@@ -1,0 +1,25 @@
+{
+    "scale_factor": 1.4000000000000004,
+    "log_folder_path": "C:/Users/repla/iCloudDrive/company/tack/TEST SAVE",
+    "column_widths": {
+        "production_summary_tree_item_code": 141,
+        "production_summary_tree_item_name": 62,
+        "production_summary_tree_2025-07-01": 108,
+        "data_table_worker": 92,
+        "data_table_session_count": 136,
+        "data_table_overall_score": 106,
+        "data_table_first_pass_yield": 135,
+        "data_table_avg_target_achievement": 125,
+        "data_table_avg_work_time": 138,
+        "data_table_avg_latency": 152,
+        "data_table_avg_idle_time": 142,
+        "data_table_total_process_errors": 79,
+        "data_table_avg_pacing_iqr": 119,
+        "data_table_total_pcs_completed": 129,
+        "data_table_avg_pcs_per_tray": 207,
+        "prod_summary_item_code": 213,
+        "prod_summary_item_name": 104,
+        "prod_summary_2025-07-01": 127,
+        "prod_summary_2025-07-02": 163
+    }
+}
