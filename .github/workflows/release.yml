@@ -24,19 +24,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          # requirements.txt 파일을 이용해 필요한 라이브러리를 설치합니다.
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build with PyInstaller (One-Folder mode)
-        # --onefile 옵션을 제거하여 폴더 단위로 빌드합니다.
-        # --add-data 로 assets과 config 폴더를, --hidden-import로 필요한 라이브러리를 포함시킵니다.
-        run: ppyinstaller --name Container_Audit --onedir --windowed --icon="assets/logo.ico" --add-data "assets;assets" --add-data "config;config" Container_Audit.py
+        # 아이콘 지정 및 hidden-import 옵션을 포함한 최종 명령어
+        run: pyinstaller --name "Container_Audit" --onedir --windowed --icon="assets/logo.ico" --add-data "assets;assets" --add-data "config;config" --hidden-import pygame --hidden-import Pillow Container_Audit.py
 
       - name: Zip the build folder
-        # 빌드된 폴더 전체(dist/Container_Audit_Setup)를 압축합니다.
         run: |
-          Compress-Archive -Path dist/Container_Audit_Setup -DestinationPath "Container_Audit-${{ github.ref_name }}.zip"
+          Compress-Archive -Path dist/Container_Audit -DestinationPath "Container_Audit-${{ github.ref_name }}.zip"
       
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@v2
