@@ -1,0 +1,50 @@
+# C:/KMTECH Program/Container_Audit/.github/workflows/release.yml
+
+name: Create GitHub Release for Container_Audit
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # 만약 이 프로젝트에 필요한 라이브러리가 있다면 requirements.txt를 만들어야 합니다.
+          # pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        # Container_Audit.py를 빌드하고, assets과 config 폴더를 포함합니다.
+        # 만약 pygame 외 다른 라이브러리 때문에 빌드가 실패하면 --hidden-import 옵션을 추가해야 할 수 있습니다.
+        run: pyinstaller --onefile --windowed --name="Container_Audit_Setup" --add-data "assets;assets" --add-data "config;config" Container_Audit.py
+
+      - name: Zip the executable
+        # 압축 파일 이름을 Container_Audit로 지정합니다.
+        run: |
+          Compress-Archive -Path dist/Container_Audit_Setup.exe -DestinationPath "Container_Audit-${{ github.ref_name }}.zip"
+      
+      - name: Create Release and Upload Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "Container_Audit-${{ github.ref_name }}.zip"
+          name: "Release ${{ github.ref_name }}"
+          body: "New release version ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
