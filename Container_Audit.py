@@ -549,8 +549,8 @@ class BarcodeValidator:
             if total_width <= 1:
                 self.root.after(50, self._set_initial_sash_positions)
                 return
-            sash_0_pos = int(total_width * 0.25)
-            sash_1_pos = int(total_width * 0.75)
+            sash_0_pos = int(total_width * 0.20)
+            sash_1_pos = int(total_width * 0.80)
             self.paned_window.sashpos(0, sash_0_pos)
             self.paned_window.sashpos(1, sash_1_pos)
         except tk.TclError as e:
