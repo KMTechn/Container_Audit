@@ -23,7 +23,7 @@ import subprocess
 # --- GitHub 저장소 설정 (이 부분을 실제 정보에 맞게 수정하세요) ---
 REPO_OWNER = "KMTechn"      # 사용자 GitHub 아이디
 REPO_NAME = "Container_Audit"  # GitHub 저장소의 실제 이름
-CURRENT_VERSION = "v1.0.6"      # 기능 추가 후 버전 업데이트
+CURRENT_VERSION = "v2.0.0"      # 기능 추가 후 버전 업데이트
 def check_for_updates():
     """GitHub에서 최신 릴리스 정보를 확인하고, 업데이트가 필요하면 .zip 파일의 다운로드 URL을 반환합니다."""
     try:
@@ -34,7 +34,6 @@ def check_for_updates():
         latest_release_data = response.json()
         latest_version = latest_release_data['tag_name']
         print(f"현재 버전: {CURRENT_VERSION}, 최신 버전: {latest_version}")
-        # 버전 비교 로직 수정 (v1.0.6이 v1.0.5보다 새로운 버전으로 인식하도록)
         if latest_version.strip().lower() > CURRENT_VERSION.strip().lower():
             print("새로운 버전이 있습니다.")
             for asset in latest_release_data['assets']:
@@ -137,6 +136,7 @@ class TraySession:
     item_spec: str = ""
     scanned_barcodes: List[str] = field(default_factory=list)
     scan_times: List[datetime.datetime] = field(default_factory=list)
+    tray_size: int = 60  # 트레이 목표 수량 (기본값 60)
     mismatch_error_count: int = 0
     total_idle_seconds: float = 0.0
     stopwatch_seconds: float = 0.0
@@ -154,7 +154,7 @@ def resource_path(relative_path: str) -> str:
 class BarcodeValidator:
     APP_TITLE = f"바코드 검증 시스템 ({CURRENT_VERSION})"
     DEFAULT_FONT = 'Malgun Gothic'
-    TRAY_SIZE = 60
+    TRAY_SIZE = 60 # 기본 트레이 사이즈
     SETTINGS_DIR = 'config'
     PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays') # 보류된 트레이 저장 경로
     SETTINGS_FILE = 'validator_settings.json'
@@ -472,7 +472,7 @@ class BarcodeValidator:
             serializable_state = {
                 'worker_name': self.worker_name, 'master_label_code': self.current_tray.master_label_code, 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name,
                 'item_spec': self.current_tray.item_spec, 'scanned_barcodes': self.current_tray.scanned_barcodes, 'scan_times': [dt.isoformat() for dt in self.current_tray.scan_times],
-                'mismatch_error_count': self.current_tray.mismatch_error_count, 'total_idle_seconds': self.current_tray.total_idle_seconds, 'stopwatch_seconds': self.current_tray.stopwatch_seconds,
+                'tray_size': self.current_tray.tray_size, 'mismatch_error_count': self.current_tray.mismatch_error_count, 'total_idle_seconds': self.current_tray.total_idle_seconds, 'stopwatch_seconds': self.current_tray.stopwatch_seconds,
                 'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'has_error_or_reset': self.current_tray.has_error_or_reset, 'is_test_tray': self.current_tray.is_test_tray, 'is_partial_submission': self.current_tray.is_partial_submission
             }
             with open(state_path, 'w', encoding='utf-8') as f: json.dump(serializable_state, f, indent=4)
@@ -509,7 +509,7 @@ class BarcodeValidator:
     def _restore_tray_from_state(self, state: Dict[str, Any]):
         self.current_tray = TraySession(
             master_label_code=state['master_label_code'], item_code=state['item_code'], item_name=state['item_name'], item_spec=state['item_spec'], scanned_barcodes=state['scanned_barcodes'],
-            scan_times=[datetime.datetime.fromisoformat(dt) for dt in state['scan_times']], mismatch_error_count=state['mismatch_error_count'], total_idle_seconds=state['total_idle_seconds'],
+            scan_times=[datetime.datetime.fromisoformat(dt) for dt in state['scan_times']], tray_size=state.get('tray_size', self.TRAY_SIZE), mismatch_error_count=state['mismatch_error_count'], total_idle_seconds=state['total_idle_seconds'],
             stopwatch_seconds=state['stopwatch_seconds'], start_time=datetime.datetime.fromisoformat(state['start_time']) if state.get('start_time') else None,
             has_error_or_reset=state.get('has_error_or_reset', False), is_test_tray=state.get('is_test_tray', False), is_partial_submission=state.get('is_partial_submission', False),
             is_restored_session=True # 이어하기 플래그 설정
@@ -549,6 +549,7 @@ class BarcodeValidator:
             if total_width <= 1:
                 self.root.after(50, self._set_initial_sash_positions)
                 return
+            # 비율 조정: 왼쪽 20%, 중앙 60%, 오른쪽 20%
             sash_0_pos = int(total_width * 0.20)
             sash_1_pos = int(total_width * 0.80)
             self.paned_window.sashpos(0, sash_0_pos)
@@ -560,7 +561,6 @@ class BarcodeValidator:
         parent_frame.grid_columnconfigure(0, weight=1)
         parent_frame['padding'] = (10, 10)
 
-        # 상단 프레임 (작업자 정보, 누적 현황, 보류 현황)
         top_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         top_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 10))
         top_frame.grid_columnconfigure(0, weight=1)
@@ -577,7 +577,6 @@ class BarcodeValidator:
         buttons_frame.grid(row=0, column=1, sticky='e')
         ttk.Button(buttons_frame, text="작업자 변경", command=self.change_worker, style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 5))
 
-        # 누적 작업 현황
         self.summary_title_label = ttk.Label(top_frame, text="누적 작업 현황", style='Subtle.TLabel', font=(self.DEFAULT_FONT, int(14*self.scale_factor),'bold'))
         self.summary_title_label.grid(row=1, column=0, sticky='w', pady=(0,10))
 
@@ -600,7 +599,6 @@ class BarcodeValidator:
         self.summary_tree['yscrollcommand'] = sb1.set
         sb1.grid(row=0, column=1, sticky='ns')
 
-        # 보류 중인 트레이 목록
         self.parked_title_label = ttk.Label(top_frame, text="보류 중인 트레이 (더블클릭으로 복원)", style='Subtle.TLabel', font=(self.DEFAULT_FONT, int(12*self.scale_factor),'bold'))
         self.parked_title_label.grid(row=3, column=0, sticky='w', pady=(20,10))
 
@@ -622,7 +620,6 @@ class BarcodeValidator:
         sb2.grid(row=0, column=1, sticky='ns')
         self.parked_tree.bind("<Double-1>", self.on_parked_tray_select)
 
-        # 하단 프레임 (이미지 뷰어)
         bottom_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         bottom_frame.grid(row=1, column=0, sticky='nsew')
         bottom_frame.grid_columnconfigure(0, weight=1)
@@ -729,25 +726,71 @@ class BarcodeValidator:
         else:
             self.current_item_label['text'] = "현품표 라벨을 스캔하여 작업을 시작하세요."
             self.current_item_label['foreground'] = self.COLOR_TEXT_SUBTLE
+    
     def process_barcode(self, event=None):
         barcode = self.scan_entry.get().strip()
         self.scan_entry.delete(0, tk.END)
         if not barcode: return
         self._update_last_activity_time()
+        
         if barcode == self.TEST_LOG_GENERATION: self._run_test_fill_tray(save_log=True); return
         if barcode == self.TEST_UI_FILL_ONLY: self._run_test_fill_tray(save_log=False); return
+
         if not self.current_tray.master_label_code:
-            if len(barcode) != self.ITEM_CODE_LENGTH:
-                self.show_fullscreen_warning("작업 시작 오류", "작업을 시작하려면 먼저 13자리 현품표 라벨을 스캔해야 합니다.", self.COLOR_DANGER); return
-            matched_item = next((item for item in self.items_data if item['Item Code'] == barcode), None)
-            if not matched_item:
-                self.show_fullscreen_warning("품목 없음", f"현품표 코드 '{barcode}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER); return
-            self.current_tray.master_label_code = barcode; self.current_tray.item_code = barcode
-            self.current_tray.item_name = matched_item.get('Item Name', ''); self.current_tray.item_spec = matched_item.get('Spec', '')
+            # 신규 QR코드 형식 처리
+            if '|' in barcode and '=' in barcode:
+                try:
+                    qr_data = dict(pair.split('=', 1) for pair in barcode.split('|'))
+                    item_code = qr_data.get('CLC')
+                    tray_quantity = int(qr_data.get('QT', self.TRAY_SIZE))
+
+                    if not item_code:
+                        self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)
+                        return
+
+                    matched_item = next((item for item in self.items_data if item['Item Code'] == item_code), None)
+                    if not matched_item:
+                        self.show_fullscreen_warning("품목 없음", f"코드 '{item_code}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
+                        return
+
+                    self.current_tray = TraySession()
+                    self.current_tray.master_label_code = barcode
+                    self.current_tray.item_code = item_code
+                    self.current_tray.tray_size = tray_quantity
+                    self.current_tray.item_name = matched_item.get('Item Name', '')
+                    self.current_tray.item_spec = matched_item.get('Spec', '')
+                    self._log_event('MASTER_LABEL_SCANNED_NEW', detail=qr_data)
+
+                except Exception as e:
+                    self.show_fullscreen_warning("QR코드 분석 오류", f"새로운 현품표 QR코드를 해석하는 중 오류가 발생했습니다.\n{e}", self.COLOR_DANGER)
+                    return
+            # 기존 바코드 형식 처리
+            else:
+                if len(barcode) != self.ITEM_CODE_LENGTH:
+                    self.show_fullscreen_warning("작업 시작 오류", f"잘못된 형식의 바코드입니다.\n13자리 품목코드 또는 신규 QR을 스캔하세요.", self.COLOR_DANGER)
+                    return
+                
+                matched_item = next((item for item in self.items_data if item['Item Code'] == barcode), None)
+                if not matched_item:
+                    self.show_fullscreen_warning("품목 없음", f"현품표 코드 '{barcode}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
+                    return
+                
+                self.current_tray = TraySession()
+                self.current_tray.master_label_code = barcode
+                self.current_tray.item_code = barcode
+                self.current_tray.tray_size = self.TRAY_SIZE
+                self.current_tray.item_name = matched_item.get('Item Name', '')
+                self.current_tray.item_spec = matched_item.get('Spec', '')
+                self._log_event('MASTER_LABEL_SCANNED_OLD', detail={'master_label_code': barcode})
+
             self._update_tray_image_display()
             self._update_current_item_label()
-            self._log_event('MASTER_LABEL_SCANNED', detail={'master_label_code': barcode, 'item_code': self.current_tray.item_code})
-            self._start_stopwatch(); self._save_current_tray_state(); return
+            self._update_center_display()
+            self._start_stopwatch()
+            self._save_current_tray_state()
+            return
+
+        # 제품 스캔 로직
         if len(barcode) <= self.ITEM_CODE_LENGTH:
             self.show_fullscreen_warning("바코드 형식 오류", f"제품 바코드는 {self.ITEM_CODE_LENGTH}자리보다 길어야 합니다.\n(스캔된 코드: {barcode})", self.COLOR_DANGER); return
         if self.current_tray.item_code not in barcode:
@@ -758,21 +801,26 @@ class BarcodeValidator:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
             self.show_fullscreen_warning("바코드 중복!", f"제품 바코드 '{barcode}'는 이미 스캔되었습니다.", self.COLOR_DANGER)
             self._log_event('SCAN_FAIL_DUPLICATE', detail={'barcode': barcode}); return
+        
         now = datetime.datetime.now()
         interval = (now - self.current_tray.scan_times[-1]).total_seconds() if self.current_tray.scan_times else 0.0
         self.add_scanned_barcode(barcode, now, interval)
         self._save_current_tray_state()
-        if len(self.current_tray.scanned_barcodes) == self.TRAY_SIZE: self.complete_tray()
+        
+        if len(self.current_tray.scanned_barcodes) == self.current_tray.tray_size:
+            self.complete_tray()
+
     def _run_test_fill_tray(self, save_log: bool):
         if not self.current_tray.master_label_code:
             messagebox.showwarning("테스트 모드 오류", "테스트 모드는 현품표 라벨을 스캔한 후에만 사용할 수 있습니다."); return
         self.current_tray.is_test_tray = not save_log; self.current_tray.has_error_or_reset = True
-        remaining_scans = self.TRAY_SIZE - len(self.current_tray.scanned_barcodes)
+        remaining_scans = self.current_tray.tray_size - len(self.current_tray.scanned_barcodes)
         for i in range(remaining_scans):
             unique_test_barcode = f"TEST-{self.current_tray.item_code}-{datetime.datetime.now().strftime('%f')}-{i}"
             self.add_scanned_barcode(unique_test_barcode, datetime.datetime.now(), 0.1)
             self.root.update(); time.sleep(0.01)
-        if len(self.current_tray.scanned_barcodes) == self.TRAY_SIZE: self.complete_tray()
+        if len(self.current_tray.scanned_barcodes) == self.current_tray.tray_size: self.complete_tray()
+
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
         if self.success_sound:
             self.success_sound.play()
@@ -786,6 +834,7 @@ class BarcodeValidator:
         self._update_current_item_label()
         self.undo_button['state'] = tk.NORMAL
         self._log_event('SCAN_OK', detail={'barcode': barcode, 'interval_sec': f"{interval:.2f}"})
+
     def complete_tray(self):
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
         is_test = self.current_tray.is_test_tray; has_error = self.current_tray.has_error_or_reset; is_partial = self.current_tray.is_partial_submission
@@ -793,7 +842,7 @@ class BarcodeValidator:
         if not is_test:
             self._log_event('TRAY_COMPLETE', detail={
                 'master_label_code': self.current_tray.master_label_code, 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name, 'scan_count': len(self.current_tray.scanned_barcodes),
-                'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
+                'tray_capacity': self.current_tray.tray_size, 'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
                 'total_idle_seconds': self.current_tray.total_idle_seconds, 'has_error_or_reset': has_error, 'is_partial_submission': is_partial, 'is_restored_session': is_restored,
                 'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'end_time': datetime.datetime.now().isoformat()
             })
@@ -881,11 +930,15 @@ class BarcodeValidator:
             card['value']['text'] = f"{int(best_time // 60):02d}:{int(best_time % 60):02d}"
         else:
             card['value']['text'] = "-"
+
     def _update_center_display(self):
         if not (hasattr(self, 'main_count_label') and self.main_count_label.winfo_exists()): return
         count = len(self.current_tray.scanned_barcodes)
-        self.main_count_label['text'] = f"{count} / {self.TRAY_SIZE}"
+        target_size = self.current_tray.tray_size if self.current_tray.master_label_code else self.TRAY_SIZE
+        self.main_count_label['text'] = f"{count} / {target_size}"
+        self.main_progress_bar['maximum'] = target_size
         self.main_progress_bar['value'] = count
+
     def _update_clock(self):
         if not self.root.winfo_exists(): return
         now = datetime.datetime.now()
@@ -1088,7 +1141,7 @@ class BarcodeValidator:
                 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name,
                 'item_spec': self.current_tray.item_spec, 'scanned_barcodes': self.current_tray.scanned_barcodes,
                 'scan_times': [dt.isoformat() for dt in self.current_tray.scan_times],
-                'mismatch_error_count': self.current_tray.mismatch_error_count,
+                'tray_size': self.current_tray.tray_size, 'mismatch_error_count': self.current_tray.mismatch_error_count,
                 'total_idle_seconds': self.current_tray.total_idle_seconds,
                 'stopwatch_seconds': self.current_tray.stopwatch_seconds,
                 'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None,
