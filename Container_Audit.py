@@ -17,6 +17,7 @@ import uuid
 import requests
 import zipfile
 import subprocess
+import random # 테스트 로그 생성을 위해 추가
 
 # ####################################################################
 # # 자동 업데이트 기능 (Auto-Updater Functionality)
@@ -158,16 +159,14 @@ def resource_path(relative_path: str) -> str:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
-class BarcodeValidator:
-    APP_TITLE = f"바코드 검증 시스템 ({CURRENT_VERSION})"
+class ContainerAudit:
+    APP_TITLE = f"컨테이너 감사 시스템 ({CURRENT_VERSION})"
     DEFAULT_FONT = 'Malgun Gothic'
     TRAY_SIZE = 60 # 기본 트레이 사이즈
     SETTINGS_DIR = 'config'
     PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays') # 보류된 트레이 저장 경로
-    SETTINGS_FILE = 'validator_settings.json'
+    SETTINGS_FILE = 'container_audit_settings.json'
     IDLE_THRESHOLD_SEC = 420
-    TEST_LOG_GENERATION = "TEST_GENERATE_LOG"
-    TEST_UI_FILL_ONLY = "TEST_FILL_UI_ONLY"
     ITEM_CODE_LENGTH = 13
     CURRENT_TRAY_STATE_FILE = "_current_tray_state.json"
     COLOR_BG = "#F5F7FA"
@@ -209,7 +208,7 @@ class BarcodeValidator:
         self.paned_window_sash_positions: Dict[str, int] = self.settings.get('paned_window_sash_positions', {})
         self.column_widths: Dict[str, int] = self.settings.get('column_widths_validator', {})
         self.worker_name = ""
-        self.completed_master_labels: set = set() # 완료된 '고유' 현품표 추적용
+        self.completed_master_labels: set = set()
         self.current_tray = TraySession()
         self.items_data = self.load_items()
         self.work_summary: Dict[str, Dict[str, Any]] = {}
@@ -445,7 +444,6 @@ class BarcodeValidator:
                         if row.get('event') == 'TRAY_COMPLETE':
                             try:
                                 details = json.loads(row['details'])
-                                # 고유 ID가 있는 신규 QR 현품표만 완료 목록에 추가
                                 master_label = details.get('master_label_code')
                                 if master_label and '|' in master_label and '=' in master_label:
                                     self.completed_master_labels.add(master_label)
@@ -580,7 +578,6 @@ class BarcodeValidator:
             if total_width <= 1:
                 self.root.after(50, self._set_initial_sash_positions)
                 return
-            # 비율 조정: 왼쪽 20%, 중앙 60%, 오른쪽 20%
             sash_0_pos = int(total_width * 0.24)
             sash_1_pos = int(total_width * 0.76)
             self.paned_window.sashpos(0, sash_0_pos)
@@ -615,9 +612,12 @@ class BarcodeValidator:
         self.summary_tree.heading('item_name_spec', text='품목명')
         self.summary_tree.heading('item_code', text='품목코드')
         self.summary_tree.heading('count', text='완료 수량')
-        self.summary_tree.column('item_name_spec', anchor='w', stretch=tk.YES)
-        self.summary_tree.column('item_code', width=120, anchor='w', stretch=tk.NO)
-        self.summary_tree.column('count', width=100, anchor='center', stretch=tk.NO)
+        
+        # **수정된 부분: 3개 컬럼 모두 stretch=tk.YES로 변경**
+        self.summary_tree.column('item_name_spec', minwidth=100, anchor='w', stretch=tk.YES)
+        self.summary_tree.column('item_code', minwidth=100, anchor='w', stretch=tk.YES)
+        self.summary_tree.column('count', minwidth=80, anchor='center', stretch=tk.YES)
+
         self.summary_tree.grid(row=0, column=0, sticky='nsew')
         sb1 = ttk.Scrollbar(tree_frame, orient='vertical', command=self.summary_tree.yview)
         self.summary_tree['yscrollcommand'] = sb1.set
@@ -755,18 +755,21 @@ class BarcodeValidator:
         if not barcode: return
         self._update_last_activity_time()
         
-        if barcode == self.TEST_LOG_GENERATION: self._run_test_fill_tray(save_log=True); return
-        if barcode == self.TEST_UI_FILL_ONLY: self._run_test_fill_tray(save_log=False); return
+        if barcode.upper().startswith("TEST_LOG_"):
+            try:
+                count = int(barcode.upper().split('_')[2])
+                if count > 0:
+                    self._generate_test_logs(count=count)
+                    return
+            except (IndexError, ValueError):
+                pass
 
         if not self.current_tray.master_label_code:
-            # === 신규 QR 현품표 처리 (고유 ID가 있는 경우) ===
             if '|' in barcode and '=' in barcode:
-                # 1. 완료된 현품표인지 중복 검사
                 if barcode in self.completed_master_labels:
                     self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.\n(현품표: {barcode})", self.COLOR_DANGER)
                     return
 
-                # 2. 보류된 현품표인지 검사 후 복원 제안
                 sanitized_barcode = self._sanitize_filename(barcode)
                 parked_filename = f"parked_qr_{self.worker_name}_{sanitized_barcode}.json"
                 parked_filepath = os.path.join(self.parked_trays_dir, parked_filename)
@@ -776,7 +779,6 @@ class BarcodeValidator:
                         self.restore_parked_tray(parked_filepath)
                     return
 
-                # 3. 새로운 트레이 시작
                 try:
                     qr_data = dict(pair.split('=', 1) for pair in barcode.split('|'))
                     item_code = qr_data.get('CLC')
@@ -804,7 +806,6 @@ class BarcodeValidator:
                     self.show_fullscreen_warning("QR코드 분석 오류", f"새로운 현품표 QR코드를 해석하는 중 오류가 발생했습니다.\n{e}", self.COLOR_DANGER)
                     return
 
-            # === 기존 13자리 현품표 처리 (고유 ID가 없는 경우) ===
             else:
                 if len(barcode) != self.ITEM_CODE_LENGTH:
                     self.show_fullscreen_warning("작업 시작 오류", f"잘못된 형식의 바코드입니다.\n{self.ITEM_CODE_LENGTH}자리 품목코드 또는 신규 QR을 스캔하세요.", self.COLOR_DANGER)
@@ -831,7 +832,6 @@ class BarcodeValidator:
             self._save_current_tray_state()
             return
 
-        # 제품 스캔 로직
         if len(barcode) <= self.ITEM_CODE_LENGTH:
             self.show_fullscreen_warning("바코드 형식 오류", f"제품 바코드는 {self.ITEM_CODE_LENGTH}자리보다 길어야 합니다.\n(스캔된 코드: {barcode})", self.COLOR_DANGER); return
         if self.current_tray.item_code not in barcode:
@@ -851,16 +851,80 @@ class BarcodeValidator:
         if len(self.current_tray.scanned_barcodes) == self.current_tray.tray_size:
             self.complete_tray()
 
-    def _run_test_fill_tray(self, save_log: bool):
+    # **수정된 부분: 수량별 테스트 로그 생성 로직**
+    def _generate_test_logs(self, count: int):
+        """지정된 수량만큼 식별 가능한 테스트 로그를 생성합니다. (여러 트레이에 걸쳐 생성 가능)"""
+        # 1. 작업 시작 전이면 임의의 품목으로 테스트 세션 시작
         if not self.current_tray.master_label_code:
-            messagebox.showwarning("테스트 모드 오류", "테스트 모드는 현품표 라벨을 스캔한 후에만 사용할 수 있습니다."); return
-        self.current_tray.is_test_tray = not save_log; self.current_tray.has_error_or_reset = True
-        remaining_scans = self.current_tray.tray_size - len(self.current_tray.scanned_barcodes)
-        for i in range(remaining_scans):
-            unique_test_barcode = f"TEST-{self.current_tray.item_code}-{datetime.datetime.now().strftime('%f')}-{i}"
-            self.add_scanned_barcode(unique_test_barcode, datetime.datetime.now(), 0.1)
-            self.root.update(); time.sleep(0.01)
-        if len(self.current_tray.scanned_barcodes) == self.current_tray.tray_size: self.complete_tray()
+            if not self.items_data:
+                self.show_fullscreen_warning("오류", "품목 데이터(Item.csv)가 없습니다.", self.COLOR_DANGER)
+                return
+
+            random_item = random.choice(self.items_data)
+            self.current_tray = TraySession(
+                item_code = random_item.get('Item Code', ''),
+                item_name = random_item.get('Item Name', ''),
+                item_spec = random_item.get('Spec', ''),
+                tray_size = self.TRAY_SIZE,
+                master_label_code = f"TEST-MASTER-{random_item.get('Item Code', '')}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
+            )
+            self._log_event('RANDOM_TEST_SESSION_START', detail={'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name})
+            self._update_current_item_label()
+            self._update_center_display()
+            self.root.update_idletasks()
+
+        # 2. 필요한 정보 저장 및 생성할 아이템 수량 초기화
+        original_tray_info = {
+            'item_code': self.current_tray.item_code,
+            'item_name': self.current_tray.item_name,
+            'item_spec': self.current_tray.item_spec,
+            'tray_size': self.current_tray.tray_size
+        }
+        items_to_generate = count
+
+        self.show_status_message(f"테스트 로그 {count}개 생성 중...", self.COLOR_PRIMARY)
+        self.root.update_idletasks()
+
+        # 3. 요청된 수량만큼 로그 생성 루프
+        while items_to_generate > 0:
+            current_scans = len(self.current_tray.scanned_barcodes)
+            tray_capacity = self.current_tray.tray_size
+            remaining_space = tray_capacity - current_scans
+            
+            scans_for_this_tray = min(items_to_generate, remaining_space)
+
+            for i in range(scans_for_this_tray):
+                barcode = f"TEST-{self.current_tray.item_code}-{datetime.datetime.now().strftime('%f')}-{i}"
+                self.add_scanned_barcode(barcode, datetime.datetime.now(), 0.1)
+                self.root.update()
+                time.sleep(0.01)
+
+            items_to_generate -= scans_for_this_tray
+
+            # 트레이가 꽉 찼고, 아직 생성할 아이템이 남았다면
+            if len(self.current_tray.scanned_barcodes) >= tray_capacity and items_to_generate > 0:
+                self.complete_tray()
+                self.root.update_idletasks() # UI 갱신
+                time.sleep(0.5) # 다음 트레이 시작 전 잠시 대기
+
+                # 다음 테스트 트레이 준비
+                self.current_tray = TraySession(
+                    item_code=original_tray_info['item_code'],
+                    item_name=original_tray_info['item_name'],
+                    item_spec=original_tray_info['item_spec'],
+                    tray_size=original_tray_info['tray_size'],
+                    master_label_code=f"TEST-MASTER-{original_tray_info['item_code']}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}"
+                )
+                self._update_current_item_label()
+                self._update_center_display()
+                self.root.update_idletasks()
+
+        # 4. 마지막 트레이가 부분적으로 채워졌다면 부분 제출로 완료
+        if self.current_tray.master_label_code and self.current_tray.scanned_barcodes:
+            self.current_tray.is_partial_submission = True
+            self.complete_tray()
+
+        self.show_status_message(f"테스트 로그 {count}개 생성을 완료했습니다.", self.COLOR_SUCCESS)
 
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
         if self.success_sound:
@@ -888,7 +952,6 @@ class BarcodeValidator:
                 'total_idle_seconds': self.current_tray.total_idle_seconds, 'has_error_or_reset': has_error, 'is_partial_submission': is_partial, 'is_restored_session': is_restored,
                 'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'end_time': datetime.datetime.now().isoformat()
             })
-            # 고유한 QR 현품표만 완료 목록에 추가하여 중복을 방지합니다.
             if '|' in master_label and '=' in master_label:
                 self.completed_master_labels.add(master_label)
 
@@ -1208,14 +1271,10 @@ class BarcodeValidator:
 
         master_label = self.current_tray.master_label_code
 
-        # 신규 QR 현품표인 경우 (고유함)
         if '|' in master_label and '=' in master_label:
             sanitized_master_label = self._sanitize_filename(master_label)
-            # 파일명에 'qr'을 붙여 구분하고, 고유한 현품표 코드를 사용
             filename = f"parked_qr_{self.worker_name}_{sanitized_master_label}.json"
-        # 기존 13자리 현품표인 경우 (고유하지 않음)
         else:
-            # 고유하지 않으므로, 파일명에 품목코드와 함께 고유 UUID를 추가
             filename = f"parked_legacy_{self.worker_name}_{master_label}_{uuid.uuid4().hex[:8]}.json"
         
         filepath = os.path.join(self.parked_trays_dir, filename)
@@ -1261,7 +1320,6 @@ class BarcodeValidator:
         if not os.path.exists(self.parked_trays_dir): return
 
         try:
-            # 'parked_'로 시작하고 현재 작업자 이름이 포함된 모든 .json 파일을 가져옴
             parked_files = [
                 f for f in os.listdir(self.parked_trays_dir) 
                 if f.endswith(".json") and f.startswith("parked_") and f"_{self.worker_name}_" in f
@@ -1308,8 +1366,8 @@ class BarcodeValidator:
             self.show_status_message(f"'{self.current_tray.item_name}' 작업을 다시 시작합니다.", self.COLOR_SUCCESS)
 
         except FileNotFoundError:
-              messagebox.showwarning("복원 실패", "선택한 보류 작업 파일을 찾을 수 없습니다. 목록을 갱신합니다.")
-              self._update_parked_trays_list()
+                messagebox.showwarning("복원 실패", "선택한 보류 작업 파일을 찾을 수 없습니다. 목록을 갱신합니다.")
+                self._update_parked_trays_list()
         except Exception as e:
             messagebox.showerror("오류", f"작업 복원 중 오류가 발생했습니다: {e}")
 
@@ -1318,5 +1376,5 @@ class BarcodeValidator:
 
 if __name__ == "__main__":
     check_and_apply_updates()
-    app = BarcodeValidator()
+    app = ContainerAudit()
     app.run()
