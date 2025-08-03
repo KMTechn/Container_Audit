@@ -25,7 +25,7 @@ import random # 테스트 로그 생성을 위해 추가
 # --- GitHub 저장소 설정 (이 부분을 실제 정보에 맞게 수정하세요) ---
 REPO_OWNER = "KMTechn"      # 사용자 GitHub 아이디
 REPO_NAME = "Container_Audit"  # GitHub 저장소의 실제 이름
-CURRENT_VERSION = "v2.0.1"      # 현품표 로직 개선 후 버전 업데이트
+CURRENT_VERSION = "v2.0.2"      # 현품표 로직 개선 후 버전 업데이트
 
 def check_for_updates():
     """GitHub에서 최신 릴리스 정보를 확인하고, 업데이트가 필요하면 .zip 파일의 다운로드 URL을 반환합니다."""
