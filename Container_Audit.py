@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 import csv
 import datetime
 import os
@@ -17,9 +17,9 @@ import uuid
 import requests
 import zipfile
 import subprocess
-import random 
-import base64 
-import binascii 
+import random
+import base64
+import binascii
 
 # ####################################################################
 # # 자동 업데이트 기능
@@ -151,7 +151,7 @@ def resource_path(relative_path: str) -> str:
 # # 메인 어플리케이션
 # ####################################################################
 class ContainerAudit:
-    APP_TITLE = f"컨테이너 감사 시스템 ({CURRENT_VERSION})"
+    APP_TITLE = f"이적 검사 시스템 ({CURRENT_VERSION})"
     DEFAULT_FONT = 'Malgun Gothic'
     TRAY_SIZE = 60
     SETTINGS_DIR = 'config'
@@ -748,12 +748,13 @@ class ContainerAudit:
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
         raw_barcode = self.scan_entry.get().strip()
         self.scan_entry.delete(0, tk.END)
-        self._process_barcode_logic(raw_barcode)
+        # Use after(0) to allow the UI to update before potentially blocking logic
+        self.root.after(0, self._process_barcode_logic, raw_barcode)
 
     def _process_barcode_logic(self, raw_barcode: str):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
-        self.last_activity_time = datetime.datetime.now()
+        self._update_last_activity_time()
         
         # --- 테스트 기능 트리거 ---
         if raw_barcode.upper().startswith("TEST_LOG_"):
@@ -880,8 +881,10 @@ class ContainerAudit:
 
     def complete_tray(self):
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
-        is_test = "TEST" in self.current_tray.master_label_code
-        has_error = self.current_tray.has_error_or_reset; is_partial = self.current_tray.is_partial_submission
+        
+        is_test = self.current_tray.is_test_tray
+        has_error = self.current_tray.has_error_or_reset
+        is_partial = self.current_tray.is_partial_submission
         is_restored = self.current_tray.is_restored_session
         master_label = self.current_tray.master_label_code
         
@@ -898,7 +901,10 @@ class ContainerAudit:
 
         item_code = self.current_tray.item_code
         if item_code not in self.work_summary: self.work_summary[item_code] = {'name': self.current_tray.item_name, 'spec': self.current_tray.item_spec, 'count': 0, 'test_count': 0}
-        if is_test: self.work_summary[item_code]['test_count'] += 1; self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
+        
+        if is_test: 
+            self.work_summary[item_code]['test_count'] += 1
+            self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
         else:
             self.work_summary[item_code]['count'] += 1
             if not is_partial: self.total_tray_count += 1
@@ -1292,6 +1298,7 @@ class ContainerAudit:
                 self.park_current_tray()
             elif res is None: # Cancel
                 return
+            # If False, continue to overwrite the current work
 
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
@@ -1299,7 +1306,7 @@ class ContainerAudit:
 
             self._restore_tray_from_state(saved_state)
             os.remove(filepath)
-
+            
             self.show_validation_screen()
 
             self._log_event('TRAY_RESTORED_FROM_PARK', detail={'item_name': self.current_tray.item_name})
@@ -1310,11 +1317,210 @@ class ContainerAudit:
                 self._update_parked_trays_list()
         except Exception as e:
             messagebox.showerror("오류", f"작업 복원 중 오류가 발생했습니다: {e}")
+            
+    # ####################################################################
+    # # [추가된 부분] 테스트 및 자동화 기능
+    # ####################################################################
+
+    def _generate_test_logs(self, count: int):
+        """지정된 수량만큼 식별 가능한 테스트 로그를 생성합니다."""
+        if not self.items_data:
+            self.show_fullscreen_warning("오류", "품목 데이터(Item.csv)가 없습니다.", self.COLOR_DANGER)
+            return
+
+        if not self.current_tray.master_label_code:
+            random_item = random.choice(self.items_data)
+            self.current_tray = TraySession(
+                item_code = random_item.get('Item Code', ''),
+                item_name = random_item.get('Item Name', ''),
+                item_spec = random_item.get('Spec', ''),
+                tray_size = self.TRAY_SIZE,
+                master_label_code = f"TEST-MASTER-{random_item.get('Item Code', '')}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+                is_test_tray = True
+            )
+            self._log_event('RANDOM_TEST_SESSION_START', detail={'item_code': self.current_tray.item_code})
+            self._update_current_item_label()
+            self._update_center_display()
+            self._start_stopwatch()
+            self.root.update_idletasks()
+
+        original_tray_info = self.current_tray
+        items_to_generate = count
+        self.show_status_message(f"테스트 로그 {count}개 생성 중...", self.COLOR_PRIMARY)
+        self.root.update_idletasks()
+
+        while items_to_generate > 0:
+            remaining_space = original_tray_info.tray_size - len(self.current_tray.scanned_barcodes)
+            scans_for_this_tray = min(items_to_generate, remaining_space)
+
+            for i in range(scans_for_this_tray):
+                barcode = f"TEST-{self.current_tray.item_code}-{datetime.datetime.now().strftime('%f')}-{i}"
+                self.add_scanned_barcode(barcode, datetime.datetime.now(), 0.1)
+                self.root.update()
+                time.sleep(0.01)
+
+            items_to_generate -= scans_for_this_tray
+
+            if len(self.current_tray.scanned_barcodes) >= original_tray_info.tray_size and items_to_generate > 0:
+                self.complete_tray()
+                self.root.update_idletasks()
+                time.sleep(0.5)
+
+                self.current_tray = TraySession(
+                    item_code=original_tray_info.item_code,
+                    item_name=original_tray_info.item_name,
+                    item_spec=original_tray_info.item_spec,
+                    tray_size=original_tray_info.tray_size,
+                    master_label_code=f"TEST-MASTER-{original_tray_info.item_code}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                    is_test_tray=True
+                )
+                self._update_current_item_label()
+                self._update_center_display()
+                self._start_stopwatch()
+                self.root.update_idletasks()
+
+        if self.current_tray.master_label_code and self.current_tray.scanned_barcodes:
+            self.current_tray.is_partial_submission = True
+            self.complete_tray()
+        self.show_status_message(f"테스트 로그 {count}개 생성을 완료했습니다.", self.COLOR_SUCCESS)
+
+    def _create_test_parked_trays(self, item_code: str, count: int):
+        """지정된 품목과 수량으로 테스트용 보류 트레이를 생성합니다."""
+        matched_item = next((item for item in self.items_data if item['Item Code'] == item_code), None)
+        if not matched_item:
+            self.show_status_message(f"오류: 품목코드 '{item_code}'를 찾을 수 없습니다.", self.COLOR_DANGER)
+            return
+        
+        self.show_status_message(f"테스트 보류 데이터 {count}개 생성 중...", self.COLOR_PRIMARY)
+        for i in range(count):
+            scanned_count = random.randint(1, self.TRAY_SIZE -1)
+            master_label = f"CLC={item_code}|QT=60|LOT=TESTLOT{i}|DATE={datetime.date.today().strftime('%Y%m%d')}"
+            
+            state = {
+                'worker_name': self.worker_name,
+                'master_label_code': master_label,
+                'item_code': item_code,
+                'item_name': matched_item.get('Item Name', ''),
+                'item_spec': matched_item.get('Spec', ''),
+                'scanned_barcodes': [f"{item_code}-TEST-BARCODE-{j}" for j in range(scanned_count)],
+                'scan_times': [datetime.datetime.now().isoformat() for _ in range(scanned_count)],
+                'tray_size': self.TRAY_SIZE,
+                'mismatch_error_count': 0, 'total_idle_seconds': 0.0, 'stopwatch_seconds': random.uniform(30, 300),
+                'start_time': datetime.datetime.now().isoformat(),
+                'has_error_or_reset': False, 'is_test_tray': True, 'is_partial_submission': False
+            }
+            
+            sanitized_label = self._sanitize_filename(master_label)
+            filename = f"parked_qr_{self.worker_name}_{sanitized_label}.json"
+            filepath = os.path.join(self.parked_trays_dir, filename)
+            
+            with open(filepath, 'w', encoding='utf-8') as f:
+                json.dump(state, f, indent=4)
+        
+        self.show_status_message(f"테스트 보류 데이터 {count}개 생성 완료.", self.COLOR_SUCCESS)
+        self._update_parked_trays_list()
+
+    def _prompt_for_test_item(self):
+        """자동 테스트를 실행할 품목을 선택하는 대화 상자를 표시합니다."""
+        if not self.items_data:
+            messagebox.showerror("오류", "자동 테스트를 실행할 품목 데이터가 없습니다.")
+            return
+        if self.current_tray.master_label_code:
+            messagebox.showwarning("경고", "진행 중인 작업이 있습니다. 자동 테스트를 실행하려면 현재 작업을 완료하거나 리셋해주세요.")
+            return
+
+        popup = tk.Toplevel(self.root)
+        popup.title("자동 테스트 시작")
+        popup.geometry("400x200")
+        popup.transient(self.root)
+        popup.grab_set()
+
+        ttk.Label(popup, text="테스트할 품목을 선택하세요:").pack(pady=10)
+        
+        item_map = {f"{item['Item Name']} ({item['Item Code']})": item['Item Code'] for item in self.items_data}
+        item_names = list(item_map.keys())
+        
+        combo = ttk.Combobox(popup, values=item_names, state="readonly", width=50)
+        combo.pack(pady=5, padx=10)
+        if item_names:
+            combo.current(0)
+            
+        def start_test():
+            selected_display_name = combo.get()
+            if selected_display_name:
+                item_code = item_map[selected_display_name]
+                popup.destroy()
+                threading.Thread(target=self._run_auto_test_sequence, args=(item_code,), daemon=True).start()
+
+        ttk.Button(popup, text="테스트 시작", command=start_test).pack(pady=20)
+        
+    def _run_auto_test_sequence(self, item_code: str):
+        """선택된 품목에 대해 전체 작업 흐름을 자동으로 시뮬레이션합니다."""
+        try:
+            self.show_status_message("자동 테스트 시작...", self.COLOR_PRIMARY)
+            time.sleep(2)
+
+            # 1. 현품표 스캔
+            self.show_status_message("1. 현품표 스캔 시뮬레이션", self.COLOR_PRIMARY)
+            master_label = f"CLC={item_code}|QT={self.TRAY_SIZE}|LOT=AUTOTEST|DATE={datetime.date.today().strftime('%Y%m%d')}"
+            self._process_barcode_logic(master_label)
+            time.sleep(1)
+
+            # 2. 제품 5개 스캔
+            self.show_status_message("2. 제품 스캔 시뮬레이션 (5개)", self.COLOR_PRIMARY)
+            for i in range(5):
+                product_barcode = f"{item_code}-AUTOTEST-{uuid.uuid4().hex[:8]}"
+                self._process_barcode_logic(product_barcode)
+                time.sleep(0.3)
+            
+            # 3. 마지막 스캔 취소
+            self.show_status_message("3. 마지막 스캔 취소", self.COLOR_PRIMARY)
+            self.undo_last_scan()
+            time.sleep(1)
+
+            # 4. 취소된 제품 다시 스캔
+            self.show_status_message("4. 취소된 제품 재스캔", self.COLOR_PRIMARY)
+            product_barcode = f"{item_code}-AUTOTEST-RESCAN-{uuid.uuid4().hex[:8]}"
+            self._process_barcode_logic(product_barcode)
+            time.sleep(1)
+
+            # 5. 작업 보류
+            self.show_status_message("5. 작업 보류", self.COLOR_PRIMARY)
+            # messagebox를 직접 호출할 수 없으므로, 내부 로직만 실행
+            self.park_current_tray.__func__.__defaults__ = (None,) # askyesno를 스킵하기 위한 임시 조치
+            self.park_current_tray()
+            self.park_current_tray.__func__.__defaults__ = (messagebox,) # 원상복구
+            time.sleep(1)
+
+            # 6. 보류된 작업 복원
+            self.show_status_message("6. 보류 작업 복원", self.COLOR_PRIMARY)
+            sanitized_label = self._sanitize_filename(master_label)
+            parked_filepath = os.path.join(self.parked_trays_dir, f"parked_qr_{self.worker_name}_{sanitized_label}.json")
+            if os.path.exists(parked_filepath):
+                self.restore_parked_tray(parked_filepath)
+            else:
+                raise FileNotFoundError("자동 테스트 중 보류된 파일을 찾지 못했습니다.")
+            time.sleep(1)
+            
+            # 7. 나머지 제품 스캔
+            remaining_scans = self.current_tray.tray_size - len(self.current_tray.scanned_barcodes)
+            self.show_status_message(f"7. 나머지 {remaining_scans}개 제품 스캔", self.COLOR_PRIMARY)
+            for i in range(remaining_scans):
+                product_barcode = f"{item_code}-AUTOTEST-FINAL-{uuid.uuid4().hex[:8]}"
+                self._process_barcode_logic(product_barcode)
+                time.sleep(0.2)
+            
+            self.show_status_message("자동 테스트 완료!", self.COLOR_SUCCESS, duration=5000)
+
+        except Exception as e:
+            print(f"자동 테스트 오류: {e}")
+            messagebox.showerror("자동 테스트 실패", f"자동 테스트 중 오류가 발생했습니다:\n{e}")
 
     def run(self):
         self.root.mainloop()
 
 if __name__ == "__main__":
-    # check_and_apply_updates() # 업데이트 체크 기능 비활성화
+    # For development, you might want to disable the update check
+    # check_and_apply_updates()
     app = ContainerAudit()
     app.run()
