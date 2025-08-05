@@ -18,6 +18,8 @@ import requests
 import zipfile
 import subprocess
 import random # 테스트 로그 생성을 위해 추가
+import base64 # << [추가] Base64 디코딩을 위해 추가
+import binascii # << [추가] Base64 에러 처리를 위해 추가
 
 # ####################################################################
 # # 자동 업데이트 기능 (Auto-Updater Functionality)
@@ -25,7 +27,7 @@ import random # 테스트 로그 생성을 위해 추가
 # --- GitHub 저장소 설정 (이 부분을 실제 정보에 맞게 수정하세요) ---
 REPO_OWNER = "KMTechn"      # 사용자 GitHub 아이디
 REPO_NAME = "Container_Audit"  # GitHub 저장소의 실제 이름
-CURRENT_VERSION = "v2.0.2"      # 현품표 로직 개선 후 버전 업데이트
+CURRENT_VERSION = "v2.0.3"      # 현품표 Base64 디코딩 로직 추가 후 버전 업데이트
 
 def check_for_updates():
     """GitHub에서 최신 릴리스 정보를 확인하고, 업데이트가 필요하면 .zip 파일의 다운로드 URL을 반환합니다."""
@@ -753,7 +755,7 @@ class ContainerAudit:
         barcode = self.scan_entry.get().strip()
         self.scan_entry.delete(0, tk.END)
         if not barcode: return
-        self._update_last_activity_time()
+        self.last_activity_time = datetime.datetime.now()
         
         if barcode.upper().startswith("TEST_LOG_"):
             try:
@@ -765,6 +767,28 @@ class ContainerAudit:
                 pass
 
         if not self.current_tray.master_label_code:
+            # ##################################################################
+            # ## [수정된 부분 시작] Base64 디코딩 로직 추가 ##
+            # ##################################################################
+            try:
+                # Base64로 인코딩된 문자열을 바이트로 변환 후 디코딩
+                decoded_bytes = base64.b64decode(barcode)
+                # 디코딩된 바이트를 utf-8 문자열로 변환
+                decoded_string = decoded_bytes.decode('utf-8')
+                
+                # 디코딩된 결과가 현품표 형식(key=value|...)인지 확인
+                if '|' in decoded_string and '=' in decoded_string:
+                    print(f"Base64 디코딩 성공: '{barcode}' -> '{decoded_string}'")
+                    # 디코딩된 데이터를 barcode 변수에 덮어써서 이후 로직이 처리하도록 함
+                    barcode = decoded_string
+            except (binascii.Error, UnicodeDecodeError):
+                # Base64 형식이 아니거나 디코딩에 실패하면, 원본 바코드를 그대로 사용
+                # 오류 메시지 없이 조용히 넘어감 (pass)
+                pass
+            # ##################################################################
+            # ## [수정된 부분 끝] ##
+            # ##################################################################
+
             if '|' in barcode and '=' in barcode:
                 if barcode in self.completed_master_labels:
                     self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.\n(현품표: {barcode})", self.COLOR_DANGER)
