@@ -17,60 +17,51 @@ import uuid
 import requests
 import zipfile
 import subprocess
-import random # 테스트 로그 생성을 위해 추가
-import base64 # << [추가] Base64 디코딩을 위해 추가
-import binascii # << [추가] Base64 에러 처리를 위해 추가
+import random 
+import base64 
+import binascii 
 
 # ####################################################################
-# # 자동 업데이트 기능 (Auto-Updater Functionality)
+# # 자동 업데이트 기능
 # ####################################################################
-# --- GitHub 저장소 설정 (이 부분을 실제 정보에 맞게 수정하세요) ---
-REPO_OWNER = "KMTechn"      # 사용자 GitHub 아이디
-REPO_NAME = "Container_Audit"  # GitHub 저장소의 실제 이름
-CURRENT_VERSION = "v2.0.3"      # 현품표 Base64 디코딩 로직 추가 후 버전 업데이트
+REPO_OWNER = "KMTechn"
+REPO_NAME = "Container_Audit"
+CURRENT_VERSION = "v2.0.4" # 테스트 스크립트 추가 후 버전 업데이트
 
 def check_for_updates():
     """GitHub에서 최신 릴리스 정보를 확인하고, 업데이트가 필요하면 .zip 파일의 다운로드 URL을 반환합니다."""
     try:
         api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-        print(f"업데이트 확인 URL: {api_url}")
         response = requests.get(api_url, timeout=5)
         response.raise_for_status()
         latest_release_data = response.json()
         latest_version = latest_release_data['tag_name']
-        print(f"현재 버전: {CURRENT_VERSION}, 최신 버전: {latest_version}")
         if latest_version.strip().lower() > CURRENT_VERSION.strip().lower():
-            print("새로운 버전이 있습니다.")
             for asset in latest_release_data['assets']:
                 if asset['name'].endswith('.zip'):
                     return asset['browser_download_url'], latest_version
-            print("릴리스에 .zip 파일이 없습니다.")
             return None, None
         else:
-            print("프로그램이 최신 버전입니다.")
             return None, None
     except requests.exceptions.RequestException as e:
-        print(f"업데이트 확인 중 오류 발생 (네트워크 문제일 수 있음): {e}")
+        print(f"업데이트 확인 중 오류 발생: {e}")
         return None, None
 
 def download_and_apply_update(url):
     """업데이트 .zip 파일을 다운로드하고, 압축 해제 후 적용 스크립트를 실행합니다."""
     try:
         zip_path = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "update.zip")
-        print(f"'{url}' 에서 새 버전을 다운로드 중...")
         response = requests.get(url, stream=True, timeout=120)
         response.raise_for_status()
         with open(zip_path, 'wb') as f:
             for chunk in response.iter_content(chunk_size=8192):
                 f.write(chunk)
-        print("다운로드 완료.")
         temp_update_folder = os.path.join(os.environ.get("TEMP", "C:\\Temp"), "temp_update")
         if os.path.exists(temp_update_folder):
             import shutil
             shutil.rmtree(temp_update_folder)
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(temp_update_folder)
-        print(f"'{temp_update_folder}'에 압축 해제 완료.")
         os.remove(zip_path)
         if getattr(sys, 'frozen', False):
             application_path = os.path.dirname(sys.executable)
@@ -109,19 +100,15 @@ timeout /t 3 /nobreak > nul
 start "" "{os.path.join(application_path, os.path.basename(sys.executable))}"
 del "%~f0"
             """)
-        print("업데이트 적용을 위해 프로그램을 종료하고 업데이트 스크립트를 실행합니다.")
         subprocess.Popen(updater_script_path, creationflags=subprocess.CREATE_NEW_CONSOLE)
         sys.exit(0)
     except Exception as e:
-        print(f"업데이트 적용 중 오류 발생: {e}")
         root_alert = tk.Tk()
         root_alert.withdraw()
         messagebox.showerror("업데이트 실패", f"업데이트 적용 중 오류가 발생했습니다.\n\n{e}\n\n프로그램을 다시 시작해주세요.", parent=root_alert)
         root_alert.destroy()
 
 def check_and_apply_updates():
-    """업데이트 확인 및 적용 프로세스를 실행하는 메인 함수"""
-    print("업데이트를 확인합니다...")
     download_url, new_version = check_for_updates()
     if download_url:
         root_alert = tk.Tk()
@@ -130,11 +117,10 @@ def check_and_apply_updates():
             root_alert.destroy()
             download_and_apply_update(download_url)
         else:
-            print("사용자가 업데이트를 거부했습니다.")
             root_alert.destroy()
 
 # ####################################################################
-# # 메인 어플리케이션
+# # 데이터 클래스 및 유틸리티
 # ####################################################################
 @dataclass
 class TraySession:
@@ -144,7 +130,7 @@ class TraySession:
     item_spec: str = ""
     scanned_barcodes: List[str] = field(default_factory=list)
     scan_times: List[datetime.datetime] = field(default_factory=list)
-    tray_size: int = 60  # 트레이 목표 수량 (기본값 60)
+    tray_size: int = 60
     mismatch_error_count: int = 0
     total_idle_seconds: float = 0.0
     stopwatch_seconds: float = 0.0
@@ -152,7 +138,7 @@ class TraySession:
     has_error_or_reset: bool = False
     is_test_tray: bool = False
     is_partial_submission: bool = False
-    is_restored_session: bool = False # 이어하기 여부 플래그
+    is_restored_session: bool = False
 
 def resource_path(relative_path: str) -> str:
     try:
@@ -161,16 +147,19 @@ def resource_path(relative_path: str) -> str:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
+# ####################################################################
+# # 메인 어플리케이션
+# ####################################################################
 class ContainerAudit:
     APP_TITLE = f"컨테이너 감사 시스템 ({CURRENT_VERSION})"
     DEFAULT_FONT = 'Malgun Gothic'
-    TRAY_SIZE = 60 # 기본 트레이 사이즈
+    TRAY_SIZE = 60
     SETTINGS_DIR = 'config'
-    PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays') # 보류된 트레이 저장 경로
+    PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays')
     SETTINGS_FILE = 'container_audit_settings.json'
     IDLE_THRESHOLD_SEC = 420
     ITEM_CODE_LENGTH = 13
-    CURRENT_TRAY_STATE_FILE = "_current_tray_state.json"
+    
     COLOR_BG = "#F5F7FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
     COLOR_TEXT = "#343A40"
@@ -191,6 +180,7 @@ class ContainerAudit:
             self.root.iconbitmap(resource_path(os.path.join('assets', 'logo.ico')))
         except Exception as e:
             print(f"아이콘 로드 실패: {e}")
+            
         pygame.init()
         pygame.mixer.init()
         try:
@@ -198,8 +188,8 @@ class ContainerAudit:
             self.error_sound = pygame.mixer.Sound(resource_path('assets/error.wav'))
         except pygame.error as e:
             messagebox.showwarning("사운드 파일 오류", f"사운드 파일을 로드할 수 없습니다.\n'assets' 폴더에 success.wav, error.wav 파일이 있는지 확인하세요.\n오류: {e}")
-            self.success_sound = None
-            self.error_sound = None
+            self.success_sound = self.error_sound = None
+
         if getattr(sys, 'frozen', False): self.application_path = os.path.dirname(sys.executable)
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
@@ -209,10 +199,12 @@ class ContainerAudit:
         self.scale_factor = self.settings.get('scale_factor', 1.0)
         self.paned_window_sash_positions: Dict[str, int] = self.settings.get('paned_window_sash_positions', {})
         self.column_widths: Dict[str, int] = self.settings.get('column_widths_validator', {})
+        
         self.worker_name = ""
         self.completed_master_labels: set = set()
         self.current_tray = TraySession()
         self.items_data = self.load_items()
+        
         self.work_summary: Dict[str, Dict[str, Any]] = {}
         self.completed_tray_times: List[float] = []
         self.total_tray_count = 0
@@ -222,24 +214,29 @@ class ContainerAudit:
         self.is_idle = False
         self.last_activity_time: Optional[datetime.datetime] = None
         self.show_tray_image_var = tk.BooleanVar(value=False)
+        
         self.status_message_job: Optional[str] = None
         self.clock_job: Optional[str] = None
         self.stopwatch_job: Optional[str] = None
         self.idle_check_job: Optional[str] = None
         self.focus_return_job: Optional[str] = None
+        
         self.log_queue: queue.Queue = queue.Queue()
         self.log_file_path: Optional[str] = None
         self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
         self.log_thread.start()
+        
         try:
             self.computer_id = hex(uuid.getnode())
         except Exception:
             import socket
             self.computer_id = socket.gethostname()
         self.CURRENT_TRAY_STATE_FILE = f"_current_tray_state_{self.computer_id}.json"
+        
         self._setup_core_ui_structure()
         self._setup_styles()
         self.show_worker_input_screen()
+        
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
@@ -279,10 +276,8 @@ class ContainerAudit:
             try:
                 with open(item_path, 'r', encoding=encoding) as file:
                     items = list(csv.DictReader(file))
-                    print(f"'{os.path.basename(item_path)}' 파일을 '{encoding}' 인코딩으로 여는 데 성공했습니다.")
                     return items
             except UnicodeDecodeError:
-                print(f"'{encoding}' 인코딩으로 파일 열기 실패. 다음 인코딩을 시도합니다...")
                 continue
             except FileNotFoundError:
                 messagebox.showerror("오류", f"필수 파일 없음: {item_path}\n'assets' 폴더에 Item.csv가 있는지 확인하세요.")
@@ -292,7 +287,7 @@ class ContainerAudit:
                 messagebox.showerror("파일 읽기 오류", f"'{item_path}' 파일을 읽는 중 예상치 못한 오류가 발생했습니다:\n{e}")
                 self.root.destroy()
                 return []
-        messagebox.showerror("인코딩 감지 실패", f"'{os.path.basename(item_path)}' 파일의 인코딩 형식을 알 수 없습니다.\n\n파일을 Excel 등에서 'CSV UTF-8' 또는 일반 'CSV' 형식으로 저장했는지 확인해주세요.\n\n(시도한 인코딩: {', '.join(encodings_to_try)})")
+        messagebox.showerror("인코딩 감지 실패", f"'{os.path.basename(item_path)}' 파일의 인코딩 형식을 알 수 없습니다.")
         self.root.destroy()
         return []
 
@@ -540,7 +535,7 @@ class ContainerAudit:
             scan_times=[datetime.datetime.fromisoformat(dt) for dt in state['scan_times']], tray_size=state.get('tray_size', self.TRAY_SIZE), mismatch_error_count=state['mismatch_error_count'], total_idle_seconds=state['total_idle_seconds'],
             stopwatch_seconds=state['stopwatch_seconds'], start_time=datetime.datetime.fromisoformat(state['start_time']) if state.get('start_time') else None,
             has_error_or_reset=state.get('has_error_or_reset', False), is_test_tray=state.get('is_test_tray', False), is_partial_submission=state.get('is_partial_submission', False),
-            is_restored_session=True # 이어하기 플래그 설정
+            is_restored_session=True
         )
         self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
 
@@ -615,7 +610,6 @@ class ContainerAudit:
         self.summary_tree.heading('item_code', text='품목코드')
         self.summary_tree.heading('count', text='완료 수량')
         
-        # **수정된 부분: 3개 컬럼 모두 stretch=tk.YES로 변경**
         self.summary_tree.column('item_name_spec', minwidth=100, anchor='w', stretch=tk.YES)
         self.summary_tree.column('item_code', minwidth=100, anchor='w', stretch=tk.YES)
         self.summary_tree.column('count', minwidth=80, anchor='center', stretch=tk.YES)
@@ -748,50 +742,55 @@ class ContainerAudit:
             self.current_item_label['foreground'] = self.COLOR_TEXT_SUBTLE
     
     def _sanitize_filename(self, filename: str) -> str:
-        """문자열에서 파일명으로 사용할 수 없는 특수문자를 제거합니다."""
         return re.sub(r'[\\/*?:"<>|]', '_', filename)
-
+    
     def process_barcode(self, event=None):
-        barcode = self.scan_entry.get().strip()
+        """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
+        raw_barcode = self.scan_entry.get().strip()
         self.scan_entry.delete(0, tk.END)
-        if not barcode: return
+        self._process_barcode_logic(raw_barcode)
+
+    def _process_barcode_logic(self, raw_barcode: str):
+        """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
+        if not raw_barcode: return
         self.last_activity_time = datetime.datetime.now()
         
-        if barcode.upper().startswith("TEST_LOG_"):
+        # --- 테스트 기능 트리거 ---
+        if raw_barcode.upper().startswith("TEST_LOG_"):
             try:
-                count = int(barcode.upper().split('_')[2])
-                if count > 0:
-                    self._generate_test_logs(count=count)
-                    return
-            except (IndexError, ValueError):
-                pass
-
+                count = int(raw_barcode.upper().split('_')[2])
+                if count > 0: self._generate_test_logs(count=count)
+                return
+            except (IndexError, ValueError): pass
+        
+        if raw_barcode.upper().startswith("_CREATE_PARKED_TRAYS_"):
+            try:
+                parts = raw_barcode.split('_')
+                item_code = parts[3]
+                count = int(parts[4])
+                threading.Thread(target=self._create_test_parked_trays, args=(item_code, count), daemon=True).start()
+            except Exception as e:
+                messagebox.showerror("오류", f"보류 데이터 생성 코드 형식 오류입니다.\n형식: _CREATE_PARKED_TRAYS_[품목코드]_[수량]_\n오류: {e}")
+            return
+        
+        if raw_barcode.upper() == "_RUN_AUTO_TEST_":
+            self.root.after(0, self._prompt_for_test_item)
+            return
+        
+        # --- 현품표 스캔 로직 ---
         if not self.current_tray.master_label_code:
-            # ##################################################################
-            # ## [수정된 부분 시작] Base64 디코딩 로직 추가 ##
-            # ##################################################################
+            barcode = raw_barcode
             try:
-                # Base64로 인코딩된 문자열을 바이트로 변환 후 디코딩
                 decoded_bytes = base64.b64decode(barcode)
-                # 디코딩된 바이트를 utf-8 문자열로 변환
                 decoded_string = decoded_bytes.decode('utf-8')
-                
-                # 디코딩된 결과가 현품표 형식(key=value|...)인지 확인
                 if '|' in decoded_string and '=' in decoded_string:
-                    print(f"Base64 디코딩 성공: '{barcode}' -> '{decoded_string}'")
-                    # 디코딩된 데이터를 barcode 변수에 덮어써서 이후 로직이 처리하도록 함
                     barcode = decoded_string
             except (binascii.Error, UnicodeDecodeError):
-                # Base64 형식이 아니거나 디코딩에 실패하면, 원본 바코드를 그대로 사용
-                # 오류 메시지 없이 조용히 넘어감 (pass)
                 pass
-            # ##################################################################
-            # ## [수정된 부분 끝] ##
-            # ##################################################################
 
             if '|' in barcode and '=' in barcode:
                 if barcode in self.completed_master_labels:
-                    self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.\n(현품표: {barcode})", self.COLOR_DANGER)
+                    self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
                     return
 
                 sanitized_barcode = self._sanitize_filename(barcode)
@@ -802,12 +801,10 @@ class ContainerAudit:
                     if messagebox.askyesno("보류 작업 발견", "이 현품표는 보류 중인 작업입니다.\n이 작업을 복원하시겠습니까?"):
                         self.restore_parked_tray(parked_filepath)
                     return
-
                 try:
                     qr_data = dict(pair.split('=', 1) for pair in barcode.split('|'))
                     item_code = qr_data.get('CLC')
                     tray_quantity = int(qr_data.get('QT', self.TRAY_SIZE))
-
                     if not item_code:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)
                         return
@@ -818,18 +815,13 @@ class ContainerAudit:
                         return
                     
                     self.current_tray = TraySession(
-                        master_label_code=barcode,
-                        item_code=item_code,
-                        tray_size=tray_quantity,
-                        item_name=matched_item.get('Item Name', ''),
-                        item_spec=matched_item.get('Spec', '')
+                        master_label_code=barcode, item_code=item_code, tray_size=tray_quantity,
+                        item_name=matched_item.get('Item Name', ''), item_spec=matched_item.get('Spec', '')
                     )
                     self._log_event('MASTER_LABEL_SCANNED_NEW', detail=qr_data)
-
                 except Exception as e:
                     self.show_fullscreen_warning("QR코드 분석 오류", f"새로운 현품표 QR코드를 해석하는 중 오류가 발생했습니다.\n{e}", self.COLOR_DANGER)
                     return
-
             else:
                 if len(barcode) != self.ITEM_CODE_LENGTH:
                     self.show_fullscreen_warning("작업 시작 오류", f"잘못된 형식의 바코드입니다.\n{self.ITEM_CODE_LENGTH}자리 품목코드 또는 신규 QR을 스캔하세요.", self.COLOR_DANGER)
@@ -841,11 +833,8 @@ class ContainerAudit:
                     return
                 
                 self.current_tray = TraySession(
-                    master_label_code=barcode,
-                    item_code=barcode,
-                    tray_size=self.TRAY_SIZE,
-                    item_name=matched_item.get('Item Name', ''),
-                    item_spec=matched_item.get('Spec', '')
+                    master_label_code=barcode, item_code=barcode, tray_size=self.TRAY_SIZE,
+                    item_name=matched_item.get('Item Name', ''), item_spec=matched_item.get('Spec', '')
                 )
                 self._log_event('MASTER_LABEL_SCANNED_OLD', detail={'master_label_code': barcode})
 
@@ -855,104 +844,29 @@ class ContainerAudit:
             self._start_stopwatch()
             self._save_current_tray_state()
             return
-
-        if len(barcode) <= self.ITEM_CODE_LENGTH:
-            self.show_fullscreen_warning("바코드 형식 오류", f"제품 바코드는 {self.ITEM_CODE_LENGTH}자리보다 길어야 합니다.\n(스캔된 코드: {barcode})", self.COLOR_DANGER); return
-        if self.current_tray.item_code not in barcode:
+            
+        # --- 제품 스캔 로직 ---
+        if len(raw_barcode) <= self.ITEM_CODE_LENGTH:
+            self.show_fullscreen_warning("바코드 형식 오류", f"제품 바코드는 {self.ITEM_CODE_LENGTH}자리보다 길어야 합니다.", self.COLOR_DANGER); return
+        if self.current_tray.item_code not in raw_barcode:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
             self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
-            self._log_event('SCAN_FAIL_MISMATCH', detail={'expected': self.current_tray.item_code, 'scanned': barcode}); return
-        if barcode in self.current_tray.scanned_barcodes:
+            self._log_event('SCAN_FAIL_MISMATCH', detail={'expected': self.current_tray.item_code, 'scanned': raw_barcode}); return
+        if raw_barcode in self.current_tray.scanned_barcodes:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
-            self.show_fullscreen_warning("바코드 중복!", f"제품 바코드 '{barcode}'는 이미 스캔되었습니다.", self.COLOR_DANGER)
-            self._log_event('SCAN_FAIL_DUPLICATE', detail={'barcode': barcode}); return
+            self.show_fullscreen_warning("바코드 중복!", f"제품 바코드 '{raw_barcode}'는 이미 스캔되었습니다.", self.COLOR_DANGER)
+            self._log_event('SCAN_FAIL_DUPLICATE', detail={'barcode': raw_barcode}); return
         
         now = datetime.datetime.now()
         interval = (now - self.current_tray.scan_times[-1]).total_seconds() if self.current_tray.scan_times else 0.0
-        self.add_scanned_barcode(barcode, now, interval)
+        self.add_scanned_barcode(raw_barcode, now, interval)
         self._save_current_tray_state()
         
         if len(self.current_tray.scanned_barcodes) == self.current_tray.tray_size:
             self.complete_tray()
 
-    # **수정된 부분: 수량별 테스트 로그 생성 로직**
-    def _generate_test_logs(self, count: int):
-        """지정된 수량만큼 식별 가능한 테스트 로그를 생성합니다. (여러 트레이에 걸쳐 생성 가능)"""
-        # 1. 작업 시작 전이면 임의의 품목으로 테스트 세션 시작
-        if not self.current_tray.master_label_code:
-            if not self.items_data:
-                self.show_fullscreen_warning("오류", "품목 데이터(Item.csv)가 없습니다.", self.COLOR_DANGER)
-                return
-
-            random_item = random.choice(self.items_data)
-            self.current_tray = TraySession(
-                item_code = random_item.get('Item Code', ''),
-                item_name = random_item.get('Item Name', ''),
-                item_spec = random_item.get('Spec', ''),
-                tray_size = self.TRAY_SIZE,
-                master_label_code = f"TEST-MASTER-{random_item.get('Item Code', '')}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-            )
-            self._log_event('RANDOM_TEST_SESSION_START', detail={'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name})
-            self._update_current_item_label()
-            self._update_center_display()
-            self.root.update_idletasks()
-
-        # 2. 필요한 정보 저장 및 생성할 아이템 수량 초기화
-        original_tray_info = {
-            'item_code': self.current_tray.item_code,
-            'item_name': self.current_tray.item_name,
-            'item_spec': self.current_tray.item_spec,
-            'tray_size': self.current_tray.tray_size
-        }
-        items_to_generate = count
-
-        self.show_status_message(f"테스트 로그 {count}개 생성 중...", self.COLOR_PRIMARY)
-        self.root.update_idletasks()
-
-        # 3. 요청된 수량만큼 로그 생성 루프
-        while items_to_generate > 0:
-            current_scans = len(self.current_tray.scanned_barcodes)
-            tray_capacity = self.current_tray.tray_size
-            remaining_space = tray_capacity - current_scans
-            
-            scans_for_this_tray = min(items_to_generate, remaining_space)
-
-            for i in range(scans_for_this_tray):
-                barcode = f"TEST-{self.current_tray.item_code}-{datetime.datetime.now().strftime('%f')}-{i}"
-                self.add_scanned_barcode(barcode, datetime.datetime.now(), 0.1)
-                self.root.update()
-                time.sleep(0.01)
-
-            items_to_generate -= scans_for_this_tray
-
-            # 트레이가 꽉 찼고, 아직 생성할 아이템이 남았다면
-            if len(self.current_tray.scanned_barcodes) >= tray_capacity and items_to_generate > 0:
-                self.complete_tray()
-                self.root.update_idletasks() # UI 갱신
-                time.sleep(0.5) # 다음 트레이 시작 전 잠시 대기
-
-                # 다음 테스트 트레이 준비
-                self.current_tray = TraySession(
-                    item_code=original_tray_info['item_code'],
-                    item_name=original_tray_info['item_name'],
-                    item_spec=original_tray_info['item_spec'],
-                    tray_size=original_tray_info['tray_size'],
-                    master_label_code=f"TEST-MASTER-{original_tray_info['item_code']}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}"
-                )
-                self._update_current_item_label()
-                self._update_center_display()
-                self.root.update_idletasks()
-
-        # 4. 마지막 트레이가 부분적으로 채워졌다면 부분 제출로 완료
-        if self.current_tray.master_label_code and self.current_tray.scanned_barcodes:
-            self.current_tray.is_partial_submission = True
-            self.complete_tray()
-
-        self.show_status_message(f"테스트 로그 {count}개 생성을 완료했습니다.", self.COLOR_SUCCESS)
-
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
-        if self.success_sound:
-            self.success_sound.play()
+        if self.success_sound: self.success_sound.play()
         self.current_tray.scanned_barcodes.append(barcode)
         self.current_tray.scan_times.append(scan_time)
         count = len(self.current_tray.scanned_barcodes)
@@ -966,28 +880,32 @@ class ContainerAudit:
 
     def complete_tray(self):
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
-        is_test = self.current_tray.is_test_tray; has_error = self.current_tray.has_error_or_reset; is_partial = self.current_tray.is_partial_submission
+        is_test = "TEST" in self.current_tray.master_label_code
+        has_error = self.current_tray.has_error_or_reset; is_partial = self.current_tray.is_partial_submission
         is_restored = self.current_tray.is_restored_session
         master_label = self.current_tray.master_label_code
-        if not is_test:
-            self._log_event('TRAY_COMPLETE', detail={
-                'master_label_code': master_label, 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name, 'scan_count': len(self.current_tray.scanned_barcodes),
-                'tray_capacity': self.current_tray.tray_size, 'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
-                'total_idle_seconds': self.current_tray.total_idle_seconds, 'has_error_or_reset': has_error, 'is_partial_submission': is_partial, 'is_restored_session': is_restored,
-                'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'end_time': datetime.datetime.now().isoformat()
-            })
-            if '|' in master_label and '=' in master_label:
-                self.completed_master_labels.add(master_label)
+        
+        log_detail = {
+            'master_label_code': master_label, 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name, 'scan_count': len(self.current_tray.scanned_barcodes),
+            'tray_capacity': self.current_tray.tray_size, 'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
+            'total_idle_seconds': self.current_tray.total_idle_seconds, 'has_error_or_reset': has_error, 'is_partial_submission': is_partial, 'is_restored_session': is_restored, 'is_test_tray': is_test,
+            'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'end_time': datetime.datetime.now().isoformat()
+        }
+        self._log_event('TRAY_COMPLETE', detail=log_detail)
+
+        if not is_test and '|' in master_label and '=' in master_label:
+            self.completed_master_labels.add(master_label)
 
         item_code = self.current_tray.item_code
         if item_code not in self.work_summary: self.work_summary[item_code] = {'name': self.current_tray.item_name, 'spec': self.current_tray.item_spec, 'count': 0, 'test_count': 0}
-        if is_test: self.work_summary[item_code]['test_count'] += 1; self.show_status_message(f"테스트 트레이 완료! (로그 미저장)", self.COLOR_SUCCESS)
+        if is_test: self.work_summary[item_code]['test_count'] += 1; self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
         else:
             self.work_summary[item_code]['count'] += 1
             if not is_partial: self.total_tray_count += 1
             if not has_error and not is_partial and not is_restored and self.current_tray.stopwatch_seconds > 0: self.completed_tray_times.append(self.current_tray.stopwatch_seconds)
             if is_partial: self.show_status_message(f"'{self.current_tray.item_name}' 부분 트레이 제출 완료!", self.COLOR_PRIMARY)
             else: self.show_status_message(f"'{self.current_tray.item_name}' 1 파렛트 완료!", self.COLOR_SUCCESS)
+            
         self.current_tray = TraySession()
         self._delete_current_tray_state()
         self.scanned_listbox.delete(0, tk.END)
@@ -1000,6 +918,7 @@ class ContainerAudit:
         if self.info_cards.get('stopwatch'): self.info_cards['stopwatch']['value']['text'] = "00:00"
         self._set_idle_style(is_idle=True)
         self._update_center_display()
+        self._update_tray_image_display()
 
     def undo_last_scan(self):
         self._update_last_activity_time()
@@ -1022,7 +941,6 @@ class ContainerAudit:
             self._delete_current_tray_state(); self.scanned_listbox.delete(0, tk.END)
             self._update_all_summaries(); self.undo_button['state'] = tk.DISABLED
             self._reset_ui_to_waiting_state()
-            self._update_tray_image_display()
             self.show_status_message("현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
 
@@ -1228,9 +1146,11 @@ class ContainerAudit:
                 if not self.log_file_path: time.sleep(0.1); self.log_queue.put(log_entry); continue
                 file_exists = not os.path.exists(self.log_file_path) or os.stat(self.log_file_path).st_size == 0
                 with open(self.log_file_path, 'a', newline='', encoding='utf-8-sig') as f_handle:
-                    writer = csv.writer(f_handle)
-                    if file_exists: writer.writerow(['timestamp', 'worker_name', 'event', 'details'])
-                    writer.writerow([log_entry['timestamp'], log_entry['worker_name'], log_entry['event'], log_entry['details']])
+                    headers = ['timestamp', 'worker_name', 'event', 'details']
+                    writer = csv.DictWriter(f_handle, fieldnames=headers)
+                    if file_exists:
+                        writer.writeheader()
+                    writer.writerow(log_entry)
             except queue.Empty: continue
             except Exception as e: print(f"로그 파일 쓰기 오류: {e}")
 
@@ -1281,9 +1201,6 @@ class ContainerAudit:
             self.tray_image_label.image = None
         self._schedule_focus_return()
 
-    # ####################################################################
-    # # 트레이 보류 및 복원 기능
-    # ####################################################################
     def park_current_tray(self):
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
         if not self.current_tray.master_label_code:
@@ -1294,7 +1211,6 @@ class ContainerAudit:
             return
 
         master_label = self.current_tray.master_label_code
-
         if '|' in master_label and '=' in master_label:
             sanitized_master_label = self._sanitize_filename(master_label)
             filename = f"parked_qr_{self.worker_name}_{sanitized_master_label}.json"
@@ -1399,6 +1315,6 @@ class ContainerAudit:
         self.root.mainloop()
 
 if __name__ == "__main__":
-    check_and_apply_updates()
+    # check_and_apply_updates() # 업데이트 체크 기능 비활성화
     app = ContainerAudit()
     app.run()
