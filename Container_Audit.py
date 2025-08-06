@@ -839,6 +839,8 @@ class ContainerAudit:
                 )
                 self._log_event('MASTER_LABEL_SCANNED_OLD', detail={'master_label_code': barcode})
 
+            # 현품표 스캔 시 이미지 자동 표시
+            self.show_tray_image_var.set(True)
             self._update_tray_image_display()
             self._update_current_item_label()
             self._update_center_display()
@@ -920,6 +922,8 @@ class ContainerAudit:
         self.tray_last_end_time = datetime.datetime.now()
 
     def _reset_ui_to_waiting_state(self):
+        # UI 리셋 시 이미지 체크박스 해제
+        self.show_tray_image_var.set(False)
         self._update_current_item_label()
         if self.info_cards.get('stopwatch'): self.info_cards['stopwatch']['value']['text'] = "00:00"
         self._set_idle_style(is_idle=True)
@@ -1308,6 +1312,10 @@ class ContainerAudit:
             os.remove(filepath)
             
             self.show_validation_screen()
+
+            # 복원 후 이미지 자동 표시
+            self.show_tray_image_var.set(True)
+            self._update_tray_image_display()
 
             self._log_event('TRAY_RESTORED_FROM_PARK', detail={'item_name': self.current_tray.item_name})
             self.show_status_message(f"'{self.current_tray.item_name}' 작업을 다시 시작합니다.", self.COLOR_SUCCESS)
