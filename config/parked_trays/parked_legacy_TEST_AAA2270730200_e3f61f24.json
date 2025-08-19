@@ -1,0 +1,17 @@
+{
+    "worker_name": "TEST",
+    "master_label_code": "AAA2270730200",
+    "item_code": "AAA2270730200",
+    "item_name": "A14",
+    "item_spec": "KMC_LHD",
+    "scanned_barcodes": [],
+    "scan_times": [],
+    "tray_size": 60,
+    "mismatch_error_count": 0,
+    "total_idle_seconds": 0.0,
+    "stopwatch_seconds": 5,
+    "start_time": "2025-08-19T20:29:36.894850",
+    "has_error_or_reset": false,
+    "is_test_tray": false,
+    "is_partial_submission": false
+}
