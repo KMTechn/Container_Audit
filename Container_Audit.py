@@ -200,6 +200,9 @@ class ContainerAudit:
         self.paned_window_sash_positions: Dict[str, int] = self.settings.get('paned_window_sash_positions', {})
         self.column_widths: Dict[str, int] = self.settings.get('column_widths_validator', {})
         
+        self.best_time_records: Dict[str, float] = {} # 날짜별 최고 기록 저장
+        self._load_best_time_records()
+        
         self.worker_name = ""
         self.completed_master_labels: set = set()
         self.current_tray = TraySession()
@@ -240,6 +243,52 @@ class ContainerAudit:
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
+    ####################################################################
+    # 30일 최고 기록 관리
+    ####################################################################
+    def _load_best_time_records(self):
+        """설정 폴더에서 30일 최고 기록 파일을 불러옵니다."""
+        self.best_time_file_path = os.path.join(self.config_folder, 'best_time_records.json')
+        try:
+            with open(self.best_time_file_path, 'r', encoding='utf-8') as f:
+                self.best_time_records = json.load(f)
+            self._cleanup_old_records()
+        except (FileNotFoundError, json.JSONDecodeError):
+            self.best_time_records = {} # 파일이 없거나 깨졌으면 초기화
+
+    def _save_best_time_records(self):
+        """현재 최고 기록 데이터를 파일에 저장합니다."""
+        try:
+            with open(self.best_time_file_path, 'w', encoding='utf-8') as f:
+                json.dump(self.best_time_records, f, indent=4)
+        except Exception as e:
+            print(f"최고 기록 저장 실패: {e}")
+
+    def _cleanup_old_records(self):
+        """30일이 지난 오래된 기록을 삭제합니다."""
+        if not self.best_time_records: return
+        today = datetime.date.today()
+        thirty_days_ago = today - datetime.timedelta(days=30)
+        
+        # 30일 이내의 유효한 기록만 필터링
+        valid_records = {
+            date_str: time
+            for date_str, time in self.best_time_records.items()
+            if datetime.datetime.strptime(date_str, '%Y-%m-%d').date() >= thirty_days_ago
+        }
+        if len(valid_records) != len(self.best_time_records):
+            self.best_time_records = valid_records
+            self._save_best_time_records()
+
+    def _update_best_time_records(self, new_time: float):
+        """새로운 완료 시간을 받아 최고 기록을 갱신하고 저장합니다."""
+        today_str = datetime.date.today().isoformat()
+        current_best_today = self.best_time_records.get(today_str)
+
+        if current_best_today is None or new_time < current_best_today:
+            self.best_time_records[today_str] = new_time
+            self._save_best_time_records() # 최고 기록이 갱신되었으므로 파일에 즉시 저장
+            
     def _setup_paths_and_dirs(self):
         """애플리케이션에서 사용하는 주요 경로와 디렉터리를 설정하고 생성합니다."""
         self.save_folder = "C:\\Sync"
@@ -582,6 +631,30 @@ class ContainerAudit:
         except tk.TclError as e:
             print(f"Could not set initial sash position (ignorable): {e}")
 
+    def _adjust_summary_tree_columns(self, event=None):
+        """금일 작업 현황 Treeview의 컬럼 너비를 동일하게 1/3씩 조절합니다."""
+        # Treeview 위젯이 존재하는지 확인
+        if not (hasattr(self, 'summary_tree') and self.summary_tree.winfo_exists()):
+            return
+        
+        # Treeview를 감싸고 있는 부모 프레임의 현재 너비를 가져옵니다.
+        parent_frame = self.summary_tree.master
+        available_width = parent_frame.winfo_width()
+        
+        # 스크롤바가 보일 경우 그 너비만큼 제외하여 가용 너비를 계산합니다.
+        for child in parent_frame.winfo_children():
+            if isinstance(child, ttk.Scrollbar) and child.winfo_ismapped():
+                available_width -= child.winfo_width()
+                break
+        
+        # 너비가 1 이상일 때만 실행 (UI가 완전히 그려지기 전 오류 방지)
+        if available_width > 1:
+            column_width = available_width // 3
+            cols = ('item_name_spec', 'item_code', 'count')
+            for col_id in cols:
+                # stretch=tk.NO 옵션으로 수동 설정한 너비가 유지되도록 합니다.
+                self.summary_tree.column(col_id, width=column_width, stretch=tk.NO)
+
     def _create_left_sidebar_content(self, parent_frame):
         parent_frame.grid_columnconfigure(0, weight=1)
         parent_frame['padding'] = (10, 10)
@@ -610,14 +683,19 @@ class ContainerAudit:
         self.summary_tree.heading('item_code', text='품목코드')
         self.summary_tree.heading('count', text='완료 수량')
         
-        self.summary_tree.column('item_name_spec', minwidth=100, anchor='w', stretch=tk.YES)
-        self.summary_tree.column('item_code', minwidth=100, anchor='w', stretch=tk.YES)
-        self.summary_tree.column('count', minwidth=80, anchor='center', stretch=tk.YES)
+        # 기존의 고정 너비/minwidth/stretch 설정을 제거하고 anchor만 남깁니다.
+        self.summary_tree.column('item_name_spec', anchor='w')
+        self.summary_tree.column('item_code', anchor='w')
+        self.summary_tree.column('count', anchor='center')
 
         self.summary_tree.grid(row=0, column=0, sticky='nsew')
         sb1 = ttk.Scrollbar(tree_frame, orient='vertical', command=self.summary_tree.yview)
         self.summary_tree['yscrollcommand'] = sb1.set
         sb1.grid(row=0, column=1, sticky='ns')
+
+        # tree_frame의 크기가 변경될 때마다 컬럼 너비를 조절하는 함수를 호출하도록 바인딩합니다.
+        tree_frame.bind('<Configure>', self._adjust_summary_tree_columns)
+
         self.parked_title_label = ttk.Label(top_frame, text="보류 중인 트레이 (더블클릭으로 복원)", style='Subtle.TLabel', font=(self.DEFAULT_FONT, int(12*self.scale_factor),'bold'))
         self.parked_title_label.grid(row=3, column=0, sticky='w', pady=(20,10))
         parked_tree_frame = ttk.Frame(top_frame)
@@ -680,7 +758,7 @@ class ContainerAudit:
         self.clock_label.grid(row=1, column=0, pady=(0,20))
         self.info_cards = {
             'status': self._create_info_card(parent_frame, "⏰ 현재 작업 상태"), 'stopwatch': self._create_info_card(parent_frame, "⏱️ 현재 트레이 소요 시간"),
-            'avg_time': self._create_info_card(parent_frame, "📊 평균 완료 시간"), 'best_time': self._create_info_card(parent_frame, "🥇 금주 최고 기록")
+            'avg_time': self._create_info_card(parent_frame, "📊 평균 완료 시간"), 'best_time': self._create_info_card(parent_frame, "🥇 30일 최고 기록")
         }
         card_order = ['status', 'stopwatch', 'avg_time', 'best_time']
         for i, card_key in enumerate(card_order):
@@ -910,7 +988,13 @@ class ContainerAudit:
         else:
             self.work_summary[item_code]['count'] += 1
             if not is_partial: self.total_tray_count += 1
-            if not has_error and not is_partial and not is_restored and self.current_tray.stopwatch_seconds > 0: self.completed_tray_times.append(self.current_tray.stopwatch_seconds)
+            
+            # 조건에 맞는 경우 최고 기록 갱신
+            if not has_error and not is_partial and not is_restored and self.current_tray.stopwatch_seconds > 0:
+                work_time = self.current_tray.stopwatch_seconds
+                self.completed_tray_times.append(work_time) # 주간 평균 계산을 위해 유지
+                self._update_best_time_records(work_time) # 30일 최고 기록 갱신
+
             if is_partial: self.show_status_message(f"'{self.current_tray.item_name}' 부분 트레이 제출 완료!", self.COLOR_PRIMARY)
             else: self.show_status_message(f"'{self.current_tray.item_name}' 1 파렛트 완료!", self.COLOR_SUCCESS)
             
@@ -926,6 +1010,9 @@ class ContainerAudit:
         self.show_tray_image_var.set(False)
         self._update_current_item_label()
         if self.info_cards.get('stopwatch'): self.info_cards['stopwatch']['value']['text'] = "00:00"
+        
+        self.is_idle = True # 프로그램 내부 상태를 유휴 상태로 설정
+        
         self._set_idle_style(is_idle=True)
         self._update_center_display()
         self._update_tray_image_display()
@@ -995,8 +1082,10 @@ class ContainerAudit:
     def _update_best_time(self):
         card = self.info_cards.get('best_time')
         if not card or not card['value'].winfo_exists(): return
-        if self.completed_tray_times:
-            best_time = min(self.completed_tray_times)
+        
+        if self.best_time_records:
+            # self.best_time_records 딕셔너리의 모든 값 중에서 최소값을 찾음
+            best_time = min(self.best_time_records.values())
             card['value']['text'] = f"{int(best_time // 60):02d}:{int(best_time % 60):02d}"
         else:
             card['value']['text'] = "-"
@@ -1468,10 +1557,32 @@ class ContainerAudit:
             self.show_status_message("자동 테스트 시작...", self.COLOR_PRIMARY)
             time.sleep(2)
 
-            # 1. 현품표 스캔
+            # 1. 현품표 스캔 시뮬레이션 (직접 TraySession 생성)
             self.show_status_message("1. 현품표 스캔 시뮬레이션", self.COLOR_PRIMARY)
             master_label = f"CLC={item_code}|QT={self.TRAY_SIZE}|LOT=AUTOTEST|DATE={datetime.date.today().strftime('%Y%m%d')}"
-            self._process_barcode_logic(master_label)
+
+            # 품목 정보 찾기
+            matched_item = next((item for item in self.items_data if item['Item Code'] == item_code), None)
+            if not matched_item:
+                raise ValueError(f"자동 테스트 중 품목코드 '{item_code}'를 찾지 못했습니다.")
+
+            # is_test_tray=True로 설정하여 테스트 세션을 직접 생성
+            self.current_tray = TraySession(
+                master_label_code=master_label,
+                item_code=item_code,
+                tray_size=self.TRAY_SIZE,
+                item_name=matched_item.get('Item Name', ''),
+                item_spec=matched_item.get('Spec', ''),
+                is_test_tray=True  # 테스트 트레이임을 명시
+            )
+
+            # 기존 process_barcode 함수가 하던 UI 업데이트 및 스톱워치 시작을 수동으로 호출
+            self.show_tray_image_var.set(True)
+            self._update_tray_image_display()
+            self._update_current_item_label()
+            self._update_center_display()
+            self._start_stopwatch()
+            self._save_current_tray_state()
             time.sleep(1)
 
             # 2. 제품 5개 스캔
