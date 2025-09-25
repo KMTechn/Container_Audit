@@ -1432,7 +1432,7 @@ class ContainerAudit:
                 item_name = random_item.get('Item Name', ''),
                 item_spec = random_item.get('Spec', ''),
                 tray_size = self.TRAY_SIZE,
-                master_label_code = f"TEST-MASTER-{random_item.get('Item Code', '')}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}",
+                master_label_code = f"PHS=1|CLC={random_item.get('Item Code', '')}|WID=TEST-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}|SPC=A14|FPB=A146000306|OBD={datetime.date.today().strftime('%Y-%m-%d')}|PJT=KMC_TEST|QT={self.TRAY_SIZE}",
                 is_test_tray = True
             )
             self._log_event('RANDOM_TEST_SESSION_START', detail={'item_code': self.current_tray.item_code})
@@ -1468,7 +1468,7 @@ class ContainerAudit:
                     item_name=original_tray_info.item_name,
                     item_spec=original_tray_info.item_spec,
                     tray_size=original_tray_info.tray_size,
-                    master_label_code=f"TEST-MASTER-{original_tray_info.item_code}-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}",
+                    master_label_code=f"PHS=1|CLC={original_tray_info.item_code}|WID=RSTEST-{datetime.datetime.now().strftime('%Y%m%d%H%M%S%f')}|SPC=A14|FPB=A146000306|OBD={datetime.date.today().strftime('%Y-%m-%d')}|PJT=KMC_RESTART|QT={original_tray_info.tray_size}",
                     is_test_tray=True
                 )
                 self._update_current_item_label()

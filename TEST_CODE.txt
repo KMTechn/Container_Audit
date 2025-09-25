@@ -6,8 +6,21 @@ TEST_LOG_60
 TEST_LOG_120
 TEST_LOG_180
 
-1. 자동화 테스트 스크립트 실행
+1. 자동화 테스트 스크립트 실행 (신형 현품표 양식 적용)
 _RUN_AUTO_TEST_
 
-2. 테스트용 검사 기록 대량 생성
+2. 테스트용 검사 기록 대량 생성 (신형 현품표 양식 적용)
 TEST_LOG_[수량]
+
+3. 신형 현품표 양식 예제:
+PHS=1|CLC=AAA2270730200|WID=MFG-WO-2025-00047|SPC=A14|FPB=A146000306|OBD=2025-09-16|PJT=KMC_LHD|QT=60
+
+필드 설명:
+- PHS: Phase 정보
+- CLC: Customer Label Code (고객사 코드)
+- WID: Work ID (작업 지시 번호)
+- SPC: Spec Code (규격 코드)
+- FPB: Part Number (부품 번호)
+- OBD: Order Date (주문일)
+- PJT: Project Code (프로젝트 코드)
+- QT: Quantity (수량)
