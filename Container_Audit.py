@@ -217,7 +217,11 @@ class ContainerAudit:
         self.is_idle = False
         self.last_activity_time: Optional[datetime.datetime] = None
         self.show_tray_image_var = tk.BooleanVar(value=False)
-        
+
+        # 현품표 교체 관련 상태 변수
+        self.master_label_replace_state: Optional[str] = None
+        self.replacement_context: Dict[str, Any] = {}
+
         self.status_message_job: Optional[str] = None
         self.clock_job: Optional[str] = None
         self.stopwatch_job: Optional[str] = None
@@ -746,6 +750,8 @@ class ContainerAudit:
         self.undo_button = ttk.Button(button_frame, text="↩️ 마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED)
         self.undo_button.pack(side=tk.LEFT, padx=10)
         ttk.Button(button_frame, text="⏸️ 트레이 보류", command=self.park_current_tray).pack(side=tk.LEFT, padx=10)
+        self.replace_master_label_button = ttk.Button(button_frame, text="🔄 완료 현품표 교체", command=self.initiate_master_label_replacement)
+        self.replace_master_label_button.pack(side=tk.LEFT, padx=10)
         self.submit_tray_button = ttk.Button(button_frame, text="✅ 트레이 제출", command=self.submit_current_tray)
         self.submit_tray_button.pack(side=tk.LEFT, padx=10)
 
@@ -805,6 +811,30 @@ class ContainerAudit:
 
     def _update_current_item_label(self, instruction: str = ""):
         if not (hasattr(self, 'current_item_label') and self.current_item_label.winfo_exists()): return
+
+        # 현품표 교체 상태 메시지 표시
+        if self.master_label_replace_state == 'awaiting_old_completed':
+            self.current_item_label['text'] = "완료된 현품표 교체: 교체할 기존 현품표를 스캔하세요."
+            self.current_item_label['foreground'] = self.COLOR_PRIMARY
+            return
+        elif self.master_label_replace_state == 'awaiting_new_replacement':
+            self.current_item_label['text'] = "완료된 현품표 교체: 적용할 새로운 현품표를 스캔하세요."
+            self.current_item_label['foreground'] = self.COLOR_SUCCESS
+            return
+        elif self.master_label_replace_state == 'awaiting_additional_items':
+            needed = self.replacement_context.get('items_needed', 0)
+            scanned = len(self.replacement_context.get('additional_items', []))
+            self.current_item_label['text'] = f"수량 추가: {needed - scanned}개 더 추가 스캔하세요. (총 {needed}개)"
+            self.current_item_label['foreground'] = self.COLOR_PRIMARY
+            return
+        elif self.master_label_replace_state == 'awaiting_removed_items':
+            needed = self.replacement_context.get('items_to_remove_count', 0)
+            scanned = len(self.replacement_context.get('removed_items', []))
+            self.current_item_label['text'] = f"수량 제외: {needed - scanned}개 더 제외 스캔하세요. (총 {needed}개)"
+            self.current_item_label['foreground'] = self.COLOR_DANGER
+            return
+
+        # 기본 작업 상태 메시지
         if self.current_tray.master_label_code:
             name_part = f"현재 품목: {self.current_tray.item_name} ({self.current_tray.item_code})"
             spec_part = f" - {self.current_tray.item_spec}" if self.current_tray.item_spec else ""
@@ -832,6 +862,16 @@ class ContainerAudit:
     def _process_barcode_logic(self, raw_barcode: str):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
+
+        # 현품표 교체 모드 처리
+        if self.master_label_replace_state:
+            if self.master_label_replace_state in ['awaiting_old_completed', 'awaiting_new_replacement']:
+                self._handle_historical_replacement_scan(raw_barcode)
+            elif self.master_label_replace_state == 'awaiting_additional_items':
+                self._handle_additional_item_scan(raw_barcode)
+            elif self.master_label_replace_state == 'awaiting_removed_items':
+                self._handle_removed_item_scan(raw_barcode)
+            return
         self._update_last_activity_time()
         
         # --- 테스트 기능 트리거 ---
@@ -1637,6 +1677,254 @@ class ContainerAudit:
 
     def run(self):
         self.root.mainloop()
+
+    # ===================================================================
+    # 현품표 교체 (완료된 작업 대상) 관련 기능들
+    # ===================================================================
+
+    def _parse_new_format_qr(self, qr_data: str) -> Optional[Dict[str, str]]:
+        """현품표 QR 코드를 파싱합니다."""
+        # JSON 형식 현품표 QR 코드 처리
+        if qr_data.strip().startswith('{') and qr_data.strip().endswith('}'):
+            try:
+                parsed = json.loads(qr_data)
+                if isinstance(parsed, dict):
+                    return parsed
+                else:
+                    return None
+            except json.JSONDecodeError:
+                pass
+
+        # 기존 형식 (=, |로 구분) 처리
+        if '=' in qr_data and '|' in qr_data:
+            parsed_data = {}
+            try:
+                pairs = qr_data.split('|')
+                for pair in pairs:
+                    if '=' in pair:
+                        key, value = pair.split('=', 1)
+                        parsed_data[key.strip()] = value.strip()
+                return parsed_data if parsed_data else None
+            except Exception:
+                return None
+
+        return None
+
+    def initiate_master_label_replacement(self):
+        """현품표 교체 프로세스를 시작합니다."""
+        if self.current_tray.master_label_code:
+            messagebox.showwarning("작업 중 오류", "진행 중인 작업이 있을 때는 현품표를 교체할 수 없습니다.")
+            return
+
+        if self.master_label_replace_state:
+            self.cancel_master_label_replacement()
+        else:
+            self.master_label_replace_state = 'awaiting_old_completed'
+            self._log_event('HISTORICAL_REPLACE_START')
+            self.show_status_message("교체할 '완료된' 현품표를 스캔하세요.", self.COLOR_PRIMARY)
+            self._update_current_item_label()
+            self._schedule_focus_return()
+
+    def cancel_master_label_replacement(self):
+        """현품표 교체 프로세스를 취소하고 상태와 컨텍스트를 초기화합니다."""
+        if self.master_label_replace_state:
+            self.master_label_replace_state = None
+            self.replacement_context = {}
+            self._log_event('HISTORICAL_REPLACE_CANCEL')
+            self.show_status_message("현품표 교체가 취소되었습니다.", self.COLOR_TEXT_SUBTLE)
+            self._update_current_item_label()
+
+    def _handle_historical_replacement_scan(self, barcode: str):
+        """현품표 교체 프로세스의 초기 스캔(기존/신규 현품표)을 처리합니다."""
+        if self.master_label_replace_state == 'awaiting_old_completed':
+            self.replacement_context['old_label'] = barcode
+            self.master_label_replace_state = 'awaiting_new_replacement'
+            self.show_status_message("확인. 적용할 '새로운' 현품표를 스캔하세요.", self.COLOR_SUCCESS)
+            self._update_current_item_label()
+
+        elif self.master_label_replace_state == 'awaiting_new_replacement':
+            new_data = self._parse_new_format_qr(barcode)
+            if not new_data:
+                self.show_fullscreen_warning("스캔 오류", "유효한 현품표 QR 형식이 아닙니다.", self.COLOR_DANGER)
+                self.cancel_master_label_replacement()
+                return
+
+            if barcode == self.replacement_context.get('old_label'):
+                self.show_fullscreen_warning("스캔 오류", "기존과 동일한 현품표입니다.", self.COLOR_DANGER)
+                return
+
+            self.replacement_context['new_label'] = barcode
+            self.replacement_context['new_data'] = new_data
+            self._perform_historical_master_label_swap()
+
+    def _perform_historical_master_label_swap(self):
+        """모든 로컬 로그 파일을 검색하여 교체할 기록을 찾습니다."""
+        old_label = self.replacement_context.get('old_label')
+
+        # 1. 검사실 로그 파일 검색 (C:\Sync 폴더)
+        inspection_folder = "C:\\Sync"
+        log_file_pattern = re.compile(r"검사작업이벤트로그_.*_(\d{8})\.csv")
+
+        try:
+            if not os.path.exists(inspection_folder):
+                messagebox.showerror("오류", f"검사실 로그 폴더 '{inspection_folder}'를 찾을 수 없습니다.")
+                self.cancel_master_label_replacement()
+                return
+
+            all_log_files = [os.path.join(inspection_folder, f) for f in os.listdir(inspection_folder)
+                           if log_file_pattern.match(f)]
+            all_log_files.sort(reverse=True)  # 최신 파일부터 검색
+        except FileNotFoundError:
+            messagebox.showerror("오류", f"검사실 로그 폴더 '{inspection_folder}'를 찾을 수 없습니다.")
+            self.cancel_master_label_replacement()
+            return
+
+        # 2. 각 로그 파일을 순회하며 old_label을 찾습니다.
+        found_log_info = None
+        for log_path in all_log_files:
+            found_log_info = self._find_log_in_file(log_path, old_label)
+            if found_log_info:
+                break
+
+        # 3. 검색 결과에 따라 다음 단계를 진행합니다.
+        if found_log_info:
+            self.replacement_context.update(found_log_info)
+            self._compare_quantities_and_proceed()
+        else:
+            messagebox.showwarning("기록 없음", f"모든 검사실 로그 파일에서 해당 현품표({old_label})의 완료 기록을 찾을 수 없습니다.")
+            self.cancel_master_label_replacement()
+
+    def _find_log_in_file(self, file_path: str, old_label: str) -> Optional[Dict]:
+        """지정된 파일에서 old_label에 해당하는 로그를 찾아 관련 정보를 반환합니다."""
+        try:
+            with open(file_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                for idx, row in enumerate(reader):
+                    if row.get('event') == 'TRAY_COMPLETE':
+                        try:
+                            details = json.loads(row.get('details', '{}'))
+                            if details.get('master_label_code') == old_label:
+                                return {
+                                    'found_log_file': file_path,
+                                    'found_row_index': idx + 1,  # CSV 헤더 다음 행부터 1로 시작
+                                    'original_details': details
+                                }
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+        except Exception as e:
+            print(f"로그 파일 '{os.path.basename(file_path)}' 검색 중 오류: {e}")
+        return None
+
+    def _compare_quantities_and_proceed(self):
+        """수량을 비교하고 다음 단계를 결정하는 로직입니다."""
+        original_details = self.replacement_context['original_details']
+
+        old_details_data = self._parse_new_format_qr(original_details.get('master_label_code', ''))
+        old_qty = int(old_details_data.get('QT', -1)) if old_details_data else len(original_details.get('scanned_barcodes', []))
+        new_qty = int(self.replacement_context['new_data'].get('QT', -2))
+
+        self.replacement_context['old_qty'] = old_qty
+        self.replacement_context['new_qty'] = new_qty
+
+        if old_qty == new_qty:
+            self._finalize_replacement()
+        elif new_qty > old_qty:
+            self.replacement_context['items_needed'] = new_qty - old_qty
+            self.replacement_context['additional_items'] = []
+            self.master_label_replace_state = 'awaiting_additional_items'
+            self._update_current_item_label()
+        else:  # new_qty < old_qty
+            self.replacement_context['items_to_remove_count'] = old_qty - new_qty
+            self.replacement_context['removed_items'] = []
+            self.master_label_replace_state = 'awaiting_removed_items'
+            self._update_current_item_label()
+
+    def _handle_additional_item_scan(self, barcode: str):
+        """추가할 제품 스캔을 처리하는 함수"""
+        ctx = self.replacement_context
+        if barcode in ctx['original_details'].get('scanned_barcodes', []):
+            self.show_fullscreen_warning("중복 스캔", "이미 기존 작업에 포함된 바코드입니다.", self.COLOR_DANGER)
+            return
+        if barcode in ctx.get('additional_items', []):
+            self.show_fullscreen_warning("중복 스캔", "이미 추가 목록에 스캔된 바코드입니다.", self.COLOR_DANGER)
+            return
+
+        ctx['additional_items'].append(barcode)
+        if self.success_sound:
+            self.success_sound.play()
+
+        if len(ctx['additional_items']) >= ctx['items_needed']:
+            self._finalize_replacement()
+        else:
+            self._update_current_item_label()
+
+    def _handle_removed_item_scan(self, barcode: str):
+        """제외할 제품 스캔을 처리하는 함수"""
+        ctx = self.replacement_context
+        if barcode not in ctx['original_details'].get('scanned_barcodes', []):
+            self.show_fullscreen_warning("스캔 오류", "기존 작업에 포함되지 않은 바코드입니다.", self.COLOR_DANGER)
+            return
+        if barcode in ctx.get('removed_items', []):
+            self.show_fullscreen_warning("중복 스캔", "이미 제외 목록에 스캔된 바코드입니다.", self.COLOR_DANGER)
+            return
+
+        ctx['removed_items'].append(barcode)
+        if self.success_sound:
+            self.success_sound.play()
+
+        if len(ctx['removed_items']) >= ctx['items_to_remove_count']:
+            self._finalize_replacement()
+        else:
+            self._update_current_item_label()
+
+    def _finalize_replacement(self):
+        """모든 정보가 준비되면 최종적으로 찾았던 로그 파일을 수정하고 저장합니다."""
+        try:
+            ctx = self.replacement_context
+            log_file_path = ctx['found_log_file']
+            row_index = ctx['found_row_index']
+            details = ctx['original_details']
+
+            # 기존 details 딕셔너리 수정
+            details['master_label_code'] = ctx['new_label']
+
+            # 수량이 증가한 경우 추가 바코드 반영
+            if ctx.get('additional_items'):
+                details['scanned_barcodes'].extend(ctx['additional_items'])
+
+            # 수량이 감소한 경우 제외 바코드 반영
+            if ctx.get('removed_items'):
+                for removed_item in ctx['removed_items']:
+                    if removed_item in details['scanned_barcodes']:
+                        details['scanned_barcodes'].remove(removed_item)
+
+            # CSV 파일 전체를 읽어와서 해당 행만 수정 후 다시 저장
+            with open(log_file_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.DictReader(f)
+                rows = list(reader)
+                fieldnames = reader.fieldnames
+
+            # 해당 행의 details 업데이트
+            if row_index - 1 < len(rows):  # 인덱스 범위 확인
+                rows[row_index - 1]['details'] = json.dumps(details, ensure_ascii=False)
+
+            # 파일에 다시 저장
+            with open(log_file_path, 'w', newline='', encoding='utf-8-sig') as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+
+            # 성공 처리
+            log_details = {'old_master_label': ctx['old_label'], 'new_master_label': ctx['new_label']}
+            self._log_event('HISTORICAL_REPLACE_SUCCESS', detail=log_details)
+
+            messagebox.showinfo("교체 완료", "현품표 정보가 성공적으로 교체 및 수정되었습니다.")
+            self._update_all_summaries()
+
+        except Exception as e:
+            messagebox.showerror("파일 쓰기 오류", f"수정된 로그 저장 중 오류: {e}")
+        finally:
+            self.cancel_master_label_replacement()
 
 if __name__ == "__main__":
     # For development, you might want to disable the update check
