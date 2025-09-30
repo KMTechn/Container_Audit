@@ -1,0 +1,547 @@
+================================================================================
+CONTAINER AUDIT 데이터 분석 프로그램 개발 가이드라인
+================================================================================
+
+이 문서는 Container Audit (이적 검사 시스템)의 로그 데이터를 분석하는 프로그램을
+개발하기 위한 상세한 가이드라인입니다.
+
+================================================================================
+1. 데이터 저장소 위치 및 구조
+================================================================================
+
+1.1 메인 로그 디렉토리
+└── C:\Sync\
+    ├── 이적검사이벤트로그_[작업자명]_[YYYYMMDD].csv     # 이적 검사 로그
+    └── [기타 관련 로그 파일들]
+
+1.2 설정 및 상태 파일
+└── [프로그램폴더]\config\
+    └── container_audit_settings.json               # UI 설정
+└── [프로그램폴더]\config\parked_trays\
+    └── parked_tray_[컴퓨터ID]_[타임스탬프].json      # 보류된 트레이 데이터
+└── [프로그램폴더]\
+    └── _current_tray_state_[컴퓨터ID].json          # 현재 트레이 상태
+
+1.3 최고 기록 데이터
+└── [프로그램폴더]\config\
+    └── best_time_records.json                      # 30일 최고 기록
+
+================================================================================
+2. CSV 로그 파일 구조 분석
+================================================================================
+
+2.1 이적 검사 로그 (이적검사이벤트로그_*.csv)
+컬럼 구조:
+- timestamp: 이벤트 발생 시간 (YYYY-MM-DD HH:MM:SS.mmm)
+- event_type: 이벤트 타입 (아래 2.3 참조)
+- worker: 작업자명
+- item_code: 품목 코드 (13자리)
+- item_name: 품목명
+- master_label: 현품표 코드 (WID-형식)
+- barcode: 스캔된 바코드 (제품 바코드)
+- scan_count: 현재 스캔 횟수
+- total_quantity: 목표 수량
+- work_time_sec: 작업 소요 시간 (초)
+- details: 추가 정보 (JSON 형식 문자열)
+
+예시 데이터:
+2024-12-24 09:15:30.123,SESSION_START,이영희,8811012345678,샘플제품B,WID20241224091530,,0,60,0.0,"{""tray_size"": 60}"
+2024-12-24 09:16:45.456,TRAY_PRODUCT_SCANNED,이영희,8811012345678,샘플제품B,WID20241224091530,8811012345678001,1,60,75.2,"{""scan_time"": ""2024-12-24 09:16:45""}"
+2024-12-24 09:45:30.789,SESSION_COMPLETE,이영희,8811012345678,샘플제품B,WID20241224091530,,60,60,1800.5,"{""completion_type"": ""full""}"
+
+2.2 Container Audit 특징
+- 모든 제품이 양품으로 처리됨 (불량품 판정 없음)
+- 간단하고 빠른 이적 검사 워크플로우
+- 트레이 보류/복구 기능 지원
+- 개별 제품 교환 기능 지원
+
+2.3 주요 이벤트 타입 및 의미
+
+▶ 세션 관리 이벤트:
+- SESSION_START: 검사 세션 시작 (현품표 스캔)
+- SESSION_COMPLETE: 세션 정상 완료
+- SESSION_RESET: 세션 리셋
+- TRAY_SUBMIT: 트레이 제출
+- SESSION_RESTORED: 이전 세션 복구
+
+▶ 검사 관련 이벤트:
+- SCAN_SUCCESS: 바코드 스캔 성공
+- SCAN_DUPLICATE: 중복 바코드 스캔 시도
+- SCAN_MISMATCH: 품목 불일치
+- TRAY_PRODUCT_SCANNED: 트레이 제품 스캔 (양품)
+
+▶ 트레이 관리 이벤트:
+- TRAY_PARKED: 트레이 보류
+- TRAY_RESTORED: 보류된 트레이 복구
+- PARTIAL_TRAY_SUBMITTED: 부분 트레이 제출
+
+▶ 개별 제품 교환 이벤트:
+- PRODUCT_EXCHANGE_COMPLETED: 제품 교환 완료
+
+▶ 현품표 교체 이벤트:
+- MASTER_LABEL_REPLACE_START: 현품표 교체 시작
+- HISTORICAL_REPLACE_SUCCESS: 완료된 현품표 교체 성공
+- MASTER_LABEL_REPLACE_CANCEL: 현품표 교체 취소
+
+▶ 시스템 이벤트:
+- UPDATE_CHECK_FOUND: 업데이트 발견
+- UPDATE_STARTED: 업데이트 시작
+- IDLE_MODE_ON/OFF: 유휴 모드 진입/해제
+
+▶ 테스트 관련 이벤트:
+- TEST_TRAY_COMPLETED: 테스트 트레이 완료
+- AUTO_TEST_STARTED: 자동 테스트 시작
+
+2.4 Details 필드 JSON 구조 예시
+
+SESSION_START:
+{
+  "tray_size": 60,
+  "item_spec": "A14",
+  "phs": "1",
+  "work_order_id": "MFG-WO-2025-00047",
+  "supplier_code": "SUP001",
+  "finished_product_batch": "A146000306",
+  "outbound_date": "2025-09-16"
+}
+
+TRAY_PRODUCT_SCANNED:
+{
+  "scan_time": "2024-12-24 09:16:45",
+  "item_spec": "A14",
+  "scan_sequence": 1,
+  "scan_duration_ms": 150
+}
+
+SESSION_COMPLETE:
+{
+  "completion_type": "full|partial",
+  "scan_count": 60,
+  "work_time_sec": 1800.5,
+  "has_error_or_reset": false,
+  "scanned_product_barcodes": ["8811012345678001", "8811012345678002", ...],
+  "average_scan_interval": 30.2,
+  "idle_time_sec": 120.0
+}
+
+TRAY_PARKED:
+{
+  "reason": "user_requested|system_auto",
+  "parked_scan_count": 45,
+  "parked_time": "2024-12-24T09:30:15.123456",
+  "remaining_quantity": 15
+}
+
+PRODUCT_EXCHANGE_COMPLETED:
+{
+  "target_quantity": 3,
+  "exchange_pairs": [
+    {"defective": "8811012345678057", "good": "8811012345678061"},
+    {"defective": "8811012345678058", "good": "8811012345678062"},
+    {"defective": "8811012345678059", "good": "8811012345678063"}
+  ],
+  "item_code": "8811012345678",
+  "item_name": "샘플제품B"
+}
+
+HISTORICAL_REPLACE_SUCCESS:
+{
+  "old_master_label": "WID20241223091530",
+  "new_master_label": "WID20241224091530",
+  "affected_records": 1,
+  "replacement_time": "2024-12-24T10:15:30.123456"
+}
+
+================================================================================
+3. JSON 데이터 파일 구조
+================================================================================
+
+3.1 현재 트레이 상태 (_current_tray_state_*.json)
+{
+  "master_label_code": "WID20241224091530",
+  "item_code": "8811012345678",
+  "item_name": "샘플제품B",
+  "item_spec": "A14",
+  "scanned_barcodes": [
+    "8811012345678001",
+    "8811012345678002",
+    ...
+  ],
+  "scan_times": [
+    "2024-12-24T09:16:45.456Z",
+    "2024-12-24T09:17:15.789Z",
+    ...
+  ],
+  "tray_size": 60,
+  "start_time": "2024-12-24T09:15:30.123456",
+  "stopwatch_seconds": 1200.5,
+  "mismatch_error_count": 0,
+  "total_idle_seconds": 45.2,
+  "has_error_or_reset": false,
+  "is_test_tray": false,
+  "is_partial_submission": false,
+  "is_restored_session": false
+}
+
+3.2 보류된 트레이 데이터 (parked_tray_*.json)
+{
+  "master_label_code": "WID20241224091530",
+  "item_code": "8811012345678",
+  "item_name": "샘플제품B",
+  "scanned_barcodes": ["8811012345678001", "8811012345678002", ...],
+  "scan_times": ["2024-12-24T09:16:45.456Z", ...],
+  "parked_time": "2024-12-24T09:30:15.123456",
+  "parked_scan_count": 45,
+  "remaining_quantity": 15,
+  "worker": "이영희",
+  "computer_id": "0x1234567890abcdef"
+}
+
+3.3 최고 기록 데이터 (best_time_records.json)
+{
+  "2024-12-24": {
+    "best_time": 1245.8,
+    "worker": "이영희",
+    "item_code": "8811012345678",
+    "recorded_at": "2024-12-24T10:30:45.123456"
+  },
+  "2024-12-23": {
+    "best_time": 1356.2,
+    "worker": "김철수",
+    "item_code": "8811012345679",
+    "recorded_at": "2024-12-23T15:22:30.789012"
+  }
+}
+
+3.4 UI 설정 데이터 (container_audit_settings.json)
+{
+  "scale_factor": 1.2,
+  "paned_window_sash_positions": {
+    "main_paned": 400,
+    "secondary_paned": 300
+  },
+  "column_widths_validator": {
+    "barcode_column": 200,
+    "sequence_column": 80
+  },
+  "show_tray_image": true,
+  "scan_delay": 0.1,
+  "window_geometry": "1400x800",
+  "window_state": "zoomed"
+}
+
+================================================================================
+4. 분석 프로그램 개발 권장사항
+================================================================================
+
+4.1 필수 라이브러리
+- pandas: CSV 데이터 처리
+- json: JSON 파일 파싱
+- datetime: 시간 데이터 처리
+- matplotlib/seaborn: 시각화
+- numpy: 수치 계산
+- glob: 파일 패턴 매칭
+
+4.2 데이터 로딩 예시 코드 (Python)
+
+import pandas as pd
+import json
+import glob
+from datetime import datetime, timedelta
+
+def load_container_audit_logs(date_range=None, worker=None):
+    """이적 검사 로그 데이터 로딩"""
+    log_files = glob.glob("C:/Sync/이적검사이벤트로그_*.csv")
+
+    all_data = []
+    for file in log_files:
+        try:
+            df = pd.read_csv(file, encoding='utf-8-sig')
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
+
+            # 필터링
+            if date_range:
+                df = df[(df['timestamp'] >= date_range[0]) &
+                       (df['timestamp'] <= date_range[1])]
+            if worker:
+                df = df[df['worker'] == worker]
+
+            all_data.append(df)
+        except Exception as e:
+            print(f"파일 로딩 오류 {file}: {e}")
+
+    return pd.concat(all_data, ignore_index=True) if all_data else pd.DataFrame()
+
+def load_parked_trays():
+    """보류된 트레이 데이터 로딩"""
+    parked_files = glob.glob("./config/parked_trays/parked_tray_*.json")
+    parked_data = []
+
+    for file in parked_files:
+        try:
+            with open(file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                parked_data.append(data)
+        except Exception as e:
+            print(f"보류 트레이 파일 로딩 오류 {file}: {e}")
+
+    return parked_data
+
+def load_best_time_records():
+    """최고 기록 데이터 로딩"""
+    try:
+        with open('./config/best_time_records.json', 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"최고 기록 파일 로딩 오류: {e}")
+        return {}
+
+def parse_details_json(details_str):
+    """Details 필드 JSON 파싱"""
+    if pd.isna(details_str) or details_str == '':
+        return {}
+    try:
+        return json.loads(details_str)
+    except:
+        return {}
+
+4.3 주요 분석 메트릭
+
+▶ 생산성 지표:
+- 시간당 처리량 (trays/hour)
+- 평균 트레이 완료 시간 (work_time_sec)
+- 작업자별 효율성 비교
+- 품목별 처리 속도
+- 스캔 간격 분석 (scan interval)
+
+▶ 품질 지표:
+- 오류 발생률 (SCAN_DUPLICATE, SCAN_MISMATCH)
+- 세션 리셋 빈도
+- 부분 제출 비율
+- 개별 제품 교환 빈도
+
+▶ 시스템 사용 패턴:
+- 트레이 보류/복구 패턴
+- 현품표 교체 빈도
+- 유휴 시간 분석
+- 테스트 트레이 사용 패턴
+
+▶ 시간 효율성:
+- 30일 최고 기록 추이
+- 작업자별 학습 곡선
+- 시간대별 생산성 변화
+- 요일별 성과 분석
+
+4.4 분석 쿼리 예시
+
+# 일별 생산량 집계
+daily_production = df[df['event_type'] == 'SESSION_COMPLETE'].groupby([
+    df['timestamp'].dt.date, 'worker', 'item_code'
+]).agg({
+    'scan_count': 'sum',
+    'work_time_sec': ['mean', 'min', 'max', 'count']
+}).reset_index()
+
+# 스캔 효율성 분석
+scan_efficiency = df[df['event_type'] == 'TRAY_PRODUCT_SCANNED'].groupby([
+    df['timestamp'].dt.date, 'worker'
+]).agg({
+    'timestamp': lambda x: x.diff().dt.total_seconds().mean()  # 평균 스캔 간격
+}).rename(columns={'timestamp': 'avg_scan_interval_sec'})
+
+# 오류율 계산
+error_analysis = df[df['event_type'].isin([
+    'SCAN_DUPLICATE', 'SCAN_MISMATCH', 'SESSION_RESET'
+])].groupby([
+    df['timestamp'].dt.date, 'worker'
+]).size().reset_index(name='error_count')
+
+# 트레이 보류 패턴 분석
+parking_analysis = df[df['event_type'] == 'TRAY_PARKED'].groupby([
+    df['timestamp'].dt.date, 'worker'
+]).agg({
+    'scan_count': 'mean',  # 보류 시점 평균 스캔 수
+    'event_type': 'count'  # 보류 횟수
+}).rename(columns={'event_type': 'park_count'})
+
+# 최고 기록 달성 분석
+best_records_df = pd.DataFrame([
+    {'date': date, **record}
+    for date, record in load_best_time_records().items()
+])
+best_records_df['date'] = pd.to_datetime(best_records_df['date'])
+
+4.5 Container Audit 특화 분석
+
+▶ 이적 검사 특성 분석:
+- 100% 양품 처리 확인
+- 스캔 속도 일관성 측정
+- 연속 작업 패턴 분석
+
+▶ 트레이 관리 효율성:
+- 보류/복구 사이클 시간
+- 부분 제출 vs 전체 제출 비율
+- 세션 복구 성공률
+
+▶ 개별 제품 교환 분석:
+- 교환 발생 빈도
+- 교환 수량 분포
+- 교환 소요 시간
+
+▶ 현품표 관리:
+- 교체 작업 빈도
+- 교체 소요 시간
+- 교체 오류 패턴
+
+4.6 성능 벤치마킹
+
+# 작업자별 성과 비교
+worker_performance = df[df['event_type'] == 'SESSION_COMPLETE'].groupby('worker').agg({
+    'work_time_sec': ['mean', 'std', 'min'],
+    'scan_count': 'sum',
+    'timestamp': 'count'
+}).round(2)
+
+# 품목별 처리 난이도 분석
+item_difficulty = df[df['event_type'] == 'SESSION_COMPLETE'].groupby('item_code').agg({
+    'work_time_sec': 'mean',
+    'mismatch_error_count': 'mean'
+}).sort_values('work_time_sec', ascending=False)
+
+# 시간대별 생산성 패턴
+hourly_productivity = df[df['event_type'] == 'SESSION_COMPLETE'].groupby(
+    df['timestamp'].dt.hour
+).agg({
+    'work_time_sec': 'mean',
+    'scan_count': 'sum'
+})
+
+================================================================================
+5. 예외 상황 및 데이터 검증
+================================================================================
+
+5.1 데이터 무결성 검사
+
+▶ 세션 완료성 검사:
+- SESSION_START와 SESSION_COMPLETE 쌍 확인
+- 비정상 종료된 세션 식별
+- 미완료 세션의 보류 상태 확인
+
+▶ 시간 순서 검증:
+- 타임스탬프 순서 확인
+- 비현실적인 작업 시간 감지 (음수, 과도한 값)
+- 스캔 간격 이상치 탐지
+
+▶ 바코드 중복 검사:
+- 동일 세션 내 중복 스캔 확인
+- 서로 다른 세션 간 바코드 충돌 검사
+- 품목 코드 일치성 검증
+
+5.2 시스템 오류 패턴 분석
+
+def detect_anomalies(df):
+    """시스템 이상 패턴 감지"""
+    anomalies = []
+
+    # 1. 과도한 오류 발생
+    error_events = df[df['event_type'].isin([
+        'SCAN_DUPLICATE', 'SCAN_MISMATCH', 'SESSION_RESET'
+    ])]
+    high_error_sessions = error_events.groupby(['worker', 'master_label']).size()
+    anomalies.extend(high_error_sessions[high_error_sessions > 5].index.tolist())
+
+    # 2. 비정상적인 작업 시간
+    complete_sessions = df[df['event_type'] == 'SESSION_COMPLETE']
+    time_outliers = complete_sessions[
+        (complete_sessions['work_time_sec'] < 60) |  # 너무 빠름
+        (complete_sessions['work_time_sec'] > 7200)  # 너무 느림 (2시간)
+    ]
+    anomalies.extend(time_outliers['master_label'].tolist())
+
+    # 3. 빈번한 보류 패턴
+    park_events = df[df['event_type'] == 'TRAY_PARKED']
+    frequent_parkers = park_events.groupby('worker').size()
+    anomalies.extend(frequent_parkers[frequent_parkers > 10].index.tolist())
+
+    return anomalies
+
+5.3 데이터 품질 메트릭
+
+def calculate_data_quality_metrics(df):
+    """데이터 품질 지표 계산"""
+    total_sessions = df[df['event_type'] == 'SESSION_START'].shape[0]
+    complete_sessions = df[df['event_type'] == 'SESSION_COMPLETE'].shape[0]
+
+    quality_metrics = {
+        'session_completion_rate': complete_sessions / total_sessions if total_sessions > 0 else 0,
+        'data_completeness': df.isnull().sum().sum() / (df.shape[0] * df.shape[1]),
+        'timestamp_consistency': (df['timestamp'].diff() >= pd.Timedelta(0)).sum() / len(df),
+        'error_rate': df[df['event_type'].str.contains('ERROR|MISMATCH|DUPLICATE', na=False)].shape[0] / len(df)
+    }
+
+    return quality_metrics
+
+================================================================================
+6. 실시간 모니터링 고려사항
+================================================================================
+
+6.1 라이브 데이터 처리
+- 파일 락 감지 및 대기
+- 점진적 데이터 읽기 (tail -f 방식)
+- 실시간 알림 시스템
+
+6.2 성능 모니터링
+- 메모리 사용량 추적
+- 처리 지연 시간 측정
+- 시스템 리소스 모니터링
+
+6.3 알림 및 대시보드
+- 임계값 기반 알림 (오류율, 처리 시간)
+- 실시간 생산성 대시보드
+- 작업자별 성과 모니터링
+
+================================================================================
+7. 보고서 생성 템플릿
+================================================================================
+
+7.1 일일 생산 보고서
+- 총 처리량 (트레이/제품 수)
+- 작업자별 성과
+- 오류 발생 현황
+- 최고 기록 갱신 여부
+
+7.2 주간/월간 트렌드 분석
+- 생산성 추이
+- 품목별 처리 패턴
+- 시스템 사용 패턴 변화
+- 개선 권장사항
+
+7.3 예외 상황 보고서
+- 시스템 오류 분석
+- 데이터 품질 이슈
+- 성능 병목 지점
+- 조치 방안 제안
+
+================================================================================
+8. API 연동 고려사항
+================================================================================
+
+8.1 외부 시스템 연동
+- ERP 시스템과의 생산 데이터 동기화
+- 품질 관리 시스템 연동
+- 실시간 대시보드 API 제공
+
+8.2 데이터 익스포트
+- 표준 형식 (JSON, CSV, Excel) 지원
+- 필터링 및 집계 옵션
+- 자동화된 정기 보고서 생성
+
+================================================================================
+이 가이드라인을 바탕으로 Container Audit 시스템의 데이터를 효과적으로
+분석하는 프로그램을 개발하시기 바랍니다.
+
+Container Audit은 간단하고 효율적인 이적 검사에 특화되어 있으므로,
+분석 시에도 이러한 특성을 고려한 메트릭과 시각화를 활용하시기 바랍니다.
+
+문의사항이나 추가 정보가 필요한 경우 개발팀에 연락 주세요.
+================================================================================
