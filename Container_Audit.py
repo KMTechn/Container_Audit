@@ -1984,7 +1984,7 @@ class ContainerAudit:
 
         # 상태 라벨
         self.exchange_status_label = ttk.Label(main_frame,
-                                             text="'교환 시작' 버튼을 클릭한 후 불량품을 스캔하세요.",
+                                             text="교환할 수량을 선택한 후 불량품을 스캔하세요.",
                                              font=(self.DEFAULT_FONT, 12))
         self.exchange_status_label.pack(pady=10)
 
@@ -2032,10 +2032,6 @@ class ContainerAudit:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X)
 
-        self.exchange_start_button = ttk.Button(button_frame, text="교환 시작",
-                                              command=self._start_exchange)
-        self.exchange_start_button.pack(side=tk.LEFT, padx=(0, 10))
-
         self.exchange_complete_button = ttk.Button(button_frame, text="교환 완료",
                                                  command=self._complete_exchange,
                                                  state=tk.DISABLED)
@@ -2053,14 +2049,16 @@ class ContainerAudit:
         self.exchange_scan_entry.focus()
 
     def _start_exchange(self):
-        """교환을 시작합니다."""
+        """교환을 시작합니다. (첫 스캔 시 자동 호출)"""
         quantity = self.exchange_quantity_var.get()
+        if not quantity or quantity < 1:
+            return False
+
         self.current_exchange_session.target_quantity = quantity
         self.current_exchange_session.current_step = "scan_defective"
 
-        self.exchange_start_button.config(state=tk.DISABLED)
         self._update_exchange_status()
-        self.exchange_scan_entry.focus()
+        return True
 
     def _on_exchange_scan(self, event):
         """엔터키 누를 때 호출되는 함수"""
@@ -2073,8 +2071,13 @@ class ContainerAudit:
         """교환 스캔을 처리합니다."""
         session = self.current_exchange_session
 
+        # 세션이 시작되지 않았으면 자동으로 시작
+        if session.current_step == "not_started":
+            if not self._start_exchange():
+                messagebox.showwarning("수량 미설정", "교환할 수량을 먼저 설정해주세요.")
+                return
+
         if session.current_step not in ["scan_defective", "scan_good"]:
-            messagebox.showwarning("오류", "먼저 '교환 시작' 버튼을 클릭하세요.")
             return
 
         # 바코드 검증
@@ -2169,7 +2172,7 @@ class ContainerAudit:
             else:
                 status = "모든 스캔이 완료되었습니다. '교환 완료' 버튼을 클릭하세요."
         else:
-            status = "'교환 시작' 버튼을 클릭한 후 불량품을 스캔하세요."
+            status = "교환할 수량을 선택한 후 불량품을 스캔하세요."
 
         if session.item_name:
             status = f"품목: {session.item_name} | " + status
