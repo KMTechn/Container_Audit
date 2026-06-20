@@ -20,6 +20,7 @@ import subprocess
 import random
 import base64
 import binascii
+import hashlib
 
 # ####################################################################
 # # 자동 업데이트 기능
@@ -172,6 +173,9 @@ class ContainerAudit:
     SETTINGS_FILE = 'container_audit_settings.json'
     IDLE_THRESHOLD_SEC = 420
     ITEM_CODE_LENGTH = 13
+    SOURCE_SYSTEM = "container_audit"
+    SOURCE_TRANSPORT_OR_DATASET = "legacy_transfer_csv"
+    SCAN_CONTRACT_VERSION = "container_audit_legacy_v1"
     
     COLOR_BG = "#F5F7FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -1013,7 +1017,19 @@ class ContainerAudit:
         self._update_center_display()
         self._update_current_item_label()
         self.undo_button['state'] = tk.NORMAL
-        self._log_event('SCAN_OK', detail={'barcode': barcode, 'interval_sec': f"{interval:.2f}"})
+        self._log_event(
+            'SCAN_OK',
+            detail={
+                'barcode': barcode,
+                'interval_sec': f"{interval:.2f}",
+                'scan_position': count,
+                'barcode_role': 'product',
+                'raw_barcode': barcode,
+                'parsed_barcode': barcode,
+                'product_barcode': barcode,
+                'scan_contract_version': self.SCAN_CONTRACT_VERSION,
+            },
+        )
 
     def complete_tray(self):
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
@@ -1026,10 +1042,19 @@ class ContainerAudit:
         
         log_detail = {
             'master_label_code': master_label, 'item_code': self.current_tray.item_code, 'item_name': self.current_tray.item_name, 'scan_count': len(self.current_tray.scanned_barcodes),
-            'tray_capacity': self.current_tray.tray_size, 'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
+            'tray_capacity': self.current_tray.tray_size, 'scanned_product_barcodes': self.current_tray.scanned_barcodes, 'product_barcodes': self.current_tray.scanned_barcodes, 'work_time_sec': self.current_tray.stopwatch_seconds, 'error_count': self.current_tray.mismatch_error_count,
             'total_idle_seconds': self.current_tray.total_idle_seconds, 'has_error_or_reset': has_error, 'is_partial_submission': is_partial, 'is_restored_session': is_restored, 'is_test_tray': is_test,
             'start_time': self.current_tray.start_time.isoformat() if self.current_tray.start_time else None, 'end_time': datetime.datetime.now().isoformat()
         }
+        master_label_fields = self._parse_new_format_qr(master_label) if '|' in master_label and '=' in master_label else {}
+        log_detail.update({
+            'master_label_fields': master_label_fields,
+            'quantity_basis': 'PRODUCT_BARCODE' if self.current_tray.scanned_barcodes else 'SESSION_QTY',
+            'confidence': 'BARCODE' if self.current_tray.scanned_barcodes else 'LOW_CONFIDENCE',
+            'qty_uom': 'piece',
+            'measure_code': 'STATE_QTY',
+            'barcode_count': len(set(self.current_tray.scanned_barcodes)),
+        })
         self._log_event('TRAY_COMPLETE', detail=log_detail)
 
         if not is_test and '|' in master_label and '=' in master_label:
@@ -1311,8 +1336,31 @@ class ContainerAudit:
 
     def _log_event(self, event_type: str, detail: Optional[Dict] = None):
         if not self.worker_name: return
-        log_entry = { 'timestamp': datetime.datetime.now().isoformat(), 'worker_name': self.worker_name, 'event': event_type, 'details': json.dumps(detail, ensure_ascii=False) if detail else '' }
+        enriched_detail = self._plan_b_event_detail(event_type, detail or {})
+        log_entry = { 'timestamp': datetime.datetime.now().isoformat(), 'worker_name': self.worker_name, 'event': event_type, 'details': json.dumps(enriched_detail, ensure_ascii=False) if enriched_detail else '' }
         self.log_queue.put(log_entry)
+
+    def _plan_b_event_detail(self, event_type: str, detail: Dict[str, Any]) -> Dict[str, Any]:
+        enriched = dict(detail or {})
+        enriched.setdefault('source_system', self.SOURCE_SYSTEM)
+        enriched.setdefault('source_transport_or_dataset', self.SOURCE_TRANSPORT_OR_DATASET)
+        enriched.setdefault('raw_event_name', event_type)
+        enriched.setdefault('canonical_event_name', event_type)
+        enriched.setdefault(
+            'dispatch_key',
+            f"{self.SOURCE_SYSTEM}|{self.SOURCE_TRANSPORT_OR_DATASET}|{event_type}",
+        )
+        enriched.setdefault('identity_class', 'LEGACY_FALLBACK')
+        enriched.setdefault('integrity_requirement', 'UNSIGNED_LEGACY_ALLOWED')
+        enriched.setdefault('integrity_status', 'UNSIGNED_LEGACY')
+        enriched.setdefault('parser_mapping_version', 'container-audit-plan-b-v1')
+        return enriched
+
+    @staticmethod
+    def _stable_hash(data: Dict[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(data or {}, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
+        ).hexdigest()
 
     def show_status_message(self, message: str, color: Optional[str] = None, duration: int = 4000):
         if self.status_message_job: self.root.after_cancel(self.status_message_job)
@@ -1813,6 +1861,13 @@ class ContainerAudit:
     def _find_log_in_file(self, file_path: str, old_label: str) -> Optional[Dict]:
         """지정된 파일에서 old_label에 해당하는 로그를 찾아 관련 정보를 반환합니다."""
         try:
+            with open(file_path, 'rb') as raw_f:
+                raw_lines = raw_f.read().splitlines(keepends=True)
+            byte_offsets = []
+            running_offset = len(raw_lines[0]) if raw_lines else 0
+            for raw_line in raw_lines[1:]:
+                byte_offsets.append(running_offset)
+                running_offset += len(raw_line)
             with open(file_path, 'r', encoding='utf-8-sig') as f:
                 reader = csv.DictReader(f)
                 for idx, row in enumerate(reader):
@@ -1823,6 +1878,13 @@ class ContainerAudit:
                                 return {
                                     'found_log_file': file_path,
                                     'found_row_index': idx + 1,  # CSV 헤더 다음 행부터 1로 시작
+                                    'found_source_byte_offset': byte_offsets[idx] if idx < len(byte_offsets) else None,
+                                    'found_row_hash': self._stable_hash({
+                                        'source_file_id': os.path.basename(file_path),
+                                        'source_row_number': idx + 1,
+                                        'source_byte_offset': byte_offsets[idx] if idx < len(byte_offsets) else None,
+                                        'row': row,
+                                    }),
                                     'original_details': details
                                 }
                         except (json.JSONDecodeError, KeyError):
@@ -1899,42 +1961,76 @@ class ContainerAudit:
             ctx = self.replacement_context
             log_file_path = ctx['found_log_file']
             row_index = ctx['found_row_index']
-            details = ctx['original_details']
-
-            # 기존 details 딕셔너리 수정
-            details['master_label_code'] = ctx['new_label']
-
-            # 수량이 증가한 경우 추가 바코드 반영
+            original_details = dict(ctx['original_details'])
+            corrected_details = dict(original_details)
+            corrected_details['master_label_code'] = ctx['new_label']
+            corrected_barcodes = list(corrected_details.get('scanned_product_barcodes') or corrected_details.get('scanned_barcodes') or [])
             if ctx.get('additional_items'):
-                details['scanned_barcodes'].extend(ctx['additional_items'])
-
-            # 수량이 감소한 경우 제외 바코드 반영
+                corrected_barcodes.extend(ctx['additional_items'])
             if ctx.get('removed_items'):
-                for removed_item in ctx['removed_items']:
-                    if removed_item in details['scanned_barcodes']:
-                        details['scanned_barcodes'].remove(removed_item)
+                corrected_barcodes = [
+                    barcode for barcode in corrected_barcodes
+                    if barcode not in set(ctx.get('removed_items') or [])
+                ]
+            corrected_details['scanned_product_barcodes'] = corrected_barcodes
+            corrected_details['product_barcodes'] = corrected_barcodes
+            old_payload_hash = self._stable_hash(original_details)
+            new_payload_hash = self._stable_hash(corrected_details)
+            source_file_id = os.path.basename(log_file_path)
+            old_row_hash = ctx.get('found_row_hash') or ctx.get('original_row_hash') or old_payload_hash
+            new_row_hash = self._stable_hash({
+                'source_system': self.SOURCE_SYSTEM,
+                'source_transport_or_dataset': self.SOURCE_TRANSPORT_OR_DATASET,
+                'source_file_id': source_file_id,
+                'source_row_number': row_index,
+                'source_byte_offset': ctx.get('found_source_byte_offset'),
+                'payload_hash': new_payload_hash,
+            })
+            correction_payload = {
+                'transfer_id': original_details.get('transfer_id') or original_details.get('bundle_id') or original_details.get('packaging_set_identity'),
+                'item_code': original_details.get('item_code') or original_details.get('item') or original_details.get('product_code'),
+                'product_barcodes': corrected_barcodes,
+                'old_master_label': ctx['old_label'],
+                'new_master_label': ctx['new_label'],
+                'original_event_identity': {
+                    'source_system': self.SOURCE_SYSTEM,
+                    'source_transport_or_dataset': self.SOURCE_TRANSPORT_OR_DATASET,
+                    'source_file_id': source_file_id,
+                    'source_row_number': row_index,
+                    'source_byte_offset': ctx.get('found_source_byte_offset'),
+                    'row_hash': old_row_hash,
+                    'raw_event_name': 'TRAY_COMPLETE',
+                },
+                'supersedes_identity': {
+                    'source_system': self.SOURCE_SYSTEM,
+                    'source_transport_or_dataset': self.SOURCE_TRANSPORT_OR_DATASET,
+                    'source_file_id': source_file_id,
+                    'source_row_number': row_index,
+                    'source_byte_offset': ctx.get('found_source_byte_offset'),
+                    'row_hash': old_row_hash,
+                    'old_payload_hash': old_payload_hash,
+                },
+                'old_qty': ctx.get('old_qty'),
+                'new_qty': ctx.get('new_qty'),
+                'added_product_barcodes': list(ctx.get('additional_items') or []),
+                'removed_product_barcodes': list(ctx.get('removed_items') or []),
+                'old_payload_hash': old_payload_hash,
+                'new_payload_hash': new_payload_hash,
+                'old_row_hash': old_row_hash,
+                'new_row_hash': new_row_hash,
+                'reason': 'operator_master_label_replacement',
+                'operator': self.worker_name,
+                'evidence_hash': self._stable_hash({
+                    'old_payload_hash': old_payload_hash,
+                    'new_payload_hash': new_payload_hash,
+                    'operator': self.worker_name,
+                    'source_file_id': source_file_id,
+                    'source_row_number': row_index,
+                }),
+            }
+            self._log_event('MASTER_LABEL_REPLACEMENT_APPLIED', detail=correction_payload)
 
-            # CSV 파일 전체를 읽어와서 해당 행만 수정 후 다시 저장
-            with open(log_file_path, 'r', encoding='utf-8-sig') as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-                fieldnames = reader.fieldnames
-
-            # 해당 행의 details 업데이트
-            if row_index - 1 < len(rows):  # 인덱스 범위 확인
-                rows[row_index - 1]['details'] = json.dumps(details, ensure_ascii=False)
-
-            # 파일에 다시 저장
-            with open(log_file_path, 'w', newline='', encoding='utf-8-sig') as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-
-            # 성공 처리
-            log_details = {'old_master_label': ctx['old_label'], 'new_master_label': ctx['new_label']}
-            self._log_event('HISTORICAL_REPLACE_SUCCESS', detail=log_details)
-
-            messagebox.showinfo("교체 완료", "현품표 정보가 성공적으로 교체 및 수정되었습니다.")
+            messagebox.showinfo("교체 완료", "현품표 교체 증거가 append-only correction 이벤트로 기록되었습니다.")
             self._update_all_summaries()
 
         except Exception as e:
