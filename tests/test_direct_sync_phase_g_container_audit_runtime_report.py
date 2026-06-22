@@ -32,7 +32,8 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert runtime_report["source_host_id"] == "container-phase-g-host"
     assert runtime_report["producer_role"] == "container_audit"
     assert runtime_report["stream_name"] == "container_audit_events"
-    assert runtime_report["source_transport"] == "legacy_transfer_csv"
+    assert runtime_report["source_transport"] == "http_push"
+    assert runtime_report["manifest_source_transport"] == "legacy_transfer_csv"
     assert runtime_report["source_scope_key"] == "container-phase-g-host/container_audit/container_audit_events"
     assert runtime_report["source_scope_key_sha256"] == hashlib.sha256(
         runtime_report["source_scope_key"].encode("utf-8")
