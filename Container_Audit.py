@@ -161,6 +161,75 @@ def resource_path(relative_path: str) -> str:
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
+
+class WorkerRegistry:
+    def __init__(self, registry_path: str):
+        self.registry_path = registry_path
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        return str(name or "").strip()
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if not name:
+            raise ValueError("작업자 이름은 비워둘 수 없습니다.")
+        if re.search(r'[\\/:*?"<>|]', name):
+            raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
+
+    def _read_payload(self) -> Dict[str, Any]:
+        if not os.path.exists(self.registry_path):
+            return {"workers": []}
+        try:
+            with open(self.registry_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return {"workers": []}
+        if not isinstance(payload, dict) or not isinstance(payload.get("workers"), list):
+            return {"workers": []}
+        return payload
+
+    def _write_payload(self, payload: Dict[str, Any]) -> None:
+        os.makedirs(os.path.dirname(self.registry_path), exist_ok=True)
+        tmp_path = f"{self.registry_path}.{os.getpid()}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+        os.replace(tmp_path, self.registry_path)
+
+    def list_workers(self) -> List[str]:
+        workers: List[str] = []
+        seen: set[str] = set()
+        for entry in self._read_payload().get("workers", []):
+            if not isinstance(entry, dict) or not entry.get("active", True):
+                continue
+            name = self.normalize_name(entry.get("name", ""))
+            if name and name not in seen:
+                workers.append(name)
+                seen.add(name)
+        return sorted(workers)
+
+    def has_worker(self, name: str) -> bool:
+        return self.normalize_name(name) in set(self.list_workers())
+
+    def register(self, name: str) -> str:
+        name = self.normalize_name(name)
+        self._validate_name(name)
+        payload = self._read_payload()
+        workers = payload.setdefault("workers", [])
+        for entry in workers:
+            if isinstance(entry, dict) and self.normalize_name(entry.get("name", "")) == name:
+                entry["active"] = True
+                self._write_payload(payload)
+                return name
+        workers.append({
+            "name": name,
+            "active": True,
+            "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+        })
+        self._write_payload(payload)
+        return name
+
 # ####################################################################
 # # 메인 어플리케이션
 # ####################################################################
@@ -171,6 +240,7 @@ class ContainerAudit:
     SETTINGS_DIR = 'config'
     PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays')
     SETTINGS_FILE = 'container_audit_settings.json'
+    WORKERS_FILE = 'worker_registry.json'
     IDLE_THRESHOLD_SEC = 420
     ITEM_CODE_LENGTH = 13
     SOURCE_SYSTEM = "container_audit"
@@ -211,6 +281,7 @@ class ContainerAudit:
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
         self._setup_paths_and_dirs()
+        self.worker_registry = WorkerRegistry(os.path.join(self.config_folder, self.WORKERS_FILE))
 
         self.settings = self.load_app_settings()
         self.scale_factor = self.settings.get('scale_factor', 1.0)
@@ -445,18 +516,71 @@ class ContainerAudit:
             print(f"로고 로드 실패: {e}")
         ttk.Label(center_frame, text=self.APP_TITLE, style='Title.TLabel').pack(pady=(20, 60))
         ttk.Label(center_frame, text="작업자 이름", style='TLabel', font=(self.DEFAULT_FONT, int(12*self.scale_factor))).pack(pady=(10, 5))
-        self.worker_entry = tk.Entry(center_frame, width=25, font=(self.DEFAULT_FONT, int(18*self.scale_factor), 'bold'), bd=2, relief=tk.SOLID, justify='center', highlightbackground=self.COLOR_BORDER, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2)
+        workers = self.worker_registry.list_workers()
+        self.worker_entry_var = tk.StringVar(value=workers[0] if workers else "")
+        self.worker_entry = ttk.Combobox(
+            center_frame,
+            textvariable=self.worker_entry_var,
+            values=workers,
+            state='normal',
+            width=25,
+            font=(self.DEFAULT_FONT, int(18*self.scale_factor), 'bold'),
+            justify='center',
+        )
         self.worker_entry.pack(ipady=int(12*self.scale_factor))
         self.worker_entry.bind('<Return>', self.start_work)
         self.worker_entry.focus()
         button_container = ttk.Frame(center_frame, style='TFrame')
         button_container.pack(pady=60)
+        ttk.Button(button_container, text="신규 등록", command=self.register_worker_from_login, style='Secondary.TButton', width=16).pack(side=tk.LEFT, padx=10, ipady=int(10*self.scale_factor))
         ttk.Button(button_container, text="작업 시작", command=self.start_work, style='TButton', width=20).pack(side=tk.LEFT, padx=10, ipady=int(10*self.scale_factor))
 
-    def start_work(self, event=None):
-        worker_name = self.worker_entry.get().strip()
+    def _refresh_worker_entry_options(self):
+        if hasattr(self, 'worker_entry') and hasattr(self.worker_entry, 'configure'):
+            self.worker_entry.configure(values=self.worker_registry.list_workers())
+
+    def _register_worker_name(self, worker_name: str, parent=None) -> Optional[str]:
+        worker_name = WorkerRegistry.normalize_name(worker_name)
+        try:
+            return self.worker_registry.register(worker_name)
+        except ValueError as exc:
+            messagebox.showerror("작업자 등록 오류", str(exc), parent=parent or self.root)
+            return None
+
+    def register_worker_from_login(self):
+        worker_name = WorkerRegistry.normalize_name(self.worker_entry_var.get() if hasattr(self, 'worker_entry_var') else "")
+        if not worker_name:
+            worker_name = simpledialog.askstring("신규 작업자 등록", "등록할 작업자 이름을 입력하세요.", parent=self.root)
+        registered = self._register_worker_name(worker_name, parent=self.root)
+        if not registered:
+            return
+        self.worker_entry_var.set(registered)
+        self._refresh_worker_entry_options()
+        messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
+
+    def _ensure_worker_login_name(self, worker_name: str) -> Optional[str]:
+        worker_name = WorkerRegistry.normalize_name(worker_name)
         if not worker_name:
             messagebox.showerror("오류", "작업자 이름을 입력해주세요.")
+            return None
+        if self.worker_registry.has_worker(worker_name):
+            return worker_name
+        should_register = messagebox.askyesno(
+            "신규 작업자 등록",
+            f"등록되지 않은 작업자입니다.\n\n작업자: {worker_name}\n\n신규 작업자로 등록하시겠습니까?",
+            parent=self.root,
+        )
+        if not should_register:
+            return None
+        registered = self._register_worker_name(worker_name, parent=self.root)
+        if registered:
+            self._refresh_worker_entry_options()
+            messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
+        return registered
+
+    def start_work(self, event=None):
+        worker_name = self._ensure_worker_login_name(self.worker_entry.get())
+        if not worker_name:
             return
         self.worker_name = worker_name
         self._load_session_state()
