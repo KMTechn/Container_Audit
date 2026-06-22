@@ -29,11 +29,22 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert report["local_contract_status"] == "PASS"
     runtime_report = report["container_audit_runtime_relay_report"]
     assert runtime_report["status"] == "BLOCKED"
+    manifest_path = Path(report["producer_manifest_path"])
+    assert runtime_report["flow"] == "ContainerAudit"
+    assert runtime_report["producer_repo"] == "Container_Audit"
     assert runtime_report["source_host_id"] == "container-phase-g-host"
+    assert runtime_report["producer_install_id"] == "install-container-phase-g"
     assert runtime_report["producer_role"] == "container_audit"
     assert runtime_report["stream_name"] == "container_audit_events"
     assert runtime_report["source_transport"] == "http_push"
     assert runtime_report["manifest_source_transport"] == "legacy_transfer_csv"
+    assert runtime_report["manifest_hash"] == hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    assert runtime_report["task_or_service_name"] == "direct-sync-relay-container-audit"
+    assert runtime_report["task_or_service_installed"] is False
+    assert runtime_report["runtime_kind"] == "scheduled_task"
+    assert runtime_report["service_task_status"] == "BLOCKED"
+    assert runtime_report["status_log_status"] == "PASS"
+    assert runtime_report["reboot_logoff_sleep_status"] == "BLOCKED"
     assert runtime_report["source_scope_key"] == "container-phase-g-host/container_audit/container_audit_events"
     assert runtime_report["source_scope_key_sha256"] == hashlib.sha256(
         runtime_report["source_scope_key"].encode("utf-8")
@@ -41,6 +52,7 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     runner_report = runtime_report["local_runner_status_log_report"]
     status_artifact_path = Path(runtime_report["status_json_artifact_path"])
     log_artifact_path = Path(runtime_report["redacted_log_artifact_path"])
+    assert runtime_report["queue_db_path"] == runner_report["queue_db_path"]
     assert runtime_report["status_json_artifact_ref"] == str(status_artifact_path)
     assert runtime_report["redacted_log_artifact_ref"] == str(log_artifact_path)
     assert runtime_report["status_json_artifact_sha256"] == hashlib.sha256(
