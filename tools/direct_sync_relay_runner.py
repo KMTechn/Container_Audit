@@ -6,17 +6,34 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from direct_sync_runtime import DirectSyncRuntimeConfig, enqueue_completed_source_file, run_relay_once  # noqa: E402
+from direct_sync_runtime import (  # noqa: E402
+    DirectSyncRuntimeConfig,
+    enqueue_completed_source_file,
+    record_scan_drain_status,
+    record_scan_result_status,
+    record_scan_status,
+    run_relay_once,
+)
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
 ALLOWED_SOURCE_SUFFIX = ".csv"
+DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 300
+SCAN_SUCCESS_STATUSES = {"enqueued", "already_queued", "already_acked"}
+SCAN_BLOCKED_STATUSES = {
+    "paused_by_operator",
+    "blocked_operator_control",
+    "blocked_queue_backpressure",
+    "blocked_disk_pressure",
+    "existing_terminal_blocked",
+}
 
 
 def _validate_source_glob(pattern: str) -> str:
@@ -32,24 +49,86 @@ def _is_allowed_source_file(path: Path) -> bool:
     return path.name.startswith(ALLOWED_SOURCE_PREFIX) and path.suffix.lower() == ALLOWED_SOURCE_SUFFIX
 
 
-def _scan_source_files(scan_source_dir: str, patterns: list[str], max_files: int) -> list[Path]:
+def _is_old_enough_source_file(path: Path, min_age_seconds: int, *, now: float | None = None) -> bool:
+    min_age = max(0, int(min_age_seconds or 0))
+    if min_age == 0:
+        return True
+    current_time = time.time() if now is None else float(now)
+    try:
+        return path.stat().st_mtime <= current_time - min_age
+    except FileNotFoundError:
+        return False
+
+
+def _scan_source_files(
+    scan_source_dir: str,
+    patterns: list[str],
+    max_files: int,
+    min_age_seconds: int = DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS,
+    *,
+    limit_results: bool = True,
+) -> list[Path]:
     root = Path(scan_source_dir)
     if not root.is_dir():
         raise SystemExit(f"scan source dir does not exist: {root}")
+    root_resolved = root.resolve()
     scan_patterns = [_validate_source_glob(pattern) for pattern in (patterns or ["*.csv"])]
     seen: set[str] = set()
-    files: list[Path] = []
+    files: list[tuple[int, str, Path]] = []
+    current_time = time.time()
     for pattern in scan_patterns:
         for path in root.glob(pattern):
-            if not path.is_file() or not _is_allowed_source_file(path):
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                stat_result = path.stat()
+                resolved_path = path.resolve()
+            except OSError:
                 continue
-            resolved = str(path.resolve())
+            if not resolved_path.is_relative_to(root_resolved):
+                continue
+            if not _is_allowed_source_file(path):
+                continue
+            min_age = max(0, int(min_age_seconds or 0))
+            if min_age and stat_result.st_mtime > current_time - min_age:
+                continue
+            resolved = str(resolved_path)
             if resolved in seen:
                 continue
             seen.add(resolved)
-            files.append(path)
-    files.sort(key=lambda item: (item.stat().st_mtime_ns, str(item)))
-    return files[: max(0, max_files)]
+            files.append((stat_result.st_mtime_ns, str(path), path))
+    files.sort(key=lambda item: (item[0], item[1]))
+    if max(0, max_files) == 0:
+        return []
+    selected_files = files[: max(0, max_files)] if limit_results else files
+    return [path for _, _, path in selected_files]
+
+
+def _source_file_still_eligible_for_enqueue(
+    path: Path,
+    scan_source_dir: str,
+    min_age_seconds: int,
+    *,
+    now: float | None = None,
+) -> bool:
+    try:
+        root_resolved = Path(scan_source_dir).resolve()
+        if path.is_symlink() or not path.is_file():
+            return False
+        stat_result = path.stat()
+        resolved_path = path.resolve()
+    except OSError:
+        return False
+    if not resolved_path.is_relative_to(root_resolved):
+        return False
+    if not _is_allowed_source_file(path):
+        return False
+    min_age = max(0, int(min_age_seconds or 0))
+    if min_age:
+        current_time = time.time() if now is None else float(now)
+        if stat_result.st_mtime > current_time - min_age:
+            return False
+    return True
 
 
 def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
@@ -92,6 +171,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scan-source-dir", default="")
     parser.add_argument("--source-glob", action="append", default=[])
     parser.add_argument("--max-enqueue-files", type=int, default=100)
+    parser.add_argument("--min-source-file-age-seconds", type=int, default=DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS)
+    parser.add_argument("--drain-after-scan", action="store_true")
     args = parser.parse_args(argv)
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
@@ -108,35 +189,90 @@ def main(argv: list[str] | None = None) -> int:
         enqueued_count = 0
         attempted_count = 0
         preflight_status = None
+        max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
         for source_file in _scan_source_files(
             args.scan_source_dir,
             args.source_glob,
             args.max_enqueue_files,
+            args.min_source_file_age_seconds,
+            limit_results=False,
         ):
+            if enqueued_count >= max_enqueue_files:
+                break
+            if not _source_file_still_eligible_for_enqueue(
+                source_file,
+                args.scan_source_dir,
+                args.min_source_file_age_seconds,
+            ):
+                continue
             current = enqueue_completed_source_file(config, source_file_path=source_file)
-            if current["status"] in {"paused_by_operator", "blocked_queue_backpressure", "blocked_disk_pressure"}:
+            attempted_count += 1
+            if current["status"] in SCAN_BLOCKED_STATUSES:
+                current["scan_failed_source_file"] = str(source_file)
                 preflight_status = current
                 break
             statuses.append(current)
-            attempted_count += 1
             if current["status"] == "enqueued":
                 enqueued_count += 1
-            else:
+            elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 break
-        status = preflight_status or (statuses[-1] if statuses else {"status": "scan_no_files"})
-        status["scan_enqueued_count"] = enqueued_count
-        status["scan_attempted_count"] = attempted_count
+        scan_status = preflight_status or (statuses[-1] if statuses else {"status": "scan_no_files"})
+        scan_status["scan_enqueued_count"] = enqueued_count
+        scan_status["scan_attempted_count"] = attempted_count
+        if scan_status["status"] == "scan_no_files":
+            scan_status = record_scan_status(
+                config,
+                status="scan_no_files",
+                scan_enqueued_count=enqueued_count,
+                scan_attempted_count=attempted_count,
+            )
+            scan_status["scan_enqueued_count"] = enqueued_count
+            scan_status["scan_attempted_count"] = attempted_count
+        should_drain = args.drain_after_scan and scan_status["status"] not in {
+            *SCAN_BLOCKED_STATUSES,
+            "enqueue_error",
+        }
+        if should_drain:
+            status = run_relay_once(config)
+            status = record_scan_drain_status(
+                config,
+                drain_status=status,
+                scan_status=scan_status["status"],
+                scan_enqueued_count=enqueued_count,
+                scan_attempted_count=attempted_count,
+                scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
+            )
+        else:
+            if scan_status["status"] == "scan_no_files":
+                status = scan_status
+            else:
+                status = record_scan_result_status(
+                    config,
+                    scan_result=scan_status,
+                    scan_enqueued_count=enqueued_count,
+                    scan_attempted_count=attempted_count,
+                    scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
+                )
     else:
         status = run_relay_once(config)
     print(f"direct_sync_relay_status={status['status']}")
+    if "scan_status" in status:
+        print(f"direct_sync_scan_status={status['scan_status']}")
     if "scan_enqueued_count" in status:
         print(f"direct_sync_scan_enqueued_count={status['scan_enqueued_count']}")
     if "scan_attempted_count" in status:
         print(f"direct_sync_scan_attempted_count={status['scan_attempted_count']}")
     if status.get("scan_failed_source_file"):
         print(f"direct_sync_scan_failed_source_file={status['scan_failed_source_file']}")
-    if status["status"] in {"blocked_disk_pressure", "blocked_queue_backpressure"}:
+    if status["status"] in {
+        "blocked_disk_pressure",
+        "blocked_operator_control",
+        "blocked_queue_backpressure",
+        "existing_terminal_blocked",
+        "failed_permanent",
+        "operator_review",
+    }:
         return 2
     if status["status"] in {"enqueue_error", "runtime_error"}:
         return 1

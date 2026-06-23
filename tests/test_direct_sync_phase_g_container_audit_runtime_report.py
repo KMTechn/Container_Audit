@@ -5,12 +5,16 @@ import sys
 from pathlib import Path
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+PHASE_G_REPORT_SCRIPT = REPO_ROOT / "tools" / "direct_sync_phase_g_container_audit_runtime_report.py"
+
+
 def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blocked(tmp_path):
     report_path = tmp_path / "reports" / "phase-g-container-audit-runtime.json"
     completed = subprocess.run(
         [
             sys.executable,
-            "tools/direct_sync_phase_g_container_audit_runtime_report.py",
+            str(PHASE_G_REPORT_SCRIPT),
             "--tmp-root",
             str(tmp_path),
             "--report-path",
@@ -19,6 +23,7 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
         check=False,
         capture_output=True,
         text=True,
+        cwd=REPO_ROOT,
     )
 
     assert completed.returncode == 2

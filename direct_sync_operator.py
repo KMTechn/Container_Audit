@@ -3,26 +3,36 @@
 from __future__ import annotations
 
 import hashlib
+import datetime
 import json
 import os
+import re
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
-from direct_sync_push import RELAY_STATUS_FAILED_PERMANENT, RELAY_STATUS_PENDING, utc_now_text
+from direct_sync_push import (
+    RELAY_STATUS_FAILED_PERMANENT,
+    RELAY_STATUS_OPERATOR_REVIEW,
+    RELAY_STATUS_PENDING,
+    utc_now_text,
+)
 
 
 PAUSE_SCHEMA_VERSION = "direct-sync-relay-operator-pause-v1"
 AUDIT_SCHEMA_VERSION = "direct-sync-relay-operator-audit-v1"
 OPERATOR_TOOL_VERSION = "container-audit-local-operator-v1"
 RETRYABLE_DEAD_STATUSES = frozenset({RELAY_STATUS_FAILED_PERMANENT})
+SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+REASON_REDACTED_RE = re.compile(r"^sha256:[A-Fa-f0-9]{12}$")
+DEAD_LETTER_STATUSES = (RELAY_STATUS_OPERATOR_REVIEW, RELAY_STATUS_FAILED_PERMANENT)
 
 
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target.with_suffix(target.suffix + ".tmp")
+    temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
         json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
@@ -74,11 +84,39 @@ def _read_pause_marker(path: Path) -> tuple[dict[str, Any], bool]:
         return {}, True
     try:
         payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}, False
     if not isinstance(payload, dict):
         return {}, False
     return payload, True
+
+
+def _pause_marker_contract_error(marker: Mapping[str, Any]) -> str:
+    if marker.get("schema_version") != PAUSE_SCHEMA_VERSION:
+        return "operator_pause_marker_schema_invalid"
+    if marker.get("status") != "paused":
+        return "operator_pause_marker_status_invalid"
+    if not isinstance(marker.get("operator_id"), str) or not str(marker.get("operator_id") or "").strip():
+        return "operator_pause_marker_operator_invalid"
+    reason_redacted = marker.get("reason_redacted")
+    if not isinstance(reason_redacted, str) or not REASON_REDACTED_RE.fullmatch(reason_redacted):
+        return "operator_pause_marker_reason_invalid"
+    reason_sha256 = marker.get("reason_sha256")
+    if not isinstance(reason_sha256, str) or not SHA256_RE.fullmatch(reason_sha256):
+        return "operator_pause_marker_reason_invalid"
+    if reason_redacted.lower() != f"sha256:{reason_sha256[:12].lower()}":
+        return "operator_pause_marker_reason_invalid"
+    reason_length = _safe_int(marker.get("reason_length"))
+    if reason_length <= 0:
+        return "operator_pause_marker_reason_invalid"
+    created_at = marker.get("created_at")
+    if not isinstance(created_at, str) or not created_at.strip():
+        return "operator_pause_marker_created_at_invalid"
+    try:
+        datetime.datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+    except ValueError:
+        return "operator_pause_marker_created_at_invalid"
+    return ""
 
 
 def read_operator_pause(pause_path: str | os.PathLike[str]) -> dict[str, Any]:
@@ -86,19 +124,45 @@ def read_operator_pause(pause_path: str | os.PathLike[str]) -> dict[str, Any]:
     if not path_text:
         return {"enabled": False, "paused": False, "path": "", "marker_valid": True}
     marker_path = Path(path_text)
-    marker, valid = _read_pause_marker(marker_path)
+    marker, json_valid = _read_pause_marker(marker_path)
+    marker_error_code = "" if json_valid else "operator_pause_marker_json_invalid"
+    if json_valid and marker_path.exists():
+        marker_error_code = _pause_marker_contract_error(marker)
+    valid = json_valid and not marker_error_code
     return {
         "enabled": True,
         "paused": marker_path.exists(),
         "path": str(marker_path),
         "marker_valid": valid,
-        "schema_version": str(marker.get("schema_version") or "") if valid else "",
-        "operator_id": str(marker.get("operator_id") or "") if valid else "",
-        "reason_redacted": str(marker.get("reason_redacted") or "") if valid else "",
-        "reason_sha256": str(marker.get("reason_sha256") or "") if valid else "",
-        "reason_length": int(marker.get("reason_length") or 0) if valid else 0,
-        "created_at": str(marker.get("created_at") or "") if valid else "",
+        "marker_error_code": marker_error_code,
+        "schema_version": str(marker.get("schema_version") or "") if json_valid else "",
+        "operator_id": str(marker.get("operator_id") or "") if json_valid else "",
+        "reason_redacted": str(marker.get("reason_redacted") or "") if json_valid else "",
+        "reason_sha256": str(marker.get("reason_sha256") or "") if json_valid else "",
+        "reason_length": _safe_int(marker.get("reason_length")) if json_valid else 0,
+        "created_at": str(marker.get("created_at") or "") if json_valid else "",
     }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _decode_receipt_json(raw_value: Any) -> tuple[dict[str, Any], bool]:
+    if raw_value in (None, ""):
+        return {}, True
+    try:
+        payload = json.loads(str(raw_value))
+    except (TypeError, json.JSONDecodeError):
+        return {}, False
+    return (payload, True) if isinstance(payload, dict) else ({}, False)
+
+
+def _sqlite_error_message(exc: sqlite3.Error) -> str:
+    return f"relay queue database error: {exc.__class__.__name__}"
 
 
 def _append_operator_audit(audit_log_path: str | os.PathLike[str], *, action: str, report: Mapping[str, Any]) -> None:
@@ -113,6 +177,25 @@ def _append_operator_audit(audit_log_path: str | os.PathLike[str], *, action: st
     }
     entry.update(dict(report))
     _append_jsonl(audit_log_path, entry)
+
+
+def _with_operator_audit_status(
+    audit_log_path: str | os.PathLike[str],
+    *,
+    action: str,
+    report: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = dict(report)
+    if not str(audit_log_path or "").strip():
+        return payload
+    try:
+        _append_operator_audit(audit_log_path, action=action, report=payload)
+        payload["audit_write_status"] = "PASS"
+    except OSError as exc:
+        payload["audit_write_status"] = "FAIL"
+        payload["audit_write_error_code"] = "operator_audit_write_failed"
+        payload["audit_write_error_message"] = f"operator audit write failed: {exc.__class__.__name__}"
+    return payload
 
 
 def pause_relay(
@@ -134,7 +217,21 @@ def pause_relay(
         **reason_fields,
         "created_at": utc_now_text(),
     }
-    _write_json_atomic(target, marker)
+    try:
+        _write_json_atomic(target, marker)
+    except OSError as exc:
+        report = {
+            "status": "BLOCKED",
+            "operation": "pause",
+            "operator_id": operator,
+            "tool_version": OPERATOR_TOOL_VERSION,
+            **reason_fields,
+            "pause": previous,
+            "previous_paused": bool(previous.get("paused")),
+            "error_code": "operator_pause_write_failed",
+            "error_message": f"operator pause marker could not be written: {exc.__class__.__name__}",
+        }
+        return _with_operator_audit_status(audit_log_path, action="pause-blocked", report=report)
     report = {
         "status": "PASS",
         "operation": "pause",
@@ -144,8 +241,7 @@ def pause_relay(
         "pause": read_operator_pause(target),
         "previous_paused": bool(previous.get("paused")),
     }
-    _append_operator_audit(audit_log_path, action="pause", report=report)
-    return report
+    return _with_operator_audit_status(audit_log_path, action="pause", report=report)
 
 
 def resume_relay(
@@ -154,14 +250,47 @@ def resume_relay(
     operator_id: str,
     reason: str,
     audit_log_path: str | os.PathLike[str] = "",
+    force_invalid_marker: bool = False,
 ) -> dict[str, Any]:
     operator = _require_text(operator_id, field_name="operator_id", max_length=128)
     reason_text = _require_text(reason, field_name="reason")
     target = Path(pause_path)
     previous = read_operator_pause(target)
     reason_fields = _reason_evidence(reason_text)
+    invalid_existing_marker = target.exists() and not bool(previous.get("marker_valid"))
+    if invalid_existing_marker and not force_invalid_marker:
+        report = {
+            "status": "BLOCKED",
+            "operation": "resume",
+            "operator_id": operator,
+            "tool_version": OPERATOR_TOOL_VERSION,
+            **reason_fields,
+            "pause": previous,
+            "previous_paused": bool(previous.get("paused")),
+            "previous_marker_valid": bool(previous.get("marker_valid")),
+            "error_code": str(previous.get("marker_error_code") or "operator_pause_marker_invalid"),
+            "error_message": "operator pause marker is invalid; use force_invalid_marker to remove it",
+        }
+        return _with_operator_audit_status(audit_log_path, action="resume-blocked", report=report)
     if target.exists():
-        target.unlink()
+        try:
+            target.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            report = {
+                "status": "BLOCKED",
+                "operation": "resume",
+                "operator_id": operator,
+                "tool_version": OPERATOR_TOOL_VERSION,
+                **reason_fields,
+                "pause": previous,
+                "previous_paused": bool(previous.get("paused")),
+                "previous_marker_valid": bool(previous.get("marker_valid")),
+                "error_code": "operator_pause_resume_failed",
+                "error_message": f"operator pause marker could not be removed: {exc.__class__.__name__}",
+            }
+            return _with_operator_audit_status(audit_log_path, action="resume-blocked", report=report)
     report = {
         "status": "PASS",
         "operation": "resume",
@@ -170,9 +299,10 @@ def resume_relay(
         **reason_fields,
         "pause": read_operator_pause(target),
         "previous_paused": bool(previous.get("paused")),
+        "previous_marker_valid": bool(previous.get("marker_valid")),
+        "forced_invalid_marker": bool(invalid_existing_marker and force_invalid_marker),
     }
-    _append_operator_audit(audit_log_path, action="resume", report=report)
-    return report
+    return _with_operator_audit_status(audit_log_path, action="resume", report=report)
 
 
 def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[str, Any]:
@@ -189,7 +319,7 @@ def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[s
             "counts": {},
             "oldest_active_created_at": "",
             "error_code": "relay_db_open_failed",
-            "error_message": str(exc),
+            "error_message": _sqlite_error_message(exc),
         }
     try:
         counts = {
@@ -218,20 +348,40 @@ def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[s
             "counts": {},
             "oldest_active_created_at": "",
             "error_code": "relay_db_schema_unavailable",
-            "error_message": str(exc),
+            "error_message": _sqlite_error_message(exc),
         }
     finally:
         conn.close()
 
 
 def operator_status(*, db_path: str | os.PathLike[str], pause_path: str | os.PathLike[str] = "") -> dict[str, Any]:
-    return {
-        "status": "PASS",
+    queue = read_relay_queue_status_read_only(db_path)
+    pause = read_operator_pause(pause_path)
+    pause_invalid = bool(pause.get("enabled")) and bool(pause.get("paused")) and not bool(pause.get("marker_valid"))
+    counts = queue.get("counts") if isinstance(queue.get("counts"), Mapping) else {}
+    dead_letter_counts = {
+        status: _safe_int(counts.get(status))
+        for status in DEAD_LETTER_STATUSES
+        if _safe_int(counts.get(status)) > 0
+    }
+    requires_attention = bool(dead_letter_counts)
+    status = "BLOCKED" if queue.get("status") == "blocked" or pause_invalid or requires_attention else "PASS"
+    report = {
+        "status": status,
         "operation": "status",
         "tool_version": OPERATOR_TOOL_VERSION,
-        "queue": read_relay_queue_status_read_only(db_path),
-        "pause": read_operator_pause(pause_path),
+        "queue": queue,
+        "pause": pause,
+        "requires_attention": requires_attention,
+        "dead_letter_counts": dead_letter_counts,
     }
+    if requires_attention:
+        report["error_code"] = (
+            "dead_letter_operator_review"
+            if dead_letter_counts.get(RELAY_STATUS_OPERATOR_REVIEW)
+            else "dead_letter_failed_permanent"
+        )
+    return report
 
 
 def retry_dead_relay_batch(
@@ -241,6 +391,7 @@ def retry_dead_relay_batch(
     operator_id: str,
     reason: str,
     audit_log_path: str | os.PathLike[str] = "",
+    allow_operator_review: bool = False,
 ) -> dict[str, Any]:
     relay = _require_text(relay_id, field_name="relay_id", max_length=128)
     operator = _require_text(operator_id, field_name="operator_id", max_length=128)
@@ -256,16 +407,16 @@ def retry_dead_relay_batch(
             **reason_fields,
             "error_code": "relay_db_not_initialized",
         }
-        _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-        return report
+        return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
     now = utc_now_text()
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    conn = None
     try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
-            SELECT relay_id, status, attempt_count, spooled_file_path, content_sha256, byte_length
+            SELECT relay_id, status, attempt_count, spooled_file_path, content_sha256, byte_length, receipt_json
             FROM direct_sync_relay_batches
             WHERE relay_id = ?
             """,
@@ -282,11 +433,13 @@ def retry_dead_relay_batch(
                 **reason_fields,
                 "error_code": "relay_not_found",
             }
-            _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-            return report
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         previous_status = str(row["status"])
         previous_attempt_count = int(row["attempt_count"])
-        if previous_status not in RETRYABLE_DEAD_STATUSES:
+        retryable_statuses = set(RETRYABLE_DEAD_STATUSES)
+        if allow_operator_review:
+            retryable_statuses.add(RELAY_STATUS_OPERATOR_REVIEW)
+        if previous_status not in retryable_statuses:
             conn.rollback()
             report = {
                 "status": "BLOCKED",
@@ -298,8 +451,43 @@ def retry_dead_relay_batch(
                 "previous_status": previous_status,
                 "error_code": "relay_status_not_retryable_by_operator",
             }
-            _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-            return report
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
+        if previous_status == RELAY_STATUS_OPERATOR_REVIEW:
+            receipt, receipt_valid = _decode_receipt_json(row["receipt_json"])
+            if not receipt_valid:
+                conn.rollback()
+                report = {
+                    "status": "BLOCKED",
+                    "operation": "retry-dead",
+                    "relay_id": relay,
+                    "operator_id": operator,
+                    "tool_version": OPERATOR_TOOL_VERSION,
+                    **reason_fields,
+                    "previous_status": previous_status,
+                    "error_code": "operator_review_receipt_invalid",
+                }
+                return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
+            committed = receipt.get("committed")
+            local_committed = receipt.get("_local_upload_result_committed")
+            ambiguous_or_committed = (
+                committed is True
+                or local_committed is True
+                or (committed is not None and committed is not False)
+                or (local_committed is not None and local_committed is not False)
+            )
+            if ambiguous_or_committed:
+                conn.rollback()
+                report = {
+                    "status": "BLOCKED",
+                    "operation": "retry-dead",
+                    "relay_id": relay,
+                    "operator_id": operator,
+                    "tool_version": OPERATOR_TOOL_VERSION,
+                    **reason_fields,
+                    "previous_status": previous_status,
+                    "error_code": "operator_review_committed_receipt_not_retryable",
+                }
+                return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         spool_path = Path(str(row["spooled_file_path"] or ""))
         if not spool_path.is_file():
             conn.rollback()
@@ -313,9 +501,23 @@ def retry_dead_relay_batch(
                 "previous_status": previous_status,
                 "error_code": "spooled_file_missing",
             }
-            _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-            return report
-        actual_hash, actual_bytes = _read_file_digest(spool_path)
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
+        try:
+            actual_hash, actual_bytes = _read_file_digest(spool_path)
+        except OSError as exc:
+            conn.rollback()
+            report = {
+                "status": "BLOCKED",
+                "operation": "retry-dead",
+                "relay_id": relay,
+                "operator_id": operator,
+                "tool_version": OPERATOR_TOOL_VERSION,
+                **reason_fields,
+                "previous_status": previous_status,
+                "error_code": "spooled_file_missing" if isinstance(exc, FileNotFoundError) else "spooled_file_unreadable",
+                "error_message": f"spooled file cannot be read: {exc.__class__.__name__}",
+            }
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         expected_hash = str(row["content_sha256"] or "")
         expected_bytes = int(row["byte_length"])
         if actual_hash != expected_hash or actual_bytes != expected_bytes:
@@ -334,8 +536,7 @@ def retry_dead_relay_batch(
                 "actual_byte_length": actual_bytes,
                 "error_code": "spooled_file_digest_mismatch",
             }
-            _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-            return report
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         cursor = conn.execute(
             """
             UPDATE direct_sync_relay_batches
@@ -345,13 +546,15 @@ def retry_dead_relay_batch(
                 next_attempt_at = NULL,
                 last_error_code = NULL,
                 last_error_message = NULL,
+                receipt_json = NULL,
+                upload_status_path = NULL,
                 updated_at = ?
             WHERE relay_id = ?
               AND status = ?
               AND lease_owner IS NULL
               AND lease_expires_at IS NULL
             """,
-            (RELAY_STATUS_PENDING, now, relay, RELAY_STATUS_FAILED_PERMANENT),
+            (RELAY_STATUS_PENDING, now, relay, previous_status),
         )
         if cursor.rowcount != 1:
             conn.rollback()
@@ -365,11 +568,28 @@ def retry_dead_relay_batch(
                 "previous_status": previous_status,
                 "error_code": "relay_status_changed",
             }
-            _append_operator_audit(audit_log_path, action="retry-dead-blocked", report=report)
-            return report
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         conn.commit()
+    except sqlite3.Error as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+        report = {
+            "status": "BLOCKED",
+            "operation": "retry-dead",
+            "relay_id": relay,
+            "operator_id": operator,
+            "tool_version": OPERATOR_TOOL_VERSION,
+            **reason_fields,
+            "error_code": "relay_db_unavailable",
+            "error_message": f"relay queue database error: {exc.__class__.__name__}",
+        }
+        return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     report = {
         "status": "PASS",
         "operation": "retry-dead",
@@ -385,5 +605,4 @@ def retry_dead_relay_batch(
         "spool_file_name": spool_path.name,
         "queue": read_relay_queue_status_read_only(db_path),
     }
-    _append_operator_audit(audit_log_path, action="retry-dead", report=report)
-    return report
+    return _with_operator_audit_status(audit_log_path, action="retry-dead", report=report)

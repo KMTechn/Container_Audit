@@ -9,6 +9,7 @@ import re
 import shutil
 import sqlite3
 import sys
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,12 +20,17 @@ from direct_sync_push import (
     DEFAULT_TIMEOUT_SECONDS,
     DirectSyncPushError,
     ProducerCredentials,
+    RELAY_STATUS_ACKED,
+    RELAY_STATUS_FAILED_PERMANENT,
     RELAY_STATUS_LEASED,
+    RELAY_STATUS_OPERATOR_REVIEW,
     RELAY_STATUS_PENDING,
     RELAY_STATUS_RETRY_WAIT,
+    RelaySpoolFileError,
     UploadResult,
     drain_one_relay_batch,
     enqueue_source_file_for_relay,
+    load_json_no_duplicate_keys,
     relay_queue_status,
     reset_stale_relay_leases,
     utc_now_text,
@@ -59,13 +65,20 @@ class DirectSyncRuntimeConfig:
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target.with_suffix(target.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp_path, target)
+    temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, target)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
@@ -185,12 +198,20 @@ def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_d
 
 def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredentials:
     credential_path = Path(path)
-    payload = json.loads(credential_path.read_text(encoding="utf-8-sig"))
+    try:
+        payload = load_json_no_duplicate_keys(credential_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise DirectSyncPushError(f"credential file is missing or invalid: {exc.__class__.__name__}") from exc
+    except DirectSyncPushError as exc:
+        raise DirectSyncPushError(f"credential file is missing or invalid: {exc}") from exc
     if not isinstance(payload, dict):
         raise DirectSyncPushError("credential file must be a JSON object")
     producer_id = str(payload.get("producer_id") or "").strip()
     key_id = str(payload.get("key_id") or "").strip()
-    secret = payload.get("secret")
+    raw_secret = payload.get("secret")
+    if raw_secret is not None and (not isinstance(raw_secret, str) or (raw_secret != "" and not raw_secret.strip())):
+        raise DirectSyncPushError("credential secret must be a nonempty string")
+    secret = raw_secret if isinstance(raw_secret, str) and raw_secret.strip() else ""
     secret_ref = str(payload.get("secret_ref") or "").strip()
     endpoint_url = str(payload.get("endpoint_url") or "").strip()
     if secret and secret_ref:
@@ -216,9 +237,21 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
 
 def _disk_pressure_report(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
     spool_dir = Path(config.spool_dir)
-    spool_dir.mkdir(parents=True, exist_ok=True)
-    usage = shutil.disk_usage(spool_dir)
     min_free = max(0, int(config.min_free_bytes or 0))
+    try:
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        usage = shutil.disk_usage(spool_dir)
+    except OSError as exc:
+        return {
+            "status": "blocked",
+            "path": str(spool_dir),
+            "free_bytes": 0,
+            "total_bytes": 0,
+            "used_bytes": 0,
+            "min_free_bytes": min_free,
+            "error_code": "disk_pressure_check_failed",
+            "error_message": f"disk pressure check failed: {exc.__class__.__name__}",
+        }
     return {
         "status": "blocked" if usage.free < min_free else "pass",
         "path": str(spool_dir),
@@ -232,7 +265,7 @@ def _disk_pressure_report(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
 def _safe_relay_queue_status(db_path: str | os.PathLike[str]) -> dict[str, Any]:
     try:
         return relay_queue_status(db_path)
-    except sqlite3.DatabaseError as exc:
+    except (sqlite3.DatabaseError, OSError) as exc:
         return {
             "status": "unavailable",
             "error_code": "relay_queue_db_error",
@@ -241,7 +274,7 @@ def _safe_relay_queue_status(db_path: str | os.PathLike[str]) -> dict[str, Any]:
 
 
 def _runtime_error_details(exc: Exception) -> tuple[str, str]:
-    if isinstance(exc, sqlite3.DatabaseError):
+    if isinstance(exc, (sqlite3.DatabaseError, OSError)):
         return "relay_queue_db_error", f"relay queue database error: {exc.__class__.__name__}"
     return "direct_sync_runtime_error", str(exc)
 
@@ -306,28 +339,53 @@ def _queue_backpressure_report(
     }
 
 
-def _result_summary(result: UploadResult | None) -> dict[str, Any]:
+def _result_summary(result: UploadResult | None, queue: Mapping[str, Any] | None = None) -> dict[str, Any]:
     if result is None:
+        counts = dict((queue or {}).get("counts") or {})
+        dead_letter_counts = {
+            status: int(counts.get(status, 0) or 0)
+            for status in (RELAY_STATUS_OPERATOR_REVIEW, RELAY_STATUS_FAILED_PERMANENT)
+            if int(counts.get(status, 0) or 0) > 0
+        }
+        if dead_letter_counts.get(RELAY_STATUS_OPERATOR_REVIEW):
+            status = "operator_review"
+            error_code = "dead_letter_operator_review"
+        elif dead_letter_counts.get(RELAY_STATUS_FAILED_PERMANENT):
+            status = "failed_permanent"
+            error_code = "dead_letter_failed_permanent"
+        else:
+            status = "idle"
+            error_code = ""
         return {
-            "status": "idle",
+            "status": status,
             "success": False,
             "committed": False,
             "retryable": False,
             "status_code": 0,
-            "error_code": "",
+            "error_code": error_code,
+            "dead_letter_counts": dead_letter_counts,
         }
-    relay_id = ""
+    relay_id = str(getattr(result, "relay_id", "") or "").strip()
+    producer_client_batch_id = ""
     if isinstance(result.receipt, Mapping):
-        relay_id = str(result.receipt.get("client_batch_id") or "").strip()
+        producer_client_batch_id = str(result.receipt.get("client_batch_id") or "").strip()
+        if not relay_id:
+            relay_id = producer_client_batch_id
     if result.success:
         status = "acked"
+    elif result.error_code == "operator_paused":
+        status = "paused_by_operator"
+    elif result.error_code == "operator_pause_marker_invalid":
+        status = "blocked_operator_control"
     elif result.committed:
         status = "operator_review"
     elif result.retryable:
         status = "retry_wait"
+    elif result.error_code in {"relay_metadata_invalid", "upload_unhandled_exception"}:
+        status = "operator_review"
     else:
         status = "failed_permanent"
-    return {
+    summary = {
         "status": status,
         "success": result.success,
         "committed": result.committed,
@@ -337,6 +395,9 @@ def _result_summary(result: UploadResult | None) -> dict[str, Any]:
         "relay_id": relay_id,
         "upload_status_path": result.status_path,
     }
+    if producer_client_batch_id and producer_client_batch_id != relay_id:
+        summary["producer_client_batch_id"] = producer_client_batch_id
+    return summary
 
 
 def _write_runtime_status(
@@ -364,13 +425,26 @@ def _write_runtime_status(
         "queue_backpressure": dict(queue_backpressure or {}),
         "error_code": error_code,
         "error_message": error_message,
+        "runtime_status_write_status": "PASS",
         "updated_at": utc_now_text(),
     }
-    _write_json_atomic(config.runtime_status_path, payload)
+    return _write_runtime_payload(config, payload)
+
+
+def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    payload["runtime_status_write_status"] = "PASS"
+    payload.pop("runtime_status_write_error_code", None)
+    payload.pop("runtime_status_write_error_message", None)
+    try:
+        _write_json_atomic(config.runtime_status_path, payload)
+    except OSError as exc:
+        payload["runtime_status_write_status"] = "FAIL"
+        payload["runtime_status_write_error_code"] = "runtime_status_write_failed"
+        payload["runtime_status_write_error_message"] = f"runtime status write failed: {exc.__class__.__name__}"
     return payload
 
 
-def _append_runtime_event(config: DirectSyncRuntimeConfig, event: str, payload: Mapping[str, Any]) -> None:
+def _append_runtime_event(config: DirectSyncRuntimeConfig, event: str, payload: Mapping[str, Any]) -> tuple[bool, str]:
     entry = {
         "event": event,
         "app": "Container_Audit",
@@ -379,7 +453,27 @@ def _append_runtime_event(config: DirectSyncRuntimeConfig, event: str, payload: 
         "generated_at": utc_now_text(),
     }
     entry.update(dict(payload))
-    _append_jsonl(config.log_path, entry)
+    try:
+        _append_jsonl(config.log_path, entry)
+    except OSError as exc:
+        return False, f"runtime log append failed: {exc.__class__.__name__}"
+    return True, ""
+
+
+def _append_runtime_event_with_status(
+    config: DirectSyncRuntimeConfig,
+    event: str,
+    status: dict[str, Any],
+    *,
+    log_payload: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ok, error_message = _append_runtime_event(config, event, log_payload or status)
+    if ok:
+        return status
+    status["runtime_log_write_status"] = "FAIL"
+    status["runtime_log_write_error_code"] = "runtime_log_write_failed"
+    status["runtime_log_write_error_message"] = error_message
+    return _write_runtime_payload(config, status)
 
 
 def _paused_by_operator(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
@@ -388,18 +482,22 @@ def _paused_by_operator(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
 
 def _write_paused_status(config: DirectSyncRuntimeConfig, *, event: str) -> dict[str, Any]:
     pause = _paused_by_operator(config)
-    queue = relay_queue_status(config.db_path)
+    queue = _safe_relay_queue_status(config.db_path)
+    marker_invalid = bool(pause.get("enabled")) and bool(pause.get("paused")) and not bool(pause.get("marker_valid"))
     status = _write_runtime_status(
         config,
-        status="paused_by_operator",
+        status="blocked_operator_control" if marker_invalid else "paused_by_operator",
         queue=queue,
-        disk={"status": "not_checked", "reason": "operator_pause"},
+        disk={"status": "not_checked", "reason": "operator_pause_invalid" if marker_invalid else "operator_pause"},
         operator_control=pause,
-        error_code="operator_paused",
-        error_message="direct-sync relay is paused by local operator control",
+        error_code="operator_pause_marker_invalid" if marker_invalid else "operator_paused",
+        error_message=(
+            "direct-sync relay operator pause marker is invalid"
+            if marker_invalid
+            else "direct-sync relay is paused by local operator control"
+        ),
     )
-    _append_runtime_event(config, event, status)
-    return status
+    return _append_runtime_event_with_status(config, event, status)
 
 
 def _write_backpressure_status(
@@ -407,18 +505,19 @@ def _write_backpressure_status(
     *,
     backpressure: Mapping[str, Any],
     event: str,
+    stale_leases_reset: int = 0,
 ) -> dict[str, Any]:
     status = _write_runtime_status(
         config,
         status="blocked_queue_backpressure",
-        queue=backpressure.get("queue") if isinstance(backpressure.get("queue"), Mapping) else relay_queue_status(config.db_path),
+        queue=backpressure.get("queue") if isinstance(backpressure.get("queue"), Mapping) else _safe_relay_queue_status(config.db_path),
         disk={"status": "not_checked", "reason": "queue_backpressure"},
+        stale_leases_reset=stale_leases_reset,
         queue_backpressure=backpressure,
         error_code="queue_backpressure",
         error_message="direct-sync relay active queue exceeds configured enqueue threshold",
     )
-    _append_runtime_event(config, event, status)
-    return status
+    return _append_runtime_event_with_status(config, event, status)
 
 
 def enqueue_completed_source_file(
@@ -432,12 +531,29 @@ def enqueue_completed_source_file(
     if _paused_by_operator(config).get("paused"):
         return _write_paused_status(config, event="enqueue_paused_by_operator")
 
-    backpressure = _queue_backpressure_report(config)
+    stale_leases_reset = 0
+    try:
+        stale_leases_reset = reset_stale_relay_leases(db_path=config.db_path, now=utc_now_text())
+        backpressure = _queue_backpressure_report(config)
+    except (sqlite3.DatabaseError, OSError) as exc:
+        queue = _safe_relay_queue_status(config.db_path)
+        error_code, error_message = _runtime_error_details(exc)
+        status = _write_runtime_status(
+            config,
+            status="enqueue_error",
+            queue=queue,
+            disk={"status": "not_checked", "reason": "relay_queue_db_error"},
+            stale_leases_reset=stale_leases_reset,
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return _append_runtime_event_with_status(config, "enqueue_error", status)
     if backpressure["status"] != "pass":
         return _write_backpressure_status(
             config,
             backpressure=backpressure,
             event="enqueue_blocked_queue_backpressure",
+            stale_leases_reset=stale_leases_reset,
         )
 
     disk = _disk_pressure_report(config)
@@ -448,11 +564,11 @@ def enqueue_completed_source_file(
             status="blocked_disk_pressure",
             queue=queue,
             disk=disk,
+            stale_leases_reset=stale_leases_reset,
             error_code="disk_pressure",
             error_message="free space is below configured direct-sync relay minimum",
         )
-        _append_runtime_event(config, "enqueue_blocked_disk_pressure", status)
-        return status
+        return _append_runtime_event_with_status(config, "enqueue_blocked_disk_pressure", status)
     try:
         creds = credentials or load_credentials_from_json(config.credential_path)
         row = enqueue_source_file_for_relay(
@@ -464,24 +580,40 @@ def enqueue_completed_source_file(
             relative_path=relative_path,
             dedupe_existing=True,
         )
-    except DirectSyncPushError as exc:
-        queue = relay_queue_status(config.db_path)
+    except (DirectSyncPushError, sqlite3.DatabaseError, OSError) as exc:
+        queue = _safe_relay_queue_status(config.db_path)
+        error_code, error_message = _runtime_error_details(exc)
+        if isinstance(exc, RelaySpoolFileError):
+            error_code = "relay_spool_filesystem_error"
+            error_message = str(exc)
+        elif isinstance(exc, DirectSyncPushError):
+            error_code = "direct_sync_enqueue_error"
+            error_message = str(exc)
         status = _write_runtime_status(
             config,
             status="enqueue_error",
             queue=queue,
             disk=disk,
-            error_code="direct_sync_enqueue_error",
-            error_message=str(exc),
+            stale_leases_reset=stale_leases_reset,
+            error_code=error_code,
+            error_message=error_message,
         )
-        _append_runtime_event(config, "enqueue_error", status)
-        return status
-    queue = relay_queue_status(config.db_path)
+        return _append_runtime_event_with_status(config, "enqueue_error", status)
+    if row.deduped_existing and row.status in {RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, RELAY_STATUS_LEASED}:
+        enqueue_status = "already_queued"
+    elif row.deduped_existing and row.status == RELAY_STATUS_ACKED:
+        enqueue_status = "already_acked"
+    elif row.deduped_existing and row.status in {RELAY_STATUS_FAILED_PERMANENT, RELAY_STATUS_OPERATOR_REVIEW}:
+        enqueue_status = "existing_terminal_blocked"
+    else:
+        enqueue_status = "enqueued"
+    queue = _safe_relay_queue_status(config.db_path)
     status = _write_runtime_status(
         config,
-        status="enqueued",
+        status=enqueue_status,
         queue=queue,
         disk=disk,
+        stale_leases_reset=stale_leases_reset,
         last_result={
             "relay_id": row.relay_id,
             "relay_status": row.status,
@@ -492,12 +624,14 @@ def enqueue_completed_source_file(
             "deduped_existing": row.deduped_existing,
         },
     )
-    _append_runtime_event(
+    return _append_runtime_event_with_status(
         config,
-        "enqueue_completed_source_file",
-        {
+        "enqueue_completed_source_file" if enqueue_status == "enqueued" else "enqueue_existing_source_file",
+        status,
+        log_payload={
             "relay_id": row.relay_id,
             "relay_status": row.status,
+            "status": enqueue_status,
             "spooled_file_path": row.spooled_file_path,
             "relative_path": row.relative_path,
             "content_sha256": row.content_sha256,
@@ -505,7 +639,85 @@ def enqueue_completed_source_file(
             "deduped_existing": row.deduped_existing,
         },
     )
-    return status
+
+
+def record_scan_status(
+    config: DirectSyncRuntimeConfig,
+    *,
+    status: str,
+    scan_enqueued_count: int,
+    scan_attempted_count: int,
+    scan_failed_source_file: str = "",
+) -> dict[str, Any]:
+    queue = _safe_relay_queue_status(config.db_path)
+    payload = _write_runtime_status(
+        config,
+        status=status,
+        queue=queue,
+        disk={"status": "not_checked", "reason": "source_scan"},
+        last_result={
+            "status": status,
+            "scan_enqueued_count": int(scan_enqueued_count),
+            "scan_attempted_count": int(scan_attempted_count),
+            "scan_failed_source_file": scan_failed_source_file,
+        },
+    )
+    return _append_runtime_event_with_status(config, "source_scan_status", payload)
+
+
+def record_scan_result_status(
+    config: DirectSyncRuntimeConfig,
+    *,
+    scan_result: Mapping[str, Any],
+    scan_enqueued_count: int,
+    scan_attempted_count: int,
+    scan_failed_source_file: str = "",
+) -> dict[str, Any]:
+    payload = dict(scan_result)
+    payload["scan_enqueued_count"] = int(scan_enqueued_count)
+    payload["scan_attempted_count"] = int(scan_attempted_count)
+    if scan_failed_source_file:
+        payload["scan_failed_source_file"] = scan_failed_source_file
+    last_result = dict(payload.get("last_result") or {})
+    last_result.update(
+        {
+            "scan_enqueued_count": int(scan_enqueued_count),
+            "scan_attempted_count": int(scan_attempted_count),
+            "scan_failed_source_file": scan_failed_source_file,
+        }
+    )
+    payload["last_result"] = last_result
+    payload = _write_runtime_payload(config, payload)
+    return _append_runtime_event_with_status(config, "source_scan_result_status", payload)
+
+
+def record_scan_drain_status(
+    config: DirectSyncRuntimeConfig,
+    *,
+    drain_status: Mapping[str, Any],
+    scan_status: str,
+    scan_enqueued_count: int,
+    scan_attempted_count: int,
+    scan_failed_source_file: str = "",
+) -> dict[str, Any]:
+    payload = dict(drain_status)
+    payload["scan_status"] = scan_status
+    payload["scan_enqueued_count"] = int(scan_enqueued_count)
+    payload["scan_attempted_count"] = int(scan_attempted_count)
+    if scan_failed_source_file:
+        payload["scan_failed_source_file"] = scan_failed_source_file
+    last_result = dict(payload.get("last_result") or {})
+    last_result.update(
+        {
+            "scan_status": scan_status,
+            "scan_enqueued_count": int(scan_enqueued_count),
+            "scan_attempted_count": int(scan_attempted_count),
+            "scan_failed_source_file": scan_failed_source_file,
+        }
+    )
+    payload["last_result"] = last_result
+    payload = _write_runtime_payload(config, payload)
+    return _append_runtime_event_with_status(config, "source_scan_drain_status", payload)
 
 
 def run_relay_once(
@@ -521,7 +733,7 @@ def run_relay_once(
 
     disk = _disk_pressure_report(config)
     if disk["status"] != "pass":
-        queue = relay_queue_status(config.db_path)
+        queue = _safe_relay_queue_status(config.db_path)
         status = _write_runtime_status(
             config,
             status="blocked_disk_pressure",
@@ -530,12 +742,12 @@ def run_relay_once(
             error_code="disk_pressure",
             error_message="free space is below configured direct-sync relay minimum",
         )
-        _append_runtime_event(config, "relay_blocked_disk_pressure", status)
-        return status
+        return _append_runtime_event_with_status(config, "relay_blocked_disk_pressure", status)
 
+    cycle_now = now or utc_now_text()
     reset_count = 0
     try:
-        reset_count = reset_stale_relay_leases(db_path=config.db_path, now=now or utc_now_text())
+        reset_count = reset_stale_relay_leases(db_path=config.db_path, now=cycle_now)
         creds = credentials or load_credentials_from_json(config.credential_path)
         result = drain_one_relay_batch(
             db_path=config.db_path,
@@ -545,8 +757,10 @@ def run_relay_once(
             status_dir=config.upload_status_dir,
             retry_base_seconds=config.retry_base_seconds,
             timeout=config.timeout_seconds,
+            pre_upload_pause_check=lambda: _paused_by_operator(config),
+            now=cycle_now,
         )
-    except (DirectSyncPushError, sqlite3.DatabaseError) as exc:
+    except (DirectSyncPushError, sqlite3.DatabaseError, OSError) as exc:
         queue = _safe_relay_queue_status(config.db_path)
         error_code, error_message = _runtime_error_details(exc)
         status = _write_runtime_status(
@@ -558,11 +772,21 @@ def run_relay_once(
             error_code=error_code,
             error_message=error_message,
         )
-        _append_runtime_event(config, "relay_runtime_error", status)
-        return status
+        return _append_runtime_event_with_status(config, "relay_runtime_error", status)
 
-    result_summary = _result_summary(result)
     queue = _safe_relay_queue_status(config.db_path)
+    result_summary = _result_summary(result, queue)
+    operator_control = None
+    error_code = ""
+    error_message = ""
+    if result_summary["status"] in {"paused_by_operator", "blocked_operator_control"}:
+        operator_control = _paused_by_operator(config)
+        error_code = result_summary["error_code"]
+        error_message = (
+            "direct-sync relay operator pause marker is invalid"
+            if result_summary["status"] == "blocked_operator_control"
+            else "direct-sync relay is paused by local operator control"
+        )
     status = _write_runtime_status(
         config,
         status=result_summary["status"],
@@ -570,6 +794,8 @@ def run_relay_once(
         disk=disk,
         stale_leases_reset=reset_count,
         last_result=result_summary,
+        operator_control=operator_control,
+        error_code=error_code,
+        error_message=error_message,
     )
-    _append_runtime_event(config, "relay_runner_once", status)
-    return status
+    return _append_runtime_event_with_status(config, "relay_runner_once", status)

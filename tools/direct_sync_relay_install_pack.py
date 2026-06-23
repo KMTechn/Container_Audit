@@ -7,24 +7,72 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
+import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Sequence
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from direct_sync_push import (  # noqa: E402
+    DEFAULT_PRODUCER_ROLE,
+    DEFAULT_SOURCE_SYSTEM,
+    DEFAULT_SOURCE_TRANSPORT,
+    DEFAULT_STREAM_NAME,
+    DirectSyncPushError,
+    load_json_no_duplicate_keys,
+    validate_endpoint_url,
+)
+from direct_sync_runtime import _production_profile_enabled, _safe_secret_ref_name  # noqa: E402
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 DEFAULT_PROGRAM_DATA_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
+DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 300
+MAX_TASK_NAME_LENGTH = 128
+TASK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def _quote_cmd(parts: Sequence[str]) -> str:
-    return " ".join(shlex.quote(str(part)) for part in parts)
+    return subprocess.list2cmdline([str(part) for part in parts])
 
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _task_name_report(task_name: str) -> dict:
+    value = str(task_name or "")
+    valid = bool(value) and len(value) <= MAX_TASK_NAME_LENGTH and bool(TASK_NAME_PATTERN.fullmatch(value))
+    report = {
+        "status": "PASS" if valid else "FAIL",
+        "task_name_valid": valid,
+        "max_length": MAX_TASK_NAME_LENGTH,
+        "allowed_pattern": TASK_NAME_PATTERN.pattern,
+    }
+    if not valid:
+        report["blocked_reason"] = (
+            "task_name must be 1-128 characters and contain only letters, digits, underscore, dash, or dot"
+        )
+    return report
 
 
 def _runtime_paths(program_data_root: str | os.PathLike[str]) -> dict[str, str]:
@@ -56,6 +104,13 @@ def _runtime_path_boundary_report(program_data_root: str | os.PathLike[str], pat
             "all_runtime_paths_under_program_data_root": False,
         }
     resolved_root = root_path.resolve()
+    if resolved_root.exists() and not resolved_root.is_dir():
+        return {
+            "status": "FAIL",
+            "blocked_reason": "program_data_root exists and is not a directory",
+            "program_data_root": str(resolved_root),
+            "all_runtime_paths_under_program_data_root": False,
+        }
     escaped_paths: list[str] = []
     resolved_paths: dict[str, str] = {}
     for name, path in paths.items():
@@ -74,16 +129,285 @@ def _runtime_path_boundary_report(program_data_root: str | os.PathLike[str], pat
     }
 
 
+def _app_root_dependency_report(app_root: str | os.PathLike[str]) -> dict:
+    root = Path(app_root).resolve()
+    required = {
+        "runner_script": root / "tools" / "direct_sync_relay_runner.py",
+        "direct_sync_runtime": root / "direct_sync_runtime.py",
+        "direct_sync_push": root / "direct_sync_push.py",
+        "direct_sync_operator": root / "direct_sync_operator.py",
+    }
+    missing = [name for name, path in required.items() if not path.is_file()]
+    return {
+        "status": "PASS" if not missing else "FAIL",
+        "blocked_reason": "" if not missing else "app_root missing direct-sync runtime dependencies",
+        "app_root": str(root),
+        "missing": missing,
+        "required_paths": {name: str(path) for name, path in required.items()},
+    }
+
+
+def _python_executable_report(python_exe: str | os.PathLike[str]) -> dict:
+    raw_path = str(python_exe or "").strip()
+    if not raw_path:
+        return {
+            "status": "FAIL",
+            "blocked_reason": "python_exe is required",
+            "python_exe": raw_path,
+        }
+    resolved = Path(raw_path).expanduser().resolve()
+    if not resolved.is_file():
+        return {
+            "status": "FAIL",
+            "blocked_reason": "python_exe does not exist",
+            "python_exe": str(resolved),
+        }
+    return {
+        "status": "PASS",
+        "blocked_reason": "",
+        "python_exe": str(resolved),
+    }
+
+
+def _python_runtime_import_report(python_exe: str | os.PathLike[str], app_root: str | os.PathLike[str]) -> dict:
+    resolved_python = Path(str(python_exe or "")).expanduser().resolve()
+    resolved_app_root = Path(app_root).expanduser().resolve()
+    modules = ["requests", "direct_sync_push", "direct_sync_runtime", "direct_sync_operator"]
+    code = "\n".join(
+        [
+            "import sys",
+            f"sys.path.insert(0, {str(resolved_app_root)!r})",
+            *[f"import {module}" for module in modules],
+        ]
+    )
+    try:
+        completed = subprocess.run(
+            [str(resolved_python), "-c", code],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "status": "FAIL",
+            "blocked_reason": "python_exe cannot import direct-sync runtime modules",
+            "python_exe": str(resolved_python),
+            "app_root": str(resolved_app_root),
+            "required_modules": modules,
+            "error_type": exc.__class__.__name__,
+        }
+    ok = completed.returncode == 0
+    return {
+        "status": "PASS" if ok else "FAIL",
+        "blocked_reason": "" if ok else "python_exe cannot import direct-sync runtime modules",
+        "python_exe": str(resolved_python),
+        "app_root": str(resolved_app_root),
+        "required_modules": modules,
+        "returncode": completed.returncode,
+        "stderr": completed.stderr[-1000:],
+    }
+
+
+def _skipped_report(reason: str) -> dict:
+    return {
+        "status": "SKIPPED",
+        "blocked_reason": "",
+        "reason": reason,
+    }
+
+
+def _load_json_object_report(path: str | os.PathLike[str], *, label: str) -> tuple[dict, dict | None]:
+    raw_path = str(path or "").strip()
+    if not raw_path:
+        return {
+            "status": "FAIL",
+            "blocked_reason": f"{label} path is required",
+            "path": raw_path,
+        }, None
+    resolved = Path(raw_path).expanduser().resolve()
+    if not resolved.is_file():
+        return {
+            "status": "FAIL",
+            "blocked_reason": f"{label} file does not exist",
+            "path": str(resolved),
+        }, None
+    try:
+        payload = load_json_no_duplicate_keys(resolved.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return {
+            "status": "FAIL",
+            "blocked_reason": f"{label} file is not valid JSON",
+            "path": str(resolved),
+            "error_type": exc.__class__.__name__,
+        }, None
+    except DirectSyncPushError as exc:
+        return {
+            "status": "FAIL",
+            "blocked_reason": f"{label} file is not valid JSON",
+            "path": str(resolved),
+            "error_type": "DuplicateJSONKey",
+            "error_message": str(exc),
+        }, None
+    if not isinstance(payload, dict):
+        return {
+            "status": "FAIL",
+            "blocked_reason": f"{label} file must be a JSON object",
+            "path": str(resolved),
+        }, None
+    return {
+        "status": "PASS",
+        "blocked_reason": "",
+        "path": str(resolved),
+    }, payload
+
+
+def _producer_manifest_report(path: str | os.PathLike[str]) -> dict:
+    report, payload = _load_json_object_report(path, label="producer_manifest")
+    if payload is None:
+        return report
+    identity = payload.get("pc_identity") if isinstance(payload.get("pc_identity"), dict) else {}
+    missing_identity = [
+        name for name in ("producer_install_id", "source_host_id") if not str(identity.get(name) or "").strip()
+    ]
+    matching_stream = None
+    for stream in payload.get("streams") or []:
+        if isinstance(stream, dict) and stream.get("stream_name") == DEFAULT_STREAM_NAME:
+            matching_stream = stream
+            break
+    stream_ok = bool(
+        matching_stream
+        and matching_stream.get("producer_role") == DEFAULT_PRODUCER_ROLE
+        and matching_stream.get("source_system") == DEFAULT_SOURCE_SYSTEM
+        and matching_stream.get("source_transport") == DEFAULT_SOURCE_TRANSPORT
+    )
+    failures: list[str] = []
+    if missing_identity:
+        failures.append("producer manifest identity is incomplete")
+    if not stream_ok:
+        failures.append("producer manifest stream does not match Container_Audit legacy CSV")
+    report.update(
+        {
+            "missing_identity_fields": missing_identity,
+            "container_audit_stream_present": matching_stream is not None,
+            "container_audit_stream_valid": stream_ok,
+        }
+    )
+    if failures:
+        report["status"] = "FAIL"
+        report["blocked_reason"] = "; ".join(failures)
+    return report
+
+
+def _credential_report(path: str | os.PathLike[str]) -> dict:
+    report, payload = _load_json_object_report(path, label="credential")
+    if payload is None:
+        return report
+    required_missing = [
+        name for name in ("producer_id", "key_id", "endpoint_url") if not str(payload.get(name) or "").strip()
+    ]
+    raw_secret = payload.get("secret")
+    secret_invalid = raw_secret is not None and (
+        not isinstance(raw_secret, str) or (raw_secret != "" and not raw_secret.strip())
+    )
+    has_secret = isinstance(raw_secret, str) and bool(raw_secret.strip())
+    has_secret_ref = bool(str(payload.get("secret_ref") or "").strip())
+    secret_ref = str(payload.get("secret_ref") or "").strip()
+    production_profile_enabled = _production_profile_enabled()
+    failures: list[str] = []
+    if required_missing:
+        failures.append("credential file is missing required identity or endpoint fields")
+    if secret_invalid:
+        failures.append("credential secret must be a nonempty string")
+    if has_secret and has_secret_ref:
+        failures.append("credential file must not contain both secret and secret_ref")
+    if not has_secret and not has_secret_ref:
+        failures.append("credential file is missing secret or secret_ref")
+    if has_secret and production_profile_enabled:
+        failures.append("raw credential secret is disabled in production")
+    secret_ref_scheme = ""
+    if has_secret_ref:
+        if ":" not in secret_ref:
+            failures.append("secret_ref must start with env:, dpapi:, or wincred:")
+        else:
+            secret_ref_scheme, secret_ref_target = secret_ref.split(":", 1)
+            secret_ref_scheme = secret_ref_scheme.lower()
+            if secret_ref_scheme not in {"env", "dpapi", "wincred"}:
+                failures.append("secret_ref must start with env:, dpapi:, or wincred:")
+            try:
+                _safe_secret_ref_name(secret_ref_target)
+            except DirectSyncPushError as exc:
+                failures.append(str(exc))
+            if secret_ref_scheme == "env" and production_profile_enabled:
+                failures.append("env secret_ref is disabled in production")
+    endpoint_valid = False
+    if not required_missing:
+        try:
+            validate_endpoint_url(str(payload.get("endpoint_url") or ""))
+            endpoint_valid = True
+        except DirectSyncPushError as exc:
+            failures.append(str(exc))
+    report.update(
+        {
+            "missing_fields": required_missing,
+            "secret_material_configured": has_secret or has_secret_ref,
+            "secret_ref_configured": has_secret_ref,
+            "raw_secret_configured": has_secret,
+            "secret_ref_scheme": secret_ref_scheme,
+            "production_profile_enabled": production_profile_enabled,
+            "endpoint_url_valid": endpoint_valid,
+        }
+    )
+    if failures:
+        report["status"] = "FAIL"
+        report["blocked_reason"] = "; ".join(failures)
+    return report
+
+
 def _source_scan_config(args: argparse.Namespace) -> dict:
     scan_source_dir = str(getattr(args, "scan_source_dir", "") or "").strip()
     source_globs = [str(item) for item in (getattr(args, "source_glob", []) or [])]
-    max_enqueue_files = max(0, int(getattr(args, "max_enqueue_files", 100) or 0))
+    max_enqueue_files = int(getattr(args, "max_enqueue_files", 100) or 0)
+    min_source_file_age_seconds = int(
+        getattr(args, "min_source_file_age_seconds", DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS) or 0
+    )
     return {
         "enabled": bool(scan_source_dir),
         "scan_source_dir": str(Path(scan_source_dir).resolve()) if scan_source_dir else "",
         "source_globs": source_globs,
         "max_enqueue_files": max_enqueue_files,
+        "min_source_file_age_seconds": min_source_file_age_seconds,
+        "drain_after_scan": bool(scan_source_dir),
     }
+
+
+def _validate_source_scan_config(source_scan: dict) -> dict:
+    if not source_scan["enabled"]:
+        return {"status": "PASS", "enabled": False}
+    failures: list[str] = []
+    scan_source_dir = Path(source_scan["scan_source_dir"])
+    if not scan_source_dir.is_dir():
+        failures.append("scan_source_dir does not exist or is not a directory")
+    if source_scan["max_enqueue_files"] < 0:
+        failures.append("max_enqueue_files must not be negative")
+    if source_scan["min_source_file_age_seconds"] < 0:
+        failures.append("min_source_file_age_seconds must not be negative")
+    for pattern in source_scan["source_globs"]:
+        text = str(pattern or "").strip()
+        if not text:
+            failures.append("source glob must not be empty")
+        elif "**" in text or "/" in text or "\\" in text:
+            failures.append("source glob must be a direct-child file pattern")
+    report = {
+        "status": "PASS" if not failures else "FAIL",
+        "enabled": True,
+        "scan_source_dir_exists": scan_source_dir.is_dir(),
+        "source_globs_valid": not any("source glob" in failure for failure in failures),
+        "source_scan_limits_valid": not any("must not be negative" in failure for failure in failures),
+    }
+    if failures:
+        report["blocked_reason"] = "; ".join(failures)
+    return report
 
 
 def _append_source_scan_args(runner_parts: list[str], source_scan: dict) -> None:
@@ -93,81 +417,157 @@ def _append_source_scan_args(runner_parts: list[str], source_scan: dict) -> None
     for pattern in source_scan["source_globs"]:
         runner_parts.extend(["--source-glob", pattern])
     runner_parts.extend(["--max-enqueue-files", str(source_scan["max_enqueue_files"])])
+    runner_parts.extend(["--min-source-file-age-seconds", str(source_scan["min_source_file_age_seconds"])])
+    if source_scan.get("drain_after_scan"):
+        runner_parts.append("--drain-after-scan")
 
 
 def _backpressure_config(args: argparse.Namespace) -> dict:
     return {
-        "max_active_queue_count": max(0, int(getattr(args, "max_active_queue_count", 1000) or 0)),
-        "max_active_queue_age_seconds": max(
-            0,
-            int(getattr(args, "max_active_queue_age_seconds", 24 * 60 * 60) or 0),
-        ),
+        "max_active_queue_count": int(getattr(args, "max_active_queue_count", 1000) or 0),
+        "max_active_queue_age_seconds": int(getattr(args, "max_active_queue_age_seconds", 24 * 60 * 60) or 0),
     }
 
 
+def _validate_backpressure_config(backpressure: dict) -> dict:
+    failures: list[str] = []
+    if backpressure["max_active_queue_count"] < 0:
+        failures.append("max_active_queue_count must not be negative")
+    if backpressure["max_active_queue_age_seconds"] < 0:
+        failures.append("max_active_queue_age_seconds must not be negative")
+    report = {
+        "status": "PASS" if not failures else "FAIL",
+        "limits_valid": not failures,
+    }
+    if failures:
+        report["blocked_reason"] = "; ".join(failures)
+    return report
+
+
 def build_install_plan(args: argparse.Namespace) -> dict:
+    uninstall = bool(args.uninstall)
+    probe_python_runtime = bool(getattr(args, "probe_python_runtime", False) or getattr(args, "apply", False))
+    task_name_validation = _task_name_report(args.task_name)
     app_root = Path(args.app_root).resolve()
-    python_exe = str(Path(args.python_exe).resolve())
     runner_script = app_root / "tools" / "direct_sync_relay_runner.py"
     paths = _runtime_paths(args.program_data_root)
-    runtime_path_boundary = _runtime_path_boundary_report(args.program_data_root, paths)
+    runtime_path_boundary = (
+        _skipped_report("uninstall does not use runtime data paths")
+        if uninstall
+        else _runtime_path_boundary_report(args.program_data_root, paths)
+    )
+    app_root_dependencies = (
+        _skipped_report("uninstall does not use application runtime dependencies")
+        if uninstall
+        else _app_root_dependency_report(app_root)
+    )
+    python_executable = (
+        _skipped_report("uninstall does not launch the Python relay runtime")
+        if uninstall
+        else _python_executable_report(args.python_exe)
+    )
+    python_runtime_imports = (
+        _skipped_report("uninstall does not import the Python relay runtime")
+        if uninstall
+        else (
+            _python_runtime_import_report(args.python_exe, app_root)
+            if probe_python_runtime and python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS"
+            else _skipped_report(
+                "python runtime import check requires --probe-python-runtime or production apply"
+                if python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS"
+                else "python runtime import check requires valid python_exe and app_root dependencies"
+            )
+        )
+    )
+    producer_manifest = (
+        _skipped_report("uninstall does not read the producer manifest")
+        if uninstall
+        else _producer_manifest_report(args.producer_manifest_path)
+    )
+    credential = (
+        _skipped_report("uninstall does not read producer credentials")
+        if uninstall
+        else _credential_report(args.credential_path)
+    )
     source_scan = _source_scan_config(args)
+    source_scan_validation = (
+        _skipped_report("uninstall does not scan source files")
+        if uninstall
+        else _validate_source_scan_config(source_scan)
+    )
     backpressure = _backpressure_config(args)
-    runner_parts = [
-        python_exe,
-        str(runner_script),
-        "--db-path",
-        paths["db_path"],
-        "--spool-dir",
-        paths["spool_dir"],
-        "--producer-manifest-path",
-        str(Path(args.producer_manifest_path).resolve()),
-        "--credential-path",
-        str(Path(args.credential_path).resolve()),
-        "--upload-status-dir",
-        paths["upload_status_dir"],
-        "--runtime-status-path",
-        paths["runtime_status_path"],
-        "--log-path",
-        paths["log_path"],
-        "--operator-pause-path",
-        paths["operator_pause_path"],
-        "--worker-id",
-        args.task_name,
-        "--min-free-bytes",
-        str(max(0, int(args.min_free_bytes))),
-        "--max-active-queue-count",
-        str(backpressure["max_active_queue_count"]),
-        "--max-active-queue-age-seconds",
-        str(backpressure["max_active_queue_age_seconds"]),
-    ]
-    _append_source_scan_args(runner_parts, source_scan)
-    task_action = _quote_cmd(runner_parts)
-    create_command = [
-        "schtasks.exe",
-        "/Create",
-        "/TN",
-        args.task_name,
-        "/SC",
-        "MINUTE",
-        "/MO",
-        str(max(1, int(args.minute_interval))),
-        "/TR",
-        task_action,
-        "/F",
-    ]
+    backpressure_validation = (
+        _skipped_report("uninstall does not run relay backpressure checks")
+        if uninstall
+        else _validate_backpressure_config(backpressure)
+    )
+    runner_parts: list[str] = []
+    create_command: list[str] = []
+    if not uninstall:
+        python_exe = python_executable["python_exe"]
+        runner_parts = [
+            python_exe,
+            str(runner_script),
+            "--db-path",
+            paths["db_path"],
+            "--spool-dir",
+            paths["spool_dir"],
+            "--producer-manifest-path",
+            str(Path(args.producer_manifest_path).resolve()),
+            "--credential-path",
+            str(Path(args.credential_path).resolve()),
+            "--upload-status-dir",
+            paths["upload_status_dir"],
+            "--runtime-status-path",
+            paths["runtime_status_path"],
+            "--log-path",
+            paths["log_path"],
+            "--operator-pause-path",
+            paths["operator_pause_path"],
+            "--worker-id",
+            args.task_name,
+            "--min-free-bytes",
+            str(max(0, int(args.min_free_bytes))),
+            "--max-active-queue-count",
+            str(backpressure["max_active_queue_count"]),
+            "--max-active-queue-age-seconds",
+            str(backpressure["max_active_queue_age_seconds"]),
+        ]
+        _append_source_scan_args(runner_parts, source_scan)
+        task_action = _quote_cmd(runner_parts)
+        create_command = [
+            "schtasks.exe",
+            "/Create",
+            "/TN",
+            args.task_name,
+            "/SC",
+            "MINUTE",
+            "/MO",
+            str(max(1, int(args.minute_interval))),
+            "/TR",
+            task_action,
+            "/F",
+        ]
     delete_command = ["schtasks.exe", "/Delete", "/TN", args.task_name, "/F"]
     return {
         "report_version": "container-audit-direct-sync-install-pack-v1",
         "status": "DRY_RUN" if not args.apply else "APPLY_REQUESTED",
         "apply": bool(args.apply),
-        "uninstall": bool(args.uninstall),
+        "uninstall": uninstall,
         "task_name": args.task_name,
+        "task_name_validation": task_name_validation,
         "program_data_root": str(Path(args.program_data_root).expanduser().resolve()),
         "runtime_paths": paths,
         "runtime_path_boundary": runtime_path_boundary,
+        "app_root_dependencies": app_root_dependencies,
+        "python_executable": python_executable,
+        "python_runtime_imports": python_runtime_imports,
+        "producer_manifest": producer_manifest,
+        "credential": credential,
         "source_scan": source_scan,
+        "source_scan_validation": source_scan_validation,
         "backpressure": backpressure,
+        "backpressure_validation": backpressure_validation,
         "runner_script": str(runner_script),
         "runner_command": runner_parts,
         "scheduled_task_create_command": create_command,
@@ -185,7 +585,16 @@ def build_install_plan(args: argparse.Namespace) -> dict:
 
 
 def _run_command(command: Sequence[str]) -> dict:
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    except OSError as exc:
+        return {
+            "returncode": None,
+            "stdout": "",
+            "stderr": "",
+            "error_code": "scheduled_task_command_start_failed",
+            "error_message": f"scheduled task command failed to start: {exc.__class__.__name__}",
+        }
     return {
         "returncode": completed.returncode,
         "stdout": completed.stdout,
@@ -198,29 +607,80 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--python-exe", default=sys.executable)
     parser.add_argument("--program-data-root", default=DEFAULT_PROGRAM_DATA_ROOT)
-    parser.add_argument("--producer-manifest-path", required=True)
-    parser.add_argument("--credential-path", required=True)
+    parser.add_argument("--producer-manifest-path", default="")
+    parser.add_argument("--credential-path", default="")
     parser.add_argument("--task-name", default=DEFAULT_TASK_NAME)
     parser.add_argument("--minute-interval", type=int, default=1)
     parser.add_argument("--min-free-bytes", type=int, default=512 * 1024 * 1024)
     parser.add_argument("--scan-source-dir", default="")
     parser.add_argument("--source-glob", action="append", default=[])
     parser.add_argument("--max-enqueue-files", type=int, default=100)
+    parser.add_argument("--min-source-file-age-seconds", type=int, default=DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS)
     parser.add_argument("--max-active-queue-count", type=int, default=1000)
     parser.add_argument("--max-active-queue-age-seconds", type=int, default=24 * 60 * 60)
     parser.add_argument("--report-path", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--confirm-production-install", action="store_true")
+    parser.add_argument("--probe-python-runtime", action="store_true")
     args = parser.parse_args(argv)
 
     plan = build_install_plan(args)
-    if plan["runtime_path_boundary"]["status"] != "PASS":
+    if plan["task_name_validation"]["status"] != "PASS":
         plan["status"] = "BLOCKED"
-        plan["blocked_reason"] = plan["runtime_path_boundary"]["blocked_reason"]
+        plan["blocked_reason"] = plan["task_name_validation"]["blocked_reason"]
         _write_json(Path(args.report_path), plan)
         print(f"install_pack_report={Path(args.report_path).resolve()}")
         return 2
+    if not args.uninstall:
+        if plan["runtime_path_boundary"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["runtime_path_boundary"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["app_root_dependencies"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["app_root_dependencies"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["python_executable"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["python_executable"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["python_runtime_imports"]["status"] == "FAIL":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["python_runtime_imports"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["producer_manifest"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["producer_manifest"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["credential"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["credential"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["source_scan_validation"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["source_scan_validation"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
+        if plan["backpressure_validation"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["backpressure_validation"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
 
     if args.apply and not args.confirm_production_install:
         plan["status"] = "BLOCKED"
@@ -231,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.apply:
         command = plan["scheduled_task_delete_command"] if args.uninstall else plan["scheduled_task_create_command"]
+        plan["status"] = "APPLYING"
+        _write_json(Path(args.report_path), plan)
         plan["command_result"] = _run_command(command)
         plan["status"] = "PASS" if plan["command_result"]["returncode"] == 0 else "FAIL"
 

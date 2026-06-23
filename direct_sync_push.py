@@ -3,18 +3,23 @@
 
 from __future__ import annotations
 
+import csv
+from email.utils import parsedate_to_datetime
 import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
+import socket
 import sqlite3
+import time
 import unicodedata
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, BinaryIO, Callable, Dict, Mapping
 from urllib.parse import urlparse
 
 
@@ -26,6 +31,7 @@ DEFAULT_SOURCE_SYSTEM = "container_audit"
 DEFAULT_SOURCE_TRANSPORT = "legacy_transfer_csv"
 DEFAULT_PRODUCER_ROLE = "container_audit"
 DEFAULT_TIMEOUT_SECONDS = 30
+EVENT_LOG_HEADERS = ["timestamp", "worker_name", "event", "details"]
 RELAY_STATUS_PENDING = "pending"
 RELAY_STATUS_LEASED = "leased"
 RELAY_STATUS_RETRY_WAIT = "retry_wait"
@@ -34,9 +40,24 @@ RELAY_STATUS_FAILED_PERMANENT = "failed_permanent"
 RELAY_STATUS_OPERATOR_REVIEW = "operator_review"
 DEFAULT_LEASE_SECONDS = 300
 DEFAULT_RETRY_SECONDS = 60
+MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
+SQLITE_BUSY_TIMEOUT_MS = 30000
+RELAY_METADATA_IDENTITY_FIELDS = (
+    "producer_install_id",
+    "source_host_id",
+    "producer_role",
+    "stream_name",
+    "source_system",
+    "source_transport",
+    "relative_path",
+)
 
 
 class DirectSyncPushError(Exception):
+    pass
+
+
+class RelaySpoolFileError(DirectSyncPushError):
     pass
 
 
@@ -63,9 +84,11 @@ class UploadResult:
     committed: bool
     retryable: bool
     receipt: Dict[str, Any]
+    retry_after_seconds: int = 0
     status_path: str = ""
     error_code: str = ""
     error_message: str = ""
+    relay_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -78,7 +101,13 @@ class RelayQueueRow:
     content_sha256: str
     byte_length: int
     attempt_count: int
+    metadata: Dict[str, Any]
+    lease_owner: str = ""
+    lease_expires_at: str = ""
     deduped_existing: bool = False
+    claim_previous_status: str = ""
+    claim_previous_next_attempt_at: str = ""
+    metadata_error: str = ""
 
 
 def _normalize_for_json(value: Any) -> Any:
@@ -150,8 +179,21 @@ def utc_now_text() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, Any]]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise DirectSyncPushError(f"JSON object contains duplicate key: {key}")
+        payload[key] = value
+    return payload
+
+
+def load_json_no_duplicate_keys(text: str | bytes | bytearray) -> Any:
+    return json.loads(text, object_pairs_hook=_reject_duplicate_json_keys)
+
+
 def _load_manifest(path: str | os.PathLike[str]) -> Dict[str, Any]:
-    payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+    payload = load_json_no_duplicate_keys(Path(path).read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise DirectSyncPushError("producer manifest must be a JSON object")
     return payload
@@ -175,18 +217,34 @@ def _safe_relative_path(value: str) -> str:
 
 
 def _read_file_digest(path: Path) -> tuple[str, int]:
+    with path.open("rb") as handle:
+        return _read_open_file_digest(handle)
+
+
+def _read_open_file_digest(handle: BinaryIO) -> tuple[str, int]:
     digest = hashlib.sha256()
     byte_count = 0
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-            byte_count += len(chunk)
+    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(chunk)
+        byte_count += len(chunk)
     return digest.hexdigest(), byte_count
 
 
 def count_csv_data_rows(path: str | os.PathLike[str]) -> int:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
-        return max(0, sum(1 for line in handle if line.strip()) - 1)
+        reader = csv.reader(handle)
+        next(reader, None)
+        return sum(1 for row in reader if any(str(cell).strip() for cell in row))
+
+
+def validate_source_event_log_header(path: str | os.PathLike[str]) -> None:
+    try:
+        with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
+            header = next(csv.reader(handle), None)
+    except UnicodeDecodeError as exc:
+        raise DirectSyncPushError("source file is not a readable Container_Audit event log CSV") from exc
+    if header != EVENT_LOG_HEADERS:
+        raise DirectSyncPushError("source file is not a Container_Audit event log CSV")
 
 
 def build_source_file_plan(
@@ -201,6 +259,7 @@ def build_source_file_plan(
     file_path = Path(source_file_path)
     if not file_path.is_file():
         raise DirectSyncPushError(f"source file does not exist: {file_path}")
+    validate_source_event_log_header(file_path)
     manifest = _load_manifest(producer_manifest_path)
     identity = manifest.get("pc_identity") or {}
     producer_install_id = str(identity.get("producer_install_id") or "").strip()
@@ -208,7 +267,11 @@ def build_source_file_plan(
     if not producer_install_id or not source_host_id:
         raise DirectSyncPushError("producer manifest identity is incomplete")
     stream = _stream_from_manifest(manifest, DEFAULT_STREAM_NAME)
-    if stream.get("source_system") != DEFAULT_SOURCE_SYSTEM or stream.get("source_transport") != DEFAULT_SOURCE_TRANSPORT:
+    if (
+        stream.get("producer_role") != DEFAULT_PRODUCER_ROLE
+        or stream.get("source_system") != DEFAULT_SOURCE_SYSTEM
+        or stream.get("source_transport") != DEFAULT_SOURCE_TRANSPORT
+    ):
         raise DirectSyncPushError("producer manifest stream does not match Container_Audit legacy CSV")
     safe_relative_path = _safe_relative_path(relative_path or f"legacy_csv/{file_path.name}")
     if safe_relative_path.split("/", 1)[0] == DEFAULT_STREAM_NAME:
@@ -289,34 +352,68 @@ def validate_endpoint_url(endpoint_url: str) -> None:
         raise DirectSyncPushError(f"endpoint_url path must be {DEFAULT_ENDPOINT_PATH}")
     if parsed.query or parsed.fragment:
         raise DirectSyncPushError("endpoint_url must not include query or fragment")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise DirectSyncPushError("endpoint_url port is invalid") from exc
     host = parsed.hostname.strip().lower()
     if host == "localhost" or host.endswith(".localhost"):
         raise DirectSyncPushError("endpoint_url must not target localhost")
     try:
-        address = ipaddress.ip_address(host)
+        addresses = [ipaddress.ip_address(host)]
     except ValueError:
-        return
-    if address.is_loopback or address.is_unspecified:
-        raise DirectSyncPushError("endpoint_url must not target loopback or unspecified addresses")
+        addresses = []
+        try:
+            for result in socket.getaddrinfo(host, port or 443, type=socket.SOCK_STREAM):
+                sockaddr = result[4]
+                if sockaddr:
+                    addresses.append(ipaddress.ip_address(str(sockaddr[0])))
+        except (OSError, ValueError):
+            return
+    for address in addresses:
+        _reject_unsafe_endpoint_address(address)
+
+
+def _reject_unsafe_endpoint_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
+    if (
+        address.is_loopback
+        or address.is_unspecified
+        or address.is_private
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+    ):
+        raise DirectSyncPushError(
+            "endpoint_url must not target loopback, unspecified, private, link-local, multicast, or reserved addresses"
+        )
 
 
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp_path, path)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
-def _response_json(response: Any) -> Dict[str, Any]:
+def _response_json(response: Any) -> tuple[Dict[str, Any], bool]:
     try:
         payload = response.json()
     except Exception:
-        payload = {}
-    return payload if isinstance(payload, dict) else {}
+        return {}, False
+    if not isinstance(payload, dict):
+        return {}, False
+    return payload, True
 
 
 def _transport_error_result(exc: Exception) -> UploadResult:
@@ -331,49 +428,153 @@ def _transport_error_result(exc: Exception) -> UploadResult:
     )
 
 
-def upload_source_file(
-    plan: SourceFilePlan,
-    credentials: ProducerCredentials,
-    *,
-    session: Any = None,
-    timeout: int = DEFAULT_TIMEOUT_SECONDS,
-    status_dir: str | os.PathLike[str] = "",
-) -> UploadResult:
-    if session is None:
-        import requests
+def _source_file_unreadable_result(exc: OSError) -> UploadResult:
+    return UploadResult(
+        success=False,
+        status_code=0,
+        committed=False,
+        retryable=False,
+        receipt={},
+        error_code="source_file_unreadable",
+        error_message=f"source file cannot be read before upload: {type(exc).__name__}",
+    )
 
-        session = requests.Session()
-    headers = signed_headers(credentials, plan.metadata)
+
+def _source_file_digest_matches_plan(
+    plan: SourceFilePlan,
+    current_sha256: str,
+    current_byte_length: int,
+) -> bool:
     try:
-        with Path(plan.source_file_path).open("rb") as handle:
-            response = session.post(
-                credentials.endpoint_url,
-                data={"metadata": canonical_json(plan.metadata)},
-                files={"file": (Path(plan.source_file_path).name, handle, "application/octet-stream")},
-                headers=headers,
-                timeout=timeout,
-            )
-    except Exception as exc:
-        result = _transport_error_result(exc)
-    else:
-        payload = _response_json(response)
-        status_code = int(getattr(response, "status_code", 0) or 0)
-        totals = payload.get("totals") if isinstance(payload.get("totals"), dict) else {}
-        committed = bool(payload.get("committed")) and 200 <= status_code < 300
-        success = committed and int(totals.get("errors") or 0) == 0 and int(totals.get("quarantined") or 0) == 0
-        error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
-        result = UploadResult(
-            success=success,
-            status_code=status_code,
-            committed=committed,
-            retryable=bool(payload.get("retryable")) or status_code in {408, 429, 500, 502, 503, 504},
-            receipt=payload,
-            error_code=str(error.get("code") or ""),
-            error_message=str(error.get("message") or ""),
-        )
-    if status_dir:
-        suffix = hashlib.sha256(plan.metadata["idempotency_key"].encode("utf-8")).hexdigest()[:12]
-        status_path = Path(status_dir) / f"direct_sync_upload_status_{suffix}.json"
+        plan_byte_length = int(plan.byte_length)
+        metadata_byte_length = int(plan.metadata.get("byte_length"))
+    except (TypeError, ValueError):
+        return False
+    return (
+        current_sha256 == str(plan.content_sha256 or "")
+        and current_sha256 == str(plan.metadata.get("content_sha256") or "")
+        and current_byte_length == plan_byte_length
+        and current_byte_length == metadata_byte_length
+    )
+
+
+def _source_file_digest_mismatch_result() -> UploadResult:
+    return UploadResult(
+        success=False,
+        status_code=0,
+        committed=False,
+        retryable=False,
+        receipt={},
+        error_code="source_file_digest_mismatch",
+        error_message="source file changed after upload plan was built; rebuild the direct sync upload plan",
+    )
+
+
+def _response_header(response: Any, name: str) -> str:
+    headers = getattr(response, "headers", {}) or {}
+    try:
+        return str(headers.get(name) or headers.get(name.lower()) or "").strip()
+    except AttributeError:
+        return ""
+
+
+def _retry_after_header_seconds(value: str, *, now: datetime | None = None) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 0
+    try:
+        seconds = int(text)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError, OverflowError):
+            return 0
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        comparison_now = now or datetime.now(timezone.utc)
+        if comparison_now.tzinfo is None:
+            comparison_now = comparison_now.replace(tzinfo=timezone.utc)
+        seconds = max(0, math.ceil((retry_at - comparison_now.astimezone(retry_at.tzinfo)).total_seconds()))
+        return min(seconds, MAX_RETRY_AFTER_SECONDS)
+    return min(max(0, seconds), MAX_RETRY_AFTER_SECONDS)
+
+
+def _expected_server_source_file_id(metadata: Mapping[str, Any]) -> str:
+    return (
+        f"{metadata.get('source_host_id')}/"
+        f"{metadata.get('producer_role')}/"
+        f"{metadata.get('stream_name')}/"
+        f"{metadata.get('relative_path')}"
+    )
+
+
+def _receipt_identity_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> tuple[str, str]:
+    client_batch_id = str(receipt.get("client_batch_id") or "").strip()
+    expected_client_batch_id = str(plan.metadata.get("client_batch_id") or "").strip()
+    if not client_batch_id:
+        return "receipt_identity_missing", "producer receipt client_batch_id is missing"
+    if client_batch_id != expected_client_batch_id:
+        return "receipt_identity_mismatch", "producer receipt client_batch_id does not match relay batch"
+
+    server_source_file_id = str(receipt.get("server_source_file_id") or "").strip()
+    expected_source_file_id = _expected_server_source_file_id(plan.metadata)
+    if not server_source_file_id:
+        return "receipt_identity_missing", "producer receipt server_source_file_id is missing"
+    if server_source_file_id != expected_source_file_id:
+        return "receipt_identity_mismatch", "producer receipt server_source_file_id does not match source file"
+    return "", ""
+
+
+def _strict_non_negative_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    if value < 0:
+        return None
+    return value
+
+
+def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> tuple[str, str, int, int]:
+    identity_error_code, identity_error_message = _receipt_identity_issue(plan, receipt)
+    if identity_error_code:
+        return identity_error_code, identity_error_message, 0, 0
+    totals = receipt.get("totals")
+    if not isinstance(totals, dict):
+        return "producer_receipt_invalid", "producer receipt totals are missing or invalid", 0, 0
+    try:
+        inserted = _strict_non_negative_int(totals["inserted"])
+        replayed = _strict_non_negative_int(totals["replayed"])
+        errors = _strict_non_negative_int(totals["errors"])
+        quarantined = _strict_non_negative_int(totals["quarantined"])
+        row_count = _strict_non_negative_int(plan.metadata["row_count"])
+    except KeyError:
+        return "producer_receipt_invalid", "producer receipt totals are missing or invalid", 0, 0
+    if None in (inserted, replayed, errors, quarantined, row_count):
+        return "producer_receipt_invalid", "producer receipt totals are missing or invalid", 0, 0
+    if inserted + replayed + errors + quarantined != row_count:
+        return "producer_receipt_invalid", "producer receipt totals do not match source row count", errors, quarantined
+    return "", "", errors, quarantined
+
+
+def _with_upload_status_artifact(
+    plan: SourceFilePlan,
+    result: UploadResult,
+    status_dir: str | os.PathLike[str],
+    *,
+    status_context: Mapping[str, Any] | None = None,
+) -> UploadResult:
+    if not status_dir:
+        return result
+    context = dict(status_context or {})
+    suffix_input = str(plan.metadata["idempotency_key"])
+    if context:
+        suffix_input = canonical_json({"idempotency_key": suffix_input, "status_context": context})
+    suffix = hashlib.sha256(suffix_input.encode("utf-8")).hexdigest()[:12]
+    status_path = Path(status_dir) / f"direct_sync_upload_status_{suffix}.json"
+    status_path_text = str(status_path)
+    receipt = dict(result.receipt or {})
+    status_write_error_code = ""
+    status_write_error_message = ""
+    try:
         _write_json_atomic(
             status_path,
             {
@@ -381,32 +582,173 @@ def upload_source_file(
                 "status_code": result.status_code,
                 "committed": result.committed,
                 "retryable": result.retryable,
-                "receipt": result.receipt,
+                "retry_after_seconds": result.retry_after_seconds,
+                "receipt": receipt,
                 "error_code": result.error_code,
                 "error_message": result.error_message,
                 "metadata": dict(plan.metadata),
+                "status_context": context,
                 "source_file_path": plan.source_file_path,
                 "generated_at": utc_now_text(),
             },
         )
+    except OSError as exc:
+        local_error_message = f"upload status artifact write failed: {exc.__class__.__name__}"
+        if result.error_code:
+            receipt["_local_upload_status_write_error_code"] = "upload_status_write_failed"
+            receipt["_local_upload_status_write_error_message"] = local_error_message
+        else:
+            status_write_error_code = "upload_status_write_failed"
+            status_write_error_message = local_error_message
+        status_path_text = ""
+    return UploadResult(
+        success=result.success,
+        status_code=result.status_code,
+        committed=result.committed,
+        retryable=result.retryable,
+        receipt=receipt,
+        retry_after_seconds=result.retry_after_seconds,
+        status_path=status_path_text,
+        error_code=status_write_error_code or result.error_code,
+        error_message=status_write_error_message or result.error_message,
+        relay_id=result.relay_id,
+    )
+
+
+def _upload_response_result(plan: SourceFilePlan, response: Any) -> UploadResult:
+    payload, payload_is_valid_json = _response_json(response)
+    status_code = int(getattr(response, "status_code", 0) or 0)
+    retry_after_seconds = _retry_after_header_seconds(_response_header(response, "Retry-After"))
+    committed_value = payload.get("committed")
+    if 300 <= status_code < 400:
         return UploadResult(
-            success=result.success,
-            status_code=result.status_code,
-            committed=result.committed,
-            retryable=result.retryable,
-            receipt=result.receipt,
-            status_path=str(status_path),
-            error_code=result.error_code,
-            error_message=result.error_message,
+            success=False,
+            status_code=status_code,
+            committed=False,
+            retryable=False,
+            receipt=payload if payload_is_valid_json else {},
+            error_code="producer_redirect_not_allowed",
+            error_message="producer ingest redirected; redirects are not allowed",
         )
-    return result
+    if not payload_is_valid_json and not 200 <= status_code < 300:
+        is_retryable_status = status_code in {408, 429, 500, 502, 503, 504}
+        return UploadResult(
+            success=False,
+            status_code=status_code,
+            committed=False,
+            retryable=is_retryable_status,
+            receipt={},
+            retry_after_seconds=retry_after_seconds if is_retryable_status else 0,
+            error_code="producer_response_invalid_json",
+            error_message="producer ingest error response is not valid JSON",
+        )
+    if 200 <= status_code < 300 and (not payload_is_valid_json or committed_value is not True):
+        return UploadResult(
+            success=False,
+            status_code=status_code,
+            committed=True,
+            retryable=False,
+            receipt=payload,
+            error_code="producer_receipt_invalid",
+            error_message="producer ingest response receipt is missing or invalid",
+        )
+    committed = committed_value is True
+    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    if committed:
+        receipt_error_code, receipt_error_message, errors, quarantined = _committed_receipt_issue(plan, payload)
+        success = 200 <= status_code < 300 and not receipt_error_code and errors == 0 and quarantined == 0
+    else:
+        receipt_error_code, receipt_error_message = "", ""
+        success = False
+    producer_error_code = str(error.get("code") or "")
+    producer_error_message = str(error.get("message") or "")
+    if committed and not 200 <= status_code < 300 and not receipt_error_code and not producer_error_code:
+        producer_error_code = "producer_committed_non_2xx"
+        producer_error_message = f"producer committed upload but returned HTTP {status_code}"
+    return UploadResult(
+        success=success,
+        status_code=status_code,
+        committed=committed,
+        retryable=payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504},
+        receipt=payload,
+        retry_after_seconds=(
+            retry_after_seconds
+            if payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504}
+            else 0
+        ),
+        error_code=receipt_error_code or producer_error_code,
+        error_message=receipt_error_message or producer_error_message,
+    )
+
+
+def upload_source_file(
+    plan: SourceFilePlan,
+    credentials: ProducerCredentials,
+    *,
+    session: Any = None,
+    timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    status_dir: str | os.PathLike[str] = "",
+    status_context: Mapping[str, Any] | None = None,
+) -> UploadResult:
+    if session is None:
+        import requests
+
+        session = requests.Session()
+    source_path = Path(plan.source_file_path)
+    try:
+        handle = source_path.open("rb")
+    except OSError as exc:
+        result = _source_file_unreadable_result(exc)
+    else:
+        with handle:
+            try:
+                current_sha256, current_byte_length = _read_open_file_digest(handle)
+                handle.seek(0)
+            except OSError as exc:
+                result = _source_file_unreadable_result(exc)
+                return _with_upload_status_artifact(plan, result, status_dir, status_context=status_context)
+            if not _source_file_digest_matches_plan(plan, current_sha256, current_byte_length):
+                result = _source_file_digest_mismatch_result()
+                return _with_upload_status_artifact(plan, result, status_dir, status_context=status_context)
+            headers = signed_headers(credentials, plan.metadata)
+            try:
+                response = session.post(
+                    credentials.endpoint_url,
+                    data={"metadata": canonical_json(plan.metadata)},
+                    files={"file": (source_path.name, handle, "application/octet-stream")},
+                    headers=headers,
+                    timeout=timeout,
+                    allow_redirects=False,
+                )
+            except Exception as exc:
+                result = _transport_error_result(exc)
+            else:
+                result = _upload_response_result(plan, response)
+    return _with_upload_status_artifact(plan, result, status_dir, status_context=status_context)
+
+
+def _execute_with_busy_retry(
+    conn: sqlite3.Connection,
+    statement: str,
+    *,
+    attempts: int = 6,
+) -> sqlite3.Cursor:
+    for attempt in range(attempts):
+        try:
+            return conn.execute(statement)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() or attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    raise RuntimeError("unreachable sqlite retry state")
 
 
 def _connect_relay_db(db_path: str | os.PathLike[str]) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MS}")
+    _execute_with_busy_retry(conn, "PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
@@ -433,11 +775,13 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
                 last_error_message TEXT,
                 receipt_json TEXT,
                 upload_status_path TEXT,
+                metadata_json TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
+        _ensure_relay_queue_columns(conn)
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_direct_sync_relay_status_due
@@ -449,7 +793,44 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
         conn.close()
 
 
+def _ensure_relay_queue_columns(conn: sqlite3.Connection) -> None:
+    columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(direct_sync_relay_batches)").fetchall()}
+    migrations = {
+        "metadata_json": "ALTER TABLE direct_sync_relay_batches ADD COLUMN metadata_json TEXT",
+    }
+    for column, statement in migrations.items():
+        if column not in columns:
+            conn.execute(statement)
+
+
+def _relay_metadata(row: sqlite3.Row) -> tuple[Dict[str, Any], str]:
+    if "metadata_json" not in row.keys() or not row["metadata_json"]:
+        return {}, "relay metadata_json is missing"
+    try:
+        payload = json.loads(str(row["metadata_json"]))
+    except json.JSONDecodeError:
+        return {}, "relay metadata_json is invalid JSON"
+    if not isinstance(payload, dict):
+        return {}, "relay metadata_json must be a JSON object"
+    return payload, ""
+
+
+def _relay_metadata_identity_matches(existing_metadata: Mapping[str, Any], planned_metadata: Mapping[str, Any]) -> bool:
+    return all(
+        str(existing_metadata.get(field) or "").strip() == str(planned_metadata.get(field) or "").strip()
+        for field in RELAY_METADATA_IDENTITY_FIELDS
+    )
+
+
+def _relay_row_metadata_identity_matches(row: sqlite3.Row, plan: SourceFilePlan) -> bool:
+    metadata, metadata_error = _relay_metadata(row)
+    if metadata_error:
+        return False
+    return _relay_metadata_identity_matches(metadata, plan.metadata)
+
+
 def _relay_row(row: sqlite3.Row, *, deduped_existing: bool = False) -> RelayQueueRow:
+    metadata, metadata_error = _relay_metadata(row)
     return RelayQueueRow(
         relay_id=str(row["relay_id"]),
         status=str(row["status"]),
@@ -459,75 +840,131 @@ def _relay_row(row: sqlite3.Row, *, deduped_existing: bool = False) -> RelayQueu
         content_sha256=str(row["content_sha256"]),
         byte_length=int(row["byte_length"]),
         attempt_count=int(row["attempt_count"]),
+        metadata=metadata,
+        lease_owner=str(row["lease_owner"] or ""),
+        lease_expires_at=str(row["lease_expires_at"] or ""),
         deduped_existing=deduped_existing,
+        metadata_error=metadata_error,
     )
 
 
 def _copy_file_atomic(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = destination.with_suffix(destination.suffix + ".tmp")
-    with source.open("rb") as src, temp_path.open("wb") as dst:
-        for chunk in iter(lambda: src.read(1024 * 1024), b""):
-            dst.write(chunk)
-        dst.flush()
-        os.fsync(dst.fileno())
-    os.replace(temp_path, destination)
+    temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with source.open("rb") as src, temp_path.open("wb") as dst:
+            for chunk in iter(lambda: src.read(1024 * 1024), b""):
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+        os.replace(temp_path, destination)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _copy_spool_file_atomic(source: Path, destination: Path) -> None:
+    try:
+        _copy_file_atomic(source, destination)
+    except OSError as exc:
+        raise RelaySpoolFileError(f"relay spool file cannot be written: {exc.__class__.__name__}") from exc
 
 
 def _find_existing_relay_batch(
     conn: sqlite3.Connection,
     *,
-    source_path: Path,
     producer_manifest_path: str | os.PathLike[str],
     plan: SourceFilePlan,
 ) -> sqlite3.Row | None:
-    return conn.execute(
+    rows = conn.execute(
         """
         SELECT *
         FROM direct_sync_relay_batches
-        WHERE source_file_path = ?
-          AND producer_manifest_path = ?
-          AND relative_path = ?
+        WHERE relative_path = ?
           AND content_sha256 = ?
           AND byte_length = ?
         ORDER BY created_at, relay_id
-        LIMIT 1
         """,
         (
-            str(source_path),
-            str(producer_manifest_path),
             plan.metadata["relative_path"],
             plan.content_sha256,
             plan.byte_length,
         ),
-    ).fetchone()
+    ).fetchall()
+    for row in rows:
+        if _relay_row_metadata_identity_matches(row, plan):
+            return row
+    return None
 
 
 def _find_conflicting_relay_batch(
     conn: sqlite3.Connection,
     *,
-    source_path: Path,
     producer_manifest_path: str | os.PathLike[str],
-    plan: SourceFileUploadPlan,
+    plan: SourceFilePlan,
 ) -> sqlite3.Row | None:
-    return conn.execute(
+    rows = conn.execute(
         """
         SELECT *
         FROM direct_sync_relay_batches
-        WHERE source_file_path = ?
-          AND producer_manifest_path = ?
-          AND relative_path = ?
+        WHERE relative_path = ?
           AND (content_sha256 != ? OR byte_length != ?)
         ORDER BY created_at, relay_id
-        LIMIT 1
         """,
         (
-            str(source_path),
-            str(producer_manifest_path),
             plan.metadata["relative_path"],
             plan.content_sha256,
             plan.byte_length,
         ),
+    ).fetchall()
+    for row in rows:
+        if _relay_row_metadata_identity_matches(row, plan):
+            return row
+    return None
+
+
+def _spooled_file_matches_relay_row(row: sqlite3.Row) -> bool:
+    try:
+        spooled_hash, spooled_bytes = _read_file_digest(Path(str(row["spooled_file_path"])))
+    except OSError:
+        return False
+    return spooled_hash == str(row["content_sha256"]).lower() and spooled_bytes == int(row["byte_length"])
+
+
+def _repair_relay_spool_for_existing_row(
+    conn: sqlite3.Connection,
+    *,
+    existing: sqlite3.Row,
+    source_path: Path,
+    spool_dir: str | os.PathLike[str],
+) -> sqlite3.Row:
+    relay_id = str(existing["relay_id"])
+    repaired_spool_path = Path(spool_dir) / f"{relay_id}{source_path.suffix or '.bin'}"
+    _copy_spool_file_atomic(source_path, repaired_spool_path)
+    spooled_hash, spooled_bytes = _read_file_digest(repaired_spool_path)
+    if spooled_hash != str(existing["content_sha256"]).lower() or spooled_bytes != int(existing["byte_length"]):
+        raise DirectSyncPushError("repaired spool file hash or byte length mismatch")
+    conn.execute(
+        """
+        UPDATE direct_sync_relay_batches
+        SET source_file_path = ?,
+            spooled_file_path = ?,
+            updated_at = ?
+        WHERE relay_id = ?
+        """,
+        (
+            str(source_path),
+            str(repaired_spool_path),
+            utc_now_text(),
+            relay_id,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+        (relay_id,),
     ).fetchone()
 
 
@@ -542,21 +979,25 @@ def enqueue_source_file_for_relay(
     dedupe_existing: bool = False,
 ) -> RelayQueueRow:
     init_relay_queue_schema(db_path)
-    source_path = Path(source_file_path)
+    source_path = Path(source_file_path).resolve()
+    manifest_path = Path(producer_manifest_path).resolve()
     if not source_path.is_file():
         raise DirectSyncPushError(f"source file does not exist: {source_path}")
+    relay_id = f"relay-{uuid.uuid4().hex}"
     plan = build_source_file_plan(
         source_file_path=source_path,
-        producer_manifest_path=producer_manifest_path,
+        producer_manifest_path=manifest_path,
         credentials=credentials,
         relative_path=relative_path,
+        client_batch_id=relay_id,
     )
     conn = _connect_relay_db(db_path)
+    spool_path: Path | None = None
     try:
+        conn.execute("BEGIN IMMEDIATE")
         conflicting = _find_conflicting_relay_batch(
             conn,
-            source_path=source_path,
-            producer_manifest_path=producer_manifest_path,
+            producer_manifest_path=manifest_path,
             plan=plan,
         )
         if conflicting is not None:
@@ -564,41 +1005,46 @@ def enqueue_source_file_for_relay(
         if dedupe_existing:
             existing = _find_existing_relay_batch(
                 conn,
-                source_path=source_path,
-                producer_manifest_path=producer_manifest_path,
+                producer_manifest_path=manifest_path,
                 plan=plan,
             )
             if existing is not None:
+                if str(existing["status"]) in {RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT} and not _spooled_file_matches_relay_row(existing):
+                    existing = _repair_relay_spool_for_existing_row(
+                        conn,
+                        existing=existing,
+                        source_path=source_path,
+                        spool_dir=spool_dir,
+                    )
+                conn.commit()
                 return _relay_row(existing, deduped_existing=True)
-    finally:
-        conn.close()
-    relay_id = f"relay-{uuid.uuid4().hex}"
-    spool_path = Path(spool_dir) / f"{relay_id}{source_path.suffix or '.bin'}"
-    _copy_file_atomic(source_path, spool_path)
-    spooled_hash, spooled_bytes = _read_file_digest(spool_path)
-    if spooled_hash != plan.content_sha256 or spooled_bytes != plan.byte_length:
-        raise DirectSyncPushError("spooled file hash or byte length mismatch")
-    now = utc_now_text()
-    conn = _connect_relay_db(db_path)
-    try:
+
+        spool_path = Path(spool_dir) / f"{relay_id}{source_path.suffix or '.bin'}"
+        _copy_spool_file_atomic(source_path, spool_path)
+        spooled_hash, spooled_bytes = _read_file_digest(spool_path)
+        if spooled_hash != plan.content_sha256 or spooled_bytes != plan.byte_length:
+            raise DirectSyncPushError("spooled file hash or byte length mismatch")
+        now = utc_now_text()
         conn.execute(
             """
             INSERT INTO direct_sync_relay_batches (
                 relay_id, status, source_file_path, spooled_file_path,
                 producer_manifest_path, relative_path, content_sha256,
-                byte_length, attempt_count, next_attempt_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?)
+                byte_length, attempt_count, next_attempt_at, metadata_json,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
             """,
             (
                 relay_id,
                 RELAY_STATUS_PENDING,
                 str(source_path),
                 str(spool_path),
-                str(producer_manifest_path),
+                str(manifest_path),
                 plan.metadata["relative_path"],
                 plan.content_sha256,
                 plan.byte_length,
                 now,
+                canonical_json(plan.metadata),
                 now,
                 now,
             ),
@@ -609,6 +1055,14 @@ def enqueue_source_file_for_relay(
             (relay_id,),
         ).fetchone()
         return _relay_row(row)
+    except Exception:
+        conn.rollback()
+        if spool_path is not None and spool_path.exists():
+            try:
+                spool_path.unlink()
+            except OSError:
+                pass
+        raise
     finally:
         conn.close()
 
@@ -697,7 +1151,11 @@ def claim_next_relay_batch(
             "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
             (row["relay_id"],),
         ).fetchone()
-        return _relay_row(claimed)
+        return replace(
+            _relay_row(claimed),
+            claim_previous_status=str(row["status"] or ""),
+            claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
+        )
     finally:
         conn.close()
 
@@ -712,12 +1170,28 @@ def _set_relay_status(
     next_attempt_at: str = "",
     error_code: str = "",
     error_message: str = "",
-) -> None:
+    expected_lease_owner: str = "",
+    expected_attempt_count: int | None = None,
+) -> bool:
     now = utc_now_text()
     conn = _connect_relay_db(db_path)
     try:
-        conn.execute(
-            """
+        where_clause = "WHERE relay_id = ?"
+        params: list[Any] = [
+            status,
+            next_attempt_at or None,
+            error_code,
+            error_message,
+            json.dumps(dict(receipt or {}), ensure_ascii=False, sort_keys=True) if receipt is not None else None,
+            upload_status_path,
+            now,
+            relay_id,
+        ]
+        if expected_lease_owner or expected_attempt_count is not None:
+            where_clause += " AND status = ? AND lease_owner = ? AND attempt_count = ?"
+            params.extend([RELAY_STATUS_LEASED, expected_lease_owner, expected_attempt_count])
+        cursor = conn.execute(
+            f"""
             UPDATE direct_sync_relay_batches
             SET status = ?,
                 lease_owner = NULL,
@@ -728,20 +1202,12 @@ def _set_relay_status(
                 receipt_json = ?,
                 upload_status_path = ?,
                 updated_at = ?
-            WHERE relay_id = ?
+            {where_clause}
             """,
-            (
-                status,
-                next_attempt_at or None,
-                error_code,
-                error_message,
-                json.dumps(dict(receipt or {}), ensure_ascii=False, sort_keys=True) if receipt is not None else None,
-                upload_status_path,
-                now,
-                relay_id,
-            ),
+            params,
         )
         conn.commit()
+        return int(cursor.rowcount) == 1
     finally:
         conn.close()
 
@@ -749,6 +1215,180 @@ def _set_relay_status(
 def _retry_after_seconds(attempt_count: int, base_seconds: int) -> int:
     multiplier = min(max(1, attempt_count), 5)
     return max(1, int(base_seconds)) * multiplier
+
+
+def _relay_status_update_conflict(
+    row: RelayQueueRow,
+    *,
+    committed: bool = False,
+    prior_result: UploadResult | None = None,
+) -> UploadResult:
+    receipt = dict(prior_result.receipt or {}) if prior_result is not None else {"client_batch_id": row.relay_id}
+    receipt.setdefault("client_batch_id", row.relay_id)
+    receipt["_local_status_update_error_code"] = "relay_status_update_conflict"
+    receipt["_local_status_update_error_message"] = "relay lease changed before final status update"
+    return UploadResult(
+        success=False,
+        status_code=prior_result.status_code if prior_result is not None else 0,
+        committed=committed or bool(prior_result.committed if prior_result is not None else False),
+        retryable=False,
+        receipt=receipt,
+        status_path=prior_result.status_path if prior_result is not None else "",
+        error_code="relay_status_update_conflict",
+        error_message="relay lease changed before final status update",
+        relay_id=row.relay_id,
+    )
+
+
+def _release_claimed_relay_after_operator_pause(
+    row: RelayQueueRow,
+    *,
+    db_path: str | os.PathLike[str],
+    error_code: str,
+    error_message: str,
+) -> bool:
+    restored_status = (
+        row.claim_previous_status
+        if row.claim_previous_status in {RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT}
+        else RELAY_STATUS_PENDING
+    )
+    restored_attempt_count = max(0, row.attempt_count - 1)
+    restored_next_attempt_at = row.claim_previous_next_attempt_at if restored_status == RELAY_STATUS_RETRY_WAIT else ""
+    now = utc_now_text()
+    conn = _connect_relay_db(db_path)
+    try:
+        cursor = conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?,
+                attempt_count = ?,
+                lease_owner = NULL,
+                lease_expires_at = NULL,
+                next_attempt_at = ?,
+                last_error_code = ?,
+                last_error_message = ?,
+                updated_at = ?
+            WHERE relay_id = ?
+              AND status = ?
+              AND lease_owner = ?
+              AND attempt_count = ?
+            """,
+            (
+                restored_status,
+                restored_attempt_count,
+                restored_next_attempt_at or None,
+                error_code,
+                error_message,
+                now,
+                row.relay_id,
+                RELAY_STATUS_LEASED,
+                row.lease_owner,
+                row.attempt_count,
+            ),
+        )
+        conn.commit()
+        return int(cursor.rowcount) == 1
+    finally:
+        conn.close()
+
+
+def _pause_requested(pause_state: Any) -> bool:
+    if isinstance(pause_state, Mapping):
+        return bool(pause_state.get("paused"))
+    return bool(pause_state)
+
+
+def _operator_pause_upload_result(row: RelayQueueRow, pause_state: Any) -> UploadResult:
+    marker_invalid = (
+        isinstance(pause_state, Mapping)
+        and bool(pause_state.get("enabled"))
+        and bool(pause_state.get("paused"))
+        and not bool(pause_state.get("marker_valid"))
+    )
+    return UploadResult(
+        success=False,
+        status_code=0,
+        committed=False,
+        retryable=False,
+        receipt={"client_batch_id": row.relay_id},
+        error_code="operator_pause_marker_invalid" if marker_invalid else "operator_paused",
+        error_message=(
+            "direct-sync relay operator pause marker is invalid"
+            if marker_invalid
+            else "direct-sync relay paused before upload"
+        ),
+    )
+
+
+def _upload_exception_result(row: RelayQueueRow, exc: Exception) -> UploadResult:
+    return UploadResult(
+        success=False,
+        status_code=0,
+        committed=False,
+        retryable=False,
+        receipt={"client_batch_id": row.relay_id},
+        error_code="upload_unhandled_exception",
+        error_message=f"direct-sync upload failed before returning a result: {exc.__class__.__name__}",
+    )
+
+
+def _operator_review_receipt(row: RelayQueueRow, result: UploadResult) -> Dict[str, Any]:
+    receipt = dict(result.receipt or {})
+    if not result.committed:
+        return receipt
+    receipt.setdefault("client_batch_id", row.relay_id)
+    receipt["_local_upload_result_committed"] = True
+    receipt["_local_upload_result_error_code"] = result.error_code
+    return receipt
+
+
+def _local_relay_upload_result(row: RelayQueueRow, result: UploadResult) -> UploadResult:
+    return replace(result, relay_id=row.relay_id)
+
+
+def _set_claimed_relay_status(
+    row: RelayQueueRow,
+    *,
+    db_path: str | os.PathLike[str],
+    status: str,
+    receipt: Mapping[str, Any] | None = None,
+    upload_status_path: str = "",
+    next_attempt_at: str = "",
+    error_code: str = "",
+    error_message: str = "",
+) -> bool:
+    return _set_relay_status(
+        db_path=db_path,
+        relay_id=row.relay_id,
+        status=status,
+        receipt=receipt,
+        upload_status_path=upload_status_path,
+        next_attempt_at=next_attempt_at,
+        error_code=error_code,
+        error_message=error_message,
+        expected_lease_owner=row.lease_owner,
+        expected_attempt_count=row.attempt_count,
+    )
+
+
+def _source_file_plan_from_relay_row(row: RelayQueueRow) -> SourceFilePlan:
+    if row.metadata_error:
+        raise DirectSyncPushError(row.metadata_error)
+    metadata = dict(row.metadata)
+    if str(metadata.get("client_batch_id") or "") != row.relay_id:
+        raise DirectSyncPushError("relay metadata client_batch_id does not match relay_id")
+    if str(metadata.get("relative_path") or "") != row.relative_path:
+        raise DirectSyncPushError("relay metadata relative_path does not match queued row")
+    if str(metadata.get("content_sha256") or "").lower() != row.content_sha256.lower():
+        raise DirectSyncPushError("relay metadata content_sha256 does not match queued row")
+    if int(metadata.get("byte_length") or -1) != row.byte_length:
+        raise DirectSyncPushError("relay metadata byte_length does not match queued row")
+    return SourceFilePlan(
+        source_file_path=row.spooled_file_path,
+        metadata=metadata,
+        content_sha256=row.content_sha256,
+        byte_length=row.byte_length,
+    )
 
 
 def drain_one_relay_batch(
@@ -760,86 +1400,162 @@ def drain_one_relay_batch(
     status_dir: str | os.PathLike[str] = "",
     retry_base_seconds: int = DEFAULT_RETRY_SECONDS,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
+    pre_upload_pause_check: Callable[[], Any] | None = None,
+    now: str = "",
 ) -> UploadResult | None:
-    row = claim_next_relay_batch(db_path=db_path, worker_id=worker_id)
+    now = now or utc_now_text()
+    lease_seconds = max(DEFAULT_LEASE_SECONDS, int(timeout) + 60)
+    row = claim_next_relay_batch(db_path=db_path, worker_id=worker_id, lease_seconds=lease_seconds, now=now)
     if row is None:
         return None
-    spooled_hash, spooled_bytes = _read_file_digest(Path(row.spooled_file_path))
+    try:
+        spooled_hash, spooled_bytes = _read_file_digest(Path(row.spooled_file_path))
+    except OSError as exc:
+        error_code = "spooled_file_missing" if isinstance(exc, FileNotFoundError) else "spooled_file_unreadable"
+        result = UploadResult(
+            success=False,
+            status_code=0,
+            committed=False,
+            retryable=False,
+            receipt={"client_batch_id": row.relay_id},
+            error_code=error_code,
+            error_message=f"spooled file cannot be read: {exc}",
+        )
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=RELAY_STATUS_FAILED_PERMANENT,
+            receipt=result.receipt,
+            error_code=result.error_code,
+            error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
     if spooled_hash != row.content_sha256 or spooled_bytes != row.byte_length:
         result = UploadResult(
             success=False,
             status_code=0,
             committed=False,
             retryable=False,
-            receipt={},
+            receipt={"client_batch_id": row.relay_id},
             error_code="spooled_file_digest_mismatch",
             error_message="spooled file content does not match queued content hash/byte length",
         )
-        _set_relay_status(
+        if not _set_claimed_relay_status(
+            row,
             db_path=db_path,
-            relay_id=row.relay_id,
             status=RELAY_STATUS_FAILED_PERMANENT,
+            receipt=result.receipt,
             error_code=result.error_code,
             error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
+    try:
+        plan = _source_file_plan_from_relay_row(row)
+    except (DirectSyncPushError, ValueError, TypeError) as exc:
+        result = UploadResult(
+            success=False,
+            status_code=0,
+            committed=False,
+            retryable=False,
+            receipt={"client_batch_id": row.relay_id},
+            error_code="relay_metadata_invalid",
+            error_message=str(exc),
         )
-        return result
-    plan = build_source_file_plan(
-        source_file_path=row.spooled_file_path,
-        producer_manifest_path=row.producer_manifest_path,
-        credentials=credentials,
-        relative_path=row.relative_path,
-        client_batch_id=row.relay_id,
-    )
-    result = upload_source_file(
-        plan,
-        credentials,
-        session=session,
-        timeout=timeout,
-        status_dir=status_dir,
-    )
-    if result.success:
-        _set_relay_status(
+        if not _set_claimed_relay_status(
+            row,
             db_path=db_path,
-            relay_id=row.relay_id,
+            status=RELAY_STATUS_OPERATOR_REVIEW,
+            receipt=result.receipt,
+            error_code=result.error_code,
+            error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
+    if pre_upload_pause_check is not None:
+        pause_state = pre_upload_pause_check()
+        if _pause_requested(pause_state):
+            result = _operator_pause_upload_result(row, pause_state)
+            if not _release_claimed_relay_after_operator_pause(
+                row,
+                db_path=db_path,
+                error_code=result.error_code,
+                error_message=result.error_message,
+            ):
+                return _relay_status_update_conflict(row, prior_result=result)
+            return _local_relay_upload_result(row, result)
+    try:
+        result = upload_source_file(
+            plan,
+            credentials,
+            session=session,
+            timeout=timeout,
+            status_dir=status_dir,
+            status_context={"relay_id": row.relay_id, "attempt_count": row.attempt_count},
+        )
+    except Exception as exc:
+        result = _upload_exception_result(row, exc)
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=RELAY_STATUS_OPERATOR_REVIEW,
+            receipt=result.receipt,
+            error_code=result.error_code,
+            error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
+    result = _local_relay_upload_result(row, result)
+    if result.success:
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
             status=RELAY_STATUS_ACKED,
             receipt=result.receipt,
             upload_status_path=result.status_path,
-        )
+            error_code=result.error_code,
+            error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, committed=result.committed, prior_result=result)
     elif result.committed:
-        _set_relay_status(
+        if not _set_claimed_relay_status(
+            row,
             db_path=db_path,
-            relay_id=row.relay_id,
             status=RELAY_STATUS_OPERATOR_REVIEW,
-            receipt=result.receipt,
+            receipt=_operator_review_receipt(row, result),
             upload_status_path=result.status_path,
             error_code=result.error_code,
             error_message=result.error_message,
-        )
+        ):
+            return _relay_status_update_conflict(row, committed=True, prior_result=result)
     elif result.retryable:
-        retry_after = _retry_after_seconds(row.attempt_count, retry_base_seconds)
+        retry_after = result.retry_after_seconds or _retry_after_seconds(row.attempt_count, retry_base_seconds)
         next_attempt_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=retry_after)
+            datetime.fromisoformat(now.replace("Z", "+00:00")).astimezone(timezone.utc) + timedelta(seconds=retry_after)
         ).isoformat().replace("+00:00", "Z")
-        _set_relay_status(
+        if not _set_claimed_relay_status(
+            row,
             db_path=db_path,
-            relay_id=row.relay_id,
             status=RELAY_STATUS_RETRY_WAIT,
             receipt=result.receipt,
             upload_status_path=result.status_path,
             next_attempt_at=next_attempt_at,
             error_code=result.error_code,
             error_message=result.error_message,
-        )
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
     else:
-        _set_relay_status(
+        if not _set_claimed_relay_status(
+            row,
             db_path=db_path,
-            relay_id=row.relay_id,
             status=RELAY_STATUS_FAILED_PERMANENT,
             receipt=result.receipt,
             upload_status_path=result.status_path,
             error_code=result.error_code,
             error_message=result.error_message,
-        )
+        ):
+            return _relay_status_update_conflict(row, committed=result.committed, prior_result=result)
     return result
 
 

@@ -51,7 +51,7 @@ python -m py_compile Container_Audit.py
 
 ## 데이터와 설정 위치
 
-- 운영 로그: `C:\Sync\이적검사이벤트로그_[작업자]_[YYYYMMDD].csv`
+- 운영 로그: `C:\Sync\이적작업이벤트로그_[작업자]_[YYYYMMDD].csv`
 - 현재 트레이 상태: 코드 기준 `C:\Sync\_current_tray_state_[컴퓨터ID].json`
 - 보류 트레이: `config/parked_trays`
 - 최고 기록: `config/best_time_records.json`

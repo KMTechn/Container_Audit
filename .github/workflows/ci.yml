@@ -1,0 +1,72 @@
+name: Container Audit CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Run tests
+        run: python -m pytest -q -p no:cacheprovider
+
+      - name: Prepare release config
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath build/release_config -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path build/release_config | Out-Null
+          Copy-Item -LiteralPath config/container_audit_settings.json -Destination build/release_config/container_audit_settings.json
+          python tools/check_release_config.py --config-dir build/release_config
+
+      - name: Prepare release tools
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath build/release_tools -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path build/release_tools | Out-Null
+          Copy-Item -LiteralPath tools/direct_sync_relay_runner.py -Destination build/release_tools/direct_sync_relay_runner.py
+          Copy-Item -LiteralPath tools/direct_sync_relay_install_pack.py -Destination build/release_tools/direct_sync_relay_install_pack.py
+          Copy-Item -LiteralPath tools/direct_sync_relay_operator.py -Destination build/release_tools/direct_sync_relay_operator.py
+
+      - name: Build PyInstaller smoke artifact
+        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "direct_sync_operator.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
+
+      - name: Smoke check CI update archive
+        shell: pwsh
+        run: |
+          $zipPath = Join-Path $env:RUNNER_TEMP "Container_Audit-ci-smoke.zip"
+          $smokeDir = Join-Path $env:RUNNER_TEMP "container-audit-ci-smoke"
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
+          Compress-Archive -Path dist/Container_Audit -DestinationPath "$zipPath"
+          python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"
+          $releaseConfigDir = Join-Path $smokeDir "Container_Audit/config"
+          python tools/check_release_config.py --config-dir "$releaseConfigDir"

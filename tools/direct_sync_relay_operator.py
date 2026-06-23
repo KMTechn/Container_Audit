@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import sys
+import uuid
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,7 +22,7 @@ from direct_sync_operator import operator_status, pause_relay, resume_relay, ret
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = target.with_suffix(target.suffix + ".tmp")
+    temp_path = target.with_name(f"{target.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
         json.dump(dict(payload), handle, ensure_ascii=False, indent=2, sort_keys=True)
         handle.write("\n")
@@ -31,11 +32,29 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
 
 
 def _emit(report: Mapping[str, Any], report_path: str = "") -> int:
+    mutable_report = dict(report)
+    report_status = "SKIPPED"
+    report_error_code = ""
+    report_error_message = ""
     if report_path:
-        _write_json_atomic(report_path, report)
-    print(f"direct_sync_operator_status={report.get('status', 'FAIL')}")
-    print(f"direct_sync_operator_operation={report.get('operation', '')}")
-    status = str(report.get("status") or "FAIL")
+        try:
+            _write_json_atomic(report_path, mutable_report)
+            report_status = "PASS"
+        except OSError as exc:
+            report_status = "FAIL"
+            report_error_code = "operator_report_write_failed"
+            report_error_message = f"operator report write failed: {exc.__class__.__name__}"
+            mutable_report["report_write_status"] = report_status
+            mutable_report["report_write_error_code"] = report_error_code
+            mutable_report["report_write_error_message"] = report_error_message
+    print(f"direct_sync_operator_status={mutable_report.get('status', 'FAIL')}")
+    print(f"direct_sync_operator_operation={mutable_report.get('operation', '')}")
+    print(f"direct_sync_operator_report_status={report_status}")
+    if report_error_code:
+        print(f"direct_sync_operator_report_error_code={report_error_code}")
+    status = str(mutable_report.get("status") or "FAIL")
+    if report_status == "FAIL":
+        return 1
     if status == "PASS":
         return 0
     if status == "BLOCKED":
@@ -65,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     resume_parser.add_argument("--reason", required=True)
     resume_parser.add_argument("--audit-log-path", default="")
     resume_parser.add_argument("--report-path", default="")
+    resume_parser.add_argument("--force-invalid-marker", action="store_true")
 
     retry_parser = subparsers.add_parser("retry-dead", help="Move failed_permanent relay batch to pending")
     retry_parser.add_argument("--db-path", required=True)
@@ -73,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     retry_parser.add_argument("--reason", required=True)
     retry_parser.add_argument("--audit-log-path", default="")
     retry_parser.add_argument("--report-path", default="")
+    retry_parser.add_argument("--allow-operator-review", action="store_true")
 
     args = parser.parse_args(argv)
     try:
@@ -95,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
                     operator_id=args.operator_id,
                     reason=args.reason,
                     audit_log_path=args.audit_log_path,
+                    force_invalid_marker=args.force_invalid_marker,
                 ),
                 args.report_path,
             )
@@ -106,6 +128,7 @@ def main(argv: list[str] | None = None) -> int:
                     operator_id=args.operator_id,
                     reason=args.reason,
                     audit_log_path=args.audit_log_path,
+                    allow_operator_review=args.allow_operator_review,
                 ),
                 args.report_path,
             )

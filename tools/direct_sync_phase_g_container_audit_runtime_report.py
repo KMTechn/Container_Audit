@@ -56,7 +56,7 @@ class EchoAcceptedSession:
     def __init__(self):
         self.calls: list[dict] = []
 
-    def post(self, url, *, data, files, headers, timeout):
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
         file_name, file_handle, content_type = files["file"]
         metadata = json.loads(data["metadata"])
         self.calls.append(
@@ -65,6 +65,7 @@ class EchoAcceptedSession:
                 "metadata": data["metadata"],
                 "headers": dict(headers),
                 "timeout": timeout,
+                "allow_redirects": allow_redirects,
                 "file_name": file_name,
                 "file_bytes": file_handle.read(),
                 "content_type": content_type,
@@ -91,7 +92,7 @@ class FixedSession:
         self.response = response
         self.calls: list[dict] = []
 
-    def post(self, url, *, data, files, headers, timeout):
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
         file_name, file_handle, content_type = files["file"]
         self.calls.append(
             {
@@ -99,6 +100,7 @@ class FixedSession:
                 "metadata": data["metadata"],
                 "headers": dict(headers),
                 "timeout": timeout,
+                "allow_redirects": allow_redirects,
                 "file_name": file_name,
                 "file_bytes": file_handle.read(),
                 "content_type": content_type,
@@ -838,15 +840,15 @@ def _source_scan_admission_report(tmp_root: Path) -> dict:
     ignored_file.write_text("event_id,status\nCA-IGNORE-1,ok\n", encoding="utf-8")
     nested_allowed.write_text("event_id,status\nCA-NESTED-1,ok\n", encoding="utf-8")
 
-    selected = _scan_source_files(str(scan_dir), ["*.csv"], 100)
+    selected = _scan_source_files(str(scan_dir), ["*.csv"], 100, min_age_seconds=0)
     recursive_rejected = False
     path_rejected = False
     try:
-        _scan_source_files(str(scan_dir), ["**/*.csv"], 100)
+        _scan_source_files(str(scan_dir), ["**/*.csv"], 100, min_age_seconds=0)
     except SystemExit:
         recursive_rejected = True
     try:
-        _scan_source_files(str(scan_dir), ["nested/*.csv"], 100)
+        _scan_source_files(str(scan_dir), ["nested/*.csv"], 100, min_age_seconds=0)
     except SystemExit:
         path_rejected = True
 

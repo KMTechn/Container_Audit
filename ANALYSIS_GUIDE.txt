@@ -11,7 +11,7 @@ CONTAINER AUDIT 데이터 분석 프로그램 개발 가이드라인
 
 1.1 메인 로그 디렉토리
 └── C:\Sync\
-    ├── 이적검사이벤트로그_[작업자명]_[YYYYMMDD].csv     # 이적 검사 로그
+    ├── 이적작업이벤트로그_[작업자명]_[YYYYMMDD].csv     # 이적 작업 로그
     └── [기타 관련 로그 파일들]
 
 1.2 설정 및 상태 파일
@@ -30,24 +30,25 @@ CONTAINER AUDIT 데이터 분석 프로그램 개발 가이드라인
 2. CSV 로그 파일 구조 분석
 ================================================================================
 
-2.1 이적 검사 로그 (이적검사이벤트로그_*.csv)
-컬럼 구조:
-- timestamp: 이벤트 발생 시간 (YYYY-MM-DD HH:MM:SS.mmm)
-- event_type: 이벤트 타입 (아래 2.3 참조)
-- worker: 작업자명
-- item_code: 품목 코드 (13자리)
-- item_name: 품목명
-- master_label: 현품표 코드 (WID-형식)
-- barcode: 스캔된 바코드 (제품 바코드)
-- scan_count: 현재 스캔 횟수
-- total_quantity: 목표 수량
-- work_time_sec: 작업 소요 시간 (초)
-- details: 추가 정보 (JSON 형식 문자열)
+2.1 이적 작업 로그 (이적작업이벤트로그_*.csv)
+현행 원시 CSV 컬럼 구조(Container_Audit.py v2.0.7 기준):
+- timestamp: 이벤트 발생 시간(ISO 형식)
+- worker_name: 작업자명
+- event: 이벤트 타입(예: SCAN_OK, TRAY_COMPLETE)
+- details: 추가 정보(JSON 문자열)
+
+주의:
+- 과거 문서에는 event_type, worker, item_code, scan_count 같은 평탄화 컬럼과
+  SESSION_COMPLETE 이벤트가 등장한다.
+- 현행 원시 파일은 4컬럼 append-only 로그이며, 분석 프로그램이 필요한 확장
+  컬럼은 details JSON을 파싱해 정규화 뷰로 생성해야 한다.
+- 트레이 완료의 현행 완료 이벤트는 TRAY_COMPLETE다.
 
 예시 데이터:
-2024-12-24 09:15:30.123,SESSION_START,이영희,8811012345678,샘플제품B,WID20241224091530,,0,60,0.0,"{""tray_size"": 60}"
-2024-12-24 09:16:45.456,TRAY_PRODUCT_SCANNED,이영희,8811012345678,샘플제품B,WID20241224091530,8811012345678001,1,60,75.2,"{""scan_time"": ""2024-12-24 09:16:45""}"
-2024-12-24 09:45:30.789,SESSION_COMPLETE,이영희,8811012345678,샘플제품B,WID20241224091530,,60,60,1800.5,"{""completion_type"": ""full""}"
+timestamp,worker_name,event,details
+2024-12-24T09:15:30.123456,이영희,SESSION_START,"{""master_label_code"": ""WID20241224091530""}"
+2024-12-24T09:16:45.456789,이영희,SCAN_OK,"{""barcode"": ""8811012345678001"", ""scan_count"": 1}"
+2024-12-24T09:45:30.789012,이영희,TRAY_COMPLETE,"{""master_label_code"": ""WID20241224091530"", ""scan_count"": 60, ""tray_capacity"": 60, ""work_time_sec"": 1800.5}"
 
 2.2 Container Audit 특징
 - 모든 제품이 양품으로 처리됨 (불량품 판정 없음)
@@ -59,7 +60,8 @@ CONTAINER AUDIT 데이터 분석 프로그램 개발 가이드라인
 
 ▶ 세션 관리 이벤트:
 - SESSION_START: 검사 세션 시작 (현품표 스캔)
-- SESSION_COMPLETE: 세션 정상 완료
+- TRAY_COMPLETE: 트레이 정상 완료(현행 원시 CSV 완료 이벤트)
+- SESSION_COMPLETE: 레거시/정규화 뷰의 완료 이벤트명
 - SESSION_RESET: 세션 리셋
 - TRAY_SUBMIT: 트레이 제출
 - SESSION_RESTORED: 이전 세션 복구
@@ -113,15 +115,17 @@ TRAY_PRODUCT_SCANNED:
   "scan_duration_ms": 150
 }
 
-SESSION_COMPLETE:
+TRAY_COMPLETE:
 {
-  "completion_type": "full|partial",
+  "master_label_code": "WID...",
+  "item_code": "8811012345678",
+  "item_name": "샘플제품B",
   "scan_count": 60,
+  "tray_capacity": 60,
   "work_time_sec": 1800.5,
   "has_error_or_reset": false,
   "scanned_product_barcodes": ["8811012345678001", "8811012345678002", ...],
-  "average_scan_interval": 30.2,
-  "idle_time_sec": 120.0
+  "total_idle_seconds": 120.0
 }
 
 TRAY_PARKED:
@@ -251,7 +255,7 @@ from datetime import datetime, timedelta
 
 def load_container_audit_logs(date_range=None, worker=None):
     """이적 검사 로그 데이터 로딩"""
-    log_files = glob.glob("C:/Sync/이적검사이벤트로그_*.csv")
+    log_files = glob.glob("C:/Sync/이적작업이벤트로그_*.csv")
 
     all_data = []
     for file in log_files:
@@ -264,7 +268,7 @@ def load_container_audit_logs(date_range=None, worker=None):
                 df = df[(df['timestamp'] >= date_range[0]) &
                        (df['timestamp'] <= date_range[1])]
             if worker:
-                df = df[df['worker'] == worker]
+                df = df[df['worker_name'] == worker]
 
             all_data.append(df)
         except Exception as e:
@@ -334,8 +338,15 @@ def parse_details_json(details_str):
 
 4.4 분석 쿼리 예시
 
+아래 예시는 원시 CSV를 그대로 읽은 데이터프레임이 아니라 정규화 뷰를
+전제로 한다. 정규화 단계에서 `event`를 `event_type`으로 복사하고,
+`worker_name`을 `worker`로 맞추며, `details` JSON의 `item_code`,
+`scan_count`, `work_time_sec`, `master_label_code` 등을 평탄화해야 한다.
+현행 원시 완료 이벤트 `TRAY_COMPLETE`는 필요 시 legacy 분석명
+`SESSION_COMPLETE`로 매핑할 수 있지만, 원본 계약은 `TRAY_COMPLETE`다.
+
 # 일별 생산량 집계
-daily_production = df[df['event_type'] == 'SESSION_COMPLETE'].groupby([
+daily_production = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])].groupby([
     df['timestamp'].dt.date, 'worker', 'item_code'
 ]).agg({
     'scan_count': 'sum',
@@ -343,7 +354,7 @@ daily_production = df[df['event_type'] == 'SESSION_COMPLETE'].groupby([
 }).reset_index()
 
 # 스캔 효율성 분석
-scan_efficiency = df[df['event_type'] == 'TRAY_PRODUCT_SCANNED'].groupby([
+scan_efficiency = df[df['event_type'].isin(['SCAN_OK', 'TRAY_PRODUCT_SCANNED'])].groupby([
     df['timestamp'].dt.date, 'worker'
 ]).agg({
     'timestamp': lambda x: x.diff().dt.total_seconds().mean()  # 평균 스캔 간격
@@ -396,20 +407,20 @@ best_records_df['date'] = pd.to_datetime(best_records_df['date'])
 4.6 성능 벤치마킹
 
 # 작업자별 성과 비교
-worker_performance = df[df['event_type'] == 'SESSION_COMPLETE'].groupby('worker').agg({
+worker_performance = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])].groupby('worker').agg({
     'work_time_sec': ['mean', 'std', 'min'],
     'scan_count': 'sum',
     'timestamp': 'count'
 }).round(2)
 
 # 품목별 처리 난이도 분석
-item_difficulty = df[df['event_type'] == 'SESSION_COMPLETE'].groupby('item_code').agg({
+item_difficulty = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])].groupby('item_code').agg({
     'work_time_sec': 'mean',
     'mismatch_error_count': 'mean'
 }).sort_values('work_time_sec', ascending=False)
 
 # 시간대별 생산성 패턴
-hourly_productivity = df[df['event_type'] == 'SESSION_COMPLETE'].groupby(
+hourly_productivity = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])].groupby(
     df['timestamp'].dt.hour
 ).agg({
     'work_time_sec': 'mean',
@@ -423,7 +434,7 @@ hourly_productivity = df[df['event_type'] == 'SESSION_COMPLETE'].groupby(
 5.1 데이터 무결성 검사
 
 ▶ 세션 완료성 검사:
-- SESSION_START와 SESSION_COMPLETE 쌍 확인
+- SESSION_START와 TRAY_COMPLETE 쌍 확인
 - 비정상 종료된 세션 식별
 - 미완료 세션의 보류 상태 확인
 
@@ -451,7 +462,7 @@ def detect_anomalies(df):
     anomalies.extend(high_error_sessions[high_error_sessions > 5].index.tolist())
 
     # 2. 비정상적인 작업 시간
-    complete_sessions = df[df['event_type'] == 'SESSION_COMPLETE']
+    complete_sessions = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])]
     time_outliers = complete_sessions[
         (complete_sessions['work_time_sec'] < 60) |  # 너무 빠름
         (complete_sessions['work_time_sec'] > 7200)  # 너무 느림 (2시간)
@@ -470,7 +481,7 @@ def detect_anomalies(df):
 def calculate_data_quality_metrics(df):
     """데이터 품질 지표 계산"""
     total_sessions = df[df['event_type'] == 'SESSION_START'].shape[0]
-    complete_sessions = df[df['event_type'] == 'SESSION_COMPLETE'].shape[0]
+    complete_sessions = df[df['event_type'].isin(['TRAY_COMPLETE', 'SESSION_COMPLETE'])].shape[0]
 
     quality_metrics = {
         'session_completion_rate': complete_sessions / total_sessions if total_sessions > 0 else 0,

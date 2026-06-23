@@ -4,6 +4,8 @@ from pathlib import Path
 
 import pytest
 
+import direct_sync_push
+import direct_sync_runtime
 from direct_sync_operator import pause_relay, resume_relay
 from direct_sync_push import (
     DirectSyncPushError,
@@ -22,6 +24,28 @@ from direct_sync_push import (
 from direct_sync_runtime import DirectSyncRuntimeConfig, enqueue_completed_source_file, load_credentials_from_json, run_relay_once
 
 
+def test_runtime_status_atomic_json_write_uses_unique_temp_paths(tmp_path, monkeypatch):
+    target = tmp_path / "status.json"
+    observed = []
+    original_replace = direct_sync_runtime.os.replace
+
+    def capture_replace(src, dst):
+        observed.append((Path(src).name, Path(dst).name))
+        original_replace(src, dst)
+
+    monkeypatch.setattr(direct_sync_runtime.os, "replace", capture_replace)
+
+    direct_sync_runtime._write_json_atomic(target, {"step": 1})
+    direct_sync_runtime._write_json_atomic(target, {"step": 2})
+
+    assert observed[0][0].startswith("status.json.tmp.")
+    assert observed[1][0].startswith("status.json.tmp.")
+    assert observed[0][0] != observed[1][0]
+    assert observed[0][1] == "status.json"
+    assert json.loads(target.read_text(encoding="utf-8"))["step"] == 2
+    assert list(tmp_path.glob("status.json.tmp.*")) == []
+
+
 class FakeResponse:
     def __init__(self, status_code, payload):
         self.status_code = status_code
@@ -36,7 +60,7 @@ class FakeSession:
         self.response = response
         self.calls = []
 
-    def post(self, url, *, data, files, headers, timeout):
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
         file_name, file_handle, content_type = files["file"]
         self.calls.append(
             {
@@ -44,6 +68,7 @@ class FakeSession:
                 "metadata": data["metadata"],
                 "headers": dict(headers),
                 "timeout": timeout,
+                "allow_redirects": allow_redirects,
                 "file_name": file_name,
                 "file_bytes": file_handle.read(),
                 "content_type": content_type,
@@ -56,8 +81,8 @@ class RaisingSession:
     def __init__(self):
         self.calls = []
 
-    def post(self, url, *, data, files, headers, timeout):
-        self.calls.append({"url": url, "headers": dict(headers), "timeout": timeout})
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
+        self.calls.append({"url": url, "headers": dict(headers), "timeout": timeout, "allow_redirects": allow_redirects})
         raise TimeoutError("Authorization: Bearer SHOULD-NOT-LEAK raw_payload")
 
 
@@ -65,7 +90,7 @@ class EchoAcceptedSession:
     def __init__(self):
         self.calls = []
 
-    def post(self, url, *, data, files, headers, timeout):
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
         file_name, file_handle, content_type = files["file"]
         metadata = json.loads(data["metadata"])
         self.calls.append(
@@ -74,6 +99,7 @@ class EchoAcceptedSession:
                 "metadata": data["metadata"],
                 "headers": dict(headers),
                 "timeout": timeout,
+                "allow_redirects": allow_redirects,
                 "file_name": file_name,
                 "file_bytes": file_handle.read(),
                 "content_type": content_type,
@@ -196,6 +222,81 @@ def test_load_credentials_blocks_env_secret_ref_in_production_profile(monkeypatc
         load_credentials_from_json(path)
 
 
+def test_load_credentials_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "credential-duplicate-key.json"
+    path.write_text(
+        '{"producer_id": "producer-runtime-1", "key_id": "key-runtime-1", '
+        '"secret": "runtime-secret", "secret": "runtime-secret-shadow", '
+        '"endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DirectSyncPushError, match="duplicate key: secret"):
+        load_credentials_from_json(path)
+
+
+@pytest.mark.parametrize("secret_value", [123, ["runtime-secret"], {"value": "runtime-secret"}, "   "])
+def test_load_credentials_rejects_non_string_or_blank_raw_secret(tmp_path, secret_value):
+    path = tmp_path / "credential-invalid-secret.json"
+    path.write_text(
+        json.dumps(
+            {
+                "producer_id": "producer-runtime-1",
+                "key_id": "key-runtime-1",
+                "secret": secret_value,
+                "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DirectSyncPushError, match="credential secret must be a nonempty string"):
+        load_credentials_from_json(path)
+
+
+@pytest.mark.parametrize("credential_contents", [None, "{not-json}"])
+def test_runtime_records_credential_load_errors_for_enqueue_and_drain(tmp_path, credential_contents):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    credential_path = tmp_path / "bad_credential.json"
+    if credential_contents is not None:
+        credential_path.write_text(credential_contents, encoding="utf-8")
+    bad_config = DirectSyncRuntimeConfig(**{**config.__dict__, "credential_path": credential_path})
+
+    enqueue_status = enqueue_completed_source_file(bad_config, source_file_path=source_file)
+    run_status = run_relay_once(bad_config, session=EchoAcceptedSession())
+
+    assert enqueue_status["status"] == "enqueue_error"
+    assert enqueue_status["error_code"] == "direct_sync_enqueue_error"
+    assert "credential file is missing or invalid" in enqueue_status["error_message"]
+    assert run_status["status"] == "runtime_error"
+    assert run_status["error_code"] == "direct_sync_runtime_error"
+    assert "credential file is missing or invalid" in run_status["error_message"]
+    assert Path(bad_config.runtime_status_path).is_file()
+    assert Path(bad_config.log_path).is_file()
+    assert relay_queue_status(config.db_path)["counts"] == {}
+
+
+def test_runtime_records_spool_disk_preflight_errors_for_enqueue_and_drain(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    blocked_parent = tmp_path / "spool-parent-is-file"
+    blocked_parent.write_text("not a directory", encoding="utf-8")
+    blocked_config = DirectSyncRuntimeConfig(**{**config.__dict__, "spool_dir": blocked_parent / "spool"})
+
+    enqueue_status = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    run_status = run_relay_once(blocked_config, session=EchoAcceptedSession())
+
+    assert enqueue_status["status"] == "blocked_disk_pressure"
+    assert enqueue_status["disk"]["error_code"] == "disk_pressure_check_failed"
+    assert run_status["status"] == "blocked_disk_pressure"
+    assert run_status["disk"]["error_code"] == "disk_pressure_check_failed"
+    assert Path(blocked_config.runtime_status_path).is_file()
+    assert Path(blocked_config.log_path).is_file()
+    assert relay_queue_status(config.db_path)["counts"] == {}
+
+
 def make_config(tmp_path, *, min_free_bytes=0, max_active_queue_count=0, max_active_queue_age_seconds=0):
     _manifest, manifest_path = make_manifest(tmp_path)
     credential_path = write_credential_file(tmp_path)
@@ -271,6 +372,68 @@ def test_runtime_corrupt_relay_db_records_runtime_error_without_posting(tmp_path
     assert session.calls == []
 
 
+def test_enqueue_corrupt_relay_db_writes_status_instead_of_raising(tmp_path):
+    config = make_config(tmp_path, max_active_queue_count=1000)
+    csv_path = write_csv(tmp_path)
+    Path(config.db_path).write_text("not a sqlite database", encoding="utf-8")
+
+    status = enqueue_completed_source_file(config, source_file_path=csv_path)
+
+    assert status["status"] == "enqueue_error"
+    assert status["error_code"] == "relay_queue_db_error"
+    assert status["queue"]["status"] == "unavailable"
+    assert "not a sqlite database" not in json.dumps(status)
+    persisted = json.loads(Path(config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["status"] == "enqueue_error"
+    assert persisted["error_code"] == "relay_queue_db_error"
+
+
+def test_enqueue_spool_filesystem_error_is_not_reported_as_queue_db_error(tmp_path, monkeypatch):
+    config = make_config(tmp_path, max_active_queue_count=1000)
+    csv_path = write_csv(tmp_path)
+
+    def fail_copy(_source, _destination):
+        raise PermissionError("spool blocked")
+
+    monkeypatch.setattr(direct_sync_push, "_copy_file_atomic", fail_copy)
+
+    status = enqueue_completed_source_file(config, source_file_path=csv_path)
+
+    assert status["status"] == "enqueue_error"
+    assert status["error_code"] == "relay_spool_filesystem_error"
+    assert "relay spool file cannot be written" in status["error_message"]
+    assert status["queue"]["counts"] == {}
+    persisted = json.loads(Path(config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["error_code"] == "relay_spool_filesystem_error"
+
+
+def test_runtime_queue_db_filesystem_error_writes_status_instead_of_raising(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    blocked_parent = tmp_path / "queue-parent-is-file"
+    blocked_parent.write_text("not a directory", encoding="utf-8")
+    blocked_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "db_path": blocked_parent / "direct_sync_relay.sqlite3"}
+    )
+    session = EchoAcceptedSession()
+
+    enqueue_status = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    run_status = run_relay_once(blocked_config, session=session)
+
+    assert enqueue_status["status"] == "enqueue_error"
+    assert enqueue_status["error_code"] == "relay_queue_db_error"
+    assert enqueue_status["error_message"] == "relay queue database error: FileExistsError"
+    assert enqueue_status["queue"]["status"] == "unavailable"
+    assert run_status["status"] == "runtime_error"
+    assert run_status["error_code"] == "relay_queue_db_error"
+    assert run_status["error_message"] == "relay queue database error: FileExistsError"
+    assert run_status["queue"]["status"] == "unavailable"
+    assert Path(blocked_config.runtime_status_path).is_file()
+    assert Path(blocked_config.log_path).is_file()
+    assert session.calls == []
+    assert list(Path(blocked_config.spool_dir).glob("*")) == []
+
+
 def assert_runtime_artifacts_are_redacted(config):
     status_bytes = Path(config.runtime_status_path).read_bytes()
     log_bytes = Path(config.log_path).read_bytes()
@@ -293,6 +456,39 @@ def test_runtime_empty_queue_writes_idle_status_without_posting(tmp_path):
     assert session.calls == []
     assert Path(config.runtime_status_path).is_file()
     assert Path(config.log_path).is_file()
+
+
+@pytest.mark.parametrize(
+    ("terminal_status", "expected_error_code"),
+    [
+        (RELAY_STATUS_OPERATOR_REVIEW, "dead_letter_operator_review"),
+        (RELAY_STATUS_FAILED_PERMANENT, "dead_letter_failed_permanent"),
+    ],
+)
+def test_runtime_terminal_queue_rows_do_not_get_masked_as_idle(tmp_path, terminal_status, expected_error_code):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?, last_error_code = ?
+            WHERE relay_id = ?
+            """,
+            (terminal_status, "fixture_dead_letter", enqueued["last_result"]["relay_id"]),
+        )
+    session = EchoAcceptedSession()
+
+    status = run_relay_once(config, session=session)
+
+    assert status["status"] == terminal_status
+    assert status["last_result"]["status"] == terminal_status
+    assert status["last_result"]["error_code"] == expected_error_code
+    assert status["last_result"]["dead_letter_counts"] == {terminal_status: 1}
+    assert session.calls == []
+    persisted = json.loads(Path(config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["status"] == terminal_status
 
 
 def test_runtime_operator_pause_blocks_enqueue_and_drain_before_credentials(tmp_path):
@@ -325,6 +521,114 @@ def test_runtime_operator_pause_blocks_enqueue_and_drain_before_credentials(tmp_
     assert run_status["status"] == "paused_by_operator"
     assert run_status["operator_control"]["paused"] is True
     assert run_status["disk"]["status"] == "not_checked"
+    assert relay_queue_status(config.db_path)["counts"] == {}
+    assert session.calls == []
+
+
+def test_runtime_operator_pause_after_claim_blocks_upload_and_releases_queue(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueue_completed_source_file(config, source_file_path=source_file)
+    session = EchoAcceptedSession()
+    pause_checks = {"count": 0}
+
+    def pause_after_initial_check(runtime_config):
+        assert runtime_config is config
+        pause_checks["count"] += 1
+        paused = pause_checks["count"] >= 2
+        return {
+            "enabled": True,
+            "paused": paused,
+            "path": str(config.operator_pause_path),
+            "marker_valid": True,
+            "schema_version": "direct-sync-relay-operator-pause-v1" if paused else "",
+            "operator_id": "operator-a" if paused else "",
+            "reason_redacted": "sha256:ffffffffffff" if paused else "",
+            "reason_sha256": "f" * 64 if paused else "",
+            "reason_length": 13 if paused else 0,
+            "created_at": "2026-06-23T00:00:00Z" if paused else "",
+        }
+
+    monkeypatch.setattr(direct_sync_runtime, "_paused_by_operator", pause_after_initial_check)
+
+    status = run_relay_once(config, session=session)
+
+    assert status["status"] == "paused_by_operator"
+    assert status["last_result"]["error_code"] == "operator_paused"
+    assert status["operator_control"]["paused"] is True
+    assert session.calls == []
+    queue = relay_queue_status(config.db_path)
+    assert queue["counts"][RELAY_STATUS_PENDING] == 1
+    assert queue["counts"].get(RELAY_STATUS_LEASED, 0) == 0
+    with sqlite3.connect(config.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT attempt_count, lease_owner, lease_expires_at, last_error_code FROM direct_sync_relay_batches"
+        ).fetchone()
+    assert row["attempt_count"] == 0
+    assert row["lease_owner"] is None
+    assert row["lease_expires_at"] is None
+    assert row["last_error_code"] == "operator_paused"
+
+
+def test_runtime_operator_pause_with_corrupt_db_writes_status_without_raising(tmp_path):
+    config = make_config(tmp_path)
+    Path(config.db_path).write_text("not a sqlite database", encoding="utf-8")
+    source_file = write_csv(tmp_path)
+    pause_relay(
+        pause_path=config.operator_pause_path,
+        operator_id="operator-a",
+        reason="local maintenance",
+    )
+    session = EchoAcceptedSession()
+
+    enqueue_status = enqueue_completed_source_file(config, source_file_path=source_file)
+    run_status = run_relay_once(config, session=session)
+
+    assert enqueue_status["status"] == "paused_by_operator"
+    assert run_status["status"] == "paused_by_operator"
+    assert run_status["queue"]["status"] == "unavailable"
+    assert run_status["queue"]["error_code"] == "relay_queue_db_error"
+    assert "not a sqlite database" not in json.dumps(run_status)
+    assert session.calls == []
+
+
+def test_runtime_invalid_operator_pause_marker_is_blocked_control(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    Path(config.operator_pause_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(config.operator_pause_path).write_text("{not-json}", encoding="utf-8")
+    session = EchoAcceptedSession()
+
+    enqueue_status = enqueue_completed_source_file(config, source_file_path=source_file)
+    run_status = run_relay_once(config, session=session)
+
+    assert enqueue_status["status"] == "blocked_operator_control"
+    assert enqueue_status["operator_control"]["marker_valid"] is False
+    assert enqueue_status["error_code"] == "operator_pause_marker_invalid"
+    assert run_status["status"] == "blocked_operator_control"
+    assert run_status["operator_control"]["marker_valid"] is False
+    assert run_status["disk"]["reason"] == "operator_pause_invalid"
+    assert relay_queue_status(config.db_path)["counts"] == {}
+    assert session.calls == []
+
+
+def test_runtime_wrong_schema_operator_pause_marker_is_blocked_control(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    Path(config.operator_pause_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(config.operator_pause_path).write_text("{}", encoding="utf-8")
+    session = EchoAcceptedSession()
+
+    enqueue_status = enqueue_completed_source_file(config, source_file_path=source_file)
+    run_status = run_relay_once(config, session=session)
+
+    assert enqueue_status["status"] == "blocked_operator_control"
+    assert enqueue_status["operator_control"]["marker_valid"] is False
+    assert enqueue_status["operator_control"]["marker_error_code"] == "operator_pause_marker_schema_invalid"
+    assert run_status["status"] == "blocked_operator_control"
+    assert run_status["operator_control"]["marker_valid"] is False
+    assert run_status["operator_control"]["marker_error_code"] == "operator_pause_marker_schema_invalid"
     assert relay_queue_status(config.db_path)["counts"] == {}
     assert session.calls == []
 
@@ -364,6 +668,169 @@ def test_runtime_enqueue_writes_status_and_redacted_log(tmp_path):
     assert_runtime_artifacts_are_redacted(config)
 
 
+def test_runtime_enqueue_survives_runtime_log_append_failure(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    blocked_log_parent = tmp_path / "blocked-log-parent"
+    blocked_log_parent.write_text("not a directory", encoding="utf-8")
+    bad_log_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "log_path": blocked_log_parent / "relay.jsonl"}
+    )
+
+    status = enqueue_completed_source_file(bad_log_config, source_file_path=source_file)
+
+    assert status["status"] == "enqueued"
+    assert status["runtime_log_write_status"] == "FAIL"
+    assert status["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert Path(bad_log_config.runtime_status_path).is_file()
+    persisted = json.loads(Path(bad_log_config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["runtime_log_write_status"] == "FAIL"
+    assert persisted["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
+
+
+def test_runtime_drain_survives_runtime_log_append_failure(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    blocked_log_parent = tmp_path / "blocked-drain-log-parent"
+    blocked_log_parent.write_text("not a directory", encoding="utf-8")
+    bad_log_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "log_path": blocked_log_parent / "relay.jsonl"}
+    )
+
+    status = run_relay_once(bad_log_config, session=EchoAcceptedSession())
+
+    assert status["status"] == "acked"
+    assert status["last_result"]["relay_id"] == enqueued["last_result"]["relay_id"]
+    assert status["runtime_log_write_status"] == "FAIL"
+    assert status["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert Path(bad_log_config.runtime_status_path).is_file()
+    persisted = json.loads(Path(bad_log_config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["runtime_log_write_status"] == "FAIL"
+    assert persisted["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
+
+def test_runtime_scan_result_status_surfaces_runtime_log_append_failure(tmp_path):
+    config = make_config(tmp_path)
+    blocked_log_parent = tmp_path / "blocked-scan-result-log-parent"
+    blocked_log_parent.write_text("not a directory", encoding="utf-8")
+    bad_log_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "log_path": blocked_log_parent / "relay.jsonl"}
+    )
+
+    status = direct_sync_runtime.record_scan_result_status(
+        bad_log_config,
+        scan_result={"status": "enqueued", "last_result": {"relay_id": "relay-fixture"}},
+        scan_enqueued_count=1,
+        scan_attempted_count=2,
+    )
+
+    assert status["runtime_log_write_status"] == "FAIL"
+    assert status["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert status["last_result"]["scan_enqueued_count"] == 1
+    persisted = json.loads(Path(bad_log_config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["runtime_log_write_status"] == "FAIL"
+    assert persisted["last_result"]["scan_attempted_count"] == 2
+
+
+def test_runtime_scan_drain_status_surfaces_runtime_log_append_failure(tmp_path):
+    config = make_config(tmp_path)
+    blocked_log_parent = tmp_path / "blocked-scan-drain-log-parent"
+    blocked_log_parent.write_text("not a directory", encoding="utf-8")
+    bad_log_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "log_path": blocked_log_parent / "relay.jsonl"}
+    )
+
+    status = direct_sync_runtime.record_scan_drain_status(
+        bad_log_config,
+        drain_status={"status": "acked", "last_result": {"relay_id": "relay-fixture"}},
+        scan_status="enqueued",
+        scan_enqueued_count=1,
+        scan_attempted_count=1,
+    )
+
+    assert status["runtime_log_write_status"] == "FAIL"
+    assert status["runtime_log_write_error_code"] == "runtime_log_write_failed"
+    assert status["last_result"]["scan_status"] == "enqueued"
+    persisted = json.loads(Path(bad_log_config.runtime_status_path).read_text(encoding="utf-8"))
+    assert persisted["runtime_log_write_status"] == "FAIL"
+    assert persisted["last_result"]["relay_id"] == "relay-fixture"
+
+
+def test_runtime_enqueue_survives_runtime_status_write_failure(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    blocked_status_parent = tmp_path / "blocked-status-parent"
+    blocked_status_parent.write_text("not a directory", encoding="utf-8")
+    bad_status_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "runtime_status_path": blocked_status_parent / "status.json"}
+    )
+
+    status = enqueue_completed_source_file(bad_status_config, source_file_path=source_file)
+
+    assert status["status"] == "enqueued"
+    assert status["runtime_status_write_status"] == "FAIL"
+    assert status["runtime_status_write_error_code"] == "runtime_status_write_failed"
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
+    assert Path(bad_status_config.log_path).is_file()
+
+
+def test_runtime_scan_result_status_survives_runtime_status_write_failure(tmp_path):
+    config = make_config(tmp_path)
+    blocked_status_parent = tmp_path / "blocked-scan-status-parent"
+    blocked_status_parent.write_text("not a directory", encoding="utf-8")
+    bad_status_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "runtime_status_path": blocked_status_parent / "status.json"}
+    )
+
+    status = direct_sync_runtime.record_scan_result_status(
+        bad_status_config,
+        scan_result={
+            "status": "enqueued",
+            "queue": {"counts": {RELAY_STATUS_PENDING: 1}},
+            "last_result": {"status": "enqueued", "relay_id": "relay-fixture"},
+        },
+        scan_enqueued_count=1,
+        scan_attempted_count=1,
+    )
+
+    assert status["status"] == "enqueued"
+    assert status["runtime_status_write_status"] == "FAIL"
+    assert status["runtime_status_write_error_code"] == "runtime_status_write_failed"
+    assert status["last_result"]["scan_enqueued_count"] == 1
+    assert Path(bad_status_config.log_path).is_file()
+
+
+def test_runtime_scan_drain_status_survives_runtime_status_write_failure(tmp_path):
+    config = make_config(tmp_path)
+    blocked_status_parent = tmp_path / "blocked-scan-drain-status-parent"
+    blocked_status_parent.write_text("not a directory", encoding="utf-8")
+    bad_status_config = DirectSyncRuntimeConfig(
+        **{**config.__dict__, "runtime_status_path": blocked_status_parent / "status.json"}
+    )
+
+    status = direct_sync_runtime.record_scan_drain_status(
+        bad_status_config,
+        drain_status={
+            "status": "acked",
+            "queue": {"counts": {RELAY_STATUS_ACKED: 1}},
+            "last_result": {"status": "acked", "relay_id": "relay-fixture"},
+        },
+        scan_status="enqueued",
+        scan_enqueued_count=1,
+        scan_attempted_count=1,
+    )
+
+    assert status["status"] == "acked"
+    assert status["scan_status"] == "enqueued"
+    assert status["runtime_status_write_status"] == "FAIL"
+    assert status["runtime_status_write_error_code"] == "runtime_status_write_failed"
+    assert status["last_result"]["scan_status"] == "enqueued"
+    assert Path(bad_status_config.log_path).is_file()
+
+
 def test_runtime_repeated_source_scan_reuses_existing_relay_row(tmp_path):
     config = make_config(tmp_path)
     source_file = write_csv(tmp_path)
@@ -371,7 +838,7 @@ def test_runtime_repeated_source_scan_reuses_existing_relay_row(tmp_path):
     first = enqueue_completed_source_file(config, source_file_path=source_file)
     duplicate = enqueue_completed_source_file(config, source_file_path=source_file)
 
-    assert duplicate["status"] == "enqueued"
+    assert duplicate["status"] == "already_queued"
     assert duplicate["last_result"]["relay_id"] == first["last_result"]["relay_id"]
     assert duplicate["last_result"]["deduped_existing"] is True
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
@@ -403,6 +870,32 @@ def test_runtime_backpressure_blocks_enqueue_before_credentials_and_allows_drain
     assert blocked["disk"]["status"] == "not_checked"
     assert drained["status"] == "acked"
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+    assert_runtime_artifacts_are_redacted(blocked_config)
+
+
+def test_runtime_enqueue_backpressure_resets_stale_leases_before_reporting(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueue_completed_source_file(config, source_file_path=source_file)
+    claimed = claim_next_relay_batch(
+        db_path=config.db_path,
+        worker_id="stale-worker",
+        now="2099-01-01T00:00:00Z",
+    )
+    assert claimed is not None
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET lease_expires_at = ? WHERE relay_id = ?",
+            ("2000-01-01T00:00:00Z", claimed.relay_id),
+        )
+        conn.commit()
+    blocked_config = DirectSyncRuntimeConfig(**{**config.__dict__, "max_active_queue_count": 1})
+
+    blocked = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+
+    assert blocked["status"] == "blocked_queue_backpressure"
+    assert blocked["stale_leases_reset"] == 1
+    assert relay_queue_status(config.db_path)["counts"] == {RELAY_STATUS_PENDING: 1}
     assert_runtime_artifacts_are_redacted(blocked_config)
 
 
@@ -442,12 +935,59 @@ def test_runtime_repeated_source_scan_after_ack_does_not_requeue(tmp_path):
     duplicate = enqueue_completed_source_file(config, source_file_path=source_file)
 
     assert acked["status"] == "acked"
+    assert duplicate["status"] == "already_acked"
     assert duplicate["last_result"]["relay_id"] == enqueued["last_result"]["relay_id"]
     assert duplicate["last_result"]["relay_status"] == RELAY_STATUS_ACKED
     assert duplicate["last_result"]["deduped_existing"] is True
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
     assert len(session.calls) == 1
     assert_runtime_artifacts_are_redacted(config)
+
+
+def test_runtime_repeated_source_scan_existing_terminal_blocked_is_not_enqueued(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    first = enqueue_completed_source_file(config, source_file_path=source_file)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET status = ?, last_error_code = ? WHERE relay_id = ?",
+            (RELAY_STATUS_FAILED_PERMANENT, "fixture_failure", first["last_result"]["relay_id"]),
+        )
+        conn.commit()
+
+    duplicate = enqueue_completed_source_file(config, source_file_path=source_file)
+
+    assert duplicate["status"] == "existing_terminal_blocked"
+    assert duplicate["last_result"]["relay_id"] == first["last_result"]["relay_id"]
+    assert duplicate["last_result"]["relay_status"] == RELAY_STATUS_FAILED_PERMANENT
+    assert duplicate["last_result"]["deduped_existing"] is True
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_FAILED_PERMANENT] == 1
+    assert len(list(Path(config.spool_dir).iterdir())) == 1
+
+
+def test_runtime_relay_metadata_invalid_reports_operator_review(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    with sqlite3.connect(config.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        current = conn.execute(
+            "SELECT metadata_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (enqueued["last_result"]["relay_id"],),
+        ).fetchone()
+        metadata = json.loads(current["metadata_json"])
+        metadata["relative_path"] = "legacy_csv/other.csv"
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET metadata_json = ? WHERE relay_id = ?",
+            (json.dumps(metadata, ensure_ascii=False), enqueued["last_result"]["relay_id"]),
+        )
+        conn.commit()
+
+    status = run_relay_once(config, session=EchoAcceptedSession())
+
+    assert status["status"] == "operator_review"
+    assert status["last_result"]["error_code"] == "relay_metadata_invalid"
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
 
 
 def test_runtime_once_acks_batch_and_records_local_status(tmp_path):
@@ -522,6 +1062,13 @@ def test_runtime_retryable_failure_records_retry_wait_and_skips_early_retry(tmp_
     assert idle["status"] == "idle"
     assert early_success.calls == []
 
+    due_success = EchoAcceptedSession()
+    due = run_relay_once(config, session=due_success, now="2999-01-01T00:00:00Z")
+
+    assert due["status"] == "acked"
+    assert len(due_success.calls) == 1
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
 
 def test_runtime_transport_exception_records_retry_wait_and_redacts_status(tmp_path):
     config = make_config(tmp_path)
@@ -551,10 +1098,28 @@ def test_runtime_transport_exception_records_retry_wait_and_redacts_status(tmp_p
     assert "SHOULD-NOT-LEAK" not in status_text
 
 
+def test_runtime_upload_unhandled_exception_reports_operator_review(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+
+    def fail_upload(*args, **kwargs):
+        raise RuntimeError("unexpected upload failure")
+
+    monkeypatch.setattr(direct_sync_push, "upload_source_file", fail_upload)
+
+    status = run_relay_once(config, session=EchoAcceptedSession())
+
+    assert status["status"] == "operator_review"
+    assert status["last_result"]["error_code"] == "upload_unhandled_exception"
+    assert status["last_result"]["relay_id"] == enqueued["last_result"]["relay_id"]
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
+
+
 def test_runtime_committed_with_conflict_moves_to_operator_review(tmp_path):
     config = make_config(tmp_path)
     source_file = write_csv(tmp_path)
-    enqueue_completed_source_file(config, source_file_path=source_file)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
     session = FakeSession(
         FakeResponse(
             200,
@@ -572,6 +1137,8 @@ def test_runtime_committed_with_conflict_moves_to_operator_review(tmp_path):
 
     assert status["status"] == "operator_review"
     assert status["last_result"]["committed"] is True
+    assert status["last_result"]["relay_id"] == enqueued["last_result"]["relay_id"]
+    assert status["last_result"]["producer_client_batch_id"] == "relay-conflict-1"
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
 
 
@@ -610,6 +1177,20 @@ def test_runtime_disk_pressure_blocks_without_claiming_pending_batch(tmp_path):
     assert relay_queue_status(normal_config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
     assert session.calls == []
     assert_runtime_artifacts_are_redacted(blocked_config)
+
+
+def test_runtime_disk_pressure_with_corrupt_db_writes_status_without_raising(tmp_path):
+    config = make_config(tmp_path, min_free_bytes=10**20)
+    Path(config.db_path).write_text("not a sqlite database", encoding="utf-8")
+    session = EchoAcceptedSession()
+
+    status = run_relay_once(config, session=session)
+
+    assert status["status"] == "blocked_disk_pressure"
+    assert status["queue"]["status"] == "unavailable"
+    assert status["queue"]["error_code"] == "relay_queue_db_error"
+    assert "not a sqlite database" not in json.dumps(status)
+    assert session.calls == []
 
 
 def test_runtime_resets_stale_lease_after_reboot_like_pause(tmp_path):

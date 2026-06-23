@@ -104,7 +104,7 @@ python -m py_compile Container_Audit.py
 ### 필수 시스템 디렉토리
 ```bash
 C:\Sync/                           # 필수! 메인 로그 저장소
-├── 이적검사이벤트로그_[작업자]_[날짜].csv    # 이적 검사 로그
+├── 이적작업이벤트로그_[작업자]_[날짜].csv    # 이적 작업 로그
 └── 기타 관련 로그 파일들
 ```
 
@@ -121,6 +121,12 @@ config/
 
 ## 🔍 API 및 이벤트 시스템
 
+> **현행 로그 계약 주의**
+> 현재 `Container_Audit.py`가 `C:\Sync`에 쓰는 원시 CSV는
+> `timestamp,worker_name,event,details` 4개 컬럼이다. 트레이 완료 이벤트는
+> `TRAY_COMPLETE`이며, `event_type`, `worker`, `SESSION_COMPLETE` 중심 설명은
+> 과거 문서나 분석용 정규화 뷰에서만 사용할 수 있다.
+
 ### 주요 이벤트 타입
 ```python
 # 검사 관련 이벤트
@@ -131,7 +137,8 @@ TRAY_PRODUCT_SCANNED    # 트레이 제품 스캔
 
 # 세션 관리 이벤트
 SESSION_START           # 검사 세션 시작
-SESSION_COMPLETE        # 세션 완료
+TRAY_COMPLETE           # 트레이 완료(현행 원시 CSV 완료 이벤트)
+SESSION_COMPLETE        # 레거시/정규화 뷰의 완료 이벤트명
 SESSION_RESET           # 세션 리셋
 TRAY_SUBMIT            # 트레이 제출
 SESSION_RESTORED        # 세션 복구
@@ -196,30 +203,34 @@ def _log_event(self, event_type: str, detail: Dict[str, Any] = None):
     """
     모든 시스템 이벤트를 비동기적으로 로깅합니다.
 
-    이벤트 구조:
+    현행 원시 CSV 이벤트 구조:
     - timestamp: 이벤트 발생 시간
-    - event_type: 이벤트 타입 (위 이벤트 타입 참조)
-    - detail: 이벤트 상세 정보 (JSON 형식)
-    - worker: 현재 작업자
-    - session_id: 현재 세션 ID
+    - worker_name: 현재 작업자
+    - event: 이벤트 타입 (예: TRAY_COMPLETE)
+    - details: 이벤트 상세 정보 (JSON 문자열)
     """
 ```
 
-### CSV 데이터 구조
+### CSV 데이터 구조(현행 원시 로그)
 ```csv
-timestamp,event_type,worker,item_code,item_name,master_label,barcode,scan_count,total_quantity,work_time_sec,details
-2024-12-24 09:15:30,SESSION_START,작업자1,8811012345678,샘플제품,WID20241224091530,,,0,60,0.0,"{""tray_size"": 60}"
-2024-12-24 09:16:45,TRAY_PRODUCT_SCANNED,작업자1,8811012345678,샘플제품,WID20241224091530,8811012345678001,1,60,75.2,"{""scan_time"": ""2024-12-24 09:16:45""}"
-2024-12-24 09:45:20,SESSION_COMPLETE,작업자1,8811012345678,샘플제품,WID20241224091530,,60,60,1790.5,"{""completion_type"": ""full""}"
+timestamp,worker_name,event,details
+2024-12-24T09:15:30.123456,작업자1,SESSION_START,"{""master_label_code"": ""WID20241224091530""}"
+2024-12-24T09:16:45.456789,작업자1,SCAN_OK,"{""barcode"": ""8811012345678001"", ""scan_count"": 1}"
+2024-12-24T09:45:20.123456,작업자1,TRAY_COMPLETE,"{""master_label_code"": ""WID20241224091530"", ""scan_count"": 60, ""tray_capacity"": 60, ""work_time_sec"": 1790.5}"
 ```
+
+분석 프로그램에서 `event_type`, `worker`, `item_code`, `scan_count`,
+`work_time_sec` 같은 평탄화 컬럼이 필요하면 `details` JSON을 파싱해 만든
+정규화 뷰로 다뤄야 한다. 원시 파일 스키마 자체를 과거 확장 컬럼 형식으로
+가정하면 안 된다.
 
 ### 데이터 흐름 처리
 ```python
 # 1. 바코드 스캔 → 이벤트 생성
-process_scan() → _log_event('TRAY_PRODUCT_SCANNED')
+process_scan() → _log_event('SCAN_OK')
 
 # 2. 트레이 완료 → 세션 저장
-submit_current_tray() → _log_event('SESSION_COMPLETE') → CSV 저장
+submit_current_tray() → _log_event('TRAY_COMPLETE') → CSV 저장
 
 # 3. 개별 제품 교환 → 교환 로그
 _complete_exchange() → _log_event('PRODUCT_EXCHANGE_COMPLETED')
@@ -333,7 +344,7 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 ## 📂 파일 구조 및 데이터 관리
 
-* **로그 파일 위치**: 모든 검사 기록 및 이벤트 로그는 `C:\Sync` 폴더에 `이적검사이벤트로그_작업자이름_날짜.csv` 형식으로 저장됩니다.
+* **로그 파일 위치**: 모든 검사 기록 및 이벤트 로그는 `C:\Sync` 폴더에 `이적작업이벤트로그_작업자이름_날짜.csv` 형식으로 저장됩니다.
 
 * **데이터 중요성**: 이 로그 파일들은 모든 작업의 증거 자료이므로 **절대로 임의로 수정하거나 삭제하지 마세요.**
 
