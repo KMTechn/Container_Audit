@@ -53,6 +53,7 @@ from replacement_workflow import (
     compare_replacement_quantities,
 )
 from session_history import load_session_history
+from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
 from storage_utils import atomic_write_json
 from tray_state import (
     TrayStateValidationError,
@@ -472,9 +473,17 @@ class ContainerAudit:
     COLOR_INPUT_BG = "#FFFFFF"
 
     def __init__(self):
+        startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
         self.root = tk.Tk()
+        if startup_geometry:
+            self.root.withdraw()
         self.root.title(self.APP_TITLE)
-        self.root.state('zoomed')
+        if startup_geometry:
+            self.root.geometry(startup_geometry)
+            self.root.update_idletasks()
+            self.root.deiconify()
+        else:
+            self.root.state('zoomed')
         self.root.configure(bg=self.COLOR_BG)
         try:
             self.root.iconbitmap(resource_path(os.path.join('assets', 'logo.ico')))
@@ -586,10 +595,14 @@ class ContainerAudit:
             
     def _setup_paths_and_dirs(self):
         """애플리케이션에서 사용하는 주요 경로와 디렉터리를 설정하고 생성합니다."""
-        self.save_folder = "C:\\Sync"
+        self.storage_paths = build_container_audit_storage_paths(application_path=self.application_path)
+        ensure_container_audit_storage_dirs(self.storage_paths)
+        self.data_root = str(self.storage_paths.data_root)
+        self.save_folder = str(self.storage_paths.events_dir)
+        self.direct_sync_scan_source_dir = str(self.storage_paths.events_dir)
+        self.direct_sync_program_data_root = str(self.storage_paths.direct_sync_root)
         self.config_folder = os.path.join(self.application_path, self.SETTINGS_DIR)
         self.parked_trays_dir = os.path.join(self.application_path, self.PARKED_TRAY_DIR)
-        os.makedirs(self.save_folder, exist_ok=True)
         os.makedirs(self.config_folder, exist_ok=True)
         os.makedirs(self.parked_trays_dir, exist_ok=True)
 
@@ -2660,6 +2673,15 @@ class ContainerAudit:
         if hasattr(self, 'status_label') and self.status_label.winfo_exists():
             self.status_label['text'] = "준비"; self.status_label['fg'] = self.COLOR_TEXT
 
+    def _clear_tray_image_label(self, text: str = "", foreground: Optional[str] = None) -> None:
+        if not (hasattr(self, 'tray_image_label') and self.tray_image_label.winfo_exists()):
+            return
+        self.tray_image_label.image = None
+        options: Dict[str, Any] = {"image": "", "text": text}
+        if foreground is not None:
+            options["foreground"] = foreground
+        self.tray_image_label.config(**options)
+
     def _update_tray_image_display(self):
         if not (hasattr(self, 'tray_image_label') and self.tray_image_label.winfo_exists()): return
         self._apply_left_sidebar_layout()
@@ -2684,14 +2706,13 @@ class ContainerAudit:
                         self.tray_image_label.config(image=photo, text="")
                         self.tray_image_label.image = photo
                     except Exception as e:
-                        self.tray_image_label.config(image=None, text=f"이미지 오류:\n{e}", foreground=self.COLOR_DANGER)
+                        self._clear_tray_image_label(f"이미지 오류:\n{e}", self.COLOR_DANGER)
                 else:
-                    self.tray_image_label.config(image=None, text="이 품목의\n트레이 이미지가\n등록되지 않았습니다.", foreground=self.COLOR_TEXT_SUBTLE)
+                    self._clear_tray_image_label("이 품목의\n트레이 이미지가\n등록되지 않았습니다.", self.COLOR_TEXT_SUBTLE)
             else:
-                self.tray_image_label.config(image=None, text="현품표를 먼저\n스캔해주세요.", foreground=self.COLOR_TEXT_SUBTLE)
+                self._clear_tray_image_label("현품표를 먼저\n스캔해주세요.", self.COLOR_TEXT_SUBTLE)
         else:
-            self.tray_image_label.config(image=None, text="")
-            self.tray_image_label.image = None
+            self._clear_tray_image_label("")
         self._schedule_focus_return()
 
     def park_current_tray(self, *, confirm: bool = True) -> bool:
@@ -3267,8 +3288,10 @@ class ContainerAudit:
         """모든 로컬 로그 파일을 검색하여 교체할 기록을 찾습니다."""
         old_label = self.replacement_context.get('old_label')
 
-        # 1. 검사실 로그 파일 검색 (기본 C:\Sync 폴더)
-        inspection_folder = getattr(self, 'save_folder', '') or "C:\\Sync"
+        # 1. 검사실 로그 파일 검색 (HTTPS-direct 로컬 이벤트 폴더)
+        inspection_folder = getattr(self, 'save_folder', '') or str(
+            build_container_audit_storage_paths(application_path=getattr(self, 'application_path', None)).events_dir
+        )
         try:
             if not os.path.exists(inspection_folder):
                 messagebox.showerror("오류", f"검사실 로그 폴더 '{inspection_folder}'를 찾을 수 없습니다.")

@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 
 from storage_utils import atomic_write_json
 
+FORMULA_PREFIX_CHARS = ("=", "+", "-", "@")
+CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
 
 class WorkerRegistry:
     def __init__(self, registry_path: str):
@@ -20,6 +23,10 @@ class WorkerRegistry:
     def _validate_name(name: str) -> None:
         if not name:
             raise ValueError("작업자 이름은 비워둘 수 없습니다.")
+        if CONTROL_CHAR_RE.search(name):
+            raise ValueError("작업자 이름에는 제어 문자를 사용할 수 없습니다.")
+        if name.startswith(FORMULA_PREFIX_CHARS):
+            raise ValueError("작업자 이름은 = + - @ 문자로 시작할 수 없습니다.")
         if re.search(r'[\\/:*?"<>|]', name):
             raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
 

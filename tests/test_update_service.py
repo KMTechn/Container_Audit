@@ -233,7 +233,13 @@ def test_update_service_rejects_archive_missing_required_files(tmp_path):
         "Container_Audit/assets/KMC_LHD.png",
         "Container_Audit/config/container_audit_settings.json",
         "Container_Audit/tools/direct_sync_relay_install_pack.py",
+        "Container_Audit/tools/register_container_audit_worker_pc.py",
+        "Container_Audit/Container_Audit_DirectSync_Install.exe",
+        "Container_Audit/Container_Audit_DirectSync_Relay.exe",
+        "Container_Audit/Container_Audit_Worker_PC_Register.exe",
         "Container_Audit/direct_sync_runtime.py",
+        "Container_Audit/storage_policy.py",
+        "Container_Audit/storage_utils.py",
     ],
 )
 def test_update_service_rejects_archive_missing_runtime_assets_or_modules(tmp_path, missing_member):

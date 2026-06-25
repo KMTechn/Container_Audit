@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sqlite3
 import sys
 import time
@@ -27,7 +28,7 @@ from direct_sync_runtime import (  # noqa: E402
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
 ALLOWED_SOURCE_SUFFIX = ".csv"
-DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 300
+DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
 DELTA_PROGRESS_STATUSES = {"pending", "leased", "retry_wait", "acked"}
 SCAN_SUCCESS_STATUSES = {"enqueued", "already_queued", "already_acked"}
 SCAN_BLOCKED_STATUSES = {
@@ -37,6 +38,10 @@ SCAN_BLOCKED_STATUSES = {
     "blocked_disk_pressure",
     "existing_terminal_blocked",
 }
+
+
+class ExistingTerminalDeltaBlocked(Exception):
+    pass
 
 
 def _validate_source_glob(pattern: str) -> str:
@@ -152,18 +157,22 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
     ).fetchone()
     if not has_relay_table:
         return 0, ""
+    relay_columns = {
+        row["name"]
+        for row in conn.execute("PRAGMA table_info(direct_sync_relay_batches)").fetchall()
+    }
+    receipt_select = "receipt_json" if "receipt_json" in relay_columns else "'' AS receipt_json"
     source_delta_key = _source_delta_key(source_file)
     rows = conn.execute(
-        """
-        SELECT source_file_path, relative_path, content_sha256, status
+        f"""
+        SELECT source_file_path, relative_path, content_sha256, status, {receipt_select}
         FROM direct_sync_relay_batches
         WHERE relative_path LIKE 'legacy_csv_deltas/%'
         """
     ).fetchall()
     matching_ranges: dict[int, int] = {}
+    blocked_ranges: dict[int, int] = {}
     for row in rows:
-        if str(row["status"] or "") not in DELTA_PROGRESS_STATUSES:
-            continue
         source_path = Path(str(row["source_file_path"] or ""))
         if source_path.parent.name != source_delta_key:
             continue
@@ -173,16 +182,53 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
         start_byte, end_byte = parsed_range
         delta_hash = _delta_content_sha256_for_range(source_file, start_byte, end_byte)
         if delta_hash and delta_hash == str(row["content_sha256"] or ""):
-            matching_ranges[start_byte] = max(matching_ranges.get(start_byte, 0), end_byte)
+            if _delta_relay_row_counts_as_progress(row):
+                matching_ranges[start_byte] = max(matching_ranges.get(start_byte, 0), end_byte)
+            elif _delta_relay_row_blocks_progress(row):
+                blocked_ranges[start_byte] = max(blocked_ranges.get(start_byte, 0), end_byte)
     best_end_byte = 0
     while best_end_byte in matching_ranges:
         next_end_byte = matching_ranges[best_end_byte]
         if next_end_byte <= best_end_byte:
             break
         best_end_byte = next_end_byte
+    if best_end_byte in blocked_ranges:
+        raise ExistingTerminalDeltaBlocked(str(source_file))
     if best_end_byte <= 0:
         return 0, ""
     return best_end_byte, _file_prefix_sha256(source_file, best_end_byte)
+
+
+def _delta_relay_row_counts_as_progress(row: sqlite3.Row) -> bool:
+    status = str(row["status"] or "")
+    if status in DELTA_PROGRESS_STATUSES:
+        return True
+    if status != "operator_review":
+        return False
+    try:
+        receipt = json.loads(str(row["receipt_json"] or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return False
+    if not isinstance(receipt, dict):
+        return False
+    return receipt.get("committed") is True or receipt.get("_local_upload_result_committed") is True
+
+
+def _delta_relay_row_blocks_progress(row: sqlite3.Row) -> bool:
+    status = str(row["status"] or "")
+    if status == "failed_permanent":
+        return True
+    if status != "operator_review":
+        return False
+    try:
+        receipt = json.loads(str(row["receipt_json"] or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return True
+    if not isinstance(receipt, dict):
+        return True
+    committed = receipt.get("committed")
+    local_committed = receipt.get("_local_upload_result_committed")
+    return committed is not True and local_committed is not True
 
 
 def _read_source_scan_state(db_path: str | Path, source_file: Path) -> tuple[int, str]:
@@ -403,7 +449,19 @@ def main(argv: list[str] | None = None) -> int:
                 args.min_source_file_age_seconds,
             ):
                 continue
-            delta = _build_delta_source_file(config, source_file)
+            try:
+                delta = _build_delta_source_file(config, source_file)
+            except ExistingTerminalDeltaBlocked:
+                attempted_count += 1
+                preflight_status = {
+                    "status": "existing_terminal_blocked",
+                    "scan_failed_source_file": str(source_file),
+                    "last_result": {
+                        "status": "existing_terminal_blocked",
+                        "error_code": "existing_terminal_delta_blocked",
+                    },
+                }
+                break
             if delta is None:
                 no_new_count += 1
                 continue

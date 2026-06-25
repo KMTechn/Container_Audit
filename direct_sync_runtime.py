@@ -38,11 +38,13 @@ from direct_sync_push import (
     validate_endpoint_url,
 )
 from direct_sync_operator import read_operator_pause
+from storage_policy import is_legacy_syncthing_path
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
 PRODUCTION_PROFILE_ENV_NAMES = ("APP_ENV", "ENV", "CONTAINER_AUDIT_PRODUCTION", "DIRECT_SYNC_PRODUCTION")
 SECRET_REF_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+WINCRED_TARGET_PREFIX = "KMTech.DirectSync."
 RUNTIME_REDACTED_MESSAGE_MARKERS = (
     "authorization:",
     "bearer ",
@@ -190,6 +192,13 @@ def _read_wincred_secret(target_name: str) -> str:
         advapi32.CredFree(credential_ptr)
 
 
+def _wincred_target_name(name: str) -> str:
+    safe_name = _safe_secret_ref_name(name)
+    if safe_name.startswith(WINCRED_TARGET_PREFIX):
+        return safe_name
+    return f"{WINCRED_TARGET_PREFIX}{safe_name}"
+
+
 def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_dir: str = "") -> str:
     text = str(secret_ref or "").strip()
     if ":" not in text:
@@ -206,12 +215,14 @@ def _resolve_secret_ref(secret_ref: str, *, credential_path: Path, secret_data_d
         return value
     if scheme == "dpapi":
         base_dir = Path(secret_data_dir).expanduser() if secret_data_dir else _default_secret_data_dir(credential_path)
+        if secret_data_dir and is_legacy_syncthing_path(base_dir):
+            raise DirectSyncPushError("secret_data_dir must not point at the legacy Syncthing folder")
         protected_path = base_dir / "secrets" / f"{name}.dpapi"
         if not protected_path.is_file():
             raise DirectSyncPushError("dpapi secret_ref artifact is missing")
         return _dpapi_unprotect_current_user(protected_path.read_bytes()).decode("utf-8")
     if scheme == "wincred":
-        return _read_wincred_secret(f"KMTech.DirectSync.{name}")
+        return _read_wincred_secret(_wincred_target_name(name))
     raise DirectSyncPushError("secret_ref must start with env:, dpapi:, or wincred:")
 
 

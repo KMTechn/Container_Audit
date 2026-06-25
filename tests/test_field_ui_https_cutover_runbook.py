@@ -54,7 +54,10 @@ def test_field_runbook_keeps_live_side_effects_behind_explicit_approval():
     text = _runbook_text()
 
     required = [
-        "운영 `C:\\Sync`, 운영 HTTPS endpoint, 운영 DB는 명시 승인 전까지 사용하지 않는다",
+        "운영 HTTPS endpoint, 운영 DB, 레거시 archive/Syncthing 경로 변경은 배포 단위 승인 전까지 수행하지 않는다",
+        "PC별 수동 승인은 설치 시 self-enrollment로 대체",
+        "PC별 별도 key 발급/승인은 요구하지 않는다",
+        "direct-sync `--scan-source-dir`는 새 로컬 `events` 폴더만 가리켜야 하며 `C:\\Sync` 또는 Syncthing 공유 폴더를 스캔 소스로 지정하지 않는다",
         "direct_sync_relay_install_pack.py --apply",
         "test endpoint",
         "Stop And Rollback Triggers",

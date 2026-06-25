@@ -54,7 +54,7 @@ Container Audit (2,215 Lines)
 
 **운영체제**: Windows 10 이상
 **Python**: 3.11+
-**필수 디렉토리**: `C:\Sync` (로그 저장소)
+**기본 데이터 디렉토리**: `%LOCALAPPDATA%\KMTech\ContainerAudit\events` (로컬 이벤트 저장소)
 
 ### 의존성 설치
 
@@ -92,7 +92,7 @@ python -m py_compile Container_Audit.py
 ### 📊 실시간 데이터 처리
 - **실시간 현황판**: 진행률, 당일 통계, 평균 작업시간 표시
 - **자동 저장**: 트레이 상태 실시간 저장, 예기치 않은 종료시 복구
-- **CSV 로깅**: 모든 검사 이벤트를 `C:\Sync`에 자동 저장
+- **CSV 로깅**: 모든 검사 이벤트를 로컬 이벤트 폴더에 먼저 저장하고 HTTPS 릴레이가 같은 폴더를 업로드
 
 ### 🔄 자동 업데이트 시스템
 - **GitHub API 연동**: 릴리즈 자동 감지 및 다운로드
@@ -103,9 +103,15 @@ python -m py_compile Container_Audit.py
 
 ### 필수 시스템 디렉토리
 ```bash
-C:\Sync/                           # 필수! 메인 로그 저장소
-├── 이적작업이벤트로그_[작업자]_[날짜].csv    # 이적 작업 로그
-└── 기타 관련 로그 파일들
+%LOCALAPPDATA%\KMTech\ContainerAudit/
+├── events/                                  # 앱이 직접 쓰는 로컬 이벤트/상태 저장소
+│   ├── 이적작업이벤트로그_[작업자]_[날짜].csv  # 이적 작업 로그
+│   └── _current_tray_state_[PC].json        # 비정상 종료 복구 상태
+└── direct_sync/                             # HTTPS 릴레이 큐/스풀/상태 저장소
+    ├── queue/
+    ├── spool/
+    ├── status/
+    └── logs/
 ```
 
 ### 설정 및 자산 파일
@@ -122,7 +128,7 @@ config/
 ## 🔍 API 및 이벤트 시스템
 
 > **현행 로그 계약 주의**
-> 현재 `Container_Audit.py`가 `C:\Sync`에 쓰는 원시 CSV는
+> 현재 `Container_Audit.py`가 로컬 이벤트 폴더에 쓰는 원시 CSV는
 > `timestamp,worker_name,event,details` 4개 컬럼이다. 트레이 완료 이벤트는
 > `TRAY_COMPLETE`이며, `event_type`, `worker`, `SESSION_COMPLETE` 중심 설명은
 > 과거 문서나 분석용 정규화 뷰에서만 사용할 수 있다.
@@ -344,7 +350,11 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 ## 📂 파일 구조 및 데이터 관리
 
-* **로그 파일 위치**: 모든 검사 기록 및 이벤트 로그는 `C:\Sync` 폴더에 `이적작업이벤트로그_작업자이름_날짜.csv` 형식으로 저장됩니다.
+* **로그 파일 위치**: 모든 검사 기록 및 이벤트 로그는 `%LOCALAPPDATA%\KMTech\ContainerAudit\events` 폴더에 `이적작업이벤트로그_작업자이름_날짜.csv` 형식으로 저장됩니다.
+
+* **배포 저장 원칙**: 배포 버전은 Syncthing 폴더가 없는 것을 전제로 합니다. `CONTAINER_AUDIT_DATA_ROOT`로 데이터 루트를 바꿀 수 있지만, `C:\Sync` 계열 경로는 기본적으로 거부됩니다.
+
+* **작업자 PC 자동 등록**: HTTPS direct-sync 배포에서는 설치 시 `register_container_audit_worker_pc.py --self-enroll`이 PC별 `source_host_id`, `producer_install_id`, `producer_id`, `key_id`를 자동 생성/등록합니다. 서버가 설치 PC의 IP 대역을 허용하거나 배포용 enrollment token을 허용하면 PC별 수동 승인 없이 바로 WinCred에 HMAC secret을 저장하고 업로드 준비 상태가 됩니다. 설치 후 토큰을 새로 주입하는 후처리는 필요하지 않습니다. raw secret은 manifest, credential JSON, report 파일에 저장하지 않습니다.
 
 * **데이터 중요성**: 이 로그 파일들은 모든 작업의 증거 자료이므로 **절대로 임의로 수정하거나 삭제하지 마세요.**
 
@@ -353,8 +363,8 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 ## 🔒 보안 및 규정 준수
 
 ### 데이터 보안
-- **로컬 데이터 저장**: 모든 데이터는 `C:\Sync`에 로컬 저장
-- **네트워크 통신**: GitHub API 연결시에만 외부 통신
+- **로컬 데이터 저장**: 모든 데이터는 먼저 로컬 이벤트 폴더에 저장되어 서버 연결 없이도 당일 작업 조회와 복구 가능
+- **네트워크 통신**: 배포 전환 후 direct-sync HTTPS 릴레이가 서버 endpoint로 이벤트 CSV를 업로드
 - **바코드 검증**: 입력 데이터 검증으로 보안 위협 방지
 - **로그 무결성**: CSV 형식으로 변조 탐지 가능
 

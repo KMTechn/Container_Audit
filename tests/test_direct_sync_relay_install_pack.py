@@ -8,6 +8,7 @@ import pytest
 import direct_sync_push
 from tools import direct_sync_relay_install_pack as install_pack
 from tools.direct_sync_relay_install_pack import _quote_cmd
+from storage_policy import DATA_ROOT_ENV
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,16 @@ def test_install_pack_report_write_uses_unique_atomic_temp_paths(tmp_path, monke
     assert observed[0][1] == "install-report.json"
     assert json.loads(target.read_text(encoding="utf-8"))["step"] == 2
     assert list(tmp_path.glob("install-report.json.tmp.*")) == []
+
+
+def test_install_pack_frozen_default_app_root_uses_executable_directory(tmp_path, monkeypatch):
+    frozen_exe = tmp_path / "release" / "Container_Audit_DirectSync_Install.exe"
+    frozen_exe.parent.mkdir()
+    frozen_exe.write_bytes(b"exe")
+    monkeypatch.setattr(install_pack.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(install_pack.sys, "executable", str(frozen_exe))
+
+    assert install_pack._default_app_root() == str(frozen_exe.parent.resolve())
 
 
 def make_manifest_and_credential(tmp_path):
@@ -75,6 +86,162 @@ def make_manifest_and_credential(tmp_path):
     return manifest_path, credential_path
 
 
+def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    local_app_data = tmp_path / "LocalAppData"
+    report_path = tmp_path / "install-pack-default-storage.json"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
+    assert report["status"] == "DRY_RUN"
+    assert report["container_audit_storage"]["defaulted_program_data_root"] is True
+    assert report["container_audit_storage"]["defaulted_scan_source_dir"] is True
+    assert report["container_audit_storage"]["defaulted_source_glob"] is True
+    assert report["program_data_root"] == str(expected_root / "direct_sync")
+    assert report["source_scan"]["scan_source_dir"] == str(expected_root / "events")
+    assert report["source_scan"]["source_globs"] == ["이적작업이벤트로그_*.csv"]
+    assert report["source_scan_validation"]["status"] == "PASS"
+    assert str(expected_root / "events") in report["runner_command"]
+    assert str(expected_root / "direct_sync") in report["runtime_paths"]["db_path"]
+
+
+def test_install_pack_blocks_syncthing_data_root_with_report(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-syncthing-block.json"
+    monkeypatch.setenv(DATA_ROOT_ENV, r"C:\Sync")
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 2
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert report["status"] == "BLOCKED"
+    assert report["container_audit_storage"]["status"] == "FAIL"
+    assert "legacy Syncthing folder" in report["blocked_reason"]
+
+
+def test_install_pack_blocks_explicit_syncthing_program_data_root(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-explicit-syncthing-program-data.json"
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--program-data-root",
+            r"C:\Sync\container-audit-direct-sync",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert report["runtime_path_boundary"]["status"] == "FAIL"
+    assert "legacy Syncthing folder" in report["blocked_reason"]
+
+
+def test_install_pack_blocks_explicit_syncthing_scan_source_dir(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-explicit-syncthing-source.json"
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--scan-source-dir",
+            r"C:\Sync",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert report["source_scan_validation"]["status"] == "FAIL"
+    assert report["source_scan_validation"]["syncthing_path_rejected"] is True
+    assert "legacy Syncthing folder" in report["blocked_reason"]
+
+
+def test_install_pack_blocks_explicit_syncthing_manifest_and_credential_paths(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-explicit-syncthing-artifacts.json"
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            r"C:\Sync\producer_manifest.json",
+            "--credential-path",
+            r"C:\Sync\credential.json",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert manifest_path.is_file()
+    assert credential_path.is_file()
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert report["explicit_path_boundary"]["status"] == "FAIL"
+    assert "producer_manifest_path must not point at the legacy Syncthing folder" in report["blocked_reason"]
+    assert "credential_path must not point at the legacy Syncthing folder" in report["blocked_reason"]
+
+
+def test_install_pack_blocks_syncthing_report_path_without_writing_there(tmp_path, monkeypatch, capsys):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            r"C:\Sync\install-report.json",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    report = json.loads(captured.out)
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert report["explicit_path_boundary"]["status"] == "FAIL"
+    assert "report_path must not point at the legacy Syncthing folder" in report["blocked_reason"]
+
+
 def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     (tmp_path / "sync").mkdir()
@@ -94,7 +261,7 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
             "--source-glob",
             "이적작업이벤트로그_*.csv",
             "--min-source-file-age-seconds",
-            "300",
+            "30",
             "--report-path",
             str(report_path),
         ],
@@ -117,7 +284,7 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     assert report["source_scan"]["enabled"] is True
     assert report["source_scan_validation"]["status"] == "PASS"
     assert report["source_scan"]["max_enqueue_files"] == 100
-    assert report["source_scan"]["min_source_file_age_seconds"] == 300
+    assert report["source_scan"]["min_source_file_age_seconds"] == 30
     assert report["source_scan"]["drain_after_scan"] is True
     assert report["runtime_path_boundary"]["status"] == "PASS"
     assert report["runtime_path_boundary"]["all_runtime_paths_under_program_data_root"] is True
@@ -136,11 +303,134 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     assert "--max-active-queue-age-seconds" in report["runner_command"]
     assert "--min-source-file-age-seconds" in report["runner_command"]
     assert "--drain-after-scan" in report["runner_command"]
-    assert "300" in report["runner_command"]
+    assert "30" in report["runner_command"]
     assert "schtasks.exe" == report["scheduled_task_create_command"][0]
+    tr_index = report["scheduled_task_create_command"].index("/TR")
+    assert report["scheduled_task_create_command"][tr_index + 1] == report["scheduled_task_launcher_command"]
+    assert len(report["scheduled_task_create_command"][tr_index + 1]) <= 261
+    assert report["scheduled_task_wrapper_path"].endswith("direct-sync-relay-container-audit.cmd")
+    assert report["scheduled_task_launcher_path"].endswith("direct-sync-relay-container-audit.vbs")
+    assert report["scheduled_task_uses_hidden_launcher"] is True
+    assert "wscript.exe" in report["scheduled_task_launcher_command"]
     assert str(credential_path.resolve()) in report["runner_command"]
     assert "install-pack-secret" not in report_text
     assert report["secret_redaction"]["raw_secret_in_report"] is False
+
+
+def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-apply-raw-secret-blocked.json"
+    commands = []
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.delenv("ENV", raising=False)
+    monkeypatch.delenv("CONTAINER_AUDIT_PRODUCTION", raising=False)
+    monkeypatch.delenv("DIRECT_SYNC_PRODUCTION", raising=False)
+    monkeypatch.setattr(
+        install_pack,
+        "_run_command",
+        lambda command: commands.append(command) or {"returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--confirm-production-install",
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    report_text = report_path.read_text(encoding="utf-8-sig")
+    assert exit_code == 2
+    assert commands == []
+    assert report["status"] == "BLOCKED"
+    assert report["credential"]["status"] == "FAIL"
+    assert report["credential"]["raw_secret_configured"] is True
+    assert report["credential"]["raw_secret_forbidden"] is True
+    assert "raw credential secret is disabled for production apply" in report["blocked_reason"]
+    assert "install-pack-secret" not in report_text
+
+
+def test_install_pack_prefers_bundled_relay_executable_without_python_dependency(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    app_root = tmp_path / "release-app"
+    app_root.mkdir()
+    bundled_relay = app_root / "Container_Audit_DirectSync_Relay.exe"
+    bundled_relay.write_bytes(b"relay-exe")
+    local_app_data = tmp_path / "LocalAppData"
+    report_path = tmp_path / "install-pack-bundled-relay.json"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = install_pack.main(
+        [
+            "--app-root",
+            str(app_root),
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 0
+    assert report["status"] == "DRY_RUN"
+    assert report["use_bundled_relay_executable"] is True
+    assert report["bundled_relay_executable"]["status"] == "PASS"
+    assert report["runner_command"][0] == str(bundled_relay.resolve())
+    assert "direct_sync_relay_runner.py" not in report["runner_command"]
+    assert report["app_root_dependencies"]["status"] == "SKIPPED"
+    assert report["python_executable"]["status"] == "SKIPPED"
+    assert report["python_runtime_imports"]["status"] == "SKIPPED"
+
+
+def test_install_pack_honors_explicit_python_exe_even_when_bundled_relay_exists(tmp_path):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    app_root = tmp_path / "release-app"
+    (app_root / "tools").mkdir(parents=True)
+    (app_root / "tools" / "direct_sync_relay_runner.py").write_text("", encoding="utf-8")
+    (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
+    (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
+    (app_root / "direct_sync_runtime.py").write_text("", encoding="utf-8")
+    (app_root / "storage_policy.py").write_text("", encoding="utf-8")
+    (app_root / "Container_Audit_DirectSync_Relay.exe").write_bytes(b"relay-exe")
+    report_path = tmp_path / "install-pack-explicit-python.json"
+
+    exit_code = install_pack.main(
+        [
+            "--app-root",
+            str(app_root),
+            "--python-exe",
+            sys.executable,
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--program-data-root",
+            str(tmp_path / "ProgramData"),
+            "--scan-source-dir",
+            str(tmp_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 0
+    assert report["use_bundled_relay_executable"] is False
+    assert report["python_exe_explicit"] is True
+    assert report["runner_command"][0] == str(Path(sys.executable).resolve())
+    assert report["runner_command"][1].endswith("direct_sync_relay_runner.py")
 
 
 @pytest.mark.parametrize(
@@ -240,9 +530,9 @@ def test_install_pack_source_scan_defaults_to_file_age_grace_period(tmp_path):
 
     assert completed.returncode == 0
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
-    assert report["source_scan"]["min_source_file_age_seconds"] == 300
+    assert report["source_scan"]["min_source_file_age_seconds"] == 30
     assert "--min-source-file-age-seconds" in report["runner_command"]
-    assert "300" in report["runner_command"]
+    assert "30" in report["runner_command"]
 
 
 @pytest.mark.parametrize(
@@ -425,6 +715,7 @@ def test_install_pack_dry_run_skips_python_runtime_import_probe_by_default(tmp_p
     (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_runtime.py").write_text("raise RuntimeError('broken runtime import')\n", encoding="utf-8")
+    (app_root / "storage_policy.py").write_text("", encoding="utf-8")
     report_path = tmp_path / "install-pack-runtime-import-skipped.json"
     completed = subprocess.run(
         [
@@ -482,6 +773,7 @@ def test_install_pack_blocks_python_that_cannot_import_runtime_modules_when_prob
     (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_runtime.py").write_text("raise RuntimeError('broken runtime import')\n", encoding="utf-8")
+    (app_root / "storage_policy.py").write_text("", encoding="utf-8")
     report_path = tmp_path / "install-pack-runtime-import.json"
     completed = subprocess.run(
         [
@@ -855,6 +1147,24 @@ def test_install_pack_quotes_scheduled_task_command_for_windows_paths_with_space
     assert '"C:\\ProgramData\\KM Tech\\credential.json"' in command
 
 
+def test_install_pack_writes_utf8_wrapper_script_for_long_runner_command(tmp_path):
+    wrapper_path = tmp_path / "direct-sync-relay-container-audit.cmd"
+    runner_parts = [
+        r"C:\Program Files\Python 3.12\python.exe",
+        r"C:\Company Apps\Container Audit\tools\direct_sync_relay_runner.py",
+        "--source-glob",
+        "이적작업이벤트로그_*.csv",
+    ]
+
+    install_pack._write_scheduled_task_wrapper(wrapper_path, runner_parts)
+
+    text = wrapper_path.read_text(encoding="utf-8")
+    assert text.startswith("@echo off\nchcp 65001 >nul\n")
+    assert "direct_sync_relay_runner.py" in text
+    assert "이적작업이벤트로그_*.csv" in text
+    assert text.rstrip().endswith("exit /b %ERRORLEVEL%")
+
+
 def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     report_path = tmp_path / "install-pack-blocked.json"
@@ -884,6 +1194,10 @@ def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
 
 def test_install_pack_apply_writes_applying_report_before_running_command(tmp_path, monkeypatch):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    credential = json.loads(credential_path.read_text(encoding="utf-8"))
+    credential.pop("secret")
+    credential["secret_ref"] = "wincred:KMTech.DirectSync.ContainerAudit.PC-APPLY"
+    credential_path.write_text(json.dumps(credential, ensure_ascii=False), encoding="utf-8")
     report_path = tmp_path / "install-pack-applying.json"
     observed_statuses = []
 
@@ -899,6 +1213,8 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
             str(manifest_path),
             "--credential-path",
             str(credential_path),
+            "--program-data-root",
+            str(tmp_path / "ProgramData"),
             "--report-path",
             str(report_path),
             "--apply",
@@ -911,6 +1227,18 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     assert report["status"] == "PASS"
     assert report["command_result"]["returncode"] == 0
+    wrapper_path = Path(report["scheduled_task_wrapper_path"])
+    assert wrapper_path.is_file()
+    wrapper_text = wrapper_path.read_text(encoding="utf-8")
+    assert "direct_sync_relay_runner.py" in wrapper_text
+    launcher_path = Path(report["scheduled_task_launcher_path"])
+    assert launcher_path.is_file()
+    launcher_text = launcher_path.read_text(encoding="utf-8-sig")
+    assert "WScript.Shell" in launcher_text
+    assert str(wrapper_path.resolve()) in launcher_text
+    tr_index = report["scheduled_task_create_command"].index("/TR")
+    assert report["scheduled_task_create_command"][tr_index + 1] == report["scheduled_task_launcher_command"]
+    assert len(report["scheduled_task_create_command"][tr_index + 1]) <= 261
 
 
 def test_install_pack_uninstall_skips_create_only_preflight_without_manifest_or_credential(tmp_path, monkeypatch):

@@ -87,9 +87,15 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/tools/direct_sync_relay_runner.py",
         "Container_Audit/tools/direct_sync_relay_install_pack.py",
         "Container_Audit/tools/direct_sync_relay_operator.py",
+        "Container_Audit/tools/register_container_audit_worker_pc.py",
+        "Container_Audit/Container_Audit_DirectSync_Install.exe",
+        "Container_Audit/Container_Audit_DirectSync_Relay.exe",
+        "Container_Audit/Container_Audit_Worker_PC_Register.exe",
         "Container_Audit/direct_sync_push.py",
         "Container_Audit/direct_sync_runtime.py",
         "Container_Audit/direct_sync_operator.py",
+        "Container_Audit/storage_policy.py",
+        "Container_Audit/storage_utils.py",
     }
 )
 ALLOWED_RELEASE_ASSET_HOSTS = frozenset(

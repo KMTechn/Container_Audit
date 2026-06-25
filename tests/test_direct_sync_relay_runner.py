@@ -6,7 +6,13 @@ from pathlib import Path
 
 import pytest
 
-from direct_sync_push import RELAY_STATUS_ACKED, RELAY_STATUS_FAILED_PERMANENT, RELAY_STATUS_PENDING, relay_queue_status
+from direct_sync_push import (
+    RELAY_STATUS_ACKED,
+    RELAY_STATUS_FAILED_PERMANENT,
+    RELAY_STATUS_OPERATOR_REVIEW,
+    RELAY_STATUS_PENDING,
+    relay_queue_status,
+)
 import tools.direct_sync_relay_runner as runner_module
 from tools.direct_sync_relay_runner import main
 
@@ -258,6 +264,98 @@ def test_runner_scan_source_content_append_enqueues_new_delta(tmp_path, capsys):
     second_payload = Path(rows[1]["spooled_file_path"]).read_text(encoding="utf-8")
     assert "BC-2" in second_payload
     assert "BC-1" not in second_payload
+
+
+def test_runner_scan_source_committed_operator_review_delta_allows_later_append(tmp_path, capsys):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
+    with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
+        conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?,
+                receipt_json = ?,
+                last_error_code = ?
+            WHERE relay_id = ?
+            """,
+            (
+                RELAY_STATUS_OPERATOR_REVIEW,
+                json.dumps(
+                    {
+                        "client_batch_id": first_row["relay_id"],
+                        "committed": True,
+                        "_local_upload_result_committed": True,
+                        "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+                    }
+                ),
+                "producer_receipt_contains_quarantine",
+                first_row["relay_id"],
+            ),
+        )
+        conn.commit()
+    with csv_path.open("a", encoding="utf-8") as file:
+        file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+
+    assert "direct_sync_relay_status=enqueued" in output
+    assert "direct_sync_scan_enqueued_count=1" in output
+    assert "direct_sync_scan_attempted_count=1" in output
+    assert "direct_sync_scan_failed_source_file=" not in output
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {
+        RELAY_STATUS_OPERATOR_REVIEW: 1,
+        RELAY_STATUS_PENDING: 1,
+    }
+    rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert "/bytes-0-" in rows[0]["relative_path"].replace("\\", "/")
+    assert "/bytes-0-" not in rows[1]["relative_path"].replace("\\", "/")
+    second_payload = Path(rows[1]["spooled_file_path"]).read_text(encoding="utf-8")
+    assert "BC-2" in second_payload
+    assert "BC-1" not in second_payload
+
+
+def test_runner_scan_source_uncommitted_operator_review_delta_still_blocks(tmp_path, capsys):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    first_row = relay_rows(tmp_path / "relay.sqlite3")[0]
+    with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
+        conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?,
+                receipt_json = ?,
+                last_error_code = ?
+            WHERE relay_id = ?
+            """,
+            (
+                RELAY_STATUS_OPERATOR_REVIEW,
+                json.dumps({"client_batch_id": first_row["relay_id"], "committed": False}),
+                "relay_metadata_invalid",
+                first_row["relay_id"],
+            ),
+        )
+        conn.commit()
+    with csv_path.open("a", encoding="utf-8") as file:
+        file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
+
+    assert main(args) == 2
+    output = capsys.readouterr().out
+
+    assert "direct_sync_relay_status=existing_terminal_blocked" in output
+    assert "direct_sync_scan_enqueued_count=0" in output
+    assert "direct_sync_scan_attempted_count=1" in output
+    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
 
 
 def test_runner_scan_source_records_watermark_after_durable_ack(tmp_path, capsys, monkeypatch):

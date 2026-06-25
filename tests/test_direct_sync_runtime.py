@@ -287,6 +287,26 @@ def test_load_credentials_blocks_env_secret_ref_in_production_profile(monkeypatc
         load_credentials_from_json(path)
 
 
+def test_load_credentials_blocks_dpapi_secret_data_dir_in_legacy_syncthing_folder(tmp_path):
+    path = tmp_path / "credential-dpapi-syncthing.json"
+    path.write_text(
+        json.dumps(
+            {
+                "producer_id": "producer-runtime-1",
+                "key_id": "key-runtime-1",
+                "secret_ref": "dpapi:CONTAINER_RUNTIME_SECRET",
+                "secret_data_dir": r"C:\Sync\producer-secrets",
+                "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DirectSyncPushError, match="legacy Syncthing folder"):
+        load_credentials_from_json(path)
+
+
 def test_load_credentials_rejects_duplicate_json_keys(tmp_path):
     path = tmp_path / "credential-duplicate-key.json"
     path.write_text(

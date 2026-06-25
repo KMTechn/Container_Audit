@@ -28,17 +28,111 @@ from direct_sync_push import (  # noqa: E402
     validate_endpoint_url,
 )
 from direct_sync_runtime import _production_profile_enabled, _safe_secret_ref_name  # noqa: E402
+from storage_policy import (  # noqa: E402
+    build_container_audit_storage_paths,
+    ensure_container_audit_storage_dirs,
+    is_legacy_syncthing_path,
+)
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
-DEFAULT_PROGRAM_DATA_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
-DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 300
+DEFAULT_SOURCE_GLOB = "이적작업이벤트로그_*.csv"
+DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
+BUNDLED_RELAY_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
 MAX_TASK_NAME_LENGTH = 128
 TASK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
+def _default_app_root() -> str:
+    if getattr(sys, "frozen", False):
+        return str(Path(sys.executable).resolve().parent)
+    return str(ROOT)
+
+
 def _quote_cmd(parts: Sequence[str]) -> str:
     return subprocess.list2cmdline([str(part) for part in parts])
+
+
+def _scheduled_task_wrapper_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
+    return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.cmd"
+
+
+def _scheduled_task_launcher_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
+    return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.vbs"
+
+
+def _vbs_string(value: str | os.PathLike[str]) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _write_scheduled_task_wrapper(path: Path, runner_parts: Sequence[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    command = _quote_cmd(runner_parts)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    content = "@echo off\nchcp 65001 >nul\n" + command + "\nexit /b %ERRORLEVEL%\n"
+    try:
+        temp_path.write_text(content, encoding="utf-8", newline="\r\n")
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _scheduled_task_launcher_content(wrapper_path: str | os.PathLike[str]) -> str:
+    return "\r\n".join(
+        [
+            'Set shell = CreateObject("WScript.Shell")',
+            'comspec = shell.ExpandEnvironmentStrings("%ComSpec%")',
+            f"runner = {_vbs_string(Path(wrapper_path).expanduser().resolve())}",
+            'command = """" & comspec & """ /d /c """ & runner & """"',
+            "exitCode = shell.Run(command, 0, True)",
+            "WScript.Quit exitCode",
+            "",
+        ]
+    )
+
+
+def _write_scheduled_task_launcher(path: Path, wrapper_path: str | os.PathLike[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        temp_path.write_text(_scheduled_task_launcher_content(wrapper_path), encoding="utf-8-sig", newline="\r\n")
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
+    paths = build_container_audit_storage_paths(application_path=args.app_root)
+    defaulted_program_data_root = not bool(str(getattr(args, "program_data_root", "") or "").strip())
+    defaulted_scan_source_dir = not bool(str(getattr(args, "scan_source_dir", "") or "").strip())
+    defaulted_source_glob = not bool(getattr(args, "source_glob", []) or [])
+
+    if defaulted_program_data_root:
+        args.program_data_root = str(paths.direct_sync_root)
+    if defaulted_scan_source_dir:
+        args.scan_source_dir = str(paths.events_dir)
+    if defaulted_source_glob:
+        args.source_glob = [DEFAULT_SOURCE_GLOB]
+
+    if not bool(getattr(args, "uninstall", False)):
+        ensure_container_audit_storage_dirs(paths)
+
+    return {
+        "data_root": str(paths.data_root),
+        "events_dir": str(paths.events_dir),
+        "direct_sync_root": str(paths.direct_sync_root),
+        "defaulted_program_data_root": defaulted_program_data_root,
+        "defaulted_scan_source_dir": defaulted_scan_source_dir,
+        "defaulted_source_glob": defaulted_source_glob,
+    }
 
 
 def _write_json(path: Path, payload: dict) -> None:
@@ -73,6 +167,21 @@ def _task_name_report(task_name: str) -> dict:
             "task_name must be 1-128 characters and contain only letters, digits, underscore, dash, or dot"
         )
     return report
+
+
+def _bundled_relay_executable_path(app_root: str | os.PathLike[str]) -> Path:
+    return Path(app_root).expanduser().resolve() / BUNDLED_RELAY_EXE_NAME
+
+
+def _bundled_relay_executable_report(app_root: str | os.PathLike[str]) -> dict:
+    path = _bundled_relay_executable_path(app_root)
+    exists = path.is_file()
+    return {
+        "status": "PASS" if exists else "MISSING",
+        "blocked_reason": "" if exists else "bundled relay executable is not present",
+        "path": str(path),
+        "exists": exists,
+    }
 
 
 def _runtime_paths(program_data_root: str | os.PathLike[str]) -> dict[str, str]:
@@ -111,6 +220,13 @@ def _runtime_path_boundary_report(program_data_root: str | os.PathLike[str], pat
             "program_data_root": str(resolved_root),
             "all_runtime_paths_under_program_data_root": False,
         }
+    if is_legacy_syncthing_path(resolved_root):
+        return {
+            "status": "FAIL",
+            "blocked_reason": "program_data_root must not point at the legacy Syncthing folder",
+            "program_data_root": str(resolved_root),
+            "all_runtime_paths_under_program_data_root": False,
+        }
     escaped_paths: list[str] = []
     resolved_paths: dict[str, str] = {}
     for name, path in paths.items():
@@ -136,6 +252,7 @@ def _app_root_dependency_report(app_root: str | os.PathLike[str]) -> dict:
         "direct_sync_runtime": root / "direct_sync_runtime.py",
         "direct_sync_push": root / "direct_sync_push.py",
         "direct_sync_operator": root / "direct_sync_operator.py",
+        "storage_policy": root / "storage_policy.py",
     }
     missing = [name for name, path in required.items() if not path.is_file()]
     return {
@@ -262,6 +379,31 @@ def _load_json_object_report(path: str | os.PathLike[str], *, label: str) -> tup
     }, payload
 
 
+def _legacy_path_block_report(field_name: str, path: str | os.PathLike[str]) -> dict | None:
+    raw_path = str(path or "").strip()
+    if raw_path and is_legacy_syncthing_path(raw_path):
+        return {
+            "field": field_name,
+            "path": str(Path(raw_path).expanduser().resolve(strict=False)),
+            "blocked_reason": f"{field_name} must not point at the legacy Syncthing folder",
+        }
+    return None
+
+
+def _explicit_path_boundary_report(args: argparse.Namespace) -> dict:
+    checks = [
+        _legacy_path_block_report("producer_manifest_path", args.producer_manifest_path),
+        _legacy_path_block_report("credential_path", args.credential_path),
+        _legacy_path_block_report("report_path", args.report_path),
+    ]
+    unsafe_paths = [check for check in checks if check]
+    return {
+        "status": "PASS" if not unsafe_paths else "FAIL",
+        "blocked_reason": "" if not unsafe_paths else "; ".join(item["blocked_reason"] for item in unsafe_paths),
+        "unsafe_paths": unsafe_paths,
+    }
+
+
 def _producer_manifest_report(path: str | os.PathLike[str]) -> dict:
     report, payload = _load_json_object_report(path, label="producer_manifest")
     if payload is None:
@@ -299,7 +441,7 @@ def _producer_manifest_report(path: str | os.PathLike[str]) -> dict:
     return report
 
 
-def _credential_report(path: str | os.PathLike[str]) -> dict:
+def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool = False) -> dict:
     report, payload = _load_json_object_report(path, label="credential")
     if payload is None:
         return report
@@ -325,6 +467,8 @@ def _credential_report(path: str | os.PathLike[str]) -> dict:
         failures.append("credential file is missing secret or secret_ref")
     if has_secret and production_profile_enabled:
         failures.append("raw credential secret is disabled in production")
+    elif has_secret and forbid_raw_secret:
+        failures.append("raw credential secret is disabled for production apply; use secret_ref")
     secret_ref_scheme = ""
     if has_secret_ref:
         if ":" not in secret_ref:
@@ -355,6 +499,7 @@ def _credential_report(path: str | os.PathLike[str]) -> dict:
             "raw_secret_configured": has_secret,
             "secret_ref_scheme": secret_ref_scheme,
             "production_profile_enabled": production_profile_enabled,
+            "raw_secret_forbidden": forbid_raw_secret,
             "endpoint_url_valid": endpoint_valid,
         }
     )
@@ -386,7 +531,9 @@ def _validate_source_scan_config(source_scan: dict) -> dict:
         return {"status": "PASS", "enabled": False}
     failures: list[str] = []
     scan_source_dir = Path(source_scan["scan_source_dir"])
-    if not scan_source_dir.is_dir():
+    if is_legacy_syncthing_path(scan_source_dir):
+        failures.append("scan_source_dir must not point at the legacy Syncthing folder")
+    elif not scan_source_dir.is_dir():
         failures.append("scan_source_dir does not exist or is not a directory")
     if source_scan["max_enqueue_files"] < 0:
         failures.append("max_enqueue_files must not be negative")
@@ -404,6 +551,7 @@ def _validate_source_scan_config(source_scan: dict) -> dict:
         "scan_source_dir_exists": scan_source_dir.is_dir(),
         "source_globs_valid": not any("source glob" in failure for failure in failures),
         "source_scan_limits_valid": not any("must not be negative" in failure for failure in failures),
+        "syncthing_path_rejected": any("legacy Syncthing folder" in failure for failure in failures),
     }
     if failures:
         report["blocked_reason"] = "; ".join(failures)
@@ -446,10 +594,17 @@ def _validate_backpressure_config(backpressure: dict) -> dict:
 
 def build_install_plan(args: argparse.Namespace) -> dict:
     uninstall = bool(args.uninstall)
+    container_audit_storage = getattr(args, "container_audit_storage", {})
     probe_python_runtime = bool(getattr(args, "probe_python_runtime", False) or getattr(args, "apply", False))
     task_name_validation = _task_name_report(args.task_name)
+    explicit_path_boundary = _explicit_path_boundary_report(args)
     app_root = Path(args.app_root).resolve()
     runner_script = app_root / "tools" / "direct_sync_relay_runner.py"
+    bundled_relay_executable = _bundled_relay_executable_report(app_root)
+    python_exe_explicit = bool(getattr(args, "python_exe_explicit", False))
+    use_bundled_relay_executable = (
+        not uninstall and not python_exe_explicit and bundled_relay_executable["status"] == "PASS"
+    )
     paths = _runtime_paths(args.program_data_root)
     runtime_path_boundary = (
         _skipped_report("uninstall does not use runtime data paths")
@@ -459,26 +614,34 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     app_root_dependencies = (
         _skipped_report("uninstall does not use application runtime dependencies")
         if uninstall
-        else _app_root_dependency_report(app_root)
+        else (
+            _skipped_report("bundled relay executable supplies scheduled-task runtime")
+            if use_bundled_relay_executable
+            else _app_root_dependency_report(app_root)
+        )
     )
     python_executable = (
         _skipped_report("uninstall does not launch the Python relay runtime")
         if uninstall
-        else _python_executable_report(args.python_exe)
-    )
-    python_runtime_imports = (
-        _skipped_report("uninstall does not import the Python relay runtime")
-        if uninstall
         else (
-            _python_runtime_import_report(args.python_exe, app_root)
-            if probe_python_runtime and python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS"
-            else _skipped_report(
-                "python runtime import check requires --probe-python-runtime or production apply"
-                if python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS"
-                else "python runtime import check requires valid python_exe and app_root dependencies"
-            )
+            _skipped_report("bundled relay executable selected")
+            if use_bundled_relay_executable
+            else _python_executable_report(args.python_exe)
         )
     )
+    if uninstall:
+        python_runtime_imports = _skipped_report("uninstall does not import the Python relay runtime")
+    elif use_bundled_relay_executable:
+        python_runtime_imports = _skipped_report("bundled relay executable selected")
+    elif probe_python_runtime and python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS":
+        python_runtime_imports = _python_runtime_import_report(args.python_exe, app_root)
+    else:
+        reason = (
+            "python runtime import check requires --probe-python-runtime or production apply"
+            if python_executable["status"] == "PASS" and app_root_dependencies["status"] == "PASS"
+            else "python runtime import check requires valid python_exe and app_root dependencies"
+        )
+        python_runtime_imports = _skipped_report(reason)
     producer_manifest = (
         _skipped_report("uninstall does not read the producer manifest")
         if uninstall
@@ -487,7 +650,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     credential = (
         _skipped_report("uninstall does not read producer credentials")
         if uninstall
-        else _credential_report(args.credential_path)
+        else _credential_report(args.credential_path, forbid_raw_secret=bool(getattr(args, "apply", False)))
     )
     source_scan = _source_scan_config(args)
     source_scan_validation = (
@@ -503,38 +666,48 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     )
     runner_parts: list[str] = []
     create_command: list[str] = []
+    wrapper_path = ""
+    launcher_path = ""
+    launcher_command = ""
     if not uninstall:
-        python_exe = python_executable["python_exe"]
-        runner_parts = [
-            python_exe,
+        runner_parts = [bundled_relay_executable["path"]] if use_bundled_relay_executable else [
+            python_executable["python_exe"],
             str(runner_script),
-            "--db-path",
-            paths["db_path"],
-            "--spool-dir",
-            paths["spool_dir"],
-            "--producer-manifest-path",
-            str(Path(args.producer_manifest_path).resolve()),
-            "--credential-path",
-            str(Path(args.credential_path).resolve()),
-            "--upload-status-dir",
-            paths["upload_status_dir"],
-            "--runtime-status-path",
-            paths["runtime_status_path"],
-            "--log-path",
-            paths["log_path"],
-            "--operator-pause-path",
-            paths["operator_pause_path"],
-            "--worker-id",
-            args.task_name,
-            "--min-free-bytes",
-            str(max(0, int(args.min_free_bytes))),
-            "--max-active-queue-count",
-            str(backpressure["max_active_queue_count"]),
-            "--max-active-queue-age-seconds",
-            str(backpressure["max_active_queue_age_seconds"]),
         ]
+        runner_parts.extend(
+            [
+                "--db-path",
+                paths["db_path"],
+                "--spool-dir",
+                paths["spool_dir"],
+                "--producer-manifest-path",
+                str(Path(args.producer_manifest_path).resolve()),
+                "--credential-path",
+                str(Path(args.credential_path).resolve()),
+                "--upload-status-dir",
+                paths["upload_status_dir"],
+                "--runtime-status-path",
+                paths["runtime_status_path"],
+                "--log-path",
+                paths["log_path"],
+                "--operator-pause-path",
+                paths["operator_pause_path"],
+                "--worker-id",
+                args.task_name,
+                "--min-free-bytes",
+                str(max(0, int(args.min_free_bytes))),
+                "--max-active-queue-count",
+                str(backpressure["max_active_queue_count"]),
+                "--max-active-queue-age-seconds",
+                str(backpressure["max_active_queue_age_seconds"]),
+            ]
+        )
         _append_source_scan_args(runner_parts, source_scan)
-        task_action = _quote_cmd(runner_parts)
+        wrapper = _scheduled_task_wrapper_path(args.program_data_root, args.task_name)
+        wrapper_path = str(wrapper)
+        launcher = _scheduled_task_launcher_path(args.program_data_root, args.task_name)
+        launcher_path = str(launcher)
+        launcher_command = _quote_cmd(["wscript.exe", "//B", "//NoLogo", launcher_path])
         create_command = [
             "schtasks.exe",
             "/Create",
@@ -545,7 +718,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
             "/MO",
             str(max(1, int(args.minute_interval))),
             "/TR",
-            task_action,
+            launcher_command,
             "/F",
         ]
     delete_command = ["schtasks.exe", "/Delete", "/TN", args.task_name, "/F"]
@@ -556,9 +729,14 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "uninstall": uninstall,
         "task_name": args.task_name,
         "task_name_validation": task_name_validation,
+        "explicit_path_boundary": explicit_path_boundary,
+        "container_audit_storage": container_audit_storage,
         "program_data_root": str(Path(args.program_data_root).expanduser().resolve()),
         "runtime_paths": paths,
         "runtime_path_boundary": runtime_path_boundary,
+        "bundled_relay_executable": bundled_relay_executable,
+        "use_bundled_relay_executable": use_bundled_relay_executable,
+        "python_exe_explicit": python_exe_explicit,
         "app_root_dependencies": app_root_dependencies,
         "python_executable": python_executable,
         "python_runtime_imports": python_runtime_imports,
@@ -570,6 +748,11 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "backpressure_validation": backpressure_validation,
         "runner_script": str(runner_script),
         "runner_command": runner_parts,
+        "scheduled_task_wrapper_path": wrapper_path,
+        "scheduled_task_wrapper_command": _quote_cmd([wrapper_path]),
+        "scheduled_task_launcher_path": launcher_path,
+        "scheduled_task_launcher_command": launcher_command,
+        "scheduled_task_uses_hidden_launcher": True,
         "scheduled_task_create_command": create_command,
         "scheduled_task_delete_command": delete_command,
         "secret_redaction": {
@@ -603,10 +786,11 @@ def _run_command(command: Sequence[str]) -> dict:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay scheduled-task install pack")
-    parser.add_argument("--app-root", default=str(Path(__file__).resolve().parents[1]))
+    parser.add_argument("--app-root", default=_default_app_root())
     parser.add_argument("--python-exe", default=sys.executable)
-    parser.add_argument("--program-data-root", default=DEFAULT_PROGRAM_DATA_ROOT)
+    parser.add_argument("--program-data-root", default="")
     parser.add_argument("--producer-manifest-path", default="")
     parser.add_argument("--credential-path", default="")
     parser.add_argument("--task-name", default=DEFAULT_TASK_NAME)
@@ -623,12 +807,54 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--confirm-production-install", action="store_true")
     parser.add_argument("--probe-python-runtime", action="store_true")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(raw_argv)
+    args.python_exe_explicit = "--python-exe" in raw_argv
+    report_path_policy = _legacy_path_block_report("report_path", args.report_path)
+    if report_path_policy:
+        plan = {
+            "report_version": "container-audit-direct-sync-install-pack-v1",
+            "status": "BLOCKED",
+            "blocked_reason": report_path_policy["blocked_reason"],
+            "explicit_path_boundary": {
+                "status": "FAIL",
+                "blocked_reason": report_path_policy["blocked_reason"],
+                "unsafe_paths": [report_path_policy],
+            },
+        }
+        print(json.dumps(plan, ensure_ascii=False, sort_keys=True))
+        return 2
+    try:
+        args.container_audit_storage = _apply_container_audit_storage_defaults(args)
+    except ValueError as exc:
+        plan = {
+            "report_version": "container-audit-direct-sync-install-pack-v1",
+            "status": "BLOCKED",
+            "blocked_reason": str(exc),
+            "container_audit_storage": {
+                "status": "FAIL",
+                "blocked_reason": str(exc),
+            },
+        }
+        _write_json(Path(args.report_path), plan)
+        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        return 2
 
     plan = build_install_plan(args)
     if plan["task_name_validation"]["status"] != "PASS":
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = plan["task_name_validation"]["blocked_reason"]
+        _write_json(Path(args.report_path), plan)
+        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        return 2
+    if plan["explicit_path_boundary"]["status"] != "PASS":
+        plan["status"] = "BLOCKED"
+        plan["blocked_reason"] = plan["explicit_path_boundary"]["blocked_reason"]
+        _write_json(Path(args.report_path), plan)
+        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        return 2
+    if args.apply and not args.confirm_production_install:
+        plan["status"] = "BLOCKED"
+        plan["blocked_reason"] = "apply requires --confirm-production-install"
         _write_json(Path(args.report_path), plan)
         print(f"install_pack_report={Path(args.report_path).resolve()}")
         return 2
@@ -639,13 +865,13 @@ def main(argv: list[str] | None = None) -> int:
             _write_json(Path(args.report_path), plan)
             print(f"install_pack_report={Path(args.report_path).resolve()}")
             return 2
-        if plan["app_root_dependencies"]["status"] != "PASS":
+        if plan["app_root_dependencies"]["status"] != "PASS" and not plan.get("use_bundled_relay_executable"):
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["app_root_dependencies"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
             print(f"install_pack_report={Path(args.report_path).resolve()}")
             return 2
-        if plan["python_executable"]["status"] != "PASS":
+        if plan["python_executable"]["status"] != "PASS" and not plan.get("use_bundled_relay_executable"):
             plan["status"] = "BLOCKED"
             plan["blocked_reason"] = plan["python_executable"]["blocked_reason"]
             _write_json(Path(args.report_path), plan)
@@ -682,17 +908,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"install_pack_report={Path(args.report_path).resolve()}")
             return 2
 
-    if args.apply and not args.confirm_production_install:
-        plan["status"] = "BLOCKED"
-        plan["blocked_reason"] = "apply requires --confirm-production-install"
-        _write_json(Path(args.report_path), plan)
-        print(f"install_pack_report={Path(args.report_path).resolve()}")
-        return 2
-
     if args.apply:
         command = plan["scheduled_task_delete_command"] if args.uninstall else plan["scheduled_task_create_command"]
         plan["status"] = "APPLYING"
         _write_json(Path(args.report_path), plan)
+        if not args.uninstall:
+            _write_scheduled_task_wrapper(Path(plan["scheduled_task_wrapper_path"]), plan["runner_command"])
+            _write_scheduled_task_launcher(
+                Path(plan["scheduled_task_launcher_path"]),
+                plan["scheduled_task_wrapper_path"],
+            )
         plan["command_result"] = _run_command(command)
         plan["status"] = "PASS" if plan["command_result"]["returncode"] == 0 else "FAIL"
 
