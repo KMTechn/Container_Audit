@@ -21,6 +21,43 @@ ALLOWED_SETTINGS_KEYS = {
 FORBIDDEN_RUNTIME_NAMES = {"worker_registry.json", "best_time_records.json"}
 FORBIDDEN_RUNTIME_DIRS = {"parked_trays"}
 ALLOWED_RELEASE_CONFIG_NAMES = {SETTINGS_FILE}
+FORBIDDEN_TEXT_MARKERS = (
+    "secret",
+    "token",
+    "api_key",
+    "apikey",
+    "hmac",
+    "producer",
+    "credential",
+    "endpoint",
+    "http://",
+    "https://",
+    "localhost",
+    "127.0.0.1",
+    "175.45.200.171",
+    "fault",
+    "debug",
+)
+
+
+def _reject_forbidden_text_marker(value: str, *, path: str) -> None:
+    lowered = value.lower()
+    matched = [marker for marker in FORBIDDEN_TEXT_MARKERS if marker in lowered]
+    if matched:
+        raise ValueError(f"{path} contains forbidden release marker: {matched[0]}")
+
+
+def _reject_forbidden_markers(value: Any, *, path: str) -> None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if isinstance(key, str):
+                _reject_forbidden_text_marker(key, path=f"{path}.{key}")
+            _reject_forbidden_markers(item, path=f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_forbidden_markers(item, path=f"{path}[{index}]")
+    elif isinstance(value, str):
+        _reject_forbidden_text_marker(value, path=path)
 
 
 def _require_int_mapping(value: Any, *, name: str) -> None:
@@ -38,6 +75,7 @@ def _require_int_mapping(value: Any, *, name: str) -> None:
 def validate_settings_payload(payload: Any) -> None:
     if not isinstance(payload, dict):
         raise ValueError(f"{SETTINGS_FILE} must be a JSON object")
+    _reject_forbidden_markers(payload, path=SETTINGS_FILE)
     unknown_keys = sorted(set(payload) - ALLOWED_SETTINGS_KEYS)
     if unknown_keys:
         raise ValueError(f"{SETTINGS_FILE} contains unknown keys: {', '.join(unknown_keys)}")

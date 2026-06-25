@@ -27,6 +27,7 @@ from direct_sync_push import (
     RELAY_STATUS_PENDING,
     RELAY_STATUS_RETRY_WAIT,
     RelaySpoolFileError,
+    SIGNATURE_VERSION,
     UploadResult,
     drain_one_relay_batch,
     enqueue_source_file_for_relay,
@@ -42,6 +43,24 @@ from direct_sync_operator import read_operator_pause
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
 PRODUCTION_PROFILE_ENV_NAMES = ("APP_ENV", "ENV", "CONTAINER_AUDIT_PRODUCTION", "DIRECT_SYNC_PRODUCTION")
 SECRET_REF_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+RUNTIME_REDACTED_MESSAGE_MARKERS = (
+    "authorization:",
+    "bearer ",
+    "canonical signed request",
+    "hmac_key",
+    "producer_signature",
+    "raw_payload",
+    "raw_secret",
+    "receipt_json",
+    "secret_hex",
+    "should-not-leak",
+    "source_file_bytes",
+    "source_file_text",
+    "x-producer-signature",
+)
+AUTHORIZATION_TEXT_RE = re.compile(r"(?i)authorization\s*:\s*[^\r\n\t ]+(?:[ \t]+[^\r\n\t ]+)?")
+SENSITIVE_ASSIGNMENT_RE = re.compile(r"(?i)\b(secret|token|signature)\s*=\s*[^\s,;]+")
+CONTROL_TEXT_RE = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 @dataclass(frozen=True)
@@ -276,7 +295,20 @@ def _safe_relay_queue_status(db_path: str | os.PathLike[str]) -> dict[str, Any]:
 def _runtime_error_details(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, (sqlite3.DatabaseError, OSError)):
         return "relay_queue_db_error", f"relay queue database error: {exc.__class__.__name__}"
-    return "direct_sync_runtime_error", str(exc)
+    return "direct_sync_runtime_error", _redact_runtime_error_message(str(exc))
+
+
+def _redact_runtime_error_message(message: str) -> str:
+    text = str(message or "")
+    normalized = text.strip().lower()
+    if any(marker in normalized for marker in RUNTIME_REDACTED_MESSAGE_MARKERS):
+        return "[REDACTED]"
+    for sensitive in (SIGNATURE_VERSION, "X-Producer-Signature"):
+        text = text.replace(sensitive, "[redacted]")
+    text = AUTHORIZATION_TEXT_RE.sub("[redacted]", text)
+    text = SENSITIVE_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    text = CONTROL_TEXT_RE.sub(" ", text)
+    return text.strip()[:500]
 
 
 def _parse_utc_text(value: str) -> datetime | None:
@@ -585,10 +617,10 @@ def enqueue_completed_source_file(
         error_code, error_message = _runtime_error_details(exc)
         if isinstance(exc, RelaySpoolFileError):
             error_code = "relay_spool_filesystem_error"
-            error_message = str(exc)
+            error_message = _redact_runtime_error_message(str(exc))
         elif isinstance(exc, DirectSyncPushError):
             error_code = "direct_sync_enqueue_error"
-            error_message = str(exc)
+            error_message = _redact_runtime_error_message(str(exc))
         status = _write_runtime_status(
             config,
             status="enqueue_error",

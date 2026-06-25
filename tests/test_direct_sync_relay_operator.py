@@ -197,6 +197,122 @@ def test_operator_status_cli_exits_blocked_when_dead_letter_rows_require_attenti
     assert persisted["dead_letter_counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
 
 
+def test_operator_status_cli_can_include_runtime_last_failure(tmp_path, capsys):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueue_completed_source_file(config, source_file_path=source_file)
+    run_relay_once(
+        config,
+        session=FakeSession(
+            FakeResponse(
+                503,
+                {
+                    "committed": False,
+                    "retryable": True,
+                    "error": {"code": "temporary_unavailable", "message": "try later"},
+                },
+            )
+        ),
+    )
+    report_path = tmp_path / "reports" / "status-with-runtime.json"
+
+    exit_code = main(
+        [
+            "status",
+            "--db-path",
+            str(config.db_path),
+            "--operator-pause-path",
+            str(config.operator_pause_path),
+            "--runtime-status-path",
+            str(config.runtime_status_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    output = capsys.readouterr().out
+    persisted = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 0
+    assert "direct_sync_operator_status=PASS" in output
+    assert persisted["queue"]["counts"][RELAY_STATUS_RETRY_WAIT] == 1
+    assert persisted["runtime"]["available"] is True
+    assert persisted["runtime"]["status"] == "retry_wait"
+    assert persisted["runtime"]["payload"]["last_result"]["status"] == "retry_wait"
+    assert persisted["runtime"]["payload"]["last_result"]["error_code"] == "temporary_unavailable"
+
+
+def test_operator_status_cli_redacts_sensitive_runtime_status_payload(tmp_path, capsys):
+    config = make_config(tmp_path)
+    report_path = tmp_path / "reports" / "status-redacted.json"
+    runtime_path = Path(config.runtime_status_path)
+    runtime_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path.write_text(
+        json.dumps(
+            {
+                "status": "retry_wait",
+                "updated_at": "2026-06-25T00:00:00Z",
+                "last_result": {
+                    "status": "retry_wait",
+                    "error_code": "transport_error",
+                    "error_message": (
+                        "Authorization: Bearer SHOULD-NOT-LEAK "
+                        "X-Producer-Signature: PRODUCER-HMAC-SHA256-V1 RAW-FREEFORM-SIGNATURE; "
+                        "secret=RAW-SECRET token=RAW-TOKEN signature=RAW-SIGNATURE "
+                        "hmac=RAW-HMAC api_key=RAW-API-KEY password=RAW-PASSWORD"
+                    ),
+                    "headers": {
+                        "X-Producer-Key-Id": "key-container-01",
+                        "X-Producer-Signature": "PRODUCER-HMAC-SHA256-V1 SHOULD-NOT-LEAK",
+                    },
+                    "receipt_json": {"raw": "SHOULD-NOT-LEAK"},
+                },
+                "raw_payload": "SHOULD-NOT-LEAK",
+                "nested": [{"token": "SHOULD-NOT-LEAK"}],
+                "content_sha256": "a" * 64,
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "status",
+            "--db-path",
+            str(config.db_path),
+            "--operator-pause-path",
+            str(config.operator_pause_path),
+            "--runtime-status-path",
+            str(runtime_path),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    capsys.readouterr()
+    persisted = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    persisted_json = json.dumps(persisted, ensure_ascii=False)
+    assert exit_code == 0
+    assert persisted["runtime"]["available"] is True
+    assert persisted["runtime"]["status"] == "retry_wait"
+    assert "SHOULD-NOT-LEAK" not in persisted_json
+    assert "RAW-SECRET" not in persisted_json
+    assert "RAW-TOKEN" not in persisted_json
+    assert "RAW-SIGNATURE" not in persisted_json
+    assert "RAW-FREEFORM-SIGNATURE" not in persisted_json
+    assert "RAW-HMAC" not in persisted_json
+    assert "RAW-API-KEY" not in persisted_json
+    assert "RAW-PASSWORD" not in persisted_json
+    assert "Authorization: Bearer" not in persisted_json
+    assert "X-Producer-Signature:" not in persisted_json
+    assert persisted["runtime"]["payload"]["last_result"]["headers"]["X-Producer-Key-Id"] == "key-container-01"
+    assert persisted["runtime"]["payload"]["last_result"]["headers"]["X-Producer-Signature"] == "[redacted]"
+    assert persisted["runtime"]["payload"]["last_result"]["receipt_json"] == "[redacted]"
+    assert persisted["runtime"]["payload"]["raw_payload"] == "[redacted]"
+    assert persisted["runtime"]["payload"]["nested"][0]["token"] == "[redacted]"
+    assert persisted["runtime"]["payload"]["content_sha256"] == "a" * 64
+
+
 def test_operator_pause_preserves_mutation_when_audit_write_fails(tmp_path):
     config = make_config(tmp_path)
     audit_parent = tmp_path / "audit-as-file"
@@ -530,6 +646,8 @@ def test_operator_retry_dead_blocks_operator_review_rows(tmp_path):
                     "client_batch_id": relay_id,
                     "committed": True,
                     "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
                     "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
                 },
             )

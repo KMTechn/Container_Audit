@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from tools import build_release_config
 from tools import check_release_config
 
 
@@ -83,3 +84,93 @@ def test_release_config_rejects_malformed_settings_shape(tmp_path):
 
     with pytest.raises(ValueError, match="scale_factor"):
         check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_rejects_forbidden_markers_inside_allowed_settings(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "scale_factor": 1.0,
+            "column_widths_validator": {
+                "endpoint_url": 120,
+            },
+            "paned_window_sash_positions": {
+                "debug_fault_injection": 1,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="forbidden release marker"):
+        check_release_config.validate_release_config(config_dir)
+
+
+@pytest.mark.parametrize(
+    "marker",
+    [
+        "secret",
+        "api_key",
+        "hmac",
+        "producer",
+        "credential",
+        "http://localhost:8089",
+        "https://175.45.200.171/api/producer-ingest/v1/source-file",
+    ],
+)
+def test_release_config_rejects_secret_and_endpoint_markers_even_when_shape_is_valid(tmp_path, marker):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "scale_factor": 1.0,
+            "column_widths_validator": {
+                f"summary_tree_{marker}": 120,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="forbidden release marker"):
+        check_release_config.validate_release_config(config_dir)
+
+
+def test_build_release_config_copies_only_valid_settings_and_excludes_runtime_artifacts(tmp_path):
+    source_config = tmp_path / "runtime-config"
+    write_settings(
+        source_config,
+        {
+            "scale_factor": 1.0,
+            "column_widths_validator": {"summary_tree_item_code": 120},
+            "paned_window_sash_positions": {"0": 500},
+        },
+    )
+    (source_config / "parked_trays").mkdir()
+    (source_config / "parked_trays" / "parked_tray_1.json").write_text("{}", encoding="utf-8")
+    (source_config / "validator_settings.json").write_text("{}", encoding="utf-8")
+    (source_config / "credential.json").write_text('{"secret": "do-not-copy"}', encoding="utf-8")
+
+    output_config = tmp_path / "release-config"
+
+    result = build_release_config.build_release_config(source_config, output_config)
+
+    assert result == output_config
+    assert sorted(child.name for child in output_config.iterdir()) == ["container_audit_settings.json"]
+    assert not (output_config / "parked_trays").exists()
+    assert not (output_config / "validator_settings.json").exists()
+    assert not (output_config / "credential.json").exists()
+    check_release_config.validate_release_config(output_config)
+
+
+def test_build_release_config_fails_closed_when_settings_contains_forbidden_marker(tmp_path):
+    source_config = tmp_path / "runtime-config"
+    write_settings(
+        source_config,
+        {
+            "scale_factor": 1.0,
+            "column_widths_validator": {
+                "https://175.45.200.171/api/producer-ingest/v1/source-file": 120,
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="forbidden release marker"):
+        build_release_config.build_release_config(source_config, tmp_path / "release-config")

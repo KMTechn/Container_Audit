@@ -161,6 +161,64 @@ def test_find_replacement_source_entry_skips_malformed_matching_completion_row(t
     assert found["original_details"]["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
 
 
+def test_find_replacement_source_entry_treats_injection_strings_as_data_and_skips_malformed_rows(tmp_path):
+    log_path = tmp_path / "이적작업이벤트로그_홍길동_20260624.csv"
+    malicious_item = 'AAA2270730100"; DROP TABLE replacement_lookup; --'
+    old_label = f"PHS=1|CLC={malicious_item}|QT=2"
+    dangerous_barcodes = [
+        '=HYPERLINK("https://evil.invalid","replacement")',
+        '<script>alert("replacement")</script>',
+    ]
+    malformed_details = {
+        "master_label_code": old_label,
+        "item_code": malicious_item,
+        "scan_count": 2,
+        "tray_capacity": 2,
+        "barcode_count": 2,
+        "product_barcodes": ["only-one"],
+        "scanned_product_barcodes": ["only-one"],
+    }
+    valid_details = {
+        "master_label_code": old_label,
+        "item_code": malicious_item,
+        "scan_count": 2,
+        "tray_capacity": 2,
+        "barcode_count": 2,
+        "product_barcodes": dangerous_barcodes,
+        "scanned_product_barcodes": dangerous_barcodes,
+    }
+    with log_path.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["timestamp", "worker_name", "event", "details"])
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-24T09:00:00",
+                "worker_name": "홍길동",
+                "event": "TRAY_COMPLETE",
+                "details": json.dumps(malformed_details, ensure_ascii=False),
+            }
+        )
+        writer.writerow(
+            {
+                "timestamp": "2026-06-24T09:05:00",
+                "worker_name": "홍길동",
+                "event": "TRAY_COMPLETE",
+                "details": json.dumps(valid_details, ensure_ascii=False),
+            }
+        )
+
+    found = replacement_log_lookup.find_replacement_source_entry(
+        log_path,
+        old_label,
+        stable_hash_func=stable_hash,
+    )
+
+    assert found is not None
+    assert found["found_row_index"] == 3
+    assert found["original_details"]["item_code"] == malicious_item
+    assert found["original_details"]["product_barcodes"] == dangerous_barcodes
+
+
 def test_find_replacement_source_entry_uses_unsuperseded_replacement_projection(tmp_path):
     log_path = tmp_path / "이적작업이벤트로그_홍길동_20260623.csv"
     old_label = "PHS=1|CLC=AAA2270730100|QT=1"

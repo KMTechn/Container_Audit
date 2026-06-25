@@ -527,6 +527,8 @@ class ContainerAudit:
         self.stopwatch_job: Optional[str] = None
         self.idle_check_job: Optional[str] = None
         self.focus_return_job: Optional[str] = None
+        self.log_write_errors: List[str] = []
+        self.last_log_write_error: Optional[str] = None
         
         self.log_queue: queue.Queue = queue.Queue()
         self.log_file_path: Optional[str] = None
@@ -2580,10 +2582,21 @@ class ContainerAudit:
                     continue
                 append_event_log_entry(log_file_path, log_entry)
             except Exception as e:
-                print(f"로그 파일 쓰기 오류: {e}")
+                error_message = f"로그 파일 쓰기 오류: {e}"
+                self._record_log_write_error(error_message)
+                print(error_message)
             finally:
                 if hasattr(self.log_queue, "task_done"):
                     self.log_queue.task_done()
+
+    def _record_log_write_error(self, message: str) -> None:
+        error_message = str(message or "").strip()
+        if not error_message:
+            return
+        if not hasattr(self, "log_write_errors") or self.log_write_errors is None:
+            self.log_write_errors = []
+        self.last_log_write_error = error_message
+        self.log_write_errors.append(error_message)
 
     def _log_event(
         self,
@@ -2612,7 +2625,9 @@ class ContainerAudit:
                 append_event_log_entry(self.log_file_path, log_entry, durable=True)
                 return True
             except Exception as e:
-                print(f"로그 파일 쓰기 오류: {e}")
+                error_message = f"로그 파일 쓰기 오류: {e}"
+                self._record_log_write_error(error_message)
+                print(error_message)
                 return False
         self.log_queue.put({'log_file_path': self.log_file_path, 'log_entry': log_entry})
         return True

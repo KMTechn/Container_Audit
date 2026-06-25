@@ -1,5 +1,7 @@
+import concurrent.futures
 import json
 import sqlite3
+import threading
 from pathlib import Path
 
 import pytest
@@ -109,6 +111,7 @@ class EchoAcceptedSession:
             200,
             {
                 "request_id": f"request-{metadata['client_batch_id']}",
+                "upload_id": f"request-{metadata['client_batch_id']}",
                 "client_batch_id": metadata["client_batch_id"],
                 "server_source_file_id": (
                     f"{metadata['source_host_id']}/{metadata['producer_role']}/"
@@ -116,18 +119,74 @@ class EchoAcceptedSession:
                 ),
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
 
 
-def make_manifest(tmp_path):
+class ReplayAwareAcceptedSession:
+    def __init__(self):
+        self.calls = []
+        self._seen_by_idempotency_key = {}
+        self._lock = threading.Lock()
+
+    def post(self, url, *, data, files, headers, timeout, allow_redirects=None):
+        file_name, file_handle, content_type = files["file"]
+        metadata = json.loads(data["metadata"])
+        file_bytes = file_handle.read()
+        idempotency_key = metadata["idempotency_key"]
+        with self._lock:
+            prior_request_id = self._seen_by_idempotency_key.get(idempotency_key)
+            replayed = prior_request_id is not None
+            request_id = prior_request_id or f"request-{metadata['client_batch_id']}"
+            self._seen_by_idempotency_key.setdefault(idempotency_key, request_id)
+            self.calls.append(
+                {
+                    "url": url,
+                    "metadata": data["metadata"],
+                    "headers": dict(headers),
+                    "timeout": timeout,
+                    "allow_redirects": allow_redirects,
+                    "file_name": file_name,
+                    "file_bytes": file_bytes,
+                    "content_type": content_type,
+                    "replayed": replayed,
+                }
+            )
+        return FakeResponse(
+            200,
+            {
+                "request_id": request_id,
+                "upload_id": request_id,
+                "client_batch_id": metadata["client_batch_id"],
+                "server_source_file_id": (
+                    f"{metadata['source_host_id']}/{metadata['producer_role']}/"
+                    f"{metadata['stream_name']}/{metadata['relative_path']}"
+                ),
+                "committed": True,
+                "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
+                "totals": {"inserted": 0 if replayed else 1, "replayed": 1 if replayed else 0, "quarantined": 0, "errors": 0},
+            },
+        )
+
+
+def make_manifest(
+    tmp_path,
+    *,
+    pc_id="CONTAINER-PC01",
+    source_host_id="container-runtime-host-1",
+    producer_install_id="install-container-runtime-1",
+):
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
         "pc_identity": {
-            "pc_id": "CONTAINER-PC01",
-            "source_host_id": "container-runtime-host-1",
-            "producer_install_id": "install-container-runtime-1",
+            "pc_id": pc_id,
+            "source_host_id": source_host_id,
+            "producer_install_id": producer_install_id,
         },
         "apps": ["ContainerAudit"],
         "streams": [
@@ -144,24 +203,30 @@ def make_manifest(tmp_path):
     return manifest, path
 
 
-def write_csv(tmp_path):
-    path = tmp_path / "container_runtime.csv"
+def write_csv(tmp_path, *, name="container_runtime.csv", barcode="BC-1"):
+    path = tmp_path / name
     path.write_text(
         "timestamp,worker_name,event,details\n"
-        "2026-06-22T00:00:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-1\"\" }\"\n",
+        f"2026-06-22T00:00:00,worker,SCAN_OK,\"{{ \"\"product_barcode\"\": \"\"{barcode}\"\" }}\"\n",
         encoding="utf-8",
     )
     return path
 
 
-def write_credential_file(tmp_path):
+def write_credential_file(
+    tmp_path,
+    *,
+    producer_id="producer-runtime-1",
+    key_id="key-runtime-1",
+    secret="runtime-secret",
+):
     path = tmp_path / "credential.json"
     path.write_text(
         json.dumps(
             {
-                "producer_id": "producer-runtime-1",
-                "key_id": "key-runtime-1",
-                "secret": "runtime-secret",
+                "producer_id": producer_id,
+                "key_id": key_id,
+                "secret": secret,
                 "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
             },
             ensure_ascii=False,
@@ -276,6 +341,38 @@ def test_runtime_records_credential_load_errors_for_enqueue_and_drain(tmp_path, 
     assert Path(bad_config.runtime_status_path).is_file()
     assert Path(bad_config.log_path).is_file()
     assert relay_queue_status(config.db_path)["counts"] == {}
+
+
+def test_runtime_credential_error_redacts_sensitive_assignments(monkeypatch, tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+
+    def fail_credentials(*args, **kwargs):
+        raise DirectSyncPushError(
+            "credential load failed secret=DO_NOT_EXPOSE token=DO_NOT_EXPOSE "
+            "signature=DO_NOT_EXPOSE\nnext"
+        )
+
+    monkeypatch.setattr(direct_sync_runtime, "load_credentials_from_json", fail_credentials)
+
+    enqueue_status = enqueue_completed_source_file(config, source_file_path=source_file)
+    run_status = run_relay_once(config, session=EchoAcceptedSession())
+
+    assert enqueue_status["status"] == "enqueue_error"
+    assert enqueue_status["error_code"] == "direct_sync_enqueue_error"
+    assert run_status["status"] == "runtime_error"
+    assert run_status["error_code"] == "direct_sync_runtime_error"
+    for status in (enqueue_status, run_status):
+        assert "DO_NOT_EXPOSE" not in status["error_message"]
+        assert "\n" not in status["error_message"]
+        assert "secret=[redacted]" in status["error_message"]
+        assert "token=[redacted]" in status["error_message"]
+        assert "signature=[redacted]" in status["error_message"]
+    combined_text = (
+        Path(config.runtime_status_path).read_text(encoding="utf-8")
+        + Path(config.log_path).read_text(encoding="utf-8")
+    )
+    assert "DO_NOT_EXPOSE" not in combined_text
 
 
 def test_runtime_records_spool_disk_preflight_errors_for_enqueue_and_drain(tmp_path):
@@ -1128,6 +1225,8 @@ def test_runtime_committed_with_conflict_moves_to_operator_review(tmp_path):
                 "client_batch_id": "relay-conflict-1",
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
             },
         )
@@ -1257,3 +1356,117 @@ def test_runtime_lost_ack_retry_reuses_same_batch_and_idempotency_after_stale_le
     assert first_metadata["idempotency_key"] == retry_metadata["idempotency_key"]
     assert first_metadata["content_sha256"] == retry_metadata["content_sha256"]
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
+
+def test_runtime_twenty_container_audit_pcs_same_korean_filename_lost_ack_replay_preserves_https_identity_scope(tmp_path):
+    session = ReplayAwareAcceptedSession()
+    pc_roots = [tmp_path / f"pc_{index:03d}" for index in range(1, 21)]
+    file_name = "이적작업이벤트로그_홍길동_20260624.csv"
+    upload_start_barrier = threading.Barrier(len(pc_roots))
+
+    def run_pc(index, pc_root):
+        pc_root.mkdir(parents=True, exist_ok=True)
+        manifest, manifest_path = make_manifest(
+            pc_root,
+            pc_id=f"CONTAINER-PC-{index:03d}",
+            source_host_id=f"container-runtime-host-{index:03d}",
+            producer_install_id=f"install-container-runtime-{index:03d}",
+        )
+        credential_path = write_credential_file(
+            pc_root,
+            producer_id=f"producer-container-{index:03d}",
+            key_id=f"key-container-{index:03d}",
+            secret=f"runtime-secret-container-{index:03d}",
+        )
+        config = DirectSyncRuntimeConfig(
+            db_path=pc_root / "direct_sync_relay.sqlite3",
+            spool_dir=pc_root / "spool",
+            producer_manifest_path=manifest_path,
+            credential_path=credential_path,
+            upload_status_dir=pc_root / "upload_status",
+            runtime_status_path=pc_root / "runtime_status" / "status.json",
+            log_path=pc_root / "logs" / "relay.jsonl",
+            retry_base_seconds=1,
+            timeout_seconds=5,
+            operator_pause_path=pc_root / "control" / "pause.json",
+        )
+        source_file = write_csv(
+            pc_root,
+            name=file_name,
+            barcode=f"BC-CONTAINER-{index:03d}",
+        )
+        enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+        assert enqueued["status"] == "enqueued"
+        claimed = claim_next_relay_batch(
+            db_path=config.db_path,
+            worker_id=f"crashed-process-{index:03d}",
+            lease_seconds=1,
+            now="2099-01-01T00:00:00Z",
+        )
+        assert claimed is not None
+        credentials = ProducerCredentials(
+            producer_id=f"producer-container-{index:03d}",
+            key_id=f"key-container-{index:03d}",
+            secret=f"runtime-secret-container-{index:03d}",
+            endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        )
+        plan = build_source_file_plan(
+            source_file_path=claimed.spooled_file_path,
+            producer_manifest_path=claimed.producer_manifest_path,
+            credentials=credentials,
+            relative_path=claimed.relative_path,
+            client_batch_id=claimed.relay_id,
+        )
+        upload_start_barrier.wait(timeout=30)
+        first_upload = upload_source_file(
+            plan,
+            credentials,
+            session=session,
+            status_dir=pc_root / "crash_status",
+        )
+        assert first_upload.success is True
+        retry = run_relay_once(config, session=session, now="2099-01-01T00:00:02Z")
+        assert retry["status"] == "acked"
+        assert retry["stale_leases_reset"] == 1
+        assert retry["last_result"]["relay_id"] == claimed.relay_id
+        assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+        return {
+            "relay_id": claimed.relay_id,
+            "source_host_id": manifest["pc_identity"]["source_host_id"],
+            "producer_install_id": manifest["pc_identity"]["producer_install_id"],
+            "producer_id": credentials.producer_id,
+        }
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(pc_roots)) as executor:
+        results = list(executor.map(lambda item: run_pc(*item), enumerate(pc_roots, start=1)))
+
+    calls_by_key = {}
+    for call in session.calls:
+        metadata = json.loads(call["metadata"])
+        calls_by_key.setdefault(metadata["idempotency_key"], []).append((call, metadata))
+
+    assert len(results) == 20
+    assert len(calls_by_key) == 20
+    assert len(session.calls) == 40
+    assert len({row["source_host_id"] for row in results}) == 20
+    assert len({row["producer_install_id"] for row in results}) == 20
+    assert len({row["producer_id"] for row in results}) == 20
+    for idempotency_key, keyed_calls in calls_by_key.items():
+        assert len(keyed_calls) == 2
+        first_call, first_metadata = keyed_calls[0]
+        retry_call, retry_metadata = keyed_calls[1]
+        assert first_call["url"] == retry_call["url"] == "https://worker.example.invalid/api/producer-ingest/v1/source-file"
+        assert first_call["replayed"] is False
+        assert retry_call["replayed"] is True
+        assert first_metadata["idempotency_key"] == retry_metadata["idempotency_key"] == idempotency_key
+        assert first_metadata["client_batch_id"] == retry_metadata["client_batch_id"]
+        assert first_metadata["content_sha256"] == retry_metadata["content_sha256"]
+        assert first_metadata["source_host_id"] == retry_metadata["source_host_id"]
+        assert first_metadata["producer_install_id"] == retry_metadata["producer_install_id"]
+        assert first_metadata["producer_role"] == retry_metadata["producer_role"] == "container_audit"
+        assert first_metadata["stream_name"] == retry_metadata["stream_name"] == "container_audit_events"
+        assert first_metadata["source_transport"] == retry_metadata["source_transport"] == "legacy_transfer_csv"
+        assert first_metadata["relative_path"] == retry_metadata["relative_path"] == f"legacy_csv/{file_name}"
+        assert first_metadata["row_count"] == retry_metadata["row_count"] == 1
+        assert first_metadata["first_row_number"] == retry_metadata["first_row_number"] == 2
+        assert first_metadata["last_row_number"] == retry_metadata["last_row_number"] == 2

@@ -3,6 +3,7 @@ import csv
 import datetime
 import hashlib
 import json
+import multiprocessing
 from pathlib import Path
 import queue
 
@@ -26,6 +27,22 @@ from Container_Audit import ContainerAudit, ProductExchangeSession, TraySession,
 
 def _headless_app():
     return ContainerAudit.__new__(ContainerAudit)
+
+
+def _append_event_log_worker(args):
+    log_path, worker_name, count = args
+    for index in range(count):
+        event_log_store.append_event_log_entry(
+            log_path,
+            {
+                "timestamp": f"2026-06-24T09:00:{index:02d}",
+                "worker_name": worker_name,
+                "event": "SCAN_OK",
+                "details": json.dumps({"worker_name": worker_name, "index": index}, ensure_ascii=False),
+            },
+            durable=True,
+        )
+    return count
 
 
 def test_normalize_app_settings_rejects_non_object_root():
@@ -133,8 +150,10 @@ class CapturingListbox:
         else:
             self.rows.append(value)
 
-    def delete(self, index):
-        if self.rows:
+    def delete(self, index, *_rest):
+        if _rest:
+            self.rows.clear()
+        elif self.rows:
             del self.rows[index]
 
     def itemconfig(self, index, config):
@@ -397,6 +416,18 @@ class DummyRoot:
 
     def winfo_exists(self):
         return True
+
+
+class ImmediateLogQueue:
+    def join(self):
+        return None
+
+    def put(self, payload):
+        event_log_store.append_event_log_entry(
+            payload["log_file_path"],
+            payload["log_entry"],
+            durable=True,
+        )
 
 
 class CapturingRoot:
@@ -1047,6 +1078,34 @@ def test_async_log_event_uses_path_captured_at_queue_time(tmp_path):
     assert not second_path.exists()
 
 
+def test_async_log_writer_records_write_failures(tmp_path, monkeypatch):
+    app = _headless_app()
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.log_queue = queue.Queue()
+
+    def fail_append(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(container_audit_module, "append_event_log_entry", fail_append)
+    app.log_queue.put(
+        {
+            "log_file_path": app.log_file_path,
+            "log_entry": {
+                "timestamp": "2026-06-24T09:00:00",
+                "worker_name": "홍길동",
+                "event": "SCAN_OK",
+                "details": "{}",
+            },
+        }
+    )
+    app.log_queue.put(None)
+
+    app._event_log_writer()
+
+    assert app.last_log_write_error == "로그 파일 쓰기 오류: disk full"
+    assert app.log_write_errors == ["로그 파일 쓰기 오류: disk full"]
+
+
 def test_event_log_store_appends_header_once(tmp_path):
     log_path = tmp_path / "events.csv"
 
@@ -1062,6 +1121,36 @@ def test_event_log_store_appends_header_once(tmp_path):
     with open(log_path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert [row["event"] for row in rows] == ["SCAN_OK", "TRAY_COMPLETE"]
+
+
+def test_event_log_store_serializes_multi_process_appends(tmp_path):
+    log_path = tmp_path / "events.csv"
+    process_count = 3
+    rows_per_process = 8
+    ctx = multiprocessing.get_context("spawn")
+
+    with ctx.Pool(processes=process_count) as pool:
+        results = pool.map(
+            _append_event_log_worker,
+            [
+                (str(log_path), f"worker-{worker_index}", rows_per_process)
+                for worker_index in range(process_count)
+            ],
+        )
+
+    assert results == [rows_per_process] * process_count
+    text = log_path.read_text(encoding="utf-8-sig")
+    assert text.count("timestamp,worker_name,event,details") == 1
+    assert not Path(f"{log_path}.lock").exists()
+    with log_path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == process_count * rows_per_process
+    observed = {(json.loads(row["details"])["worker_name"], json.loads(row["details"])["index"]) for row in rows}
+    assert observed == {
+        (f"worker-{worker_index}", row_index)
+        for worker_index in range(process_count)
+        for row_index in range(rows_per_process)
+    }
 
 
 def test_event_log_store_fsyncs_only_for_durable_appends(tmp_path, monkeypatch):
@@ -1666,6 +1755,78 @@ def test_session_history_ignores_future_timestamp_rows_in_current_log(tmp_path):
     assert label_qr.canonical_master_label_key(future_label) not in history.completed_master_labels
     assert history.work_summary == {}
     assert history.completed_tray_times == []
+
+
+def test_session_history_local_received_data_handles_today_past_and_injection_rows(tmp_path):
+    today = datetime.date(2026, 6, 24)
+    current_log_path = tmp_path / "이적작업이벤트로그_홍길동_20260624.csv"
+    past_log_path = tmp_path / "이적작업이벤트로그_홍길동_20260610.csv"
+    malicious_item = 'AAA2270730100"; DROP TABLE work_summary; --'
+    malicious_label = f"PHS=1|CLC={malicious_item}|QT=2"
+    past_label = "PHS=1|CLC=BBB2270730100|QT=2|LOT=PAST"
+    dangerous_barcodes = [
+        '=HYPERLINK("https://evil.invalid","scan")',
+        '<script>alert("container")</script>',
+    ]
+    _write_session_history_row(
+        current_log_path,
+        timestamp=datetime.datetime(2026, 6, 24, 9, 0, 0),
+        master_label=malicious_label,
+        item_code=malicious_item,
+        scan_count=2,
+        tray_capacity=2,
+        work_time_sec=20.0,
+        product_barcodes=dangerous_barcodes,
+        barcode_count=2,
+    )
+    _write_session_history_row(
+        past_log_path,
+        timestamp=datetime.datetime(2026, 6, 10, 9, 0, 0),
+        master_label=past_label,
+        item_code="BBB2270730100",
+        scan_count=2,
+        tray_capacity=2,
+        work_time_sec=20.0,
+        product_barcodes=["BBB2270730100-001", "BBB2270730100-002"],
+        barcode_count=2,
+    )
+    with current_log_path.open("a", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["timestamp", "worker_name", "event", "details"])
+        writer.writerow(
+            {
+                "timestamp": "2026-06-24T10:00:00",
+                "worker_name": "홍길동",
+                "event": "TRAY_COMPLETE",
+                "details": json.dumps(
+                    {
+                        "master_label_code": malicious_label,
+                        "item_code": malicious_item,
+                        "item_name": "tampered",
+                        "scan_count": 2,
+                        "tray_capacity": 2,
+                        "barcode_count": 2,
+                        "product_barcodes": ["only-one"],
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+
+    history = session_history.load_session_history(
+        save_folder=tmp_path,
+        worker_name="홍길동",
+        today=today,
+        tray_size=2,
+    )
+
+    assert history.total_tray_count == 1
+    assert history.work_summary[malicious_item]["count"] == 1
+    assert "BBB2270730100" not in history.work_summary
+    assert history.completed_tray_times == [20.0]
+    assert label_qr.canonical_master_label_key(malicious_label) in history.completed_master_labels
+    assert label_qr.canonical_master_label_key(past_label) in history.completed_master_labels
+    assert len(history.load_errors) == 1
+    assert "TRAY_COMPLETE 처리 중 오류" in history.load_errors[0]
 
 
 def test_session_history_projects_replacement_new_master_label_as_completed(tmp_path):
@@ -2553,6 +2714,88 @@ def test_app_current_tray_state_save_restore_round_trips_with_tmp_path(tmp_path)
     assert app.current_tray.master_label_code == "PHS=1|CLC=AAA2270730100|QT=60"
     assert app.current_tray.scanned_barcodes == ["BC-1"]
     assert app.current_tray.is_restored_session is True
+
+
+def test_close_save_restore_then_auto_complete_marks_restored_session(tmp_path, monkeypatch):
+    closing_app = _headless_app()
+    closing_app.worker_name = "홍길동"
+    closing_app.save_folder = str(tmp_path)
+    closing_app.CURRENT_TRAY_STATE_FILE = "current.json"
+    closing_app.current_tray = TraySession(
+        master_label_code='{"CLC":"AAA2270730100","QT":"2"}',
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=["AAA2270730100-001"],
+        scan_times=[datetime.datetime(2026, 6, 22, 9, 1, 0)],
+        tray_size=2,
+        mismatch_error_count=0,
+        total_idle_seconds=0.0,
+        stopwatch_seconds=60.0,
+        start_time=datetime.datetime(2026, 6, 22, 9, 0, 0),
+        has_error_or_reset=False,
+    )
+    assert closing_app._save_current_tray_state() is True
+
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.log_queue = ImmediateLogQueue()
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
+    app.current_tray = TraySession()
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
+    app.is_idle = False
+    app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 2, 0)
+    app.root = CapturingRoot()
+    app.scanned_listbox = CapturingListbox()
+    app.undo_button = {"state": container_audit_module.tk.NORMAL}
+    app.success_sound = None
+    app._scan_callback_epoch = 0
+    app.work_summary = {}
+    app.total_tray_count = 0
+    app.completed_tray_times = []
+    app.tray_last_end_time = None
+    app.COLOR_DANGER = "danger"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SIDEBAR_BG = "sidebar"
+    app.COLOR_TEXT = "text"
+    app._stop_stopwatch = lambda: setattr(app, "stopwatch_stopped", True)
+    app._stop_idle_checker = lambda: setattr(app, "idle_stopped", True)
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
+    app._reset_ui_to_waiting_state = lambda: setattr(app, "ui_reset", True)
+    app._update_best_time_records = lambda work_time: (_ for _ in ()).throw(
+        AssertionError("restored tray should not update best-time records")
+    )
+    app.show_status_message = lambda *args, **kwargs: None
+    app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError(f"valid restored scanner flow should not warn: {args}")
+    )
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+
+    app._load_current_tray_state()
+    assert app.current_tray.is_restored_session is True
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
+
+    app._process_barcode_logic("AAA2270730100-002")
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["event"] for row in rows] == ["TRAY_RESTORE", "SCAN_OK", "TRAY_COMPLETE"]
+    completion_detail = json.loads(rows[-1]["details"])
+    assert completion_detail["is_restored_session"] is True
+    assert completion_detail["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
+    assert completion_detail["quantity_basis"] == "PRODUCT_BARCODE"
+    assert app.current_tray.master_label_code == ""
+    assert not (tmp_path / "current.json").exists()
+    assert app.summaries_updated is True
+    assert app.ui_reset is True
 
 
 def test_current_tray_state_save_includes_active_idle_duration(tmp_path):
@@ -4879,6 +5122,271 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
     assert app.logged[0][1] == {"detail": {"CLC": "AAA2270730100", "QT": "2"}, "synchronous": True}
 
 
+def test_worker_scanner_full_tray_flow_writes_csv_sequence_before_relay_plan(tmp_path):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "이적작업이벤트로그_홍길동_20260624.csv")
+    app.log_queue = ImmediateLogQueue()
+    app.current_tray = TraySession()
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.show_tray_image_var = DummyToggle()
+    app.is_idle = False
+    app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 0, 0)
+    app.root = CapturingRoot()
+    app.scanned_listbox = CapturingListbox()
+    app.undo_button = {"state": container_audit_module.tk.DISABLED}
+    app.success_sound = None
+    app._scan_callback_epoch = 0
+    app.work_summary = {}
+    app.total_tray_count = 0
+    app.completed_tray_times = []
+    app.tray_last_end_time = None
+    app.COLOR_DANGER = "danger"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SIDEBAR_BG = "sidebar"
+    app.COLOR_TEXT = "text"
+    app._save_current_tray_state = lambda: True
+    app._delete_current_tray_state = lambda: True
+    app._stop_stopwatch = lambda: setattr(app, "stopwatch_stopped", True)
+    app._stop_idle_checker = lambda: setattr(app, "idle_stopped", True)
+    app._update_tray_image_display = lambda: None
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    app._start_stopwatch = lambda: None
+    app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
+    app._reset_ui_to_waiting_state = lambda: setattr(app, "ui_reset", True)
+    app._update_best_time_records = lambda work_time: None
+    app.show_status_message = lambda *args, **kwargs: None
+    app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError(f"valid scanner flow should not warn: {args}")
+    )
+
+    assert app._log_event("WORK_START", detail={"message": "작업자 로그인"}, synchronous=True) is True
+    app._process_barcode_logic('{"CLC":"AAA2270730100","QT":"2"}')
+    app._process_barcode_logic("AAA2270730100-001")
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
+    app._process_barcode_logic("AAA2270730100-002")
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["event"] for row in rows] == [
+        "WORK_START",
+        "MASTER_LABEL_SCANNED_NEW",
+        "SCAN_OK",
+        "SCAN_OK",
+        "TRAY_COMPLETE",
+    ]
+    assert app.current_tray.master_label_code == ""
+    assert app.undo_button["state"] == container_audit_module.tk.DISABLED
+    assert app.scanned_listbox.rows == []
+    assert app.summaries_updated is True
+    assert app.ui_reset is True
+
+    master_detail = json.loads(rows[1]["details"])
+    first_scan_detail = json.loads(rows[2]["details"])
+    second_scan_detail = json.loads(rows[3]["details"])
+    completion_detail = json.loads(rows[4]["details"])
+    assert master_detail["dispatch_key"] == "container_audit|legacy_transfer_csv|MASTER_LABEL_SCANNED_NEW"
+    assert first_scan_detail["product_barcode"] == "AAA2270730100-001"
+    assert first_scan_detail["scan_position"] == 1
+    assert second_scan_detail["product_barcode"] == "AAA2270730100-002"
+    assert second_scan_detail["scan_position"] == 2
+    assert completion_detail["dispatch_key"] == "container_audit|legacy_transfer_csv|TRAY_COMPLETE"
+    assert completion_detail["scan_count"] == 2
+    assert completion_detail["tray_capacity"] == 2
+    assert completion_detail["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
+    assert completion_detail["master_label_fields"] == {"CLC": "AAA2270730100", "QT": "2"}
+    assert completion_detail["is_restored_session"] is False
+
+    from direct_sync_push import ProducerCredentials, build_source_file_plan
+
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "producer-onboarding-manifest-v1",
+                "pc_identity": {
+                    "pc_id": "CONTAINER-PC01",
+                    "source_host_id": "container-host-01",
+                    "producer_install_id": "install-container-01",
+                },
+                "apps": ["ContainerAudit"],
+                "streams": [
+                    {
+                        "producer_role": "container_audit",
+                        "stream_name": "container_audit_events",
+                        "source_system": "container_audit",
+                        "source_transport": "legacy_transfer_csv",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    plan = build_source_file_plan(
+        source_file_path=Path(app.log_file_path),
+        producer_manifest_path=manifest_path,
+        credentials=ProducerCredentials(
+            producer_id="producer-container-01",
+            key_id="key-container-01",
+            secret="container-secret",
+            endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        ),
+    )
+    assert plan.metadata["relative_path"] == "legacy_csv/이적작업이벤트로그_홍길동_20260624.csv"
+    assert plan.metadata["row_count"] == 5
+    assert plan.metadata["first_row_number"] == 2
+    assert plan.metadata["last_row_number"] == 6
+    assert plan.metadata["source_host_id"] == "container-host-01"
+    assert plan.metadata["producer_install_id"] == "install-container-01"
+
+
+def test_scanning_parked_master_label_restore_then_completion_writes_relay_plan(tmp_path, monkeypatch):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "이적작업이벤트로그_홍길동_20260624.csv")
+    app.log_queue = ImmediateLogQueue()
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.current_tray = TraySession()
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.show_tray_image_var = DummyToggle()
+    app.is_idle = False
+    app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 0, 0)
+    app.root = CapturingRoot()
+    app.scanned_listbox = CapturingListbox()
+    app.undo_button = {"state": container_audit_module.tk.DISABLED}
+    app.success_sound = None
+    app._scan_callback_epoch = 0
+    app.work_summary = {}
+    app.total_tray_count = 0
+    app.completed_tray_times = []
+    app.tray_last_end_time = None
+    app.COLOR_DANGER = "danger"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SIDEBAR_BG = "sidebar"
+    app.COLOR_TEXT = "text"
+    app._delete_current_tray_state = lambda: True
+    app._stop_stopwatch = lambda: setattr(app, "stopwatch_stopped", True)
+    app._stop_idle_checker = lambda: setattr(app, "idle_stopped", True)
+    app._update_tray_image_display = lambda: None
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
+    app._reset_ui_to_waiting_state = lambda: setattr(app, "ui_reset", True)
+    app._update_best_time_records = lambda work_time: (_ for _ in ()).throw(
+        AssertionError("restored parked tray should not update best-time records")
+    )
+    app.show_validation_screen = lambda: setattr(app, "validation_shown", True)
+    app.show_status_message = lambda *args, **kwargs: None
+    app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError(f"valid parked restore scanner flow should not warn: {args}")
+    )
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+
+    master_label = '{"CLC":"AAA2270730100","QT":"2"}'
+    parked_session = TraySession(
+        master_label_code=master_label,
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=["AAA2270730100-001"],
+        scan_times=[datetime.datetime(2026, 6, 22, 9, 1, 0)],
+        tray_size=2,
+        mismatch_error_count=0,
+        total_idle_seconds=0.0,
+        stopwatch_seconds=60.0,
+        start_time=datetime.datetime(2026, 6, 22, 9, 0, 0),
+        has_error_or_reset=False,
+    )
+    parked_path = parked_tray_store.ParkedTrayStore(app.parked_trays_dir).save_state(
+        tray_state.tray_session_to_state(parked_session, worker_name="홍길동"),
+        worker_name="홍길동",
+        master_label=master_label,
+    )
+
+    app._process_barcode_logic(master_label)
+    assert not parked_path.exists()
+    assert app.validation_shown is True
+    assert app.current_tray.is_restored_session is True
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
+
+    app._process_barcode_logic("AAA2270730100-002")
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["event"] for row in rows] == ["TRAY_RESTORED_FROM_PARK", "SCAN_OK", "TRAY_COMPLETE"]
+    restore_detail = json.loads(rows[0]["details"])
+    scan_detail = json.loads(rows[1]["details"])
+    completion_detail = json.loads(rows[2]["details"])
+    assert restore_detail["canonical_event_name"] == "TRAY_RESTORED"
+    assert restore_detail["dispatch_key"] == "container_audit|legacy_transfer_csv|TRAY_RESTORED_FROM_PARK"
+    assert restore_detail["scan_count"] == 1
+    assert scan_detail["product_barcode"] == "AAA2270730100-002"
+    assert scan_detail["scan_position"] == 2
+    assert completion_detail["is_restored_session"] is True
+    assert completion_detail["scan_count"] == 2
+    assert completion_detail["tray_capacity"] == 2
+    assert completion_detail["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
+    assert completion_detail["quantity_basis"] == "PRODUCT_BARCODE"
+    assert app.current_tray.master_label_code == ""
+    assert app.scanned_listbox.rows == []
+    assert app.summaries_updated is True
+    assert app.ui_reset is True
+
+    from direct_sync_push import ProducerCredentials, build_source_file_plan
+
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "producer-onboarding-manifest-v1",
+                "pc_identity": {
+                    "pc_id": "CONTAINER-PC01",
+                    "source_host_id": "container-host-01",
+                    "producer_install_id": "install-container-01",
+                },
+                "apps": ["ContainerAudit"],
+                "streams": [
+                    {
+                        "producer_role": "container_audit",
+                        "stream_name": "container_audit_events",
+                        "source_system": "container_audit",
+                        "source_transport": "legacy_transfer_csv",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    plan = build_source_file_plan(
+        source_file_path=Path(app.log_file_path),
+        producer_manifest_path=manifest_path,
+        credentials=ProducerCredentials(
+            producer_id="producer-container-01",
+            key_id="key-container-01",
+            secret="container-secret",
+            endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        ),
+    )
+    assert plan.metadata["relative_path"] == "legacy_csv/이적작업이벤트로그_홍길동_20260624.csv"
+    assert plan.metadata["row_count"] == 3
+    assert plan.metadata["first_row_number"] == 2
+    assert plan.metadata["last_row_number"] == 4
+    assert plan.metadata["source_host_id"] == "container-host-01"
+    assert plan.metadata["producer_install_id"] == "install-container-01"
+
+
 def test_process_barcode_blocks_same_label_parked_by_other_worker(tmp_path, monkeypatch):
     app = _headless_app()
     app.current_tray = TraySession()
@@ -5295,6 +5803,94 @@ def test_submit_current_tray_rolls_back_partial_flag_when_completion_log_fails(t
     assert app.current_tray.is_partial_submission is False
     assert app.activity_updated is True
     assert app.focus_scheduled is True
+
+
+def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path, monkeypatch):
+    app = _completion_app(tmp_path)
+    app.current_tray.master_label_code = '{"CLC":"AAA2270730100","QT":"60"}'
+    app.current_tray.has_error_or_reset = False
+    app.current_tray.is_partial_submission = False
+    app.current_tray.scanned_barcodes = ["AAA2270730100-001", "AAA2270730100-002"]
+    app.current_tray.scan_times = [
+        datetime.datetime(2026, 6, 22, 9, 1, 0),
+        datetime.datetime(2026, 6, 22, 9, 2, 0),
+    ]
+    app.current_tray.stopwatch_seconds = 18.0
+    app._update_last_activity_time = lambda: setattr(app, "activity_updated", True)
+    app._schedule_focus_return = lambda: setattr(app, "focus_scheduled", True)
+    app._update_best_time_records = lambda work_time: (_ for _ in ()).throw(
+        AssertionError("partial submit must not update best-time records")
+    )
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+
+    app.submit_current_tray()
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 1
+    assert rows[0]["event"] == "TRAY_COMPLETE"
+    details = json.loads(rows[0]["details"])
+    assert details["is_partial_submission"] is True
+    assert details["is_restored_session"] is False
+    assert details["scan_count"] == 2
+    assert details["tray_capacity"] == 60
+    assert details["quantity_basis"] == "PRODUCT_BARCODE"
+    assert details["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
+    assert details["master_label_fields"] == {"CLC": "AAA2270730100", "QT": "60"}
+    assert app.current_tray.master_label_code == ""
+    assert app.current_tray.scanned_barcodes == []
+    assert app.completed_tray_times == []
+    assert app.total_tray_count == 0
+    assert app.work_summary["AAA2270730100"]["count"] == 1
+    assert app.state_deleted is True
+    assert app.scanned_listbox.deleted is True
+    assert app.summaries_updated is True
+    assert app.ui_reset is True
+    assert app.activity_updated is True
+    assert app.focus_scheduled is True
+
+    from direct_sync_push import ProducerCredentials, build_source_file_plan
+
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "producer-onboarding-manifest-v1",
+                "pc_identity": {
+                    "pc_id": "CONTAINER-PC01",
+                    "source_host_id": "container-host-01",
+                    "producer_install_id": "install-container-01",
+                },
+                "apps": ["ContainerAudit"],
+                "streams": [
+                    {
+                        "producer_role": "container_audit",
+                        "stream_name": "container_audit_events",
+                        "source_system": "container_audit",
+                        "source_transport": "legacy_transfer_csv",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    plan = build_source_file_plan(
+        source_file_path=Path(app.log_file_path),
+        producer_manifest_path=manifest_path,
+        credentials=ProducerCredentials(
+            producer_id="producer-container-01",
+            key_id="key-container-01",
+            secret="container-secret",
+            endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        ),
+    )
+    assert plan.metadata["relative_path"] == "legacy_csv/events.csv"
+    assert plan.metadata["row_count"] == 1
+    assert plan.metadata["first_row_number"] == 2
+    assert plan.metadata["last_row_number"] == 2
+    assert plan.metadata["source_host_id"] == "container-host-01"
+    assert plan.metadata["producer_install_id"] == "install-container-01"
 
 
 def test_park_current_tray_logs_identifying_detail(tmp_path):
@@ -7480,6 +8076,154 @@ def test_replacement_search_uses_current_transfer_log_prefix(tmp_path, monkeypat
     assert app.replacement_context["found_log_file"] == str(log_path)
     assert app.replacement_context["original_details"]["product_barcodes"] == ["BC-1"]
     assert not hasattr(app, "cancelled")
+
+
+def test_replacement_scanner_flow_writes_correction_and_direct_sync_plan(tmp_path, monkeypatch):
+    old_label = '{"CLC":"AAA2270730100","QT":"1","LOT":"OLD"}'
+    new_label = '{"CLC":"AAA2270730100","QT":"1","LOT":"NEW"}'
+    old_log_path = tmp_path / "이적작업이벤트로그_홍길동_20260623.csv"
+    replacement_log_path = tmp_path / "이적작업이벤트로그_홍길동_20260624.csv"
+    with old_log_path.open("w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.DictWriter(f, fieldnames=["timestamp", "worker_name", "event", "details"])
+        writer.writeheader()
+        writer.writerow(
+            {
+                "timestamp": "2026-06-23T09:00:00",
+                "worker_name": "홍길동",
+                "event": "TRAY_COMPLETE",
+                "details": json.dumps(
+                    {
+                        "master_label_code": old_label,
+                        "item_code": "AAA2270730100",
+                        "item_name": "fixture item",
+                        "item_spec": "fixture spec",
+                        "scan_count": 1,
+                        "tray_capacity": 1,
+                        "product_barcodes": ["AAA2270730100-001"],
+                        "quantity_basis": "PRODUCT_BARCODE",
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(replacement_log_path)
+    app.log_queue = ImmediateLogQueue()
+    app.save_folder = str(tmp_path)
+    app.current_tray = TraySession()
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app.replacement_context = {}
+    app.SOURCE_SYSTEM = "container_audit"
+    app.SOURCE_TRANSPORT_OR_DATASET = "legacy_transfer_csv"
+    app.ITEM_CODE_LENGTH = 13
+    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
+    app._scan_callback_epoch = 0
+    app.focus_return_job = None
+    app.root = CapturingRoot()
+    app.reset_button = DummyButton()
+    app.park_button = DummyButton()
+    app.undo_button = DummyButton()
+    app.submit_tray_button = DummyButton()
+    app.replace_master_label_button = DummyButton()
+    app.exchange_button = DummyButton()
+    app.exchange_dialog = None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_DANGER = "danger"
+    app.COLOR_TEXT_SUBTLE = "subtle"
+    app.show_status_message = lambda *args, **kwargs: None
+    app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError(f"valid replacement scanner flow should not warn: {args}")
+    )
+    app._update_current_item_label = lambda *args, **kwargs: None
+    app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
+    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showwarning",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError(f"valid replacement scanner flow should not warn: {args}")
+        ),
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError(f"valid replacement scanner flow should not error: {args}")
+        ),
+    )
+
+    app.initiate_master_label_replacement()
+    assert app.master_label_replace_state == "awaiting_old_completed"
+    app._process_barcode_logic(old_label)
+    assert app.master_label_replace_state == "awaiting_new_replacement"
+    app._process_barcode_logic(new_label)
+
+    assert app.master_label_replace_state is None
+    assert app.replacement_context == {}
+    assert app.summaries_updated is True
+    assert app._is_completed_master_label(old_label) is True
+    assert app._is_completed_master_label(new_label) is True
+
+    with replacement_log_path.open(newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    assert [row["event"] for row in rows] == ["HISTORICAL_REPLACE_START", "MASTER_LABEL_REPLACEMENT_APPLIED"]
+    replacement_detail = json.loads(rows[1]["details"])
+    assert replacement_detail["dispatch_key"] == "container_audit|legacy_transfer_csv|MASTER_LABEL_REPLACEMENT_APPLIED"
+    assert replacement_detail["old_master_label"] == old_label
+    assert replacement_detail["new_master_label"] == new_label
+    assert replacement_detail["original_event_identity"]["source_file_id"] == old_log_path.name
+    assert replacement_detail["original_event_identity"]["source_row_number"] == 2
+    assert replacement_detail["corrected_completion_projection"]["master_label_code"] == new_label
+    assert replacement_detail["corrected_completion_projection"]["product_barcodes"] == ["AAA2270730100-001"]
+    assert replacement_detail["old_row_hash"]
+    assert replacement_detail["new_row_hash"]
+
+    from direct_sync_push import ProducerCredentials, build_source_file_plan
+
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "producer-onboarding-manifest-v1",
+                "pc_identity": {
+                    "pc_id": "CONTAINER-PC01",
+                    "source_host_id": "container-host-01",
+                    "producer_install_id": "install-container-01",
+                },
+                "apps": ["ContainerAudit"],
+                "streams": [
+                    {
+                        "producer_role": "container_audit",
+                        "stream_name": "container_audit_events",
+                        "source_system": "container_audit",
+                        "source_transport": "legacy_transfer_csv",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    plan = build_source_file_plan(
+        source_file_path=replacement_log_path,
+        producer_manifest_path=manifest_path,
+        credentials=ProducerCredentials(
+            producer_id="producer-container-01",
+            key_id="key-container-01",
+            secret="container-secret",
+            endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        ),
+    )
+    assert plan.metadata["relative_path"] == "legacy_csv/이적작업이벤트로그_홍길동_20260624.csv"
+    assert plan.metadata["row_count"] == 2
+    assert plan.metadata["first_row_number"] == 2
+    assert plan.metadata["last_row_number"] == 3
+    assert plan.metadata["source_host_id"] == "container-host-01"
+    assert plan.metadata["producer_install_id"] == "install-container-01"
 
 
 @pytest.mark.parametrize("payload", ["AAA2270730100", "[1,2,3]", "{not-json}"])

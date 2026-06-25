@@ -245,6 +245,33 @@ def test_update_service_rejects_archive_missing_runtime_assets_or_modules(tmp_pa
         update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
 
 
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        "Container_Audit/direct_sync_relay.sqlite3",
+        "Container_Audit/direct_sync_relay.sqlite3-wal",
+        "Container_Audit/relay_spool/batch.csv",
+        "Container_Audit/status/direct_sync_upload_status_abcdef123456.json",
+        "Container_Audit/receipts/request-1.upload",
+        "Container_Audit/logs/relay.jsonl",
+        "Container_Audit/config/producer_credential.json",
+        "Container_Audit/config/parked_trays/parked_tray_1.json",
+        "Container_Audit/config/worker_registry.json",
+        "Container_Audit/config/best_time_records.json",
+        "Container_Audit/config/validator_settings.json",
+        "Container_Audit/이적작업이벤트로그_홍길동_20260622.csv",
+    ],
+)
+def test_update_service_rejects_archive_with_runtime_local_or_sensitive_members(tmp_path, member_name):
+    zip_path = tmp_path / "runtime-local.zip"
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        _write_required_update_members(zip_ref)
+        zip_ref.writestr(member_name, b"runtime-local")
+
+    with pytest.raises(ValueError, match="현장 런타임/민감 상태 파일"):
+        update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+
 def test_update_service_rejects_duplicate_archive_members(tmp_path):
     zip_path = tmp_path / "duplicate.zip"
     with zipfile.ZipFile(zip_path, "w") as zip_ref:

@@ -20,6 +20,58 @@ WINDOWS_RESERVED_NAMES = {
 DEFAULT_MAX_UPDATE_ARCHIVE_ENTRIES = 20_000
 DEFAULT_MAX_UPDATE_ARCHIVE_MEMBER_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_UPDATE_ARCHIVE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS = frozenset(
+    {
+        ".syncthing",
+        "archive",
+        "direct_sync_spool",
+        "logs",
+        "parked_trays",
+        "raw_artifacts",
+        "receipts",
+        "relay_spool",
+        "runtime",
+        "spool",
+        "status",
+        "syncthing",
+        "upload_status",
+    }
+)
+DENIED_UPDATE_ARCHIVE_FILE_SUFFIXES = (
+    ".db",
+    ".db-shm",
+    ".db-wal",
+    ".jsonl",
+    ".log",
+    ".sqlite",
+    ".sqlite-shm",
+    ".sqlite-wal",
+    ".sqlite3",
+    ".sqlite3-shm",
+    ".sqlite3-wal",
+    ".tmp",
+    ".upload",
+)
+DENIED_UPDATE_ARCHIVE_BASENAMES = frozenset(
+    {
+        ".env",
+        "credential.json",
+        "credentials.json",
+        "best_time_records.json",
+        "direct_sync_credential.json",
+        "direct_sync_credentials.json",
+        "producer_credential.json",
+        "producer_credentials.json",
+        "status.json",
+        "validator_settings.json",
+        "worker_registry.json",
+    }
+)
+DENIED_UPDATE_ARCHIVE_BASENAME_PATTERNS = (
+    re.compile(r"direct_sync_upload_status_[0-9a-f]+\.json", flags=re.IGNORECASE),
+    re.compile(r".*(credential|hmac|private[_-]?key|secret|token).*\.json", flags=re.IGNORECASE),
+    re.compile(r"이적작업이벤트로그_.*\.csv", flags=re.IGNORECASE),
+)
 REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
     {
         "Container_Audit/Container_Audit.exe",
@@ -242,11 +294,42 @@ def _validate_archive_path_collisions(file_names: list[str]) -> None:
             raise ValueError("업데이트 ZIP에 파일/폴더 경로 충돌이 포함되어 있습니다.")
 
 
+def _runtime_local_archive_member_issue(member_name: str) -> str:
+    normalized = str(member_name or "").replace("\\", "/").rstrip("/")
+    if not normalized:
+        return ""
+    parts = [part for part in normalized.split("/") if part]
+    lowered_parts = [part.casefold() for part in parts]
+    for segment in lowered_parts[1:]:
+        if segment in DENIED_UPDATE_ARCHIVE_PATH_SEGMENTS:
+            return f"runtime-local path segment is not allowed: {segment}"
+    basename = lowered_parts[-1] if lowered_parts else ""
+    if basename in DENIED_UPDATE_ARCHIVE_BASENAMES:
+        return f"runtime-local file is not allowed: {basename}"
+    if any(basename.endswith(suffix) for suffix in DENIED_UPDATE_ARCHIVE_FILE_SUFFIXES):
+        return f"runtime-local file suffix is not allowed: {basename}"
+    original_basename = parts[-1] if parts else ""
+    if any(pattern.fullmatch(original_basename) for pattern in DENIED_UPDATE_ARCHIVE_BASENAME_PATTERNS):
+        return f"runtime-local file pattern is not allowed: {original_basename}"
+    return ""
+
+
+def _validate_update_archive_runtime_local_denylist(file_names: list[str]) -> None:
+    denied = []
+    for name in file_names:
+        issue = _runtime_local_archive_member_issue(name)
+        if issue:
+            denied.append(f"{name} ({issue})")
+    if denied:
+        raise ValueError("업데이트 ZIP에 현장 런타임/민감 상태 파일이 포함되어 있습니다: " + ", ".join(denied[:5]))
+
+
 def validate_update_archive_layout(members: list[str]) -> None:
     file_names = [str(member or "").replace("\\", "/") for member in members if str(member or "").strip()]
     if not file_names:
         raise ValueError("업데이트 ZIP이 비어 있습니다.")
     _validate_archive_path_collisions(file_names)
+    _validate_update_archive_runtime_local_denylist(file_names)
     top_level = {name.split("/", 1)[0] for name in file_names}
     if top_level != {"Container_Audit"}:
         raise ValueError("업데이트 ZIP은 최상위 Container_Audit 폴더 하나만 포함해야 합니다.")

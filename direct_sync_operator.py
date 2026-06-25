@@ -27,6 +27,13 @@ RETRYABLE_DEAD_STATUSES = frozenset({RELAY_STATUS_FAILED_PERMANENT})
 SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
 REASON_REDACTED_RE = re.compile(r"^sha256:[A-Fa-f0-9]{12}$")
 DEAD_LETTER_STATUSES = (RELAY_STATUS_OPERATOR_REVIEW, RELAY_STATUS_FAILED_PERMANENT)
+RUNTIME_SENSITIVE_KEY_RE = re.compile(
+    r"(?i)(authorization|bearer|credential|hmac|raw_payload|receipt_json|secret|signature|source_file_bytes|source_file_text|token)"
+)
+AUTHORIZATION_TEXT_RE = re.compile(r"(?i)\b(?:authorization|x-producer-signature)\s*:\s*[^\r\n,;]+")
+SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?P<key>api[_-]?key|hmac|password|passwd|secret|signature|token)\s*=\s*[^\s,;]+"
+)
 
 
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
@@ -149,6 +156,24 @@ def _safe_int(value: Any) -> int:
         return int(value or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _redact_runtime_status_text(value: str) -> str:
+    text = str(value or "")
+    text = AUTHORIZATION_TEXT_RE.sub("[redacted]", text)
+    return SENSITIVE_ASSIGNMENT_RE.sub(lambda match: f"{match.group('key')}=[redacted]", text)
+
+
+def _redact_runtime_status_payload(value: Any, *, key_name: str = "") -> Any:
+    if RUNTIME_SENSITIVE_KEY_RE.search(str(key_name or "")):
+        return "[redacted]"
+    if isinstance(value, Mapping):
+        return {str(key): _redact_runtime_status_payload(item, key_name=str(key)) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_runtime_status_payload(item) for item in value]
+    if isinstance(value, str):
+        return _redact_runtime_status_text(value)
+    return value
 
 
 def _decode_receipt_json(raw_value: Any) -> tuple[dict[str, Any], bool]:
@@ -354,10 +379,60 @@ def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[s
         conn.close()
 
 
-def operator_status(*, db_path: str | os.PathLike[str], pause_path: str | os.PathLike[str] = "") -> dict[str, Any]:
+def read_runtime_status(path: str | os.PathLike[str]) -> dict[str, Any]:
+    path_text = str(path or "").strip()
+    if not path_text:
+        return {"enabled": False, "available": False, "path": ""}
+    runtime_path = Path(path_text)
+    if not runtime_path.is_file():
+        return {
+            "enabled": True,
+            "available": False,
+            "path": str(runtime_path),
+            "status": "not_found",
+            "error_code": "runtime_status_not_found",
+        }
+    try:
+        payload = json.loads(runtime_path.read_text(encoding="utf-8-sig"))
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        return {
+            "enabled": True,
+            "available": False,
+            "path": str(runtime_path),
+            "status": "invalid",
+            "error_code": "runtime_status_unreadable",
+            "error_message": f"runtime status cannot be read: {exc.__class__.__name__}",
+        }
+    if not isinstance(payload, dict):
+        return {
+            "enabled": True,
+            "available": False,
+            "path": str(runtime_path),
+            "status": "invalid",
+            "error_code": "runtime_status_invalid",
+        }
+    safe_payload = _redact_runtime_status_payload(payload)
+    return {
+        "enabled": True,
+        "available": True,
+        "path": str(runtime_path),
+        "status": str(payload.get("status") or ""),
+        "updated_at": str(payload.get("updated_at") or ""),
+        "payload": safe_payload,
+    }
+
+
+def operator_status(
+    *,
+    db_path: str | os.PathLike[str],
+    pause_path: str | os.PathLike[str] = "",
+    runtime_status_path: str | os.PathLike[str] = "",
+) -> dict[str, Any]:
     queue = read_relay_queue_status_read_only(db_path)
     pause = read_operator_pause(pause_path)
+    runtime = read_runtime_status(runtime_status_path)
     pause_invalid = bool(pause.get("enabled")) and bool(pause.get("paused")) and not bool(pause.get("marker_valid"))
+    runtime_invalid = bool(runtime.get("enabled")) and str(runtime.get("status") or "") == "invalid"
     counts = queue.get("counts") if isinstance(queue.get("counts"), Mapping) else {}
     dead_letter_counts = {
         status: _safe_int(counts.get(status))
@@ -365,13 +440,14 @@ def operator_status(*, db_path: str | os.PathLike[str], pause_path: str | os.Pat
         if _safe_int(counts.get(status)) > 0
     }
     requires_attention = bool(dead_letter_counts)
-    status = "BLOCKED" if queue.get("status") == "blocked" or pause_invalid or requires_attention else "PASS"
+    status = "BLOCKED" if queue.get("status") == "blocked" or pause_invalid or runtime_invalid or requires_attention else "PASS"
     report = {
         "status": status,
         "operation": "status",
         "tool_version": OPERATOR_TOOL_VERSION,
         "queue": queue,
         "pause": pause,
+        "runtime": runtime,
         "requires_attention": requires_attention,
         "dead_letter_counts": dead_letter_counts,
     }
@@ -381,6 +457,8 @@ def operator_status(*, db_path: str | os.PathLike[str], pause_path: str | os.Pat
             if dead_letter_counts.get(RELAY_STATUS_OPERATOR_REVIEW)
             else "dead_letter_failed_permanent"
         )
+    elif runtime_invalid:
+        report["error_code"] = str(runtime.get("error_code") or "runtime_status_invalid")
     return report
 
 

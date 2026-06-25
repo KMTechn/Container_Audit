@@ -12,6 +12,7 @@ import subprocess
 import sys
 from argparse import Namespace
 from pathlib import Path
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 TOOLS = Path(__file__).resolve().parent
@@ -20,6 +21,7 @@ for path in (ROOT, TOOLS):
         sys.path.insert(0, str(path))
 
 from direct_sync_push import (  # noqa: E402
+    DEFAULT_ENDPOINT_PATH,
     RELAY_STATUS_ACKED,
     RELAY_STATUS_FAILED_PERMANENT,
     RELAY_STATUS_LEASED,
@@ -75,6 +77,7 @@ class EchoAcceptedSession:
             200,
             {
                 "request_id": f"request-{metadata['client_batch_id']}",
+                "upload_id": f"request-{metadata['client_batch_id']}",
                 "client_batch_id": metadata["client_batch_id"],
                 "server_source_file_id": (
                     f"{metadata['source_host_id']}/{metadata['producer_role']}/"
@@ -82,6 +85,8 @@ class EchoAcceptedSession:
                 ),
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -177,6 +182,7 @@ def _bind_evidence_artifact(entry: dict, *, report_path: Path, evidence_name: st
         "evidence": evidence_name,
         "status": entry["status"],
         "production_ready": False,
+        "credential_secret_ref_report": entry.get("credential_secret_ref_report"),
         "source_scope_key_sha256": entry.get("source_scope_key_sha256", ""),
         "blocked_reason": entry.get("blocked_reason", ""),
     }
@@ -310,6 +316,7 @@ def _credential_secret_ref_report(tmp_root: Path) -> dict:
 
     env_name = "CONTAINER_PHASE_G_SECRET_REF"
     secret_value = "container-phase-g-secret-ref-fixture"
+    endpoint_url = "https://worker.example.invalid/api/producer-ingest/v1/source-file"
     credential_path = tmp_root / "credential_secret_ref.json"
     _write_json(
         credential_path,
@@ -317,7 +324,7 @@ def _credential_secret_ref_report(tmp_root: Path) -> dict:
             "producer_id": "producer-container-phase-g",
             "key_id": "key-container-phase-g",
             "secret_ref": f"env:{env_name}",
-            "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "endpoint_url": endpoint_url,
         },
     )
     previous = os.environ.get(env_name)
@@ -336,10 +343,19 @@ def _credential_secret_ref_report(tmp_root: Path) -> dict:
         credentials.producer_id == "producer-container-phase-g"
         and credentials.key_id == "key-container-phase-g"
         and credentials.secret == secret_value
-        and credentials.endpoint_url == "https://worker.example.invalid/api/producer-ingest/v1/source-file"
+        and credentials.endpoint_url == endpoint_url
         and payload.get("secret_ref") == f"env:{env_name}"
         and secret_material_field_present is False
         and secret_value not in serialized
+    )
+    parsed_endpoint = urlparse(credentials.endpoint_url)
+    endpoint_transport_ok = (
+        parsed_endpoint.scheme == "https"
+        and parsed_endpoint.path == DEFAULT_ENDPOINT_PATH
+        and not parsed_endpoint.query
+        and not parsed_endpoint.fragment
+        and not parsed_endpoint.username
+        and not parsed_endpoint.password
     )
     return {
         "status": "PASS" if ok else "FAIL",
@@ -348,6 +364,15 @@ def _credential_secret_ref_report(tmp_root: Path) -> dict:
         "secret_ref_scheme": "env",
         "secret_material_field_present": secret_material_field_present,
         "secret_material_value_in_file": secret_value in serialized,
+        "endpoint_transport_report": {
+            "status": "PASS" if endpoint_transport_ok else "FAIL",
+            "endpoint_scheme": parsed_endpoint.scheme,
+            "endpoint_path": parsed_endpoint.path,
+            "endpoint_url_sha256": hashlib.sha256(credentials.endpoint_url.encode("utf-8")).hexdigest(),
+            "endpoint_host_sha256": hashlib.sha256(str(parsed_endpoint.hostname or "").encode("utf-8")).hexdigest(),
+            "query_or_fragment_present": bool(parsed_endpoint.query or parsed_endpoint.fragment),
+            "userinfo_present": bool(parsed_endpoint.username or parsed_endpoint.password),
+        },
         "production_readback_status": "BLOCKED",
         "blocked_reason": "No real producer-PC wincred:/dpapi: credential bootstrap and readback evidence.",
     }
@@ -640,9 +665,12 @@ def _retry_dead_letter_report(tmp_root: Path) -> dict:
                 200,
                 {
                     "request_id": "request-operator-review",
+                    "upload_id": "request-operator-review",
                     "client_batch_id": "relay-operator-review",
                     "committed": True,
                     "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
                     "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
                 },
             )

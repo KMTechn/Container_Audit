@@ -53,3 +53,23 @@ def test_check_update_archive_extracts_to_absent_destination(tmp_path):
     assert completed.returncode == 0
     assert (destination / "Container_Audit" / "Container_Audit.exe").is_file()
     assert "update_archive_smoke_dir=" in completed.stdout
+
+
+def test_check_update_archive_rejects_runtime_local_state_member(tmp_path):
+    zip_path = tmp_path / "runtime-local.zip"
+    _write_required_update_archive(zip_path)
+    with zipfile.ZipFile(zip_path, "a") as zip_ref:
+        zip_ref.writestr("Container_Audit/relay_spool/queued.csv", b"queued")
+    destination = tmp_path / "smoke"
+
+    completed = subprocess.run(
+        [sys.executable, str(SCRIPT), "--zip-path", str(zip_path), "--destination", str(destination)],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert not (destination / "Container_Audit" / "relay_spool" / "queued.csv").exists()
+    assert "현장 런타임/민감 상태 파일" in completed.stderr

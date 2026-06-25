@@ -513,17 +513,20 @@ def test_upload_writes_status_without_storing_secret(tmp_path):
     session = FakeSession(
         FakeResponse(
             200,
-            {
-                "request_id": "request-container-1",
-                "client_batch_id": plan.metadata["client_batch_id"],
-                "server_source_file_id": (
-                    f"{plan.metadata['source_host_id']}/"
+                {
+                    "request_id": "request-container-1",
+                    "upload_id": "request-container-1",
+                    "client_batch_id": plan.metadata["client_batch_id"],
+                    "server_source_file_id": (
+                        f"{plan.metadata['source_host_id']}/"
                     f"{plan.metadata['producer_role']}/"
                     f"{plan.metadata['stream_name']}/"
                     f"{plan.metadata['relative_path']}"
                 ),
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -619,6 +622,75 @@ def test_upload_disables_redirects_and_rejects_redirect_response(tmp_path):
     assert Path(result.status_path).is_file()
 
 
+def test_upload_remote_failure_redacts_server_echoed_sensitive_payload(tmp_path):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    plan = build_source_file_plan(
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+
+    class EchoingFailureSession:
+        def __init__(self):
+            self.calls = []
+
+        def post(self, url, *, data, files, headers, timeout, allow_redirects):
+            file_name, file_handle, content_type = files["file"]
+            self.calls.append(
+                {
+                    "url": url,
+                    "metadata": data["metadata"],
+                    "headers": dict(headers),
+                    "timeout": timeout,
+                    "allow_redirects": allow_redirects,
+                    "file_name": file_name,
+                    "file_bytes": file_handle.read(),
+                    "content_type": content_type,
+                }
+            )
+            signature = headers["X-Producer-Signature"]
+            return FakeResponse(
+                503,
+                {
+                    "committed": False,
+                    "retryable": True,
+                    "error": {
+                        "code": "ingest_write_disabled",
+                        "message": (
+                            "disabled Authorization: Bearer SHOULD-NOT-LEAK "
+                            f"{signature} X-Producer-Signature "
+                            f"{direct_sync_push.SIGNATURE_VERSION} {credentials.secret}\nnext"
+                        ),
+                    },
+                    "echo": ["Authorization: Bearer SHOULD-NOT-LEAK", signature],
+                    "X-Producer-Signature": "server-echo-key",
+                },
+            )
+
+    session = EchoingFailureSession()
+
+    result = upload_source_file(plan, credentials, session=session, status_dir=tmp_path / "status")
+
+    assert result.success is False
+    assert result.committed is False
+    assert result.retryable is True
+    assert result.error_code == "ingest_write_disabled"
+    assert "\n" not in result.error_message
+    status_text = Path(result.status_path).read_text(encoding="utf-8")
+    combined_text = json.dumps(result.receipt, ensure_ascii=False) + status_text + result.error_message
+    for leaked in (
+        "SHOULD-NOT-LEAK",
+        credentials.secret,
+        session.calls[0]["headers"]["X-Producer-Signature"],
+        "X-Producer-Signature",
+        direct_sync_push.SIGNATURE_VERSION,
+        "Authorization",
+    ):
+        assert leaked not in combined_text
+
+
 def test_upload_non_2xx_invalid_json_has_retryable_diagnostic(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -662,12 +734,15 @@ def test_upload_status_artifact_write_failure_preserves_upload_result(tmp_path):
     session = FakeSession(
         FakeResponse(
             200,
-            {
-                "request_id": "request-container-1",
-                "client_batch_id": plan.metadata["client_batch_id"],
-                "server_source_file_id": server_source_file_id,
-                "committed": True,
+                {
+                    "request_id": "request-container-1",
+                    "upload_id": "request-container-1",
+                    "client_batch_id": plan.metadata["client_batch_id"],
+                    "server_source_file_id": server_source_file_id,
+                    "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -991,12 +1066,15 @@ def test_relay_enqueue_repairs_invalid_existing_spool_for_deduped_pending_batch(
     session = FakeSession(
         FakeResponse(
             200,
-            {
-                "request_id": "request-repaired-spool",
-                "client_batch_id": duplicate.relay_id,
-                "server_source_file_id": server_source_file_id,
-                "committed": True,
+                {
+                    "request_id": "request-repaired-spool",
+                    "upload_id": "request-repaired-spool",
+                    "client_batch_id": duplicate.relay_id,
+                    "server_source_file_id": server_source_file_id,
+                    "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -1249,10 +1327,13 @@ def test_relay_retry_then_success_uses_fresh_signed_request_and_marks_acked(tmp_
                 200,
                 {
                     "request_id": "request-relay-2",
+                    "upload_id": "request-relay-2",
                     "client_batch_id": row.relay_id,
                     "server_source_file_id": server_source_file_id,
                     "committed": True,
                     "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
                     "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
                 },
             ),
@@ -1560,6 +1641,7 @@ def test_drain_uses_enqueued_metadata_snapshot_after_manifest_changes(tmp_path):
                 200,
                 {
                     "request_id": "request-snapshot",
+                    "upload_id": "request-snapshot",
                     "client_batch_id": metadata["client_batch_id"],
                     "server_source_file_id": (
                         f"{metadata['source_host_id']}/"
@@ -1569,6 +1651,8 @@ def test_drain_uses_enqueued_metadata_snapshot_after_manifest_changes(tmp_path):
                     ),
                     "committed": True,
                     "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
                     "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
                 },
             )
@@ -1751,6 +1835,8 @@ def test_drain_moves_committed_receipt_identity_mismatch_to_operator_review(tmp_
                 "server_source_file_id": "wrong/source/id",
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -1801,6 +1887,8 @@ def test_drain_moves_committed_receipt_missing_client_batch_id_to_operator_revie
                 "server_source_file_id": server_source_file_id,
                 "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -1831,7 +1919,78 @@ def test_drain_moves_committed_receipt_missing_client_batch_id_to_operator_revie
 @pytest.mark.parametrize(
     ("receipt_patch", "expected_error_code"),
     [
+        ({"request_id": "__DELETE__"}, "receipt_trace_missing"),
+        ({"upload_id": "__DELETE__"}, "receipt_trace_missing"),
+        ({"upload_id": "request-from-different-upload"}, "receipt_trace_mismatch"),
+    ],
+)
+def test_drain_moves_committed_receipt_missing_trace_identity_to_operator_review(
+    tmp_path, receipt_patch, expected_error_code
+):
+    manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    row = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=tmp_path / "spool",
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    server_source_file_id = f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
+    receipt = {
+        "request_id": "request-trace-identity",
+        "upload_id": "request-trace-identity",
+        "client_batch_id": row.relay_id,
+        "server_source_file_id": server_source_file_id,
+        "committed": True,
+        "status": "accepted",
+        "retryable": False,
+        "next_retry_after": None,
+        "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
+    }
+    for key, value in receipt_patch.items():
+        if value == "__DELETE__":
+            receipt.pop(key, None)
+        else:
+            receipt[key] = value
+    session = FakeSession(FakeResponse(200, receipt))
+
+    result = drain_one_relay_batch(
+        db_path=db_path,
+        credentials=credentials,
+        session=session,
+        status_dir=tmp_path / "status",
+    )
+
+    assert result is not None
+    assert result.success is False
+    assert result.committed is True
+    assert result.error_code == expected_error_code
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        current = conn.execute(
+            "SELECT status, last_error_code, receipt_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (row.relay_id,),
+        ).fetchone()
+    assert current["status"] == RELAY_STATUS_OPERATOR_REVIEW
+    assert current["last_error_code"] == expected_error_code
+    stored_receipt = json.loads(current["receipt_json"])
+    assert stored_receipt["client_batch_id"] == row.relay_id
+
+
+@pytest.mark.parametrize(
+    ("receipt_patch", "expected_error_code"),
+    [
         ({"server_source_file_id": None}, "receipt_identity_missing"),
+        ({"status": "retry_wait"}, "producer_receipt_invalid"),
+        ({"retryable": "__DELETE__"}, "producer_receipt_invalid"),
+        ({"retryable": None}, "producer_receipt_invalid"),
+        ({"retryable": True}, "producer_receipt_invalid"),
+        ({"retryable": "false"}, "producer_receipt_invalid"),
+        ({"next_retry_after": "2026-06-21T00:01:00Z"}, "producer_receipt_invalid"),
+        ({"error": {"code": "contradictory_error", "message": "not accepted"}}, "producer_receipt_invalid"),
         ({"totals": None}, "producer_receipt_invalid"),
         ({"totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": "bad"}}, "producer_receipt_invalid"),
         ({"totals": {"inserted": True, "replayed": 0, "quarantined": 0, "errors": 0}}, "producer_receipt_invalid"),
@@ -1854,13 +2013,20 @@ def test_drain_moves_incomplete_committed_receipt_to_operator_review(tmp_path, r
     server_source_file_id = f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
     receipt = {
         "request_id": "request-incomplete-committed",
+        "upload_id": "request-incomplete-committed",
         "client_batch_id": row.relay_id,
         "server_source_file_id": server_source_file_id,
         "committed": True,
         "status": "accepted",
+        "retryable": False,
+        "next_retry_after": None,
         "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
     }
-    receipt.update(receipt_patch)
+    for key, value in receipt_patch.items():
+        if value == "__DELETE__":
+            receipt.pop(key, None)
+        else:
+            receipt[key] = value
     session = FakeSession(FakeResponse(200, receipt))
 
     result = drain_one_relay_batch(
@@ -1990,12 +2156,15 @@ def test_drain_preserves_non_2xx_committed_receipt_for_operator_review(tmp_path)
     session = FakeSession(
         FakeResponse(
             409,
-            {
-                "request_id": "request-committed-conflict",
-                "client_batch_id": row.relay_id,
-                "server_source_file_id": server_source_file_id,
-                "committed": True,
+                {
+                    "request_id": "request-committed-conflict",
+                    "upload_id": "request-committed-conflict",
+                    "client_batch_id": row.relay_id,
+                    "server_source_file_id": server_source_file_id,
+                    "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )
@@ -2236,6 +2405,91 @@ def test_drain_corrupt_relay_metadata_goes_to_operator_review_without_rebuild(tm
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+def test_drain_rejects_non_integer_relay_metadata_byte_length_without_upload(tmp_path):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    row = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=tmp_path / "spool",
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    metadata = dict(row.metadata)
+    metadata["byte_length"] = float(row.byte_length)
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET metadata_json = ? WHERE relay_id = ?",
+            (json.dumps(metadata, ensure_ascii=False, sort_keys=True), row.relay_id),
+        )
+        conn.commit()
+    session = FakeSession(FakeResponse(200, {"committed": True}))
+
+    result = drain_one_relay_batch(
+        db_path=db_path,
+        credentials=credentials,
+        session=session,
+        status_dir=tmp_path / "status",
+    )
+
+    assert result is not None
+    assert result.error_code == "relay_metadata_invalid"
+    assert "byte_length" in result.error_message
+    assert session.calls == []
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        current = conn.execute(
+            "SELECT status, last_error_code, receipt_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (row.relay_id,),
+        ).fetchone()
+    assert current["status"] == RELAY_STATUS_OPERATOR_REVIEW
+    assert current["last_error_code"] == "relay_metadata_invalid"
+    assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
+
+
+def test_drain_rejects_changed_producer_credentials_without_upload(tmp_path):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    row = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=tmp_path / "spool",
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    changed_credentials = ProducerCredentials(
+        producer_id=credentials.producer_id,
+        key_id="key-container-rotated",
+        secret=credentials.secret,
+        endpoint_url=credentials.endpoint_url,
+    )
+    session = FakeSession(FakeResponse(200, {"committed": True}))
+
+    result = drain_one_relay_batch(
+        db_path=db_path,
+        credentials=changed_credentials,
+        session=session,
+        status_dir=tmp_path / "status",
+    )
+
+    assert result is not None
+    assert result.error_code == "relay_credentials_changed"
+    assert session.calls == []
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        current = conn.execute(
+            "SELECT status, last_error_code, receipt_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (row.relay_id,),
+        ).fetchone()
+    assert current["status"] == RELAY_STATUS_OPERATOR_REVIEW
+    assert current["last_error_code"] == "relay_credentials_changed"
+    assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
+
+
 def test_drain_upload_exception_after_claim_releases_lease_to_operator_review(tmp_path, monkeypatch):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2307,12 +2561,15 @@ def test_drain_acks_committed_upload_when_status_artifact_write_fails(tmp_path):
     session = FakeSession(
         FakeResponse(
             200,
-            {
-                "request_id": "request-relay-acked",
-                "client_batch_id": row.relay_id,
-                "server_source_file_id": server_source_file_id,
-                "committed": True,
+                {
+                    "request_id": "request-relay-acked",
+                    "upload_id": "request-relay-acked",
+                    "client_batch_id": row.relay_id,
+                    "server_source_file_id": server_source_file_id,
+                    "committed": True,
                 "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
             },
         )

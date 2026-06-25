@@ -69,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
     status_parser = subparsers.add_parser("status", help="Report local relay queue and pause state")
     status_parser.add_argument("--db-path", required=True)
     status_parser.add_argument("--operator-pause-path", default="")
+    status_parser.add_argument("--runtime-status-path", default="")
     status_parser.add_argument("--report-path", default="")
 
     pause_parser = subparsers.add_parser("pause", help="Pause local relay enqueue/drain work")
@@ -98,7 +99,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
-            return _emit(operator_status(db_path=args.db_path, pause_path=args.operator_pause_path), args.report_path)
+            return _emit(
+                operator_status(
+                    db_path=args.db_path,
+                    pause_path=args.operator_pause_path,
+                    runtime_status_path=args.runtime_status_path,
+                ),
+                args.report_path,
+            )
         if args.command == "pause":
             return _emit(
                 pause_relay(

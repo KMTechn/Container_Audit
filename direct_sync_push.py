@@ -11,6 +11,7 @@ import ipaddress
 import json
 import math
 import os
+import re
 import socket
 import sqlite3
 import time
@@ -51,6 +52,8 @@ RELAY_METADATA_IDENTITY_FIELDS = (
     "source_transport",
     "relative_path",
 )
+AUTHORIZATION_HEADER_RE = re.compile(r"(?i)authorization\s*:\s*[^\r\n\t ]+(?:[ \t]+[^\r\n\t ]+)?")
+CONTROL_TEXT_RE = re.compile(r"[\x00-\x1f\x7f]+")
 
 
 class DirectSyncPushError(Exception):
@@ -102,6 +105,9 @@ class RelayQueueRow:
     byte_length: int
     attempt_count: int
     metadata: Dict[str, Any]
+    producer_id: str = ""
+    key_id: str = ""
+    endpoint_url: str = ""
     lease_owner: str = ""
     lease_expires_at: str = ""
     deduped_existing: bool = False
@@ -416,6 +422,48 @@ def _response_json(response: Any) -> tuple[Dict[str, Any], bool]:
     return payload, True
 
 
+def _redact_remote_error_message(
+    value: Any,
+    *,
+    credentials: ProducerCredentials,
+    headers: Mapping[str, str],
+    limit: int = 500,
+) -> str:
+    text = str(value or "")
+    for sensitive in (
+        credentials.secret,
+        headers.get("X-Producer-Signature", ""),
+        SIGNATURE_VERSION,
+        "X-Producer-Signature",
+    ):
+        if sensitive:
+            text = text.replace(str(sensitive), "[redacted]")
+    text = AUTHORIZATION_HEADER_RE.sub("[redacted]", text)
+    text = CONTROL_TEXT_RE.sub(" ", text)
+    return text.strip()[:limit]
+
+
+def _redact_remote_error_payload(
+    payload: Mapping[str, Any],
+    *,
+    credentials: ProducerCredentials,
+    headers: Mapping[str, str],
+) -> Dict[str, Any]:
+    def redact_value(value: Any) -> Any:
+        if isinstance(value, str):
+            return _redact_remote_error_message(value, credentials=credentials, headers=headers)
+        if isinstance(value, list):
+            return [redact_value(item) for item in value]
+        if isinstance(value, dict):
+            return {
+                _redact_remote_error_message(key, credentials=credentials, headers=headers): redact_value(item)
+                for key, item in value.items()
+            }
+        return value
+
+    return redact_value(dict(payload))
+
+
 def _transport_error_result(exc: Exception) -> UploadResult:
     return UploadResult(
         success=False,
@@ -537,6 +585,22 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
     identity_error_code, identity_error_message = _receipt_identity_issue(plan, receipt)
     if identity_error_code:
         return identity_error_code, identity_error_message, 0, 0
+    request_id = str(receipt.get("request_id") or "").strip()
+    if not request_id:
+        return "receipt_trace_missing", "producer receipt request_id is missing", 0, 0
+    upload_id = str(receipt.get("upload_id") or "").strip()
+    if not upload_id:
+        return "receipt_trace_missing", "producer receipt upload_id is missing", 0, 0
+    if upload_id != request_id:
+        return "receipt_trace_mismatch", "producer receipt upload_id does not match request_id", 0, 0
+    if str(receipt.get("status") or "").strip() != "accepted":
+        return "producer_receipt_invalid", "accepted receipt status must be accepted", 0, 0
+    if receipt.get("retryable") is not False:
+        return "producer_receipt_invalid", "accepted receipt retryable must be false", 0, 0
+    if receipt.get("next_retry_after") is not None:
+        return "producer_receipt_invalid", "accepted receipt next_retry_after must be null", 0, 0
+    if receipt.get("error") is not None:
+        return "producer_receipt_invalid", "accepted receipt must not include error details", 0, 0
     totals = receipt.get("totals")
     if not isinstance(totals, dict):
         return "producer_receipt_invalid", "producer receipt totals are missing or invalid", 0, 0
@@ -615,8 +679,15 @@ def _with_upload_status_artifact(
     )
 
 
-def _upload_response_result(plan: SourceFilePlan, response: Any) -> UploadResult:
+def _upload_response_result(
+    plan: SourceFilePlan,
+    response: Any,
+    *,
+    credentials: ProducerCredentials,
+    headers: Mapping[str, str],
+) -> UploadResult:
     payload, payload_is_valid_json = _response_json(response)
+    safe_payload = _redact_remote_error_payload(payload, credentials=credentials, headers=headers)
     status_code = int(getattr(response, "status_code", 0) or 0)
     retry_after_seconds = _retry_after_header_seconds(_response_header(response, "Retry-After"))
     committed_value = payload.get("committed")
@@ -626,7 +697,7 @@ def _upload_response_result(plan: SourceFilePlan, response: Any) -> UploadResult
             status_code=status_code,
             committed=False,
             retryable=False,
-            receipt=payload if payload_is_valid_json else {},
+            receipt=safe_payload if payload_is_valid_json else {},
             error_code="producer_redirect_not_allowed",
             error_message="producer ingest redirected; redirects are not allowed",
         )
@@ -648,12 +719,12 @@ def _upload_response_result(plan: SourceFilePlan, response: Any) -> UploadResult
             status_code=status_code,
             committed=True,
             retryable=False,
-            receipt=payload,
+            receipt=safe_payload,
             error_code="producer_receipt_invalid",
             error_message="producer ingest response receipt is missing or invalid",
         )
     committed = committed_value is True
-    error = payload.get("error") if isinstance(payload.get("error"), dict) else {}
+    error = safe_payload.get("error") if isinstance(safe_payload.get("error"), dict) else {}
     if committed:
         receipt_error_code, receipt_error_message, errors, quarantined = _committed_receipt_issue(plan, payload)
         success = 200 <= status_code < 300 and not receipt_error_code and errors == 0 and quarantined == 0
@@ -670,7 +741,7 @@ def _upload_response_result(plan: SourceFilePlan, response: Any) -> UploadResult
         status_code=status_code,
         committed=committed,
         retryable=payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504},
-        receipt=payload,
+        receipt=safe_payload,
         retry_after_seconds=(
             retry_after_seconds
             if payload.get("retryable") is True or status_code in {408, 429, 500, 502, 503, 504}
@@ -723,7 +794,7 @@ def upload_source_file(
             except Exception as exc:
                 result = _transport_error_result(exc)
             else:
-                result = _upload_response_result(plan, response)
+                result = _upload_response_result(plan, response, credentials=credentials, headers=headers)
     return _with_upload_status_artifact(plan, result, status_dir, status_context=status_context)
 
 
@@ -776,6 +847,9 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
                 receipt_json TEXT,
                 upload_status_path TEXT,
                 metadata_json TEXT,
+                producer_id TEXT,
+                key_id TEXT,
+                endpoint_url TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -797,6 +871,9 @@ def _ensure_relay_queue_columns(conn: sqlite3.Connection) -> None:
     columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(direct_sync_relay_batches)").fetchall()}
     migrations = {
         "metadata_json": "ALTER TABLE direct_sync_relay_batches ADD COLUMN metadata_json TEXT",
+        "producer_id": "ALTER TABLE direct_sync_relay_batches ADD COLUMN producer_id TEXT",
+        "key_id": "ALTER TABLE direct_sync_relay_batches ADD COLUMN key_id TEXT",
+        "endpoint_url": "ALTER TABLE direct_sync_relay_batches ADD COLUMN endpoint_url TEXT",
     }
     for column, statement in migrations.items():
         if column not in columns:
@@ -841,6 +918,9 @@ def _relay_row(row: sqlite3.Row, *, deduped_existing: bool = False) -> RelayQueu
         byte_length=int(row["byte_length"]),
         attempt_count=int(row["attempt_count"]),
         metadata=metadata,
+        producer_id=str(row["producer_id"] or ""),
+        key_id=str(row["key_id"] or ""),
+        endpoint_url=str(row["endpoint_url"] or ""),
         lease_owner=str(row["lease_owner"] or ""),
         lease_expires_at=str(row["lease_expires_at"] or ""),
         deduped_existing=deduped_existing,
@@ -1031,8 +1111,8 @@ def enqueue_source_file_for_relay(
                 relay_id, status, source_file_path, spooled_file_path,
                 producer_manifest_path, relative_path, content_sha256,
                 byte_length, attempt_count, next_attempt_at, metadata_json,
-                created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
+                producer_id, key_id, endpoint_url, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 relay_id,
@@ -1045,6 +1125,9 @@ def enqueue_source_file_for_relay(
                 plan.byte_length,
                 now,
                 canonical_json(plan.metadata),
+                credentials.producer_id,
+                credentials.key_id,
+                credentials.endpoint_url,
                 now,
                 now,
             ),
@@ -1381,7 +1464,7 @@ def _source_file_plan_from_relay_row(row: RelayQueueRow) -> SourceFilePlan:
         raise DirectSyncPushError("relay metadata relative_path does not match queued row")
     if str(metadata.get("content_sha256") or "").lower() != row.content_sha256.lower():
         raise DirectSyncPushError("relay metadata content_sha256 does not match queued row")
-    if int(metadata.get("byte_length") or -1) != row.byte_length:
+    if type(metadata.get("byte_length")) is not int or metadata["byte_length"] != row.byte_length:
         raise DirectSyncPushError("relay metadata byte_length does not match queued row")
     return SourceFilePlan(
         source_file_path=row.spooled_file_path,
@@ -1389,6 +1472,24 @@ def _source_file_plan_from_relay_row(row: RelayQueueRow) -> SourceFilePlan:
         content_sha256=row.content_sha256,
         byte_length=row.byte_length,
     )
+
+
+def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredentials) -> tuple[str, str]:
+    if not row.producer_id or not row.key_id or not row.endpoint_url:
+        return (
+            "relay_credentials_unpinned",
+            "relay batch was queued before producer credentials were pinned; operator review is required",
+        )
+    if (
+        row.producer_id != credentials.producer_id
+        or row.key_id != credentials.key_id
+        or row.endpoint_url != credentials.endpoint_url
+    ):
+        return (
+            "relay_credentials_changed",
+            "current producer credentials do not match the queued relay batch",
+        )
+    return "", ""
 
 
 def drain_one_relay_batch(
@@ -1462,6 +1563,27 @@ def drain_one_relay_batch(
             receipt={"client_batch_id": row.relay_id},
             error_code="relay_metadata_invalid",
             error_message=str(exc),
+        )
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=RELAY_STATUS_OPERATOR_REVIEW,
+            receipt=result.receipt,
+            error_code=result.error_code,
+            error_message=result.error_message,
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
+    credential_error_code, credential_error_message = _relay_credentials_issue(row, credentials)
+    if credential_error_code:
+        result = UploadResult(
+            success=False,
+            status_code=0,
+            committed=False,
+            retryable=False,
+            receipt={"client_batch_id": row.relay_id},
+            error_code=credential_error_code,
+            error_message=credential_error_message,
         )
         if not _set_claimed_relay_status(
             row,
