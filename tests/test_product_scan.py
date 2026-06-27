@@ -1,5 +1,7 @@
 from types import SimpleNamespace
 
+import pytest
+
 import product_scan
 
 
@@ -64,6 +66,30 @@ def test_decide_product_scan_rejects_invalid_tray_capacity_without_raising():
     assert not decision.accepted
 
 
+@pytest.mark.parametrize(
+    ("barcode", "reason"),
+    [
+        ("AAA2270730100\n001", "control_character"),
+        ("=AAA2270730100-001", "formula_prefix"),
+        ("AAA2270730100<script>alert(1)</script>", "html_or_script_marker"),
+        ("AAA2270730100..\\..\\evil", "path_traversal_marker"),
+        ("AAA2270730100/../evil", "path_traversal_marker"),
+        (f"AAA2270730100-{'1' * 128}", "barcode_too_long"),
+    ],
+)
+def test_decide_product_scan_rejects_unsafe_product_barcodes_without_storing_raw_payload(barcode, reason):
+    decision = product_scan.decide_product_scan(_tray(), barcode, item_code_length=13)
+
+    assert decision.status == product_scan.SCAN_FORMAT_ERROR
+    assert not decision.accepted
+    assert decision.event_name == "SCAN_FAIL_FORMAT"
+    assert decision.event_detail["reason"] == reason
+    assert decision.event_detail["raw_barcode_length"] == len(barcode)
+    assert len(decision.event_detail["raw_barcode_sha256"]) == 64
+    assert "raw_barcode" not in decision.event_detail
+    assert barcode not in str(decision.event_detail)
+
+
 def test_decide_product_scan_rejects_item_mismatch_with_event_detail():
     decision = product_scan.decide_product_scan(_tray(), "BBB2270730100-001", item_code_length=13)
 
@@ -106,3 +132,21 @@ def test_decide_product_scan_accepts_valid_new_product_barcode():
     assert decision.accepted
     assert decision.event_name == ""
     assert decision.event_detail == {}
+
+
+@pytest.mark.parametrize(
+    "barcode",
+    [
+        "AAA2270730100/LOT-001",
+        "AAA2270730100&A=1",
+        "AAA2270730100;SERIAL",
+        "AAA2270730100|SERIAL",
+        'AAA2270730100"SERIAL"',
+        "AAA2270730100'SERIAL'",
+        "AAA2270730100" + ("1" * (product_scan.MAX_PRODUCT_BARCODE_LENGTH - len("AAA2270730100"))),
+    ],
+)
+def test_decide_product_scan_accepts_legitimate_non_control_separator_barcodes(barcode):
+    decision = product_scan.decide_product_scan(_tray(), barcode, item_code_length=13)
+
+    assert decision.accepted

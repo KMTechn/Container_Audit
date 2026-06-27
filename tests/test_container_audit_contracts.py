@@ -4854,6 +4854,44 @@ def test_product_scan_logs_format_failure_without_mutating_tray_state():
     assert app.warning[0] == "바코드 형식 오류"
 
 
+def test_product_scan_logs_unsafe_format_failure_without_raw_payload_or_state_mutation():
+    app = _headless_app()
+    app.current_tray = TraySession(
+        master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        scanned_barcodes=[],
+        scan_times=[],
+        tray_size=2,
+    )
+    app.master_label_replace_state = None
+    app.ITEM_CODE_LENGTH = 13
+    app.COLOR_DANGER = "danger"
+    app._update_last_activity_time = lambda: None
+    app._save_current_tray_state = lambda: (_ for _ in ()).throw(
+        AssertionError("unsafe format failure should not mutate or save tray state")
+    )
+    logged = []
+    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+        {"event": event, "detail": detail}
+    ) or True
+    app.show_fullscreen_warning = lambda *args, **kwargs: setattr(app, "warning", args)
+    unsafe_barcode = "AAA2270730100<script>alert(1)</script>"
+
+    app._process_barcode_logic(unsafe_barcode)
+
+    assert app.current_tray.scanned_barcodes == []
+    assert app.current_tray.mismatch_error_count == 0
+    assert app.current_tray.has_error_or_reset is False
+    assert logged[0]["event"] == "SCAN_FAIL_FORMAT"
+    assert logged[0]["detail"]["reason"] == "html_or_script_marker"
+    assert logged[0]["detail"]["raw_barcode_length"] == len(unsafe_barcode)
+    assert len(logged[0]["detail"]["raw_barcode_sha256"]) == 64
+    assert "raw_barcode" not in logged[0]["detail"]
+    assert unsafe_barcode not in str(logged)
+    assert app.warning[0] == "바코드 형식 오류"
+
+
 def test_product_scan_rejects_barcode_matching_multiple_item_codes():
     app = _headless_app()
     app.current_tray = TraySession(

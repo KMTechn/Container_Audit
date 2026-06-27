@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
     enqueue_completed_source_file,
@@ -29,6 +30,7 @@ from direct_sync_runtime import (  # noqa: E402
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
 ALLOWED_SOURCE_SUFFIX = ".csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
+SOURCE_WRITER_LOCK_STALE_SECONDS = float(EVENT_LOG_LOCK_STALE_SECONDS)
 DELTA_PROGRESS_STATUSES = {"pending", "leased", "retry_wait", "acked"}
 SCAN_SUCCESS_STATUSES = {"enqueued", "already_queued", "already_acked"}
 SCAN_BLOCKED_STATUSES = {
@@ -245,8 +247,12 @@ def _read_source_scan_state(db_path: str | Path, source_file: Path) -> tuple[int
         conn.close()
 
 
-def _record_source_sent_byte_count(db_path: str | Path, source_file: Path, sent_byte_count: int) -> None:
-    sent_prefix_sha256 = _file_prefix_sha256(source_file, sent_byte_count)
+def _record_source_sent_byte_count(
+    db_path: str | Path,
+    source_file: Path,
+    sent_byte_count: int,
+    sent_prefix_sha256: str,
+) -> None:
     conn = _scan_state_connect(db_path)
     try:
         conn.execute(
@@ -265,8 +271,41 @@ def _record_source_sent_byte_count(db_path: str | Path, source_file: Path, sent_
         conn.close()
 
 
-def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int] | None:
-    source_size = source_file.stat().st_size
+def _complete_line_prefix(data: bytes) -> bytes:
+    if not data:
+        return b""
+    if data.endswith(b"\n"):
+        return data
+    last_newline = data.rfind(b"\n")
+    if last_newline < 0:
+        return b""
+    return data[: last_newline + 1]
+
+
+def _source_writer_lock_path(source_file: Path) -> Path:
+    return Path(f"{source_file.resolve()}.lock")
+
+
+def _has_active_source_writer_lock(source_file: Path) -> bool:
+    lock_path = _source_writer_lock_path(source_file)
+    try:
+        lock_stat = lock_path.stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return time.time() - lock_stat.st_mtime <= SOURCE_WRITER_LOCK_STALE_SECONDS
+
+
+def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int, str] | None:
+    if _has_active_source_writer_lock(source_file):
+        return None
+    try:
+        source_stat = source_file.stat()
+    except OSError:
+        return None
+    source_size = source_stat.st_size
+    source_mtime_ns = source_stat.st_mtime_ns
     sent_byte_count, sent_prefix_sha256 = _read_source_scan_state(config.db_path, source_file)
     if sent_byte_count > 0:
         replaced_or_truncated = not sent_prefix_sha256 or source_size < sent_byte_count
@@ -286,20 +325,42 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
         handle.seek(start_byte)
         delta_body = handle.read()
 
-    if not delta_body.strip():
+    try:
+        after_stat = source_file.stat()
+    except OSError:
+        return None
+    if after_stat.st_size != source_size or after_stat.st_mtime_ns != source_mtime_ns:
         return None
 
-    delta_content = delta_body if start_byte == 0 else header + delta_body
+    complete_delta_body = _complete_line_prefix(delta_body)
+    if not complete_delta_body.strip():
+        return None
+    end_byte = start_byte + len(complete_delta_body)
+    if start_byte == 0 and end_byte <= data_start:
+        return None
+
+    delta_content = complete_delta_body if start_byte == 0 else header + complete_delta_body
     delta_hash = hashlib.sha256(delta_content).hexdigest()
+    try:
+        with source_file.open("rb") as handle:
+            sent_prefix = handle.read(end_byte)
+        after_prefix_stat = source_file.stat()
+    except OSError:
+        return None
+    if after_prefix_stat.st_size != source_size or after_prefix_stat.st_mtime_ns != source_mtime_ns:
+        return None
+    if len(sent_prefix) != end_byte:
+        return None
+    sent_prefix_sha256 = hashlib.sha256(sent_prefix).hexdigest()
     delta_source = (
         Path(config.spool_dir)
         / "_scan_delta_inputs"
         / _source_delta_key(source_file)
-        / f"bytes-{start_byte}-{source_size}-sha256-{delta_hash[:16]}.csv"
+        / f"bytes-{start_byte}-{end_byte}-sha256-{delta_hash[:16]}.csv"
     )
     delta_source.parent.mkdir(parents=True, exist_ok=True)
     delta_source.write_bytes(delta_content)
-    return delta_source, _delta_relative_path(source_file, start_byte, source_size, delta_hash), source_size
+    return delta_source, _delta_relative_path(source_file, start_byte, end_byte, delta_hash), end_byte, sent_prefix_sha256
 
 
 def _scan_source_files(
@@ -432,7 +493,7 @@ def main(argv: list[str] | None = None) -> int:
         attempted_count = 0
         no_new_count = 0
         preflight_status = None
-        pending_delta_progress: dict[str, tuple[Path, int]] = {}
+        pending_delta_progress: dict[str, tuple[Path, int, str]] = {}
         max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
         for source_file in _scan_source_files(
             args.scan_source_dir,
@@ -465,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
             if delta is None:
                 no_new_count += 1
                 continue
-            delta_source_file, relative_path, sent_byte_count = delta
+            delta_source_file, relative_path, sent_byte_count, sent_prefix_sha256 = delta
             current = enqueue_completed_source_file(
                 config,
                 source_file_path=delta_source_file,
@@ -482,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
                 last_result = current.get("last_result") if isinstance(current.get("last_result"), dict) else {}
                 relay_id = str(last_result.get("relay_id") or "")
                 if relay_id:
-                    pending_delta_progress[relay_id] = (source_file, sent_byte_count)
+                    pending_delta_progress[relay_id] = (source_file, sent_byte_count, sent_prefix_sha256)
             elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 break
@@ -530,8 +591,13 @@ def main(argv: list[str] | None = None) -> int:
             last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else {}
             acked_relay_id = str(last_result.get("relay_id") or "")
             if status.get("status") == "acked" and acked_relay_id in pending_delta_progress:
-                source_file, sent_byte_count = pending_delta_progress[acked_relay_id]
-                _record_source_sent_byte_count(config.db_path, source_file, sent_byte_count)
+                source_file, sent_byte_count, sent_prefix_sha256 = pending_delta_progress[acked_relay_id]
+                _record_source_sent_byte_count(
+                    config.db_path,
+                    source_file,
+                    sent_byte_count,
+                    sent_prefix_sha256,
+                )
         else:
             if scan_status["status"] == "scan_no_files":
                 status = scan_status
