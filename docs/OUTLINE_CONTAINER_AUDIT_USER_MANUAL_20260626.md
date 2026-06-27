@@ -8,6 +8,12 @@
 
 이 문서는 OUTLINE에 올려서 현장 작업자가 그대로 따라 볼 수 있도록 만든 사용 설명서입니다. 어려운 서버, DB, 동기화 용어보다 실제 화면에서 무엇을 보고 무엇을 해야 하는지 중심으로 설명합니다.
 
+## 전체 워크플로우
+
+![전체 워크플로우](assets/container_audit_user_manual_20260626/00-workflow.png)
+
+Mermaid 원본은 `docs/assets/container_audit_user_manual_20260626/00-workflow.mmd`에 보관합니다.
+
 ## 1. 꼭 기억할 것
 
 이 프로그램은 이적실에서 현품표와 제품 바코드를 스캔해서 작업 기록을 남기는 프로그램입니다.
@@ -457,13 +463,18 @@
 
 게시 결과:
 
-- OUTLINE 문서: `https://wiki.kmtecherp.com/doc/container_audit-2026-06-26-9MW2TIcDBR`
-- OUTLINE document id: `83d0038f-f401-4f69-a1d4-8dd1da4a0723`
+- OUTLINE 부모 문서: `https://wiki.kmtecherp.com/doc/8jsuydsp4hsgrag7zse66gc6re4656o-7EK8SbJ618`
+- OUTLINE 문서: `https://wiki.kmtecherp.com/doc/container_audit-aJEkn1X2yH`
+- OUTLINE document id: `38dcd747-21d1-456f-852d-c929aa835e03`
 - 게시 시각: 2026-06-26 KST
-- 게시 방식: 서버 `/root/.outline_env`의 승인된 Outline API 환경을 사용해 문서 생성 후 이미지 12장을 document attachment로 업로드하고 본문 이미지 링크를 `/api/attachments.redirect` URL로 치환했다.
+- 게시 방식: 서버 `/root/.outline_env`의 승인된 Outline API 환경을 사용해 문서 생성 후 기존 이미지 12장을 document attachment로 업로드하고 본문 이미지 링크를 `/api/attachments.redirect` URL로 치환했다.
+- 2026-06-27 로컬 원본에는 전체 워크플로우 이미지 1장을 추가했다. OUTLINE 게시본에 반영하려면 `00-workflow.png`를 추가 attachment로 올리고 상단 이미지를 attachment URL로 치환해야 한다.
 
 이미지 자산:
 
+- `docs/assets/container_audit_user_manual_20260626/00-workflow.png`
+- `docs/assets/container_audit_user_manual_20260626/00-workflow.svg`
+- `docs/assets/container_audit_user_manual_20260626/00-workflow.mmd`
 - `docs/assets/container_audit_user_manual_20260626/01-login.png`
 - `docs/assets/container_audit_user_manual_20260626/02-work-start.png`
 - `docs/assets/container_audit_user_manual_20260626/03-master-label.png`
@@ -483,4 +494,4 @@
 - `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\screenshots`
 - `C:\company\program\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`
 
-OUTLINE에 올릴 때는 Markdown 본문을 붙여 넣은 뒤 이미지 12장을 같은 순서로 첨부하거나, OUTLINE import가 로컬 상대 이미지 링크를 지원하는 방식이면 `docs/assets/container_audit_user_manual_20260626` 폴더를 함께 사용합니다.
+OUTLINE에 올릴 때는 Markdown 본문을 붙여 넣은 뒤 워크플로우 이미지를 포함한 PNG 13장을 같은 순서로 첨부하거나, OUTLINE import가 로컬 상대 이미지 링크를 지원하는 방식이면 `docs/assets/container_audit_user_manual_20260626` 폴더를 함께 사용합니다.

@@ -812,6 +812,7 @@ def _install_pack_dry_run_report(tmp_root: Path) -> dict:
             program_data_root=str(tmp_root / "ProgramData" / "KMTech" / "DirectSync" / "container_audit"),
             producer_manifest_path=str(tmp_root / "producer_manifest.json"),
             credential_path=str(tmp_root / "credential.json"),
+            report_path=str(tmp_root / "install_pack_report.json"),
             task_name="direct-sync-relay-container-audit",
             minute_interval=1,
             min_free_bytes=512 * 1024 * 1024,

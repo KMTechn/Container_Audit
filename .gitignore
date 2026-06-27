@@ -1,0 +1,10 @@
+.tmp/
+build/
+dist/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+Container_Audit.spec
+Container_Audit-*.zip
+config/worker_registry.json
+config/parked_trays/
