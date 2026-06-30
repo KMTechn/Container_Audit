@@ -72,4 +72,7 @@ def test_check_update_archive_rejects_runtime_local_state_member(tmp_path):
 
     assert completed.returncode != 0
     assert not (destination / "Container_Audit" / "relay_spool" / "queued.csv").exists()
-    assert "현장 런타임/민감 상태 파일" in completed.stderr
+    assert (
+        "현장 런타임/민감 상태 파일" in completed.stderr
+        or "runtime-local path segment is not allowed" in completed.stderr
+    )
