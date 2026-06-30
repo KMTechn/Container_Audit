@@ -1190,6 +1190,7 @@ def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     assert report["status"] == "BLOCKED"
     assert report["blocked_reason"] == "apply requires --confirm-production-install"
+    assert report["production_apply_guard"]["requires_confirm_production_install"] is True
 
 
 def test_install_pack_apply_writes_applying_report_before_running_command(tmp_path, monkeypatch):
