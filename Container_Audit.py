@@ -23,6 +23,7 @@ from pathlib import Path
 
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
+from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import append_event_log_entry
 from event_payloads import (
@@ -63,13 +64,28 @@ from tray_state import (
     validate_tray_state,
 )
 from update_service import (
+    UPDATE_CHANNEL_ENV,
+    UPDATE_DEFAULT_CHANNEL,
+    UPDATE_MANIFEST_PUBLIC_KEY_ENV,
+    UPDATE_MANIFEST_SIGNATURE_URL_ENV,
+    UPDATE_MANIFEST_URL_ENV,
+    UPDATE_PROVIDER_ENV,
+    UPDATE_PROVIDER_GITHUB,
+    UPDATE_PROVIDER_OFF,
+    UPDATE_PROVIDER_PRIVATE_MANIFEST,
+    assert_https_update_url,
+    find_release_asset_update_info,
     find_release_asset_urls,
+    is_sha256,
     is_newer_version,
     parse_version_tag,
     release_asset_name_from_url,
     safe_extract_update_zip,
+    update_candidate_from_private_manifest,
     validate_release_asset_url,
+    verify_update_file_hash,
     verify_update_checksum,
+    verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
 
@@ -103,6 +119,17 @@ def _safe_int_mapping(value: Any) -> Dict[str, int]:
     return safe
 
 
+def normalize_update_settings(raw: Any) -> Dict[str, str]:
+    if not isinstance(raw, dict):
+        return {}
+    normalized: Dict[str, str] = {}
+    for key in ("provider", "manifest_url", "manifest_signature_url", "manifest_public_key", "channel"):
+        value = raw.get(key)
+        if isinstance(value, str) and value.strip():
+            normalized[key] = value.strip()
+    return normalized
+
+
 def normalize_app_settings(raw: Any) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return {}
@@ -119,6 +146,9 @@ def normalize_app_settings(raw: Any) -> Dict[str, Any]:
     internal_test_commands = raw.get("enable_internal_test_commands")
     if isinstance(internal_test_commands, bool):
         settings["enable_internal_test_commands"] = internal_test_commands
+    update_settings = normalize_update_settings(raw.get("update_settings"))
+    if update_settings:
+        settings["update_settings"] = update_settings
     return settings
 
 
@@ -140,6 +170,119 @@ def _find_release_asset_urls(
 
 def _verify_update_checksum(zip_path: str, checksum_text: str, *, expected_filename: str = "") -> None:
     verify_update_checksum(zip_path, checksum_text, expected_filename=expected_filename)
+
+
+def _get_update_provider() -> str:
+    settings = _load_update_settings()
+    return str(os.environ.get(UPDATE_PROVIDER_ENV) or settings.get("provider") or UPDATE_PROVIDER_OFF).strip().lower()
+
+
+def _get_update_channel() -> str:
+    settings = _load_update_settings()
+    return str(os.environ.get(UPDATE_CHANNEL_ENV) or settings.get("channel") or UPDATE_DEFAULT_CHANNEL).strip().lower()
+
+
+def _update_settings_path() -> str:
+    path_resolver = globals().get("resource_path")
+    relative_path = os.path.join("config", "container_audit_settings.json")
+    if callable(path_resolver):
+        return path_resolver(relative_path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), relative_path)
+
+
+def _load_update_settings() -> Dict[str, str]:
+    try:
+        with open(_update_settings_path(), "r", encoding="utf-8") as handle:
+            return normalize_update_settings(json.load(handle).get("update_settings"))
+    except Exception:
+        return {}
+
+
+def _get_update_manifest_url() -> str:
+    settings = _load_update_settings()
+    return str(os.environ.get(UPDATE_MANIFEST_URL_ENV) or settings.get("manifest_url") or "").strip()
+
+
+def _get_update_manifest_signature_url(manifest_url: str) -> str:
+    settings = _load_update_settings()
+    return str(os.environ.get(UPDATE_MANIFEST_SIGNATURE_URL_ENV) or settings.get("manifest_signature_url") or "").strip() or f"{manifest_url}.sig"
+
+
+def _get_update_manifest_public_key() -> str:
+    settings = _load_update_settings()
+    return str(os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV) or settings.get("manifest_public_key") or "").strip()
+
+
+def _check_github_release_for_updates() -> Optional[Dict[str, str]]:
+    api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+    response = requests.get(api_url, timeout=5)
+    response.raise_for_status()
+    latest_release_data = response.json()
+    if not isinstance(latest_release_data, dict):
+        raise ValueError("GitHub latest release 응답 형식이 올바르지 않습니다.")
+    latest_version = str(latest_release_data.get('tag_name') or "").strip()
+    if not latest_version:
+        raise ValueError("GitHub latest release tag_name이 없습니다.")
+    if not _is_newer_version(latest_version, CURRENT_VERSION):
+        return None
+    update_info = find_release_asset_update_info(latest_release_data, expected_version=latest_version)
+    if update_info:
+        return {
+            "download_url": update_info["download_url"],
+            "version": latest_version,
+            "checksum_url": update_info.get("checksum_url", ""),
+            "sha256": update_info.get("sha256", ""),
+            "provider": UPDATE_PROVIDER_GITHUB,
+        }
+    download_url, checksum_url = _find_release_asset_urls(latest_release_data, expected_version=latest_version)
+    if download_url:
+        print("업데이트 확인 중 오류 발생: SHA256 체크섬 asset 또는 GitHub asset digest를 찾을 수 없습니다.")
+    return None
+
+
+def _check_private_manifest_for_updates() -> Optional[Dict[str, Any]]:
+    manifest_url = _get_update_manifest_url()
+    if not manifest_url:
+        print(f"업데이트 확인 생략: {UPDATE_MANIFEST_URL_ENV} 환경변수가 설정되지 않았습니다.")
+        return None
+    public_key_hex = _get_update_manifest_public_key()
+    if not public_key_hex:
+        raise ValueError("private_manifest updater requires a manifest public key")
+    assert_https_update_url(manifest_url)
+    response = requests.get(manifest_url, timeout=5)
+    response.raise_for_status()
+    manifest = response.json()
+    if not isinstance(manifest, dict):
+        raise ValueError("업데이트 manifest 응답 형식이 올바르지 않습니다.")
+    signature_url = _get_update_manifest_signature_url(manifest_url)
+    assert_https_update_url(signature_url)
+    signature_response = requests.get(signature_url, timeout=5)
+    signature_response.raise_for_status()
+    verify_update_manifest_signature(manifest, signature_response.content, public_key_hex)
+    return update_candidate_from_private_manifest(
+        manifest,
+        current_version=CURRENT_VERSION,
+        expected_channel=_get_update_channel(),
+    )
+
+
+def _check_update_candidate() -> Optional[Dict[str, Any]]:
+    provider = _get_update_provider()
+    if provider in {"", UPDATE_PROVIDER_OFF, "disabled", "none"}:
+        return None
+    if provider in {"private", "manifest", UPDATE_PROVIDER_PRIVATE_MANIFEST}:
+        return _check_private_manifest_for_updates()
+    if provider == UPDATE_PROVIDER_GITHUB:
+        return _check_github_release_for_updates()
+    raise ValueError(f"지원하지 않는 업데이트 provider입니다: {provider}")
+
+
+def _safe_check_update_candidate() -> Optional[Dict[str, Any]]:
+    try:
+        return _check_update_candidate()
+    except (requests.exceptions.RequestException, ValueError, TypeError) as e:
+        print(f"업데이트 확인 중 오류 발생: {e}")
+        return None
 
 
 def _validate_updater_batch_value(name: str, value: str) -> str:
@@ -203,56 +346,50 @@ def _read_update_checksum_response(response: Any, *, max_bytes: int = MAX_UPDATE
 
 
 def check_for_updates():
-    """GitHub에서 최신 릴리스 정보를 확인하고, 업데이트가 필요하면 .zip 파일의 다운로드 URL을 반환합니다."""
-    try:
-        api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
-        response = requests.get(api_url, timeout=5)
-        response.raise_for_status()
-        latest_release_data = response.json()
-        if not isinstance(latest_release_data, dict):
-            raise ValueError("GitHub latest release 응답 형식이 올바르지 않습니다.")
-        latest_version = str(latest_release_data.get('tag_name') or "").strip()
-        if not latest_version:
-            raise ValueError("GitHub latest release tag_name이 없습니다.")
-        if _is_newer_version(latest_version, CURRENT_VERSION):
-            download_url, checksum_url = _find_release_asset_urls(latest_release_data, expected_version=latest_version)
-            if download_url and checksum_url:
-                return download_url, latest_version, checksum_url
-            if download_url:
-                print("업데이트 확인 중 오류 발생: SHA256 체크섬 asset을 찾을 수 없습니다.")
-            return None, None, None
-        else:
-            return None, None, None
-    except (requests.exceptions.RequestException, ValueError, TypeError) as e:
-        print(f"업데이트 확인 중 오류 발생: {e}")
+    """설정된 provider에서 최신 업데이트 후보를 확인합니다."""
+    candidate = _safe_check_update_candidate()
+    if not candidate:
         return None, None, None
+    return candidate["download_url"], candidate["version"], candidate.get("checksum_url")
 
-def download_and_apply_update(url, checksum_url=None, *, allow_source_mode: bool = False):
+def download_and_apply_update(
+    url,
+    checksum_url=None,
+    *,
+    expected_sha256=None,
+    archive_policy=None,
+    allow_source_mode: bool = False,
+):
     """업데이트 .zip 파일을 다운로드하고, 압축 해제 후 적용 스크립트를 실행합니다."""
     update_temp_root = ""
     updater_launched = False
     try:
-        if not checksum_url:
-            raise ValueError("업데이트 SHA256 체크섬 URL이 필요합니다.")
+        if not checksum_url and not expected_sha256:
+            raise ValueError("업데이트 SHA256 체크섬 URL 또는 예상 해시가 필요합니다.")
+        if expected_sha256 and not is_sha256(str(expected_sha256).strip()):
+            raise ValueError("업데이트 SHA256 예상 해시 형식이 올바르지 않습니다.")
         if not allow_source_mode and not _release_runtime_mode():
             raise ValueError("소스 실행 모드에서는 자동 업데이트를 적용하지 않습니다.")
-        download_url = validate_release_asset_url(url)
-        verified_checksum_url = validate_release_asset_url(checksum_url)
+        download_url = assert_https_update_url(url, require_zip=True) if expected_sha256 else validate_release_asset_url(url)
+        verified_checksum_url = validate_release_asset_url(checksum_url) if checksum_url else ""
         update_temp_root = tempfile.mkdtemp(prefix="container_audit_update_", dir=os.environ.get("TEMP", "C:\\Temp"))
         zip_path = os.path.join(update_temp_root, "update.zip")
         response = requests.get(download_url, stream=True, timeout=120)
         response.raise_for_status()
         _write_update_download(response, zip_path)
-        checksum_response = requests.get(verified_checksum_url, stream=True, timeout=30)
-        checksum_response.raise_for_status()
-        checksum_text = _read_update_checksum_response(checksum_response)
-        _verify_update_checksum(
-            zip_path,
-            checksum_text,
-            expected_filename=release_asset_name_from_url(download_url),
-        )
+        if verified_checksum_url:
+            checksum_response = requests.get(verified_checksum_url, stream=True, timeout=30)
+            checksum_response.raise_for_status()
+            checksum_text = _read_update_checksum_response(checksum_response)
+            _verify_update_checksum(
+                zip_path,
+                checksum_text,
+                expected_filename=release_asset_name_from_url(download_url),
+            )
+        else:
+            verify_update_file_hash(zip_path, str(expected_sha256))
         temp_update_folder = os.path.join(update_temp_root, "extracted")
-        safe_extract_update_zip(zip_path, temp_update_folder)
+        safe_extract_update_zip(zip_path, temp_update_folder, archive_policy=archive_policy)
         os.remove(zip_path)
         if getattr(sys, 'frozen', False):
             application_path = os.path.dirname(sys.executable)
@@ -394,13 +531,20 @@ exit /b 1
 def check_and_apply_updates():
     if not _release_runtime_mode():
         return
-    download_url, new_version, checksum_url = check_for_updates()
-    if download_url:
+    candidate = _safe_check_update_candidate()
+    if candidate:
+        download_url = candidate["download_url"]
+        new_version = candidate["version"]
         root_alert = tk.Tk()
         root_alert.withdraw()
         if messagebox.askyesno("업데이트 발견", f"새로운 버전({new_version})이 발견되었습니다.\n지금 업데이트하시겠습니까? (현재: {CURRENT_VERSION})", parent=root_alert):
             root_alert.destroy()
-            download_and_apply_update(download_url, checksum_url=checksum_url)
+            download_and_apply_update(
+                download_url,
+                checksum_url=candidate.get("checksum_url"),
+                expected_sha256=candidate.get("sha256"),
+                archive_policy=candidate.get("archive_policy"),
+            )
         else:
             root_alert.destroy()
 
@@ -496,6 +640,11 @@ class ContainerAudit:
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
         self._setup_paths_and_dirs()
+        self._direct_sync_bootstrap_thread = start_direct_sync_auto_bootstrap(
+            app_root=self.application_path,
+            direct_sync_root=self.direct_sync_program_data_root,
+            scan_source_dir=self.direct_sync_scan_source_dir,
+        )
         self.worker_registry = WorkerRegistry(os.path.join(self.config_folder, self.WORKERS_FILE))
         self.parked_tray_store = ParkedTrayStore(self.parked_trays_dir)
 
@@ -617,11 +766,14 @@ class ContainerAudit:
     def save_settings(self):
         try:
             path = os.path.join(self.config_folder, self.SETTINGS_FILE)
+            previous_settings = self.load_app_settings()
             current_settings = {
                 'scale_factor': self.scale_factor,
                 'column_widths_validator': self.column_widths,
                 'paned_window_sash_positions': self.paned_window_sash_positions,
             }
+            if "update_settings" in previous_settings:
+                current_settings["update_settings"] = previous_settings["update_settings"]
             if not _release_runtime_mode():
                 current_settings['enable_internal_test_commands'] = bool(getattr(self, 'internal_test_commands_enabled', False))
             atomic_write_json(path, current_settings, indent=4, ensure_ascii=False)
@@ -1408,7 +1560,8 @@ class ContainerAudit:
         if center_width <= 1 or center_height <= 1:
             return
         metrics = self._get_center_layout_metrics(center_width, center_height)
-        metrics_key = tuple(metrics.values())
+        action_layout_band = 3 if center_width >= 1080 else 2 if center_width >= 720 else 1
+        metrics_key = tuple(metrics.values()) + (action_layout_band,)
         if metrics_key == getattr(self, "_center_layout_metrics", None):
             return
         self._center_layout_metrics = metrics_key
@@ -1442,6 +1595,31 @@ class ContainerAudit:
         try:
             if center_width <= 0:
                 center_width = button_frame.winfo_width()
+            groups = getattr(self, "_center_action_groups", [])
+            if groups:
+                if center_width >= 1080:
+                    group_columns = 3
+                elif center_width >= 720:
+                    group_columns = 2
+                else:
+                    group_columns = 1
+
+                for group in groups:
+                    group["frame"].grid_forget()
+                for column in range(max(6, len(groups))):
+                    button_frame.grid_columnconfigure(column, weight=0, uniform="")
+                for index, group in enumerate(groups):
+                    group["frame"].grid(
+                        row=index // group_columns,
+                        column=index % group_columns,
+                        sticky='nsew',
+                        padx=pad_x,
+                        pady=(0, max(4, int(8 * self.scale_factor))),
+                    )
+                    button_frame.grid_columnconfigure(index % group_columns, weight=1, uniform="center_action_groups")
+                    self._layout_center_action_group_buttons(group, center_width // max(1, group_columns), pad_x)
+                return
+
             if center_width >= 1080:
                 columns = len(buttons)
             elif center_width >= 620:
@@ -1463,6 +1641,38 @@ class ContainerAudit:
                     weight=1 if column < columns else 0,
                     uniform="center_actions" if column < columns else "",
                 )
+        except (tk.TclError, AttributeError):
+            return
+
+    def _layout_center_action_group_buttons(self, group: dict, group_width: int, pad_x: int = 8) -> None:
+        buttons = group.get("buttons", [])
+        if not buttons:
+            return
+        group_key = group.get("key", "")
+        inner_frame = group.get("button_frame")
+        if inner_frame is None:
+            return
+        try:
+            if group_key == "primary":
+                columns = 1
+            elif group_key == "danger":
+                columns = 1 if group_width < 720 else 2
+            else:
+                columns = min(len(buttons), 2 if group_width >= 360 else 1)
+
+            for button in buttons:
+                button.grid_forget()
+            for column in range(max(3, len(buttons))):
+                inner_frame.grid_columnconfigure(column, weight=0, uniform="")
+            for index, button in enumerate(buttons):
+                button.grid(
+                    row=index // columns,
+                    column=index % columns,
+                    sticky='ew',
+                    padx=max(2, pad_x // 2),
+                    pady=(0, max(4, int(6 * self.scale_factor))),
+                )
+                inner_frame.grid_columnconfigure(index % columns, weight=1, uniform=f"center_{group_key}_actions")
         except (tk.TclError, AttributeError):
             return
 
@@ -1774,13 +1984,27 @@ class ContainerAudit:
         self.root.after(0, self._apply_scanned_listbox_layout)
         button_frame = ttk.Frame(parent_frame)
         self._center_button_frame = button_frame
-        button_frame.grid(row=5, column=0, pady=(30, 0))
-        self.reset_button = ttk.Button(button_frame, text="현재 작업 리셋", command=self.reset_current_work, style='Danger.TButton')
-        self.undo_button = ttk.Button(button_frame, text="↩️ 마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton')
-        self.park_button = ttk.Button(button_frame, text="⏸️ 트레이 보류", command=self.park_current_tray, style='Warning.TButton')
-        self.replace_master_label_button = ttk.Button(button_frame, text="🔄 완료 현품표 교체", command=self.initiate_master_label_replacement, style='Secondary.TButton')
-        self.exchange_button = ttk.Button(button_frame, text="🔁 개별 제품 교환", command=self.show_exchange_dialog, style='Secondary.TButton')
-        self.submit_tray_button = ttk.Button(button_frame, text="✅ 트레이 제출", command=self.submit_current_tray, style='Success.TButton')
+        button_frame.grid(row=5, column=0, sticky='ew', pady=(30, 0), padx=20)
+
+        primary_group = ttk.LabelFrame(button_frame, text="주요 작업", style='TLabelframe', padding=(8, 8))
+        support_group = ttk.LabelFrame(button_frame, text="보조 작업", style='TLabelframe', padding=(8, 8))
+        danger_group = ttk.LabelFrame(button_frame, text="고위험 작업", style='TLabelframe', padding=(8, 8))
+        primary_button_frame = ttk.Frame(primary_group, style='TFrame')
+        support_button_frame = ttk.Frame(support_group, style='TFrame')
+        danger_button_frame = ttk.Frame(danger_group, style='TFrame')
+        primary_button_frame.grid(row=0, column=0, sticky='ew')
+        support_button_frame.grid(row=0, column=0, sticky='ew')
+        danger_button_frame.grid(row=0, column=0, sticky='ew')
+        primary_group.grid_columnconfigure(0, weight=1)
+        support_group.grid_columnconfigure(0, weight=1)
+        danger_group.grid_columnconfigure(0, weight=1)
+
+        self.submit_tray_button = ttk.Button(primary_button_frame, text="✅ 트레이 제출", command=self.submit_current_tray, style='Success.TButton')
+        self.undo_button = ttk.Button(support_button_frame, text="↩️ 마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton')
+        self.park_button = ttk.Button(support_button_frame, text="⏸️ 트레이 보류", command=self.park_current_tray, style='Warning.TButton')
+        self.reset_button = ttk.Button(danger_button_frame, text="현재 작업 리셋", command=self.reset_current_work, style='Danger.TButton')
+        self.replace_master_label_button = ttk.Button(danger_button_frame, text="🔄 완료 현품표 교체", command=self.initiate_master_label_replacement, style='Secondary.TButton')
+        self.exchange_button = ttk.Button(danger_button_frame, text="🔁 개별 제품 교환", command=self.show_exchange_dialog, style='Secondary.TButton')
         self._center_action_buttons = [
             self.reset_button,
             self.undo_button,
@@ -1788,6 +2012,16 @@ class ContainerAudit:
             self.replace_master_label_button,
             self.exchange_button,
             self.submit_tray_button,
+        ]
+        self._center_action_groups = [
+            {"key": "primary", "frame": primary_group, "button_frame": primary_button_frame, "buttons": [self.submit_tray_button]},
+            {"key": "support", "frame": support_group, "button_frame": support_button_frame, "buttons": [self.undo_button, self.park_button]},
+            {
+                "key": "danger",
+                "frame": danger_group,
+                "button_frame": danger_button_frame,
+                "buttons": [self.reset_button, self.replace_master_label_button, self.exchange_button],
+            },
         ]
         self._layout_center_action_buttons(720, int(8 * self.scale_factor))
         self._update_action_button_states()
