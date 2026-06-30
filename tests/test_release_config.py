@@ -29,6 +29,138 @@ def test_release_config_accepts_safe_default_settings(tmp_path):
     check_release_config.validate_release_config(config_dir)
 
 
+def test_release_config_accepts_private_update_settings(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "scale_factor": 1.0,
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                "manifest_signature_url": "https://updates.example/container_audit/stable/latest.json.sig",
+                "manifest_public_key": "a" * 64,
+                "channel": "stable",
+            },
+        },
+    )
+
+    check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_accepts_github_update_provider_for_public_fallback(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "github",
+                "channel": "stable",
+            }
+        },
+    )
+
+    check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_rejects_github_provider_with_private_manifest_keys(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "github",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                "channel": "stable",
+            }
+        },
+    )
+
+    with pytest.raises(ValueError, match="private-manifest keys"):
+        check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_rejects_tokenized_private_update_url(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json?token=raw",
+                "manifest_public_key": "a" * 64,
+                "channel": "stable",
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="raw token query"):
+        check_release_config.validate_release_config(config_dir)
+
+
+@pytest.mark.parametrize("query", ["sig=raw", "signature=raw", "X-Amz-Signature=raw", "X-Goog-Signature=raw"])
+def test_release_config_rejects_signed_credential_private_update_url(tmp_path, query):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": f"https://updates.example/container_audit/stable/latest.json?{query}",
+                "manifest_public_key": "a" * 64,
+                "channel": "stable",
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="raw token query"):
+        check_release_config.validate_release_config(config_dir)
+
+
+@pytest.mark.parametrize(
+    "update_settings",
+    [
+        {
+            "provider": "private_manifest",
+            "manifest_url": "https://raw.githubusercontent.com/KMTechn/update-feed/main/container_audit/latest.json",
+            "manifest_public_key": "a" * 64,
+            "channel": "stable",
+        },
+        {
+            "provider": "private_manifest",
+            "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+            "manifest_signature_url": "https://github-releases.githubusercontent.com/123/latest.json.sig",
+            "manifest_public_key": "a" * 64,
+            "channel": "stable",
+        },
+    ],
+)
+def test_release_config_rejects_github_hosted_private_update_urls(tmp_path, update_settings):
+    config_dir = tmp_path / "config"
+    write_settings(config_dir, {"update_settings": update_settings})
+
+    with pytest.raises(ValueError, match="GitHub-hosted"):
+        check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_rejects_malformed_private_update_key(tmp_path):
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                "manifest_public_key": "not-hex",
+                "channel": "stable",
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="64 hex"):
+        check_release_config.validate_release_config(config_dir)
+
+
 def test_release_config_rejects_enabled_internal_test_commands(tmp_path):
     config_dir = tmp_path / "config"
     write_settings(config_dir, {"enable_internal_test_commands": True})

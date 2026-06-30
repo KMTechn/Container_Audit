@@ -76,8 +76,10 @@ from update_service import (
     assert_https_update_url,
     find_release_asset_update_info,
     find_release_asset_urls,
+    is_github_hosted_update_url,
     is_sha256,
     is_newer_version,
+    parse_sha256_checksum,
     parse_version_tag,
     release_asset_name_from_url,
     safe_extract_update_zip,
@@ -227,11 +229,24 @@ def _check_github_release_for_updates() -> Optional[Dict[str, str]]:
         return None
     update_info = find_release_asset_update_info(latest_release_data, expected_version=latest_version)
     if update_info:
+        expected_sha256 = str(update_info.get("sha256") or "").strip().lower()
+        checksum_url = str(update_info.get("checksum_url") or "").strip()
+        if not expected_sha256 and checksum_url:
+            checksum_response = requests.get(checksum_url, stream=True, timeout=30)
+            checksum_response.raise_for_status()
+            checksum_text = _read_update_checksum_response(checksum_response)
+            expected_sha256 = parse_sha256_checksum(
+                checksum_text,
+                expected_filename=release_asset_name_from_url(update_info["download_url"]),
+            )
+            checksum_url = ""
+        if not is_sha256(expected_sha256):
+            return None
         return {
             "download_url": update_info["download_url"],
             "version": latest_version,
-            "checksum_url": update_info.get("checksum_url", ""),
-            "sha256": update_info.get("sha256", ""),
+            "checksum_url": checksum_url,
+            "sha256": expected_sha256,
             "provider": UPDATE_PROVIDER_GITHUB,
         }
     download_url, checksum_url = _find_release_asset_urls(latest_release_data, expected_version=latest_version)
@@ -249,6 +264,8 @@ def _check_private_manifest_for_updates() -> Optional[Dict[str, Any]]:
     if not public_key_hex:
         raise ValueError("private_manifest updater requires a manifest public key")
     assert_https_update_url(manifest_url)
+    if is_github_hosted_update_url(manifest_url):
+        raise ValueError("private_manifest updater manifest URL must not point to GitHub-hosted update storage")
     response = requests.get(manifest_url, timeout=5)
     response.raise_for_status()
     manifest = response.json()
@@ -256,6 +273,8 @@ def _check_private_manifest_for_updates() -> Optional[Dict[str, Any]]:
         raise ValueError("업데이트 manifest 응답 형식이 올바르지 않습니다.")
     signature_url = _get_update_manifest_signature_url(manifest_url)
     assert_https_update_url(signature_url)
+    if is_github_hosted_update_url(signature_url):
+        raise ValueError("private_manifest updater signature URL must not point to GitHub-hosted update storage")
     signature_response = requests.get(signature_url, timeout=5)
     signature_response.raise_for_status()
     verify_update_manifest_signature(manifest, signature_response.content, public_key_hex)

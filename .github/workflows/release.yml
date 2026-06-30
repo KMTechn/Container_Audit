@@ -38,10 +38,39 @@ jobs:
 
       - name: Prepare release config
         shell: pwsh
+        env:
+          PRIVATE_UPDATE_MANIFEST_URL: ${{ vars.PRIVATE_UPDATE_MANIFEST_URL }}
+          PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL: ${{ vars.PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL }}
+          PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY: ${{ vars.PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY }}
+          PRIVATE_UPDATE_CHANNEL: ${{ vars.PRIVATE_UPDATE_CHANNEL }}
         run: |
           Remove-Item -LiteralPath build/release_config -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path build/release_config | Out-Null
           Copy-Item -LiteralPath config/container_audit_settings.json -Destination build/release_config/container_audit_settings.json
+          $settingsPath = "build/release_config/container_audit_settings.json"
+          $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath $settingsPath | ConvertFrom-Json
+          $channel = if ([string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_CHANNEL)) { "stable" } else { $env:PRIVATE_UPDATE_CHANNEL.Trim() }
+          if (-not [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_URL) -or -not [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY)) {
+            if ([string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_URL) -or [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY)) {
+              throw "PRIVATE_UPDATE_MANIFEST_URL and PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY must be set together."
+            }
+            $updateSettings = [ordered]@{
+              provider = "private_manifest"
+              manifest_url = $env:PRIVATE_UPDATE_MANIFEST_URL.Trim()
+              manifest_public_key = $env:PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY.Trim()
+              channel = $channel
+            }
+            if (-not [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL)) {
+              $updateSettings.manifest_signature_url = $env:PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL.Trim()
+            }
+          } else {
+            $updateSettings = [ordered]@{
+              provider = "github"
+              channel = $channel
+            }
+          }
+          $settings | Add-Member -NotePropertyName update_settings -NotePropertyValue ([pscustomobject]$updateSettings) -Force
+          $settings | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8NoBOM -LiteralPath $settingsPath
           python tools/check_release_config.py --config-dir build/release_config
 
       - name: Prepare release tools
@@ -112,7 +141,65 @@ jobs:
           python tools/check_release_config.py --config-dir "$releaseConfigDir"
           $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
           "$($hash.Hash)  $zipPath" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
-      
+          $zipInfo = Get-Item -LiteralPath $zipPath
+          if (-not [string]::IsNullOrWhiteSpace("${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}")) {
+            $manifestPath = "Container_Audit-${{ github.ref_name }}.manifest.json"
+            $baseUrl = "${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}".Trim().TrimEnd("/")
+            $baseUri = [System.Uri]$baseUrl
+            if ($baseUri.Scheme -ne "https") {
+              throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must use HTTPS."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($baseUri.UserInfo)) {
+              throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not include userinfo."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($baseUri.Fragment)) {
+              throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not include fragments."
+            }
+            if (-not [string]::IsNullOrWhiteSpace($baseUri.Query)) {
+              throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not contain query strings."
+            }
+            $blockedHosts = @("github.com", "www.github.com", "api.github.com", "objects.githubusercontent.com", "github-releases.githubusercontent.com")
+            $artifactHost = $baseUri.Host.ToLowerInvariant()
+            if ($blockedHosts -contains $artifactHost -or $artifactHost.EndsWith(".githubusercontent.com")) {
+              throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must point to the private update artifact host, not GitHub release storage."
+            }
+            $artifactUrl = "$baseUrl/$zipPath"
+            $manifest = [ordered]@{
+              schema_version = "kmtech-private-update-manifest-v1"
+              manifest_version = 1
+              app_id = "Container_Audit"
+              package_id = "Container_Audit"
+              channel = "stable"
+              version = "${{ github.ref_name }}"
+              artifact = [ordered]@{
+                name = $zipPath
+                url = $artifactUrl
+                size_bytes = $zipInfo.Length
+                sha256 = $hash.Hash.ToLowerInvariant()
+                legacy_sha256_url = "$artifactUrl.sha256"
+              }
+              archive = [ordered]@{
+                format = "zip"
+                pyinstaller_layout = "onedir"
+                top_level = "Container_Audit"
+                entrypoint = "Container_Audit.exe"
+                required_files = $required
+                deny_runtime_state = $true
+              }
+              install = [ordered]@{
+                strategy = "robocopy_backup_then_mirror"
+                preserve_paths = @("config/container_audit_settings.json")
+                restart_executable = "Container_Audit.exe"
+              }
+              rollout = [ordered]@{
+                percentage = 0
+                allow_pc_ids = @()
+                deny_pc_ids = @()
+              }
+            }
+            $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding utf8NoBOM $manifestPath
+          }
+
       - name: Create Release and Upload Asset
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:

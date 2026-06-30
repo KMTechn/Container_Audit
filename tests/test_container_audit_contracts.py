@@ -80,6 +80,32 @@ def test_normalize_app_settings_clamps_numeric_scale_and_drops_malformed_values(
     }
 
 
+def test_normalize_app_settings_preserves_private_update_settings():
+    settings = container_audit_module.normalize_app_settings(
+        {
+            "update_settings": {
+                "provider": " private_manifest ",
+                "manifest_url": " https://updates.example/container_audit/stable/latest.json ",
+                "manifest_signature_url": " https://updates.example/container_audit/stable/latest.json.sig ",
+                "manifest_public_key": "a" * 64,
+                "channel": " stable ",
+                "ignored": "drop",
+                "bad_type": True,
+            }
+        }
+    )
+
+    assert settings == {
+        "update_settings": {
+            "provider": "private_manifest",
+            "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+            "manifest_signature_url": "https://updates.example/container_audit/stable/latest.json.sig",
+            "manifest_public_key": "a" * 64,
+            "channel": "stable",
+        }
+    }
+
+
 def test_load_app_settings_returns_normalized_settings_from_file(tmp_path):
     app = _headless_app()
     app.config_folder = str(tmp_path)
@@ -116,6 +142,12 @@ def test_release_runtime_drops_internal_test_commands_on_load_and_save(tmp_path,
             {
                 "scale_factor": 1.0,
                 "enable_internal_test_commands": True,
+                "update_settings": {
+                    "provider": "private_manifest",
+                    "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                    "manifest_public_key": "b" * 64,
+                    "channel": "stable",
+                },
             },
             ensure_ascii=False,
         ),
@@ -127,8 +159,74 @@ def test_release_runtime_drops_internal_test_commands_on_load_and_save(tmp_path,
     app.save_settings()
 
     saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert loaded == {"scale_factor": 1.0}
+    assert loaded == {
+        "scale_factor": 1.0,
+        "update_settings": {
+            "provider": "private_manifest",
+            "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+            "manifest_public_key": "b" * 64,
+            "channel": "stable",
+        },
+    }
     assert "enable_internal_test_commands" not in saved
+    assert saved["update_settings"]["provider"] == "private_manifest"
+
+
+def test_update_helpers_load_private_settings_from_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "config" / "container_audit_settings.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "update_settings": {
+                    "provider": "private_manifest",
+                    "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                    "manifest_signature_url": "https://updates.example/container_audit/stable/latest.json.sig",
+                    "manifest_public_key": "c" * 64,
+                    "channel": "stable",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "resource_path",
+        lambda relative: str(tmp_path / Path(relative)),
+    )
+    for env_name in (
+        container_audit_module.UPDATE_PROVIDER_ENV,
+        container_audit_module.UPDATE_MANIFEST_URL_ENV,
+        container_audit_module.UPDATE_MANIFEST_SIGNATURE_URL_ENV,
+        container_audit_module.UPDATE_MANIFEST_PUBLIC_KEY_ENV,
+        container_audit_module.UPDATE_CHANNEL_ENV,
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    assert container_audit_module._get_update_provider() == "private_manifest"
+    assert container_audit_module._get_update_channel() == "stable"
+    assert container_audit_module._get_update_manifest_url() == "https://updates.example/container_audit/stable/latest.json"
+    assert (
+        container_audit_module._get_update_manifest_signature_url("https://updates.example/container_audit/stable/latest.json")
+        == "https://updates.example/container_audit/stable/latest.json.sig"
+    )
+    assert container_audit_module._get_update_manifest_public_key() == "c" * 64
+
+
+def test_private_manifest_rejects_github_hosted_manifest_url(monkeypatch):
+    monkeypatch.setenv(
+        container_audit_module.UPDATE_MANIFEST_URL_ENV,
+        "https://raw.githubusercontent.com/KMTechn/update-feed/main/latest.json",
+    )
+    monkeypatch.setenv(container_audit_module.UPDATE_MANIFEST_PUBLIC_KEY_ENV, "a" * 64)
+
+    def fail_get(*args, **kwargs):
+        raise AssertionError("requests.get should not be called for GitHub-hosted private manifest URL")
+
+    monkeypatch.setattr(container_audit_module.requests, "get", fail_get)
+
+    with pytest.raises(ValueError, match="GitHub-hosted"):
+        container_audit_module._check_private_manifest_for_updates()
 
 
 class DummyListbox:
@@ -694,6 +792,7 @@ def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monk
     update_root = tmp_path / "update-root"
     popen_paths = []
     requests_seen = []
+    extract_kwargs = []
     monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
 
     class FakeResponse:
@@ -712,7 +811,7 @@ def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monk
         update_root.mkdir()
         return str(update_root)
 
-    def fake_extract(zip_path, destination):
+    def fake_extract(zip_path, destination, **kwargs):
         extracted = tmp_path / "update-root" / "extracted" / "Container_Audit"
         extracted.mkdir(parents=True)
         (extracted / "Container_Audit.exe").write_text("exe", encoding="utf-8")
@@ -745,6 +844,66 @@ def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monk
     assert popen_paths == [[str(updater_path)]]
     assert updater_path.is_file()
     assert update_root.exists()
+
+
+def test_download_and_apply_update_accepts_manifest_sha256_without_checksum_url(tmp_path, monkeypatch):
+    update_root = tmp_path / "update-root"
+    popen_paths = []
+    requests_seen = []
+    extract_kwargs = []
+    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+
+    class FakeResponse:
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size):
+            return iter([b"zip-bytes"])
+
+    def fake_mkdtemp(*args, **kwargs):
+        update_root.mkdir()
+        return str(update_root)
+
+    def fake_extract(zip_path, destination, **kwargs):
+        extract_kwargs.append(kwargs)
+        extracted = update_root / "extracted" / "Container_Audit"
+        extracted.mkdir(parents=True)
+        (extracted / "Container_Audit.exe").write_text("exe", encoding="utf-8")
+        return extracted.parent
+
+    monkeypatch.setattr(container_audit_module.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(
+        container_audit_module.requests,
+        "get",
+        lambda url, **kwargs: requests_seen.append((url, kwargs)) or FakeResponse(),
+    )
+    monkeypatch.setattr(container_audit_module, "safe_extract_update_zip", fake_extract)
+    monkeypatch.setattr(container_audit_module.subprocess, "Popen", lambda path, **kwargs: popen_paths.append(path))
+
+    with pytest.raises(SystemExit):
+        container_audit_module.download_and_apply_update(
+            "https://updates.example/Container_Audit-v2.0.10.zip",
+            expected_sha256=hashlib.sha256(b"zip-bytes").hexdigest(),
+            archive_policy={
+                "top_level": "Container_Audit",
+                "required_files": ["Container_Audit/Container_Audit.exe"],
+            },
+        )
+
+    assert [call[0] for call in requests_seen] == [
+        "https://updates.example/Container_Audit-v2.0.10.zip",
+    ]
+    assert extract_kwargs == [
+        {
+            "archive_policy": {
+                "top_level": "Container_Audit",
+                "required_files": ["Container_Audit/Container_Audit.exe"],
+            }
+        }
+    ]
+    assert popen_paths == [[str(update_root / "updater.bat")]]
 
 
 def test_update_checksum_response_rejects_oversized_stream():
@@ -888,10 +1047,23 @@ def test_download_and_apply_update_requires_checksum_before_network_or_extract(m
     )
 
     assert errors
-    assert "체크섬 URL" in errors[0][1]
+    assert "SHA256" in errors[0][1]
+
+
+def test_check_for_updates_defaults_off_before_network(monkeypatch):
+    monkeypatch.delenv("CONTAINER_AUDIT_UPDATE_PROVIDER", raising=False)
+    monkeypatch.setattr(
+        container_audit_module.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("provider=off should not call network")),
+    )
+
+    assert container_audit_module.check_for_updates() == (None, None, None)
 
 
 def test_check_for_updates_skips_zip_without_checksum(monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+
     class FakeResponse:
         def raise_for_status(self):
             return None
@@ -912,7 +1084,119 @@ def test_check_for_updates_skips_zip_without_checksum(monkeypatch):
     assert container_audit_module.check_for_updates() == (None, None, None)
 
 
+def test_check_for_updates_resolves_release_checksum_before_prompt(monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+    zip_name = "Container_Audit-v9.9.9.zip"
+    zip_url = f"https://github.com/KMTechn/Container_Audit/releases/download/v9.9.9/{zip_name}"
+    checksum_url = f"{zip_url}.sha256"
+    checksum = "e" * 64
+    calls = []
+
+    class ReleaseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "tag_name": "v9.9.9",
+                "assets": [
+                    {"name": zip_name, "browser_download_url": zip_url},
+                    {"name": f"{zip_name}.sha256", "browser_download_url": checksum_url},
+                ],
+            }
+
+    class ChecksumResponse:
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=4096):
+            yield f"{checksum}  {zip_name}\n".encode("utf-8")
+
+    def fake_get(url, *args, **kwargs):
+        calls.append(url)
+        if url == checksum_url:
+            return ChecksumResponse()
+        return ReleaseResponse()
+
+    monkeypatch.setattr(container_audit_module.requests, "get", fake_get)
+
+    assert container_audit_module.check_for_updates() == (zip_url, "v9.9.9", "")
+    candidate = container_audit_module._check_github_release_for_updates()
+    assert candidate["sha256"] == checksum
+    assert candidate["checksum_url"] == ""
+    assert checksum_url in calls
+
+
+def test_check_for_updates_skips_release_when_checksum_sidecar_is_invalid(monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+    zip_name = "Container_Audit-v9.9.9.zip"
+    zip_url = f"https://github.com/KMTechn/Container_Audit/releases/download/v9.9.9/{zip_name}"
+    checksum_url = f"{zip_url}.sha256"
+
+    class ReleaseResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "tag_name": "v9.9.9",
+                "assets": [
+                    {"name": zip_name, "browser_download_url": zip_url},
+                    {"name": f"{zip_name}.sha256", "browser_download_url": checksum_url},
+                ],
+            }
+
+    class BadChecksumResponse:
+        headers = {}
+
+        def raise_for_status(self):
+            return None
+
+        def iter_content(self, chunk_size=4096):
+            yield b"not a sha256 checksum\n"
+
+    def fake_get(url, *args, **kwargs):
+        if url == checksum_url:
+            return BadChecksumResponse()
+        return ReleaseResponse()
+
+    monkeypatch.setattr(container_audit_module.requests, "get", fake_get)
+
+    assert container_audit_module.check_for_updates() == (None, None, None)
+
+
+def test_check_for_updates_uses_github_asset_digest_without_checksum(monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+    zip_url = "https://github.com/KMTechn/Container_Audit/releases/download/v9.9.9/Container_Audit-v9.9.9.zip"
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "tag_name": "v9.9.9",
+                "assets": [
+                    {
+                        "name": "Container_Audit-v9.9.9.zip",
+                        "browser_download_url": zip_url,
+                        "digest": f"sha256:{'d' * 64}",
+                    }
+                ],
+            }
+
+    monkeypatch.setattr(container_audit_module.requests, "get", lambda *args, **kwargs: FakeResponse())
+
+    assert container_audit_module.check_for_updates() == (zip_url, "v9.9.9", "")
+    candidate = container_audit_module._check_github_release_for_updates()
+    assert candidate["sha256"] == "d" * 64
+
+
 def test_check_for_updates_skips_non_matching_zip_assets(monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+
     class FakeResponse:
         def raise_for_status(self):
             return None
@@ -939,6 +1223,8 @@ def test_check_for_updates_skips_non_matching_zip_assets(monkeypatch):
 
 @pytest.mark.parametrize("payload", [{}, [], {"tag_name": ""}])
 def test_check_for_updates_handles_malformed_release_payload(monkeypatch, payload):
+    monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
+
     class FakeResponse:
         def raise_for_status(self):
             return None

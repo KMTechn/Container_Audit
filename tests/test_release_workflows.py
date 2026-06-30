@@ -36,6 +36,30 @@ def test_ci_and_release_workflows_package_clean_release_config():
     release_text = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
     assert _release_workflow_required_assets(release_text) == update_service.REQUIRED_UPDATE_ARCHIVE_FILES
     assert "Expand-Archive" not in release_text
+    assert "- name: Smoke check release archive" in release_text
+    assert "Get-FileHash -LiteralPath $zipPath -Algorithm SHA256" in release_text
+    assert "kmtech-private-update-manifest-v1" in release_text
+    assert 'app_id = "Container_Audit"' in release_text
+    assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL" in release_text
+    assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL must use HTTPS." in release_text
+    assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not include userinfo." in release_text
+    assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not include fragments." in release_text
+    assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not contain query strings." in release_text
+    assert "not GitHub release storage" in release_text
+    assert ".githubusercontent.com" in release_text
+    assert "$artifactUrl = \"$baseUrl/$zipPath\"" in release_text
+    assert "releases/download" not in release_text
+    assert "legacy_sha256_url" in release_text
+    assert "required_files = $required" in release_text
+    assert "percentage = 0" in release_text
+    assert "Container_Audit-${{ github.ref_name }}.manifest.json" in release_text
+    assert "PRIVATE_UPDATE_MANIFEST_URL" in release_text
+    assert "PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY" in release_text
+    assert 'provider = "private_manifest"' in release_text
+    assert 'provider = "github"' in release_text
+    assert "PRIVATE_UPDATE_MANIFEST_URL and PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY must be set together." in release_text
+    upload_block = release_text[release_text.index("- name: Create Release and Upload Asset"):]
+    assert "Container_Audit-${{ github.ref_name }}.manifest.json" not in upload_block
 
 
 def test_ci_workflow_tests_supported_python_minors():
@@ -56,6 +80,17 @@ def test_release_workflow_pins_actions_running_with_release_write_permission():
     assert uses_values
     assert all(re.search(r"@[0-9a-f]{40}$", value) for value in uses_values)
     assert "softprops/action-gh-release@v2" not in release_text
+
+
+def test_ci_workflow_pins_external_actions():
+    root = Path(__file__).resolve().parents[1]
+    ci_text = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    uses_values = re.findall(r"(?m)^\s+uses:\s+([^\s#]+)", ci_text)
+
+    assert uses_values
+    assert all(re.search(r"@[0-9a-f]{40}$", value) for value in uses_values)
+    assert "actions/checkout@v4" not in ci_text
+    assert "actions/setup-python@v5" not in ci_text
 
 
 def test_dev_toolchain_is_pinned_in_requirements_dev():

@@ -13,6 +13,38 @@ def _write_required_update_members(zip_ref, *, omit=()):
         zip_ref.writestr(name, name.encode("utf-8"))
 
 
+def _private_update_manifest(*, version="v2.0.10", sha256="a" * 64, url=None):
+    return {
+        "schema_version": "kmtech-private-update-manifest-v1",
+        "manifest_version": 1,
+        "app_id": "Container_Audit",
+        "package_id": "Container_Audit",
+        "channel": "stable",
+        "version": version,
+        "artifact": {
+            "name": f"Container_Audit-{version}.zip",
+            "url": url or f"https://updates.example/Container_Audit-{version}.zip",
+            "size_bytes": 123,
+            "sha256": sha256,
+        },
+        "archive": {
+            "format": "zip",
+            "top_level": "Container_Audit",
+            "entrypoint": "Container_Audit.exe",
+            "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+        "install": {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config/container_audit_settings.json"],
+        },
+        "rollout": {
+            "percentage": 100,
+            "allow_pc_ids": [],
+            "deny_pc_ids": [],
+        },
+    }
+
+
 def test_update_service_uses_semantic_version_order():
     assert update_service.parse_version_tag("v2.10.0") == (2, 10, 0)
     assert update_service.is_newer_version("v2.10.0", "v2.9.9") is True
@@ -39,6 +71,37 @@ def test_update_service_finds_matching_zip_checksum_asset():
         "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip",
         "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip.sha256",
     )
+
+
+def test_update_service_finds_matching_zip_asset_digest_without_checksum_asset():
+    payload = {
+        "assets": [
+            {
+                "name": "Container_Audit-v2.0.10.zip",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip",
+                "digest": f"sha256:{'c' * 64}",
+            },
+        ]
+    }
+
+    assert update_service.find_release_asset_update_info(payload, expected_version="v2.0.10") == {
+        "download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip",
+        "checksum_url": "",
+        "sha256": "c" * 64,
+    }
+
+
+def test_update_service_rejects_matching_zip_without_checksum_or_digest():
+    payload = {
+        "assets": [
+            {
+                "name": "Container_Audit-v2.0.10.zip",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip",
+            },
+        ]
+    }
+
+    assert update_service.find_release_asset_update_info(payload, expected_version="v2.0.10") is None
 
 
 def test_update_service_finds_exact_tagged_asset_when_multiple_zips():
@@ -99,6 +162,220 @@ def test_update_service_skips_ambiguous_or_non_matching_zip_assets():
 def test_update_service_rejects_untrusted_release_asset_urls(url):
     with pytest.raises(ValueError, match="릴리스 asset URL|GitHub"):
         update_service.validate_release_asset_url(url)
+
+
+def test_update_service_verifies_private_manifest_signature_and_candidate():
+    cryptography = pytest.importorskip("cryptography")
+    assert cryptography
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    public_key_hex = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    ).hex()
+    manifest = {
+        "schema_version": "kmtech-private-update-manifest-v1",
+        "manifest_version": 1,
+        "app_id": "Container_Audit",
+        "package_id": "Container_Audit",
+        "channel": "stable",
+        "version": "v2.0.10",
+        "artifact": {
+            "name": "Container_Audit-v2.0.10.zip",
+            "url": "https://updates.example/Container_Audit-v2.0.10.zip",
+            "size_bytes": 123,
+            "sha256": "a" * 64,
+        },
+        "archive": {
+            "format": "zip",
+            "top_level": "Container_Audit",
+            "entrypoint": "Container_Audit.exe",
+            "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+        "install": {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config/container_audit_settings.json"],
+        },
+        "rollout": {
+            "percentage": 100,
+            "allow_pc_ids": [],
+            "deny_pc_ids": [],
+        },
+    }
+    signature = private_key.sign(update_service.canonical_manifest_bytes(manifest))
+
+    update_service.verify_update_manifest_signature(manifest, signature, public_key_hex)
+    candidate = update_service.update_candidate_from_private_manifest(
+        manifest,
+        current_version="v2.0.9",
+        expected_channel="stable",
+    )
+
+    assert candidate == {
+        "download_url": "https://updates.example/Container_Audit-v2.0.10.zip",
+        "version": "v2.0.10",
+        "sha256": "a" * 64,
+        "provider": "private_manifest",
+        "archive_policy": {
+            "top_level": "Container_Audit",
+            "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "artifact_url",
+    [
+        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip",
+        "https://raw.githubusercontent.com/KMTechn/update-feed/main/Container_Audit-v2.0.10.zip",
+    ],
+)
+def test_update_service_rejects_private_manifest_github_hosted_artifact_url(artifact_url):
+    manifest = {
+        "schema_version": "kmtech-private-update-manifest-v1",
+        "manifest_version": 1,
+        "app_id": "Container_Audit",
+        "package_id": "Container_Audit",
+        "channel": "stable",
+        "version": "v2.0.10",
+        "artifact": {
+            "name": "Container_Audit-v2.0.10.zip",
+            "url": artifact_url,
+            "size_bytes": 123,
+            "sha256": "b" * 64,
+        },
+        "archive": {
+            "format": "zip",
+            "top_level": "Container_Audit",
+            "entrypoint": "Container_Audit.exe",
+            "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+        "install": {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config/container_audit_settings.json"],
+        },
+        "rollout": {
+            "percentage": 100,
+            "allow_pc_ids": [],
+            "deny_pc_ids": [],
+        },
+    }
+
+    with pytest.raises(ValueError, match="GitHub"):
+        update_service.update_candidate_from_private_manifest(
+            manifest,
+            current_version="v2.0.9",
+            expected_channel="stable",
+        )
+
+
+def test_update_service_rejects_private_manifest_fragment_artifact_url():
+    manifest = _private_update_manifest(
+        url="https://updates.example/Container_Audit-v2.0.10.zip#token=raw-secret"
+    )
+
+    with pytest.raises(ValueError):
+        update_service.update_candidate_from_private_manifest(
+            manifest,
+            current_version="v2.0.9",
+            expected_channel="stable",
+        )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "sig=raw",
+        "signature=raw",
+        "X-Amz-Signature=raw",
+        "X-Goog-Signature=raw",
+    ],
+)
+def test_update_service_rejects_signed_credential_query_keys(query):
+    with pytest.raises(ValueError, match="장기 인증 토큰"):
+        update_service.assert_https_update_url(
+            f"https://updates.example/Container_Audit-v2.0.10.zip?{query}",
+            require_zip=True,
+        )
+
+
+def test_update_service_rejects_release_asset_url_fragment():
+    payload = {
+        "assets": [
+            {
+                "name": "Container_Audit-v2.0.10.zip",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip#token=raw-secret",
+            },
+            {
+                "name": "Container_Audit-v2.0.10.zip.sha256",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip.sha256",
+            },
+        ]
+    }
+
+    assert update_service.find_release_asset_urls(payload, expected_version="v2.0.10") == (None, None)
+
+
+def test_update_service_rejects_release_asset_signed_credential_query():
+    payload = {
+        "assets": [
+            {
+                "name": "Container_Audit-v2.0.10.zip",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip?X-Amz-Signature=raw",
+            },
+            {
+                "name": "Container_Audit-v2.0.10.zip.sha256",
+                "browser_download_url": "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/Container_Audit-v2.0.10.zip.sha256",
+            },
+        ]
+    }
+
+    assert update_service.find_release_asset_urls(payload, expected_version="v2.0.10") == (None, None)
+
+
+def test_update_service_rejects_boolean_integer_fields():
+    manifest = _private_update_manifest()
+    manifest["artifact"]["size_bytes"] = True
+    with pytest.raises(ValueError, match="size"):
+        update_service.update_candidate_from_private_manifest(
+            manifest,
+            current_version="v2.0.9",
+            expected_channel="stable",
+        )
+
+    manifest = _private_update_manifest()
+    manifest["rollout"]["percentage"] = True
+    with pytest.raises(ValueError, match="percentage"):
+        update_service.update_candidate_from_private_manifest(
+            manifest,
+            current_version="v2.0.9",
+            expected_channel="stable",
+        )
+
+
+def test_update_service_private_manifest_rollout_blocks_and_allowlists_current_pc(monkeypatch):
+    manifest = _private_update_manifest(sha256="c" * 64)
+    manifest["rollout"]["percentage"] = 0
+    monkeypatch.setenv(update_service.UPDATE_PC_ID_ENV, "line-a-pc-01")
+
+    assert update_service.update_candidate_from_private_manifest(
+        manifest,
+        current_version="v2.0.9",
+        expected_channel="stable",
+    ) is None
+
+    manifest["rollout"]["allow_pc_ids"] = [" LINE-A-PC-01 "]
+    candidate = update_service.update_candidate_from_private_manifest(
+        manifest,
+        current_version="v2.0.9",
+        expected_channel="stable",
+    )
+
+    assert candidate["download_url"] == "https://updates.example/Container_Audit-v2.0.10.zip"
+    assert candidate["sha256"] == "c" * 64
+    assert candidate["archive_policy"]["required_files"] == ["Container_Audit/Container_Audit.exe"]
 
 
 def test_update_service_skips_assets_with_untrusted_urls():
@@ -192,6 +469,35 @@ def test_update_service_safe_extracts_normal_zip(tmp_path):
     assert (
         extracted / "Container_Audit" / "tools" / "direct_sync_relay_runner.py"
     ).read_bytes() == b"Container_Audit/tools/direct_sync_relay_runner.py"
+
+
+def test_update_service_safe_extract_enforces_manifest_archive_policy(tmp_path):
+    zip_path = tmp_path / "update.zip"
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        _write_required_update_members(zip_ref)
+
+    with pytest.raises(ValueError, match="archive.top_level"):
+        update_service.safe_extract_update_zip(
+            zip_path,
+            tmp_path / "wrong-top-level",
+            archive_policy={
+                "top_level": "Other_App",
+                "required_files": ["Container_Audit/Container_Audit.exe"],
+            },
+        )
+
+    with pytest.raises(ValueError, match="manifest 필수 파일"):
+        update_service.safe_extract_update_zip(
+            zip_path,
+            tmp_path / "missing-policy-required",
+            archive_policy={
+                "top_level": "Container_Audit",
+                "required_files": [
+                    "Container_Audit/Container_Audit.exe",
+                    "Container_Audit/not-in-archive.txt",
+                ],
+            },
+        )
 
 
 @pytest.mark.parametrize(

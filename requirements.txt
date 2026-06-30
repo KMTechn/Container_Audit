@@ -1,3 +1,4 @@
 Pillow
+cryptography>=41.0.0
 pygame
 requests
