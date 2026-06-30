@@ -1,0 +1,249 @@
+{
+  "agents": {
+    "agent_a_server_db_ingest": [
+      "operational DB backup/hash gate",
+      "additive schema readiness",
+      "authenticated canary receipt reconciliation"
+    ],
+    "agent_b_producer_field_security": [
+      "worker PC/scanner UI scenarios",
+      "credential lifecycle",
+      "20-PC concurrency, malicious input, fault, and soak evidence"
+    ],
+    "agent_c_downstream_shadow_rollback": [
+      "today/past/trace/summary/export validation",
+      "Syncthing shadow no-double-count proof",
+      "rollback rehearsal and retirement signoff"
+    ]
+  },
+  "approval_packet_placeholders": {
+    "00_freeze_manifest": [
+      {
+        "filename": "PHASE0_PREFLIGHT_COMMAND_PACKET.md",
+        "source_doc": "docs/PHASE0_PREFLIGHT_COMMAND_PACKET_20260625.md"
+      },
+      {
+        "filename": "PHASE0_OWNER_APPROVAL_CHECKLIST.md",
+        "source_doc": "docs/PHASE0_OWNER_APPROVAL_CHECKLIST_20260625.md"
+      },
+      {
+        "filename": "PHASE0_DRY_RUN_TRANSCRIPT_TEMPLATE.md",
+        "source_doc": "docs/PHASE0_DRY_RUN_TRANSCRIPT_TEMPLATE_20260625.md"
+      }
+    ],
+    "01_schema_backup_and_apply": [
+      {
+        "filename": "PHASE1_ADDITIVE_SCHEMA_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE1_ADDITIVE_SCHEMA_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "02_post_schema_readiness": [
+      {
+        "filename": "PHASE2_POST_SCHEMA_READINESS_PACKET.md",
+        "source_doc": "docs/PHASE2_POST_SCHEMA_READINESS_PACKET_20260625.md"
+      }
+    ],
+    "03_one_pc_canary": [
+      {
+        "filename": "PHASE3_ONE_PC_CANARY_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE3_ONE_PC_CANARY_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "04_field_ui_scanner": [
+      {
+        "filename": "FIELD_UI_HTTPS_CUTOVER_RUNBOOK.md",
+        "source_doc": "docs/FIELD_UI_HTTPS_CUTOVER_RUNBOOK.md"
+      }
+    ],
+    "05_twenty_pc_concurrency": [
+      {
+        "filename": "PHASE4_TWENTY_PC_CONCURRENCY_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE4_TWENTY_PC_CONCURRENCY_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "06_downstream_today_past_export": [
+      {
+        "filename": "PHASE5_DOWNSTREAM_RECEIVER_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE5_DOWNSTREAM_RECEIVER_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "07_syncthing_shadow_no_double_count": [
+      {
+        "filename": "PHASE6_SYNCTHING_SHADOW_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE6_SYNCTHING_SHADOW_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "08_rollback_rehearsal": [
+      {
+        "filename": "PHASE7_ROLLBACK_REHEARSAL_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE7_ROLLBACK_REHEARSAL_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "09_operator_visibility": [
+      {
+        "filename": "PHASE8_OPERATOR_VISIBILITY_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE8_OPERATOR_VISIBILITY_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "10_soak_and_security": [
+      {
+        "filename": "PHASE9_SOAK_SECURITY_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE9_SOAK_SECURITY_APPROVAL_PACKET_20260625.md"
+      }
+    ],
+    "11_final_signoff": [
+      {
+        "filename": "PHASE10_FINAL_SIGNOFF_APPROVAL_PACKET.md",
+        "source_doc": "docs/PHASE10_FINAL_SIGNOFF_APPROVAL_PACKET_20260625.md"
+      }
+    ]
+  },
+  "created_at_utc": "2026-06-25T03:54:19+00:00",
+  "current_decision": "BLOCKED_UNTIL_APPROVAL_AND_EVIDENCE",
+  "directory_guidance": {
+    "00_freeze_manifest": [
+      "production freeze manifest",
+      "FQDN OPTIONS response",
+      "DB/WAL size and disk free-space proof",
+      "release config checker output"
+    ],
+    "01_schema_backup_and_apply": [
+      "expected_db_sha256",
+      "backup DB path and SHA-256",
+      "apply_additive_schema_report.json",
+      "legacy row counts before and after"
+    ],
+    "02_post_schema_readiness": [
+      "direct_sync_ops_status.after.json",
+      "health_ingest.after.json",
+      "missing_tables and missing_columns empty proof"
+    ],
+    "03_one_pc_canary": [
+      "redacted request id, key id, nonce fingerprint, and idempotency key fingerprint",
+      "receipt hash",
+      "raw artifact reference and hash",
+      "source_claim and projection reconciliation counts"
+    ],
+    "04_field_ui_scanner": [
+      "operator checklist",
+      "scanner UI screenshots or video references",
+      "CSV/event hashes for login, scans, undo, reset, park/restore, replacement, exchange, close/recover"
+    ],
+    "05_twenty_pc_concurrency": [
+      "20 PC identity table with secrets redacted",
+      "per-PC CSV hash and row count",
+      "replay, network interruption, queue restart, and resume evidence"
+    ],
+    "06_downstream_today_past_export": [
+      "today/past/trace/summary screenshots",
+      "export checksum and row count",
+      "dashboard/API totals compared with receipt totals"
+    ],
+    "07_syncthing_shadow_no_double_count": [
+      "direct HTTPS receipt evidence",
+      "Syncthing/archive ingest evidence",
+      "source_claim history",
+      "projection parity report"
+    ],
+    "08_rollback_rehearsal": [
+      "relay pause evidence",
+      "scheduled task or service stop rehearsal",
+      "legacy path verification",
+      "queued upload resume without duplicate projection"
+    ],
+    "09_operator_visibility": [
+      "status/report output",
+      "last failure",
+      "next retry",
+      "operator review row and rollback state"
+    ],
+    "10_soak_and_security": [
+      "4-8 hour or full-day-volume soak metrics",
+      "malicious input UI/CSV/HTTPS/DB/dashboard/export evidence",
+      "fault injection evidence for timeout, 500/503, DNS/TLS, DB lock, disk pressure, spool/status corruption"
+    ],
+    "11_final_signoff": [
+      "owner signoff record",
+      "promotion_allowed=true only after all gates pass",
+      "production_removal_ready=true only after Syncthing retirement gate passes",
+      "evidence archive hash"
+    ]
+  },
+  "endpoint": "https://worker.kmtecherp.com/api/producer-ingest/v1/source-file",
+  "hard_stop_summary": [
+    "backup or expected_db_sha256 verification fails",
+    "direct_sync_ops_status remains BLOCKED after schema step",
+    "producer POST writes receipt without nonce/raw artifact/source_claim/summary reconciliation",
+    "replay, retry, or Syncthing shadow creates duplicate projection",
+    "raw secret, HMAC key, receipt JSON, or raw payload appears in evidence output",
+    "operator cannot identify last failure, next retry, review row, and rollback state"
+  ],
+  "packet_directories": [
+    "00_freeze_manifest",
+    "01_schema_backup_and_apply",
+    "02_post_schema_readiness",
+    "03_one_pc_canary",
+    "04_field_ui_scanner",
+    "05_twenty_pc_concurrency",
+    "06_downstream_today_past_export",
+    "07_syncthing_shadow_no_double_count",
+    "08_rollback_rehearsal",
+    "09_operator_visibility",
+    "10_soak_and_security",
+    "11_final_signoff"
+  ],
+  "required_direct_sync_objects": [
+    "producer_ingest_receipts",
+    "producer_ingest_nonces",
+    "producer_ingest_raw_artifacts",
+    "source_claim",
+    "source_claim_history",
+    "transfer_legacy_projection",
+    "packaging_set_projection",
+    "process_state_summary_sources",
+    "defect_hmac_chain_state",
+    "defect_hmac_chain_review_audit"
+  ],
+  "schema_version": "container-audit-production-evidence-packet-v1",
+  "source_docs": [
+    "docs/THREE_AGENT_PRODUCTION_CUTOVER_PLAN_20260625.md",
+    "docs/OPERATIONAL_CHANGE_WINDOW_RUNBOOK_20260625.md",
+    "docs/PRE_PRODUCTION_VALIDATION_MATRIX_20260625.md",
+    "docs/LOCAL_AUDIT_READINESS_REPORT_20260624.md",
+    "docs/OPERATIONAL_DB_READONLY_AUDIT_20260625.md",
+    "docs/COMPANY_SERVER_READONLY_PRECHECK_20260625.md",
+    "docs/PHASE0_EXECUTION_INPUTS_MANIFEST_20260625.md",
+    "docs/PHASE0_PREFLIGHT_COMMAND_PACKET_20260625.md",
+    "docs/PHASE0_OWNER_APPROVAL_CHECKLIST_20260625.md",
+    "docs/PHASE0_DRY_RUN_TRANSCRIPT_TEMPLATE_20260625.md",
+    "docs/PHASE1_ADDITIVE_SCHEMA_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE2_POST_SCHEMA_READINESS_PACKET_20260625.md",
+    "docs/PHASE3_ONE_PC_CANARY_APPROVAL_PACKET_20260625.md",
+    "docs/FIELD_UI_HTTPS_CUTOVER_RUNBOOK.md",
+    "docs/PHASE4_TWENTY_PC_CONCURRENCY_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE5_DOWNSTREAM_RECEIVER_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE6_SYNCTHING_SHADOW_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE7_ROLLBACK_REHEARSAL_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE8_OPERATOR_VISIBILITY_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE9_SOAK_SECURITY_APPROVAL_PACKET_20260625.md",
+    "docs/PHASE10_FINAL_SIGNOFF_APPROVAL_PACKET_20260625.md"
+  ],
+  "syncthing_retirement_gate": {
+    "production_removal_ready": false,
+    "promotion_allowed": false,
+    "required_results": [
+      "one-PC canary PASS",
+      "20-PC ingest PASS",
+      "source_claim unresolved conflict count is 0",
+      "downstream today/past/trace/summary/export totals PASS",
+      "Syncthing shadow no-double-count PASS",
+      "rollback rehearsal PASS",
+      "operator visibility PASS",
+      "soak/security PASS",
+      "backup/retention PASS",
+      "release package PASS",
+      "dashboard browser XSS PASS",
+      "owner signoff PASS"
+    ]
+  }
+}

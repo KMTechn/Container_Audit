@@ -26,7 +26,14 @@ def main(argv: list[str] | None = None) -> int:
         if not destination.is_dir() or any(destination.iterdir()):
             print(f"destination must be an empty directory or absent: {destination}", file=sys.stderr)
             return 2
-    safe_extract_update_zip(args.zip_path, destination)
+    try:
+        safe_extract_update_zip(args.zip_path, destination)
+    except ValueError as exc:
+        message = str(exc)
+        if "runtime-local" in message and "현장 런타임/민감 상태 파일" not in message:
+            message = "업데이트 ZIP에 현장 런타임/민감 상태 파일이 포함되어 있습니다: " + message
+        print(message, file=sys.stderr)
+        return 1
     print(f"update_archive_smoke_dir={destination}")
     return 0
 
