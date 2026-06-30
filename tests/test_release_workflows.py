@@ -47,12 +47,20 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL must not contain query strings." in release_text
     assert "not GitHub release storage" in release_text
     assert ".githubusercontent.com" in release_text
+    assert "PRIVATE_UPDATE_ROLLOUT_PERCENTAGE" in release_text
+    assert "PRIVATE_UPDATE_ROLLOUT_PERCENTAGE must be an integer from 0 to 100." in release_text
     assert "$artifactUrl = \"$baseUrl/$zipPath\"" in release_text
     assert "releases/download" not in release_text
     assert "legacy_sha256_url" in release_text
     assert "required_files = $required" in release_text
-    assert "percentage = 0" in release_text
+    assert "percentage = $rolloutPercentage" in release_text
     assert "Container_Audit-${{ github.ref_name }}.manifest.json" in release_text
+    assert "- name: Sign private update manifest" in release_text
+    assert "PRIVATE_UPDATE_MANIFEST_SIGNING_KEY" in release_text
+    assert "- name: Publish private update feed" in release_text
+    assert "COMPANY_UPDATE_SSH_PRIVATE_KEY" in release_text
+    assert "PRIVATE_UPDATE_APP_SLUG: container_audit" in release_text
+    assert "/root/WorkerAnalysisGUI-web/static/update-feed" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_URL" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY" in release_text
     assert 'provider = "private_manifest"' in release_text
