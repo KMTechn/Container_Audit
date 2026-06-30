@@ -38,6 +38,7 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "Expand-Archive" not in release_text
     assert "- name: Smoke check release archive" in release_text
     assert "Get-FileHash -LiteralPath $zipPath -Algorithm SHA256" in release_text
+    assert '"$($hash.Hash.ToLowerInvariant())  $zipPath" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii' in release_text
     assert "kmtech-private-update-manifest-v1" in release_text
     assert 'app_id = "Container_Audit"' in release_text
     assert "PRIVATE_UPDATE_ARTIFACT_BASE_URL" in release_text

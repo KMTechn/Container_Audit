@@ -140,7 +140,7 @@ jobs:
           $releaseConfigDir = Join-Path $smokeDir "Container_Audit/config"
           python tools/check_release_config.py --config-dir "$releaseConfigDir"
           $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
-          "$($hash.Hash)  $zipPath" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
+          "$($hash.Hash.ToLowerInvariant())  $zipPath" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
           $zipInfo = Get-Item -LiteralPath $zipPath
           if (-not [string]::IsNullOrWhiteSpace("${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}")) {
             $manifestPath = "Container_Audit-${{ github.ref_name }}.manifest.json"
