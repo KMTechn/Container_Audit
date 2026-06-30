@@ -58,9 +58,9 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "- name: Sign private update manifest" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_SIGNING_KEY" in release_text
     assert "- name: Publish private update feed" in release_text
-    assert "COMPANY_UPDATE_SSH_PRIVATE_KEY" in release_text
+    assert "COMPANY_UPDATE_UPLOAD_TOKEN" in release_text
     assert "PRIVATE_UPDATE_APP_SLUG: container_audit" in release_text
-    assert "/root/WorkerAnalysisGUI-web/static/update-feed" in release_text
+    assert "curl.exe" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_URL" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY" in release_text
     assert 'provider = "private_manifest"' in release_text
