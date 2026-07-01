@@ -36,7 +36,7 @@ class ParkedTrayStore:
         if not parse_new_format_qr(master_label):
             return None
         safe_worker = _safe_worker_filename(worker_name)
-        safe_prefix = sanitize_filename(master_label)[:48].rstrip("_") or "label"
+        safe_prefix = sanitize_filename(master_label)[:16].rstrip("_") or "label"
         digest = hashlib.sha256(canonical_master_label_key(master_label).encode("utf-8")).hexdigest()[:16]
         return self.directory / f"parked_qr_{safe_worker}_{safe_prefix}_{digest}.json"
 

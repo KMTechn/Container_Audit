@@ -1,0 +1,24 @@
+{
+  "asset_dir": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627",
+  "contact_sheet_refs": 1,
+  "document_id": "38dcd747-21d1-456f-852d-c929aa835e03",
+  "env_files_checked": [
+    "C:\\company\\program\\Container_Audit\\.outline_env",
+    "C:\\company\\program\\.outline_env",
+    "C:\\company\\.outline_env",
+    "C:\\Users\\repla\\.outline_env",
+    "\\root\\.outline_env"
+  ],
+  "manual_path": "C:\\company\\program\\Container_Audit\\docs\\OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md",
+  "markdown_image_refs": 21,
+  "mermaid_block_count": 1,
+  "missing_images": [],
+  "mode": "dry-run",
+  "outline_url": "https://wiki.kmtecherp.com",
+  "remaining_field_approval_phrase_count": 1,
+  "status": "PASS",
+  "title": "Container_Audit(이적실 프로그램)",
+  "token_present": false,
+  "unique_image_refs": 21,
+  "workflow_png_refs": 2
+}

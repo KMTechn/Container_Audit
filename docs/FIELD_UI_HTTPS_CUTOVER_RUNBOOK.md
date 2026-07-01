@@ -34,6 +34,16 @@
 - 보조 모니터 UI/scanner 검증: 기본 offscreen geometry `1600x900-32000-32000` 캡처는 흰 화면만 저장되어 UI evidence로 폐기했다. 이후 실제 보조 모니터 `1600x900+3880+366`에서 `tools/run_container_audit_ui_validation.py`를 실행했고, report `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\ui_validation_report.json`는 `PASS`였다. 스크린샷 7장(`login`, `work-start`, `master-label`, `product-scan-1`, `product-scan-2`, `internal-test-log`, `final-state`)은 1600x900 유효 픽셀로 확인했다. 임시 로컬 데이터 루트의 CSV는 7 rows이고 events는 `WORK_START=1`, `MASTER_LABEL_SCANNED_NEW=1`, `SCAN_OK=2`, `TRAY_COMPLETE=2`, `RANDOM_TEST_SESSION_START=1`였다. 이 검증은 실제 스캐너 하드웨어가 아니라 UI 입력 시뮬레이션이므로, 현장 스캐너 sweep은 별도 P0로 남는다.
 - 이 canary는 Syncthing을 제거해도 된다는 승인으로 간주하지 않는다. 20PC 동시성, Syncthing shadow no-double-count, 실제 스캐너 UI 전체 시나리오, rollback rehearsal, downstream 화면 검증은 별도 승인된 window에서 계속 필요하다.
 
+## 2026-06-29 This-PC Worker Registration Recheck
+
+- 이 PC `DESKTOP-03PCRD7`는 기존 서버 등록 identity로 재확인했다. `source_host_id=container-audit-desktop-03pcrd7`, `producer_install_id=container-audit-desktop-03pcrd7-30560f929982`, `producer_id=container-audit-desktop-03pcrd7`, `key_id=pending-server-key-desktop-03pcrd7`다.
+- 새 임시 install id `container-audit-desktop-03pcrd7-local`로 self-enroll을 시도했을 때 서버가 `producer_identity_conflict`로 거부했다. 따라서 임시 identity는 사용하지 않고, 2026-06-25 canary에서 이미 등록된 기존 identity로 manifest와 credential reference를 복구했다.
+- self-enroll 재확인 결과는 `SELF_ENROLLMENT_REGISTERED`, `enrollment_status=already_enrolled`, `server_registration_verified=true`, `secret_bootstrap_verified=true`, `raw_secret_written=false`다. 증거는 `C:\company\program\_e2e_artifacts\this_pc_worker_registration_20260629\container_audit_worker_pc_registration_existing_identity_self_enroll.json`이다.
+- 로컬 manifest는 `%LOCALAPPDATA%\KMTech\ContainerAudit\direct_sync\producer_manifest.json`, credential reference는 `%LOCALAPPDATA%\KMTech\ContainerAudit\direct_sync\credential.json`에 있다. credential JSON에는 `wincred:KMTech.DirectSync.ContainerAudit.desktop-03pcrd7` 참조만 있고 원시 secret은 저장하지 않는다.
+- Windows task `direct-sync-relay-container-audit`는 존재하고 `Ready` 상태다. 다만 실제 task wrapper가 쓰는 queue DB 기준 operator status는 `BLOCKED`다. queue count는 `acked=3`, `operator_review=1`이며, 증거는 `C:\company\program\_e2e_artifacts\this_pc_worker_registration_20260629\container_audit_operator_status_after_registration_actual_queue.json`이다.
+- `operator_review` 1건은 2026-06-26 기존 relay row `relay-7adba429408b49788121c765702b8598`이다. 서버 receipt는 `accepted`, `committed=true`였지만 totals가 `inserted=0`, `quarantined=3`이라 자동 PASS 처리나 임의 재시도/삭제 대상이 아니다. 서버 DB read-only 재확인에서는 raw artifact 1건, source_claim 0건, common event 0건, quarantine reason `MANIFEST_EVENT_VALIDATION_FAILED` 3건이었다. 증거는 `C:\company\program\_e2e_artifacts\this_pc_worker_registration_20260629\container_audit_operator_review_server_readonly_summary.json`이다.
+- 이 항목으로 닫힌 것은 "이 PC의 Container_Audit 작업자 PC identity 등록 및 secret bootstrap"뿐이다. P0 field gate, 20PC 증거, direct+legacy no-double-count, rollback, Syncthing retirement는 계속 별도 차단이다.
+
 ## PC 준비
 
 1. 각 PC에서 앱 버전, PC hostname, 자동 생성된 source_host_id, producer_install_id, 작업자 이름을 기록한다.

@@ -1564,6 +1564,64 @@ def test_build_master_label_replacement_detail_preserves_correction_identity():
     assert detail["reason"] == "operator_master_label_replacement"
 
 
+def test_build_master_label_replacement_detail_recomputes_input_tag_trace_from_new_label():
+    original_details = {
+        "master_label_code": (
+            "PHS=1|CLC=AAA2270730100|QT=2|ITG=ITAG-OLD|LBL=LBL-OLD|"
+            "HSH_CORE=old-core|HSH_LABEL=old-label"
+        ),
+        "item_code": "AAA2270730100",
+        "product_barcodes": ["AAA2270730100-001", "AAA2270730100-002"],
+        "scanned_product_barcodes": ["AAA2270730100-001", "AAA2270730100-002"],
+        "scan_count": 2,
+        "tray_capacity": 2,
+        "barcode_count": 2,
+        "master_label_fields": {
+            "PHS": "1",
+            "CLC": "AAA2270730100",
+            "QT": "2",
+            "ITG": "ITAG-OLD",
+            "LBL": "LBL-OLD",
+            "HSH_CORE": "old-core",
+            "HSH_LABEL": "old-label",
+        },
+        "input_tag_id": "ITAG-OLD",
+        "input_tag_label_id": "LBL-OLD",
+        "input_tag_core_hash": "old-core",
+        "input_tag_label_hash": "old-label",
+        "inspection_trace": {"input_tag_id": "ITAG-OLD"},
+    }
+    new_label = (
+        "PHS=1|CLC=AAA2270730100|QT=2|ITG=ITAG-NEW|LBL=LBL-NEW|"
+        "HSH_CORE=new-core|HSH_LABEL=new-label"
+    )
+
+    detail = event_payloads.build_master_label_replacement_detail(
+        original_details=original_details,
+        old_label=original_details["master_label_code"],
+        new_label=new_label,
+        source_system="container_audit",
+        source_transport_or_dataset="legacy_transfer_csv",
+        source_file_id="events.csv",
+        source_row_number=7,
+        source_byte_offset=123,
+        operator="홍길동",
+        stable_hash_func=event_contracts.stable_hash,
+        old_qty=2,
+        new_qty=2,
+    )
+
+    corrected = detail["corrected_completion_projection"]
+    assert corrected["input_tag_id"] == "ITAG-NEW"
+    assert corrected["input_tag_label_id"] == "LBL-NEW"
+    assert corrected["input_tag_core_hash"] == "new-core"
+    assert corrected["input_tag_label_hash"] == "new-label"
+    assert corrected["source_session_id"] == "ITAG-NEW"
+    assert corrected["inspection_trace"]["inspection_session_key"] == "ITAG-NEW"
+    assert corrected["inspection_trace"]["master_label_identity_key"] == label_qr.canonical_master_label_key(new_label)
+    assert "ITAG-OLD" not in json.dumps(corrected, ensure_ascii=False)
+
+
 def test_build_master_label_replacement_detail_hashes_new_quantity_projection():
     original_details = {
         "master_label_code": "PHS=1|CLC=AAA2270730100|QT=2",
@@ -8128,6 +8186,45 @@ def test_worker_registry_lists_only_active_workers_once_sorted(tmp_path):
     )
 
     assert WorkerRegistry(str(registry_path)).list_workers() == ["가작업", "다작업"]
+
+
+def test_worker_registry_lists_recent_workers_first(tmp_path):
+    registry_path = tmp_path / "worker_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"name": "가작업", "active": True, "last_used_at": "2026-06-30T08:00:00+09:00"},
+                    {"name": "다작업", "active": True, "last_used_at": "2026-06-30T10:00:00+09:00"},
+                    {"name": "나작업", "active": True, "created_at": "2026-06-30T09:00:00+09:00"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    assert WorkerRegistry(str(registry_path)).list_workers() == ["다작업", "가작업", "나작업"]
+
+
+def test_worker_registry_mark_recent_moves_worker_to_top(tmp_path):
+    registry_path = tmp_path / "worker_registry.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "workers": [
+                    {"name": "가작업", "active": True, "last_used_at": "2026-06-30T08:00:00+09:00"},
+                    {"name": "다작업", "active": True, "last_used_at": "2026-06-30T10:00:00+09:00"},
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    registry = WorkerRegistry(str(registry_path))
+    assert registry.mark_recent("가작업") == "가작업"
+    assert registry.list_workers()[0] == "가작업"
 
 
 def test_worker_registry_skips_malformed_disk_entries(tmp_path):

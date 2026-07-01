@@ -2,7 +2,8 @@
     "scale_factor": 1.0,
     "column_widths_validator": {},
     "paned_window_sash_positions": {
-        "0": 690,
-        "1": 2185
-    }
+        "0": 466,
+        "1": 2180
+    },
+    "enable_internal_test_commands": false
 }

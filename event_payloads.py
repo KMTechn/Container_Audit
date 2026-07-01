@@ -53,6 +53,26 @@ def _validated_scanned_barcodes(value: Any) -> List[str]:
     return list(value)
 
 
+def inspection_trace_from_master_label_fields(
+    master_label_code: str,
+    master_label_fields: Dict[str, Any],
+) -> Dict[str, Any]:
+    fields = dict(master_label_fields or {})
+    trace = {
+        "input_tag_id": str(fields.get("ITG") or "").strip(),
+        "input_tag_label_id": str(fields.get("LBL") or "").strip(),
+        "input_tag_core_hash": str(fields.get("HSH_CORE") or "").strip(),
+        "input_tag_label_hash": str(fields.get("HSH_LABEL") or "").strip(),
+        "master_label_phase": str(fields.get("PHS") or "").strip(),
+    }
+    if trace["input_tag_id"]:
+        trace["inspection_session_key"] = trace["input_tag_id"]
+    identity_key = canonical_master_label_key(master_label_code)
+    if identity_key:
+        trace["master_label_identity_key"] = identity_key
+    return {key: value for key, value in trace.items() if value}
+
+
 def build_tray_complete_detail(
     tray: Any,
     *,
@@ -77,7 +97,7 @@ def build_tray_complete_detail(
             raise ValueError("master_label_fields QT must be a positive integer")
         if label_quantity != tray_capacity:
             raise ValueError("master_label_fields QT must match tray_capacity")
-    return {
+    detail = {
         "master_label_code": master_label_code,
         "item_code": item_code,
         "item_name": tray.item_name,
@@ -103,6 +123,21 @@ def build_tray_complete_detail(
         "measure_code": "STATE_QTY",
         "barcode_count": len(set(scanned_barcodes)),
     }
+    inspection_trace = inspection_trace_from_master_label_fields(master_label_code, label_fields)
+    if any(inspection_trace.get(key) for key in ("input_tag_id", "input_tag_label_id", "input_tag_core_hash", "input_tag_label_hash")):
+        detail.update({
+            key: inspection_trace[key]
+            for key in (
+                "input_tag_id",
+                "input_tag_label_id",
+                "input_tag_core_hash",
+                "input_tag_label_hash",
+            )
+            if key in inspection_trace
+        })
+        detail.setdefault("source_session_id", inspection_trace["input_tag_id"])
+        detail["inspection_trace"] = inspection_trace
+    return detail
 
 
 def build_scan_ok_detail(
@@ -225,6 +260,15 @@ def build_master_label_replacement_detail(
         raise ValueError("replacement old master label does not match original completion")
     corrected_details = dict(original_details)
     corrected_details["master_label_code"] = new_label
+    for trace_key in (
+        "master_label_fields",
+        "input_tag_id",
+        "input_tag_label_id",
+        "input_tag_core_hash",
+        "input_tag_label_hash",
+        "inspection_trace",
+    ):
+        corrected_details.pop(trace_key, None)
     added_barcodes = list(additional_items or [])
     removed_barcodes = list(removed_items or [])
     new_master_label_fields = parse_new_format_qr(new_label) or {}
@@ -252,6 +296,23 @@ def build_master_label_replacement_detail(
     corrected_details["barcode_count"] = len(set(corrected_barcodes))
     if new_master_label_fields:
         corrected_details["master_label_fields"] = new_master_label_fields
+        inspection_trace = inspection_trace_from_master_label_fields(new_label, new_master_label_fields)
+        if any(
+            inspection_trace.get(key)
+            for key in ("input_tag_id", "input_tag_label_id", "input_tag_core_hash", "input_tag_label_hash")
+        ):
+            corrected_details.update({
+                key: inspection_trace[key]
+                for key in (
+                    "input_tag_id",
+                    "input_tag_label_id",
+                    "input_tag_core_hash",
+                    "input_tag_label_hash",
+                )
+                if key in inspection_trace
+            })
+            corrected_details.setdefault("source_session_id", inspection_trace["input_tag_id"])
+            corrected_details["inspection_trace"] = inspection_trace
         parsed_capacity = parse_positive_quantity(new_master_label_fields)
         if parsed_capacity is not None:
             corrected_details["tray_capacity"] = parsed_capacity

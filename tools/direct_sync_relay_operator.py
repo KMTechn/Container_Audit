@@ -16,7 +16,14 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from direct_sync_operator import operator_status, pause_relay, resume_relay, retry_dead_relay_batch  # noqa: E402
+from direct_sync_operator import (  # noqa: E402
+    operator_status,
+    pause_relay,
+    resume_relay,
+    restore_relay_spool_from_server,
+    retry_dead_relay_batch,
+)
+from direct_sync_runtime import load_credentials_from_json  # noqa: E402
 
 
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
@@ -96,6 +103,16 @@ def main(argv: list[str] | None = None) -> int:
     retry_parser.add_argument("--report-path", default="")
     retry_parser.add_argument("--allow-operator-review", action="store_true")
 
+    restore_parser = subparsers.add_parser("restore-spool", help="Restore an ACKED relay spool file from server raw artifact")
+    restore_parser.add_argument("--db-path", required=True)
+    restore_parser.add_argument("--relay-id", required=True)
+    restore_parser.add_argument("--spool-root", required=True)
+    restore_parser.add_argument("--credential-path", required=True)
+    restore_parser.add_argument("--operator-id", required=True)
+    restore_parser.add_argument("--reason", required=True)
+    restore_parser.add_argument("--audit-log-path", default="")
+    restore_parser.add_argument("--report-path", default="")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "status":
@@ -137,6 +154,19 @@ def main(argv: list[str] | None = None) -> int:
                     reason=args.reason,
                     audit_log_path=args.audit_log_path,
                     allow_operator_review=args.allow_operator_review,
+                ),
+                args.report_path,
+            )
+        if args.command == "restore-spool":
+            return _emit(
+                restore_relay_spool_from_server(
+                    db_path=args.db_path,
+                    relay_id=args.relay_id,
+                    spool_root=args.spool_root,
+                    credentials=load_credentials_from_json(args.credential_path),
+                    operator_id=args.operator_id,
+                    reason=args.reason,
+                    audit_log_path=args.audit_log_path,
                 ),
                 args.report_path,
             )

@@ -10,17 +10,19 @@ CONTAINER AUDIT 데이터 분석 프로그램 개발 가이드라인
 ================================================================================
 
 1.1 메인 로그 디렉토리
-└── C:\Sync\
+└── %LOCALAPPDATA%\KMTech\ContainerAudit\events\
     ├── 이적작업이벤트로그_[작업자명]_[YYYYMMDD].csv     # 이적 작업 로그
-    └── [기타 관련 로그 파일들]
+    └── _current_tray_state_[컴퓨터ID].json              # 현재 트레이 상태
+
+주의: 최신 저장 정책은 C:\Sync 및 그 하위 경로를 기본 데이터 루트로 허용하지 않는다.
+CONTAINER_AUDIT_DATA_ROOT로 별도 테스트 루트를 지정할 수 있지만 C:\Sync는 legacy
+문서 기준으로만 본다.
 
 1.2 설정 및 상태 파일
 └── [프로그램폴더]\config\
     └── container_audit_settings.json               # UI 설정
 └── [프로그램폴더]\config\parked_trays\
     └── parked_tray_[컴퓨터ID]_[타임스탬프].json      # 보류된 트레이 데이터
-└── [프로그램폴더]\
-    └── _current_tray_state_[컴퓨터ID].json          # 현재 트레이 상태
 
 1.3 최고 기록 데이터
 └── [프로그램폴더]\config\
@@ -83,7 +85,7 @@ timestamp,worker_name,event,details
 ▶ 현품표 교체 이벤트:
 - MASTER_LABEL_REPLACE_START: 현품표 교체 시작
 - HISTORICAL_REPLACE_SUCCESS: 완료된 현품표 교체 성공
-- MASTER_LABEL_REPLACE_CANCEL: 현품표 교체 취소
+- HISTORICAL_REPLACE_CANCEL: 완료된 현품표 교체 취소
 
 ▶ 시스템 이벤트:
 - UPDATE_CHECK_FOUND: 업데이트 발견

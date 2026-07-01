@@ -155,7 +155,7 @@ PRODUCT_EXCHANGE_COMPLETED # 제품 교환 완료
 # 현품표 교체 이벤트
 MASTER_LABEL_REPLACE_START    # 현품표 교체 시작
 HISTORICAL_REPLACE_SUCCESS    # 완료된 현품표 교체 성공
-MASTER_LABEL_REPLACE_CANCEL   # 현품표 교체 취소
+HISTORICAL_REPLACE_CANCEL     # 완료된 현품표 교체 취소
 
 # 시스템 이벤트
 UPDATE_CHECK_FOUND      # 업데이트 발견

@@ -3,7 +3,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from storage_utils import atomic_write_json
 
@@ -29,6 +29,30 @@ class WorkerRegistry:
             raise ValueError("작업자 이름은 = + - @ 문자로 시작할 수 없습니다.")
         if re.search(r'[\\/:*?"<>|]', name):
             raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
+
+    @staticmethod
+    def _timestamp_sort_value(value: Any) -> Optional[float]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            return datetime.datetime.fromisoformat(text).timestamp()
+        except ValueError:
+            return None
+
+    @classmethod
+    def _worker_sort_key(cls, entry: Dict[str, Any]) -> tuple[int, float, str]:
+        for key in ("last_used_at", "last_login_at"):
+            value = cls._timestamp_sort_value(entry.get(key))
+            if value is not None:
+                return (0, -value, cls.normalize_name(entry.get("name", "")))
+        for key in ("updated_at", "created_at"):
+            value = cls._timestamp_sort_value(entry.get(key))
+            if value is not None:
+                return (1, -value, cls.normalize_name(entry.get("name", "")))
+        return (2, 0.0, cls.normalize_name(entry.get("name", "")))
 
     def _read_payload(self) -> Dict[str, Any]:
         if not os.path.exists(self.registry_path):
@@ -79,22 +103,32 @@ class WorkerRegistry:
                 order.append(name)
             else:
                 by_name[name]["active"] = bool(by_name[name]["active"] or active_value)
+                for key in ("last_used_at", "last_login_at", "updated_at", "created_at"):
+                    incoming_value = entry.get(key)
+                    if self._timestamp_sort_value(incoming_value) is None:
+                        continue
+                    current_value = by_name[name].get(key)
+                    current_sort = self._timestamp_sort_value(current_value)
+                    incoming_sort = self._timestamp_sort_value(incoming_value)
+                    if current_sort is None or (incoming_sort is not None and incoming_sort > current_sort):
+                        by_name[name][key] = incoming_value
         return [by_name[name] for name in order]
 
     def _write_payload(self, payload: Dict[str, Any]) -> None:
         atomic_write_json(self.registry_path, payload, indent=2, ensure_ascii=False, trailing_newline=True)
 
     def list_workers(self) -> List[str]:
-        workers: List[str] = []
+        workers: List[Dict[str, Any]] = []
         seen: set[str] = set()
         for entry in self._read_payload().get("workers", []):
             if not isinstance(entry, dict) or not entry.get("active", True):
                 continue
             name = self.normalize_name(entry.get("name", ""))
             if name and name not in seen:
-                workers.append(name)
+                workers.append(entry)
                 seen.add(name)
-        return sorted(workers)
+        workers.sort(key=self._worker_sort_key)
+        return [self.normalize_name(entry.get("name", "")) for entry in workers]
 
     def has_worker(self, name: str) -> bool:
         return self.normalize_name(name) in set(self.list_workers())
@@ -114,6 +148,29 @@ class WorkerRegistry:
                 "name": name,
                 "active": True,
                 "created_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            }
+        )
+        self._write_payload(payload)
+        return name
+
+    def mark_recent(self, name: str) -> str:
+        name = self.normalize_name(name)
+        self._validate_name(name)
+        payload = self._read_payload()
+        workers = payload.setdefault("workers", [])
+        now = datetime.datetime.now().isoformat(timespec="seconds")
+        for entry in workers:
+            if isinstance(entry, dict) and self.normalize_name(entry.get("name", "")) == name:
+                entry["active"] = True
+                entry["last_used_at"] = now
+                self._write_payload(payload)
+                return name
+        workers.append(
+            {
+                "name": name,
+                "active": True,
+                "created_at": now,
+                "last_used_at": now,
             }
         )
         self._write_payload(payload)

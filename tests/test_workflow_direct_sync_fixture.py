@@ -168,6 +168,51 @@ def test_tray_complete_payload_round_trips_to_direct_sync_source_plan(tmp_path):
     assert details["confidence"] == "BARCODE"
 
 
+def test_tray_complete_preserves_input_tag_trace_fields():
+    start_time = datetime.datetime(2026, 6, 24, 9, 0, 0)
+    master_label = (
+        "PHS=2|CLC=AAA2270730100|QT=2|ITG=ITAG-20260628-0001|"
+        "LBL=LBL-20260628-0001|HSH_CORE=core-hash-001|HSH_LABEL=label-hash-001"
+    )
+    tray = TraySession(
+        master_label_code=master_label,
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=["AAA2270730100-001", "AAA2270730100-002"],
+        scan_times=[
+            start_time + datetime.timedelta(seconds=10),
+            start_time + datetime.timedelta(seconds=20),
+        ],
+        tray_size=2,
+        start_time=start_time,
+        stopwatch_seconds=120.0,
+    )
+
+    detail = build_tray_complete_detail(
+        tray,
+        master_label_fields={
+            "PHS": "2",
+            "CLC": "AAA2270730100",
+            "QT": "2",
+            "ITG": "ITAG-20260628-0001",
+            "LBL": "LBL-20260628-0001",
+            "HSH_CORE": "core-hash-001",
+            "HSH_LABEL": "label-hash-001",
+        },
+        end_time=start_time + datetime.timedelta(seconds=120),
+    )
+
+    assert detail["input_tag_id"] == "ITAG-20260628-0001"
+    assert detail["input_tag_label_id"] == "LBL-20260628-0001"
+    assert detail["input_tag_core_hash"] == "core-hash-001"
+    assert detail["input_tag_label_hash"] == "label-hash-001"
+    assert detail["source_session_id"] == "ITAG-20260628-0001"
+    assert detail["inspection_trace"]["inspection_session_key"] == "ITAG-20260628-0001"
+    assert detail["inspection_trace"]["master_label_phase"] == "2"
+    assert detail["product_barcodes"] == ["AAA2270730100-001", "AAA2270730100-002"]
+
+
 def test_multi_pc_same_completion_file_uses_distinct_direct_sync_identity(tmp_path):
     file_name = "이적작업이벤트로그_홍길동_20260624.csv"
     pc1_dir = tmp_path / "pc1"

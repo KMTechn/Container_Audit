@@ -1,0 +1,392 @@
+{
+  "ok": true,
+  "document": "C:\\company\\program\\Container_Audit\\docs\\OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md",
+  "target_dir": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated",
+  "source_refs": [
+    "assets/container_audit_user_manual_20260627/00-workflow.png",
+    "assets/container_audit_user_manual_20260627/20-contact-sheet.png",
+    "assets/container_audit_user_manual_20260630/01_01_launch_login.png",
+    "assets/container_audit_user_manual_20260630/02_02_first_time_worker_registered_or_started.png",
+    "assets/container_audit_user_manual_20260630/04_master_label_loaded.png",
+    "assets/container_audit_user_manual_20260630/05_product_scan_1_before_park.png",
+    "assets/container_audit_user_manual_20260630/12_20_completion_or_waiting.png",
+    "assets/container_audit_user_manual_20260627/06-product-before-master-warning.png",
+    "assets/container_audit_user_manual_20260627/07-mismatch-warning.png",
+    "assets/container_audit_user_manual_20260627/08-duplicate-warning.png",
+    "assets/container_audit_user_manual_20260627/09-undo-last-scan.png",
+    "assets/container_audit_user_manual_20260627/10-reset-after-confirm.png",
+    "assets/container_audit_user_manual_20260630/07_parked_waiting.png",
+    "assets/container_audit_user_manual_20260630/10_parked_restored.png",
+    "assets/container_audit_user_manual_20260627/13-exit-save-dialog.png",
+    "assets/container_audit_user_manual_20260627/14-exit-restored.png",
+    "assets/container_audit_user_manual_20260627/15-worker-change-confirm.png",
+    "assets/container_audit_user_manual_20260627/16-worker-change-restored.png",
+    "assets/container_audit_user_manual_20260627/17-partial-submit-confirm.png",
+    "assets/container_audit_user_manual_20260627/18-product-exchange-dialog.png",
+    "assets/container_audit_user_manual_20260627/19-master-replacement-complete.png"
+  ],
+  "annotated_count": 20,
+  "contact_sheet": {
+    "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\20-contact-sheet.png",
+    "images": [
+      "01_01_launch_login.png",
+      "02_02_first_time_worker_registered_or_started.png",
+      "04_master_label_loaded.png",
+      "05_product_scan_1_before_park.png",
+      "12_20_completion_or_waiting.png",
+      "06-product-before-master-warning.png",
+      "07-mismatch-warning.png",
+      "08-duplicate-warning.png",
+      "09-undo-last-scan.png",
+      "10-reset-after-confirm.png",
+      "07_parked_waiting.png",
+      "10_parked_restored.png"
+    ],
+    "size": [
+      1492,
+      1348
+    ]
+  },
+  "images": [
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\00-workflow.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\00-workflow.png",
+      "original_size": [
+        1568,
+        1752
+      ],
+      "target_size": [
+        1568,
+        1752
+      ],
+      "mean_rgb": [
+        252.0,
+        246.0,
+        234.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\01_01_launch_login.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\01_01_launch_login.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        234.0,
+        237.0,
+        242.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\02_02_first_time_worker_registered_or_started.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\02_02_first_time_worker_registered_or_started.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        239.0,
+        235.0,
+        238.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\04_master_label_loaded.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\04_master_label_loaded.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        239.0,
+        232.0,
+        236.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\05_product_scan_1_before_park.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\05_product_scan_1_before_park.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        238.0,
+        232.0,
+        235.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\12_20_completion_or_waiting.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\12_20_completion_or_waiting.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        239.0,
+        236.0,
+        239.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\06-product-before-master-warning.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\06-product-before-master-warning.png",
+      "original_size": [
+        3840,
+        2160
+      ],
+      "target_size": [
+        2568,
+        1446
+      ],
+      "mean_rgb": [
+        220.0,
+        46.0,
+        43.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\07-mismatch-warning.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\07-mismatch-warning.png",
+      "original_size": [
+        3840,
+        2160
+      ],
+      "target_size": [
+        2568,
+        1446
+      ],
+      "mean_rgb": [
+        220.0,
+        44.0,
+        42.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\08-duplicate-warning.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\08-duplicate-warning.png",
+      "original_size": [
+        3840,
+        2160
+      ],
+      "target_size": [
+        2568,
+        1446
+      ],
+      "mean_rgb": [
+        220.0,
+        46.0,
+        44.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\09-undo-last-scan.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\09-undo-last-scan.png",
+      "original_size": [
+        1600,
+        900
+      ],
+      "target_size": [
+        1600,
+        900
+      ],
+      "mean_rgb": [
+        235.0,
+        229.0,
+        232.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\10-reset-after-confirm.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\10-reset-after-confirm.png",
+      "original_size": [
+        1600,
+        900
+      ],
+      "target_size": [
+        1600,
+        900
+      ],
+      "mean_rgb": [
+        236.0,
+        232.0,
+        235.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\07_parked_waiting.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\07_parked_waiting.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        239.0,
+        235.0,
+        238.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630\\10_parked_restored.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\10_parked_restored.png",
+      "original_size": [
+        2560,
+        1440
+      ],
+      "target_size": [
+        2560,
+        1440
+      ],
+      "mean_rgb": [
+        238.0,
+        232.0,
+        236.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\13-exit-save-dialog.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\13-exit-save-dialog.png",
+      "original_size": [
+        316,
+        159
+      ],
+      "target_size": [
+        316,
+        159
+      ],
+      "mean_rgb": [
+        223.0,
+        200.0,
+        206.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\14-exit-restored.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\14-exit-restored.png",
+      "original_size": [
+        1600,
+        900
+      ],
+      "target_size": [
+        1600,
+        900
+      ],
+      "mean_rgb": [
+        234.0,
+        229.0,
+        232.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\15-worker-change-confirm.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\15-worker-change-confirm.png",
+      "original_size": [
+        421,
+        166
+      ],
+      "target_size": [
+        421,
+        166
+      ],
+      "mean_rgb": [
+        227.0,
+        206.0,
+        211.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\16-worker-change-restored.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\16-worker-change-restored.png",
+      "original_size": [
+        1600,
+        900
+      ],
+      "target_size": [
+        1600,
+        900
+      ],
+      "mean_rgb": [
+        234.0,
+        229.0,
+        232.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\17-partial-submit-confirm.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\17-partial-submit-confirm.png",
+      "original_size": [
+        301,
+        159
+      ],
+      "target_size": [
+        301,
+        159
+      ],
+      "mean_rgb": [
+        222.0,
+        198.0,
+        204.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\18-product-exchange-dialog.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\18-product-exchange-dialog.png",
+      "original_size": [
+        900,
+        650
+      ],
+      "target_size": [
+        900,
+        650
+      ],
+      "mean_rgb": [
+        236.0,
+        229.0,
+        234.0
+      ]
+    },
+    {
+      "source": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260627\\19-master-replacement-complete.png",
+      "target": "C:\\company\\program\\Container_Audit\\docs\\assets\\container_audit_user_manual_20260630_annotated\\19-master-replacement-complete.png",
+      "original_size": [
+        1600,
+        900
+      ],
+      "target_size": [
+        1600,
+        900
+      ],
+      "mean_rgb": [
+        235.0,
+        230.0,
+        233.0
+      ]
+    }
+  ]
+}

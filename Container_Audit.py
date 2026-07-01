@@ -1031,6 +1031,14 @@ class ContainerAudit:
         worker_name = self._ensure_worker_login_name(self.worker_entry.get())
         if not worker_name:
             return
+        worker_registry = getattr(self, "worker_registry", None)
+        if worker_registry is not None:
+            try:
+                worker_name = worker_registry.mark_recent(worker_name)
+            except ValueError as exc:
+                messagebox.showerror("작업자 기록 오류", str(exc), parent=self.root)
+                return
+            self._refresh_worker_entry_options()
         self.worker_name = worker_name
         self._load_session_state()
         self._load_current_tray_state()
