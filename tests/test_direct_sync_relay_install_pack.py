@@ -120,7 +120,7 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["container_audit_storage"]["defaulted_source_glob"] is True
     assert report["program_data_root"] == str(expected_root / "direct_sync")
     assert report["source_scan"]["scan_source_dir"] == str(expected_root / "events")
-    assert report["source_scan"]["source_globs"] == ["이적작업이벤트로그_*.csv"]
+    assert report["source_scan"]["source_globs"] == ["*.csv"]
     assert report["source_scan_validation"]["status"] == "PASS"
     assert str(expected_root / "events") in report["runner_command"]
     assert str(expected_root / "direct_sync") in report["runtime_paths"]["db_path"]

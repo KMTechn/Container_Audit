@@ -96,7 +96,7 @@ from worker_registry import WorkerRegistry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.14"
+CURRENT_VERSION = "v2.0.15"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')

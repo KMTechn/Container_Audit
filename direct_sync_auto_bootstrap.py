@@ -15,7 +15,7 @@ from typing import Any
 DEFAULT_SERVER_BASE_URL = "https://worker.kmtecherp.com"
 DEFAULT_ENDPOINT_PATH = "/api/producer-ingest/v1/source-file"
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
-DEFAULT_SOURCE_GLOB = "이적작업이벤트로그_*.csv"
+DEFAULT_SOURCE_GLOB = "*.csv"
 INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
 REGISTER_EXE_NAME = "Container_Audit_Worker_PC_Register.exe"
 

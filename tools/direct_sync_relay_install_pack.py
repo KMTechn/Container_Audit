@@ -37,7 +37,7 @@ from storage_policy import (  # noqa: E402
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
-DEFAULT_SOURCE_GLOB = "이적작업이벤트로그_*.csv"
+DEFAULT_SOURCE_GLOB = "*.csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
 BUNDLED_RELAY_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
 MAX_TASK_NAME_LENGTH = 128
