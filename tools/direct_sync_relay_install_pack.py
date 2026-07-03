@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -53,6 +54,159 @@ def _quote_cmd(parts: Sequence[str]) -> str:
     return subprocess.list2cmdline([str(part) for part in parts])
 
 
+def _read_task_password(args: argparse.Namespace) -> tuple[str, str, str]:
+    env_name = str(getattr(args, "task_run_password_env", "") or "").strip()
+    file_path = str(getattr(args, "task_run_password_file", "") or "").strip()
+    if env_name and file_path:
+        return "", "", "use only one of --task-run-password-env or --task-run-password-file"
+    if env_name:
+        value = str(os.getenv(env_name) or "")
+        if not value:
+            return "", f"env:{env_name}", "task run password env var is empty or unavailable"
+        return value, f"env:{env_name}", ""
+    if file_path:
+        try:
+            value = Path(file_path).read_text(encoding="utf-8-sig").rstrip("\r\n")
+        except Exception as exc:
+            return "", "file", f"task run password file could not be read: {exc.__class__.__name__}"
+        if not value:
+            return "", "file", "task run password file is empty"
+        return value, "file", ""
+    return "", "", "stored-password task mode requires --task-run-password-env or --task-run-password-file"
+
+
+def _task_principal_args(args: argparse.Namespace, *, redact_password: bool) -> tuple[list[str], dict]:
+    user = str(getattr(args, "task_run_user", "") or "").strip()
+    password_env = str(getattr(args, "task_run_password_env", "") or "").strip()
+    password_file = str(getattr(args, "task_run_password_file", "") or "").strip()
+    apply_requested = bool(getattr(args, "apply", False))
+    uninstall = bool(getattr(args, "uninstall", False))
+    allow_interactive = bool(getattr(args, "allow_interactive_task_for_local_test", False))
+    report = {
+        "status": "PASS",
+        "mode": "interactive_token_default",
+        "run_user": "",
+        "password_source": "",
+        "password_supplied": False,
+        "password_in_report": False,
+        "blocked_reason": "",
+    }
+    if not user:
+        if password_env or password_file:
+            report.update({
+                "status": "FAIL",
+                "blocked_reason": "task password source requires --task-run-user",
+            })
+        elif apply_requested and not uninstall and not allow_interactive:
+            report.update({
+                "status": "FAIL",
+                "blocked_reason": (
+                    "production apply requires --task-run-user with password source "
+                    "or --allow-interactive-task-for-local-test"
+                ),
+            })
+        return [], report
+    password, source, error = _read_task_password(args)
+    report.update({
+        "mode": "stored_password",
+        "run_user": user,
+        "password_source": source,
+        "password_supplied": bool(password),
+        "blocked_reason": error,
+        "status": "FAIL" if error else "PASS",
+    })
+    if error:
+        return [], report
+    return ["/RU", user, "/RP", "[redacted]" if redact_password else password], report
+
+
+def _scheduled_task_create_command(
+    *,
+    task_name: str,
+    minute_interval: int,
+    task_action: str,
+    task_principal_args: Sequence[str],
+) -> list[str]:
+    return [
+        "schtasks.exe",
+        "/Create",
+        "/TN",
+        task_name,
+        "/SC",
+        "MINUTE",
+        "/MO",
+        str(max(1, int(minute_interval))),
+        "/TR",
+        task_action,
+        *[str(part) for part in task_principal_args],
+        "/F",
+    ]
+
+
+def _ps_single_quote(value: str | os.PathLike[str]) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _encoded_powershell_command(script: str) -> list[str]:
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encoded,
+    ]
+
+
+def _stored_password_task_register_command(
+    *,
+    task_name: str,
+    minute_interval: int,
+    task_action_parts: Sequence[str],
+    args: argparse.Namespace,
+) -> list[str]:
+    user = str(getattr(args, "task_run_user", "") or "").strip()
+    env_name = str(getattr(args, "task_run_password_env", "") or "").strip()
+    file_path = str(getattr(args, "task_run_password_file", "") or "").strip()
+    if env_name:
+        password_script = "\n".join(
+            [
+                f"$password = [Environment]::GetEnvironmentVariable({_ps_single_quote(env_name)}, 'Process')",
+                "if ([string]::IsNullOrEmpty($password)) { throw 'task run password env var is empty or unavailable' }",
+            ]
+        )
+    else:
+        password_script = "\n".join(
+            [
+                f"$passwordPath = {_ps_single_quote(Path(file_path).expanduser().resolve())}",
+                "$password = [System.IO.File]::ReadAllText($passwordPath, [System.Text.Encoding]::UTF8)",
+                "if ($password.Length -gt 0 -and $password[0] -eq [char]0xfeff) { $password = $password.Substring(1) }",
+                "$password = $password -replace '(?:\\r\\n|\\r|\\n)+$', ''",
+                "if ($password.Length -eq 0) { throw 'task run password file is empty' }",
+            ]
+        )
+    task_args = _quote_cmd([str(part) for part in task_action_parts[1:]])
+    script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$taskName = {_ps_single_quote(task_name)}",
+            f"$execute = {_ps_single_quote(str(task_action_parts[0]))}",
+            f"$arguments = {_ps_single_quote(task_args)}",
+            f"$user = {_ps_single_quote(user)}",
+            password_script,
+            "$action = New-ScheduledTaskAction -Execute $execute -Argument $arguments",
+            "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes "
+            + str(max(1, int(minute_interval)))
+            + ") -RepetitionDuration (New-TimeSpan -Days 3650)",
+            "$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries",
+            "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -User $user -Password $password -Force | Out-Null",
+            "",
+        ]
+    )
+    return _encoded_powershell_command(script)
+
+
 def _scheduled_task_wrapper_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
     return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.cmd"
 
@@ -99,7 +253,7 @@ def _write_scheduled_task_launcher(path: Path, wrapper_path: str | os.PathLike[s
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
-        temp_path.write_text(_scheduled_task_launcher_content(wrapper_path), encoding="utf-8-sig", newline="\r\n")
+        temp_path.write_text(_scheduled_task_launcher_content(wrapper_path), encoding="ascii", newline="\r\n")
         os.replace(temp_path, path)
     except Exception:
         try:
@@ -708,19 +862,23 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         launcher = _scheduled_task_launcher_path(args.program_data_root, args.task_name)
         launcher_path = str(launcher)
         launcher_command = _quote_cmd(["wscript.exe", "//B", "//NoLogo", launcher_path])
-        create_command = [
-            "schtasks.exe",
-            "/Create",
-            "/TN",
-            args.task_name,
-            "/SC",
-            "MINUTE",
-            "/MO",
-            str(max(1, int(args.minute_interval))),
-            "/TR",
-            launcher_command,
-            "/F",
-        ]
+        task_principal_args, task_principal = _task_principal_args(args, redact_password=True)
+        create_command = _scheduled_task_create_command(
+            task_name=args.task_name,
+            minute_interval=args.minute_interval,
+            task_action=launcher_command,
+            task_principal_args=task_principal_args,
+        )
+    else:
+        task_principal = {
+            "status": "SKIPPED",
+            "mode": "uninstall",
+            "run_user": "",
+            "password_source": "",
+            "password_supplied": False,
+            "password_in_report": False,
+            "blocked_reason": "",
+        }
     delete_command = ["schtasks.exe", "/Delete", "/TN", args.task_name, "/F"]
     return {
         "report_version": "container-audit-direct-sync-install-pack-v1",
@@ -753,6 +911,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "scheduled_task_launcher_path": launcher_path,
         "scheduled_task_launcher_command": launcher_command,
         "scheduled_task_uses_hidden_launcher": True,
+        "task_principal": task_principal,
         "scheduled_task_create_command": create_command,
         "scheduled_task_delete_command": delete_command,
         "secret_redaction": {
@@ -807,6 +966,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--uninstall", action="store_true")
     parser.add_argument("--confirm-production-install", action="store_true")
     parser.add_argument("--probe-python-runtime", action="store_true")
+    parser.add_argument("--task-run-user", default="")
+    parser.add_argument("--task-run-password-env", default="")
+    parser.add_argument("--task-run-password-file", default="")
+    parser.add_argument("--allow-interactive-task-for-local-test", action="store_true")
     args = parser.parse_args(raw_argv)
     args.python_exe_explicit = "--python-exe" in raw_argv
     report_path_policy = _legacy_path_block_report("report_path", args.report_path)
@@ -855,6 +1018,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.apply and not args.confirm_production_install:
         plan["status"] = "BLOCKED"
         plan["blocked_reason"] = "apply requires --confirm-production-install"
+        _write_json(Path(args.report_path), plan)
+        print(f"install_pack_report={Path(args.report_path).resolve()}")
+        return 2
+    if plan["task_principal"]["status"] not in {"PASS", "SKIPPED"}:
+        plan["status"] = "BLOCKED"
+        plan["blocked_reason"] = plan["task_principal"]["blocked_reason"]
         _write_json(Path(args.report_path), plan)
         print(f"install_pack_report={Path(args.report_path).resolve()}")
         return 2
@@ -909,7 +1078,32 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     if args.apply:
-        command = plan["scheduled_task_delete_command"] if args.uninstall else plan["scheduled_task_create_command"]
+        if args.uninstall:
+            command = plan["scheduled_task_delete_command"]
+        else:
+            actual_principal_args, actual_principal = _task_principal_args(args, redact_password=True)
+            if actual_principal["status"] != "PASS":
+                plan["status"] = "BLOCKED"
+                plan["blocked_reason"] = actual_principal["blocked_reason"]
+                plan["task_principal"] = actual_principal
+                _write_json(Path(args.report_path), plan)
+                print(f"install_pack_report={Path(args.report_path).resolve()}")
+                return 2
+            task_action_parts = ["wscript.exe", "//B", "//NoLogo", plan["scheduled_task_launcher_path"]]
+            if actual_principal["mode"] == "stored_password":
+                command = _stored_password_task_register_command(
+                    task_name=args.task_name,
+                    minute_interval=args.minute_interval,
+                    task_action_parts=task_action_parts,
+                    args=args,
+                )
+            else:
+                command = _scheduled_task_create_command(
+                    task_name=args.task_name,
+                    minute_interval=args.minute_interval,
+                    task_action=plan["scheduled_task_launcher_command"],
+                    task_principal_args=actual_principal_args,
+                )
         plan["status"] = "APPLYING"
         _write_json(Path(args.report_path), plan)
         if not args.uninstall:
