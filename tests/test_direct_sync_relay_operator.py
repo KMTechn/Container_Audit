@@ -732,6 +732,71 @@ def test_operator_retry_dead_preserves_mutation_when_audit_write_fails(tmp_path)
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
 
 
+def test_operator_retry_dead_repairs_legacy_source_file_idempotency_key(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    relay_id = enqueued["last_result"]["relay_id"]
+    with sqlite3.connect(config.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT metadata_json, relative_path FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+        metadata = json.loads(row["metadata_json"])
+        source_file_id = (
+            f"{metadata['source_host_id']}/{metadata['producer_role']}/"
+            f"{metadata['stream_name']}/{row['relative_path']}"
+        )
+        metadata["idempotency_key"] = f"source-file:{source_file_id}/" + ("legacy-segment/" * 16)
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET metadata_json = ? WHERE relay_id = ?",
+            (json.dumps(metadata, ensure_ascii=False, sort_keys=True), relay_id),
+        )
+        conn.commit()
+    run_relay_once(
+        config,
+        session=FakeSession(
+            FakeResponse(
+                400,
+                {
+                    "committed": False,
+                    "retryable": False,
+                    "error": {
+                        "code": "metadata_field_too_large",
+                        "message": "metadata field is too large: idempotency_key",
+                    },
+                },
+            )
+        ),
+    )
+
+    retry_report = retry_dead_relay_batch(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="server rejected legacy oversized idempotency key",
+    )
+
+    assert retry_report["status"] == "PASS"
+    assert retry_report["new_status"] == RELAY_STATUS_PENDING
+    repair = retry_report["legacy_idempotency_key_repair"]
+    assert repair["applied"] is True
+    assert repair["old_key_bytes"] > 128
+    assert repair["new_key_bytes"] <= 128
+    with sqlite3.connect(config.db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        repaired = conn.execute(
+            "SELECT metadata_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+    repaired_metadata = json.loads(repaired["metadata_json"])
+    assert repaired_metadata["idempotency_key"].startswith("source-file:")
+    assert len(repaired_metadata["idempotency_key"].encode("utf-8")) <= 128
+    assert repaired_metadata["idempotency_key"].encode("ascii")
+    assert repaired_metadata["client_batch_id"] == relay_id
+
+
 def test_operator_retry_dead_blocks_spool_digest_read_error(tmp_path, monkeypatch):
     config = make_config(tmp_path)
     source_file = write_csv(tmp_path)

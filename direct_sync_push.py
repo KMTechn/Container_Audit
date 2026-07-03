@@ -72,6 +72,7 @@ RELAY_METADATA_IDENTITY_FIELDS = (
 )
 AUTHORIZATION_HEADER_RE = re.compile(r"(?i)authorization\s*:\s*[^\r\n\t ]+(?:[ \t]+[^\r\n\t ]+)?")
 CONTROL_TEXT_RE = re.compile(r"[\x00-\x1f\x7f]+")
+SOURCE_FILE_STABLE_KEY_PREFIX = "source-file:"
 
 
 class DirectSyncPushError(Exception):
@@ -280,6 +281,11 @@ def _read_open_file_digest(handle: BinaryIO) -> tuple[str, int]:
     return digest.hexdigest(), byte_count
 
 
+def _stable_source_file_key(source_file_id: str, content_sha256: str) -> str:
+    digest = hashlib.sha256(f"{source_file_id}\n{content_sha256}".encode("utf-8")).hexdigest()
+    return f"{SOURCE_FILE_STABLE_KEY_PREFIX}{digest}"
+
+
 def count_csv_data_rows(path: str | os.PathLike[str]) -> int:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.reader(handle)
@@ -328,7 +334,7 @@ def build_source_file_plan(
         raise DirectSyncPushError("relative_path must not include stream_name")
     content_sha256, byte_length = _read_file_digest(file_path)
     source_file_id = f"{source_host_id}/{DEFAULT_PRODUCER_ROLE}/{DEFAULT_STREAM_NAME}/{safe_relative_path}"
-    stable_key = f"source-file:{source_file_id}"
+    stable_key = _stable_source_file_key(source_file_id, content_sha256)
     row_count = count_csv_data_rows(file_path)
     metadata = {
         "contract_version": CONTRACT_VERSION,

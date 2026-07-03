@@ -13,13 +13,16 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from direct_sync_push import (
+    DEFAULT_PRODUCER_ROLE,
     DirectSyncPushError,
     ProducerCredentials,
     RELAY_STATUS_ACKED,
     RELAY_STATUS_FAILED_PERMANENT,
     RELAY_STATUS_OPERATOR_REVIEW,
     RELAY_STATUS_PENDING,
+    SOURCE_FILE_STABLE_KEY_PREFIX,
     build_raw_artifact_restore_url,
+    canonical_json,
     restore_raw_artifact_to_file,
     utc_now_text,
 )
@@ -32,6 +35,7 @@ RETRYABLE_DEAD_STATUSES = frozenset({RELAY_STATUS_FAILED_PERMANENT})
 SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
 REASON_REDACTED_RE = re.compile(r"^sha256:[A-Fa-f0-9]{12}$")
 DEAD_LETTER_STATUSES = (RELAY_STATUS_OPERATOR_REVIEW, RELAY_STATUS_FAILED_PERMANENT)
+LEGACY_SOURCE_FILE_KEY_PREFIX = "source-file:"
 RUNTIME_SENSITIVE_KEY_RE = re.compile(
     r"(?i)(authorization|bearer|credential|hmac|raw_payload|receipt_json|secret|signature|source_file_bytes|source_file_text|token)"
 )
@@ -652,7 +656,8 @@ def retry_dead_relay_batch(
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
             """
-            SELECT relay_id, status, attempt_count, spooled_file_path, content_sha256, byte_length, receipt_json
+            SELECT relay_id, status, attempt_count, spooled_file_path, content_sha256, byte_length,
+                   receipt_json, metadata_json, last_error_code, relative_path
             FROM direct_sync_relay_batches
             WHERE relay_id = ?
             """,
@@ -773,6 +778,9 @@ def retry_dead_relay_batch(
                 "error_code": "spooled_file_digest_mismatch",
             }
             return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
+        legacy_key_repair = _repair_legacy_idempotency_key_for_retry(row)
+        repaired_metadata_json = str(legacy_key_repair.pop("metadata_json", "") or "")
+        metadata_json_value = repaired_metadata_json if legacy_key_repair.get("applied") else str(row["metadata_json"] or "")
         cursor = conn.execute(
             """
             UPDATE direct_sync_relay_batches
@@ -784,13 +792,14 @@ def retry_dead_relay_batch(
                 last_error_message = NULL,
                 receipt_json = NULL,
                 upload_status_path = NULL,
+                metadata_json = ?,
                 updated_at = ?
             WHERE relay_id = ?
               AND status = ?
               AND lease_owner IS NULL
               AND lease_expires_at IS NULL
             """,
-            (RELAY_STATUS_PENDING, now, relay, previous_status),
+            (RELAY_STATUS_PENDING, metadata_json_value, now, relay, previous_status),
         )
         if cursor.rowcount != 1:
             conn.rollback()
@@ -839,6 +848,45 @@ def retry_dead_relay_batch(
         "content_sha256": expected_hash,
         "byte_length": expected_bytes,
         "spool_file_name": spool_path.name,
+        "legacy_idempotency_key_repair": legacy_key_repair,
         "queue": read_relay_queue_status_read_only(db_path),
     }
     return _with_operator_audit_status(audit_log_path, action="retry-dead", report=report)
+
+
+def _repair_legacy_idempotency_key_for_retry(row: sqlite3.Row) -> dict[str, Any]:
+    if str(row["last_error_code"] or "") != "metadata_field_too_large":
+        return {"applied": False}
+    try:
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+    except json.JSONDecodeError:
+        return {"applied": False, "blocked_reason": "metadata_json_invalid"}
+    if not isinstance(metadata, dict):
+        return {"applied": False, "blocked_reason": "metadata_not_object"}
+    old_key = str(metadata.get("idempotency_key") or "")
+    if not old_key.startswith(LEGACY_SOURCE_FILE_KEY_PREFIX):
+        return {"applied": False}
+    if len(old_key.encode("utf-8")) <= 128:
+        return {"applied": False, "blocked_reason": "legacy_key_not_oversized"}
+    source_host_id = str(metadata.get("source_host_id") or "").strip()
+    producer_role = str(metadata.get("producer_role") or DEFAULT_PRODUCER_ROLE).strip()
+    stream_name = str(metadata.get("stream_name") or "").strip()
+    relative_path = str(metadata.get("relative_path") or row["relative_path"] or "").strip()
+    content_sha256 = str(metadata.get("content_sha256") or row["content_sha256"] or "").strip().lower()
+    if not source_host_id or not producer_role or not stream_name or not relative_path or not content_sha256:
+        return {"applied": False, "blocked_reason": "stable_key_source_identity_incomplete"}
+    source_file_id = f"{source_host_id}/{producer_role}/{stream_name}/{relative_path}"
+    digest = hashlib.sha256(f"{source_file_id}\n{content_sha256}".encode("utf-8")).hexdigest()
+    new_key = f"{SOURCE_FILE_STABLE_KEY_PREFIX}{digest}"
+    if len(new_key.encode("utf-8")) > 128:
+        return {"applied": False, "blocked_reason": "stable_key_too_large"}
+    metadata["idempotency_key"] = new_key
+    return {
+        "applied": True,
+        "metadata_json": canonical_json(metadata),
+        "old_key_prefix": LEGACY_SOURCE_FILE_KEY_PREFIX,
+        "old_key_bytes": len(old_key.encode("utf-8")),
+        "new_key_prefix": SOURCE_FILE_STABLE_KEY_PREFIX,
+        "new_key_bytes": len(new_key.encode("utf-8")),
+        "source_file_id_sha256": hashlib.sha256(source_file_id.encode("utf-8")).hexdigest(),
+    }

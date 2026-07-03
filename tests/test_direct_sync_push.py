@@ -509,6 +509,11 @@ def test_build_plan_uses_container_stream_and_csv_rows(tmp_path):
     assert plan.metadata["source_system"] == "container_audit"
     assert plan.metadata["source_transport"] == "legacy_transfer_csv"
     assert plan.metadata["relative_path"] == f"legacy_csv/{csv_path.name}"
+    assert plan.metadata["client_batch_id"] == plan.metadata["idempotency_key"]
+    assert plan.metadata["idempotency_key"].startswith("source-file:")
+    assert len(plan.metadata["idempotency_key"].encode("utf-8")) <= 128
+    assert plan.metadata["idempotency_key"].encode("ascii")
+    assert csv_path.name not in plan.metadata["idempotency_key"]
     assert plan.metadata["row_count"] == 1
     assert plan.metadata["first_row_number"] == 2
     assert plan.metadata["last_row_number"] == 2
@@ -540,6 +545,36 @@ def test_build_plan_counts_multiline_csv_details_as_one_data_row(tmp_path):
     assert plan.metadata["row_count"] == 1
     assert plan.metadata["first_row_number"] == 2
     assert plan.metadata["last_row_number"] == 2
+
+
+def test_build_plan_bounds_stable_key_for_long_korean_source_identity(tmp_path):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    long_relative_path = "legacy_csv/" + ("현장" * 80) + "/이적작업이벤트로그_20260704.csv"
+    csv_path = tmp_path / "source.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["timestamp", "worker_name", "event", "details"])
+        writer.writerow(["2026-07-04T00:00:00", "worker", "SCAN_OK", "{}"])
+    credentials = make_credentials()
+
+    first = build_source_file_plan(
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+        relative_path=long_relative_path,
+    )
+    second = build_source_file_plan(
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+        relative_path=long_relative_path,
+    )
+
+    assert first.metadata["idempotency_key"].startswith("source-file:")
+    assert len(first.metadata["idempotency_key"].encode("utf-8")) <= 128
+    assert first.metadata["idempotency_key"].encode("ascii")
+    assert long_relative_path not in first.metadata["idempotency_key"]
+    assert first.metadata["idempotency_key"] == second.metadata["idempotency_key"]
 
 
 def test_build_plan_rejects_duplicate_json_keys_in_manifest(tmp_path):
@@ -1890,7 +1925,9 @@ def test_drain_uses_enqueued_metadata_snapshot_after_manifest_changes(tmp_path):
     assert session.calls[0]["client_batch_id"] == row.relay_id
     assert session.calls[0]["source_host_id"] == "container-host-1"
     assert session.calls[0]["manifest_hash"] == original_manifest_hash
-    assert session.calls[0]["idempotency_key"].startswith("source-file:container-host-1/")
+    assert session.calls[0]["idempotency_key"].startswith("source-file:")
+    assert len(session.calls[0]["idempotency_key"].encode("utf-8")) <= 128
+    assert session.calls[0]["idempotency_key"].encode("ascii")
 
 
 def test_relay_schema_migrates_legacy_queue_without_metadata_snapshot(tmp_path):
