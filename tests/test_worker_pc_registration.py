@@ -47,6 +47,9 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert report["secret_bootstrap_verified"] is False
     assert manifest["schema_version"] == "producer-onboarding-manifest-v1"
     assert manifest["pc_identity"]["source_host_id"] == "container-audit-pc-01"
+    raw_event_names = manifest["streams"][0]["raw_event_names"]
+    for expected_event in ["WORK_START", "MASTER_LABEL_SCANNED_NEW", "SCAN_OK", "TRAY_COMPLETE", "WORK_END"]:
+        assert expected_event in raw_event_names
     assert manifest["sync"]["sync_transport"] == "http_push"
     assert manifest["sync"]["sync_dir"] == (expected_root / "events").as_posix()
     assert manifest["paths"]["data_dir"] == (expected_root / "direct_sync").as_posix()
