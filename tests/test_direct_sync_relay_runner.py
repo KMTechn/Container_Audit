@@ -237,8 +237,14 @@ def test_runner_scan_source_dir_does_not_starve_new_files_behind_acked_rows(tmp_
     capsys.readouterr()
     with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
         conn.execute(
-            "UPDATE direct_sync_relay_batches SET status = ? WHERE relative_path LIKE ?",
-            (RELAY_STATUS_ACKED, "%001%"),
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?
+            WHERE relay_id = (
+                SELECT relay_id FROM direct_sync_relay_batches ORDER BY created_at LIMIT 1
+            )
+            """,
+            (RELAY_STATUS_ACKED,),
         )
         conn.commit()
 

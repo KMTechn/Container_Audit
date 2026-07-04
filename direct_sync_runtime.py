@@ -152,7 +152,7 @@ def _dpapi_unprotect_current_user(protected: bytes) -> bytes:
     try:
         return ctypes.string_at(output_blob.pbData, output_blob.cbData)
     finally:
-        kernel32.LocalFree(output_blob.pbData)
+        kernel32.LocalFree(c_void_p(output_blob.pbData))
 
 
 def _read_wincred_secret(target_name: str) -> str:

@@ -165,12 +165,14 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
         captured["timeout"] = timeout
         return FakeResponse()
 
-    def fake_write_wincred(target_name, secret):
-        captured["wincred_target"] = target_name
-        captured["wincred_secret"] = secret
+    def fake_write_dpapi_secret(data_dir, target_name, secret):
+        captured["dpapi_data_dir"] = str(data_dir)
+        captured["dpapi_target"] = target_name
+        captured["dpapi_secret"] = secret
+        return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
 
     monkeypatch.setattr(registration.requests, "post", fake_post)
-    monkeypatch.setattr(registration, "_write_wincred_secret", fake_write_wincred)
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
 
     exit_code = registration.main(
         [
@@ -193,9 +195,12 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert captured["headers"] == {}
     assert credential["producer_id"] == "producer-pc-ip"
     assert credential["key_id"] == "server-key-pc-ip"
+    assert credential["secret_ref"] == "dpapi:KMTech.DirectSync.ContainerAudit.pc-ip"
+    assert credential["secret_data_dir"] == str(local_app_data / "KMTech" / "ContainerAudit" / "direct_sync")
     assert "secret" not in credential
-    assert captured["wincred_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
-    assert captured["wincred_secret"] == "server-issued-secret-pc-ip"
+    assert captured["dpapi_data_dir"] == str(local_app_data / "KMTech" / "ContainerAudit" / "direct_sync")
+    assert captured["dpapi_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
+    assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
 
 
 def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch):

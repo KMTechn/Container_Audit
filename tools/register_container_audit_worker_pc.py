@@ -13,6 +13,7 @@ import secrets
 import socket
 import sys
 import uuid
+from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -42,6 +43,7 @@ from storage_utils import atomic_write_json  # noqa: E402
 DEFAULT_ENDPOINT_URL = "https://worker.kmtecherp.com/api/producer-ingest/v1/source-file"
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v1"
 DEFAULT_ENROLLMENT_TOKEN_ENV = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
+CRYPTPROTECT_LOCAL_MACHINE = 0x4
 CONTAINER_AUDIT_APP = "ContainerAudit"
 CONTAINER_AUDIT_RAW_EVENTS = [
     "CONTAINER_AUDIT_OBSERVED",
@@ -71,7 +73,7 @@ def _slug(value: str) -> str:
 
 
 def _default_secret_ref(hostname: str) -> str:
-    return f"wincred:KMTech.DirectSync.ContainerAudit.{_slug(hostname)}"
+    return f"dpapi:KMTech.DirectSync.ContainerAudit.{_slug(hostname)}"
 
 
 def _validate_secret_ref(secret_ref: str) -> tuple[str, str]:
@@ -310,7 +312,94 @@ def _write_wincred_secret(target_name: str, secret: str) -> None:
         raise DirectSyncPushError("wincred secret bootstrap failed")
 
 
-def _self_enroll(args: argparse.Namespace, manifest: dict, credential: dict, secret_ref_target: str) -> tuple[dict, dict]:
+class _DataBlob(ctypes.Structure):
+    _fields_ = [("cbData", wintypes.DWORD), ("pbData", ctypes.c_void_p)]
+
+
+def _dpapi_protect_machine(secret: str) -> bytes:
+    if sys.platform != "win32":
+        raise DirectSyncPushError("dpapi secret bootstrap requires Windows")
+    from ctypes import byref
+
+    secret_bytes = secret.encode("utf-8")
+    input_buffer = ctypes.create_string_buffer(secret_bytes, len(secret_bytes))
+    input_blob = _DataBlob(len(secret_bytes), ctypes.cast(input_buffer, ctypes.c_void_p))
+    output_blob = _DataBlob()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_LOCAL_MACHINE,
+        byref(output_blob),
+    ):
+        raise DirectSyncPushError("dpapi secret bootstrap failed")
+    try:
+        return ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output_blob.pbData))
+
+
+def _dpapi_unprotect_current_user(protected: bytes) -> str:
+    if sys.platform != "win32":
+        raise DirectSyncPushError("dpapi secret verify requires Windows")
+    from ctypes import byref
+
+    input_buffer = ctypes.create_string_buffer(protected, len(protected))
+    input_blob = _DataBlob(len(protected), ctypes.cast(input_buffer, ctypes.c_void_p))
+    output_blob = _DataBlob()
+    if not ctypes.windll.crypt32.CryptUnprotectData(byref(input_blob), None, None, None, None, 0, byref(output_blob)):
+        raise DirectSyncPushError("dpapi secret verify failed")
+    try:
+        return ctypes.string_at(output_blob.pbData, output_blob.cbData).decode("utf-8")
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output_blob.pbData))
+
+
+def _write_dpapi_secret(data_dir: str | os.PathLike[str], target_name: str, secret: str) -> Path:
+    safe_name = _safe_secret_ref_name(target_name)
+    base_dir = Path(data_dir).expanduser().resolve()
+    if is_legacy_syncthing_path(base_dir):
+        raise DirectSyncPushError("secret_data_dir must not point at the legacy Syncthing folder")
+    secret_path = base_dir / "secrets" / f"{safe_name}.dpapi"
+    secret_path.parent.mkdir(parents=True, exist_ok=True)
+    secret_path.write_bytes(_dpapi_protect_machine(secret))
+    if _dpapi_unprotect_current_user(secret_path.read_bytes()) != secret:
+        raise DirectSyncPushError("dpapi secret verify failed")
+    return secret_path
+
+
+def _bootstrap_secret_ref(
+    *,
+    secret_ref_scheme: str,
+    secret_ref_target: str,
+    credential: dict,
+    secret: str,
+) -> dict:
+    if secret_ref_scheme == "wincred":
+        _write_wincred_secret(_wincred_target_name(secret_ref_target), secret)
+        return {"secret_ref_scheme": "wincred"}
+    if secret_ref_scheme == "dpapi":
+        secret_data_dir = str(credential.get("secret_data_dir") or "").strip()
+        if not secret_data_dir:
+            raise DirectSyncPushError("dpapi secret bootstrap requires secret_data_dir")
+        secret_path = _write_dpapi_secret(secret_data_dir, secret_ref_target, secret)
+        return {
+            "secret_ref_scheme": "dpapi",
+            "secret_data_dir": str(Path(secret_data_dir).expanduser().resolve()),
+            "secret_artifact_path": str(secret_path),
+        }
+    raise DirectSyncPushError("self-enroll secret bootstrap requires dpapi: or wincred: secret_ref")
+
+
+def _self_enroll(
+    args: argparse.Namespace,
+    manifest: dict,
+    credential: dict,
+    secret_ref_scheme: str,
+    secret_ref_target: str,
+) -> tuple[dict, dict]:
     token = args.enrollment_token or os.getenv(args.enrollment_token_env or DEFAULT_ENROLLMENT_TOKEN_ENV, "")
     enrollment_url = _validate_enrollment_url(
         args.enrollment_url or _default_enrollment_url(credential["endpoint_url"]),
@@ -348,7 +437,12 @@ def _self_enroll(args: argparse.Namespace, manifest: dict, credential: dict, sec
             raise DirectSyncPushError("self-enroll response missing valid secret") from exc
     if not secret.strip():
         raise DirectSyncPushError("self-enroll response missing valid secret")
-    _write_wincred_secret(_wincred_target_name(secret_ref_target), secret)
+    bootstrap_report = _bootstrap_secret_ref(
+        secret_ref_scheme=secret_ref_scheme,
+        secret_ref_target=secret_ref_target,
+        credential=credential,
+        secret=secret,
+    )
     credential = dict(credential)
     credential["producer_id"] = str(response_payload.get("producer_id") or credential["producer_id"])
     credential["key_id"] = str(response_payload.get("key_id") or credential["key_id"])
@@ -360,6 +454,7 @@ def _self_enroll(args: argparse.Namespace, manifest: dict, credential: dict, sec
         "enrollment_authorization_mode": "token" if token else "server_ip_allowlist",
         "secret_fingerprint_sha256": response_payload.get("secret_fingerprint_sha256"),
         "server_binding": response_payload.get("server_binding") or {},
+        "secret_bootstrap": bootstrap_report,
     }
 
 
@@ -397,6 +492,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "secret_ref": secret_ref,
         "endpoint_url": endpoint_url,
     }
+    if secret_ref_scheme == "dpapi":
+        credential["secret_data_dir"] = str(storage_paths.direct_sync_root)
     report = {
         "report_version": "container-audit-worker-pc-registration-v1",
         "status": "LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET",
@@ -425,7 +522,13 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         ),
     }
     if getattr(args, "self_enroll", False):
-        credential, enrollment_report = _self_enroll(args, manifest, credential, secret_ref_target)
+        credential, enrollment_report = _self_enroll(
+            args,
+            manifest,
+            credential,
+            secret_ref_scheme,
+            secret_ref_target,
+        )
         report.update(enrollment_report)
         report["status"] = "SELF_ENROLLMENT_REGISTERED"
         report["next_required_external_step"] = "Run direct-sync relay and verify upload receipt."

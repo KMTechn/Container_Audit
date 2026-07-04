@@ -58,3 +58,23 @@ def test_install_command_falls_back_to_python_script(tmp_path):
     )
 
     assert Path(command[1]) == script_path.resolve()
+
+
+def test_install_command_can_carry_production_task_principal(tmp_path):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    install_exe = app_root / "Container_Audit_DirectSync_Install.exe"
+    install_exe.write_bytes(b"exe")
+
+    command = bootstrap.build_install_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "data" / "direct_sync",
+        scan_source_dir=tmp_path / "data" / "events",
+        confirm_production_install=True,
+        task_run_user=r"TEST1\kmtech-dsync",
+        task_run_password_file=str(tmp_path / "task-password.txt"),
+    )
+
+    assert "--confirm-production-install" in command
+    assert command[command.index("--task-run-user") + 1] == r"TEST1\kmtech-dsync"
+    assert command[command.index("--task-run-password-file") + 1] == str(tmp_path / "task-password.txt")

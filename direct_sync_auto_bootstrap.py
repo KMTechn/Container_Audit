@@ -112,6 +112,11 @@ def build_install_command(
     scan_source_dir: str | os.PathLike[str],
     task_name: str = DEFAULT_TASK_NAME,
     report_path: str | os.PathLike[str] | None = None,
+    confirm_production_install: bool = False,
+    task_run_user: str = "",
+    task_run_password_env: str = "",
+    task_run_password_file: str = "",
+    allow_interactive_task_for_local_test: bool = False,
 ) -> list[str]:
     root = Path(direct_sync_root).expanduser().resolve()
     selected_app_root = Path(app_root).expanduser().resolve()
@@ -142,6 +147,16 @@ def build_install_command(
             str(selected_report),
         ]
     )
+    if confirm_production_install:
+        command.append("--confirm-production-install")
+    if task_run_user:
+        command.extend(["--task-run-user", task_run_user])
+    if task_run_password_env:
+        command.extend(["--task-run-password-env", task_run_password_env])
+    if task_run_password_file:
+        command.extend(["--task-run-password-file", task_run_password_file])
+    if allow_interactive_task_for_local_test:
+        command.append("--allow-interactive-task-for-local-test")
     return command
 
 
@@ -225,6 +240,11 @@ def run_direct_sync_auto_bootstrap(
     task_name: str = DEFAULT_TASK_NAME,
     server_base_url: str = DEFAULT_SERVER_BASE_URL,
     timeout_seconds: int = 180,
+    confirm_production_install: bool = False,
+    task_run_user: str = "",
+    task_run_password_env: str = "",
+    task_run_password_file: str = "",
+    allow_interactive_task_for_local_test: bool = False,
 ) -> dict[str, Any]:
     root = Path(direct_sync_root).expanduser().resolve()
     status_path = root / "status" / "container_audit_direct_sync_auto_bootstrap.json"
@@ -265,6 +285,11 @@ def run_direct_sync_auto_bootstrap(
         direct_sync_root=root,
         scan_source_dir=scan_source_dir,
         task_name=task_name,
+        confirm_production_install=confirm_production_install,
+        task_run_user=task_run_user,
+        task_run_password_env=task_run_password_env,
+        task_run_password_file=task_run_password_file,
+        allow_interactive_task_for_local_test=allow_interactive_task_for_local_test,
     )
     report["install_command_redacted"] = install_command
     install_result = _run_command(install_command, max(30, timeout_seconds))
@@ -295,6 +320,17 @@ def start_direct_sync_auto_bootstrap(
         timeout_seconds = 180
     server_base_url = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL", "").strip() or DEFAULT_SERVER_BASE_URL
     task_name = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_NAME", "").strip() or DEFAULT_TASK_NAME
+    confirm_production_install = os.environ.get(
+        "CONTAINER_AUDIT_DIRECT_SYNC_CONFIRM_PRODUCTION_INSTALL",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    allow_interactive_task_for_local_test = os.environ.get(
+        "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_INTERACTIVE_TASK_FOR_LOCAL_TEST",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    task_run_user = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_USER", "").strip()
+    task_run_password_env = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_ENV", "").strip()
+    task_run_password_file = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_FILE", "").strip()
     thread = threading.Thread(
         target=run_direct_sync_auto_bootstrap,
         kwargs={
@@ -304,6 +340,11 @@ def start_direct_sync_auto_bootstrap(
             "task_name": task_name,
             "server_base_url": server_base_url,
             "timeout_seconds": timeout_seconds,
+            "confirm_production_install": confirm_production_install,
+            "task_run_user": task_run_user,
+            "task_run_password_env": task_run_password_env,
+            "task_run_password_file": task_run_password_file,
+            "allow_interactive_task_for_local_test": allow_interactive_task_for_local_test,
         },
         name="direct-sync-bootstrap-container-audit",
         daemon=True,

@@ -79,7 +79,8 @@ def _source_delta_key(path: Path) -> str:
 
 
 def _delta_relative_path(path: Path, start_byte: int, end_byte: int, content_sha256: str) -> str:
-    return f"legacy_csv_deltas/{path.name}/bytes-{start_byte}-{end_byte}-sha256-{content_sha256[:16]}.csv"
+    source_key = _source_delta_key(path)
+    return f"d/{source_key}/bytes-{start_byte}-{end_byte}-sha256-{content_sha256[:16]}.csv"
 
 
 def _file_prefix_sha256(path: Path, byte_count: int) -> str:
@@ -121,11 +122,18 @@ def _scan_state_connect(db_path: str | Path) -> sqlite3.Connection:
 
 
 def _parse_delta_range(relative_path: str, source_file: Path) -> tuple[int, int] | None:
-    prefix = f"legacy_csv_deltas/{source_file.name}/bytes-"
     text = str(relative_path or "").replace("\\", "/")
-    if not text.startswith(prefix):
+    prefixes = [
+        f"d/{_source_delta_key(source_file)}/bytes-",
+        f"legacy_csv_deltas/{_source_delta_key(source_file)}/bytes-",
+        f"legacy_csv_deltas/{source_file.name}/bytes-",
+    ]
+    for prefix in prefixes:
+        if text.startswith(prefix):
+            range_text = text[len(prefix):].split("-sha256-", 1)[0]
+            break
+    else:
         return None
-    range_text = text[len(prefix):].split("-sha256-", 1)[0]
     try:
         start_text, end_text = range_text.split("-", 1)
         start_byte = int(start_text)
@@ -170,6 +178,7 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
         SELECT source_file_path, relative_path, content_sha256, status, {receipt_select}
         FROM direct_sync_relay_batches
         WHERE relative_path LIKE 'legacy_csv_deltas/%'
+           OR relative_path LIKE 'd/%'
         """
     ).fetchall()
     matching_ranges: dict[int, int] = {}
