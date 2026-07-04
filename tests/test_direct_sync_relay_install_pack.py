@@ -22,6 +22,13 @@ def decode_encoded_powershell_command(command):
     return base64.b64decode(command[5]).decode("utf-16le")
 
 
+def find_command(commands, executable):
+    for command in commands:
+        if command and command[0] == executable:
+            return command
+    raise AssertionError(f"command not found: {executable}")
+
+
 def test_install_pack_report_write_uses_unique_atomic_temp_paths(tmp_path, monkeypatch):
     target = tmp_path / "install-report.json"
     observed = []
@@ -1288,9 +1295,9 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
     )
 
     assert exit_code == 0
-    assert commands and commands[0][0] == "powershell.exe"
-    assert "stored-task-password" not in " ".join(commands[0])
-    command_script = decode_encoded_powershell_command(commands[0])
+    task_command = find_command(commands, "powershell.exe")
+    assert "stored-task-password" not in " ".join(task_command)
+    command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
     assert "TASK_PASSWORD_FOR_TEST" in command_script
     assert "stored-task-password" not in command_script
@@ -1299,6 +1306,14 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
     assert report["task_principal"]["mode"] == "stored_password"
     assert report["task_principal"]["password_source"] == "env:TASK_PASSWORD_FOR_TEST"
     assert report["task_principal"]["password_in_report"] is False
+    assert report["task_runtime_acl"]["enabled"] is True
+    assert report["task_runtime_acl"]["principal"] == r"TEST1\kmtech-remote-admin"
+    assert str((tmp_path / "ProgramData").resolve()) in report["task_runtime_acl"]["paths"]
+    assert any(
+        command[:3] == ["icacls.exe", str((tmp_path / "ProgramData").resolve()), "/grant:r"]
+        and command[3] == r"TEST1\kmtech-remote-admin:(OI)(CI)M"
+        for command in commands
+    )
     assert report["scheduled_task_create_command"][report["scheduled_task_create_command"].index("/RP") + 1] == "[redacted]"
     assert "stored-task-password" not in report_text
 
@@ -1343,9 +1358,9 @@ def test_install_pack_apply_supports_password_file_without_leaking_password(tmp_
     )
 
     assert exit_code == 0
-    assert commands and commands[0][0] == "powershell.exe"
-    assert "file-task-password" not in " ".join(commands[0])
-    command_script = decode_encoded_powershell_command(commands[0])
+    task_command = find_command(commands, "powershell.exe")
+    assert "file-task-password" not in " ".join(task_command)
+    command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
     assert str(password_file.resolve()) in command_script
     assert "file-task-password" not in command_script

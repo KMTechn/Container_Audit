@@ -399,6 +399,79 @@ def _runtime_path_boundary_report(program_data_root: str | os.PathLike[str], pat
     }
 
 
+def _task_runtime_acl_plan(args: argparse.Namespace) -> dict:
+    user = str(getattr(args, "task_run_user", "") or "").strip()
+    root = Path(args.program_data_root).expanduser().resolve()
+    enabled = bool(user) and not bool(getattr(args, "uninstall", False))
+    status = "PASS"
+    blocked_reason = ""
+    if enabled and root.parent == root:
+        status = "FAIL"
+        blocked_reason = "program_data_root must not be a filesystem root"
+    return {
+        "status": status,
+        "blocked_reason": blocked_reason,
+        "enabled": enabled,
+        "principal": user,
+        "rights": "M",
+        "inheritance": "(OI)(CI)",
+        "paths": [str(root)] if enabled else [],
+    }
+
+
+def _apply_task_runtime_acl(plan: dict) -> dict:
+    if plan.get("status") != "PASS":
+        return {
+            "status": "FAIL",
+            "blocked_reason": plan.get("blocked_reason") or "task runtime ACL plan is not pass",
+            "command_results": [],
+        }
+    paths = [str(path) for path in plan.get("paths") or []]
+    created_paths: list[str] = []
+    for path in paths:
+        Path(path).mkdir(parents=True, exist_ok=True)
+        created_paths.append(path)
+    if not plan.get("enabled"):
+        return {
+            "status": "SKIPPED",
+            "blocked_reason": "",
+            "reason": "task_run_user_not_configured",
+            "created_paths": created_paths,
+            "command_results": [],
+        }
+    if os.name != "nt":
+        return {
+            "status": "SKIPPED",
+            "blocked_reason": "",
+            "reason": "non_windows_runtime",
+            "created_paths": created_paths,
+            "command_results": [],
+        }
+    principal = str(plan.get("principal") or "").strip()
+    rights = str(plan.get("rights") or "M")
+    inheritance = str(plan.get("inheritance") or "(OI)(CI)")
+    grant = f"{principal}:{inheritance}{rights}"
+    command_results = []
+    for path in paths:
+        command = ["icacls.exe", path, "/grant:r", grant]
+        result = _run_command(command)
+        command_results.append({
+            "command": command,
+            "returncode": result.get("returncode"),
+            "stdout_omitted": bool(result.get("stdout")),
+            "stderr_omitted": bool(result.get("stderr")),
+            "stdout_bytes": len(str(result.get("stdout") or "").encode("utf-8", errors="replace")),
+            "stderr_bytes": len(str(result.get("stderr") or "").encode("utf-8", errors="replace")),
+        })
+    ok = all(int(result.get("returncode") or 0) == 0 for result in command_results)
+    return {
+        "status": "PASS" if ok else "FAIL",
+        "blocked_reason": "" if ok else "icacls grant failed for task runtime path",
+        "created_paths": created_paths,
+        "command_results": command_results,
+    }
+
+
 def _app_root_dependency_report(app_root: str | os.PathLike[str]) -> dict:
     root = Path(app_root).resolve()
     required = {
@@ -818,6 +891,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         if uninstall
         else _validate_backpressure_config(backpressure)
     )
+    task_runtime_acl = _task_runtime_acl_plan(args)
     runner_parts: list[str] = []
     create_command: list[str] = []
     wrapper_path = ""
@@ -892,6 +966,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "program_data_root": str(Path(args.program_data_root).expanduser().resolve()),
         "runtime_paths": paths,
         "runtime_path_boundary": runtime_path_boundary,
+        "task_runtime_acl": task_runtime_acl,
         "bundled_relay_executable": bundled_relay_executable,
         "use_bundled_relay_executable": use_bundled_relay_executable,
         "python_exe_explicit": python_exe_explicit,
@@ -1076,6 +1151,12 @@ def main(argv: list[str] | None = None) -> int:
             _write_json(Path(args.report_path), plan)
             print(f"install_pack_report={Path(args.report_path).resolve()}")
             return 2
+        if plan["task_runtime_acl"]["status"] != "PASS":
+            plan["status"] = "BLOCKED"
+            plan["blocked_reason"] = plan["task_runtime_acl"]["blocked_reason"]
+            _write_json(Path(args.report_path), plan)
+            print(f"install_pack_report={Path(args.report_path).resolve()}")
+            return 2
 
     if args.apply:
         if args.uninstall:
@@ -1104,6 +1185,14 @@ def main(argv: list[str] | None = None) -> int:
                     task_action=plan["scheduled_task_launcher_command"],
                     task_principal_args=actual_principal_args,
                 )
+            acl_result = _apply_task_runtime_acl(plan["task_runtime_acl"])
+            plan["task_runtime_acl"]["apply_result"] = acl_result
+            if acl_result["status"] == "FAIL":
+                plan["status"] = "FAIL"
+                plan["blocked_reason"] = acl_result["blocked_reason"]
+                _write_json(Path(args.report_path), plan)
+                print(f"install_pack_report={Path(args.report_path).resolve()}")
+                return 1
         plan["status"] = "APPLYING"
         _write_json(Path(args.report_path), plan)
         if not args.uninstall:
