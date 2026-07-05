@@ -96,7 +96,7 @@ from worker_registry import WorkerRegistry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.19"
+CURRENT_VERSION = "v2.0.20"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -552,20 +552,49 @@ def check_and_apply_updates():
         return
     candidate = _safe_check_update_candidate()
     if candidate:
-        download_url = candidate["download_url"]
-        new_version = candidate["version"]
-        root_alert = tk.Tk()
-        root_alert.withdraw()
-        if messagebox.askyesno("업데이트 발견", f"새로운 버전({new_version})이 발견되었습니다.\n지금 업데이트하시겠습니까? (현재: {CURRENT_VERSION})", parent=root_alert):
-            root_alert.destroy()
+        _prompt_and_apply_update(candidate)
+
+
+def _prompt_and_apply_update(candidate, parent=None):
+    download_url = candidate["download_url"]
+    new_version = candidate["version"]
+    root_alert = parent
+    created_alert_root = None
+    if root_alert is None:
+        created_alert_root = tk.Tk()
+        created_alert_root.withdraw()
+        root_alert = created_alert_root
+    try:
+        if messagebox.askyesno(
+            "업데이트 발견",
+            f"새로운 버전({new_version})이 발견되었습니다.\n지금 업데이트하시겠습니까? (현재: {CURRENT_VERSION})",
+            parent=root_alert,
+        ):
             download_and_apply_update(
                 download_url,
                 checksum_url=candidate.get("checksum_url"),
                 expected_sha256=candidate.get("sha256"),
                 archive_policy=candidate.get("archive_policy"),
             )
-        else:
-            root_alert.destroy()
+    finally:
+        if created_alert_root is not None:
+            created_alert_root.destroy()
+
+
+def schedule_update_check(parent):
+    if not _release_runtime_mode():
+        return
+
+    def worker():
+        candidate = _safe_check_update_candidate()
+        if not candidate:
+            return
+        try:
+            parent.after(0, lambda: _prompt_and_apply_update(candidate, parent=parent))
+        except tk.TclError:
+            return
+
+    threading.Thread(target=worker, name="container-audit-update-check", daemon=True).start()
 
 # ####################################################################
 # # 데이터 클래스 및 유틸리티
@@ -613,6 +642,7 @@ class ContainerAudit:
     SOURCE_SYSTEM = "container_audit"
     SOURCE_TRANSPORT_OR_DATASET = "legacy_transfer_csv"
     SCAN_CONTRACT_VERSION = "container_audit_legacy_v1"
+    AUDIO_ENABLED_ENV = "CONTAINER_AUDIT_AUDIO_ENABLED"
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -652,8 +682,12 @@ class ContainerAudit:
             self.root.iconbitmap(resource_path(os.path.join('assets', 'logo.ico')))
         except Exception as e:
             print(f"아이콘 로드 실패: {e}")
-            
-        self._load_audio_feedback()
+
+        self.success_sound = self.error_sound = None
+        self.audio_feedback_ready = False
+        self.audio_feedback_error = ""
+        self.audio_feedback_init_started = False
+        self.root.after(250, self._start_audio_feedback_initialization)
 
         if getattr(sys, 'frozen', False): self.application_path = os.path.dirname(sys.executable)
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
@@ -730,15 +764,43 @@ class ContainerAudit:
     # 30일 최고 기록 관리
     ####################################################################
 
+    def _audio_feedback_enabled(self):
+        value = os.getenv(self.AUDIO_ENABLED_ENV, "on").strip().lower()
+        return value not in {"0", "false", "no", "off", "disabled"}
+
+    def _start_audio_feedback_initialization(self):
+        if getattr(self, "audio_feedback_init_started", False) or not self._audio_feedback_enabled():
+            return
+        self.audio_feedback_init_started = True
+
+        def initialize_audio():
+            success_sound = error_sound = None
+            error_message = ""
+            try:
+                pygame.init()
+                pygame.mixer.init()
+                success_sound = pygame.mixer.Sound(resource_path('assets/success.wav'))
+                error_sound = pygame.mixer.Sound(resource_path('assets/error.wav'))
+            except Exception as exc:
+                error_message = str(exc)
+
+            def finish():
+                self.success_sound = success_sound
+                self.error_sound = error_sound
+                self.audio_feedback_ready = success_sound is not None and error_sound is not None
+                self.audio_feedback_error = error_message
+                if error_message:
+                    print(f"사운드 피드백 초기화 오류: {error_message}")
+
+            try:
+                self.root.after(0, finish)
+            except tk.TclError:
+                pass
+
+        threading.Thread(target=initialize_audio, name="container-audit-audio-init", daemon=True).start()
+
     def _load_audio_feedback(self):
-        self.success_sound = self.error_sound = None
-        try:
-            pygame.init()
-            pygame.mixer.init()
-            self.success_sound = pygame.mixer.Sound(resource_path('assets/success.wav'))
-            self.error_sound = pygame.mixer.Sound(resource_path('assets/error.wav'))
-        except Exception as e:
-            messagebox.showwarning("사운드 파일 오류", f"사운드 피드백을 사용할 수 없습니다.\n오류: {e}")
+        self._start_audio_feedback_initialization()
     def _load_best_time_records(self):
         """설정 폴더에서 30일 최고 기록 파일을 불러옵니다."""
         self.best_time_file_path = os.path.join(self.config_folder, 'best_time_records.json')
@@ -4055,8 +4117,8 @@ class ContainerAudit:
         self._update_action_button_states()
 
 def main():
-    check_and_apply_updates()
     app = ContainerAudit()
+    app.root.after(500, lambda: schedule_update_check(app.root))
     app.run()
 
 

@@ -618,22 +618,28 @@ def test_container_audit_keeps_worker_registry_import_compatibility():
     assert WorkerRegistry is worker_registry.WorkerRegistry
 
 
-def test_main_checks_updates_before_running_app(monkeypatch):
+def test_main_schedules_update_check_after_app_creation(monkeypatch):
     calls = []
+
+    class FakeRoot:
+        def after(self, delay_ms, callback):
+            calls.append(("after", delay_ms))
+            self.callback = callback
 
     class FakeApp:
         def __init__(self):
             calls.append("init")
+            self.root = FakeRoot()
 
         def run(self):
             calls.append("run")
 
-    monkeypatch.setattr(container_audit_module, "check_and_apply_updates", lambda: calls.append("updates"))
+    monkeypatch.setattr(container_audit_module, "schedule_update_check", lambda root: calls.append("updates"))
     monkeypatch.setattr(container_audit_module, "ContainerAudit", FakeApp)
 
     container_audit_module.main()
 
-    assert calls == ["updates", "init", "run"]
+    assert calls == ["init", ("after", 500), "run"]
 
 
 def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
@@ -649,7 +655,14 @@ def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
 
 def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
     app = _headless_app()
-    warnings = []
+    class FakeRoot:
+        def after(self, _delay_ms, callback):
+            callback()
+
+    app.root = FakeRoot()
+    app.audio_feedback_init_started = False
+    app.success_sound = None
+    app.error_sound = None
     monkeypatch.setattr(container_audit_module.pygame, "init", lambda: None)
     monkeypatch.setattr(
         container_audit_module.pygame.mixer,
@@ -661,13 +674,19 @@ def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
         "Sound",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Sound should not load after init failure")),
     )
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
 
     app._load_audio_feedback()
 
+    for _ in range(100):
+        if getattr(app, "audio_feedback_error", ""):
+            break
+        import time
+
+        time.sleep(0.01)
+
     assert app.success_sound is None
     assert app.error_sound is None
-    assert warnings
+    assert "no audio device" in app.audio_feedback_error
 
 
 def test_update_asset_lookup_requires_matching_sha256_asset():

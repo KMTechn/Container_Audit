@@ -69,7 +69,12 @@ def _tool_command(app_root: Path, exe_name: str, script_name: str) -> list[str]:
     exe = _existing_file(app_root / exe_name, app_root / "tools" / exe_name)
     if exe is not None:
         return [str(exe)]
-    return [sys.executable, str(app_root / "tools" / script_name)]
+    script = app_root / "tools" / script_name
+    if not script.is_file():
+        return []
+    if getattr(sys, "frozen", False):
+        return []
+    return [sys.executable, str(script)]
 
 
 def build_registration_command(
@@ -87,6 +92,8 @@ def build_registration_command(
         REGISTER_EXE_NAME,
         "register_container_audit_worker_pc.py",
     )
+    if not command:
+        return []
     command.extend(
         [
             "--app-root",
@@ -126,6 +133,8 @@ def build_install_command(
         INSTALL_EXE_NAME,
         "direct_sync_relay_install_pack.py",
     )
+    if not command:
+        return []
     command.extend(
         [
             "--apply",
@@ -273,6 +282,10 @@ def run_direct_sync_auto_bootstrap(
         server_base_url=server_base_url,
     )
     report["registration_command_redacted"] = registration_command
+    if not registration_command:
+        report.update({"status": "FAIL", "reason": "direct-sync registration helper is missing"})
+        _write_json(status_path, report)
+        return report
     registration_result = _run_command(registration_command, max(30, timeout_seconds))
     report["registration_result"] = registration_result
     if registration_result["status"] != "PASS":
@@ -292,6 +305,10 @@ def run_direct_sync_auto_bootstrap(
         allow_interactive_task_for_local_test=allow_interactive_task_for_local_test,
     )
     report["install_command_redacted"] = install_command
+    if not install_command:
+        report.update({"status": "FAIL", "reason": "direct-sync install helper is missing"})
+        _write_json(status_path, report)
+        return report
     install_result = _run_command(install_command, max(30, timeout_seconds))
     report["install_result"] = install_result
     report["status"] = "PASS" if install_result["status"] == "PASS" else "FAIL"
