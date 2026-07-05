@@ -79,7 +79,6 @@ def _task_principal_args(args: argparse.Namespace, *, redact_password: bool) -> 
     user = str(getattr(args, "task_run_user", "") or "").strip()
     password_env = str(getattr(args, "task_run_password_env", "") or "").strip()
     password_file = str(getattr(args, "task_run_password_file", "") or "").strip()
-    apply_requested = bool(getattr(args, "apply", False))
     uninstall = bool(getattr(args, "uninstall", False))
     allow_interactive = bool(getattr(args, "allow_interactive_task_for_local_test", False))
     report = {
@@ -97,14 +96,17 @@ def _task_principal_args(args: argparse.Namespace, *, redact_password: bool) -> 
                 "status": "FAIL",
                 "blocked_reason": "task password source requires --task-run-user",
             })
-        elif apply_requested and not uninstall and not allow_interactive:
+        elif allow_interactive:
             report.update({
-                "status": "FAIL",
-                "blocked_reason": (
-                    "production apply requires --task-run-user with password source "
-                    "or --allow-interactive-task-for-local-test"
-                ),
+                "mode": "interactive_token_default",
+                "run_user": "",
             })
+        elif not uninstall:
+            report.update({
+                "mode": "system_service_account",
+                "run_user": "SYSTEM",
+            })
+            return ["/RU", "SYSTEM"], report
         return [], report
     password, source, error = _read_task_password(args)
     report.update({

@@ -128,6 +128,10 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["program_data_root"] == str(expected_root / "direct_sync")
     assert report["source_scan"]["scan_source_dir"] == str(expected_root / "events")
     assert report["source_scan"]["source_globs"] == ["*.csv"]
+    assert report["task_principal"]["mode"] == "system_service_account"
+    assert report["task_principal"]["run_user"] == "SYSTEM"
+    assert "/RU" in report["scheduled_task_create_command"]
+    assert report["scheduled_task_create_command"][report["scheduled_task_create_command"].index("/RU") + 1] == "SYSTEM"
     assert report["source_scan_validation"]["status"] == "PASS"
     assert str(expected_root / "events") in report["runner_command"]
     assert str(expected_root / "direct_sync") in report["runtime_paths"]["db_path"]
@@ -1403,9 +1407,20 @@ def test_install_pack_blocks_task_user_without_password_source(tmp_path):
     assert "requires --task-run-password" in report["blocked_reason"]
 
 
-def test_install_pack_apply_blocks_interactive_task_without_explicit_local_test_flag(tmp_path):
+def test_install_pack_apply_defaults_to_system_task_without_password(tmp_path, monkeypatch):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
-    report_path = tmp_path / "install-pack-interactive-task-blocked.json"
+    credential = json.loads(credential_path.read_text(encoding="utf-8"))
+    credential.pop("secret")
+    credential["secret_ref"] = "dpapi:KMTech.DirectSync.ContainerAudit.PC-APPLY"
+    credential["secret_data_dir"] = str(tmp_path / "ProgramData")
+    credential_path.write_text(json.dumps(credential, ensure_ascii=False), encoding="utf-8")
+    report_path = tmp_path / "install-pack-system-task.json"
+    commands = []
+    monkeypatch.setattr(
+        install_pack,
+        "_run_command",
+        lambda command: commands.append(command) or {"returncode": 0, "stdout": "", "stderr": ""},
+    )
 
     exit_code = install_pack.main(
         [
@@ -1422,12 +1437,39 @@ def test_install_pack_apply_blocks_interactive_task_without_explicit_local_test_
         ]
     )
 
-    assert exit_code == 2
+    assert exit_code == 0
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
-    assert report["status"] == "BLOCKED"
-    assert report["task_principal"]["status"] == "FAIL"
-    assert "production apply requires --task-run-user" in report["blocked_reason"]
-    assert "--allow-interactive-task-for-local-test" in report["blocked_reason"]
+    assert report["status"] == "PASS"
+    assert report["task_principal"]["status"] == "PASS"
+    assert report["task_principal"]["mode"] == "system_service_account"
+    assert report["task_principal"]["run_user"] == "SYSTEM"
+    create_command = find_command(commands, "schtasks.exe")
+    assert create_command[create_command.index("/RU") + 1] == "SYSTEM"
+
+
+def test_install_pack_local_test_flag_keeps_interactive_task_mode(tmp_path):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "install-pack-interactive-task.json"
+
+    exit_code = install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--program-data-root",
+            str(tmp_path / "ProgramData"),
+            "--report-path",
+            str(report_path),
+            "--allow-interactive-task-for-local-test",
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert report["status"] == "DRY_RUN"
+    assert report["task_principal"]["mode"] == "interactive_token_default"
+    assert "/RU" not in report["scheduled_task_create_command"]
 
 
 def test_install_pack_blocks_invalid_task_password_sources(tmp_path, monkeypatch):
