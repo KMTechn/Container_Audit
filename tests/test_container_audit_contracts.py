@@ -1340,6 +1340,34 @@ def test_synchronous_log_event_writes_durable_csv_entry(tmp_path):
     assert details["dispatch_key"] == "container_audit|legacy_transfer_csv|TRAY_COMPLETE"
 
 
+def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_write(tmp_path, monkeypatch):
+    calls = []
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.application_path = str(tmp_path / "app")
+    app.direct_sync_program_data_root = str(tmp_path / "direct-sync")
+    app.direct_sync_scan_source_dir = str(tmp_path)
+
+    monkeypatch.setattr(
+        container_audit_module,
+        "start_session_direct_sync",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    assert app._log_event("TRAY_COMPLETE", {"scan_count": 1}, synchronous=True) is True
+
+    assert Path(app.log_file_path).exists()
+    assert calls == [
+        {
+            "app_root": app.application_path,
+            "direct_sync_root": app.direct_sync_program_data_root,
+            "scan_source_dir": app.direct_sync_scan_source_dir,
+            "reason": "TRAY_COMPLETE",
+        }
+    ]
+
+
 def test_synchronous_log_event_reports_failure_without_log_path():
     app = _headless_app()
     app.worker_name = "홍길동"

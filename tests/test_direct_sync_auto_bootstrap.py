@@ -44,6 +44,30 @@ def test_install_command_prefers_bundled_install_exe(tmp_path):
     assert bootstrap.DEFAULT_SOURCE_GLOB in command
 
 
+def test_session_direct_sync_command_forces_zero_age_scan_and_drain(tmp_path):
+    app_root = tmp_path / "app"
+    tools_dir = app_root / "tools"
+    tools_dir.mkdir(parents=True)
+    runner_script = tools_dir / "direct_sync_relay_runner.py"
+    runner_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    direct_sync_root = tmp_path / "data" / "direct_sync"
+    events_dir = tmp_path / "data" / "events"
+
+    command = bootstrap.build_session_direct_sync_command(
+        app_root=app_root,
+        direct_sync_root=direct_sync_root,
+        scan_source_dir=events_dir,
+    )
+
+    assert command
+    assert Path(command[1]) == runner_script.resolve()
+    assert command[command.index("--scan-source-dir") + 1] == str(events_dir.resolve())
+    assert command[command.index("--producer-manifest-path") + 1] == str((direct_sync_root / "producer_manifest.json").resolve())
+    assert command[command.index("--credential-path") + 1] == str((direct_sync_root / "credential.json").resolve())
+    assert command[command.index("--min-source-file-age-seconds") + 1] == "0"
+    assert "--drain-after-scan" in command
+
+
 def test_install_command_falls_back_to_python_script(tmp_path):
     app_root = tmp_path / "app"
     tools_dir = app_root / "tools"

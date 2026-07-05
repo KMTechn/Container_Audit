@@ -23,7 +23,7 @@ from pathlib import Path
 
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
-from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap
+from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap, start_session_direct_sync
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import append_event_log_entry
 from event_payloads import (
@@ -96,7 +96,7 @@ from worker_registry import WorkerRegistry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.20"
+CURRENT_VERSION = "v2.0.21"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -2959,6 +2959,8 @@ class ContainerAudit:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
                     self.log_queue.join()
                 append_event_log_entry(self.log_file_path, log_entry, durable=True)
+                if event_type in {"TRAY_COMPLETE", "PRODUCT_EXCHANGE_COMPLETED"}:
+                    self._trigger_session_direct_sync(event_type)
                 return True
             except Exception as e:
                 error_message = f"로그 파일 쓰기 오류: {e}"
@@ -2967,6 +2969,22 @@ class ContainerAudit:
                 return False
         self.log_queue.put({'log_file_path': self.log_file_path, 'log_entry': log_entry})
         return True
+
+    def _trigger_session_direct_sync(self, reason: str) -> None:
+        app_root = getattr(self, "application_path", "")
+        direct_sync_root = getattr(self, "direct_sync_program_data_root", "")
+        scan_source_dir = getattr(self, "direct_sync_scan_source_dir", "")
+        if not (app_root and direct_sync_root and scan_source_dir):
+            return
+        try:
+            start_session_direct_sync(
+                app_root=app_root,
+                direct_sync_root=direct_sync_root,
+                scan_source_dir=scan_source_dir,
+                reason=reason,
+            )
+        except Exception as exc:
+            print(f"direct-sync session trigger failed: {exc}")
 
     def _plan_b_event_detail(
         self,

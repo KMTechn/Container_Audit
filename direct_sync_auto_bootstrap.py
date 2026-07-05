@@ -17,6 +17,7 @@ DEFAULT_ENDPOINT_PATH = "/api/producer-ingest/v1/source-file"
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 DEFAULT_SOURCE_GLOB = "*.csv"
 INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
+RUNNER_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
 REGISTER_EXE_NAME = "Container_Audit_Worker_PC_Register.exe"
 
 _STARTED_ROOTS: set[str] = set()
@@ -36,6 +37,15 @@ def _enabled() -> bool:
         return False
     value = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", "").strip().lower()
     return value not in {"0", "false", "no", "off", "disabled"}
+
+
+def _session_sync_trigger_enabled() -> bool:
+    value = os.environ.get("CONTAINER_AUDIT_SESSION_SYNC_TRIGGER", "").strip().lower()
+    if value in {"0", "false", "no", "off", "disabled"}:
+        return False
+    if value in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    return not bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:
@@ -75,6 +85,72 @@ def _tool_command(app_root: Path, exe_name: str, script_name: str) -> list[str]:
     if getattr(sys, "frozen", False):
         return []
     return [sys.executable, str(script)]
+
+
+def _runtime_paths(direct_sync_root: str | os.PathLike[str]) -> dict[str, str]:
+    root = Path(direct_sync_root).expanduser().resolve()
+    return {
+        "db_path": str(root / "queue" / "direct_sync_relay.sqlite3"),
+        "spool_dir": str(root / "spool"),
+        "upload_status_dir": str(root / "upload_status"),
+        "runtime_status_path": str(root / "status" / "direct_sync_relay_status.json"),
+        "log_path": str(root / "logs" / "direct_sync_relay.jsonl"),
+        "operator_pause_path": str(root / "control" / "pause.json"),
+    }
+
+
+def build_session_direct_sync_command(
+    *,
+    app_root: str | os.PathLike[str],
+    direct_sync_root: str | os.PathLike[str],
+    scan_source_dir: str | os.PathLike[str],
+    task_name: str = DEFAULT_TASK_NAME,
+    min_source_file_age_seconds: int = 0,
+) -> list[str]:
+    selected_app_root = Path(app_root).expanduser().resolve()
+    runner_exe = _existing_file(selected_app_root / RUNNER_EXE_NAME, selected_app_root / "tools" / RUNNER_EXE_NAME)
+    runner_script = selected_app_root / "tools" / "direct_sync_relay_runner.py"
+    if runner_exe is not None:
+        command = [str(runner_exe)]
+    elif runner_script.is_file() and not getattr(sys, "frozen", False):
+        command = [sys.executable, str(runner_script)]
+    else:
+        return []
+
+    root = Path(direct_sync_root).expanduser().resolve()
+    paths = _runtime_paths(root)
+    command.extend(
+        [
+            "--db-path",
+            paths["db_path"],
+            "--spool-dir",
+            paths["spool_dir"],
+            "--producer-manifest-path",
+            str(root / "producer_manifest.json"),
+            "--credential-path",
+            str(root / "credential.json"),
+            "--upload-status-dir",
+            paths["upload_status_dir"],
+            "--runtime-status-path",
+            paths["runtime_status_path"],
+            "--log-path",
+            paths["log_path"],
+            "--operator-pause-path",
+            paths["operator_pause_path"],
+            "--worker-id",
+            f"{task_name}-session-sync",
+            "--scan-source-dir",
+            str(Path(scan_source_dir).expanduser().resolve()),
+            "--source-glob",
+            DEFAULT_SOURCE_GLOB,
+            "--max-enqueue-files",
+            "25",
+            "--min-source-file-age-seconds",
+            str(max(0, int(min_source_file_age_seconds or 0))),
+            "--drain-after-scan",
+        ]
+    )
+    return command
 
 
 def build_registration_command(
@@ -219,6 +295,71 @@ def _start_task(task_name: str) -> dict[str, Any]:
         "stdout_tail": completed.stdout[-1000:],
         "stderr_tail": completed.stderr[-1000:],
     }
+
+
+def run_session_direct_sync_once(
+    *,
+    app_root: str | os.PathLike[str],
+    direct_sync_root: str | os.PathLike[str],
+    scan_source_dir: str | os.PathLike[str],
+    task_name: str = DEFAULT_TASK_NAME,
+    reason: str = "TRAY_COMPLETE",
+    timeout_seconds: int = 45,
+) -> dict[str, Any]:
+    command = build_session_direct_sync_command(
+        app_root=app_root,
+        direct_sync_root=direct_sync_root,
+        scan_source_dir=scan_source_dir,
+        task_name=task_name,
+        min_source_file_age_seconds=0,
+    )
+    if not command:
+        return {"status": "SKIPPED", "reason": "direct-sync relay runner is missing"}
+    result = _run_command(command, max(10, timeout_seconds))
+    result["reason"] = reason
+    return result
+
+
+def start_session_direct_sync(
+    *,
+    app_root: str | os.PathLike[str],
+    direct_sync_root: str | os.PathLike[str],
+    scan_source_dir: str | os.PathLike[str],
+    reason: str = "TRAY_COMPLETE",
+    task_name: str | None = None,
+) -> threading.Thread | None:
+    if not _session_sync_trigger_enabled():
+        return None
+    selected_task_name = task_name or os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_NAME", "").strip() or DEFAULT_TASK_NAME
+    root = Path(direct_sync_root).expanduser().resolve()
+
+    def worker() -> None:
+        result = run_session_direct_sync_once(
+            app_root=app_root,
+            direct_sync_root=root,
+            scan_source_dir=scan_source_dir,
+            task_name=selected_task_name,
+            reason=reason,
+        )
+        _write_json(
+            root / "status" / "container_audit_session_direct_sync_trigger.json",
+            {
+                "report_version": "container-audit-session-direct-sync-trigger-v1",
+                "captured_at": _now(),
+                "reason": reason,
+                "task_name": selected_task_name,
+                "scan_source_dir": str(Path(scan_source_dir).expanduser().resolve()),
+                "result": result,
+            },
+        )
+
+    thread = threading.Thread(
+        target=worker,
+        name="direct-sync-session-container-audit",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
