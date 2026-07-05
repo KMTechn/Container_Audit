@@ -17,8 +17,10 @@ def test_worker_pc_registration_frozen_default_app_root_uses_executable_director
 
 def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     report_path = tmp_path / "registration-report.json"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     exit_code = registration.main(
@@ -41,6 +43,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     credential = json.loads(credential_path.read_text(encoding="utf-8"))
     expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
+    expected_direct_sync_root = (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
 
     assert report["status"] == "LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET"
     assert report["raw_secret_written"] is False
@@ -52,9 +55,9 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
         assert expected_event in raw_event_names
     assert manifest["sync"]["sync_transport"] == "http_push"
     assert manifest["sync"]["sync_dir"] == (expected_root / "events").as_posix()
-    assert manifest["paths"]["data_dir"] == (expected_root / "direct_sync").as_posix()
+    assert manifest["paths"]["data_dir"] == expected_direct_sync_root.as_posix()
     assert report["local_storage"]["events_dir"] == str(expected_root / "events")
-    assert report["local_storage"]["direct_sync_root"] == str(expected_root / "direct_sync")
+    assert report["local_storage"]["direct_sync_root"] == str(expected_direct_sync_root)
     assert report["local_storage"]["syncthing_dependency"] is False
     assert credential["key_id"] == "server-issued-key-01"
     assert credential["secret_ref"] == "wincred:KMTech.DirectSync.ContainerAudit.PC-01"
@@ -63,9 +66,11 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
 
 def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     report_path = tmp_path / "registration-self-enroll-report.json"
     captured = {}
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     class FakeResponse:
@@ -137,9 +142,11 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
 
 def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowlist(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     report_path = tmp_path / "registration-self-enroll-ip-allowlist-report.json"
     captured = {}
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
     monkeypatch.delenv(registration.DEFAULT_ENROLLMENT_TOKEN_ENV, raising=False)
 
@@ -196,9 +203,10 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert credential["producer_id"] == "producer-pc-ip"
     assert credential["key_id"] == "server-key-pc-ip"
     assert credential["secret_ref"] == "dpapi:KMTech.DirectSync.ContainerAudit.pc-ip"
-    assert credential["secret_data_dir"] == str(local_app_data / "KMTech" / "ContainerAudit" / "direct_sync")
+    expected_direct_sync_root = program_data / "KMTech" / "DirectSync" / "container_audit"
+    assert credential["secret_data_dir"] == str(expected_direct_sync_root)
     assert "secret" not in credential
-    assert captured["dpapi_data_dir"] == str(local_app_data / "KMTech" / "ContainerAudit" / "direct_sync")
+    assert captured["dpapi_data_dir"] == str(expected_direct_sync_root)
     assert captured["dpapi_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
     assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
 
@@ -208,6 +216,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
     calls = []
     writes = []
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     def fake_post(*args, **kwargs):
@@ -248,6 +257,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
 def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_writes(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-output-path-blocked.json"
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     exit_code = registration.main(
@@ -272,6 +282,7 @@ def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_wr
 
 def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_there(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     exit_code = registration.main(["--report-path", r"C:\Sync\registration-report.json"])

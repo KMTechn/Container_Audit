@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -16,7 +17,11 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from direct_sync_push import (
+    DEFAULT_PRODUCER_ROLE,
     DEFAULT_RETRY_SECONDS,
+    DEFAULT_SOURCE_SYSTEM,
+    DEFAULT_SOURCE_TRANSPORT,
+    DEFAULT_STREAM_NAME,
     DEFAULT_TIMEOUT_SECONDS,
     DirectSyncPushError,
     ProducerCredentials,
@@ -32,6 +37,7 @@ from direct_sync_push import (
     drain_one_relay_batch,
     enqueue_source_file_for_relay,
     load_json_no_duplicate_keys,
+    manifest_hash,
     relay_queue_status,
     reset_stale_relay_leases,
     utc_now_text,
@@ -117,6 +123,166 @@ def _production_profile_enabled() -> bool:
         str(os.getenv(name) or "").strip().lower() in {"1", "true", "prod", "production"}
         for name in PRODUCTION_PROFILE_ENV_NAMES
     )
+
+
+def _producer_manifest_sha256(path: str | os.PathLike[str]) -> str:
+    if not path:
+        return ""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _producer_manifest_identity(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
+    manifest_ref = str(config.producer_manifest_path)
+    identity = {
+        "status": "unavailable",
+        "producer_manifest_ref": manifest_ref,
+        "producer_manifest_sha256": _producer_manifest_sha256(manifest_ref),
+        "manifest_hash": "",
+        "source_host_id": "",
+        "producer_install_id": "",
+        "producer_role": "",
+        "stream_name": "",
+        "source_system": "",
+        "source_transport": "http_push",
+        "manifest_source_transport": "",
+        "source_scope_key": "",
+        "source_scope_key_sha256": "",
+        "error_code": "producer_manifest_unavailable",
+        "error_message": "producer manifest is unavailable",
+    }
+    try:
+        manifest = load_json_no_duplicate_keys(Path(manifest_ref).read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        identity.update(
+            {
+                "error_code": "producer_manifest_invalid",
+                "error_message": f"producer manifest invalid: {exc.__class__.__name__}",
+            }
+        )
+        return identity
+    if not isinstance(manifest, dict):
+        identity.update(
+            {
+                "error_code": "producer_manifest_invalid",
+                "error_message": "producer manifest must be a JSON object",
+            }
+        )
+        return identity
+    identity["manifest_hash"] = manifest_hash(manifest)
+    pc_identity = manifest.get("pc_identity") if isinstance(manifest.get("pc_identity"), Mapping) else {}
+    streams = manifest.get("streams") if isinstance(manifest.get("streams"), list) else []
+    stream = next(
+        (
+            item
+            for item in streams
+            if isinstance(item, Mapping)
+            and str(item.get("producer_role") or "") == DEFAULT_PRODUCER_ROLE
+            and str(item.get("stream_name") or "") == DEFAULT_STREAM_NAME
+        ),
+        None,
+    )
+    source_host_id = str(pc_identity.get("source_host_id") or "").strip()
+    producer_install_id = str(pc_identity.get("producer_install_id") or "").strip()
+    if not source_host_id or not producer_install_id or stream is None:
+        identity.update(
+            {
+                "error_code": "producer_manifest_identity_incomplete",
+                "error_message": "producer manifest identity is incomplete",
+            }
+        )
+        return identity
+    producer_role = str(stream.get("producer_role") or "").strip()
+    stream_name = str(stream.get("stream_name") or "").strip()
+    source_system = str(stream.get("source_system") or "").strip()
+    manifest_source_transport = str(stream.get("source_transport") or "").strip()
+    if source_system != DEFAULT_SOURCE_SYSTEM or manifest_source_transport != DEFAULT_SOURCE_TRANSPORT:
+        identity.update(
+            {
+                "error_code": "producer_manifest_stream_mismatch",
+                "error_message": "producer manifest stream does not match Container_Audit legacy CSV",
+            }
+        )
+        return identity
+    source_scope_key = f"{source_host_id}/{producer_role}/{stream_name}"
+    identity.update(
+        {
+            "status": "PASS",
+            "source_host_id": source_host_id,
+            "producer_install_id": producer_install_id,
+            "producer_role": producer_role,
+            "stream_name": stream_name,
+            "source_system": source_system,
+            "manifest_source_transport": manifest_source_transport,
+            "source_scope_key": source_scope_key,
+            "source_scope_key_sha256": hashlib.sha256(source_scope_key.encode("utf-8")).hexdigest(),
+            "error_code": "",
+            "error_message": "",
+        }
+    )
+    return identity
+
+
+def _source_identity_from_upload_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    producer_manifest_path: str | os.PathLike[str] = "",
+) -> dict[str, Any]:
+    source_host_id = str(metadata.get("source_host_id") or "").strip()
+    producer_install_id = str(metadata.get("producer_install_id") or "").strip()
+    producer_role = str(metadata.get("producer_role") or "").strip()
+    stream_name = str(metadata.get("stream_name") or "").strip()
+    source_system = str(metadata.get("source_system") or "").strip()
+    manifest_hash_value = str(metadata.get("manifest_hash") or "").strip().lower()
+    source_transport = str(metadata.get("source_transport") or "").strip()
+    source_scope_key = f"{source_host_id}/{producer_role}/{stream_name}" if source_host_id and producer_role and stream_name else ""
+    ok = (
+        bool(source_scope_key)
+        and bool(producer_install_id)
+        and source_system == DEFAULT_SOURCE_SYSTEM
+        and source_transport == DEFAULT_SOURCE_TRANSPORT
+        and bool(manifest_hash_value)
+    )
+    return {
+        "status": "PASS" if ok else "unavailable",
+        "producer_manifest_ref": str(producer_manifest_path),
+        "producer_manifest_sha256": _producer_manifest_sha256(producer_manifest_path),
+        "manifest_hash": manifest_hash_value,
+        "source_host_id": source_host_id,
+        "producer_install_id": producer_install_id,
+        "producer_role": producer_role,
+        "stream_name": stream_name,
+        "source_system": source_system,
+        "source_transport": "http_push",
+        "manifest_source_transport": source_transport,
+        "source_scope_key": source_scope_key,
+        "source_scope_key_sha256": hashlib.sha256(source_scope_key.encode("utf-8")).hexdigest()
+        if source_scope_key
+        else "",
+        "error_code": "" if ok else "upload_metadata_identity_incomplete",
+        "error_message": "" if ok else "upload metadata identity is incomplete",
+    }
+
+
+def _source_identity_from_upload_result(
+    result: UploadResult | None,
+    *,
+    producer_manifest_path: str | os.PathLike[str],
+) -> dict[str, Any] | None:
+    if result is None or not result.status_path:
+        return None
+    try:
+        status_payload = load_json_no_duplicate_keys(Path(result.status_path).read_bytes())
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(status_payload, Mapping) and isinstance(status_payload.get("metadata"), Mapping):
+        return _source_identity_from_upload_metadata(
+            status_payload["metadata"],
+            producer_manifest_path=producer_manifest_path,
+        )
+    return None
 
 
 def _safe_secret_ref_name(value: str) -> str:
@@ -455,11 +621,17 @@ def _write_runtime_status(
     queue_backpressure: Mapping[str, Any] | None = None,
     error_code: str = "",
     error_message: str = "",
+    source_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    source_identity = dict(source_identity or _producer_manifest_identity(config))
     payload = {
         "status": status,
         "app": "Container_Audit",
         "worker_id": config.worker_id,
+        "producer_manifest_ref": source_identity["producer_manifest_ref"],
+        "producer_manifest_sha256": source_identity["producer_manifest_sha256"],
+        "manifest_hash": source_identity.get("manifest_hash", ""),
+        "source_identity": source_identity,
         "queue": dict(queue),
         "disk": dict(disk),
         "stale_leases_reset": int(stale_leases_reset),
@@ -487,11 +659,22 @@ def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, A
     return payload
 
 
-def _append_runtime_event(config: DirectSyncRuntimeConfig, event: str, payload: Mapping[str, Any]) -> tuple[bool, str]:
+def _append_runtime_event(
+    config: DirectSyncRuntimeConfig,
+    event: str,
+    payload: Mapping[str, Any],
+    *,
+    source_identity: Mapping[str, Any] | None = None,
+) -> tuple[bool, str]:
+    source_identity = dict(source_identity or _producer_manifest_identity(config))
     entry = {
         "event": event,
         "app": "Container_Audit",
         "worker_id": config.worker_id,
+        "producer_manifest_ref": source_identity["producer_manifest_ref"],
+        "producer_manifest_sha256": source_identity["producer_manifest_sha256"],
+        "manifest_hash": source_identity.get("manifest_hash", ""),
+        "source_identity": source_identity,
         "credential_ref": str(config.credential_path),
         "generated_at": utc_now_text(),
     }
@@ -510,7 +693,8 @@ def _append_runtime_event_with_status(
     *,
     log_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ok, error_message = _append_runtime_event(config, event, log_payload or status)
+    status_identity = status.get("source_identity") if isinstance(status.get("source_identity"), Mapping) else None
+    ok, error_message = _append_runtime_event(config, event, log_payload or status, source_identity=status_identity)
     if ok:
         return status
     status["runtime_log_write_status"] = "FAIL"
@@ -819,6 +1003,10 @@ def run_relay_once(
 
     queue = _safe_relay_queue_status(config.db_path)
     result_summary = _result_summary(result, queue)
+    result_source_identity = _source_identity_from_upload_result(
+        result,
+        producer_manifest_path=config.producer_manifest_path,
+    )
     operator_control = None
     error_code = ""
     error_message = ""
@@ -840,5 +1028,6 @@ def run_relay_once(
         operator_control=operator_control,
         error_code=error_code,
         error_message=error_message,
+        source_identity=result_source_identity,
     )
     return _append_runtime_event_with_status(config, "relay_runner_once", status)

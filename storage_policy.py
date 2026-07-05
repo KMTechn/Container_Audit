@@ -9,6 +9,7 @@ from typing import Optional
 DATA_ROOT_ENV = "CONTAINER_AUDIT_DATA_ROOT"
 DEFAULT_VENDOR_DIR = "KMTech"
 DEFAULT_APP_DIR = "ContainerAudit"
+DEFAULT_DIRECT_SYNC_APP_DIR = "container_audit"
 EVENTS_DIR_NAME = "events"
 DIRECT_SYNC_DIR_NAME = "direct_sync"
 LEGACY_SYNCTHING_ROOT = Path("C:/Sync")
@@ -62,6 +63,20 @@ def _default_data_root(application_path: Optional[str] = None) -> Path:
     return _resolve_path(Path.cwd() / "runtime_data")
 
 
+def _default_direct_sync_root(data_root: Path, application_path: Optional[str] = None) -> Path:
+    if os.getenv(DATA_ROOT_ENV):
+        return data_root / DIRECT_SYNC_DIR_NAME
+
+    program_data = os.getenv("PROGRAMDATA")
+    if program_data:
+        return _resolve_path(Path(program_data) / DEFAULT_VENDOR_DIR / "DirectSync" / DEFAULT_DIRECT_SYNC_APP_DIR)
+
+    if application_path:
+        return _resolve_path(Path(application_path) / "runtime_data" / DIRECT_SYNC_DIR_NAME)
+
+    return _resolve_path(Path.cwd() / "runtime_data" / DIRECT_SYNC_DIR_NAME)
+
+
 def build_container_audit_storage_paths(
     *,
     application_path: Optional[str] = None,
@@ -75,7 +90,12 @@ def build_container_audit_storage_paths(
         )
 
     events_dir = root / EVENTS_DIR_NAME
-    direct_sync_root = root / DIRECT_SYNC_DIR_NAME
+    direct_sync_root = _default_direct_sync_root(root, application_path)
+    if is_legacy_syncthing_path(direct_sync_root):
+        raise ValueError(
+            f"Container_Audit direct-sync root must not point at the legacy Syncthing folder "
+            f"({LEGACY_SYNCTHING_ROOT}) for HTTPS-direct deployments."
+        )
     status_dir = direct_sync_root / "status"
 
     return ContainerAuditStoragePaths(

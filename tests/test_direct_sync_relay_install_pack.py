@@ -103,8 +103,10 @@ def make_manifest_and_credential(tmp_path):
 def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkeypatch):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     report_path = tmp_path / "install-pack-default-storage.json"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     exit_code = install_pack.main(
@@ -125,7 +127,8 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["container_audit_storage"]["defaulted_program_data_root"] is True
     assert report["container_audit_storage"]["defaulted_scan_source_dir"] is True
     assert report["container_audit_storage"]["defaulted_source_glob"] is True
-    assert report["program_data_root"] == str(expected_root / "direct_sync")
+    expected_direct_sync_root = (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
+    assert report["program_data_root"] == str(expected_direct_sync_root)
     assert report["source_scan"]["scan_source_dir"] == str(expected_root / "events")
     assert report["source_scan"]["source_globs"] == ["*.csv"]
     assert report["task_principal"]["mode"] == "system_service_account"
@@ -134,7 +137,7 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["scheduled_task_create_command"][report["scheduled_task_create_command"].index("/RU") + 1] == "SYSTEM"
     assert report["source_scan_validation"]["status"] == "PASS"
     assert str(expected_root / "events") in report["runner_command"]
-    assert str(expected_root / "direct_sync") in report["runtime_paths"]["db_path"]
+    assert str(expected_direct_sync_root) in report["runtime_paths"]["db_path"]
 
 
 def test_install_pack_blocks_syncthing_data_root_with_report(tmp_path, monkeypatch):

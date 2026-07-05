@@ -14,19 +14,22 @@ from storage_policy import (
 )
 
 
-def test_default_storage_paths_use_local_appdata_not_syncthing(monkeypatch, tmp_path):
+def test_default_storage_paths_use_local_appdata_and_programdata_direct_sync(monkeypatch, tmp_path):
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     paths = build_container_audit_storage_paths(application_path=str(tmp_path / "app"))
 
     assert paths.data_root == (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert paths.events_dir == paths.data_root / "events"
-    assert paths.direct_sync_root == paths.data_root / "direct_sync"
+    assert paths.direct_sync_root == (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert paths.queue_dir == paths.direct_sync_root / "queue"
     assert not is_legacy_syncthing_path(paths.data_root)
     assert not is_legacy_syncthing_path(paths.events_dir)
+    assert not is_legacy_syncthing_path(paths.direct_sync_root)
 
 
 def test_syncthing_data_root_is_rejected_by_default(monkeypatch, tmp_path):
@@ -45,8 +48,10 @@ def test_syncthing_child_data_root_is_rejected(monkeypatch, tmp_path):
 
 def test_container_audit_setup_uses_local_events_folder(monkeypatch, tmp_path):
     local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
     application_path = tmp_path / "app"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
 
     app = ContainerAudit.__new__(ContainerAudit)
@@ -59,7 +64,7 @@ def test_container_audit_setup_uses_local_events_folder(monkeypatch, tmp_path):
     assert Path(app.data_root) == expected_root
     assert Path(app.save_folder) == expected_events
     assert Path(app.direct_sync_scan_source_dir) == expected_events
-    assert Path(app.direct_sync_program_data_root) == expected_root / "direct_sync"
+    assert Path(app.direct_sync_program_data_root) == (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert expected_events.is_dir()
     assert Path(app.config_folder).is_dir()
     assert Path(app.parked_trays_dir).is_dir()
