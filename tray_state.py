@@ -2,7 +2,7 @@ import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
-from label_qr import parse_new_format_qr, parse_positive_quantity
+from label_qr import inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
 
 
 class TrayStateValidationError(ValueError):
@@ -65,7 +65,7 @@ def _validate_master_label_consistency(state: Mapping[str, Any], *, tray_size: i
     if not master_label_fields:
         return
 
-    parsed_item_code = str(master_label_fields.get("CLC") or "").strip()
+    parsed_item_code = inspection_master_item_code(master_label_fields)
     state_item_code = str(state.get("item_code") or "").strip()
     if parsed_item_code and state_item_code and parsed_item_code != state_item_code:
         raise TrayStateValidationError("master_label_code CLC must match item_code")

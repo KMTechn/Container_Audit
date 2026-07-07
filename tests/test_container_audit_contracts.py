@@ -1542,6 +1542,33 @@ def test_tray_session_state_round_trips_without_ui():
     assert restored.is_partial_submission is True
 
 
+def test_tray_session_state_accepts_inspection_master_item_qty_alias():
+    session = TraySession(
+        master_label_code=(
+            "CLC=INSPECTION|WID=TEST1-HTTPS-20260708-R5-KMC-LHD|"
+            "ITEM=AAA2270730100|QTY=60|DATE=20260708"
+        ),
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=["BC-1"],
+        scan_times=[datetime.datetime(2026, 6, 22, 9, 1, 0)],
+        tray_size=60,
+        start_time=datetime.datetime(2026, 6, 22, 9, 0, 0),
+    )
+
+    state = tray_state.tray_session_to_state(session, worker_name="홍길동")
+    restored = tray_state.tray_session_from_state(
+        state,
+        session_factory=TraySession,
+        default_tray_size=60,
+    )
+
+    assert restored.item_code == "AAA2270730100"
+    assert restored.tray_size == 60
+    assert restored.master_label_code == session.master_label_code
+
+
 def test_product_barcodes_from_completion_supports_current_and_legacy_keys():
     assert event_payloads.product_barcodes_from_completion({"product_barcodes": ["P1"]}) == ["P1"]
     assert event_payloads.product_barcodes_from_completion({"product_barcodes": [], "scanned_product_barcodes": ["P2"]}) == ["P2"]
@@ -1957,6 +1984,33 @@ def test_session_history_loads_daily_summary_completed_labels_and_clean_times(tm
     assert history.completed_tray_times == [360.0]
     assert label_qr.canonical_master_label_key('{"CLC":"AAA2270730100","QT":"60"}') in history.completed_master_labels
     assert label_qr.canonical_master_label_key("PHS=1|CLC=BBB2270730100|QT=60") not in history.completed_master_labels
+
+
+def test_session_history_accepts_inspection_master_item_qty_alias(tmp_path):
+    today = datetime.date(2026, 6, 23)
+    log_path = tmp_path / "이적작업이벤트로그_홍길동_20260623.csv"
+    master_label = (
+        "CLC=INSPECTION|WID=TEST1-HTTPS-20260708-R5-KMC-LHD|"
+        "ITEM=AAA2270730100|QTY=60|DATE=20260708"
+    )
+    _write_session_history_row(
+        log_path,
+        timestamp=datetime.datetime(2026, 6, 23, 9, 0, 0),
+        master_label=master_label,
+        item_code="AAA2270730100",
+        tray_capacity=60,
+    )
+
+    history = session_history.load_session_history(
+        save_folder=tmp_path,
+        worker_name="홍길동",
+        today=today,
+        tray_size=60,
+    )
+
+    assert history.work_summary["AAA2270730100"]["count"] == 1
+    assert history.load_errors == []
+    assert label_qr.canonical_master_label_key(master_label) in history.completed_master_labels
 
 
 def test_session_history_dedupes_replayed_qr_completion_for_summary_and_times(tmp_path):
@@ -3902,6 +3956,19 @@ def test_validate_tray_state_rejects_master_label_item_code_mismatch():
 
     with pytest.raises(tray_state.TrayStateValidationError, match="CLC must match item_code"):
         tray_state.validate_tray_state(state, default_tray_size=60)
+
+
+def test_validate_tray_state_accepts_inspection_master_item_alias():
+    state = _valid_tray_state_payload(
+        master_label_code=(
+            "CLC=INSPECTION|WID=TEST1-HTTPS-20260708-R5-KMC-LHD|"
+            "ITEM=AAA2270730100|QTY=60|DATE=20260708"
+        ),
+        item_code="AAA2270730100",
+        tray_size=60,
+    )
+
+    assert tray_state.validate_tray_state(state, default_tray_size=60) is state
 
 
 def test_validate_tray_state_rejects_master_label_tray_size_mismatch():
@@ -6180,6 +6247,35 @@ def test_build_tray_complete_detail_rejects_invalid_master_label_fields(master_l
         )
 
 
+def test_build_tray_complete_detail_accepts_inspection_master_item_qty_aliases():
+    master_label = (
+        "CLC=INSPECTION|WID=TEST1-HTTPS-20260708-R5-KMC-LHD|"
+        "ITEM=AAA2270730100|QTY=60|DATE=20260708"
+    )
+    tray = TraySession(
+        master_label_code=master_label,
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=["AAA22707301000001"],
+        scan_times=[datetime.datetime(2026, 6, 22, 9, 1, 0)],
+        tray_size=60,
+        stopwatch_seconds=30.0,
+    )
+
+    detail = event_payloads.build_tray_complete_detail(
+        tray,
+        master_label_fields=label_qr.parse_new_format_qr(master_label),
+        end_time=datetime.datetime(2026, 6, 22, 9, 2, 0),
+    )
+
+    assert detail["item_code"] == "AAA2270730100"
+    assert detail["tray_capacity"] == 60
+    assert detail["master_label_fields"]["CLC"] == "INSPECTION"
+    assert detail["master_label_fields"]["ITEM"] == "AAA2270730100"
+    assert detail["master_label_fields"]["QTY"] == "60"
+
+
 def test_complete_tray_preserves_active_tray_when_completion_detail_build_fails(tmp_path):
     app = _completion_app(tmp_path)
     app.current_tray.scanned_barcodes = ["BC-1", "BC-1"]
@@ -8403,6 +8499,22 @@ def test_canonical_master_label_key_matches_equivalent_json_pipe_and_base64_payl
 )
 def test_parse_positive_quantity(payload, default, expected):
     assert label_qr.parse_positive_quantity(payload, default=default) == expected
+
+
+def test_inspection_master_qr_uses_item_and_qty_aliases():
+    payload = label_qr.parse_new_format_qr(
+        "CLC=INSPECTION|WID=TEST1-HTTPS-20260708-R4-KMC-LHD|"
+        "ITEM=AAA2270730100|QTY=60|DATE=20260708"
+    )
+
+    assert label_qr.inspection_master_item_code(payload) == "AAA2270730100"
+    assert label_qr.parse_positive_quantity(payload, default=999) == 60
+
+
+def test_inspection_master_item_code_does_not_accept_item_without_inspection_clc():
+    payload = label_qr.parse_new_format_qr("ITEM=AAA2270730100|QTY=60|DATE=20260708")
+
+    assert label_qr.inspection_master_item_code(payload) == ""
 
 
 def test_replacement_log_lookup_matches_canonical_master_label_identity(tmp_path):

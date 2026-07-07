@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Set
 
 from event_contracts import stable_hash
 from event_payloads import product_barcodes_from_completion
-from label_qr import canonical_master_label_key, parse_new_format_qr
+from label_qr import canonical_master_label_key, inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
 
 
 @dataclass
@@ -61,17 +61,13 @@ def _validate_history_complete_details(details: Dict[str, Any]) -> None:
     if not item_code.strip():
         raise ValueError("item_code must be non-empty")
     master_label_fields = parse_new_format_qr(master_label) or {}
-    label_item_code = str(master_label_fields.get("CLC") or "").strip()
+    label_item_code = inspection_master_item_code(master_label_fields)
     if label_item_code and label_item_code != item_code:
         raise ValueError("master_label_code CLC must match item_code")
-    label_quantity = str(master_label_fields.get("QT") or "").strip()
     tray_capacity = _history_int_field(details, "tray_capacity", minimum=1)
-    if label_quantity and "tray_capacity" in details:
-        try:
-            parsed_label_quantity = int(label_quantity)
-        except (TypeError, ValueError):
-            raise ValueError("master_label_code QT and tray_capacity must be integers")
-        if parsed_label_quantity <= 0 or tray_capacity is None or parsed_label_quantity != tray_capacity:
+    if any(str(master_label_fields.get(key) or "").strip() for key in ("QT", "QTY", "QUANTITY")) and "tray_capacity" in details:
+        parsed_label_quantity = parse_positive_quantity(master_label_fields)
+        if parsed_label_quantity is None or parsed_label_quantity <= 0 or tray_capacity is None or parsed_label_quantity != tray_capacity:
             raise ValueError("master_label_code QT must match tray_capacity")
     scan_count = _history_int_field(details, "scan_count", minimum=0)
     barcode_count = _history_int_field(details, "barcode_count", minimum=0)

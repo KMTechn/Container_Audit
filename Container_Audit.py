@@ -33,7 +33,13 @@ from event_payloads import (
     product_barcodes_from_completion,
 )
 from item_catalog import ItemCatalog
-from label_qr import canonical_master_label_key, normalize_master_label_input, parse_new_format_qr, parse_positive_quantity
+from label_qr import (
+    canonical_master_label_key,
+    inspection_master_item_code,
+    normalize_master_label_input,
+    parse_new_format_qr,
+    parse_positive_quantity,
+)
 from parked_tray_store import ParkedTrayStore, sanitize_filename
 from product_scan import SCAN_DUPLICATE, SCAN_FORMAT_ERROR, SCAN_MISMATCH, SCAN_TRAY_FULL, decide_product_scan
 from product_exchange import (
@@ -96,7 +102,7 @@ from worker_registry import WorkerRegistry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.21"
+CURRENT_VERSION = "v2.0.22"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -2295,7 +2301,7 @@ class ContainerAudit:
                         self.restore_parked_tray(str(parked_filepath))
                     return
                 try:
-                    item_code = qr_data.get('CLC')
+                    item_code = inspection_master_item_code(qr_data)
                     tray_quantity = parse_positive_quantity(qr_data, default=self.TRAY_SIZE)
                     if not item_code:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)

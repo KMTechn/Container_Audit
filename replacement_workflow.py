@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from event_payloads import product_barcodes_from_completion
-from label_qr import parse_new_format_qr, parse_positive_quantity
+from label_qr import inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
 
 
 REPLACEMENT_REJECT_ITEM_CODE = "reject_item_code"
@@ -37,9 +37,9 @@ def compare_replacement_quantities(
         or original_details.get("product_code")
         or ""
     )
-    new_item_code = str(new_data.get("CLC") or "")
+    new_item_code = inspection_master_item_code(dict(new_data or {}))
     old_label_data = parse_new_format_qr(str(original_details.get("master_label_code") or ""))
-    old_label_item_code = str((old_label_data or {}).get("CLC") or "")
+    old_label_item_code = inspection_master_item_code(old_label_data or {})
     if not expected_item_code and old_label_item_code:
         expected_item_code = old_label_item_code
     if expected_item_code and old_label_item_code and expected_item_code != old_label_item_code:

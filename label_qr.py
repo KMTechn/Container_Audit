@@ -66,8 +66,23 @@ def canonical_master_label_key(raw_value: str) -> str:
     return "raw:" + value
 
 
+def inspection_master_item_code(qr_data: Dict[str, str]) -> str:
+    if not qr_data:
+        return ""
+    clc = str(qr_data.get("CLC") or "").strip()
+    item = str(qr_data.get("ITEM") or qr_data.get("ITEM_CODE") or "").strip()
+    if clc.upper() == "INSPECTION" and item:
+        return item
+    return clc
+
+
 def parse_positive_quantity(qr_data: Dict[str, str], *, default: Optional[int] = None) -> Optional[int]:
-    raw_quantity = qr_data.get("QT") if qr_data else None
+    raw_quantity = None
+    if qr_data:
+        for key in ("QT", "QTY", "QUANTITY"):
+            if qr_data.get(key) not in (None, ""):
+                raw_quantity = qr_data.get(key)
+                break
     if raw_quantity in (None, ""):
         return default
     try:

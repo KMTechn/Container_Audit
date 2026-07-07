@@ -2,7 +2,7 @@ import datetime
 import math
 from typing import Any, Callable, Dict, Iterable, List
 
-from label_qr import canonical_master_label_key, parse_new_format_qr, parse_positive_quantity
+from label_qr import canonical_master_label_key, inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
 
 
 def product_barcodes_from_completion(details: Dict[str, Any]) -> List[str]:
@@ -88,10 +88,10 @@ def build_tray_complete_detail(
     if not isinstance(master_label_fields, dict):
         raise ValueError("master_label_fields must be a mapping")
     label_fields = dict(master_label_fields or {})
-    label_item_code = str(label_fields.get("CLC") or "").strip()
+    label_item_code = inspection_master_item_code(label_fields)
     if label_item_code and label_item_code != item_code:
         raise ValueError("master_label_fields CLC must match item_code")
-    if "QT" in label_fields and str(label_fields.get("QT") or "").strip():
+    if any(str(label_fields.get(key) or "").strip() for key in ("QT", "QTY", "QUANTITY")):
         label_quantity = parse_positive_quantity(label_fields)
         if label_quantity is None:
             raise ValueError("master_label_fields QT must be a positive integer")
@@ -182,7 +182,7 @@ def _replacement_item_code(original_details: Dict[str, Any], new_master_label_fi
         value = str(original_details.get(key) or "").strip()
         if value:
             return value
-    return str(new_master_label_fields.get("CLC") or "").strip()
+    return inspection_master_item_code(new_master_label_fields)
 
 
 def _barcodes_without_item_code(barcodes: Iterable[str], item_code: str) -> List[str]:
@@ -273,7 +273,7 @@ def build_master_label_replacement_detail(
     removed_barcodes = list(removed_items or [])
     new_master_label_fields = parse_new_format_qr(new_label) or {}
     expected_item_code = _replacement_item_code(original_details, new_master_label_fields)
-    new_label_item_code = str(new_master_label_fields.get("CLC") or "").strip()
+    new_label_item_code = inspection_master_item_code(new_master_label_fields)
     if expected_item_code and new_label_item_code and expected_item_code != new_label_item_code:
         raise ValueError("replacement new master label item_code does not match corrected item_code")
     if expected_item_code and not str(corrected_details.get("item_code") or "").strip():
