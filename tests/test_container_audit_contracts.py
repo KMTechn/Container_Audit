@@ -49,6 +49,12 @@ def test_normalize_app_settings_rejects_non_object_root():
     assert container_audit_module.normalize_app_settings(["not", "an", "object"]) == {}
 
 
+def test_container_audit_restored_window_has_operable_minimum_size():
+    assert ContainerAudit.DEFAULT_RESTORED_GEOMETRY == "1280x820"
+    assert ContainerAudit.MIN_WINDOW_WIDTH >= 1024
+    assert ContainerAudit.MIN_WINDOW_HEIGHT >= 720
+
+
 def test_normalize_app_settings_clamps_numeric_scale_and_drops_malformed_values():
     settings = container_audit_module.normalize_app_settings(
         {

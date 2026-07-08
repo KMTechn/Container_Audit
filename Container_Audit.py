@@ -102,7 +102,7 @@ from worker_registry import WorkerRegistry
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.25"
+CURRENT_VERSION = "v2.0.26"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -670,6 +670,9 @@ class ContainerAudit:
     COLOR_BORDER_STRONG = "#AEB8C6"
     COLOR_VELVET = "#991B1B"
     COLOR_INPUT_BG = "#FFFFFF"
+    DEFAULT_RESTORED_GEOMETRY = "1280x820"
+    MIN_WINDOW_WIDTH = 1024
+    MIN_WINDOW_HEIGHT = 720
 
     def __init__(self):
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
@@ -677,12 +680,18 @@ class ContainerAudit:
         if startup_geometry:
             self.root.withdraw()
         self.root.title(self.APP_TITLE)
+        self.root.minsize(self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
         if startup_geometry:
             self.root.geometry(startup_geometry)
             self.root.update_idletasks()
             self.root.deiconify()
         else:
-            self.root.state('zoomed')
+            self.root.geometry(self.DEFAULT_RESTORED_GEOMETRY)
+            self.root.update_idletasks()
+            try:
+                self.root.state('zoomed')
+            except tk.TclError:
+                self.root.geometry(self.DEFAULT_RESTORED_GEOMETRY)
         self.root.configure(bg=self.COLOR_BG)
         try:
             self.root.iconbitmap(resource_path(os.path.join('assets', 'logo.ico')))
