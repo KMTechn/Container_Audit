@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import direct_sync_auto_bootstrap as bootstrap
@@ -102,3 +103,42 @@ def test_install_command_can_carry_production_task_principal(tmp_path):
     assert "--confirm-production-install" in command
     assert command[command.index("--task-run-user") + 1] == r"TEST1\kmtech-dsync"
     assert command[command.index("--task-run-password-file") + 1] == str(tmp_path / "task-password.txt")
+
+
+def test_install_ready_requires_current_scan_source_dir(tmp_path):
+    direct_sync_root = tmp_path / "data" / "direct_sync"
+    events_dir = tmp_path / "data" / "events"
+    status_dir = direct_sync_root / "status"
+    status_dir.mkdir(parents=True)
+
+    report_path = status_dir / "container_audit_direct_sync_install.json"
+    report_path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "program_data_root": str(direct_sync_root),
+                "task_name": "direct-sync-relay-container-audit",
+                "source_scan": {
+                    "scan_source_dir": str(events_dir),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert bootstrap._install_ready(
+        direct_sync_root,
+        "direct-sync-relay-container-audit",
+        events_dir,
+    )
+
+    stale_events_dir = tmp_path / "Users" / "kmtech-remote-admin" / "AppData" / "Local" / "KMTech" / "ContainerAudit" / "events"
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["source_scan"]["scan_source_dir"] = str(stale_events_dir)
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    assert not bootstrap._install_ready(
+        direct_sync_root,
+        "direct-sync-relay-container-audit",
+        events_dir,
+    )

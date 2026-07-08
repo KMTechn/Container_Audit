@@ -275,6 +275,27 @@ def _task_exists(task_name: str) -> bool:
     return completed.returncode == 0
 
 
+def _install_ready(root: Path, task_name: str, scan_source_dir: str | os.PathLike[str]) -> bool:
+    report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
+    if report.get("status") != "PASS":
+        return False
+    try:
+        expected_root = str(root.resolve())
+        report_root = str(Path(str(report.get("program_data_root") or "")).expanduser().resolve())
+        if os.path.normcase(report_root) != os.path.normcase(expected_root):
+            return False
+        source_scan = report.get("source_scan") or {}
+        expected_scan_dir = str(Path(scan_source_dir).expanduser().resolve())
+        report_scan_dir = str(Path(str(source_scan.get("scan_source_dir") or "")).expanduser().resolve())
+        if os.path.normcase(report_scan_dir) != os.path.normcase(expected_scan_dir):
+            return False
+        if task_name and str(report.get("task_name") or "") != task_name:
+            return False
+    except Exception:
+        return False
+    return True
+
+
 def _start_task(task_name: str) -> dict[str, Any]:
     if os.name != "nt":
         return {"status": "SKIPPED", "reason": "scheduled tasks are Windows-only"}
@@ -412,7 +433,7 @@ def run_direct_sync_auto_bootstrap(
         return report
 
     root.mkdir(parents=True, exist_ok=True)
-    if _registration_ready(root) and _task_exists(task_name):
+    if _registration_ready(root) and _install_ready(root, task_name, scan_source_dir) and _task_exists(task_name):
         report.update({"status": "READY", "task_start": _start_task(task_name)})
         _write_json(status_path, report)
         return report
