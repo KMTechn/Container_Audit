@@ -204,7 +204,16 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
             break
         best_end_byte = next_end_byte
     if best_end_byte in blocked_ranges:
-        raise ExistingTerminalDeltaBlocked(str(source_file))
+        blocked_end_byte = blocked_ranges[best_end_byte]
+        if blocked_end_byte <= best_end_byte:
+            raise ExistingTerminalDeltaBlocked(str(source_file))
+        try:
+            source_size = source_file.stat().st_size
+        except OSError:
+            raise ExistingTerminalDeltaBlocked(str(source_file)) from None
+        if source_size <= blocked_end_byte:
+            raise ExistingTerminalDeltaBlocked(str(source_file))
+        return blocked_end_byte, _file_prefix_sha256(source_file, blocked_end_byte)
     if best_end_byte <= 0:
         return 0, ""
     return best_end_byte, _file_prefix_sha256(source_file, best_end_byte)

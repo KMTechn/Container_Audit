@@ -497,7 +497,7 @@ def test_runner_scan_source_committed_operator_review_delta_allows_later_append(
     assert "BC-1" not in second_payload
 
 
-def test_runner_scan_source_uncommitted_operator_review_delta_still_blocks(tmp_path, capsys):
+def test_runner_scan_source_uncommitted_operator_review_delta_allows_later_append(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
     args = runner_args(tmp_path, scan_dir=sync_dir)
@@ -525,14 +525,23 @@ def test_runner_scan_source_uncommitted_operator_review_delta_still_blocks(tmp_p
     with csv_path.open("a", encoding="utf-8") as file:
         file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
 
-    assert main(args) == 2
+    assert main(args) == 0
     output = capsys.readouterr().out
 
-    assert "direct_sync_relay_status=existing_terminal_blocked" in output
-    assert "direct_sync_scan_enqueued_count=0" in output
+    assert "direct_sync_relay_status=enqueued" in output
+    assert "direct_sync_scan_enqueued_count=1" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
-    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
+    assert "direct_sync_scan_failed_source_file=" not in output
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {
+        RELAY_STATUS_OPERATOR_REVIEW: 1,
+        RELAY_STATUS_PENDING: 1,
+    }
+    rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert "/bytes-0-" in rows[0]["relative_path"].replace("\\", "/")
+    assert "/bytes-0-" not in rows[1]["relative_path"].replace("\\", "/")
+    second_payload = Path(rows[1]["spooled_file_path"]).read_text(encoding="utf-8")
+    assert "BC-2" in second_payload
+    assert "BC-1" not in second_payload
 
 
 def test_runner_scan_source_records_watermark_after_durable_ack(tmp_path, capsys, monkeypatch):
