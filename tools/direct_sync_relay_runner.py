@@ -511,6 +511,7 @@ def main(argv: list[str] | None = None) -> int:
         attempted_count = 0
         no_new_count = 0
         preflight_status = None
+        terminal_blocked_sources: list[str] = []
         pending_delta_progress: dict[str, tuple[Path, int, str]] = {}
         max_enqueue_files = max(0, int(args.max_enqueue_files or 0))
         for source_file in _scan_source_files(
@@ -532,15 +533,8 @@ def main(argv: list[str] | None = None) -> int:
                 delta = _build_delta_source_file(config, source_file)
             except ExistingTerminalDeltaBlocked:
                 attempted_count += 1
-                preflight_status = {
-                    "status": "existing_terminal_blocked",
-                    "scan_failed_source_file": str(source_file),
-                    "last_result": {
-                        "status": "existing_terminal_blocked",
-                        "error_code": "existing_terminal_delta_blocked",
-                    },
-                }
-                break
+                terminal_blocked_sources.append(str(source_file))
+                continue
             if delta is None:
                 no_new_count += 1
                 continue
@@ -551,6 +545,9 @@ def main(argv: list[str] | None = None) -> int:
                 relative_path=relative_path,
             )
             attempted_count += 1
+            if current["status"] == "existing_terminal_blocked":
+                terminal_blocked_sources.append(str(source_file))
+                continue
             if current["status"] in SCAN_BLOCKED_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 preflight_status = current
@@ -565,33 +562,52 @@ def main(argv: list[str] | None = None) -> int:
             elif current["status"] not in SCAN_SUCCESS_STATUSES:
                 current["scan_failed_source_file"] = str(source_file)
                 break
-        scan_status = preflight_status or (
-            statuses[-1]
-            if statuses
-            else {"status": "scan_no_new_rows" if no_new_count else "scan_no_files"}
-        )
+        if preflight_status:
+            scan_status = preflight_status
+        elif statuses:
+            scan_status = statuses[-1]
+        elif terminal_blocked_sources:
+            scan_status = {
+                "status": "existing_terminal_blocked",
+                "scan_failed_source_file": terminal_blocked_sources[0],
+                "last_result": {
+                    "status": "existing_terminal_blocked",
+                    "error_code": "existing_terminal_delta_blocked",
+                },
+            }
+        else:
+            scan_status = {"status": "scan_no_new_rows" if no_new_count else "scan_no_files"}
         scan_status["scan_enqueued_count"] = enqueued_count
         scan_status["scan_attempted_count"] = attempted_count
         scan_status["scan_no_new_count"] = no_new_count
+        scan_status["scan_terminal_blocked_count"] = len(terminal_blocked_sources)
+        if terminal_blocked_sources:
+            scan_status["scan_terminal_blocked_source_files"] = terminal_blocked_sources
         if scan_status["status"] == "scan_no_files":
             scan_status = record_scan_status(
                 config,
                 status="scan_no_files",
                 scan_enqueued_count=enqueued_count,
                 scan_attempted_count=attempted_count,
+                scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
             scan_status["scan_enqueued_count"] = enqueued_count
             scan_status["scan_attempted_count"] = attempted_count
+            scan_status["scan_terminal_blocked_count"] = len(terminal_blocked_sources)
         elif scan_status["status"] == "scan_no_new_rows":
             scan_status = record_scan_status(
                 config,
                 status="scan_no_new_rows",
                 scan_enqueued_count=enqueued_count,
                 scan_attempted_count=attempted_count,
+                scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
             scan_status["scan_enqueued_count"] = enqueued_count
             scan_status["scan_attempted_count"] = attempted_count
             scan_status["scan_no_new_count"] = no_new_count
+            scan_status["scan_terminal_blocked_count"] = len(terminal_blocked_sources)
         should_drain = args.drain_after_scan and scan_status["status"] not in {
             *SCAN_BLOCKED_STATUSES,
             "enqueue_error",
@@ -605,6 +621,8 @@ def main(argv: list[str] | None = None) -> int:
                 scan_enqueued_count=enqueued_count,
                 scan_attempted_count=attempted_count,
                 scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
+                scan_terminal_blocked_count=len(terminal_blocked_sources),
+                scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
             last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else {}
             acked_relay_id = str(last_result.get("relay_id") or "")
@@ -626,6 +644,8 @@ def main(argv: list[str] | None = None) -> int:
                     scan_enqueued_count=enqueued_count,
                     scan_attempted_count=attempted_count,
                     scan_failed_source_file=scan_status.get("scan_failed_source_file", ""),
+                    scan_terminal_blocked_count=len(terminal_blocked_sources),
+                    scan_terminal_blocked_source_files=terminal_blocked_sources,
                 )
     else:
         status = run_relay_once(config)
@@ -638,6 +658,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"direct_sync_scan_attempted_count={status['scan_attempted_count']}")
     if "scan_no_new_count" in status:
         print(f"direct_sync_scan_no_new_count={status['scan_no_new_count']}")
+    if "scan_terminal_blocked_count" in status:
+        print(f"direct_sync_scan_terminal_blocked_count={status['scan_terminal_blocked_count']}")
     if status.get("scan_failed_source_file"):
         print(f"direct_sync_scan_failed_source_file={status['scan_failed_source_file']}")
     if status["status"] in {

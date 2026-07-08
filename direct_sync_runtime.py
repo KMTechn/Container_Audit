@@ -875,20 +875,31 @@ def record_scan_status(
     scan_enqueued_count: int,
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
+    scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
     queue = _safe_relay_queue_status(config.db_path)
+    terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
+    last_result = {
+        "status": status,
+        "scan_enqueued_count": int(scan_enqueued_count),
+        "scan_attempted_count": int(scan_attempted_count),
+        "scan_failed_source_file": scan_failed_source_file,
+        "scan_terminal_blocked_count": int(scan_terminal_blocked_count),
+    }
+    if terminal_blocked_files:
+        last_result["scan_terminal_blocked_source_files"] = terminal_blocked_files
     payload = _write_runtime_status(
         config,
         status=status,
         queue=queue,
         disk={"status": "not_checked", "reason": "source_scan"},
-        last_result={
-            "status": status,
-            "scan_enqueued_count": int(scan_enqueued_count),
-            "scan_attempted_count": int(scan_attempted_count),
-            "scan_failed_source_file": scan_failed_source_file,
-        },
+        last_result=last_result,
     )
+    payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    if terminal_blocked_files:
+        payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
+    payload = _write_runtime_payload(config, payload)
     return _append_runtime_event_with_status(config, "source_scan_status", payload)
 
 
@@ -899,10 +910,16 @@ def record_scan_result_status(
     scan_enqueued_count: int,
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
+    scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
+    terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
     payload = dict(scan_result)
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
+    payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    if terminal_blocked_files:
+        payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
         payload["scan_failed_source_file"] = scan_failed_source_file
     last_result = dict(payload.get("last_result") or {})
@@ -911,8 +928,11 @@ def record_scan_result_status(
             "scan_enqueued_count": int(scan_enqueued_count),
             "scan_attempted_count": int(scan_attempted_count),
             "scan_failed_source_file": scan_failed_source_file,
+            "scan_terminal_blocked_count": int(scan_terminal_blocked_count),
         }
     )
+    if terminal_blocked_files:
+        last_result["scan_terminal_blocked_source_files"] = terminal_blocked_files
     payload["last_result"] = last_result
     payload = _write_runtime_payload(config, payload)
     return _append_runtime_event_with_status(config, "source_scan_result_status", payload)
@@ -926,11 +946,17 @@ def record_scan_drain_status(
     scan_enqueued_count: int,
     scan_attempted_count: int,
     scan_failed_source_file: str = "",
+    scan_terminal_blocked_count: int = 0,
+    scan_terminal_blocked_source_files: list[str] | None = None,
 ) -> dict[str, Any]:
+    terminal_blocked_files = list(scan_terminal_blocked_source_files or [])
     payload = dict(drain_status)
     payload["scan_status"] = scan_status
     payload["scan_enqueued_count"] = int(scan_enqueued_count)
     payload["scan_attempted_count"] = int(scan_attempted_count)
+    payload["scan_terminal_blocked_count"] = int(scan_terminal_blocked_count)
+    if terminal_blocked_files:
+        payload["scan_terminal_blocked_source_files"] = terminal_blocked_files
     if scan_failed_source_file:
         payload["scan_failed_source_file"] = scan_failed_source_file
     last_result = dict(payload.get("last_result") or {})
@@ -940,8 +966,11 @@ def record_scan_drain_status(
             "scan_enqueued_count": int(scan_enqueued_count),
             "scan_attempted_count": int(scan_attempted_count),
             "scan_failed_source_file": scan_failed_source_file,
+            "scan_terminal_blocked_count": int(scan_terminal_blocked_count),
         }
     )
+    if terminal_blocked_files:
+        last_result["scan_terminal_blocked_source_files"] = terminal_blocked_files
     payload["last_result"] = last_result
     payload = _write_runtime_payload(config, payload)
     return _append_runtime_event_with_status(config, "source_scan_drain_status", payload)

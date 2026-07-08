@@ -284,6 +284,44 @@ def test_runner_scan_source_dir_reports_terminal_dedupe_as_blocked(tmp_path, cap
     assert status["scan_failed_source_file"] == str(csv_path)
 
 
+def test_runner_scan_source_dir_continues_after_old_terminal_delta(tmp_path, capsys):
+    sync_dir = tmp_path / "sync"
+    old_csv = write_container_csv(sync_dir, name="이적작업이벤트로그_관리자A_20260706.csv")
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
+        conn.execute("UPDATE direct_sync_relay_batches SET status = ?", (RELAY_STATUS_FAILED_PERMANENT,))
+        conn.commit()
+
+    new_csv = write_container_csv(sync_dir, name="이적작업이벤트로그_관리자A_20260709.csv")
+    new_csv.write_text(
+        "timestamp,worker_name,event,details\n"
+        "2026-07-09T02:00:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"R13-G001\"\" }\"\n",
+        encoding="utf-8",
+    )
+    now = time.time()
+    os.utime(old_csv, (now - 120, now - 120))
+    os.utime(new_csv, (now - 60, now - 60))
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+
+    assert "direct_sync_relay_status=enqueued" in output
+    assert "direct_sync_scan_enqueued_count=1" in output
+    assert "direct_sync_scan_attempted_count=2" in output
+    assert "direct_sync_scan_terminal_blocked_count=1" in output
+    assert "direct_sync_scan_failed_source_file=" not in output
+    counts = relay_queue_status(tmp_path / "relay.sqlite3")["counts"]
+    assert counts[RELAY_STATUS_FAILED_PERMANENT] == 1
+    assert counts[RELAY_STATUS_PENDING] == 1
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    assert status["status"] == "enqueued"
+    assert status["scan_terminal_blocked_count"] == 1
+    assert status["scan_terminal_blocked_source_files"] == [str(old_csv)]
+
+
 def test_runner_scan_source_dir_can_drain_after_scan(tmp_path, capsys, monkeypatch):
     sync_dir = tmp_path / "sync"
     write_container_csv(sync_dir)
