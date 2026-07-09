@@ -747,6 +747,12 @@ def _write_backpressure_status(
     return _append_runtime_event_with_status(config, event, status)
 
 
+def _queue_backpressure_event(backpressure: Mapping[str, Any]) -> str:
+    if backpressure.get("status") == "pass":
+        return "queue_backpressure_clear"
+    return "queue_backpressure_warning"
+
+
 def enqueue_completed_source_file(
     config: DirectSyncRuntimeConfig,
     *,
@@ -771,18 +777,11 @@ def enqueue_completed_source_file(
             queue=queue,
             disk={"status": "not_checked", "reason": "relay_queue_db_error"},
             stale_leases_reset=stale_leases_reset,
+            queue_backpressure=backpressure if "backpressure" in locals() else {},
             error_code=error_code,
             error_message=error_message,
         )
         return _append_runtime_event_with_status(config, "enqueue_error", status)
-    if backpressure["status"] != "pass":
-        return _write_backpressure_status(
-            config,
-            backpressure=backpressure,
-            event="enqueue_blocked_queue_backpressure",
-            stale_leases_reset=stale_leases_reset,
-        )
-
     disk = _disk_pressure_report(config)
     if disk["status"] != "pass":
         queue = _safe_relay_queue_status(config.db_path)
@@ -792,6 +791,7 @@ def enqueue_completed_source_file(
             queue=queue,
             disk=disk,
             stale_leases_reset=stale_leases_reset,
+            queue_backpressure=backpressure,
             error_code="disk_pressure",
             error_message="free space is below configured direct-sync relay minimum",
         )
@@ -822,6 +822,7 @@ def enqueue_completed_source_file(
             queue=queue,
             disk=disk,
             stale_leases_reset=stale_leases_reset,
+            queue_backpressure=backpressure,
             error_code=error_code,
             error_message=error_message,
         )
@@ -841,6 +842,7 @@ def enqueue_completed_source_file(
         queue=queue,
         disk=disk,
         stale_leases_reset=stale_leases_reset,
+        queue_backpressure=backpressure,
         last_result={
             "relay_id": row.relay_id,
             "relay_status": row.status,
@@ -856,6 +858,7 @@ def enqueue_completed_source_file(
         "enqueue_completed_source_file" if enqueue_status == "enqueued" else "enqueue_existing_source_file",
         status,
         log_payload={
+            "queue_backpressure_event": _queue_backpressure_event(backpressure),
             "relay_id": row.relay_id,
             "relay_status": row.status,
             "status": enqueue_status,
@@ -982,6 +985,7 @@ def run_relay_once(
     session: Any = None,
     credentials: ProducerCredentials | None = None,
     now: str = "",
+    target_relay_id: str = "",
 ) -> dict[str, Any]:
     """Run one bounded relay drain cycle and persist status/log evidence."""
     if _paused_by_operator(config).get("paused"):
@@ -1015,6 +1019,7 @@ def run_relay_once(
             timeout=config.timeout_seconds,
             pre_upload_pause_check=lambda: _paused_by_operator(config),
             now=cycle_now,
+            target_relay_id=target_relay_id,
         )
     except (DirectSyncPushError, sqlite3.DatabaseError, OSError) as exc:
         queue = _safe_relay_queue_status(config.db_path)
@@ -1032,6 +1037,8 @@ def run_relay_once(
 
     queue = _safe_relay_queue_status(config.db_path)
     result_summary = _result_summary(result, queue)
+    if target_relay_id:
+        result_summary["target_relay_id"] = target_relay_id
     result_source_identity = _source_identity_from_upload_result(
         result,
         producer_manifest_path=config.producer_manifest_path,

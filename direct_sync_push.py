@@ -1865,6 +1865,75 @@ def claim_next_relay_batch(
         conn.close()
 
 
+def claim_relay_batch_by_id(
+    *,
+    db_path: str | os.PathLike[str],
+    relay_id: str,
+    worker_id: str,
+    lease_seconds: int = DEFAULT_LEASE_SECONDS,
+    now: str = "",
+) -> RelayQueueRow | None:
+    relay_id = str(relay_id or "").strip()
+    if not relay_id:
+        return None
+    init_relay_queue_schema(db_path)
+    now = now or utc_now_text()
+    reset_stale_relay_leases(db_path=db_path, now=now)
+    lease_expires_at = (
+        datetime.fromisoformat(now.replace("Z", "+00:00")) + timedelta(seconds=lease_seconds)
+    ).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    conn = _connect_relay_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            """
+            SELECT *
+            FROM direct_sync_relay_batches
+            WHERE relay_id = ?
+              AND status IN (?, ?)
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+            LIMIT 1
+            """,
+            (relay_id, RELAY_STATUS_PENDING, RELAY_STATUS_RETRY_WAIT, now),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return None
+        conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?,
+                attempt_count = attempt_count + 1,
+                lease_owner = ?,
+                lease_expires_at = ?,
+                updated_at = ?
+            WHERE relay_id = ?
+              AND status IN (?, ?)
+            """,
+            (
+                RELAY_STATUS_LEASED,
+                worker_id,
+                lease_expires_at,
+                now,
+                row["relay_id"],
+                RELAY_STATUS_PENDING,
+                RELAY_STATUS_RETRY_WAIT,
+            ),
+        )
+        conn.commit()
+        claimed = conn.execute(
+            "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (row["relay_id"],),
+        ).fetchone()
+        return replace(
+            _relay_row(claimed),
+            claim_previous_status=str(row["status"] or ""),
+            claim_previous_next_attempt_at=str(row["next_attempt_at"] or ""),
+        )
+    finally:
+        conn.close()
+
+
 def _set_relay_status(
     *,
     db_path: str | os.PathLike[str],
@@ -2131,10 +2200,21 @@ def drain_one_relay_batch(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     pre_upload_pause_check: Callable[[], Any] | None = None,
     now: str = "",
+    target_relay_id: str = "",
 ) -> UploadResult | None:
     now = now or utc_now_text()
     lease_seconds = max(DEFAULT_LEASE_SECONDS, int(timeout) + 60)
-    row = claim_next_relay_batch(db_path=db_path, worker_id=worker_id, lease_seconds=lease_seconds, now=now)
+    row = (
+        claim_relay_batch_by_id(
+            db_path=db_path,
+            relay_id=target_relay_id,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+        if target_relay_id
+        else claim_next_relay_batch(db_path=db_path, worker_id=worker_id, lease_seconds=lease_seconds, now=now)
+    )
     if row is None:
         return None
     try:

@@ -613,7 +613,39 @@ def main(argv: list[str] | None = None) -> int:
             "enqueue_error",
         }
         if should_drain:
-            status = run_relay_once(config)
+            targeted_drain_results = []
+            status = None
+            if pending_delta_progress:
+                for relay_id in list(pending_delta_progress):
+                    current_status = run_relay_once(config, target_relay_id=relay_id)
+                    last_result = (
+                        current_status.get("last_result")
+                        if isinstance(current_status.get("last_result"), dict)
+                        else {}
+                    )
+                    acked_relay_id = str(last_result.get("relay_id") or "")
+                    targeted_drain_results.append(
+                        {
+                            "target_relay_id": relay_id,
+                            "status": current_status.get("status", ""),
+                            "acked_relay_id": acked_relay_id,
+                            "error_code": last_result.get("error_code", ""),
+                        }
+                    )
+                    if current_status.get("status") == "acked" and acked_relay_id in pending_delta_progress:
+                        source_file, sent_byte_count, sent_prefix_sha256 = pending_delta_progress[acked_relay_id]
+                        _record_source_sent_byte_count(
+                            config.db_path,
+                            source_file,
+                            sent_byte_count,
+                            sent_prefix_sha256,
+                        )
+                    status = current_status
+            if status is None:
+                status = run_relay_once(config)
+            if targeted_drain_results:
+                status = dict(status)
+                status["targeted_drain_results"] = targeted_drain_results
             status = record_scan_drain_status(
                 config,
                 drain_status=status,
@@ -624,16 +656,6 @@ def main(argv: list[str] | None = None) -> int:
                 scan_terminal_blocked_count=len(terminal_blocked_sources),
                 scan_terminal_blocked_source_files=terminal_blocked_sources,
             )
-            last_result = status.get("last_result") if isinstance(status.get("last_result"), dict) else {}
-            acked_relay_id = str(last_result.get("relay_id") or "")
-            if status.get("status") == "acked" and acked_relay_id in pending_delta_progress:
-                source_file, sent_byte_count, sent_prefix_sha256 = pending_delta_progress[acked_relay_id]
-                _record_source_sent_byte_count(
-                    config.db_path,
-                    source_file,
-                    sent_byte_count,
-                    sent_prefix_sha256,
-                )
         else:
             if scan_status["status"] == "scan_no_files":
                 status = scan_status

@@ -574,31 +574,36 @@ def _queue_backpressure_report(tmp_root: Path) -> dict:
     config = _runtime_config(tmp_root, name="backpressure")
     source_file = _write_source_file(tmp_root / "backpressure")
     enqueue_completed_source_file(config, source_file_path=source_file)
-    blocked_config = DirectSyncRuntimeConfig(
-        **{
-            **_runtime_config(tmp_root, name="backpressure", max_active_queue_count=1).__dict__,
-            "credential_path": tmp_root / "missing_credential.json",
-        }
+    current_source_file = _write_source_file(tmp_root / "backpressure", name="container_phase_g_current.csv")
+    current_source_file.write_text(
+        "timestamp,worker_name,event,details\n"
+        "2026-06-22T00:00:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n",
+        encoding="utf-8",
     )
-    blocked = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    warning_config = _runtime_config(tmp_root, name="backpressure", max_active_queue_count=1)
+    warned = enqueue_completed_source_file(warning_config, source_file_path=current_source_file)
     drained = run_relay_once(
-        _runtime_config(tmp_root, name="backpressure", max_active_queue_count=1),
+        warning_config,
         session=EchoAcceptedSession(),
+        target_relay_id=warned.get("last_result", {}).get("relay_id", ""),
     )
     queue = relay_queue_status(config.db_path)
     ok = (
-        blocked["status"] == "blocked_queue_backpressure"
-        and "active_queue_count_threshold" in blocked.get("queue_backpressure", {}).get("reasons", [])
-        and blocked["disk"]["status"] == "not_checked"
+        warned["status"] == "enqueued"
+        and "active_queue_count_threshold" in warned.get("queue_backpressure", {}).get("reasons", [])
+        and warned["disk"]["status"] == "pass"
         and drained["status"] == "acked"
+        and drained.get("last_result", {}).get("relay_id") == warned.get("last_result", {}).get("relay_id")
         and queue["counts"].get(RELAY_STATUS_ACKED) == 1
+        and queue["counts"].get(RELAY_STATUS_PENDING) == 1
     )
     return {
         "status": "PASS" if ok else "FAIL",
-        "scope": "local active Container_Audit relay queue threshold blocks enqueue before credential load while drain remains allowed",
-        "blocked_status": blocked["status"],
-        "blocked_reasons": blocked.get("queue_backpressure", {}).get("reasons", []),
+        "scope": "local active Container_Audit relay queue threshold is recorded as an enqueue warning while targeted drain remains allowed",
+        "enqueue_status": warned["status"],
+        "warning_reasons": warned.get("queue_backpressure", {}).get("reasons", []),
         "drain_status": drained["status"],
+        "drained_target_relay_id": drained.get("last_result", {}).get("target_relay_id", ""),
         "queue": queue,
     }
 

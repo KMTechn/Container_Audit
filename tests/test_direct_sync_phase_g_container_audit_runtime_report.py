@@ -138,7 +138,9 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert report["disk_pressure_report"]["status"] == "PASS"
     assert report["retry_wait_report"]["status"] == "PASS"
     assert report["queue_backpressure_report"]["status"] == "PASS"
-    assert report["queue_backpressure_report"]["blocked_status"] == "blocked_queue_backpressure"
+    assert report["queue_backpressure_report"]["enqueue_status"] == "enqueued"
+    assert "active_queue_count_threshold" in report["queue_backpressure_report"]["warning_reasons"]
+    assert report["queue_backpressure_report"]["drain_status"] == "acked"
     assert report["retry_dead_letter_report"]["status"] == "PASS"
     assert report["source_scan_admission_report"]["status"] == "PASS"
     assert report["source_scan_admission_report"]["broad_glob_selected_files"] == [

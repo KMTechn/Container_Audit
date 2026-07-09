@@ -992,37 +992,38 @@ def test_runtime_repeated_source_scan_reuses_existing_relay_row(tmp_path):
     assert_runtime_artifacts_are_redacted(config)
 
 
-def test_runtime_backpressure_blocks_enqueue_before_credentials_and_allows_drain(tmp_path):
+def test_runtime_backpressure_warns_on_enqueue_and_targeted_drain_acks_current(tmp_path):
     config = make_config(tmp_path)
-    source_file = write_csv(tmp_path)
-    enqueue_completed_source_file(config, source_file_path=source_file)
-    blocked_config = DirectSyncRuntimeConfig(
-        **{
-            **config.__dict__,
-            "credential_path": tmp_path / "missing_credential.json",
-            "max_active_queue_count": 1,
-        }
-    )
+    first_source = write_csv(tmp_path, name="container_runtime_first.csv", barcode="BC-1")
+    current_source = write_csv(tmp_path, name="container_runtime_current.csv", barcode="BC-2")
+    enqueue_completed_source_file(config, source_file_path=first_source)
+    warning_config = DirectSyncRuntimeConfig(**{**config.__dict__, "max_active_queue_count": 1})
 
-    blocked = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    warned = enqueue_completed_source_file(warning_config, source_file_path=current_source)
     drained = run_relay_once(
-        DirectSyncRuntimeConfig(**{**config.__dict__, "max_active_queue_count": 1}),
+        warning_config,
         session=EchoAcceptedSession(),
+        target_relay_id=warned["last_result"]["relay_id"],
     )
 
-    assert blocked["status"] == "blocked_queue_backpressure"
-    assert blocked["queue_backpressure"]["status"] == "blocked"
-    assert blocked["queue_backpressure"]["reasons"] == ["active_queue_count_threshold"]
-    assert blocked["disk"]["status"] == "not_checked"
+    assert warned["status"] == "enqueued"
+    assert warned["queue_backpressure"]["status"] == "blocked"
+    assert warned["queue_backpressure"]["reasons"] == ["active_queue_count_threshold"]
+    assert warned["disk"]["status"] == "pass"
     assert drained["status"] == "acked"
-    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
-    assert_runtime_artifacts_are_redacted(blocked_config)
+    assert drained["last_result"]["relay_id"] == warned["last_result"]["relay_id"]
+    assert drained["last_result"]["target_relay_id"] == warned["last_result"]["relay_id"]
+    counts = relay_queue_status(config.db_path)["counts"]
+    assert counts[RELAY_STATUS_PENDING] == 1
+    assert counts[RELAY_STATUS_ACKED] == 1
+    assert_runtime_artifacts_are_redacted(warning_config)
 
 
-def test_runtime_enqueue_backpressure_resets_stale_leases_before_reporting(tmp_path):
+def test_runtime_enqueue_backpressure_resets_stale_leases_before_warning(tmp_path):
     config = make_config(tmp_path)
-    source_file = write_csv(tmp_path)
-    enqueue_completed_source_file(config, source_file_path=source_file)
+    first_source = write_csv(tmp_path, name="container_runtime_first.csv", barcode="BC-1")
+    current_source = write_csv(tmp_path, name="container_runtime_current.csv", barcode="BC-2")
+    enqueue_completed_source_file(config, source_file_path=first_source)
     claimed = claim_next_relay_batch(
         db_path=config.db_path,
         worker_id="stale-worker",
@@ -1035,20 +1036,22 @@ def test_runtime_enqueue_backpressure_resets_stale_leases_before_reporting(tmp_p
             ("2000-01-01T00:00:00Z", claimed.relay_id),
         )
         conn.commit()
-    blocked_config = DirectSyncRuntimeConfig(**{**config.__dict__, "max_active_queue_count": 1})
+    warning_config = DirectSyncRuntimeConfig(**{**config.__dict__, "max_active_queue_count": 1})
 
-    blocked = enqueue_completed_source_file(blocked_config, source_file_path=source_file)
+    warned = enqueue_completed_source_file(warning_config, source_file_path=current_source)
 
-    assert blocked["status"] == "blocked_queue_backpressure"
-    assert blocked["stale_leases_reset"] == 1
-    assert relay_queue_status(config.db_path)["counts"] == {RELAY_STATUS_PENDING: 1}
-    assert_runtime_artifacts_are_redacted(blocked_config)
+    assert warned["status"] == "enqueued"
+    assert warned["queue_backpressure"]["status"] == "blocked"
+    assert warned["stale_leases_reset"] == 1
+    assert relay_queue_status(config.db_path)["counts"] == {RELAY_STATUS_PENDING: 2}
+    assert_runtime_artifacts_are_redacted(warning_config)
 
 
-def test_runtime_backpressure_blocks_old_active_queue_age(tmp_path):
+def test_runtime_backpressure_warns_old_active_queue_age(tmp_path):
     config = make_config(tmp_path)
-    source_file = write_csv(tmp_path)
-    enqueue_completed_source_file(config, source_file_path=source_file)
+    first_source = write_csv(tmp_path, name="container_runtime_first.csv", barcode="BC-1")
+    current_source = write_csv(tmp_path, name="container_runtime_current.csv", barcode="BC-2")
+    enqueue_completed_source_file(config, source_file_path=first_source)
     with sqlite3.connect(config.db_path) as conn:
         conn.execute(
             "UPDATE direct_sync_relay_batches SET created_at = ?",
@@ -1057,17 +1060,17 @@ def test_runtime_backpressure_blocks_old_active_queue_age(tmp_path):
     aged_config = DirectSyncRuntimeConfig(
         **{
             **config.__dict__,
-            "credential_path": tmp_path / "missing_credential.json",
             "max_active_queue_age_seconds": 1,
         }
     )
 
-    blocked = enqueue_completed_source_file(aged_config, source_file_path=source_file)
+    warned = enqueue_completed_source_file(aged_config, source_file_path=current_source)
 
-    assert blocked["status"] == "blocked_queue_backpressure"
-    assert "oldest_active_age_threshold" in blocked["queue_backpressure"]["reasons"]
-    assert blocked["queue_backpressure"]["oldest_active_age_seconds"] >= 1
-    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
+    assert warned["status"] == "enqueued"
+    assert warned["queue_backpressure"]["status"] == "blocked"
+    assert "oldest_active_age_threshold" in warned["queue_backpressure"]["reasons"]
+    assert warned["queue_backpressure"]["oldest_active_age_seconds"] >= 1
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 2
     assert_runtime_artifacts_are_redacted(aged_config)
 
 
