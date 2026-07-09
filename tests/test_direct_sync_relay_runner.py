@@ -387,6 +387,53 @@ def test_runner_scan_source_dir_targets_new_delta_when_old_pending_exists(tmp_pa
     assert status["targeted_drain_results"][-1]["target_relay_id"] == calls[-1]
 
 
+def test_runner_scan_source_does_not_record_watermark_past_unacked_prefix(
+    tmp_path, capsys, monkeypatch
+):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    first_rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(first_rows) == 1
+    old_pending_relay_id = first_rows[0]["relay_id"]
+
+    with csv_path.open("a", encoding="utf-8") as file:
+        file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
+
+    calls = []
+
+    def fake_acked_relay_once(config, **kwargs):
+        target_relay_id = kwargs.get("target_relay_id") or ""
+        calls.append(target_relay_id)
+        with sqlite3.connect(config.db_path) as conn:
+            conn.execute(
+                "UPDATE direct_sync_relay_batches SET status = ? WHERE relay_id = ?",
+                (RELAY_STATUS_ACKED, target_relay_id),
+            )
+            conn.commit()
+        return {"status": "acked", "last_result": {"relay_id": target_relay_id}}
+
+    monkeypatch.setattr(runner_module, "run_relay_once", fake_acked_relay_once)
+
+    assert main(args + ["--drain-after-scan"]) == 0
+    output = capsys.readouterr().out
+
+    assert "direct_sync_relay_status=acked" in output
+    assert calls
+    assert calls[-1] != old_pending_relay_id
+    counts = relay_queue_status(tmp_path / "relay.sqlite3")["counts"]
+    assert counts[RELAY_STATUS_PENDING] == 1
+    assert counts[RELAY_STATUS_ACKED] == 1
+    assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
+    status = json.loads((tmp_path / "runtime" / "status.json").read_text(encoding="utf-8"))
+    source_state_update = status["targeted_drain_results"][-1]["source_scan_state_update"]
+    assert source_state_update["status"] == "deferred_unacked_prefix"
+    assert source_state_update["durable_sent_byte_count"] == 0
+
+
 def test_runner_scan_source_content_append_enqueues_new_delta(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)

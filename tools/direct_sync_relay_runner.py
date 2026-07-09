@@ -32,6 +32,7 @@ ALLOWED_SOURCE_SUFFIX = ".csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
 SOURCE_WRITER_LOCK_STALE_SECONDS = float(EVENT_LOG_LOCK_STALE_SECONDS)
 DELTA_PROGRESS_STATUSES = {"pending", "leased", "retry_wait", "acked"}
+DURABLE_DELTA_PROGRESS_STATUSES = {"acked"}
 SCAN_SUCCESS_STATUSES = {"enqueued", "already_queued", "already_acked"}
 SCAN_BLOCKED_STATUSES = {
     "paused_by_operator",
@@ -161,7 +162,13 @@ def _delta_content_sha256_for_range(source_file: Path, start_byte: int, end_byte
     return hashlib.sha256(delta_content).hexdigest()
 
 
-def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> tuple[int, str]:
+def _read_delta_progress(
+    conn: sqlite3.Connection,
+    source_file: Path,
+    *,
+    include_inflight: bool,
+    include_blocked: bool,
+) -> tuple[int, str]:
     has_relay_table = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'direct_sync_relay_batches'"
     ).fetchone()
@@ -193,9 +200,9 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
         start_byte, end_byte = parsed_range
         delta_hash = _delta_content_sha256_for_range(source_file, start_byte, end_byte)
         if delta_hash and delta_hash == str(row["content_sha256"] or ""):
-            if _delta_relay_row_counts_as_progress(row):
+            if _delta_relay_row_counts_as_progress(row, include_inflight=include_inflight):
                 matching_ranges[start_byte] = max(matching_ranges.get(start_byte, 0), end_byte)
-            elif _delta_relay_row_blocks_progress(row):
+            elif include_blocked and _delta_relay_row_blocks_progress(row):
                 blocked_ranges[start_byte] = max(blocked_ranges.get(start_byte, 0), end_byte)
     best_end_byte = 0
     while best_end_byte in matching_ranges:
@@ -203,7 +210,7 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
         if next_end_byte <= best_end_byte:
             break
         best_end_byte = next_end_byte
-    if best_end_byte in blocked_ranges:
+    if include_blocked and best_end_byte in blocked_ranges:
         blocked_end_byte = blocked_ranges[best_end_byte]
         if blocked_end_byte <= best_end_byte:
             raise ExistingTerminalDeltaBlocked(str(source_file))
@@ -219,9 +226,19 @@ def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> 
     return best_end_byte, _file_prefix_sha256(source_file, best_end_byte)
 
 
-def _delta_relay_row_counts_as_progress(row: sqlite3.Row) -> bool:
+def _read_queued_delta_progress(conn: sqlite3.Connection, source_file: Path) -> tuple[int, str]:
+    return _read_delta_progress(conn, source_file, include_inflight=True, include_blocked=True)
+
+
+def _read_durable_delta_progress(conn: sqlite3.Connection, source_file: Path) -> tuple[int, str]:
+    return _read_delta_progress(conn, source_file, include_inflight=False, include_blocked=False)
+
+
+def _delta_relay_row_counts_as_progress(row: sqlite3.Row, *, include_inflight: bool) -> bool:
     status = str(row["status"] or "")
-    if status in DELTA_PROGRESS_STATUSES:
+    if status in DURABLE_DELTA_PROGRESS_STATUSES:
+        return True
+    if include_inflight and status in DELTA_PROGRESS_STATUSES:
         return True
     if status != "operator_review":
         return False
@@ -254,15 +271,43 @@ def _delta_relay_row_blocks_progress(row: sqlite3.Row) -> bool:
 def _read_source_scan_state(db_path: str | Path, source_file: Path) -> tuple[int, str]:
     conn = _scan_state_connect(db_path)
     try:
-        row = conn.execute(
-            "SELECT sent_byte_count, sent_prefix_sha256 FROM direct_sync_source_scan_state WHERE source_file_path = ?",
-            (_source_state_key(source_file),),
-        ).fetchone()
-        explicit_state = (int(row["sent_byte_count"]), str(row["sent_prefix_sha256"] or "")) if row else (0, "")
+        explicit_state = _read_explicit_source_scan_state(conn, source_file)
+        durable_state = _read_durable_delta_progress(conn, source_file)
+        if durable_state[0] > explicit_state[0]:
+            _write_source_scan_state(conn, source_file, durable_state[0], durable_state[1])
+            explicit_state = durable_state
         queued_state = _read_queued_delta_progress(conn, source_file)
         return queued_state if queued_state[0] > explicit_state[0] else explicit_state
     finally:
         conn.close()
+
+
+def _read_explicit_source_scan_state(conn: sqlite3.Connection, source_file: Path) -> tuple[int, str]:
+    row = conn.execute(
+        "SELECT sent_byte_count, sent_prefix_sha256 FROM direct_sync_source_scan_state WHERE source_file_path = ?",
+        (_source_state_key(source_file),),
+    ).fetchone()
+    return (int(row["sent_byte_count"]), str(row["sent_prefix_sha256"] or "")) if row else (0, "")
+
+
+def _write_source_scan_state(
+    conn: sqlite3.Connection,
+    source_file: Path,
+    sent_byte_count: int,
+    sent_prefix_sha256: str,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO direct_sync_source_scan_state (source_file_path, sent_byte_count, sent_prefix_sha256, updated_at_unix)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(source_file_path) DO UPDATE SET
+            sent_byte_count = excluded.sent_byte_count,
+            sent_prefix_sha256 = excluded.sent_prefix_sha256,
+            updated_at_unix = excluded.updated_at_unix
+        """,
+        (_source_state_key(source_file), int(sent_byte_count), sent_prefix_sha256, time.time()),
+    )
+    conn.commit()
 
 
 def _record_source_sent_byte_count(
@@ -273,20 +318,80 @@ def _record_source_sent_byte_count(
 ) -> None:
     conn = _scan_state_connect(db_path)
     try:
-        conn.execute(
-            """
-            INSERT INTO direct_sync_source_scan_state (source_file_path, sent_byte_count, sent_prefix_sha256, updated_at_unix)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(source_file_path) DO UPDATE SET
-                sent_byte_count = excluded.sent_byte_count,
-                sent_prefix_sha256 = excluded.sent_prefix_sha256,
-                updated_at_unix = excluded.updated_at_unix
-            """,
-            (_source_state_key(source_file), int(sent_byte_count), sent_prefix_sha256, time.time()),
-        )
-        conn.commit()
+        _write_source_scan_state(conn, source_file, sent_byte_count, sent_prefix_sha256)
     finally:
         conn.close()
+
+
+def _record_source_sent_byte_count_after_ack(
+    db_path: str | Path,
+    source_file: Path,
+    requested_sent_byte_count: int,
+    requested_sent_prefix_sha256: str,
+    target_relay_id: str = "",
+) -> dict[str, object]:
+    conn = _scan_state_connect(db_path)
+    try:
+        explicit_state = _read_explicit_source_scan_state(conn, source_file)
+        durable_state = _read_durable_delta_progress(conn, source_file)
+        if durable_state[0] <= explicit_state[0]:
+            target_range = _read_acknowledged_target_delta_range(conn, source_file, target_relay_id)
+            if (
+                target_range is not None
+                and target_range[1] == int(requested_sent_byte_count)
+                and (target_range[0] == 0 or explicit_state[0] == target_range[0])
+            ):
+                _write_source_scan_state(conn, source_file, requested_sent_byte_count, requested_sent_prefix_sha256)
+                return {
+                    "status": "recorded_from_acked_target",
+                    "recorded_sent_byte_count": int(requested_sent_byte_count),
+                    "durable_sent_byte_count": durable_state[0],
+                    "requested_sent_byte_count": int(requested_sent_byte_count),
+                    "requested_prefix_sha256": requested_sent_prefix_sha256,
+                    "target_relay_id": str(target_relay_id or ""),
+                    "target_start_byte": target_range[0],
+                    "target_end_byte": target_range[1],
+                }
+            return {
+                "status": "deferred_unacked_prefix"
+                if durable_state[0] < int(requested_sent_byte_count)
+                else "unchanged",
+                "recorded_sent_byte_count": explicit_state[0],
+                "durable_sent_byte_count": durable_state[0],
+                "requested_sent_byte_count": int(requested_sent_byte_count),
+                "requested_prefix_sha256": requested_sent_prefix_sha256,
+            }
+        _write_source_scan_state(conn, source_file, durable_state[0], durable_state[1])
+        return {
+            "status": "recorded",
+            "recorded_sent_byte_count": durable_state[0],
+            "durable_sent_byte_count": durable_state[0],
+            "requested_sent_byte_count": int(requested_sent_byte_count),
+            "requested_prefix_sha256": requested_sent_prefix_sha256,
+        }
+    finally:
+        conn.close()
+
+
+def _read_acknowledged_target_delta_range(
+    conn: sqlite3.Connection,
+    source_file: Path,
+    target_relay_id: str,
+) -> tuple[int, int] | None:
+    target_relay_id = str(target_relay_id or "").strip()
+    if not target_relay_id:
+        return None
+    row = conn.execute(
+        """
+        SELECT relative_path, status, receipt_json
+        FROM direct_sync_relay_batches
+        WHERE relay_id = ?
+        """,
+        (target_relay_id,),
+    ).fetchone()
+    if row is None or not _delta_relay_row_counts_as_progress(row, include_inflight=False):
+        return None
+    return _parse_delta_range(str(row["relative_path"] or ""), source_file)
 
 
 def _complete_line_prefix(data: bytes) -> bytes:
@@ -624,22 +729,22 @@ def main(argv: list[str] | None = None) -> int:
                         else {}
                     )
                     acked_relay_id = str(last_result.get("relay_id") or "")
-                    targeted_drain_results.append(
-                        {
-                            "target_relay_id": relay_id,
-                            "status": current_status.get("status", ""),
-                            "acked_relay_id": acked_relay_id,
-                            "error_code": last_result.get("error_code", ""),
-                        }
-                    )
+                    targeted_result = {
+                        "target_relay_id": relay_id,
+                        "status": current_status.get("status", ""),
+                        "acked_relay_id": acked_relay_id,
+                        "error_code": last_result.get("error_code", ""),
+                    }
                     if current_status.get("status") == "acked" and acked_relay_id in pending_delta_progress:
                         source_file, sent_byte_count, sent_prefix_sha256 = pending_delta_progress[acked_relay_id]
-                        _record_source_sent_byte_count(
+                        targeted_result["source_scan_state_update"] = _record_source_sent_byte_count_after_ack(
                             config.db_path,
                             source_file,
                             sent_byte_count,
                             sent_prefix_sha256,
+                            target_relay_id=acked_relay_id,
                         )
+                    targeted_drain_results.append(targeted_result)
                     status = current_status
             if status is None:
                 status = run_relay_once(config)
