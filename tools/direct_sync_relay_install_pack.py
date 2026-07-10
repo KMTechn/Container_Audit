@@ -14,6 +14,7 @@ import sys
 import uuid
 from pathlib import Path
 from typing import Sequence
+from urllib.parse import urlparse
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -42,6 +43,13 @@ DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
 BUNDLED_RELAY_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
 MAX_TASK_NAME_LENGTH = 128
 TASK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
+LOCAL_TEST_TASK_ENV_NAMES = (
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "REQUESTS_CA_BUNDLE",
+    "SSL_CERT_FILE",
+)
 
 
 def _default_app_root() -> str:
@@ -221,11 +229,41 @@ def _vbs_string(value: str | os.PathLike[str]) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
-def _write_scheduled_task_wrapper(path: Path, runner_parts: Sequence[str]) -> None:
+def _local_test_task_environment(args: argparse.Namespace) -> dict[str, str]:
+    if not bool(getattr(args, "allow_interactive_task_for_local_test", False)):
+        return {}
+    values: dict[str, str] = {}
+    for env_name in LOCAL_TEST_TASK_ENV_NAMES:
+        if env_name not in os.environ:
+            continue
+        value = str(os.environ.get(env_name) or "")
+        if any(character in value for character in ("\x00", "\r", "\n", '"', "%")):
+            raise ValueError(f"{env_name} contains characters unsafe for a local-test task wrapper")
+        if env_name in {"HTTPS_PROXY", "HTTP_PROXY"} and value:
+            parsed = urlparse(value)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError(f"{env_name} must be an HTTP(S) proxy URL")
+            if parsed.username or parsed.password:
+                raise ValueError(f"{env_name} must not contain proxy credentials")
+        values[env_name] = value
+    return values
+
+
+def _write_scheduled_task_wrapper(
+    path: Path,
+    runner_parts: Sequence[str],
+    *,
+    environment: dict[str, str] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     command = _quote_cmd(runner_parts)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
-    content = "@echo off\nchcp 65001 >nul\n" + command + "\nexit /b %ERRORLEVEL%\n"
+    environment_lines = [
+        f'set "{env_name}={value}"'
+        for env_name, value in (environment or {}).items()
+    ]
+    content_lines = ["@echo off", "chcp 65001 >nul", *environment_lines, command, "exit /b %ERRORLEVEL%", ""]
+    content = "\n".join(content_lines)
     try:
         temp_path.write_text(content, encoding="utf-8", newline="\r\n")
         os.replace(temp_path, path)
@@ -894,6 +932,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         else _validate_backpressure_config(backpressure)
     )
     task_runtime_acl = _task_runtime_acl_plan(args)
+    local_test_task_environment = _local_test_task_environment(args)
     runner_parts: list[str] = []
     create_command: list[str] = []
     wrapper_path = ""
@@ -988,6 +1027,8 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "scheduled_task_launcher_path": launcher_path,
         "scheduled_task_launcher_command": launcher_command,
         "scheduled_task_uses_hidden_launcher": True,
+        "local_test_task_environment_names": list(local_test_task_environment),
+        "local_test_task_environment_persisted": bool(local_test_task_environment),
         "task_principal": task_principal,
         "scheduled_task_create_command": create_command,
         "scheduled_task_delete_command": delete_command,
@@ -1198,7 +1239,11 @@ def main(argv: list[str] | None = None) -> int:
         plan["status"] = "APPLYING"
         _write_json(Path(args.report_path), plan)
         if not args.uninstall:
-            _write_scheduled_task_wrapper(Path(plan["scheduled_task_wrapper_path"]), plan["runner_command"])
+            _write_scheduled_task_wrapper(
+                Path(plan["scheduled_task_wrapper_path"]),
+                plan["runner_command"],
+                environment=_local_test_task_environment(args),
+            )
             _write_scheduled_task_launcher(
                 Path(plan["scheduled_task_launcher_path"]),
                 plan["scheduled_task_wrapper_path"],

@@ -1188,6 +1188,46 @@ def test_install_pack_writes_utf8_wrapper_script_for_long_runner_command(tmp_pat
     assert text.rstrip().endswith("exit /b %ERRORLEVEL%")
 
 
+def test_local_test_task_wrapper_persists_only_allowlisted_transport_environment(tmp_path, monkeypatch):
+    wrapper_path = tmp_path / "direct-sync-relay-container-audit.cmd"
+    proxy_url = "http://127.0.0.1:51947"
+    ca_path = str(tmp_path / "server-cert.pem")
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("NO_PROXY", "")
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", ca_path)
+    monkeypatch.setenv("PRODUCER_SELF_ENROLL_TOKEN", "must-not-be-captured")
+    args = argparse.Namespace(allow_interactive_task_for_local_test=True)
+
+    environment = install_pack._local_test_task_environment(args)
+    install_pack._write_scheduled_task_wrapper(
+        wrapper_path,
+        [sys.executable, "relay.py"],
+        environment=environment,
+    )
+    text = wrapper_path.read_text(encoding="utf-8")
+
+    assert list(environment) == [
+        "HTTPS_PROXY",
+        "HTTP_PROXY",
+        "NO_PROXY",
+        "REQUESTS_CA_BUNDLE",
+    ]
+    assert f'set "HTTPS_PROXY={proxy_url}"' in text
+    assert f'set "REQUESTS_CA_BUNDLE={ca_path}"' in text
+    assert 'set "NO_PROXY="' in text
+    assert "PRODUCER_SELF_ENROLL_TOKEN" not in text
+    assert "must-not-be-captured" not in text
+
+
+def test_local_test_task_environment_rejects_proxy_credentials(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://user:password@127.0.0.1:51947")
+    args = argparse.Namespace(allow_interactive_task_for_local_test=True)
+
+    with pytest.raises(ValueError, match="must not contain proxy credentials"):
+        install_pack._local_test_task_environment(args)
+
+
 def test_install_pack_apply_without_confirm_is_blocked(tmp_path):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     report_path = tmp_path / "install-pack-blocked.json"

@@ -61,6 +61,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
         "SCAN_OK",
         "SCAN_FAIL_DUPLICATE",
         "TRAY_COMPLETE",
+        "TRAY_DISCARDED_BY_OPERATOR",
         "TRAY_RESET",
         "MASTER_LABEL_REPLACEMENT_APPLIED",
         "WORK_END",
