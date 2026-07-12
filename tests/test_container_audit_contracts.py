@@ -660,6 +660,11 @@ def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
 
 
 def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
+    # This unit uses a fully mocked mixer and cannot reach the operator audio
+    # device; explicitly bypass the suite-wide silent guard to exercise the
+    # initialization failure branch.
+    monkeypatch.setenv("KMTECH_TEST_SILENT_AUDIO", "0")
+    monkeypatch.setenv("SDL_AUDIODRIVER", "unit-test-mocked")
     app = _headless_app()
     class FakeRoot:
         def after(self, _delay_ms, callback):
@@ -2017,6 +2022,42 @@ def test_session_history_accepts_inspection_master_item_qty_alias(tmp_path):
     assert history.work_summary["AAA2270730100"]["count"] == 1
     assert history.load_errors == []
     assert label_qr.canonical_master_label_key(master_label) in history.completed_master_labels
+
+
+def test_session_history_does_not_close_master_label_after_partial_transfer(tmp_path):
+    today = datetime.date(2026, 6, 23)
+    log_path = tmp_path / "이적작업이벤트로그_홍길동_20260623.csv"
+    master_label = "PHS=1|CLC=AAA2270730100|QT=60|ITG=ITAG-PARTIAL"
+    _write_session_history_row(
+        log_path,
+        timestamp=datetime.datetime(2026, 6, 23, 9, 0, 0),
+        master_label=master_label,
+        item_code="AAA2270730100",
+        partial=True,
+        scan_count=45,
+        product_barcodes=[f"BC-{index}" for index in range(45)],
+        barcode_count=45,
+    )
+    _write_session_history_row(
+        log_path,
+        timestamp=datetime.datetime(2026, 6, 23, 10, 0, 0),
+        master_label=master_label,
+        item_code="AAA2270730100",
+        partial=True,
+        scan_count=15,
+        product_barcodes=[f"BC-{index}" for index in range(45, 60)],
+        barcode_count=15,
+    )
+
+    history = session_history.load_session_history(
+        save_folder=tmp_path,
+        worker_name="홍길동",
+        today=today,
+        tray_size=60,
+    )
+
+    assert label_qr.canonical_master_label_key(master_label) not in history.completed_master_labels
+    assert history.work_summary["AAA2270730100"]["count"] == 2
 
 
 def test_session_history_dedupes_replayed_qr_completion_for_summary_and_times(tmp_path):
@@ -6110,6 +6151,21 @@ def test_complete_tray_still_resets_when_best_time_update_fails(tmp_path):
     assert app.ui_reset is True
 
 
+def test_internal_test_tray_never_calls_exact_transfer_server(tmp_path):
+    app = _completion_app(tmp_path)
+    app.current_tray.is_test_tray = True
+    app._prepare_and_attempt_transfer_seal = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("test tray must not create a server transfer")
+    )
+
+    assert app.complete_tray() is True
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as handle:
+        details = json.loads(next(csv.DictReader(handle))["details"])
+    assert details["transfer_seal_status"] == "TEST_SKIPPED"
+    assert details["transfer_seal_idempotency_key"] is None
+
+
 @pytest.mark.parametrize(
     ("work_time", "expected_updates"),
     [
@@ -6370,6 +6426,7 @@ def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path
     assert details["master_label_fields"] == {"CLC": "AAA2270730100", "QT": "60"}
     assert app.current_tray.master_label_code == ""
     assert app.current_tray.scanned_barcodes == []
+    assert app.completed_master_labels == set()
     assert app.completed_tray_times == []
     assert app.total_tray_count == 0
     assert app.work_summary["AAA2270730100"]["count"] == 1

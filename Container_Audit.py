@@ -69,6 +69,7 @@ from tray_state import (
     tray_session_to_state,
     validate_tray_state,
 )
+from transfer_seal import SealAttempt, transfer_seal_coordinator_from_env
 from update_service import (
     UPDATE_CHANNEL_ENV,
     UPDATE_DEFAULT_CHANNEL,
@@ -708,6 +709,15 @@ class ContainerAudit:
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
         self._setup_paths_and_dirs()
+        self.transfer_seal_coordinator = transfer_seal_coordinator_from_env(
+            Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
+        )
+        if self.transfer_seal_coordinator.client is not None:
+            threading.Thread(
+                target=self._retry_pending_transfer_seals,
+                name="container-audit-transfer-seal-recovery",
+                daemon=True,
+            ).start()
         self._direct_sync_bootstrap_thread = start_direct_sync_auto_bootstrap(
             app_root=self.application_path,
             direct_sync_root=self.direct_sync_program_data_root,
@@ -780,6 +790,10 @@ class ContainerAudit:
     ####################################################################
 
     def _audio_feedback_enabled(self):
+        if os.getenv("KMTECH_TEST_SILENT_AUDIO", "").strip().lower() in {"1", "true", "yes", "on"}:
+            return False
+        if os.getenv("SDL_AUDIODRIVER", "").strip().lower() == "dummy":
+            return False
         value = os.getenv(self.AUDIO_ENABLED_ENV, "on").strip().lower()
         return value not in {"0", "false", "no", "off", "disabled"}
 
@@ -1816,6 +1830,7 @@ class ContainerAudit:
         scanned_count = len(getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or [])
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
+        exact_exchange_blocked = self._exact_transfer_exchange_blocked()
 
         self._configure_widget_options(getattr(self, "reset_button", None), state=tk.NORMAL if active_tray else tk.DISABLED)
         self._configure_widget_options(getattr(self, "park_button", None), state=tk.NORMAL if active_tray else tk.DISABLED)
@@ -1842,8 +1857,12 @@ class ContainerAudit:
 
         self._configure_widget_options(
             getattr(self, "exchange_button", None),
-            text="교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환",
-            state=tk.DISABLED if active_tray or replacement_active else tk.NORMAL,
+            text=(
+                "중앙 교환 워크플로 필요"
+                if exact_exchange_blocked
+                else ("교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환")
+            ),
+            state=tk.DISABLED if active_tray or replacement_active or exact_exchange_blocked else tk.NORMAL,
         )
 
     def _apply_left_sidebar_layout(self) -> None:
@@ -2526,13 +2545,35 @@ class ContainerAudit:
             print(f"트레이 완료 기록 생성 실패: {e}")
             self.show_status_message("트레이 완료 기록 생성에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
             return False
+        if is_test:
+            transfer_attempt = SealAttempt(
+                intent_id="test-transfer-seal-skipped",
+                status="TEST_SKIPPED",
+            )
+        else:
+            try:
+                transfer_attempt = self._prepare_and_attempt_transfer_seal(
+                    master_label_fields=master_label_fields,
+                    log_detail=log_detail,
+                )
+            except Exception as e:
+                print(f"이적 seal 로컬 보존 실패: {e}")
+                self.show_status_message("이적 membership을 로컬에 보존하지 못해 작업 상태를 유지합니다.", self.COLOR_DANGER)
+                return False
+        if transfer_attempt.status == "OPERATOR_REVIEW":
+            self.show_status_message(
+                f"이적 membership 확인이 필요합니다: {transfer_attempt.error_message}",
+                self.COLOR_DANGER,
+            )
+            return False
+        self._attach_transfer_seal_detail(log_detail, transfer_attempt)
         if not self._log_event('TRAY_COMPLETE', detail=log_detail, synchronous=True):
             self.show_status_message("트레이 완료 기록 저장에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
             return False
 
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
 
-        if not is_test and self._parse_new_format_qr(master_label):
+        if not is_test and not is_partial and self._parse_new_format_qr(master_label):
             self._remember_completed_master_label(master_label)
 
         item_code = self.current_tray.item_code
@@ -2556,6 +2597,11 @@ class ContainerAudit:
 
             if is_partial: self.show_status_message(f"'{self.current_tray.item_name}' 부분 트레이 제출 완료!", self.COLOR_PRIMARY)
             else: self.show_status_message(f"'{self.current_tray.item_name}' 1 파렛트 완료!", self.COLOR_SUCCESS)
+            if transfer_attempt.status != "ACKED":
+                self.show_status_message(
+                    f"'{self.current_tray.item_name}' 완료 · 서버 이적 seal 재시도 대기",
+                    self.COLOR_PRIMARY,
+                )
             
         self.current_tray = TraySession()
         self._invalidate_pending_scan_callbacks()
@@ -3000,6 +3046,118 @@ class ContainerAudit:
             )
         except Exception as exc:
             print(f"direct-sync session trigger failed: {exc}")
+
+    def _transfer_seal_runtime(self):
+        coordinator = getattr(self, "transfer_seal_coordinator", None)
+        if coordinator is not None:
+            return coordinator
+        data_root = str(getattr(self, "data_root", "") or "").strip()
+        if not data_root:
+            log_path = str(getattr(self, "log_file_path", "") or "").strip()
+            data_root = str(Path(log_path).parent if log_path else Path(tempfile.gettempdir()) / "ContainerAudit")
+        coordinator = transfer_seal_coordinator_from_env(
+            Path(data_root) / "transfer_seal" / "transfer_seal.db"
+        )
+        self.transfer_seal_coordinator = coordinator
+        return coordinator
+
+    def _prepare_and_attempt_transfer_seal(
+        self,
+        *,
+        master_label_fields: Dict[str, Any],
+        log_detail: Dict[str, Any],
+    ) -> SealAttempt:
+        coordinator = self._transfer_seal_runtime()
+        prepared = coordinator.prepare(
+            master_label=self.current_tray.master_label_code,
+            master_label_fields=master_label_fields,
+            item_id=self.current_tray.item_code,
+            operator=self.worker_name,
+            scanned_barcodes=log_detail.get("product_barcodes") or (),
+        )
+        return coordinator.attempt(prepared.intent_id)
+
+    @staticmethod
+    def _attach_transfer_seal_detail(log_detail: Dict[str, Any], attempt: SealAttempt) -> None:
+        log_detail.update(
+            {
+                "transfer_seal_schema_version": "container-audit-transfer-seal-v1",
+                "transfer_seal_intent_id": attempt.intent_id,
+                "transfer_seal_status": attempt.status,
+                "transfer_seal_idempotency_key": attempt.command_id or None,
+                "transfer_bundle_id": attempt.transfer_bundle_id or None,
+                "transfer_source_bundle_id": attempt.source_bundle_id or None,
+                "transfer_remainder_bundle_id": attempt.remainder_bundle_id or None,
+                "transfer_member_count": attempt.member_count,
+                "transfer_membership_hash": attempt.membership_hash or None,
+                "seal_qr_payload": attempt.seal_qr_payload or None,
+                "transfer_seal_receipt_id": attempt.receipt_id or None,
+                "transfer_authority_scope_id": attempt.authority_scope_id or None,
+                "transfer_authority_epoch": attempt.authority_epoch or None,
+                "transfer_ledger_plane": attempt.ledger_plane or None,
+                "transfer_plane_epoch": attempt.plane_epoch or None,
+                "transfer_inbound_iin": attempt.inbound_iin or None,
+                "transfer_item_id": attempt.item_id or None,
+                "transfer_uom": attempt.uom or None,
+                "transfer_entity_versions": dict(attempt.entity_versions),
+                "transfer_route_provenance": "CONTAINER_AUDIT_EXACT_PRODUCT_SCAN",
+                "transfer_seal_retryable": attempt.retryable,
+                "transfer_seal_error_code": attempt.error_code or None,
+            }
+        )
+
+    def _retry_pending_transfer_seals(self) -> None:
+        try:
+            coordinator = self._transfer_seal_runtime()
+            for result in coordinator.drain_pending():
+                if result.status == "OPERATOR_REVIEW":
+                    print(
+                        "이적 seal 복구에 작업자 확인이 필요합니다: "
+                        f"{result.intent_id} {result.error_code}"
+                    )
+        except Exception as exc:
+            print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")
+
+    def _exact_transfer_exchange_blocked(self) -> bool:
+        if getattr(self, "_exact_exchange_mode_active", False):
+            return True
+        coordinator = getattr(self, "transfer_seal_coordinator", None)
+        if coordinator is None:
+            return False
+        blocked = coordinator.client is not None or coordinator.store.has_exact_history()
+        if blocked:
+            self._exact_exchange_mode_active = True
+        return blocked
+
+    def _block_unsafe_exact_exchange(self) -> bool:
+        if not self._exact_transfer_exchange_blocked():
+            return False
+        coordinator = getattr(self, "transfer_seal_coordinator", None)
+        receipt_id = ""
+        if coordinator is not None:
+            receipt_id = coordinator.store.record_exchange_block(
+                reason_code="BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
+                details={
+                    "operator": str(getattr(self, "worker_name", "") or ""),
+                    "policy": "post_seal_exchange_requires_transfer_and_counterpart_versions",
+                },
+            )
+        if getattr(self, "worker_name", "") and getattr(self, "log_file_path", ""):
+            self._log_event(
+                "PRODUCT_EXCHANGE_BLOCKED_EXACT_MEMBERSHIP",
+                detail={
+                    "reason_code": "BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
+                    "restriction_receipt_id": receipt_id,
+                    "message": "target sealed transfer QR and two-bundle CAS are required",
+                },
+                synchronous=True,
+            )
+        messagebox.showwarning(
+            "중앙 교환 워크플로 필요",
+            "정확 membership 이력이 있어 기존 개별 교환은 사용할 수 없습니다.\n"
+            "대상 sealed transfer QR과 상대 bundle을 함께 검증하는 중앙 교환 절차가 필요합니다.",
+        )
+        return True
 
     def _plan_b_event_detail(
         self,
@@ -3836,6 +3994,8 @@ class ContainerAudit:
 
     def show_exchange_dialog(self):
         """개별 제품 교환 다이얼로그를 표시합니다."""
+        if self._block_unsafe_exact_exchange():
+            return
         if self.current_tray.master_label_code:
             messagebox.showwarning("작업 중", "진행 중인 트레이 작업이 있습니다.\n트레이를 제출한 후 개별 제품 교환을 사용하세요.")
             return
@@ -4111,6 +4271,8 @@ class ContainerAudit:
 
     def _complete_exchange(self):
         """제품 교환을 완료합니다."""
+        if self._block_unsafe_exact_exchange():
+            return
         session = self.current_exchange_session
         if session.current_step == "completed":
             return

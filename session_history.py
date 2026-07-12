@@ -176,7 +176,18 @@ def _completion_replay_identity(details: Dict[str, Any]) -> str | None:
     master_label = _text_field(details, "master_label_code")
     if not parse_new_format_qr(master_label):
         return None
-    return canonical_master_label_key(master_label)
+    label_identity = canonical_master_label_key(master_label)
+    if details.get("is_partial_submission") is True:
+        intent_id = str(details.get("transfer_seal_intent_id") or "").strip()
+        if not intent_id:
+            intent_id = stable_hash(
+                {
+                    "master_label": label_identity,
+                    "product_barcodes": product_barcodes_from_completion(details),
+                }
+            )
+        return f"{label_identity}|partial:{intent_id}"
+    return label_identity
 
 
 def _sanitize_worker_name(worker_name: str) -> str:
@@ -284,7 +295,10 @@ def load_session_history(
                         _validate_history_complete_details(details)
                         details["timestamp"] = timestamp
                         details["_history_source"] = f"{log_path}:{row_number}"
-                        if details.get("is_test_tray") is not True:
+                        if (
+                            details.get("is_test_tray") is not True
+                            and details.get("is_partial_submission") is not True
+                        ):
                             _remember_completed_label(history.completed_master_labels, _text_field(details, "master_label_code"))
                         row_worker_name = _sanitize_worker_name(row.get("worker_name", ""))
                         if is_current_worker_file and row_worker_name == sanitized_name:
