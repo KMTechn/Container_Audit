@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+from dataclasses import FrozenInstanceError
+
+import pytest
+
+from responsive_layout import (
+    MAX_SCALE,
+    MIN_SCALE,
+    center_layout_metrics,
+    pane_layout_metrics,
+    right_sidebar_metrics,
+    scanned_list_metrics,
+    select_layout_profile,
+)
+
+
+@pytest.mark.parametrize(
+    ("size", "expected"),
+    [
+        ((1366, 768), "compact"),
+        ((1440, 900), "standard"),
+        ((1920, 1080), "wide"),
+        ((2560, 1080), "wide"),
+        ((1280, 1024), "compact"),
+    ],
+)
+def test_select_layout_profile_for_supported_content_sizes(size, expected):
+    profile = select_layout_profile(*size)
+
+    assert profile.name == expected
+    assert profile.content_width == size[0]
+    assert profile.content_height == size[1]
+
+
+def test_profile_selection_accounts_for_large_text_scale():
+    default = select_layout_profile(1920, 1080, 1.0)
+    enlarged = select_layout_profile(1920, 1080, 1.25)
+
+    assert default.name == "wide"
+    assert enlarged.name == "standard"
+    assert enlarged.effective_width == pytest.approx(1536)
+
+
+def test_scale_is_clamped_and_invalid_values_are_rejected():
+    assert select_layout_profile(1440, 900, 0.1).scale == MIN_SCALE
+    assert select_layout_profile(1440, 900, 99).scale == MAX_SCALE
+
+    with pytest.raises(TypeError):
+        select_layout_profile(True, 900)
+    with pytest.raises(TypeError):
+        select_layout_profile(1440, 900, False)
+    with pytest.raises(ValueError):
+        select_layout_profile(float("nan"), 900)
+    with pytest.raises(ValueError):
+        select_layout_profile(1440, float("inf"))
+
+
+def test_numeric_dimensions_are_clamped_to_safe_minima():
+    profile = select_layout_profile(-10, 0)
+    panes = pane_layout_metrics(-10, 0)
+
+    assert profile.content_width == 1
+    assert profile.content_height == 1
+    assert panes.total_width == 3
+    assert panes.total_height == 1
+    assert panes.left_width + panes.center_width + panes.right_width == 3
+    assert min(panes.left_width, panes.center_width, panes.right_width) == 1
+
+
+@pytest.mark.parametrize("size", [(1366, 768), (1440, 900), (1920, 1080), (2560, 1080), (1280, 1024)])
+def test_pane_metrics_preserve_center_and_exact_total(size):
+    metrics = pane_layout_metrics(*size)
+
+    assert metrics.left_width + metrics.center_width + metrics.right_width == size[0]
+    assert metrics.center_width >= metrics.center_min
+    assert metrics.center_width > metrics.left_width
+    assert metrics.center_width > metrics.right_width
+    assert metrics.left_width >= metrics.left_min
+    assert metrics.right_width >= metrics.right_min
+
+
+def test_wide_sidebars_grow_without_starving_center_scan_area():
+    standard = pane_layout_metrics(1440, 900)
+    wide = pane_layout_metrics(2560, 1080)
+
+    assert wide.left_width > 380
+    assert wide.right_width > 360
+    assert wide.left_width > standard.left_width
+    assert wide.right_width > standard.right_width
+    assert wide.center_width / wide.total_width >= 0.55
+
+
+def test_extreme_scale_uses_possible_minima_and_keeps_center_largest():
+    metrics = pane_layout_metrics(1366, 768, 2.5)
+
+    assert metrics.compressed is True
+    assert metrics.left_width + metrics.center_width + metrics.right_width == 1366
+    assert metrics.center_width >= int(1366 * 0.53)
+    assert metrics.left_min <= metrics.left_width
+    assert metrics.center_min <= metrics.center_width
+    assert metrics.right_min <= metrics.right_width
+
+
+def test_compact_wide_compact_round_trip_has_no_accumulation():
+    compact_before = pane_layout_metrics(1366, 768, 1.0)
+    wide = pane_layout_metrics(2560, 1080, 1.0)
+    compact_after = pane_layout_metrics(1366, 768, 1.0)
+
+    assert wide != compact_before
+    assert compact_after == compact_before
+
+
+def test_center_metrics_reserve_scan_list_and_scale_with_room():
+    compact = center_layout_metrics(820, 728, profile="compact")
+    narrow = center_layout_metrics(580, 728, profile="compact")
+    wide = center_layout_metrics(1500, 1040, profile="wide")
+
+    assert compact.list_minsize >= 130
+    assert wide.list_minsize > compact.list_minsize
+    assert wide.list_minsize <= round(1040 * 0.48)
+    assert compact.warning_band_height > 0
+    assert wide.action_columns == 4
+    assert compact.action_columns == 4
+    assert narrow.action_columns == 2
+
+
+def test_short_large_text_center_reserves_completed_state_action_row():
+    short = center_layout_metrics(710, 707, 1.4, profile="compact")
+    short_list = scanned_list_metrics(
+        710,
+        707,
+        short.list_minsize,
+        1.4,
+        profile="compact",
+    )
+
+    assert short.action_columns == 4
+    assert short.button_top <= 8
+    assert short.list_minsize <= 128
+    assert short_list.top_pady <= 10
+
+
+def test_scanned_list_metrics_keep_readable_rows_at_supported_extremes():
+    compact = scanned_list_metrics(720, 700, 220, profile="compact")
+    wide = scanned_list_metrics(1500, 1040, 430, profile="wide")
+    large_text = scanned_list_metrics(700, 700, 220, 2.5, profile="compact")
+
+    for metrics in (compact, wide, large_text):
+        assert metrics.font_size > 0
+        assert metrics.estimated_row_height >= 20
+    assert 5 <= compact.visible_rows <= 18
+    assert 5 <= wide.visible_rows <= 18
+    assert 3 <= large_text.visible_rows <= 18
+    assert wide.font_size >= compact.font_size
+    assert large_text.font_size >= compact.font_size
+
+
+def test_right_sidebar_prioritizes_status_and_follow_up_over_secondary_stats():
+    compact = right_sidebar_metrics(280, 728, profile="compact")
+    wide = right_sidebar_metrics(510, 1040, profile="wide")
+
+    for metrics in (compact, wide):
+        assert metrics.primary_card_minsize > metrics.secondary_card_minsize
+        assert metrics.follow_up_minsize > metrics.secondary_card_minsize
+        assert metrics.card_minsize == metrics.primary_card_minsize
+        assert metrics.value_font > metrics.secondary_value_font
+    assert wide.primary_card_minsize > compact.primary_card_minsize
+    assert wide.follow_up_minsize > compact.follow_up_minsize
+
+
+def test_short_large_text_sidebar_caps_decorative_space_and_keeps_follow_up_primary():
+    short = right_sidebar_metrics(302, 707, 1.4)
+    roomy = right_sidebar_metrics(510, 1040, 1.4)
+
+    assert short.short_large_text is True
+    assert short.legend_visible is False
+    assert short.date_font <= 20
+    assert short.clock_font <= 27
+    assert short.card_padding < roomy.card_padding
+    assert short.context_padding < roomy.context_padding
+    assert short.card_gap < roomy.card_gap
+    assert short.follow_up_minsize > short.primary_card_minsize
+    assert short.primary_card_minsize > short.secondary_card_minsize
+    assert short.value_font > short.secondary_value_font
+    assert roomy.short_large_text is False
+    assert roomy.legend_visible is True
+
+
+def test_short_large_text_sidebar_metrics_round_trip_without_accumulation():
+    compact_before = right_sidebar_metrics(302, 707, 1.4)
+    wide = right_sidebar_metrics(510, 1040, 1.4)
+    compact_after = right_sidebar_metrics(302, 707, 1.4)
+
+    assert wide != compact_before
+    assert compact_after == compact_before
+
+
+def test_profile_override_is_validated():
+    with pytest.raises(ValueError):
+        pane_layout_metrics(1440, 900, profile="huge")  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        center_layout_metrics(800, 700, profile=object())  # type: ignore[arg-type]
+
+
+def test_metric_results_are_immutable():
+    metrics = pane_layout_metrics(1440, 900)
+
+    with pytest.raises(FrozenInstanceError):
+        metrics.center_width = 1  # type: ignore[misc]

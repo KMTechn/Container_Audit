@@ -59,10 +59,20 @@ from replacement_workflow import (
     REPLACEMENT_REJECT_OLD_QTY,
     compare_replacement_quantities,
 )
+from responsive_layout import (
+    center_layout_metrics as calculate_center_layout_metrics,
+    pane_layout_metrics as calculate_pane_layout_metrics,
+    right_sidebar_metrics as calculate_right_sidebar_metrics,
+    scanned_list_metrics as calculate_scanned_list_metrics,
+    select_layout_profile,
+)
 from session_history import load_session_history
+from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
 from storage_utils import atomic_write_json
 from tray_state import (
+    OPERATOR_REVIEW_STATE_KEY,
+    OPERATOR_REVIEW_STATE_SCHEMA_VERSION,
     TrayStateValidationError,
     quarantine_tray_state_file,
     tray_session_from_state,
@@ -97,13 +107,21 @@ from update_service import (
     verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
+from warning_presenter import (
+    CompletionOutcome,
+    CompletionOutcomeSnapshot,
+    Notice,
+    NoticeSeverity,
+    WarningPresenter,
+    notice_for_completion,
+)
 
 # ####################################################################
 # # 자동 업데이트 기능
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.30"
+CURRENT_VERSION = "v2.0.31"
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -759,10 +777,14 @@ class ContainerAudit:
         self.replacement_context: Dict[str, Any] = {}
 
         self.status_message_job: Optional[str] = None
+        self._status_message_generation = 0
         self.clock_job: Optional[str] = None
         self.stopwatch_job: Optional[str] = None
         self.idle_check_job: Optional[str] = None
         self.focus_return_job: Optional[str] = None
+        self.warning_presenter = WarningPresenter()
+        self._pending_operator_review_snapshot: Optional[CompletionOutcomeSnapshot] = None
+        self._warning_beep_active = False
         self.log_write_errors: List[str] = []
         self.last_log_write_error: Optional[str] = None
         
@@ -957,7 +979,7 @@ class ContainerAudit:
             highlightthickness=1,
         )
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_label = tk.Label(status_bar, text="준비", anchor=tk.W, bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT)
+        self.status_label = tk.Label(status_bar, text="스캐너 준비", anchor=tk.W, bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT)
         self.status_label.pack(side=tk.LEFT, padx=10, pady=4)
         self.paned_window = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.left_pane = ttk.Frame(self.paned_window, style='Sidebar.TFrame')
@@ -975,22 +997,38 @@ class ContainerAudit:
         self.apply_scaling()
 
     def apply_scaling(self):
-        base=10; s,m,l,xl,xxl = (int(factor*self.scale_factor) for factor in [base,base+2,base+8,base+20,base+60])
-        button_padding = (int(16*self.scale_factor), int(9*self.scale_factor))
+        try:
+            content_width = max(1, int(self.root.winfo_width()))
+            content_height = max(1, int(self.root.winfo_height()))
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            content_width, content_height = 1440, 900
+        profile = select_layout_profile(content_width, content_height, self.scale_factor)
+        tokens = build_style_tokens(StyleProfile(profile.name), self.scale_factor)
+        self.style_tokens = tokens
+        s = tokens.fonts.caption
+        m = tokens.fonts.body
+        l = tokens.fonts.item_title
+        xl = tokens.fonts.stage_title
+        xxl = tokens.fonts.counter
+        button_padding = (tokens.spacing.lg, tokens.spacing.sm)
         self.style.configure('TFrame', background=self.COLOR_BG)
         self.style.configure('Sidebar.TFrame', background=self.COLOR_SIDEBAR_BG)
         self.style.configure('Card.TFrame', background=self.COLOR_CARD_BG, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
+        self.style.configure('SecondaryCard.TFrame', background=self.COLOR_SURFACE_ALT, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
         self.style.configure('Idle.TFrame', background=self.COLOR_IDLE_BG, relief='solid', borderwidth=1, bordercolor="#FED7AA")
         self.style.configure('TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, m))
-        self.style.configure('Sidebar.TLabel', background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, m))
+        self.style.configure('Sidebar.TLabel', background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.sidebar))
         self.style.configure('Idle.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, m))
         self.style.configure('Subtle.TLabel', background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
         self.style.configure('Card.Subtle.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
+        self.style.configure('SecondaryCard.Subtle.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
         self.style.configure('Idle.Subtle.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, s))
-        self.style.configure('Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, int(l * 1.2), 'bold'))
-        self.style.configure('Card.Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, int(l * 1.2), 'bold'))
-        self.style.configure('Idle.Value.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, int(l * 1.2), 'bold'))
-        self.style.configure('Title.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, int(xl * 1.5), 'bold'))
+        self.style.configure('Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
+        self.style.configure('Card.Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
+        self.style.configure('SecondaryCard.Value.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
+        self.style.configure('Idle.Value.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
+        self.style.configure('Title.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, xl, 'bold'))
+        self.style.configure('Stage.TLabel', background=self.COLOR_BG, foreground=self.COLOR_PRIMARY, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('ItemInfo.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, l, 'bold'))
         self.style.configure('MainCounter.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, xxl, 'bold'))
         self.style.configure('TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_PRIMARY, foreground='white', focuscolor=self.COLOR_PRIMARY)
@@ -1005,22 +1043,25 @@ class ContainerAudit:
         self.style.map('Warning.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#B45309'), ('active', '#D97706'), ('!active', self.COLOR_IDLE)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
         self.style.configure('Danger.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_DANGER, foreground='white')
         self.style.map('Danger.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#991B1B'), ('active', self.COLOR_DANGER_HOVER), ('!active', self.COLOR_DANGER)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
+        self.style.configure('Review.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_PRIMARY, foreground='white')
+        self.style.map('Review.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#1E3A8A'), ('active', self.COLOR_PRIMARY_HOVER), ('!active', self.COLOR_PRIMARY)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
         self.style.configure('TCheckbutton', background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, m))
         self.style.map('TCheckbutton', indicatorcolor=[('selected', self.COLOR_PRIMARY), ('!selected', self.COLOR_BORDER)], foreground=[('active', self.COLOR_TEXT), ('!active', self.COLOR_TEXT)])
-        self.style.configure('VelvetCard.TFrame', background=self.COLOR_VELVET, relief='solid', borderwidth=1, bordercolor="#7F1D1D")
-        self.style.configure('Velvet.Subtle.TLabel', background=self.COLOR_VELVET, foreground='white', font=(self.DEFAULT_FONT, s))
-        self.style.configure('Velvet.Value.TLabel', background=self.COLOR_VELVET, foreground='white', font=(self.DEFAULT_FONT, int(l * 1.2), 'bold'))
+        self.style.configure('VelvetCard.TFrame', background=self.COLOR_SURFACE_ALT, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
+        self.style.configure('Velvet.Subtle.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
+        self.style.configure('Velvet.Value.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('Treeview.Heading', font=(self.DEFAULT_FONT, m, 'bold'), background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, relief='flat', bordercolor=self.COLOR_BORDER)
-        self.style.configure('Treeview', rowheight=int(28 * self.scale_factor), font=(self.DEFAULT_FONT, m), background=self.COLOR_CARD_BG, fieldbackground=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER)
+        self.style.configure('Treeview', rowheight=tokens.components.row_height, font=(self.DEFAULT_FONT, m), background=self.COLOR_CARD_BG, fieldbackground=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER)
         self.style.map('Treeview', background=[('selected', self.COLOR_PRIMARY)], foreground=[('selected', 'white')])
         self.style.configure('Vertical.TScrollbar', background='#CBD5E1', troughcolor=self.COLOR_SURFACE_ALT, bordercolor=self.COLOR_SURFACE_ALT, arrowcolor=self.COLOR_TEXT_SUBTLE, relief='flat')
         self.style.map('Vertical.TScrollbar', background=[('active', '#94A3B8')])
         self.style.configure('TEntry', fieldbackground=self.COLOR_INPUT_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER, insertcolor=self.COLOR_PRIMARY)
-        self.style.configure('TSpinbox', fieldbackground=self.COLOR_INPUT_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER, arrowsize=int(14*self.scale_factor))
+        self.style.configure('TSpinbox', fieldbackground=self.COLOR_INPUT_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER, arrowsize=max(12, tokens.fonts.body))
         self.style.configure('TLabelframe', background=self.COLOR_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, relief='solid')
         self.style.configure('TLabelframe.Label', background=self.COLOR_BG, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s, 'bold'))
         self.style.configure('TPanedwindow', background=self.COLOR_BORDER)
-        self.style.configure('Big.Horizontal.TProgressbar', troughcolor='#E2E8F0', background=self.COLOR_PRIMARY, bordercolor='#E2E8F0', lightcolor=self.COLOR_PRIMARY, darkcolor=self.COLOR_PRIMARY, thickness=int(22 * self.scale_factor))
+        self.style.configure('Big.Horizontal.TProgressbar', troughcolor='#E2E8F0', background=self.COLOR_PRIMARY, bordercolor='#E2E8F0', lightcolor=self.COLOR_PRIMARY, darkcolor=self.COLOR_PRIMARY, thickness=tokens.components.progress_thickness)
+        self.style.configure('Inactive.Horizontal.TProgressbar', troughcolor=self.COLOR_BG, background=self.COLOR_BG, bordercolor=self.COLOR_BG, lightcolor=self.COLOR_BG, darkcolor=self.COLOR_BG, thickness=tokens.components.progress_thickness)
         if hasattr(self, 'status_label'):
             self.status_label.configure(font=(self.DEFAULT_FONT, s), bg=self.COLOR_SIDEBAR_BG, fg=self.COLOR_TEXT)
 
@@ -1141,6 +1182,9 @@ class ContainerAudit:
             self.show_validation_screen()
 
     def change_worker(self):
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         msg = "작업자를 변경하시겠습니까?"
         if self.current_tray.master_label_code:
             msg += "\n\n진행 중인 작업은 다음 로그인 시 복구할 수 있도록 저장됩니다."
@@ -1192,16 +1236,75 @@ class ContainerAudit:
         return self._save_tray_state_snapshot(state)
 
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
-        state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
         try:
+            state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
             atomic_write_json(state_path, state, indent=4)
             return True
         except Exception as e:
             print(f"현재 트레이 상태 저장 실패: {e}")
             return False
 
+    def _active_operator_review_snapshot(self) -> Optional[CompletionOutcomeSnapshot]:
+        pending = getattr(self, "_pending_operator_review_snapshot", None)
+        if pending is not None and pending.outcome is CompletionOutcome.OPERATOR_REVIEW:
+            return pending
+        completion = self._warning_state_presenter().state.completion
+        if completion is not None and completion.outcome is CompletionOutcome.OPERATOR_REVIEW:
+            return completion
+        return None
+
+    def _operator_review_state_payload(self) -> Optional[Dict[str, Any]]:
+        snapshot = self._active_operator_review_snapshot()
+        if snapshot is None:
+            return None
+        tray = self.current_tray
+        return {
+            "schema_version": OPERATOR_REVIEW_STATE_SCHEMA_VERSION,
+            "outcome": CompletionOutcome.OPERATOR_REVIEW.value,
+            "item_name": str(tray.item_name or ""),
+            "master_label": str(tray.master_label_code or ""),
+            "scan_count": len(tray.scanned_barcodes),
+            "target_count": int(tray.tray_size),
+            "message": str(snapshot.message or "담당자 확인이 필요한 서버 판정입니다."),
+            "receipt_id": str(snapshot.receipt_id or ""),
+            "error_code": str(snapshot.error_code or ""),
+        }
+
+    def _operator_review_snapshot_from_state(
+        self,
+        state: Dict[str, Any],
+    ) -> Optional[CompletionOutcomeSnapshot]:
+        payload = state.get(OPERATOR_REVIEW_STATE_KEY)
+        if payload is None:
+            return None
+        return CompletionOutcomeSnapshot(
+            outcome=CompletionOutcome.OPERATOR_REVIEW,
+            item_name=str(payload["item_name"]),
+            master_label=str(payload["master_label"]),
+            scan_count=int(payload["scan_count"]),
+            target_count=int(payload["target_count"]),
+            message=str(payload["message"]),
+            receipt_id=str(payload["receipt_id"]),
+            error_code=str(payload["error_code"]),
+        )
+
+    def _restore_operator_review_from_state(self, state: Dict[str, Any]) -> bool:
+        snapshot = self._operator_review_snapshot_from_state(state)
+        presenter = self._warning_state_presenter()
+        if snapshot is None:
+            self._pending_operator_review_snapshot = None
+            presenter.clear_completion()
+            return False
+        self._pending_operator_review_snapshot = snapshot
+        presenter.present_completion(snapshot)
+        self._start_warning_beep()
+        return True
+
     def _current_tray_state_snapshot(self) -> Dict[str, Any]:
         state = tray_session_to_state(self.current_tray, worker_name=self.worker_name)
+        operator_review = self._operator_review_state_payload()
+        if operator_review is not None:
+            state[OPERATOR_REVIEW_STATE_KEY] = operator_review
         last_activity_time = getattr(self, "last_activity_time", None)
         if getattr(self, "is_idle", False) and last_activity_time:
             idle_duration = max(0.0, (datetime.datetime.now() - last_activity_time).total_seconds())
@@ -1226,6 +1329,7 @@ class ContainerAudit:
         try:
             saved_worker = saved_state.get('worker_name')
             saved_master_label = saved_state.get('master_label_code')
+            saved_operator_review = self._operator_review_snapshot_from_state(saved_state)
             if saved_master_label and self._is_completed_master_label(saved_master_label):
                 self.current_tray = TraySession()
                 if not self._delete_current_tray_state():
@@ -1254,16 +1358,28 @@ class ContainerAudit:
                 return
             if saved_worker == self.worker_name:
                 msg = f"이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n· 품목: {saved_state.get('item_name', '알 수 없음')}\n· 스캔 수: {len(saved_state.get('scanned_barcodes', []))}개"
-                if messagebox.askyesno("이전 작업 복구", msg):
+                restore_required = saved_operator_review is not None
+                if restore_required or messagebox.askyesno("이전 작업 복구", msg):
+                    restore_detail = {
+                        'message': 'Same worker restored their session.',
+                    }
+                    if restore_required:
+                        restore_detail['operator_review_restored'] = True
                     if not self._log_event(
                         'TRAY_RESTORE',
-                        detail={'message': 'Same worker restored their session.'},
+                        detail=restore_detail,
                         synchronous=True,
                     ):
                         self.current_tray = TraySession()
                         messagebox.showerror("작업 기록 실패", "이전 작업 복구 기록을 남기지 못해 상태 파일을 보존합니다.")
                         return
                     self._restore_tray_from_state(saved_state)
+                    if restore_required:
+                        messagebox.showwarning(
+                            "담당자 확인 필요",
+                            "서버 판정 확인이 필요한 트레이를 복구했습니다. "
+                            "스캔 목록을 유지하고 담당자 확인을 받으세요.",
+                        )
                 else:
                     if not self._log_saved_tray_discarded(
                         saved_state,
@@ -1280,27 +1396,61 @@ class ContainerAudit:
                 msg = f"이전 작업자 '{saved_worker}'님이 마치지 않은 작업이 있습니다.\n\n이 작업을 이어서 진행하시겠습니까?"
                 response = messagebox.askyesnocancel("작업 인수 확인", msg)
                 if response is True:
+                    previous_operator_review = getattr(
+                        self,
+                        "_pending_operator_review_snapshot",
+                        None,
+                    )
                     self.current_tray = tray_session_from_state(
                         saved_state,
                         session_factory=TraySession,
                         default_tray_size=self.TRAY_SIZE,
                     )
+                    self._pending_operator_review_snapshot = saved_operator_review
                     if not self._save_current_tray_state():
+                        self._pending_operator_review_snapshot = previous_operator_review
                         self.current_tray = TraySession()
                         messagebox.showwarning("작업 저장 경고", "인수한 작업 상태의 작업자 정보를 저장하지 못해 작업을 복구하지 않습니다.")
                         return
                     takeover_detail = {'previous_worker': saved_worker, 'new_worker': self.worker_name, 'item_name': saved_state.get('item_name')}
-                    if not self._log_event('TRAY_TAKEOVER', detail=takeover_detail, synchronous=True):
-                        rollback_ok = self._save_tray_state_snapshot(saved_state)
+                    try:
+                        takeover_logged = bool(
+                            self._log_event(
+                                'TRAY_TAKEOVER',
+                                detail=takeover_detail,
+                                synchronous=True,
+                            )
+                        )
+                    except Exception as exc:
+                        print(f"작업 인수 기록 실패: {exc}")
+                        takeover_logged = False
+                    if not takeover_logged:
+                        try:
+                            rollback_ok = self._save_tray_state_snapshot(saved_state)
+                        except Exception as exc:
+                            print(f"작업 인수 상태 롤백 실패: {exc}")
+                            rollback_ok = False
+                        self._pending_operator_review_snapshot = previous_operator_review
                         self.current_tray = TraySession()
                         if rollback_ok:
                             messagebox.showerror("작업 기록 실패", "작업 인수 기록을 남기지 못해 이전 작업 상태를 보존합니다.")
                         else:
                             messagebox.showerror("작업 기록 실패", "작업 인수 기록을 남기지 못했고 이전 작업 상태 복원에도 실패했습니다. 상태 파일을 확인하세요.")
                         return
+                    self._restore_operator_review_from_state(saved_state)
                     self._invalidate_pending_scan_callbacks()
                     self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
                 elif response is False:
+                    if saved_operator_review is not None:
+                        messagebox.showwarning(
+                            "삭제 불가",
+                            "담당자 확인이 필요한 트레이는 삭제할 수 없습니다. "
+                            "담당자 확인 후 기존 작업자가 다시 로그인해 주세요.",
+                        )
+                        self.worker_name = ""
+                        self.current_tray = TraySession()
+                        self.show_worker_input_screen()
+                        return
                     if messagebox.askyesno("작업 삭제", "이전 작업을 영구적으로 삭제하시겠습니까?\n(이 작업은 복구할 수 없습니다.)"):
                         if not self._log_saved_tray_discarded(
                             saved_state,
@@ -1332,8 +1482,10 @@ class ContainerAudit:
             session_factory=TraySession,
             default_tray_size=self.TRAY_SIZE,
         )
+        restored_operator_review = self._restore_operator_review_from_state(state)
         self._invalidate_pending_scan_callbacks()
-        self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
+        if not restored_operator_review:
+            self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
 
     def _quarantine_current_tray_state(self, reason: str) -> Optional[str]:
         state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
@@ -1412,6 +1564,7 @@ class ContainerAudit:
                 self.scanned_listbox.insert(0, f"({i}) {barcode}")
             if self.current_tray.scanned_barcodes:
                 self.undo_button['state'] = tk.NORMAL
+            self._sync_last_normal_scan_from_active_tray()
             self._update_center_display()
             self._start_stopwatch(resume=True)
         else:
@@ -1419,40 +1572,28 @@ class ContainerAudit:
         self.scan_entry.focus()
 
     def _get_pane_layout_metrics(self, total_width: int) -> Dict[str, int]:
-        total_width = max(1, int(total_width or 1))
-        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
-        left_min = int(260 * scale)
-        right_min = int(260 * scale)
-        center_min = int(520 * scale)
-        side_target = self._clamped_int(total_width * 0.20, left_min, int(380 * scale))
-        right_target = self._clamped_int(total_width * 0.18, right_min, int(360 * scale))
-
-        if total_width <= left_min + center_min + right_min:
-            left_width = max(1, int(total_width * 0.28))
-            right_width = max(1, total_width - int(total_width * 0.72))
-            center_width = max(1, total_width - left_width - right_width)
-            return {
-                "left_width": left_width,
-                "center_width": center_width,
-                "right_width": right_width,
-                "left_min": left_min,
-                "center_min": int(360 * scale),
-                "right_min": right_min,
-            }
-
-        available_for_center = total_width - side_target - right_target
-        if available_for_center < center_min:
-            deficit = center_min - available_for_center
-            side_target = max(left_min, side_target - deficit // 2)
-            right_target = max(right_min, right_target - (deficit - deficit // 2))
-        center_width = max(center_min, total_width - side_target - right_target)
+        total_height = 768
+        for widget in (getattr(self, "paned_window", None), getattr(self, "root", None)):
+            try:
+                candidate = int(widget.winfo_height())
+            except (AttributeError, TypeError, ValueError, tk.TclError):
+                continue
+            if candidate > 1:
+                total_height = candidate
+                break
+        metrics = calculate_pane_layout_metrics(
+            total_width,
+            total_height,
+            getattr(self, "scale_factor", 1.0),
+        )
         return {
-            "left_width": side_target,
-            "center_width": center_width,
-            "right_width": max(right_min, total_width - side_target - center_width),
-            "left_min": left_min,
-            "center_min": center_min,
-            "right_min": right_min,
+            "profile": metrics.profile,
+            "left_width": metrics.left_width,
+            "center_width": metrics.center_width,
+            "right_width": metrics.right_width,
+            "left_min": metrics.left_min,
+            "center_min": metrics.center_min,
+            "right_min": metrics.right_min,
         }
 
     def _set_initial_sash_positions(self):
@@ -1529,48 +1670,17 @@ class ContainerAudit:
         center_height: int,
         list_height: int = 0,
     ) -> Dict[str, int]:
-        try:
-            scale = float(getattr(self, "scale_factor", 1.0))
-        except (TypeError, ValueError):
-            scale = 1.0
-        scale = max(0.7, min(2.5, scale))
-
-        center_width = max(1, int(center_width or 1))
-        center_height = max(1, int(center_height or 1))
-        list_height = max(0, int(list_height or 0))
-
-        horizontal_pad = self._clamped_int(center_width * 0.045, int(12 * scale), int(36 * scale))
-        top_pady = self._clamped_int(center_height * 0.025, int(8 * scale), int(28 * scale))
-        if center_height < 620:
-            top_pady = min(top_pady, int(14 * scale))
-
-        list_reference_height = list_height if list_height > 1 else max(140, center_height - int(330 * scale))
-        if list_reference_height < 180:
-            target_rows = 6
-        elif list_reference_height < 320:
-            target_rows = 8
-        elif list_reference_height < 520:
-            target_rows = 12
-        else:
-            target_rows = 16
-
-        row_px = max(24.0, min(42.0, list_reference_height / target_rows))
-        base_font = (16 if center_height < 620 else 18) * scale
-        candidate_font = max(base_font, row_px * 0.58)
-
-        available_text_width = max(160, center_width - horizontal_pad * 2 - 12)
-        width_limited_font = available_text_width / (34 * 0.62)
-        minimum_font = 14 * scale
-        maximum_font = min(24 * scale, max(minimum_font, width_limited_font))
-        font_size = self._clamped_int(candidate_font, int(round(minimum_font)), int(round(maximum_font)))
-
-        estimated_row_height = max(22, int(round(font_size * 1.65)))
-        visible_rows = self._clamped_int(list_reference_height / estimated_row_height, 5, 18)
+        metrics = calculate_scanned_list_metrics(
+            center_width,
+            center_height,
+            list_height,
+            getattr(self, "scale_factor", 1.0),
+        )
         return {
-            "font_size": font_size,
-            "horizontal_pad": horizontal_pad,
-            "top_pady": top_pady,
-            "visible_rows": visible_rows,
+            "font_size": metrics.font_size,
+            "horizontal_pad": metrics.horizontal_pad,
+            "top_pady": metrics.top_pady,
+            "visible_rows": metrics.visible_rows,
         }
 
     def _schedule_scanned_listbox_layout_refresh(self, event=None) -> None:
@@ -1629,41 +1739,42 @@ class ContainerAudit:
             )
             listbox.grid_configure(
                 padx=metrics["horizontal_pad"],
-                pady=(metrics["top_pady"], 0),
+                pady=(0, 0),
             )
+            header = getattr(self, "scanned_list_header_label", None)
+            if header is not None:
+                header.grid_configure(
+                    padx=metrics["horizontal_pad"],
+                    pady=(metrics["top_pady"], max(4, int(6 * self.scale_factor))),
+                )
+            scrollbar = getattr(self, "scanned_list_scrollbar", None)
+            if scrollbar is not None:
+                scrollbar.grid_configure(padx=(0, metrics["horizontal_pad"]))
         except (tk.TclError, AttributeError):
             return
 
     def _get_center_layout_metrics(self, center_width: int, center_height: int) -> Dict[str, int]:
-        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
-        center_width = max(1, int(center_width or 1))
-        center_height = max(1, int(center_height or 1))
-        compact_height = center_height < 700
-        horizontal_pad = self._clamped_int(center_width * 0.035, int(16 * scale), int(44 * scale))
-        item_top = self._clamped_int(center_height * 0.012, int(6 * scale), int(14 * scale))
-        item_bottom = self._clamped_int(center_height * 0.022, int(8 * scale), int(24 * scale))
-        count_top = self._clamped_int(center_height * 0.010, int(6 * scale), int(14 * scale))
-        count_bottom = self._clamped_int(center_height * 0.020, int(8 * scale), int(22 * scale))
-        progress_bottom = self._clamped_int(center_height * 0.018, int(8 * scale), int(20 * scale))
-        entry_ipady = self._clamped_int(center_height * 0.016, int(10 * scale), int(18 * scale))
-        button_top = self._clamped_int(center_height * 0.024, int(12 * scale), int(30 * scale))
-        button_pad_x = self._clamped_int(center_width * 0.010, int(6 * scale), int(14 * scale))
-        list_minsize = self._clamped_int(center_height * (0.31 if compact_height else 0.36), int(140 * scale), int(360 * scale))
-        entry_font = self._clamped_int(center_height * 0.036, int(24 * scale), int(34 * scale))
-        count_font = self._clamped_int(center_height * 0.090, int(52 * scale), int(76 * scale))
+        metrics = calculate_center_layout_metrics(
+            center_width,
+            center_height,
+            getattr(self, "scale_factor", 1.0),
+        )
         return {
-            "horizontal_pad": horizontal_pad,
-            "item_top": item_top,
-            "item_bottom": item_bottom,
-            "count_top": count_top,
-            "count_bottom": count_bottom,
-            "progress_bottom": progress_bottom,
-            "entry_ipady": entry_ipady,
-            "button_top": button_top,
-            "button_pad_x": button_pad_x,
-            "list_minsize": list_minsize,
-            "entry_font": entry_font,
-            "count_font": count_font,
+            "profile": metrics.profile,
+            "horizontal_pad": metrics.horizontal_pad,
+            "item_top": metrics.item_top,
+            "item_bottom": metrics.item_bottom,
+            "count_top": metrics.count_top,
+            "count_bottom": metrics.count_bottom,
+            "progress_bottom": metrics.progress_bottom,
+            "entry_ipady": metrics.entry_ipady,
+            "warning_band_height": metrics.warning_band_height,
+            "button_top": metrics.button_top,
+            "button_pad_x": metrics.button_pad_x,
+            "list_minsize": metrics.list_minsize,
+            "entry_font": metrics.entry_font,
+            "count_font": metrics.count_font,
+            "action_columns": metrics.action_columns,
         }
 
     def _apply_center_layout(self, parent_frame=None, center_width: int = 0, center_height: int = 0) -> None:
@@ -1678,15 +1789,16 @@ class ContainerAudit:
         if center_width <= 1 or center_height <= 1:
             return
         metrics = self._get_center_layout_metrics(center_width, center_height)
-        action_layout_band = 3 if center_width >= 1080 else 2 if center_width >= 720 else 1
-        metrics_key = tuple(metrics.values()) + (action_layout_band,)
+        metrics_key = tuple(metrics.values())
         if metrics_key == getattr(self, "_center_layout_metrics", None):
             return
         self._center_layout_metrics = metrics_key
         try:
-            parent_frame.grid_rowconfigure(4, weight=3, minsize=metrics["list_minsize"])
-            if hasattr(self, "current_item_label"):
-                self.current_item_label.grid_configure(pady=(metrics["item_top"], metrics["item_bottom"]))
+            parent_frame.grid_rowconfigure(4, weight=0, minsize=metrics["warning_band_height"])
+            parent_frame.grid_rowconfigure(5, weight=3, minsize=metrics["list_minsize"])
+            hero_frame = getattr(self, "_center_hero_frame", None)
+            if hero_frame is not None:
+                hero_frame.grid_configure(pady=(metrics["item_top"], metrics["item_bottom"]))
             if hasattr(self, "main_count_label"):
                 self.main_count_label.configure(font=(self.DEFAULT_FONT, metrics["count_font"], 'bold'))
                 self.main_count_label.grid_configure(pady=(metrics["count_top"], metrics["count_bottom"]))
@@ -1698,6 +1810,8 @@ class ContainerAudit:
             if hasattr(self, "scan_entry"):
                 self.scan_entry.configure(font=(self.DEFAULT_FONT, metrics["entry_font"], 'bold'))
                 self.scan_entry.grid_configure(ipady=metrics["entry_ipady"], padx=metrics["horizontal_pad"])
+            if hasattr(self, "notice_frame"):
+                self.notice_frame.grid_configure(padx=metrics["horizontal_pad"])
             button_frame = getattr(self, "_center_button_frame", None)
             if button_frame is not None:
                 button_frame.grid_configure(pady=(metrics["button_top"], 0))
@@ -1713,37 +1827,8 @@ class ContainerAudit:
         try:
             if center_width <= 0:
                 center_width = button_frame.winfo_width()
-            groups = getattr(self, "_center_action_groups", [])
-            if groups:
-                if center_width >= 1080:
-                    group_columns = 3
-                elif center_width >= 720:
-                    group_columns = 2
-                else:
-                    group_columns = 1
-
-                for group in groups:
-                    group["frame"].grid_forget()
-                for column in range(max(6, len(groups))):
-                    button_frame.grid_columnconfigure(column, weight=0, uniform="")
-                for index, group in enumerate(groups):
-                    group["frame"].grid(
-                        row=index // group_columns,
-                        column=index % group_columns,
-                        sticky='nsew',
-                        padx=pad_x,
-                        pady=(0, max(4, int(8 * self.scale_factor))),
-                    )
-                    button_frame.grid_columnconfigure(index % group_columns, weight=1, uniform="center_action_groups")
-                    self._layout_center_action_group_buttons(group, center_width // max(1, group_columns), pad_x)
-                return
-
-            if center_width >= 1080:
-                columns = len(buttons)
-            elif center_width >= 620:
-                columns = 3
-            else:
-                columns = 2
+            self._refresh_action_button_labels(center_width)
+            columns = len(buttons) if center_width >= 620 else 2
             for index, button in enumerate(buttons):
                 button.grid_forget()
                 button.grid(
@@ -1774,9 +1859,9 @@ class ContainerAudit:
             if group_key == "primary":
                 columns = 1
             elif group_key == "danger":
-                columns = 1 if group_width < 720 else 2
+                columns = 3 if group_width >= 240 else 2 if group_width >= 170 else 1
             else:
-                columns = min(len(buttons), 2 if group_width >= 360 else 1)
+                columns = min(len(buttons), 2 if group_width >= 240 else 1)
 
             for button in buttons:
                 button.grid_forget()
@@ -1825,45 +1910,192 @@ class ContainerAudit:
         except (AttributeError, tk.TclError):
             return True
 
+    def _use_compact_action_labels(self) -> bool:
+        frame = getattr(self, "_center_content_frame", None)
+        if frame is None:
+            return False
+        try:
+            width = int(frame.winfo_width())
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            return False
+        return 1 < width < 960
+
+    def _action_button_labels(
+        self,
+        *,
+        compact: bool,
+        operator_review: bool,
+        replacement_active: bool,
+        exchange_dialog_open: bool,
+        exact_exchange_blocked: bool,
+    ) -> Dict[str, str]:
+        if compact:
+            return {
+                "reset": "리셋",
+                "undo": "스캔 취소",
+                "park": "보류",
+                "submit": "담당자 확인" if operator_review else "트레이 제출",
+                "operations": "운영 작업 ▾",
+                "replace": "교체 취소" if replacement_active else "교체",
+                "exchange": (
+                    "중앙 교환"
+                    if exact_exchange_blocked
+                    else ("교환 창" if exchange_dialog_open else "교환")
+                ),
+            }
+        return {
+            "reset": "현재 작업 리셋",
+            "undo": "마지막 스캔 취소",
+            "park": "트레이 보류",
+            "submit": "담당자 확인 필요" if operator_review else "✅ 트레이 제출",
+            "operations": "운영 작업 ▾",
+            "replace": "교체 취소" if replacement_active else "🔄 완료 현품표 교체",
+            "exchange": (
+                "중앙 교환 워크플로 필요"
+                if exact_exchange_blocked
+                else ("교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환")
+            ),
+        }
+
+    def _refresh_action_button_labels(self, center_width: int) -> None:
+        completion = self._warning_state_presenter().state.completion
+        operator_review = bool(
+            completion is not None and completion.outcome is CompletionOutcome.OPERATOR_REVIEW
+        )
+        replacement_active = bool(getattr(self, "master_label_replace_state", None))
+        exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
+        exact_exchange_blocked = bool(getattr(self, "_exact_exchange_mode_active", False))
+        labels = self._action_button_labels(
+            compact=1 < int(center_width or 0) < 960,
+            operator_review=operator_review,
+            replacement_active=replacement_active,
+            exchange_dialog_open=exchange_dialog_open,
+            exact_exchange_blocked=exact_exchange_blocked,
+        )
+        for key, widget_name in (
+            ("reset", "reset_button"),
+            ("undo", "undo_button"),
+            ("park", "park_button"),
+            ("submit", "submit_tray_button"),
+            ("operations", "operations_button"),
+            ("replace", "replace_master_label_button"),
+            ("exchange", "exchange_button"),
+        ):
+            self._configure_widget_options(getattr(self, widget_name, None), text=labels[key])
+
     def _update_action_button_states(self) -> None:
         active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
         scanned_count = len(getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or [])
+        operator_review = self._operator_review_blocks_mutation()
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+        compact_labels = self._use_compact_action_labels()
+        labels = self._action_button_labels(
+            compact=compact_labels,
+            operator_review=operator_review,
+            replacement_active=replacement_active,
+            exchange_dialog_open=exchange_dialog_open,
+            exact_exchange_blocked=exact_exchange_blocked,
+        )
 
-        self._configure_widget_options(getattr(self, "reset_button", None), state=tk.NORMAL if active_tray else tk.DISABLED)
-        self._configure_widget_options(getattr(self, "park_button", None), state=tk.NORMAL if active_tray else tk.DISABLED)
-        self._configure_widget_options(getattr(self, "undo_button", None), state=tk.NORMAL if scanned_count else tk.DISABLED)
+        mutation_state = tk.DISABLED if operator_review else tk.NORMAL
+        self._configure_widget_options(
+            getattr(self, "reset_button", None),
+            text=labels["reset"],
+            state=mutation_state if active_tray else tk.DISABLED,
+        )
+        self._configure_widget_options(
+            getattr(self, "park_button", None),
+            text=labels["park"],
+            state=mutation_state if active_tray else tk.DISABLED,
+        )
+        self._configure_widget_options(
+            getattr(self, "undo_button", None),
+            text=labels["undo"],
+            state=mutation_state if scanned_count else tk.DISABLED,
+        )
         self._configure_widget_options(
             getattr(self, "submit_tray_button", None),
-            state=tk.NORMAL if active_tray and scanned_count else tk.DISABLED,
+            state=tk.NORMAL if active_tray and scanned_count and not operator_review else tk.DISABLED,
+            text=labels["submit"],
+            style='Review.TButton' if operator_review else 'Success.TButton',
+            command=self.submit_current_tray,
+        )
+        self._configure_widget_options(
+            getattr(self, "operations_button", None),
+            text=labels["operations"],
+            state=tk.DISABLED if operator_review else tk.NORMAL,
+        )
+        self._configure_widget_options(
+            getattr(self, "change_worker_button", None),
+            state=tk.DISABLED if operator_review else tk.NORMAL,
         )
 
         if replacement_active:
             self._configure_widget_options(
                 getattr(self, "replace_master_label_button", None),
-                text="교체 취소",
+                text=labels["replace"],
                 style='Danger.TButton',
-                state=tk.NORMAL,
+                state=tk.DISABLED if operator_review else tk.NORMAL,
             )
         else:
             self._configure_widget_options(
                 getattr(self, "replace_master_label_button", None),
-                text="🔄 완료 현품표 교체",
+                text=labels["replace"],
                 style='Secondary.TButton',
-                state=tk.DISABLED if active_tray or exchange_dialog_open else tk.NORMAL,
+                state=tk.DISABLED if operator_review or active_tray or exchange_dialog_open else tk.NORMAL,
             )
 
         self._configure_widget_options(
             getattr(self, "exchange_button", None),
-            text=(
-                "중앙 교환 워크플로 필요"
-                if exact_exchange_blocked
-                else ("교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환")
-            ),
+            text=labels["exchange"],
+            state=tk.DISABLED if operator_review or active_tray or replacement_active or exact_exchange_blocked else tk.NORMAL,
+        )
+
+    def _show_operations_menu(self) -> None:
+        """Show secondary and destructive actions without growing the center pane."""
+
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
+        active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
+        replacement_active = bool(getattr(self, "master_label_replace_state", None))
+        exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
+        exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+
+        menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(
+            label="현재 작업 리셋",
+            command=self.reset_current_work,
+            state=tk.NORMAL if active_tray else tk.DISABLED,
+        )
+        menu.add_separator()
+        menu.add_command(
+            label="현품표 교체 취소" if replacement_active else "완료 현품표 교체",
+            command=self.initiate_master_label_replacement,
+            state=tk.NORMAL if replacement_active or (not active_tray and not exchange_dialog_open) else tk.DISABLED,
+        )
+        menu.add_command(
+            label="중앙 교환 절차 필요" if exact_exchange_blocked else "개별 제품 교환",
+            command=self.show_exchange_dialog,
             state=tk.DISABLED if active_tray or replacement_active or exact_exchange_blocked else tk.NORMAL,
         )
+        button = getattr(self, "operations_button", None)
+        try:
+            x = button.winfo_rootx()
+            y = button.winfo_rooty() + button.winfo_height()
+            menu.tk_popup(x, y)
+        except (tk.TclError, AttributeError):
+            try:
+                menu.tk_popup(self.root.winfo_pointerx(), self.root.winfo_pointery())
+            except (tk.TclError, AttributeError):
+                return
+        finally:
+            try:
+                menu.grab_release()
+            except tk.TclError:
+                pass
 
     def _apply_left_sidebar_layout(self) -> None:
         parent_frame = getattr(self, "_left_sidebar_frame", None)
@@ -1880,13 +2112,42 @@ class ContainerAudit:
         except (tk.TclError, AttributeError):
             return
 
-    def _get_right_sidebar_layout_metrics(self, sidebar_height: int) -> Dict[str, int]:
-        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
-        sidebar_height = max(1, int(sidebar_height or 1))
-        card_gap = self._clamped_int(sidebar_height * 0.012, int(6 * scale), int(14 * scale))
-        card_minsize = self._clamped_int(sidebar_height * 0.115, int(78 * scale), int(140 * scale))
-        legend_pad_y = self._clamped_int(sidebar_height * 0.016, int(8 * scale), int(18 * scale))
-        return {"card_gap": card_gap, "card_minsize": card_minsize, "legend_pad_y": legend_pad_y}
+    def _get_right_sidebar_layout_metrics(self, sidebar_height: int) -> Dict[str, Any]:
+        sidebar_width = 320
+        parent_frame = getattr(self, "_right_sidebar_frame", None)
+        try:
+            candidate = int(parent_frame.winfo_width())
+            if candidate > 1:
+                sidebar_width = candidate
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            pass
+        metrics = calculate_right_sidebar_metrics(
+            sidebar_width,
+            sidebar_height,
+            getattr(self, "scale_factor", 1.0),
+        )
+        return {
+            "profile": metrics.profile,
+            "short_large_text": metrics.short_large_text,
+            "outer_padding": metrics.outer_padding,
+            "card_gap": metrics.card_gap,
+            "card_minsize": metrics.card_minsize,
+            "primary_card_minsize": metrics.primary_card_minsize,
+            "secondary_card_minsize": metrics.secondary_card_minsize,
+            "follow_up_minsize": metrics.follow_up_minsize,
+            "legend_pad_y": metrics.legend_pad_y,
+            "legend_visible": metrics.legend_visible,
+            "date_font": metrics.date_font,
+            "clock_font": metrics.clock_font,
+            "date_gap": metrics.date_gap,
+            "clock_gap": metrics.clock_gap,
+            "card_padding": metrics.card_padding,
+            "context_padding": metrics.context_padding,
+            "secondary_card_padding": metrics.secondary_card_padding,
+            "value_font": metrics.value_font,
+            "secondary_value_font": metrics.secondary_value_font,
+            "context_value_font": metrics.context_value_font,
+        }
 
     def _apply_right_sidebar_layout(self, event=None) -> None:
         parent_frame = getattr(self, "_right_sidebar_frame", None)
@@ -1899,18 +2160,89 @@ class ContainerAudit:
         if height <= 1:
             return
         metrics = self._get_right_sidebar_layout_metrics(height)
-        metrics_key = (metrics["card_gap"], metrics["card_minsize"], metrics["legend_pad_y"])
+        metrics_key = tuple(metrics.values())
         if metrics_key == getattr(self, "_right_sidebar_layout_metrics", None):
             return
         self._right_sidebar_layout_metrics = metrics_key
         try:
-            for row in range(2, 6):
-                parent_frame.grid_rowconfigure(row, weight=1, minsize=metrics["card_minsize"], uniform="info_cards")
-            for card in getattr(self, "info_cards", {}).values():
-                card["frame"].grid_configure(pady=(0, metrics["card_gap"]))
+            parent_frame.configure(padding=(metrics["outer_padding"], metrics["outer_padding"]))
+            parent_frame.grid_rowconfigure(6, weight=0 if metrics["short_large_text"] else 1)
+            date_label = getattr(self, "date_label", None)
+            if date_label is not None:
+                date_label.configure(font=(self.DEFAULT_FONT, metrics["date_font"], 'bold'))
+                date_label.grid_configure(pady=(0, metrics["date_gap"]))
+            clock_label = getattr(self, "clock_label", None)
+            if clock_label is not None:
+                clock_label.configure(font=(self.DEFAULT_FONT, metrics["clock_font"], 'bold'))
+                clock_label.grid_configure(pady=(0, metrics["clock_gap"]))
+            for row in (2, 3):
+                parent_frame.grid_rowconfigure(
+                    row,
+                    weight=1,
+                    minsize=metrics["primary_card_minsize"],
+                    uniform="primary_info_cards",
+                )
+            parent_frame.grid_rowconfigure(4, weight=1, minsize=metrics["follow_up_minsize"])
+            parent_frame.grid_rowconfigure(5, weight=0, minsize=metrics["secondary_card_minsize"])
+            for key in ("status", "stopwatch"):
+                card = getattr(self, "info_cards", {}).get(key)
+                if card:
+                    card["frame"].configure(padding=metrics["card_padding"])
+                    card["frame"].grid_configure(pady=(0, metrics["card_gap"]))
+                    card["value"].configure(
+                        font=(self.DEFAULT_FONT, metrics["value_font"], 'bold'),
+                        anchor='center',
+                        justify='center',
+                    )
+            context_frame = getattr(self, "_right_context_frame", None)
+            if context_frame is not None:
+                context_frame.configure(padding=metrics["context_padding"])
+                context_frame.grid_configure(pady=(0, metrics["card_gap"]))
+            context_value_font = metrics["context_value_font"]
+            if context_value_font <= 0:
+                token_fonts = getattr(getattr(self, "style_tokens", None), "fonts", None)
+                context_value_font = int(
+                    getattr(token_fonts, "section_title", max(13, int(15 * self.scale_factor)))
+                )
+            last_scan_value = getattr(self, "last_scan_value_label", None)
+            if last_scan_value is not None:
+                last_scan_value.configure(
+                    font=(self.DEFAULT_FONT, context_value_font, 'bold'),
+                    anchor='center',
+                    justify='center',
+                )
+                last_scan_value.grid_configure(
+                    pady=(3 if metrics["short_large_text"] else 4, 6 if metrics["short_large_text"] else 12)
+                )
+            context_separator = getattr(self, "_right_context_separator", None)
+            if context_separator is not None:
+                context_separator.grid_configure(
+                    pady=(0, 6 if metrics["short_large_text"] else 10)
+                )
+            follow_up = getattr(self, "follow_up_label", None)
+            if follow_up is not None:
+                follow_up.configure(
+                    font=(self.DEFAULT_FONT, context_value_font, 'bold'),
+                    anchor='center',
+                    justify='center',
+                )
+                follow_up.grid_configure(pady=(3 if metrics["short_large_text"] else 4, 0))
+            for key in ("avg_time", "best_time"):
+                card = getattr(self, "info_cards", {}).get(key)
+                if card:
+                    card["frame"].configure(padding=metrics["secondary_card_padding"])
+                    card["value"].configure(
+                        font=(self.DEFAULT_FONT, metrics["secondary_value_font"], 'bold'),
+                        anchor='center',
+                        justify='center',
+                    )
             legend_frame = getattr(self, "_legend_frame", None)
             if legend_frame is not None:
                 legend_frame.configure(padding=(0, metrics["legend_pad_y"]))
+                if metrics["legend_visible"]:
+                    legend_frame.grid(row=7, column=0, sticky='sew')
+                else:
+                    legend_frame.grid_forget()
         except (tk.TclError, AttributeError):
             return
 
@@ -2002,7 +2334,42 @@ class ContainerAudit:
         self._bind_label_to_container_width(self.worker_info_label, worker_info_frame, padding=8)
         buttons_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
         buttons_frame.grid(row=0, column=1, sticky='e')
-        ttk.Button(buttons_frame, text="작업자 변경", command=self.change_worker, style='Secondary.TButton').pack(side=tk.LEFT, padx=(0, 5))
+        self.change_worker_button = ttk.Button(
+            buttons_frame,
+            text="작업자 변경",
+            command=self.change_worker,
+            style='Secondary.TButton',
+        )
+        self.change_worker_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        current_work_frame = ttk.Frame(top_frame, style='Card.TFrame', padding=12)
+        self._current_work_frame = current_work_frame
+        current_work_frame.grid(row=1, column=0, sticky='ew', pady=(0, 14))
+        current_work_frame.grid_columnconfigure(0, weight=1)
+        ttk.Label(
+            current_work_frame,
+            text="현재 작업",
+            style='Card.Subtle.TLabel',
+            anchor='w',
+        ).grid(row=0, column=0, sticky='ew')
+        self.current_work_name_label = ttk.Label(
+            current_work_frame,
+            text="현품표 대기",
+            style='Card.Value.TLabel',
+            anchor='w',
+            justify='left',
+        )
+        self.current_work_name_label.grid(row=1, column=0, sticky='ew', pady=(3, 2))
+        self.current_work_detail_label = ttk.Label(
+            current_work_frame,
+            text="품목 코드 - · 목표 -",
+            style='Card.Subtle.TLabel',
+            anchor='w',
+            justify='left',
+        )
+        self.current_work_detail_label.grid(row=2, column=0, sticky='ew')
+        self._bind_label_to_container_width(self.current_work_name_label, current_work_frame, padding=24)
+        self._bind_label_to_container_width(self.current_work_detail_label, current_work_frame, padding=24)
         self.summary_title_label = ttk.Label(
             top_frame,
             text="누적 작업 현황",
@@ -2010,11 +2377,11 @@ class ContainerAudit:
             font=(self.DEFAULT_FONT, int(14*self.scale_factor),'bold'),
             justify='left',
         )
-        self.summary_title_label.grid(row=1, column=0, sticky='ew', pady=(0,10))
+        self.summary_title_label.grid(row=2, column=0, sticky='ew', pady=(0,10))
         self._bind_label_to_container_width(self.summary_title_label, top_frame, padding=8)
         tree_frame = ttk.Frame(top_frame)
-        tree_frame.grid(row=2, column=0, sticky='nsew')
-        top_frame.grid_rowconfigure(2, weight=2)
+        tree_frame.grid(row=3, column=0, sticky='nsew')
+        top_frame.grid_rowconfigure(3, weight=2)
         tree_frame.grid_columnconfigure(0, weight=1)
         tree_frame.grid_rowconfigure(0, weight=1)
         cols = ('item_name_spec', 'item_code', 'count')
@@ -2044,11 +2411,11 @@ class ContainerAudit:
             font=(self.DEFAULT_FONT, int(12*self.scale_factor),'bold'),
             justify='left',
         )
-        self.parked_title_label.grid(row=3, column=0, sticky='ew', pady=(20,10))
+        self.parked_title_label.grid(row=4, column=0, sticky='ew', pady=(20,10))
         self._bind_label_to_container_width(self.parked_title_label, top_frame, padding=8)
         parked_tree_frame = ttk.Frame(top_frame)
-        parked_tree_frame.grid(row=4, column=0, sticky='nsew')
-        top_frame.grid_rowconfigure(4, weight=1)
+        parked_tree_frame.grid(row=5, column=0, sticky='nsew')
+        top_frame.grid_rowconfigure(5, weight=1)
         parked_tree_frame.grid_columnconfigure(0, weight=1)
         parked_tree_frame.grid_rowconfigure(0, weight=1)
         parked_cols = ('item_name', 'scan_count')
@@ -2068,7 +2435,7 @@ class ContainerAudit:
         bottom_frame.grid(row=1, column=0, sticky='nsew')
         bottom_frame.grid_columnconfigure(0, weight=1)
         bottom_frame.grid_rowconfigure(1, weight=1)
-        self.tray_image_checkbox = ttk.Checkbutton(bottom_frame, text="🖼️ 트레이 이미지 보기", variable=self.show_tray_image_var, command=self._update_tray_image_display, style='TCheckbutton')
+        self.tray_image_checkbox = ttk.Checkbutton(bottom_frame, text="트레이 이미지 보기", variable=self.show_tray_image_var, command=self._update_tray_image_display, style='TCheckbutton')
         self.tray_image_checkbox.grid(row=0, column=0, sticky='w', pady=(10, 5))
         self.tray_image_label = ttk.Label(bottom_frame, background=self.COLOR_SIDEBAR_BG, anchor='center')
         self.tray_image_label.grid(row=1, column=0, sticky='nsew', pady=(0, 10))
@@ -2077,21 +2444,32 @@ class ContainerAudit:
     def _create_center_content(self, parent_frame):
         self._center_content_frame = parent_frame
         self._center_layout_metrics = None
-        parent_frame.grid_rowconfigure(4, weight=2, minsize=int(140 * self.scale_factor))
+        parent_frame.grid_rowconfigure(5, weight=2, minsize=int(140 * self.scale_factor))
         parent_frame.grid_columnconfigure(0, weight=1)
         self._scanned_listbox_parent_frame = parent_frame
         self._scanned_listbox_layout_job = None
         self._scanned_listbox_layout_metrics = None
-        scanned_metrics = self._get_scanned_listbox_metrics(720, 720, 300)
+        initial_center_metrics = self._get_center_layout_metrics(720, 720)
+        scanned_metrics = self._get_scanned_listbox_metrics(
+            720,
+            720,
+            initial_center_metrics["list_minsize"],
+        )
+        hero_frame = ttk.Frame(parent_frame, style='TFrame')
+        self._center_hero_frame = hero_frame
+        hero_frame.grid(row=0, column=0, sticky='ew', pady=(10, 20))
+        hero_frame.grid_columnconfigure(0, weight=1)
+        self.stage_label = ttk.Label(hero_frame, text="1 / 2 · 현품표 스캔", style='Stage.TLabel', anchor='center')
+        self.stage_label.grid(row=0, column=0, sticky='ew', pady=(0, 4))
         self.current_item_label = ttk.Label(
-            parent_frame,
+            hero_frame,
             text="",
             style='ItemInfo.TLabel',
             justify='center',
             anchor='center',
         )
-        self.current_item_label.grid(row=0, column=0, sticky='ew', pady=(10, 20))
-        self._bind_label_to_container_width(self.current_item_label, parent_frame, padding=60, min_wraplength=240)
+        self.current_item_label.grid(row=1, column=0, sticky='ew')
+        self._bind_label_to_container_width(self.current_item_label, hero_frame, padding=60, min_wraplength=240)
         self.main_count_label = ttk.Label(parent_frame, text=f"0 / {self.TRAY_SIZE}", style='MainCounter.TLabel', anchor='center')
         self.main_count_label.grid(row=1, column=0, sticky='ew', pady=(10, 20))
         self.main_progress_bar = ttk.Progressbar(parent_frame, orient='horizontal', mode='determinate', maximum=self.TRAY_SIZE, style='Big.Horizontal.TProgressbar')
@@ -2100,54 +2478,107 @@ class ContainerAudit:
         self.scan_entry = tk.Entry(parent_frame, justify='center', font=(self.DEFAULT_FONT, int(30*self.scale_factor), 'bold'), bd=1, relief=tk.SOLID, bg=self.COLOR_INPUT_BG, fg=self.COLOR_TEXT, insertbackground=self.COLOR_PRIMARY, selectbackground=self.COLOR_PRIMARY, selectforeground='white', highlightbackground=self.COLOR_PRIMARY_SOFT, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2, validate='key', validatecommand=vcmd)
         self.scan_entry.grid(row=3, column=0, sticky='ew', ipady=int(15*self.scale_factor), padx=30)
         self.scan_entry.bind('<Return>', self.process_barcode)
-        self.scanned_listbox = tk.Listbox(parent_frame, font=(self.DEFAULT_FONT, scanned_metrics["font_size"]), relief=tk.SOLID, bd=1, bg=self.COLOR_CARD_BG, fg=self.COLOR_TEXT, highlightbackground=self.COLOR_BORDER, highlightcolor=self.COLOR_PRIMARY, highlightthickness=1, justify='center', selectbackground=self.COLOR_PRIMARY, selectforeground='white', activestyle='none', height=scanned_metrics["visible_rows"])
-        self.scanned_listbox.grid(row=4, column=0, sticky='nsew', pady=(scanned_metrics["top_pady"], 0), padx=scanned_metrics["horizontal_pad"])
+        self.notice_frame = tk.Frame(
+            parent_frame,
+            bg=self.COLOR_SURFACE_ALT,
+            bd=0,
+            highlightbackground=self.COLOR_BORDER,
+            highlightcolor=self.COLOR_BORDER,
+            highlightthickness=1,
+        )
+        self.notice_frame.grid(row=4, column=0, sticky='ew', padx=30, pady=(10, 0))
+        self.notice_frame.grid_columnconfigure(1, weight=1)
+        self.notice_title_label = tk.Label(
+            self.notice_frame,
+            text="스캐너 준비",
+            bg=self.COLOR_SURFACE_ALT,
+            fg=self.COLOR_TEXT,
+            font=(self.DEFAULT_FONT, max(11, int(12 * self.scale_factor)), 'bold'),
+            anchor='w',
+        )
+        self.notice_title_label.grid(row=0, column=0, sticky='w', padx=(12, 8), pady=8)
+        self.notice_message_label = tk.Label(
+            self.notice_frame,
+            text="현품표 또는 제품 바코드를 스캔하세요.",
+            bg=self.COLOR_SURFACE_ALT,
+            fg=self.COLOR_TEXT_SUBTLE,
+            font=(self.DEFAULT_FONT, max(10, int(11 * self.scale_factor))),
+            anchor='w',
+            justify='left',
+        )
+        self.notice_message_label.grid(row=0, column=1, sticky='ew', padx=8, pady=8)
+        self._bind_label_to_container_width(
+            self.notice_message_label,
+            self.notice_frame,
+            padding=max(220, int(220 * min(self.scale_factor, 1.1))),
+            min_wraplength=160,
+        )
+        self.notice_ack_button = tk.Button(
+            self.notice_frame,
+            text="확인",
+            command=self._acknowledge_active_notice,
+            bg=self.COLOR_SIDEBAR_BG,
+            fg=self.COLOR_TEXT_SUBTLE,
+            disabledforeground=self.COLOR_BORDER_STRONG,
+            relief='flat',
+            state=tk.DISABLED,
+            padx=12,
+            pady=4,
+        )
+        self.notice_ack_button.grid(row=0, column=2, sticky='e', padx=(8, 10), pady=6)
+        self.notice_ack_button.bind('<Return>', lambda _event: self._acknowledge_active_notice())
+        self.notice_ack_button.bind('<Escape>', lambda _event: self._acknowledge_active_notice())
+        scan_list_frame = ttk.Frame(parent_frame, style='TFrame')
+        self._scan_list_frame = scan_list_frame
+        scan_list_frame.grid(row=5, column=0, sticky='nsew')
+        scan_list_frame.grid_columnconfigure(0, weight=1)
+        scan_list_frame.grid_rowconfigure(1, weight=1)
+        self.scanned_list_header_label = ttk.Label(
+            scan_list_frame,
+            text="현재 트레이 스캔 목록 · 0건",
+            style='Subtle.TLabel',
+            anchor='w',
+            font=(self.DEFAULT_FONT, max(11, int(12 * self.scale_factor)), 'bold'),
+        )
+        self.scanned_list_header_label.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky='ew',
+            padx=scanned_metrics["horizontal_pad"],
+            pady=(scanned_metrics["top_pady"], 6),
+        )
+        self.scanned_listbox = tk.Listbox(scan_list_frame, font=(self.DEFAULT_FONT, scanned_metrics["font_size"]), relief=tk.SOLID, bd=1, bg=self.COLOR_CARD_BG, fg=self.COLOR_TEXT, highlightbackground=self.COLOR_BORDER, highlightcolor=self.COLOR_PRIMARY, highlightthickness=1, justify='center', selectbackground=self.COLOR_PRIMARY, selectforeground='white', activestyle='none', height=scanned_metrics["visible_rows"])
+        self.scanned_listbox.grid(row=1, column=0, sticky='nsew', padx=scanned_metrics["horizontal_pad"])
+        self.scanned_list_scrollbar = ttk.Scrollbar(scan_list_frame, orient='vertical', command=self.scanned_listbox.yview)
+        self.scanned_listbox.configure(yscrollcommand=self.scanned_list_scrollbar.set)
+        self.scanned_list_scrollbar.grid(row=1, column=1, sticky='ns', padx=(0, scanned_metrics["horizontal_pad"]))
         parent_frame.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.scanned_listbox.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.root.after(0, self._apply_scanned_listbox_layout)
         button_frame = ttk.Frame(parent_frame)
         self._center_button_frame = button_frame
-        button_frame.grid(row=5, column=0, sticky='ew', pady=(30, 0), padx=20)
+        button_frame.grid(row=6, column=0, sticky='ew', pady=(30, 0), padx=20)
 
-        primary_group = ttk.LabelFrame(button_frame, text="주요 작업", style='TLabelframe', padding=(8, 8))
-        support_group = ttk.LabelFrame(button_frame, text="보조 작업", style='TLabelframe', padding=(8, 8))
-        danger_group = ttk.LabelFrame(button_frame, text="고위험 작업", style='TLabelframe', padding=(8, 8))
-        primary_button_frame = ttk.Frame(primary_group, style='TFrame')
-        support_button_frame = ttk.Frame(support_group, style='TFrame')
-        danger_button_frame = ttk.Frame(danger_group, style='TFrame')
-        primary_button_frame.grid(row=0, column=0, sticky='ew')
-        support_button_frame.grid(row=0, column=0, sticky='ew')
-        danger_button_frame.grid(row=0, column=0, sticky='ew')
-        primary_group.grid_columnconfigure(0, weight=1)
-        support_group.grid_columnconfigure(0, weight=1)
-        danger_group.grid_columnconfigure(0, weight=1)
-
-        self.submit_tray_button = ttk.Button(primary_button_frame, text="✅ 트레이 제출", command=self.submit_current_tray, style='Success.TButton')
-        self.undo_button = ttk.Button(support_button_frame, text="↩️ 마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton')
-        self.park_button = ttk.Button(support_button_frame, text="⏸️ 트레이 보류", command=self.park_current_tray, style='Warning.TButton')
-        self.reset_button = ttk.Button(danger_button_frame, text="현재 작업 리셋", command=self.reset_current_work, style='Danger.TButton')
-        self.replace_master_label_button = ttk.Button(danger_button_frame, text="🔄 완료 현품표 교체", command=self.initiate_master_label_replacement, style='Secondary.TButton')
-        self.exchange_button = ttk.Button(danger_button_frame, text="🔁 개별 제품 교환", command=self.show_exchange_dialog, style='Secondary.TButton')
+        self.submit_tray_button = ttk.Button(button_frame, text="트레이 제출", command=self.submit_current_tray, style='Success.TButton')
+        self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton')
+        self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton')
+        self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, style='Secondary.TButton')
+        # Compatibility handles for existing state logic and tests. These
+        # actions are intentionally exposed only through the operations menu.
+        self.reset_button = ttk.Button(button_frame, text="작업 리셋", command=self.reset_current_work, style='Danger.TButton')
+        self.replace_master_label_button = ttk.Button(button_frame, text="완료 현품표 교체", command=self.initiate_master_label_replacement, style='Secondary.TButton')
+        self.exchange_button = ttk.Button(button_frame, text="개별 제품 교환", command=self.show_exchange_dialog, style='Secondary.TButton')
         self._center_action_buttons = [
-            self.reset_button,
             self.undo_button,
             self.park_button,
-            self.replace_master_label_button,
-            self.exchange_button,
             self.submit_tray_button,
+            self.operations_button,
         ]
-        self._center_action_groups = [
-            {"key": "primary", "frame": primary_group, "button_frame": primary_button_frame, "buttons": [self.submit_tray_button]},
-            {"key": "support", "frame": support_group, "button_frame": support_button_frame, "buttons": [self.undo_button, self.park_button]},
-            {
-                "key": "danger",
-                "frame": danger_group,
-                "button_frame": danger_button_frame,
-                "buttons": [self.reset_button, self.replace_master_label_button, self.exchange_button],
-            },
-        ]
+        self._center_action_groups = []
         self._layout_center_action_buttons(720, int(8 * self.scale_factor))
         self._update_action_button_states()
+        self._render_warning_state()
 
     def _create_right_sidebar_content(self, parent_frame):
         self._right_sidebar_frame = parent_frame
@@ -2159,33 +2590,99 @@ class ContainerAudit:
         self.clock_label = ttk.Label(parent_frame, style='Sidebar.TLabel', font=(self.DEFAULT_FONT, int(24*self.scale_factor),'bold'))
         self.clock_label.grid(row=1, column=0, pady=(0,20))
         self.info_cards = {
-            'status': self._create_info_card(parent_frame, "⏰ 현재 작업 상태"), 'stopwatch': self._create_info_card(parent_frame, "⏱️ 현재 트레이 소요 시간"),
-            'avg_time': self._create_info_card(parent_frame, "📊 평균 완료 시간"), 'best_time': self._create_info_card(parent_frame, "🥇 30일 최고 기록")
+            'status': self._create_info_card(parent_frame, "현재 작업 상태"),
+            'stopwatch': self._create_info_card(parent_frame, "현재 트레이 소요 시간"),
         }
-        card_order = ['status', 'stopwatch', 'avg_time', 'best_time']
-        for i, card_key in enumerate(card_order):
-            self.info_cards[card_key]['frame'].grid(row=i + 2, column=0, sticky='nsew', pady=(0, 10))
-        best_time_card = self.info_cards['best_time']
-        best_time_card['frame'].config(style='VelvetCard.TFrame')
-        best_time_card['label'].config(style='Velvet.Subtle.TLabel')
-        best_time_card['value'].config(style='Velvet.Value.TLabel')
-        parent_frame.grid_rowconfigure(len(self.info_cards) + 2, weight=0)
+        self.info_cards['status']['frame'].grid(row=2, column=0, sticky='nsew', pady=(0, 10))
+        self.info_cards['stopwatch']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))
+
+        context_frame = ttk.Frame(parent_frame, style='Card.TFrame', padding=16)
+        self._right_context_frame = context_frame
+        context_frame.grid(row=4, column=0, sticky='nsew', pady=(0, 10))
+        context_frame.grid_columnconfigure(0, weight=1)
+        ttk.Label(
+            context_frame,
+            text="마지막 정상 스캔",
+            style='Card.Subtle.TLabel',
+            anchor='w',
+        ).grid(row=0, column=0, sticky='ew')
+        self.last_scan_value_label = ttk.Label(
+            context_frame,
+            text="-",
+            style='Card.Value.TLabel',
+            anchor='center',
+            justify='center',
+        )
+        self.last_scan_value_label.grid(row=1, column=0, sticky='ew', pady=(4, 12))
+        self._bind_label_to_container_width(self.last_scan_value_label, context_frame, padding=32)
+        context_separator = ttk.Separator(context_frame, orient='horizontal')
+        self._right_context_separator = context_separator
+        context_separator.grid(row=2, column=0, sticky='ew', pady=(0, 10))
+        ttk.Label(
+            context_frame,
+            text="다음 행동",
+            style='Card.Subtle.TLabel',
+            anchor='w',
+        ).grid(row=3, column=0, sticky='ew')
+        self.follow_up_label = ttk.Label(
+            context_frame,
+            text="현품표 라벨을 스캔하세요.",
+            style='Card.Value.TLabel',
+            anchor='center',
+            justify='center',
+        )
+        self.follow_up_label.grid(row=4, column=0, sticky='ew', pady=(4, 0))
+        self._bind_label_to_container_width(self.follow_up_label, context_frame, padding=32)
+
+        secondary_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
+        self._secondary_stats_frame = secondary_frame
+        secondary_frame.grid(row=5, column=0, sticky='ew')
+        for column in (0, 1):
+            secondary_frame.grid_columnconfigure(column, weight=1, uniform="secondary_stats")
+        self.info_cards['avg_time'] = self._create_info_card(secondary_frame, "평균")
+        self.info_cards['best_time'] = self._create_info_card(secondary_frame, "30일 최고")
+        self.info_cards['avg_time']['frame'].configure(style='SecondaryCard.TFrame', padding=10)
+        self.info_cards['avg_time']['label'].configure(style='SecondaryCard.Subtle.TLabel')
+        self.info_cards['avg_time']['value'].configure(style='SecondaryCard.Value.TLabel')
+        self.info_cards['best_time']['frame'].configure(style='SecondaryCard.TFrame', padding=10)
+        self.info_cards['best_time']['label'].configure(style='SecondaryCard.Subtle.TLabel')
+        self.info_cards['best_time']['value'].configure(style='SecondaryCard.Value.TLabel')
+        self.info_cards['avg_time']['frame'].grid(row=0, column=0, sticky='nsew', padx=(0, 5))
+        self.info_cards['best_time']['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
+        parent_frame.grid_rowconfigure(6, weight=1)
         legend_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame', padding=(0,15))
         self._legend_frame = legend_frame
-        legend_frame.grid(row=len(self.info_cards)+3, column=0, sticky='sew')
-        ttk.Label(legend_frame, text="범례:", style='Subtle.TLabel').pack(anchor='w')
-        ttk.Label(legend_frame, text="🟩 스캔 성공", style='Sidebar.TLabel', foreground=self.COLOR_SUCCESS).pack(anchor='w')
-        ttk.Label(legend_frame, text="🟨 휴식/대기", style='Sidebar.TLabel', foreground="#B8860B").pack(anchor='w')
+        legend_frame.grid(row=7, column=0, sticky='sew')
+        ttk.Label(
+            legend_frame,
+            text="상태는 문구와 색상으로 함께 표시",
+            style='Subtle.TLabel',
+            wraplength=280,
+        ).pack(anchor='w')
         parent_frame.bind('<Configure>', self._apply_right_sidebar_layout, add="+")
         self.root.after(0, self._apply_right_sidebar_layout)
+        self._render_warning_state()
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
         card = ttk.Frame(parent, style='Card.TFrame', padding=20)
-        label = ttk.Label(card, text=label_text, style='Card.Subtle.TLabel', justify='center')
+        label = ttk.Label(
+            card,
+            text=label_text,
+            style='Card.Subtle.TLabel',
+            anchor='center',
+            justify='center',
+        )
         label.pack(anchor='center')
         self._bind_label_to_container_width(label, card, padding=40)
-        value_label = ttk.Label(card, text="-", style='Card.Value.TLabel')
-        value_label.pack(expand=True, anchor='center')
+        value_label = ttk.Label(
+            card,
+            text="-",
+            style='Card.Value.TLabel',
+            anchor='center',
+            justify='center',
+        )
+        value_label.pack(fill='x', expand=True, anchor='center')
+        self._bind_label_to_container_width(value_label, card, padding=24)
         return {'frame': card, 'label': label, 'value': value_label}
 
     def _validate_barcode_input(self, p_text: str) -> bool:
@@ -2196,20 +2693,51 @@ class ContainerAudit:
             return False
         return True
 
-    def _schedule_focus_return(self, delay_ms: int = 1000):
-        if self.focus_return_job:
-            self.root.after_cancel(self.focus_return_job)
-        self.focus_return_job = self.root.after(delay_ms, self._return_focus_to_scan_entry)
+    def _schedule_focus_return(self, delay_ms: int = 50):
+        previous_job = getattr(self, "focus_return_job", None)
+        if previous_job:
+            try:
+                self.root.after_cancel(previous_job)
+            except (tk.TclError, AttributeError):
+                pass
+        self.focus_return_job = self.root.after(max(0, int(delay_ms)), self._return_focus_to_scan_entry)
 
     def _return_focus_to_scan_entry(self):
         try:
+            if self._warning_state_presenter().state.is_blocking:
+                self.focus_return_job = None
+                return
             if hasattr(self, 'scan_entry') and self.scan_entry.winfo_exists() and self.root.focus_get() != self.scan_entry:
                 self.scan_entry.focus_set()
             self.focus_return_job = None
         except Exception as e:
             print(f"포커스 설정 오류: {e}")
 
+    def _update_operator_context(self) -> None:
+        name_label = getattr(self, "current_work_name_label", None)
+        detail_label = getattr(self, "current_work_detail_label", None)
+        if name_label is None or detail_label is None:
+            return
+        tray = getattr(self, "current_tray", None)
+        active_tray = bool(getattr(tray, "master_label_code", ""))
+        try:
+            if active_tray:
+                item_name = str(getattr(tray, "item_name", "") or "이름 미등록")
+                item_spec = str(getattr(tray, "item_spec", "") or "").strip()
+                display_name = f"{item_name} · {item_spec}" if item_spec else item_name
+                item_code = str(getattr(tray, "item_code", "") or "-")
+                target = max(0, int(getattr(tray, "tray_size", 0) or 0))
+                count = len(getattr(tray, "scanned_barcodes", []) or [])
+                name_label.configure(text=display_name)
+                detail_label.configure(text=f"품목 코드 {item_code} · 목표 {target}")
+            else:
+                name_label.configure(text="현품표 대기")
+                detail_label.configure(text="품목 코드 - · 목표 -")
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            return
+
     def _update_current_item_label(self, instruction: str = ""):
+        self._update_operator_context()
         if not (hasattr(self, 'current_item_label') and self.current_item_label.winfo_exists()): return
 
         # 현품표 교체 상태 메시지 표시
@@ -2236,17 +2764,15 @@ class ContainerAudit:
 
         # 기본 작업 상태 메시지
         if self.current_tray.master_label_code:
-            name_part = f"현재 품목: {self.current_tray.item_name} ({self.current_tray.item_code})"
-            spec_part = f" - {self.current_tray.item_spec}" if self.current_tray.item_spec else ""
             if not instruction:
                 if not self.current_tray.scanned_barcodes:
-                    instruction = "\n첫 번째 제품을 스캔하세요."
+                    instruction = "첫 번째 제품을 스캔하세요."
                 else:
-                    instruction = "\n다음 제품을 스캔하세요."
-            self.current_item_label['text'] = f"{name_part}{spec_part}{instruction}"
+                    instruction = "다음 제품을 스캔하세요."
+            self.current_item_label['text'] = instruction.strip()
             self.current_item_label['foreground'] = self.COLOR_TEXT
         else:
-            self.current_item_label['text'] = "현품표 라벨을 스캔하여 작업을 시작하세요."
+            self.current_item_label['text'] = "현품표 라벨을 스캔하세요."
             self.current_item_label['foreground'] = self.COLOR_TEXT_SUBTLE
     
     def _sanitize_filename(self, filename: str) -> str:
@@ -2271,6 +2797,9 @@ class ContainerAudit:
     def _process_barcode_logic(self, raw_barcode: str):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
 
         # 현품표 교체 모드 처리
         if self.master_label_replace_state:
@@ -2381,6 +2910,7 @@ class ContainerAudit:
                 self.current_tray = TraySession()
                 self.show_status_message("현품표 시작 기록 저장에 실패했습니다. 작업을 시작하지 않습니다.", self.COLOR_DANGER)
                 return
+            self._clear_settled_operator_context()
             # 현품표 스캔 시 이미지 자동 표시
             self.show_tray_image_var.set(True)
             self._update_tray_image_display()
@@ -2455,6 +2985,11 @@ class ContainerAudit:
                 self.undo_button['state'] = tk.DISABLED
             self.show_status_message("스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다.", self.COLOR_DANGER)
             return
+        presenter = self._warning_state_presenter()
+        presenter.record_normal_scan(raw_barcode)
+        presenter.clear()
+        self._stop_warning_beep()
+        self._render_warning_state()
         self._log_event(
             'SCAN_OK',
             detail=build_scan_ok_detail(
@@ -2528,6 +3063,9 @@ class ContainerAudit:
         return float(work_time) / tray_capacity >= 5.0
 
     def complete_tray(self):
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return False
         is_test = self.current_tray.is_test_tray
         has_error = self.current_tray.has_error_or_reset
         is_partial = self.current_tray.is_partial_submission
@@ -2561,15 +3099,50 @@ class ContainerAudit:
                 self.show_status_message("이적 membership을 로컬에 보존하지 못해 작업 상태를 유지합니다.", self.COLOR_DANGER)
                 return False
         if transfer_attempt.status == "OPERATOR_REVIEW":
-            self.show_status_message(
-                f"이적 membership 확인이 필요합니다: {transfer_attempt.error_message}",
-                self.COLOR_DANGER,
+            safe_message = (
+                "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
+            )
+            if str(transfer_attempt.error_message or "").strip():
+                safe_message += f"\n상세: {str(transfer_attempt.error_message).strip()}"
+            self._present_completion_outcome(
+                CompletionOutcome.OPERATOR_REVIEW,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message=safe_message,
+                receipt_id=transfer_attempt.receipt_id,
+                error_code=transfer_attempt.error_code,
             )
             return False
         self._attach_transfer_seal_detail(log_detail, transfer_attempt)
         if not self._log_event('TRAY_COMPLETE', detail=log_detail, synchronous=True):
             self.show_status_message("트레이 완료 기록 저장에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
             return False
+
+        completion_snapshot: Optional[CompletionOutcomeSnapshot] = None
+        if not is_test:
+            if transfer_attempt.status == "ACKED":
+                completion_outcome = CompletionOutcome.ACKED
+                completion_message = (
+                    f"'{self.current_tray.item_name}' 완료 · 서버 이적 확인이 완료되었습니다."
+                )
+            else:
+                completion_outcome = CompletionOutcome.RETRY_WAIT
+                completion_message = (
+                    f"'{self.current_tray.item_name}' 완료 · 서버 이적 확인은 아직 완료되지 않았습니다. "
+                    "자동 재시도 대기 중입니다."
+                )
+            completion_snapshot = CompletionOutcomeSnapshot(
+                outcome=completion_outcome,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=max(len(self.current_tray.scanned_barcodes), self.current_tray.tray_size),
+                message=completion_message,
+                receipt_id=transfer_attempt.receipt_id,
+                error_code=transfer_attempt.error_code,
+            )
 
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
 
@@ -2595,17 +3168,11 @@ class ContainerAudit:
                 except Exception as e:
                     print(f"최고 기록 갱신 실패: {e}")
 
-            if is_partial: self.show_status_message(f"'{self.current_tray.item_name}' 부분 트레이 제출 완료!", self.COLOR_PRIMARY)
-            else: self.show_status_message(f"'{self.current_tray.item_name}' 1 파렛트 완료!", self.COLOR_SUCCESS)
-            if transfer_attempt.status != "ACKED":
-                self.show_status_message(
-                    f"'{self.current_tray.item_name}' 완료 · 서버 이적 seal 재시도 대기",
-                    self.COLOR_PRIMARY,
-                )
-            
+
         self.current_tray = TraySession()
         self._invalidate_pending_scan_callbacks()
-        if self._delete_current_tray_state() is False:
+        state_delete_failed = self._delete_current_tray_state() is False
+        if state_delete_failed:
             self._log_event(
                 'TRAY_STATE_DELETE_FAILED_AFTER_COMPLETION',
                 detail={
@@ -2613,10 +3180,16 @@ class ContainerAudit:
                     'item_code': item_code,
                 },
             )
-            self.show_status_message("트레이는 완료되었지만 임시 상태 파일 삭제에 실패했습니다.", self.COLOR_DANGER)
         self.scanned_listbox.delete(0, tk.END)
         self._update_all_summaries()
         self._reset_ui_to_waiting_state()
+        if state_delete_failed:
+            if completion_snapshot is not None:
+                self._publish_completion_snapshot(completion_snapshot)
+                self._warning_state_presenter().acknowledge()
+            self.show_status_message("트레이는 완료되었지만 임시 상태 파일 삭제에 실패했습니다.", self.COLOR_DANGER)
+        elif completion_snapshot is not None:
+            self._publish_completion_snapshot(completion_snapshot)
         self.tray_last_end_time = datetime.datetime.now()
         return True
 
@@ -2633,6 +3206,9 @@ class ContainerAudit:
         self._update_tray_image_display()
 
     def undo_last_scan(self):
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         self._update_last_activity_time()
         if not self.current_tray.scanned_barcodes: return
         last_barcode = self.current_tray.scanned_barcodes.pop()
@@ -2668,11 +3244,15 @@ class ContainerAudit:
             self._schedule_focus_return()
             return
         self.show_status_message(f"'{last_barcode}' 스캔이 취소되었습니다.", self.COLOR_DANGER)
+        self._sync_last_normal_scan_from_active_tray()
         self._update_current_item_label()
         if not self.current_tray.scanned_barcodes: self.undo_button['state'] = tk.DISABLED
         self._schedule_focus_return()
 
     def reset_current_work(self):
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         self._update_last_activity_time()
         if self.current_tray.master_label_code and messagebox.askyesno("확인", "현재 진행중인 작업을 초기화하시겠습니까?"):
             reset_detail = {
@@ -2697,12 +3277,16 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self.scanned_listbox.delete(0, tk.END)
+            self._sync_last_normal_scan_from_active_tray(clear_when_inactive=True)
             self._update_all_summaries(); self.undo_button['state'] = tk.DISABLED
             self._reset_ui_to_waiting_state()
             self.show_status_message("현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
 
     def submit_current_tray(self):
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         self._update_last_activity_time()
         if not self.current_tray.master_label_code or not self.current_tray.scanned_barcodes:
             self.show_status_message("제출할 스캔 내역이 없습니다.", self.COLOR_TEXT_SUBTLE); return
@@ -2715,6 +3299,8 @@ class ContainerAudit:
         self.current_tray.is_partial_submission = True
         if self.complete_tray():
             return True
+        if self._operator_review_blocks_mutation():
+            return False
         self.current_tray.is_partial_submission = was_partial
         return False
 
@@ -2762,11 +3348,35 @@ class ContainerAudit:
     def _update_center_display(self):
         if not (hasattr(self, 'main_count_label') and self.main_count_label.winfo_exists()): return
         count = len(self.current_tray.scanned_barcodes)
-        target_size = self.current_tray.tray_size if self.current_tray.master_label_code else self.TRAY_SIZE
-        self.main_count_label['text'] = f"{count} / {target_size}"
-        self.main_progress_bar['maximum'] = target_size
-        self.main_progress_bar['value'] = count
+        active_tray = bool(self.current_tray.master_label_code)
+        target_size = self.current_tray.tray_size if active_tray else 1
+        if hasattr(self, 'stage_label'):
+            if self.master_label_replace_state:
+                self.stage_label['text'] = "부가 작업 · 완료 현품표 교체"
+            elif active_tray:
+                self.stage_label['text'] = "2 / 2 · 제품 스캔"
+            else:
+                self.stage_label['text'] = "1 / 2 · 현품표 스캔"
+        self.main_count_label['text'] = f"{count} / {target_size}" if active_tray else "목표 대기"
+        self.main_progress_bar['maximum'] = max(1, target_size)
+        self.main_progress_bar['value'] = count if active_tray else 0
+        self.main_progress_bar['style'] = 'Big.Horizontal.TProgressbar' if active_tray else 'Inactive.Horizontal.TProgressbar'
+        if hasattr(self, 'scanned_list_header_label'):
+            self.scanned_list_header_label['text'] = f"현재 트레이 스캔 목록 · {count}건"
+        status_card = self.info_cards.get('status')
+        if status_card and status_card['value'].winfo_exists():
+            if active_tray and self.current_tray.is_restored_session:
+                status_card['value']['text'] = "복구 작업 중"
+                status_card['value']['foreground'] = self.COLOR_PRIMARY
+            elif active_tray and not getattr(self, "is_idle", False):
+                status_card['value']['text'] = "작업 중"
+                status_card['value']['foreground'] = self.COLOR_SUCCESS
+            else:
+                status_card['value']['text'] = "대기 중"
+                status_card['value']['foreground'] = self.COLOR_TEXT
+        self._update_operator_context()
         self._update_action_button_states()
+        self._render_warning_state()
 
     def _start_clock(self):
         if self.clock_job:
@@ -2861,7 +3471,7 @@ class ContainerAudit:
         card_style = 'Idle.TFrame' if is_idle else 'Card.TFrame'
         label_style = 'Idle.Subtle.TLabel' if is_idle else 'Card.Subtle.TLabel'
         value_style = 'Idle.Value.TLabel' if is_idle else 'Card.Value.TLabel'
-        for key in ['status', 'stopwatch', 'avg_time']:
+        for key in ['status', 'stopwatch']:
             if self.info_cards.get(key):
                 card = self.info_cards[key]
                 card['frame']['style'] = card_style
@@ -2884,30 +3494,316 @@ class ContainerAudit:
         self.save_settings()
 
     def _start_warning_beep(self):
-        if self.error_sound:
+        if getattr(self, "_warning_beep_active", False):
+            return
+        self._warning_beep_active = True
+        if getattr(self, "error_sound", None):
             self.error_sound.play(loops=-1)
 
     def _stop_warning_beep(self):
-        if self.error_sound:
+        self._warning_beep_active = False
+        if getattr(self, "error_sound", None):
             self.error_sound.stop()
 
+    def _warning_state_presenter(self) -> WarningPresenter:
+        presenter = getattr(self, "warning_presenter", None)
+        if not isinstance(presenter, WarningPresenter):
+            presenter = WarningPresenter()
+            self.warning_presenter = presenter
+        return presenter
+
+    def _operator_review_blocks_mutation(self) -> bool:
+        """Return whether a terminal server review owns the current tray.
+
+        The business-owned snapshot survives view refreshes. The presenter
+        fallback keeps older restored/test instances safe while they migrate.
+        """
+
+        return self._active_operator_review_snapshot() is not None
+
+    def _notice_severity_for_color(self, color: Optional[str]) -> NoticeSeverity:
+        normalized = str(color or "").strip().lower()
+        if normalized in {
+            str(getattr(self, "COLOR_DANGER", "#DC2626")).lower(),
+            "danger",
+            "red",
+        }:
+            return NoticeSeverity.ERROR
+        if normalized in {
+            str(getattr(self, "COLOR_SUCCESS", "#16A34A")).lower(),
+            "success",
+            "green",
+        }:
+            return NoticeSeverity.SUCCESS
+        if normalized in {
+            str(getattr(self, "COLOR_IDLE", "#F59E0B")).lower(),
+            "warning",
+            "orange",
+        }:
+            return NoticeSeverity.WARNING
+        return NoticeSeverity.INFO
+
+    def _render_warning_state(self) -> None:
+        presenter = self._warning_state_presenter()
+        state = presenter.state
+        notice = state.active_notice
+        if notice is None and state.completion is not None and state.completion.blocks_completion:
+            notice = notice_for_completion(state.completion)
+
+        if notice is None:
+            title = "스캐너 준비"
+            if getattr(getattr(self, "current_tray", None), "master_label_code", ""):
+                message = "다음 제품 바코드를 스캔하세요."
+            else:
+                message = "현품표 라벨을 스캔하여 작업을 시작하세요."
+            severity = NoticeSeverity.INFO
+        else:
+            title = notice.title
+            message = notice.message
+            severity = notice.severity
+
+        palette = {
+            NoticeSeverity.INFO: ("#EFF6FF", "#93C5FD", "#1D4ED8", self.COLOR_TEXT),
+            NoticeSeverity.SUCCESS: ("#F0FDF4", "#86EFAC", "#166534", self.COLOR_TEXT),
+            NoticeSeverity.WARNING: ("#FFFBEB", "#FCD34D", "#92400E", self.COLOR_TEXT),
+            NoticeSeverity.ERROR: ("#FEF2F2", "#FCA5A5", "#991B1B", self.COLOR_TEXT),
+        }
+        background, border, title_color, message_color = palette[severity]
+        frame = getattr(self, "notice_frame", None)
+        title_label = getattr(self, "notice_title_label", None)
+        message_label = getattr(self, "notice_message_label", None)
+        acknowledge_button = getattr(self, "notice_ack_button", None)
+        try:
+            if frame is not None:
+                frame.configure(
+                    bg=background,
+                    highlightbackground=border,
+                    highlightcolor=border,
+                )
+            if title_label is not None:
+                title_label.configure(text=title, bg=background, fg=title_color)
+            if message_label is not None:
+                message_label.configure(text=message, bg=background, fg=message_color)
+            active_notice = state.active_notice
+            if acknowledge_button is not None:
+                if active_notice is not None and active_notice.blocking:
+                    acknowledge_button.configure(
+                        text="확인",
+                        state=tk.NORMAL,
+                        bg=title_color,
+                        fg="white",
+                        activebackground=title_color,
+                        activeforeground="white",
+                    )
+                elif state.is_blocking:
+                    acknowledge_button.configure(
+                        text="담당자 확인 필요",
+                        state=tk.DISABLED,
+                        bg=background,
+                        fg=title_color,
+                    )
+                else:
+                    acknowledge_button.configure(
+                        text="",
+                        state=tk.DISABLED,
+                        bg=background,
+                        fg=message_color,
+                    )
+            scan_entry = getattr(self, "scan_entry", None)
+            if scan_entry is not None:
+                scan_entry.configure(state=tk.DISABLED if state.is_blocking else tk.NORMAL)
+            last_scan_label = getattr(self, "last_scan_value_label", None)
+            if last_scan_label is not None:
+                last_scan_label.configure(text=state.last_normal_scan or "-")
+            status_card = getattr(self, "info_cards", {}).get('status')
+            status_value = status_card.get('value') if status_card else None
+            if status_value is not None:
+                if self._operator_review_blocks_mutation():
+                    status_value.configure(text="담당자 확인", foreground=self.COLOR_DANGER)
+                elif notice is not None and notice.blocking:
+                    duplicate_notice = "duplicate" in notice.code.lower() or "중복" in notice.title
+                    status_value.configure(
+                        text="중복 확인" if duplicate_notice else "오류 확인",
+                        foreground=self.COLOR_DANGER,
+                    )
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
+                    status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
+                    status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
+            follow_up_label = getattr(self, "follow_up_label", None)
+            if follow_up_label is not None:
+                tray = getattr(self, "current_tray", None)
+                active_tray = bool(getattr(tray, "master_label_code", ""))
+                scan_count = len(getattr(tray, "scanned_barcodes", []) or [])
+                target_count = max(0, int(getattr(tray, "tray_size", 0) or 0))
+                if state.completion is not None and state.completion.blocks_completion:
+                    follow_up = "스캔 중지 · 담당자 확인"
+                elif state.active_notice is not None and state.active_notice.blocking:
+                    follow_up = "경고 내용을 확인한 뒤 다음 스캔"
+                elif active_tray and target_count and scan_count >= target_count:
+                    follow_up = "목표 수량 도달 · 트레이 제출"
+                elif active_tray:
+                    follow_up = "다음 제품 스캔"
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
+                    follow_up = "새 현품표 스캔 가능 · 서버 자동 재시도"
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
+                    follow_up = "새 현품표 스캔"
+                else:
+                    follow_up = "현품표 라벨 스캔"
+                follow_up_label.configure(text=follow_up)
+        except (tk.TclError, AttributeError):
+            return
+
+    def _acknowledge_active_notice(self) -> None:
+        presenter = self._warning_state_presenter()
+        presenter.acknowledge()
+        self._stop_warning_beep()
+        # Restore the ordinary working display before rendering the cleared
+        # notice. Rendering only the warning band leaves overridden values
+        # such as "중복 확인" stale in the right-side status card.
+        self._update_center_display()
+        if not presenter.state.is_blocking:
+            self._schedule_focus_return()
+
+    def _cancel_status_message_timer(self) -> None:
+        self._status_message_generation = int(getattr(self, "_status_message_generation", 0)) + 1
+        status_job = getattr(self, "status_message_job", None)
+        if status_job:
+            try:
+                self.root.after_cancel(status_job)
+            except (tk.TclError, AttributeError):
+                pass
+            self.status_message_job = None
+
+    def _publish_completion_snapshot(
+        self,
+        snapshot: CompletionOutcomeSnapshot,
+    ) -> CompletionOutcomeSnapshot:
+        self._cancel_status_message_timer()
+        self._pending_operator_review_snapshot = (
+            snapshot if snapshot.outcome is CompletionOutcome.OPERATOR_REVIEW else None
+        )
+        self._warning_state_presenter().present_completion(snapshot)
+        if snapshot.outcome is CompletionOutcome.OPERATOR_REVIEW:
+            self._start_warning_beep()
+        else:
+            self._stop_warning_beep()
+        self._render_warning_state()
+        self._update_action_button_states()
+        return snapshot
+
+    def _present_completion_outcome(
+        self,
+        outcome: CompletionOutcome,
+        *,
+        item_name: str,
+        master_label: str,
+        scan_count: int,
+        target_count: int,
+        message: str,
+        receipt_id: str = "",
+        error_code: str = "",
+    ) -> CompletionOutcomeSnapshot:
+        snapshot = CompletionOutcomeSnapshot(
+            outcome=outcome,
+            item_name=str(item_name or ""),
+            master_label=str(master_label or ""),
+            scan_count=max(0, int(scan_count or 0)),
+            target_count=max(int(scan_count or 0), int(target_count or 0)),
+            message=str(message or ""),
+            receipt_id=str(receipt_id or ""),
+            error_code=str(error_code or ""),
+        )
+        if outcome is CompletionOutcome.OPERATOR_REVIEW:
+            self._pending_operator_review_snapshot = snapshot
+            if not self._save_current_tray_state():
+                snapshot = CompletionOutcomeSnapshot(
+                    outcome=snapshot.outcome,
+                    item_name=snapshot.item_name,
+                    master_label=snapshot.master_label,
+                    scan_count=snapshot.scan_count,
+                    target_count=snapshot.target_count,
+                    message=(
+                        f"{snapshot.message}\n담당자 확인 잠금 상태를 저장하지 못했습니다. "
+                        "프로그램을 종료하지 말고 담당자에게 알리세요."
+                    ),
+                    receipt_id=snapshot.receipt_id,
+                    error_code=snapshot.error_code,
+                )
+        self._publish_completion_snapshot(snapshot)
+        if outcome is CompletionOutcome.OPERATOR_REVIEW:
+            acknowledge_button = getattr(self, "notice_ack_button", None)
+            try:
+                if acknowledge_button is not None:
+                    acknowledge_button.focus_set()
+            except (tk.TclError, AttributeError):
+                pass
+        return snapshot
+
+    def _clear_settled_operator_context(self) -> None:
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
+        presenter = self._warning_state_presenter()
+        presenter.clear_completion()
+        presenter.clear_last_normal_scan()
+        presenter.clear()
+        self._stop_warning_beep()
+        self._render_warning_state()
+
+    def _sync_last_normal_scan_from_active_tray(self, *, clear_when_inactive: bool = False) -> None:
+        tray = getattr(self, "current_tray", None)
+        active_tray = bool(getattr(tray, "master_label_code", ""))
+        presenter = self._warning_state_presenter()
+        if not active_tray:
+            if clear_when_inactive:
+                presenter.clear_last_normal_scan()
+                self._render_warning_state()
+            return
+        presenter.clear_last_normal_scan()
+        scanned_barcodes = list(getattr(tray, "scanned_barcodes", []) or [])
+        if scanned_barcodes:
+            presenter.record_normal_scan(str(scanned_barcodes[-1]))
+        self._render_warning_state()
+
     def show_fullscreen_warning(self, title: str, message: str, color: str):
-        self._start_warning_beep()
-        popup = tk.Toplevel(self.root); popup.title(title); popup.attributes('-fullscreen', True)
+        normalized_title = str(title or "확인 필요").strip() or "확인 필요"
+        normalized_message = str(message or "내용을 확인해 주세요.").strip() or "내용을 확인해 주세요."
+        code_slug = re.sub(r"[^0-9A-Za-z가-힣]+", "_", normalized_title).strip("_").lower() or "warning"
+        notice = Notice(
+            code=f"scan.{code_slug}",
+            title=normalized_title,
+            message=normalized_message,
+            severity=self._notice_severity_for_color(color),
+            blocking=True,
+        )
+        changed = self._warning_state_presenter().present(notice)
+        if changed:
+            self._start_warning_beep()
+        if getattr(self, "notice_frame", None) is not None:
+            self._render_warning_state()
+            acknowledge_button = getattr(self, "notice_ack_button", None)
+            try:
+                if changed and acknowledge_button is not None:
+                    acknowledge_button.focus_set()
+            except (tk.TclError, AttributeError):
+                pass
+            return
+
+        popup = tk.Toplevel(self.root); popup.title(normalized_title); popup.attributes('-fullscreen', True)
         popup.configure(bg=color); popup.grab_set()
         def on_popup_close():
-            self._stop_warning_beep(); popup.destroy()
-            self._schedule_focus_return()
+            self._acknowledge_active_notice(); popup.destroy()
         title_font = (self.DEFAULT_FONT, int(60*self.scale_factor), 'bold')
         msg_font = (self.DEFAULT_FONT, int(30*self.scale_factor), 'bold')
-        tk.Label(popup, text=title, font=title_font, fg='white', bg=color).pack(pady=(100, 50), expand=True)
-        tk.Label(popup, text=message, font=msg_font, fg='white', bg=color, wraplength=self.root.winfo_screenwidth() - 100, justify=tk.CENTER).pack(pady=20, expand=True)
+        tk.Label(popup, text=normalized_title, font=title_font, fg='white', bg=color).pack(pady=(100, 50), expand=True)
+        tk.Label(popup, text=normalized_message, font=msg_font, fg='white', bg=color, wraplength=self.root.winfo_screenwidth() - 100, justify=tk.CENTER).pack(pady=20, expand=True)
         btn = tk.Button(popup, text="확인 (클릭)", font=msg_font, command=on_popup_close, bg='white', fg=color, relief='flat', padx=20, pady=10)
         btn.pack(pady=50, expand=True); btn.focus_set()
 
     def _cancel_all_jobs(self):
         if self.clock_job: self.root.after_cancel(self.clock_job); self.clock_job = None
-        if self.status_message_job: self.root.after_cancel(self.status_message_job); self.status_message_job = None
+        self._cancel_status_message_timer()
         if self.stopwatch_job: self._stop_stopwatch()
         if self.idle_check_job: self._stop_idle_checker()
         if self.focus_return_job: self.root.after_cancel(self.focus_return_job); self.focus_return_job = None
@@ -2917,7 +3813,11 @@ class ContainerAudit:
         if messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
             deleted_current_state_for_close = False
             if self.worker_name and self.current_tray.master_label_code:
-                if messagebox.askyesno("작업 저장", "진행 중인 트레이를 저장하고 종료할까요?"):
+                if self._operator_review_blocks_mutation():
+                    if not self._save_current_tray_state():
+                        messagebox.showerror("작업 저장 실패", "담당자 확인이 필요한 트레이를 저장하지 못해 프로그램을 종료하지 않습니다.")
+                        return
+                elif messagebox.askyesno("작업 저장", "진행 중인 트레이를 저장하고 종료할까요?"):
                     if not self._save_current_tray_state():
                         messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 프로그램을 종료하지 않습니다.")
                         return
@@ -3179,13 +4079,50 @@ class ContainerAudit:
         return stable_hash(data)
 
     def show_status_message(self, message: str, color: Optional[str] = None, duration: int = 4000):
-        if self.status_message_job: self.root.after_cancel(self.status_message_job)
-        self.status_label['text'] = message; self.status_label['fg'] = color or self.COLOR_TEXT
-        self.status_message_job = self.root.after(duration, self._reset_status_message)
+        self._cancel_status_message_timer()
+        generation = self._status_message_generation
 
-    def _reset_status_message(self):
+        severity = self._notice_severity_for_color(color)
+        title_by_severity = {
+            NoticeSeverity.INFO: "안내",
+            NoticeSeverity.SUCCESS: "처리 완료",
+            NoticeSeverity.WARNING: "주의",
+            NoticeSeverity.ERROR: "오류",
+        }
+        notice = Notice(
+            code=f"status.{severity.value}",
+            title=title_by_severity[severity],
+            message=str(message or "상태를 확인해 주세요."),
+            severity=severity,
+            blocking=False,
+        )
+        presented = self._warning_state_presenter().present(notice)
+        self._render_warning_state()
+        status_label = getattr(self, "status_label", None)
+        if status_label is not None:
+            try:
+                status_label['text'] = "확인 필요" if self._warning_state_presenter().state.is_blocking else "스캐너 준비"
+                status_label['fg'] = self.COLOR_TEXT
+            except (tk.TclError, KeyError, TypeError):
+                pass
+        if presented and duration > 0:
+            try:
+                self.status_message_job = self.root.after(
+                    int(duration),
+                    self._reset_status_message,
+                    generation,
+                )
+            except (tk.TclError, AttributeError, TypeError, ValueError):
+                self.status_message_job = None
+
+    def _reset_status_message(self, generation: Optional[int] = None):
+        if generation is not None and generation != getattr(self, "_status_message_generation", 0):
+            return
+        self.status_message_job = None
+        self._warning_state_presenter().clear()
+        self._render_warning_state()
         if hasattr(self, 'status_label') and self.status_label.winfo_exists():
-            self.status_label['text'] = "준비"; self.status_label['fg'] = self.COLOR_TEXT
+            self.status_label['text'] = "스캐너 준비"; self.status_label['fg'] = self.COLOR_TEXT
 
     def _clear_tray_image_label(self, text: str = "", foreground: Optional[str] = None) -> None:
         if not (hasattr(self, 'tray_image_label') and self.tray_image_label.winfo_exists()):
@@ -3231,6 +4168,9 @@ class ContainerAudit:
 
     def park_current_tray(self, *, confirm: bool = True) -> bool:
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return False
         if not self.current_tray.master_label_code:
             self.show_status_message("보류할 작업이 없습니다.", self.COLOR_DANGER)
             return False
@@ -3286,6 +4226,7 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self.scanned_listbox.delete(0, tk.END)
+            self._sync_last_normal_scan_from_active_tray(clear_when_inactive=True)
             self._reset_ui_to_waiting_state()
             self._update_all_summaries()
 
@@ -3331,6 +4272,9 @@ class ContainerAudit:
 
     def on_parked_tray_select(self, event):
         """보류 목록에서 트레이를 더블 클릭했을 때 실행됩니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         selected_item_iid = self.parked_tree.focus()
         if not selected_item_iid: return
         filepath = selected_item_iid
@@ -3346,6 +4290,9 @@ class ContainerAudit:
 
     def restore_parked_tray(self, filepath: str):
         """파일 경로를 받아 보류된 트레이를 복원합니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         if not self._is_parked_tray_path(filepath):
             messagebox.showwarning("복원 실패", "보류 작업 폴더 밖의 파일은 복원할 수 없습니다. 목록을 갱신합니다.")
             self._update_parked_trays_list()
@@ -3426,6 +4373,10 @@ class ContainerAudit:
                 default_tray_size=self.TRAY_SIZE,
             )
             restored_state = tray_session_to_state(restored_tray, worker_name=self.worker_name)
+            if OPERATOR_REVIEW_STATE_KEY in saved_state:
+                restored_state[OPERATOR_REVIEW_STATE_KEY] = dict(
+                    saved_state[OPERATOR_REVIEW_STATE_KEY]
+                )
             if not self._save_tray_state_snapshot(restored_state):
                 raise RuntimeError("복원한 보류 작업의 현재 상태 저장에 실패했습니다.")
             if discard_current_for_restore:
@@ -3476,6 +4427,7 @@ class ContainerAudit:
                 self._update_parked_trays_list()
                 return
             self.current_tray = restored_tray
+            self._restore_operator_review_from_state(saved_state)
             self._invalidate_pending_scan_callbacks()
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
             
@@ -3721,6 +4673,9 @@ class ContainerAudit:
 
     def initiate_master_label_replacement(self):
         """현품표 교체 프로세스를 시작합니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         if self.current_tray.master_label_code:
             messagebox.showwarning("작업 중 오류", "진행 중인 작업이 있을 때는 현품표를 교체할 수 없습니다.")
             return
@@ -3740,6 +4695,9 @@ class ContainerAudit:
 
     def cancel_master_label_replacement(self) -> bool:
         """현품표 교체 프로세스를 취소하고 상태와 컨텍스트를 초기화합니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return False
         if self.master_label_replace_state:
             if not self._log_master_label_replacement_cancel(reason="operator_cancel"):
                 messagebox.showerror("교체 취소 기록 실패", "현품표 교체 취소 기록을 남기지 못했습니다. 상태를 유지합니다.")
@@ -3994,6 +4952,9 @@ class ContainerAudit:
 
     def show_exchange_dialog(self):
         """개별 제품 교환 다이얼로그를 표시합니다."""
+        if self._operator_review_blocks_mutation():
+            self._render_warning_state()
+            return
         if self._block_unsafe_exact_exchange():
             return
         if self.current_tray.master_label_code:

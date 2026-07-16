@@ -10,6 +10,8 @@ class TrayStateValidationError(ValueError):
 
 
 FUTURE_TIMESTAMP_SKEW_SECONDS = 300.0
+OPERATOR_REVIEW_STATE_KEY = "pending_operator_review"
+OPERATOR_REVIEW_STATE_SCHEMA_VERSION = 1
 
 
 def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
@@ -73,6 +75,46 @@ def _validate_master_label_consistency(state: Mapping[str, Any], *, tray_size: i
     parsed_tray_size = parse_positive_quantity(master_label_fields)
     if parsed_tray_size is not None and parsed_tray_size != tray_size:
         raise TrayStateValidationError("master_label_code QT must match tray_size")
+
+
+def _validate_pending_operator_review(
+    state: Mapping[str, Any],
+    *,
+    scanned_barcodes: list[str],
+    tray_size: int,
+) -> None:
+    payload = state.get(OPERATOR_REVIEW_STATE_KEY)
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping):
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} must be a JSON object")
+    if payload.get("schema_version") != OPERATOR_REVIEW_STATE_SCHEMA_VERSION:
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} has an unsupported schema version")
+    if payload.get("outcome") != "OPERATOR_REVIEW":
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} outcome must be OPERATOR_REVIEW")
+    for key in ("item_name", "master_label", "message", "receipt_id", "error_code"):
+        if not isinstance(payload.get(key), str):
+            raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY}.{key} must be a string")
+    for key in ("scan_count", "target_count"):
+        value = payload.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise TrayStateValidationError(
+                f"{OPERATOR_REVIEW_STATE_KEY}.{key} must be a non-negative integer"
+            )
+    scan_count = payload["scan_count"]
+    target_count = payload["target_count"]
+    if scan_count > target_count:
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} scan_count exceeds target_count")
+    if scan_count != len(scanned_barcodes):
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} scan_count does not match tray state")
+    if target_count != tray_size:
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} target_count does not match tray_size")
+    if payload["master_label"] != state.get("master_label_code"):
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} master_label does not match tray state")
+    if payload["item_name"] != state.get("item_name"):
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} item_name does not match tray state")
+    if not payload["message"].strip():
+        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY}.message must not be empty")
 
 
 def _parse_iso_datetime(value: str, *, key: str) -> datetime.datetime:
@@ -193,6 +235,11 @@ def validate_tray_state(
             raise TrayStateValidationError(f"{key} must be a boolean")
 
     _validate_master_label_consistency(state, tray_size=tray_size)
+    _validate_pending_operator_review(
+        state,
+        scanned_barcodes=scanned_barcodes,
+        tray_size=tray_size,
+    )
 
     return state
 

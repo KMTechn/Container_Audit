@@ -340,7 +340,10 @@ def test_scanned_listbox_metrics_honor_user_scale_with_clamps():
     metrics = app._get_scanned_listbox_metrics(center_width=320, center_height=500, list_height=150)
 
     assert metrics["font_size"] >= 35
-    assert metrics["visible_rows"] >= 5
+    # At extreme text scale the center keeps three real scan rows visible so
+    # the action row remains usable instead of forcing five oversized rows
+    # below the available 500 px height.
+    assert metrics["visible_rows"] >= 3
     assert metrics["top_pady"] <= 35
 
 
