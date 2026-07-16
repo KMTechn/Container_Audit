@@ -26,8 +26,9 @@ v2.0.31은 `Inspection_worker v2.0.49`의 작업 중심 UI 원칙을 Container A
 
 ## 보존한 계약
 
-- 원시 CSV ledger와 이벤트 이름·필드 계약을 변경하지 않았습니다.
-- 바코드 검증, 트레이 완료·보류·복구·교체·교환의 업무 데이터 계약을 변경하지 않았습니다.
+- 원시 CSV 헤더, 기존 이벤트 이름, 기존 필수 이벤트 필드는 변경하지 않았습니다.
+- OP_REVIEW 재시작 복구를 위해 로컬 트레이 JSON에 선택 필드 `pending_operator_review`를 추가하고, 복구 이벤트의 `detail`에 선택 필드 `operator_review_restored`를 추가했습니다. 기존 상태 파일과 기존 필드 판독은 그대로 호환됩니다.
+- 바코드 검증, 트레이 완료·보류·복구·교체·교환의 기존 업무 판정은 변경하지 않았습니다.
 - direct-sync HTTPS 업로드, 릴레이 도구, 업데이트 archive 구조와 API 계약을 변경하지 않았습니다.
 - PyInstaller onedir 배포 구조와 `Container_Audit.exe` 진입점, release config 정제 규칙을 유지합니다.
 - 독립 저장소 간 새 런타임 UI 패키지 의존성을 추가하지 않았습니다.
