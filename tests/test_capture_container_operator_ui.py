@@ -31,6 +31,7 @@ from tools.capture_container_operator_ui import (
     build_roundtrip_signatures,
     build_scan_list_viewport_gate,
     build_state_fixtures,
+    build_tree_heading_fit_gate,
     cluster_button_rows,
     evaluate_capture,
     evaluate_clipping_proxy,
@@ -415,6 +416,11 @@ def test_focus_verified_capture_rejects_phase_before_file_save(
         "collect_rendered_state",
         lambda _app: events.append("rendered") or {"snapshot": "rendered"},
     )
+    monkeypatch.setattr(
+        capture_tool,
+        "build_tree_heading_fit_gate",
+        lambda _app: events.append("tree_headings") or {"snapshot": "tree_headings"},
+    )
     monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
     monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
     output_path = tmp_path / "rejected.png"
@@ -439,6 +445,7 @@ def test_focus_verified_capture_rejects_phase_before_file_save(
         "monitor",
         "geometry",
         "rendered",
+        "tree_headings",
         "collect_pre",
     ]
     if failed_phase == "post_capture":
@@ -508,6 +515,11 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
         "collect_rendered_state",
         lambda _app: events.append("rendered") or {"snapshot": "rendered"},
     )
+    monkeypatch.setattr(
+        capture_tool,
+        "build_tree_heading_fit_gate",
+        lambda _app: events.append("tree_headings") or {"snapshot": "tree_headings"},
+    )
     monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
     monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
 
@@ -529,12 +541,14 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     assert frame["monitor_gate"] == {"snapshot": "monitor"}
     assert frame["ui_geometry"] == {"snapshot": "geometry"}
     assert frame["rendered_state"] == {"snapshot": "rendered"}
+    assert frame["tree_heading_fit_gate"] == {"snapshot": "tree_headings"}
     assert events == [
         "settle",
         "viewport",
         "monitor",
         "geometry",
         "rendered",
+        "tree_headings",
         "collect_pre",
         "capture",
         "collect_post",
@@ -946,6 +960,528 @@ def test_clipping_proxy_detects_right_value_outside_card_even_when_frame_is_in_p
     assert result["suspected"] is True
 
 
+def test_core_action_specs_enable_requested_width_and_proxy_compressed_buttons():
+    buttons = {
+        "undo_button": object(),
+        "park_button": object(),
+        "submit_tray_button": object(),
+        "operations_button": object(),
+    }
+    specs = capture_tool._core_action_critical_widget_specs(SimpleNamespace(**buttons))
+    assert set(specs) == {
+        "action_undo",
+        "action_park",
+        "action_submit",
+        "action_operations",
+    }
+    assert all(specification[1:] == (True, True) for specification in specs.values())
+
+    records = [
+        _widget_record(
+            "action_submit",
+            [0, 0, 154, 50],
+            requested_width=208,
+            check_requested_width=True,
+        ),
+        _widget_record(
+            "action_operations",
+            [154, 0, 307, 50],
+            requested_width=174,
+            check_requested_width=True,
+        ),
+        _widget_record(
+            "action_submit_wide",
+            [0, 60, 327, 110],
+            requested_width=363,
+            check_requested_width=True,
+        ),
+    ]
+    result = evaluate_clipping_proxy(records, (400, 120))
+    assert result["width_compressed_widgets"] == [
+        "action_operations",
+        "action_submit",
+        "action_submit_wide",
+    ]
+    assert result["suspected"] is True
+
+
+def test_notice_inner_specs_detect_wrap_aware_width_and_height_clipping():
+    notice = object()
+    title = object()
+    message = object()
+    acknowledge = SimpleNamespace(master=notice, winfo_ismapped=lambda: True)
+    specs = capture_tool._notice_critical_widget_specs(
+        SimpleNamespace(
+            notice_frame=notice,
+            notice_title_label=title,
+            notice_message_label=message,
+            notice_ack_button=acknowledge,
+        )
+    )
+    assert specs == {
+        "notice_title": (title, True, True),
+        "notice_message": (message, True, True),
+        "notice_ack": (acknowledge, True, True),
+    }
+
+    records = [
+        _widget_record("notice", [0, 0, 200, 50]),
+        _widget_record(
+            "notice_message",
+            [20, 10, 180, 30],
+            requested_width=320,
+            requested_height=44,
+            check_requested_width=True,
+            check_requested_height=True,
+        ),
+    ]
+    result = evaluate_clipping_proxy(
+        records,
+        (220, 60),
+        containment_pairs=(("notice_message", "notice"),),
+    )
+    assert result["width_compressed_widgets"] == ["notice_message"]
+    assert result["height_compressed_widgets"] == ["notice_message"]
+    assert result["outside_containers"] == []
+    assert result["suspected"] is True
+
+
+def test_hidden_nonblocking_notice_ack_is_omitted():
+    notice = object()
+    hidden_ack = SimpleNamespace(master=notice, winfo_ismapped=lambda: False)
+    specs = capture_tool._notice_critical_widget_specs(
+        SimpleNamespace(
+            notice_frame=notice,
+            notice_title_label=None,
+            notice_message_label=None,
+            notice_ack_button=hidden_ack,
+        )
+    )
+    assert specs == {}
+
+
+def test_mapped_blocking_notice_ack_is_measured_only_in_exact_notice_frame():
+    notice = object()
+    mapped_ack = SimpleNamespace(master=notice, winfo_ismapped=lambda: True)
+    specs = capture_tool._notice_critical_widget_specs(
+        SimpleNamespace(
+            notice_frame=notice,
+            notice_title_label=None,
+            notice_message_label=None,
+            notice_ack_button=mapped_ack,
+        )
+    )
+    assert specs == {"notice_ack": (mapped_ack, True, True)}
+
+    foreign_ack = SimpleNamespace(master=object(), winfo_ismapped=lambda: True)
+    specs = capture_tool._notice_critical_widget_specs(
+        SimpleNamespace(
+            notice_frame=notice,
+            notice_title_label=None,
+            notice_message_label=None,
+            notice_ack_button=foreign_ack,
+        )
+    )
+    assert specs == {}
+
+
+def test_tray_image_checkbox_checks_requested_size_and_left_pane_containment():
+    checkbox = object()
+    specs = capture_tool._left_sidebar_critical_widget_specs(
+        SimpleNamespace(tray_image_checkbox=checkbox)
+    )
+    assert specs == {"tray_image_checkbox": (checkbox, True, True)}
+
+    records = [
+        _widget_record("left_pane", [0, 0, 160, 80]),
+        _widget_record(
+            "tray_image_checkbox",
+            [5, 10, 155, 40],
+            requested_width=174,
+            requested_height=30,
+            check_requested_width=True,
+            check_requested_height=True,
+        ),
+    ]
+    result = evaluate_clipping_proxy(
+        records,
+        (200, 100),
+        containment_pairs=(("tray_image_checkbox", "left_pane"),),
+    )
+    assert result["width_compressed_widgets"] == ["tray_image_checkbox"]
+    assert result["outside_containers"] == []
+    assert result["suspected"] is True
+
+
+class _HeadingGateTk:
+    def __init__(self, image_widths=None):
+        self.image_widths = dict(image_widths or {})
+
+    @staticmethod
+    def splitlist(value):
+        if isinstance(value, (tuple, list)):
+            return tuple(value)
+        return tuple(str(value).split()) if str(value) else ()
+
+    def call(self, *args):
+        if args[:2] == ("tk", "scaling"):
+            return 2.0
+        if args[:2] == ("image", "width"):
+            return self.image_widths[str(args[2])]
+        raise AssertionError(args)
+
+
+class _HeadingGateFont:
+    def __init__(self, measures):
+        self.measures = dict(measures)
+
+    def measure(self, text):
+        return self.measures[str(text)]
+
+    @staticmethod
+    def actual():
+        return {"family": "Malgun Gothic", "size": 15, "weight": "bold"}
+
+    @staticmethod
+    def metrics():
+        return {"linespace": 41}
+
+
+class _HeadingGateStyle:
+    @staticmethod
+    def lookup(style_name, option):
+        assert style_name == "Treeview.Heading"
+        return {"font": "capture-heading-font", "padding": "3"}[option]
+
+
+class _HeadingGateScrollbar:
+    def __init__(self, tk, left, width=16):
+        self.tk = tk
+        self._left = left
+        self._width = width
+
+    @staticmethod
+    def winfo_class():
+        return "TScrollbar"
+
+    @staticmethod
+    def winfo_ismapped():
+        return True
+
+    @staticmethod
+    def cget(option):
+        assert option == "orient"
+        return "vertical"
+
+    def winfo_x(self):
+        return self._left
+
+    def winfo_width(self):
+        return self._width
+
+    def __str__(self):
+        return ".scrollbar"
+
+
+class _HeadingGateParent:
+    def __init__(self, width):
+        self._width = width
+        self.children = []
+
+    def winfo_width(self):
+        return self._width
+
+    def winfo_children(self):
+        return list(self.children)
+
+
+class _HeadingGateTree:
+    def __init__(
+        self,
+        *,
+        tk,
+        texts,
+        configured_widths,
+        visible_heading_widths,
+        widget_width,
+        images=None,
+        mapped=True,
+    ):
+        self.tk = tk
+        self._columns = tuple(f"c{index}" for index in range(1, len(texts) + 1))
+        self._texts = dict(zip(self._columns, texts))
+        self._widths = dict(zip(self._columns, configured_widths))
+        self._images = dict(zip(self._columns, images or ("",) * len(texts)))
+        self._widget_width = widget_width
+        self._mapped = mapped
+        self._pixels = {}
+        x = 2
+        for position, visible_width in enumerate(visible_heading_widths, start=1):
+            for pixel in range(x, x + visible_width):
+                self._pixels[pixel] = ("heading", f"#{position}")
+            x += visible_width
+            for pixel in range(x, x + 2):
+                self._pixels[pixel] = ("separator", f"#{position}")
+            x += 2
+        self.master = _HeadingGateParent(widget_width + 16)
+        self.scrollbar = _HeadingGateScrollbar(tk, widget_width)
+        self.master.children = [self, self.scrollbar]
+
+    def cget(self, option):
+        return {
+            "columns": self._columns,
+            "displaycolumns": ("#all",),
+            "style": "Treeview",
+        }[option]
+
+    @staticmethod
+    def winfo_pixels(value):
+        return int(value)
+
+    def winfo_ismapped(self):
+        return self._mapped
+
+    def winfo_width(self):
+        return self._widget_width
+
+    @staticmethod
+    def winfo_height():
+        return 48
+
+    @staticmethod
+    def winfo_x():
+        return 0
+
+    def identify_region(self, x, y):
+        if not 2 <= y <= 32:
+            return "nothing"
+        return self._pixels.get(x, ("nothing", ""))[0]
+
+    def identify_column(self, x):
+        return self._pixels.get(x, ("nothing", ""))[1]
+
+    def heading(self, column_id):
+        return {"text": self._texts[column_id], "image": self._images[column_id]}
+
+    def column(self, column_id, option):
+        assert option == "width"
+        return self._widths[column_id]
+
+    def __str__(self):
+        return ".tree"
+
+
+def _heading_gate_app(
+    *,
+    summary_widths=(80, 80, 120),
+    summary_visible=(70, 70, 115),
+    summary_widget_width=320,
+    summary_images=("", "", ""),
+    image_widths=None,
+    summary_mapped=True,
+    parked_mapped=True,
+    left_pane_height=900,
+    scale_factor=1.0,
+):
+    tk = _HeadingGateTk(image_widths)
+    summary = _HeadingGateTree(
+        tk=tk,
+        texts=("품목", "코드", "완료 수량"),
+        configured_widths=summary_widths,
+        visible_heading_widths=summary_visible,
+        widget_width=summary_widget_width,
+        images=summary_images,
+        mapped=summary_mapped,
+    )
+    parked = _HeadingGateTree(
+        tk=tk,
+        texts=("품목명", "스캔 수량"),
+        configured_widths=(140, 150),
+        visible_heading_widths=(130, 145),
+        widget_width=320,
+        mapped=parked_mapped,
+    )
+    return SimpleNamespace(
+        root=SimpleNamespace(tk=tk),
+        style=_HeadingGateStyle(),
+        scale_factor=scale_factor,
+        left_pane=SimpleNamespace(winfo_height=lambda: left_pane_height),
+        summary_tree=summary,
+        parked_tree=parked,
+    )
+
+
+def _heading_font_factory(measures):
+    calls = []
+
+    def factory(*, root, font):
+        calls.append((root, font))
+        return _HeadingGateFont(measures)
+
+    return factory, calls
+
+
+def test_tree_heading_fit_gate_uses_live_font_measure_and_visible_heading_span():
+    measures = {
+        "품목": 60,
+        "코드": 60,
+        "완료 수량": 131,
+        "품목명": 90,
+        "스캔 수량": 100,
+    }
+    font_factory, calls = _heading_font_factory(measures)
+    clipped = build_tree_heading_fit_gate(
+        _heading_gate_app(),
+        font_factory=font_factory,
+    )
+
+    count = clipped["trees"][0]["columns"][2]
+    assert count["font_measured_text_width_px"] == 131
+    assert count["visible_heading_width_px"] == 115
+    assert count["available_text_width_px"] == 109
+    assert count["fit_slack_px"] == -22
+    assert count["passed"] is False
+    assert clipped["checks"]["all_heading_text_fits"] is False
+    assert clipped["passed"] is False
+    assert calls and all(font == "capture-heading-font" for _root, font in calls)
+
+    widened = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_widths=(80, 80, 155),
+            summary_visible=(70, 70, 150),
+            summary_widget_width=350,
+        ),
+        font_factory=font_factory,
+    )
+    assert widened["trees"][0]["columns"][2]["fit_slack_px"] == 13
+    assert widened["passed"] is True
+
+
+def test_tree_heading_fit_gate_reserves_explicit_sort_image_width():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 100,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    without_image = build_tree_heading_fit_gate(
+        _heading_gate_app(summary_visible=(70, 70, 119)),
+        font_factory=font_factory,
+    )
+    assert without_image["trees"][0]["columns"][2]["passed"] is True
+
+    with_image = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_visible=(70, 70, 119),
+            summary_images=("", "", "sort-up"),
+            image_widths={"sort-up": 12},
+        ),
+        font_factory=font_factory,
+    )
+    count = with_image["trees"][0]["columns"][2]
+    assert count["heading_image_width_px"] == 12
+    assert count["heading_image_gap_px"] == 2
+    assert count["available_text_width_px"] == 99
+    assert count["passed"] is False
+
+
+def test_tree_heading_fit_gate_rejects_columns_extending_into_outer_viewport():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    gate = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_widths=(100, 100, 100),
+            summary_visible=(90, 90, 90),
+            summary_widget_width=300,
+        ),
+        font_factory=font_factory,
+    )
+
+    summary = gate["trees"][0]
+    assert summary["configured_column_extent_px"] == 300
+    assert summary["heading_viewport"]["viewport_width_px"] == 296
+    assert summary["checks"]["all_heading_text_fits"] is True
+    assert summary["checks"]["column_extent_within_viewport"] is False
+    assert gate["checks"]["all_column_extents_within_viewport"] is False
+    assert gate["passed"] is False
+
+
+def test_tree_heading_fit_gate_allows_only_explicit_compact_optional_unmapped_trees():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    gate = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=False,
+            parked_mapped=False,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+
+    assert gate["visibility_policy"]["logical_left_pane_height"] == pytest.approx(
+        495.7142857
+    )
+    assert gate["visibility_policy"]["visibility_required"] is False
+    assert gate["checks"]["required_trees_mapped"] is True
+    assert all(tree["visibility_required"] is False for tree in gate["trees"])
+    assert all(tree["measurement_applicable"] is False for tree in gate["trees"])
+    assert gate["passed"] is True
+
+    mapped_but_clipped = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=True,
+            parked_mapped=False,
+            summary_visible=(70, 70, 50),
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert mapped_but_clipped["trees"][0]["measurement_applicable"] is True
+    assert mapped_but_clipped["checks"]["all_heading_text_fits"] is False
+    assert mapped_but_clipped["passed"] is False
+
+
+def test_tree_heading_fit_gate_fails_closed_when_required_tree_is_unmapped():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    gate = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=False,
+            parked_mapped=True,
+            left_pane_height=620,
+            scale_factor=1.0,
+        ),
+        font_factory=font_factory,
+    )
+
+    assert gate["visibility_policy"]["visibility_required"] is True
+    assert gate["trees"][0]["checks"]["mapped_when_required"] is False
+    assert gate["checks"]["required_trees_mapped"] is False
+    assert gate["passed"] is False
+
+
 def test_button_row_clustering_preserves_approved_visual_order():
     one_row = [
         _widget_record("action_submit", [220, 10, 300, 50]),
@@ -1134,6 +1670,42 @@ def test_capture_evaluation_schema_v2_fails_closed_when_any_strict_gate_is_missi
         "compact_display_gate_missing",
         "rendered_scan_rows_do_not_match_fixture",
     ]
+
+
+def _passing_capture_gate():
+    return {
+        "gate_applicable": True,
+        "checks": {"synthetic_check": True},
+        "passed": True,
+    }
+
+
+def test_capture_evaluation_schema_v3_requires_and_enforces_tree_heading_fit_gate():
+    barcodes = ["PRODUCT-001"]
+    rows = [format_scan_list_row(1, barcodes[0], item_code="PRODUCT")]
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+    record["capture_gate_schema_version"] = 3
+    record["focus_gate"] = _passing_capture_gate()
+    record["scan_list_viewport_gate"] = _passing_capture_gate()
+    record["compact_display_gate"] = _passing_capture_gate()
+
+    assert evaluate_capture(record) == ["tree_heading_fit_gate_missing"]
+
+    record["tree_heading_fit_gate"] = {
+        "gate_applicable": True,
+        "checks": {
+            "all_column_extents_within_viewport": True,
+            "all_heading_text_fits": False,
+            "all_scrollbar_layouts_safe": True,
+        },
+        "passed": False,
+    }
+    assert evaluate_capture(record) == [
+        "tree_heading_fit_gate_all_heading_text_fits"
+    ]
+
+    record["tree_heading_fit_gate"] = _passing_capture_gate()
+    assert evaluate_capture(record) == []
 
 
 def test_capture_evaluation_matches_every_fixture_barcode_in_display_order():

@@ -45,6 +45,13 @@ DEFAULT_SCALE = 1.0
 PRIMARY_MONITOR_FLAG = 1
 GA_ROOT = 2
 SW_RESTORE = 9
+TREE_HEADING_GATE_WIDGETS = (
+    ("summary_tree", "summary_tree"),
+    ("parked_tree", "parked_tree"),
+)
+TREE_HEADING_SCAN_HEIGHT = 128
+TREE_HEADING_IMAGE_GAP_PX = 2
+TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT = 620.0
 ROUNDTRIP_KEY_WIDGET_ATTRS = (
     "paned_window",
     "left_pane",
@@ -1150,6 +1157,7 @@ def capture_and_save_focus_verified_tk_client(
     )
     geometry_record = collect_ui_geometry(app)
     rendered_state = collect_rendered_state(app)
+    tree_heading_fit_gate = build_tree_heading_fit_gate(app)
 
     # All metadata above is collected after the final Tk pump and without
     # dispatching another event. This fresh observation is the last operation
@@ -1181,6 +1189,7 @@ def capture_and_save_focus_verified_tk_client(
         "monitor_gate": monitor_gate,
         "ui_geometry": geometry_record,
         "rendered_state": rendered_state,
+        "tree_heading_fit_gate": tree_heading_fit_gate,
     }
 
 
@@ -1409,6 +1418,485 @@ def evaluate_clipping_proxy(
     }
 
 
+def _widget_tcl_list(widget: Any, value: Any) -> list[Any]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, (tuple, list)):
+        return list(value)
+    try:
+        return list(widget.tk.splitlist(value))
+    except Exception:
+        return [value]
+
+
+def _widget_pixel_value(widget: Any, value: Any) -> int:
+    try:
+        return int(round(float(widget.winfo_pixels(value))))
+    except Exception:
+        return int(round(float(value)))
+
+
+def _horizontal_style_padding(widget: Any, value: Any) -> tuple[int, int]:
+    parts = _widget_tcl_list(widget, value)
+    if not parts:
+        return 0, 0
+    pixels = [_widget_pixel_value(widget, part) for part in parts]
+    if len(pixels) == 1:
+        return pixels[0], pixels[0]
+    if len(pixels) == 2:
+        return pixels[0], pixels[0]
+    return pixels[0], pixels[2]
+
+
+def _displayed_tree_columns(tree: Any) -> list[str]:
+    columns = [str(value) for value in _widget_tcl_list(tree, tree.cget("columns"))]
+    display_columns = [
+        str(value) for value in _widget_tcl_list(tree, tree.cget("displaycolumns"))
+    ]
+    if not display_columns or display_columns == ["#all"]:
+        return columns
+    return display_columns
+
+
+def _heading_image_width(tree: Any, image_value: Any) -> int:
+    image_names = _widget_tcl_list(tree, image_value)
+    if not image_names:
+        return 0
+    image_name = str(image_names[0]).strip()
+    if not image_name:
+        return 0
+    return max(0, int(tree.tk.call("image", "width", image_name)))
+
+
+def _tree_heading_pixels(tree: Any) -> dict[str, Any]:
+    width = max(0, int(tree.winfo_width()))
+    height = max(0, int(tree.winfo_height()))
+    if width <= 1 or height <= 1:
+        raise RuntimeError("tree has no measurable viewport")
+
+    probe_xs = sorted(
+        {
+            value
+            for value in (
+                0,
+                1,
+                2,
+                3,
+                width // 4,
+                width // 2,
+                (width * 3) // 4,
+                width - 2,
+            )
+            if 0 <= value < width
+        }
+    )
+    header_y: int | None = None
+    for y in range(min(height, TREE_HEADING_SCAN_HEIGHT)):
+        if any(str(tree.identify_region(x, y)) == "heading" for x in probe_xs):
+            header_y = y
+            break
+    if header_y is None:
+        raise RuntimeError("tree heading row is not visible")
+
+    visible_heading_widths: dict[str, int] = {}
+    first_heading_or_separator_x: int | None = None
+    for x in range(width):
+        region = str(tree.identify_region(x, header_y))
+        if region in {"heading", "separator"} and first_heading_or_separator_x is None:
+            first_heading_or_separator_x = x
+        if region != "heading":
+            continue
+        display_position = str(tree.identify_column(x))
+        visible_heading_widths[display_position] = (
+            visible_heading_widths.get(display_position, 0) + 1
+        )
+    if first_heading_or_separator_x is None:
+        raise RuntimeError("tree heading viewport is not measurable")
+
+    # Clam uses symmetric outer tree borders. Mirroring the observed left inset
+    # avoids trusting the configured column widths when the last column extends
+    # beneath the border or a sibling scrollbar.
+    outer_inset = max(0, int(first_heading_or_separator_x))
+    viewport_width = max(0, width - (outer_inset * 2))
+    return {
+        "header_y": header_y,
+        "tree_widget_width_px": width,
+        "outer_inset_px": outer_inset,
+        "viewport_width_px": viewport_width,
+        "visible_heading_widths_px": visible_heading_widths,
+    }
+
+
+def _tree_scrollbar_layout(tree: Any) -> dict[str, Any]:
+    parent = tree.master
+    parent_width = max(0, int(parent.winfo_width()))
+    tree_left = int(tree.winfo_x())
+    tree_width = max(0, int(tree.winfo_width()))
+    tree_right = tree_left + tree_width
+    scrollbars: list[dict[str, Any]] = []
+    for child in parent.winfo_children():
+        if child is tree:
+            continue
+        try:
+            widget_class = str(child.winfo_class())
+            mapped = bool(child.winfo_ismapped())
+            orientation = str(child.cget("orient"))
+        except Exception:
+            continue
+        if "Scrollbar" not in widget_class or orientation != "vertical" or not mapped:
+            continue
+        left = int(child.winfo_x())
+        width = max(0, int(child.winfo_width()))
+        scrollbars.append(
+            {
+                "widget_path": str(child),
+                "left_px": left,
+                "right_px": left + width,
+                "width_px": width,
+            }
+        )
+
+    scrollbar_width = sum(item["width_px"] for item in scrollbars)
+    nonoverlapping = all(
+        tree_right <= item["left_px"] or item["right_px"] <= tree_left
+        for item in scrollbars
+    )
+    return {
+        "parent_width_px": parent_width,
+        "tree_left_px": tree_left,
+        "tree_right_px": tree_right,
+        "mapped_vertical_scrollbars": scrollbars,
+        "scrollbar_allowance_px": scrollbar_width,
+        "tree_width_within_parent_after_scrollbar": (
+            tree_width <= max(0, parent_width - scrollbar_width) + 1
+        ),
+        "scrollbars_nonoverlapping": nonoverlapping,
+    }
+
+
+def _tree_heading_fit_record(
+    app: Any,
+    name: str,
+    tree: Any,
+    *,
+    font_factory: Any,
+    visibility_required: bool,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "name": name,
+        "widget_path": str(tree),
+        "present": True,
+        "mapped": False,
+        "visibility_required": visibility_required,
+        "measurement_applicable": True,
+        "columns": [],
+        "checks": {},
+        "passed": False,
+        "error": "",
+    }
+    try:
+        record["mapped"] = bool(tree.winfo_ismapped())
+        displayed_columns = _displayed_tree_columns(tree)
+        heading_pixels = _tree_heading_pixels(tree)
+        scrollbar_layout = _tree_scrollbar_layout(tree)
+        tree_style = str(tree.cget("style") or "Treeview")
+        heading_style = f"{tree_style}.Heading"
+        font_spec = app.style.lookup(heading_style, "font") or "TkHeadingFont"
+        padding_value = app.style.lookup(heading_style, "padding")
+        padding_left, padding_right = _horizontal_style_padding(tree, padding_value)
+        heading_font = font_factory(root=app.root, font=font_spec)
+        try:
+            font_actual = dict(heading_font.actual())
+        except Exception:
+            font_actual = {"description": str(font_spec)}
+        try:
+            font_metrics = dict(heading_font.metrics())
+        except Exception:
+            font_metrics = {}
+
+        configured_extent = 0
+        all_headings_measured = bool(displayed_columns)
+        all_heading_text_fits = bool(displayed_columns)
+        for position, column_id in enumerate(displayed_columns, start=1):
+            heading_info = dict(tree.heading(column_id))
+            heading_text = str(heading_info.get("text") or "")
+            configured_width = max(0, int(tree.column(column_id, "width")))
+            configured_extent += configured_width
+            text_width = max(0, int(heading_font.measure(heading_text)))
+            image_width = _heading_image_width(tree, heading_info.get("image"))
+            image_gap = TREE_HEADING_IMAGE_GAP_PX if image_width else 0
+            visible_width = int(
+                heading_pixels["visible_heading_widths_px"].get(f"#{position}", 0)
+            )
+            non_text_allowance = (
+                padding_left + padding_right + image_width + image_gap
+            )
+            available_text_width = max(0, visible_width - non_text_allowance)
+            fits = visible_width > 0 and text_width <= available_text_width
+            all_headings_measured = all_headings_measured and visible_width > 0
+            all_heading_text_fits = all_heading_text_fits and fits
+            record["columns"].append(
+                {
+                    "id": column_id,
+                    "display_position": position,
+                    "text": heading_text,
+                    "configured_width_px": configured_width,
+                    "visible_heading_width_px": visible_width,
+                    "font_measured_text_width_px": text_width,
+                    "padding_left_px": padding_left,
+                    "padding_right_px": padding_right,
+                    "heading_image_width_px": image_width,
+                    "heading_image_gap_px": image_gap,
+                    "available_text_width_px": available_text_width,
+                    "fit_slack_px": available_text_width - text_width,
+                    "passed": fits,
+                }
+            )
+
+        column_extent_within_viewport = (
+            configured_extent <= int(heading_pixels["viewport_width_px"])
+        )
+        scrollbar_layout_safe = bool(
+            scrollbar_layout["mapped_vertical_scrollbars"]
+            and scrollbar_layout["tree_width_within_parent_after_scrollbar"]
+            and scrollbar_layout["scrollbars_nonoverlapping"]
+        )
+        checks = {
+            "mapped": record["mapped"],
+            "display_columns_present": bool(displayed_columns),
+            "all_headings_measured": all_headings_measured,
+            "column_extent_within_viewport": column_extent_within_viewport,
+            "all_heading_text_fits": all_heading_text_fits,
+            "scrollbar_layout_safe": scrollbar_layout_safe,
+        }
+        record.update(
+            {
+                "style": tree_style,
+                "heading_style": heading_style,
+                "heading_font": str(font_spec),
+                "heading_font_actual": font_actual,
+                "heading_font_metrics": font_metrics,
+                "heading_padding": str(padding_value),
+                "configured_column_extent_px": configured_extent,
+                "heading_viewport": heading_pixels,
+                "scrollbar_layout": scrollbar_layout,
+                "checks": checks,
+                "passed": all(checks.values()),
+            }
+        )
+    except Exception as exc:
+        record["error"] = f"{type(exc).__name__}: {exc}"
+        record["checks"] = {"measurement_completed": False}
+    return record
+
+
+def _tree_visibility_policy(app: Any) -> dict[str, Any]:
+    try:
+        scale_factor = float(app.scale_factor)
+        if not math.isfinite(scale_factor) or scale_factor <= 0:
+            raise ValueError("scale_factor must be finite and positive")
+        left_pane_height = max(0, int(app.left_pane.winfo_height()))
+        logical_left_pane_height = left_pane_height / scale_factor
+    except Exception as exc:
+        return {
+            "resolved": False,
+            "actual_left_pane_height_px": None,
+            "scale_factor": None,
+            "logical_left_pane_height": None,
+            "required_threshold": TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT,
+            "visibility_required": True,
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    return {
+        "resolved": True,
+        "actual_left_pane_height_px": left_pane_height,
+        "scale_factor": scale_factor,
+        "logical_left_pane_height": logical_left_pane_height,
+        "required_threshold": TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT,
+        "visibility_required": (
+            logical_left_pane_height >= TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT
+        ),
+        "error": "",
+    }
+
+
+def _unmapped_tree_heading_record(
+    name: str,
+    tree: Any,
+    *,
+    visibility_required: bool,
+) -> dict[str, Any]:
+    optional_unmapped = not visibility_required
+    checks = {
+        "mapped_when_required": optional_unmapped,
+        "optional_unmapped_allowed": optional_unmapped,
+    }
+    return {
+        "name": name,
+        "widget_path": str(tree),
+        "present": True,
+        "mapped": False,
+        "visibility_required": visibility_required,
+        "measurement_applicable": False,
+        "columns": [],
+        "checks": checks,
+        "passed": all(checks.values()),
+        "error": "",
+    }
+
+
+def build_tree_heading_fit_gate(
+    app: Any,
+    *,
+    font_factory: Any | None = None,
+) -> dict[str, Any]:
+    """Measure live Tk heading text against its actually visible viewport."""
+
+    if font_factory is None:
+        from tkinter import font as tkfont
+
+        font_factory = tkfont.Font
+
+    visibility_policy = _tree_visibility_policy(app)
+    visibility_required = bool(visibility_policy["visibility_required"])
+    trees: list[dict[str, Any]] = []
+    for name, attribute in TREE_HEADING_GATE_WIDGETS:
+        tree = getattr(app, attribute, None)
+        if tree is None:
+            trees.append(
+                {
+                    "name": name,
+                    "widget_path": "",
+                    "present": False,
+                    "mapped": False,
+                    "visibility_required": visibility_required,
+                    "measurement_applicable": False,
+                    "columns": [],
+                    "checks": {"measurement_completed": False},
+                    "passed": False,
+                    "error": f"missing app.{attribute}",
+                }
+            )
+            continue
+        try:
+            mapped = bool(tree.winfo_ismapped())
+        except Exception:
+            mapped = False
+        if not mapped:
+            trees.append(
+                _unmapped_tree_heading_record(
+                    name,
+                    tree,
+                    visibility_required=visibility_required,
+                )
+            )
+            continue
+        trees.append(
+            _tree_heading_fit_record(
+                app,
+                name,
+                tree,
+                font_factory=font_factory,
+                visibility_required=visibility_required,
+            )
+        )
+
+    checks = {
+        "visibility_policy_resolved": visibility_policy["resolved"] is True,
+        "required_trees_present": all(tree.get("present") is True for tree in trees),
+        "required_trees_mapped": all(
+            tree.get("present") is True
+            and (
+                tree.get("visibility_required") is not True
+                or tree.get("mapped") is True
+            )
+            for tree in trees
+        ),
+        "all_measurements_completed": all(not tree.get("error") for tree in trees),
+        "all_column_extents_within_viewport": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or tree.get("checks", {}).get("column_extent_within_viewport") is True
+            )
+            for tree in trees
+        ),
+        "all_heading_text_fits": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or tree.get("checks", {}).get("all_heading_text_fits") is True
+            )
+            for tree in trees
+        ),
+        "all_scrollbar_layouts_safe": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or tree.get("checks", {}).get("scrollbar_layout_safe") is True
+            )
+            for tree in trees
+        ),
+    }
+    try:
+        tk_scaling = float(app.root.tk.call("tk", "scaling"))
+    except Exception:
+        tk_scaling = None
+    return {
+        "gate_applicable": True,
+        "method": (
+            "live Tk heading font measure vs identify_region-visible heading span, "
+            "style padding/image allowance, configured extent, and sibling scrollbar layout"
+        ),
+        "tk_scaling": tk_scaling,
+        "visibility_policy": visibility_policy,
+        "trees": trees,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _core_action_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]:
+    """Require both requested width and height for the four primary actions."""
+
+    return {
+        "action_undo": (app.undo_button, True, True),
+        "action_park": (app.park_button, True, True),
+        "action_submit": (app.submit_tray_button, True, True),
+        "action_operations": (app.operations_button, True, True),
+    }
+
+
+def _notice_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]:
+    """Inspect notice contents using Tk's wrap-aware requested label size."""
+
+    specs: dict[str, tuple[Any, bool, bool]] = {}
+    title = getattr(app, "notice_title_label", None)
+    message = getattr(app, "notice_message_label", None)
+    if title is not None:
+        specs["notice_title"] = (title, True, True)
+    if message is not None:
+        # Tk Label's requested width already reflects its configured wraplength.
+        # Compressing below that post-wrap request clips text instead of causing
+        # another automatic reflow, so both axes must remain fail-closed.
+        specs["notice_message"] = (message, True, True)
+    acknowledge = getattr(app, "notice_ack_button", None)
+    if (
+        acknowledge is not None
+        and getattr(acknowledge, "master", None) is app.notice_frame
+        and _is_mapped(acknowledge)
+    ):
+        specs["notice_ack"] = (acknowledge, True, True)
+    return specs
+
+
+def _left_sidebar_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]:
+    checkbox = getattr(app, "tray_image_checkbox", None)
+    if checkbox is None:
+        return {}
+    return {"tray_image_checkbox": (checkbox, True, True)}
+
+
 def collect_ui_geometry(app: Any) -> dict[str, Any]:
     root = app.root
     root_size = (int(root.winfo_width()), int(root.winfo_height()))
@@ -1442,14 +1930,13 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
         if len(value) == 2:
             widget, check_requested_height = value
             critical_widgets[name] = (widget, False, check_requested_height)
+    core_action_specs = _core_action_critical_widget_specs(app)
     core_action_widgets = {
-        "action_undo": app.undo_button,
-        "action_park": app.park_button,
-        "action_submit": app.submit_tray_button,
-        "action_operations": app.operations_button,
+        name: specification[0] for name, specification in core_action_specs.items()
     }
-    for name, button in core_action_widgets.items():
-        critical_widgets[name] = (button, False, True)
+    critical_widgets.update(core_action_specs)
+    critical_widgets.update(_notice_critical_widget_specs(app))
+    critical_widgets.update(_left_sidebar_critical_widget_specs(app))
     records = [
         _widget_record(
             root,
@@ -1475,6 +1962,9 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
             ("progress", "center_pane"),
             ("scan_entry", "center_pane"),
             ("notice", "center_pane"),
+            ("notice_title", "notice"),
+            ("notice_message", "notice"),
+            ("notice_ack", "notice"),
             ("scan_list_frame", "center_pane"),
             ("scan_list_header", "scan_list_frame"),
             ("scan_list", "scan_list_frame"),
@@ -1492,6 +1982,7 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
             ("right_last_scan", "right_context"),
             ("right_follow_up", "right_context"),
             ("right_secondary", "right_pane"),
+            ("tray_image_checkbox", "left_pane"),
         ),
     )
 
@@ -2137,14 +2628,16 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
         issues.append("secondary_operations_exposed")
     fixture = record.get("fixture") or {}
     rendered = record.get("rendered_state") or {}
-    strict_capture_gates = int(record.get("capture_gate_schema_version", 1)) >= 2
+    capture_gate_schema_version = int(record.get("capture_gate_schema_version", 1))
     for gate_name in (
         "focus_gate",
         "scan_list_viewport_gate",
         "compact_display_gate",
     ):
-        if strict_capture_gates or gate_name in record:
+        if capture_gate_schema_version >= 2 or gate_name in record:
             _append_gate_issues(issues, record, gate_name)
+    if capture_gate_schema_version >= 3 or "tree_heading_fit_gate" in record:
+        _append_gate_issues(issues, record, "tree_heading_fit_gate")
     if rendered:
         if int(rendered.get("scan_list_row_count", -1)) != int(fixture.get("scan_count", 0)):
             issues.append("rendered_scan_count_mismatch")
@@ -2983,7 +3476,7 @@ def run_capture_matrix(
     fixtures_by_id = {fixture.state_id: fixture for fixture in build_state_fixtures()}
 
     manifest: dict[str, Any] = {
-        "schema_version": 2,
+        "schema_version": 3,
         "tool": "tools/capture_container_operator_ui.py",
         "generated_at": dt.datetime.now(dt.timezone.utc).astimezone().isoformat(),
         "repository_root": str(ROOT),
@@ -3072,6 +3565,7 @@ def run_capture_matrix(
                 monitor_gate = frame["monitor_gate"]
                 geometry_record = frame["ui_geometry"]
                 rendered_state = frame["rendered_state"]
+                tree_heading_fit_gate = frame["tree_heading_fit_gate"]
                 fixture_manifest = _fixture_manifest(fixture)
                 record_id = f"{size[0]}x{size[1]}-{state_id}"
                 if capture_sequence == "roundtrip":
@@ -3085,7 +3579,7 @@ def run_capture_matrix(
                     "requested_size": [size[0], size[1]],
                     "requested_scale": requested_scale,
                     "applied_scale_factor": float(app.scale_factor),
-                    "capture_gate_schema_version": 2,
+                    "capture_gate_schema_version": 3,
                     "path": str(path.relative_to(resolved_output)).replace("\\", "/"),
                     "capture_source": source,
                     "sha256": _sha256(path),
@@ -3096,6 +3590,7 @@ def run_capture_matrix(
                     "rendered_state": rendered_state,
                     "focus_gate": focus_gate,
                     "scan_list_viewport_gate": viewport_gate,
+                    "tree_heading_fit_gate": tree_heading_fit_gate,
                     "compact_display_gate": build_compact_display_gate(
                         fixture_manifest,
                         rendered_state,
