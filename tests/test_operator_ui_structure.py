@@ -54,6 +54,10 @@ class FakeWidget:
         self.grid_options["mapped"] = False
         self._mapped = False
 
+    def grid_remove(self):
+        self.grid_options["mapped"] = False
+        self._mapped = False
+
     def pack(self, **kwargs):
         self.pack_options.update(kwargs)
         self._mapped = True
@@ -65,7 +69,12 @@ class FakeWidget:
         self.grid_columns.setdefault(column, {}).update(kwargs)
 
     def bind(self, sequence, callback, add=None):
+        if add != "+":
+            self.bindings = [binding for binding in self.bindings if binding[0] != sequence]
         self.bindings.append((sequence, callback, add))
+
+    def unbind(self, sequence):
+        self.bindings = [binding for binding in self.bindings if binding[0] != sequence]
 
     def configure(self, **kwargs):
         self.options.update(kwargs)
@@ -249,6 +258,45 @@ def test_compact_worker_header_gives_name_and_button_full_width(monkeypatch):
     assert app.change_worker_button.pack_options["fill"] == container_audit_module.tk.X
 
 
+def test_large_text_left_tray_image_label_round_trips_without_clipping(monkeypatch):
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(container_audit_module.tk, name, _factory(f"tk.{name}"))
+    for name in (
+        "Frame",
+        "Label",
+        "Button",
+        "Treeview",
+        "Scrollbar",
+        "Checkbutton",
+    ):
+        monkeypatch.setattr(container_audit_module.ttk, name, _factory(f"ttk.{name}"))
+
+    class HiddenTrayImage:
+        @staticmethod
+        def get():
+            return False
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = FakeRoot()
+    app.scale_factor = 1.4
+    app.worker_name = "캡처 작업자"
+    app.show_tray_image_var = HiddenTrayImage()
+    left = FakeWidget(kind="LeftPane")
+    left.pixel_width = 322
+
+    app._create_left_sidebar_content(left)
+    assert app.tray_image_checkbox.options["text"] == "트레이 이미지"
+    assert sum(sequence == "<Configure>" for sequence, _callback, _add in left.bindings) == 1
+
+    left.pixel_width = 559
+    app._apply_left_sidebar_layout()
+    assert app.tray_image_checkbox.options["text"] == "트레이 이미지 보기"
+
+    left.pixel_width = 322
+    app._apply_left_sidebar_layout()
+    assert app.tray_image_checkbox.options["text"] == "트레이 이미지"
+
+
 def test_center_has_the_only_full_scan_history_and_right_has_no_history_table(operator_view):
     app, center, right = operator_view
 
@@ -317,7 +365,7 @@ def test_four_exposed_actions_use_one_row_then_two_by_two_without_exposing_opera
         exchange_dialog_open=False,
         exact_exchange_blocked=False,
     )
-    assert compact_review_labels["submit"] == "담당자 확인"
+    assert compact_review_labels["submit"] == "확인"
 
     app._layout_center_action_buttons(580, 8)
     assert [
@@ -330,6 +378,49 @@ def test_four_exposed_actions_use_one_row_then_two_by_two_without_exposing_opera
         (button.grid_options["row"], button.grid_options["column"])
         for button in exposed
     ] == [(0, 0), (0, 1), (0, 2), (0, 3)]
+
+
+def test_center_layout_cache_tracks_compact_label_boundary_round_trip(operator_view):
+    app, center, _right = operator_view
+    assert app._get_center_layout_metrics(959, 900) == app._get_center_layout_metrics(960, 900)
+
+    app._apply_center_layout(center, 959, 900)
+    compact_key = app._center_layout_metrics
+    assert app.submit_tray_button.options["text"] == "제출"
+
+    app._apply_center_layout(center, 960, 900)
+    wide_key = app._center_layout_metrics
+    assert wide_key != compact_key
+    assert app.submit_tray_button.options["text"] == "트레이 제출"
+
+    app._apply_center_layout(center, 959, 900)
+    assert app._center_layout_metrics == compact_key
+    assert app.submit_tray_button.options["text"] == "제출"
+
+
+def test_ultrashort_center_reclaims_scan_header_padding_round_trip(operator_view):
+    app, center, _right = operator_view
+    app.scale_factor = 1.4
+    center.pixel_width = 710
+    center.pixel_height = 694
+    app._center_layout_metrics = None
+    app._scanned_listbox_layout_metrics = None
+    app._apply_scanned_listbox_layout()
+
+    assert app.notice_message_label.grid_options["padx"] == 4
+    assert app.scanned_list_header_label.grid_options["pady"][1] == 3
+
+    center.pixel_width = 1467
+    center.pixel_height = 1310
+    app._apply_scanned_listbox_layout()
+    assert app.notice_message_label.grid_options["padx"] == 8
+    assert app.scanned_list_header_label.grid_options["pady"][1] > 3
+
+    center.pixel_width = 710
+    center.pixel_height = 694
+    app._apply_scanned_listbox_layout()
+    assert app.notice_message_label.grid_options["padx"] == 4
+    assert app.scanned_list_header_label.grid_options["pady"][1] == 3
 
 
 def _replace_scan_rows(app, barcodes):
@@ -369,6 +460,7 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
     app.warning_presenter = WarningPresenter()
     app.warning_presenter.record_normal_scan(barcodes[-1])
     app._update_center_display()
+    assert app.notice_ack_button.winfo_ismapped() is False
     normal_rows = tuple(app.scanned_listbox.items)
     assert normal_rows == tuple(
         app._format_scanned_list_row(index, barcode)
@@ -386,6 +478,7 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
         )
     )
     app._update_center_display()
+    assert app.notice_ack_button.winfo_ismapped() is True
     assert tuple(app.scanned_listbox.items) == normal_rows
     assert _scan_list_geometry(app, center) == baseline_geometry
 
@@ -402,6 +495,7 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
         )
     )
     app._update_center_display()
+    assert app.notice_ack_button.winfo_ismapped() is True
     assert tuple(app.scanned_listbox.items) == normal_rows
     assert _scan_list_geometry(app, center) == baseline_geometry
 
@@ -420,6 +514,7 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
         )
     )
     app._update_center_display()
+    assert app.notice_ack_button.winfo_ismapped() is False
     assert app.scanned_listbox.items == []
     assert _scan_list_geometry(app, center) == baseline_geometry
 
@@ -444,6 +539,7 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
         )
     )
     app._update_center_display()
+    assert app.notice_ack_button.winfo_ismapped() is False
     assert len(app.scanned_listbox.items) == len(app.current_tray.scanned_barcodes) == 2
     assert "2건" in app.scanned_list_header_label.options["text"]
     assert _scan_list_geometry(app, center) == baseline_geometry
@@ -578,8 +674,8 @@ def test_short_large_text_sidebar_values_fit_and_legend_restores_on_round_trip(o
     assert compact_before["legend_mapped"] is False
     assert compact_before["date_font"][1] <= 20
     assert compact_before["clock_font"][1] <= 27
-    assert compact_before["status_padding"] == 6
-    assert compact_before["context_padding"] == 6
+    assert compact_before["status_padding"] == 4
+    assert compact_before["context_padding"] == 4
     assert compact_before["spacer_weight"] == 0
 
     for value_label in (
@@ -595,12 +691,253 @@ def test_short_large_text_sidebar_values_fit_and_legend_restores_on_round_trip(o
 
     wide = apply_at(510, 1324)
     assert wide["legend_mapped"] is True
-    assert wide["status_padding"] == 20
-    assert wide["context_padding"] == 16
-    assert wide["spacer_weight"] == 1
+    assert wide["status_padding"] == 8
+    assert wide["context_padding"] == 10
+    assert wide["spacer_weight"] == 0
 
     compact_after = apply_at(302, 707)
     assert compact_after == compact_before
+
+
+def test_rebuilding_operator_panes_replaces_configure_bindings_and_rejects_stale_generation(
+    operator_view,
+):
+    app, center, right = operator_view
+    first_center_generation = app._center_widget_generation
+    first_right_generation = app._right_widget_generation
+    stale_center_callback = next(
+        callback for sequence, callback, _add in center.bindings if sequence == "<Configure>"
+    )
+    stale_right_callback = next(
+        callback for sequence, callback, _add in right.bindings if sequence == "<Configure>"
+    )
+
+    app._create_center_content(center)
+    app._create_right_sidebar_content(right)
+
+    assert app._center_widget_generation == first_center_generation + 1
+    assert app._right_widget_generation == first_right_generation + 1
+    assert sum(sequence == "<Configure>" for sequence, _callback, _add in center.bindings) == 1
+    assert sum(sequence == "<Configure>" for sequence, _callback, _add in right.bindings) == 1
+
+    scheduled_before = len(app.root.after_calls)
+    right_cache_before = app._right_sidebar_layout_metrics
+    stale_center_callback(None)
+    stale_right_callback(None)
+
+    assert len(app.root.after_calls) == scheduled_before
+    assert app._right_sidebar_layout_metrics == right_cache_before
+    assert app._right_sidebar_layout_metrics[0] == app._right_widget_generation
+
+
+def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
+    app, _center, _right = operator_view
+    summary_parent = FakeWidget(kind="SummaryParent")
+    parked_parent = FakeWidget(kind="ParkedParent")
+    app.summary_tree = FakeWidget(summary_parent, kind="ttk.Treeview")
+    app.parked_tree = FakeWidget(parked_parent, kind="ttk.Treeview")
+    app.scale_factor = 1.4
+
+    summary_parent.pixel_width = 700
+    parked_parent.pixel_width = 500
+    app.summary_tree.pixel_width = 700
+    app.parked_tree.pixel_width = 500
+    app._adjust_summary_tree_columns()
+    app._adjust_parked_tree_columns()
+
+    assert app.summary_tree.heading_options["item_name_spec"]["text"] == "품목"
+    assert app.summary_tree.heading_options["item_code"]["text"] == "코드"
+    assert app.summary_tree.heading_options["count"]["text"] == "완료"
+    assert app.parked_tree.heading_options["item_name"]["text"] == "품목"
+    assert app.parked_tree.heading_options["scan_count"]["text"] == "수량"
+
+    summary_parent.pixel_width = 800
+    parked_parent.pixel_width = 600
+    app.summary_tree.pixel_width = 800
+    app.parked_tree.pixel_width = 600
+    app._adjust_summary_tree_columns()
+    app._adjust_parked_tree_columns()
+
+    assert app.summary_tree.heading_options["item_name_spec"]["text"] == "품목명"
+    assert app.summary_tree.heading_options["item_code"]["text"] == "품목코드"
+    assert app.summary_tree.heading_options["count"]["text"] == "완료 수량"
+    assert app.parked_tree.heading_options["item_name"]["text"] == "품목명"
+    assert app.parked_tree.heading_options["scan_count"]["text"] == "스캔 수량"
+
+    summary_parent.pixel_width = 700
+    parked_parent.pixel_width = 500
+    app.summary_tree.pixel_width = 700
+    app.parked_tree.pixel_width = 500
+    app._adjust_summary_tree_columns()
+    app._adjust_parked_tree_columns()
+
+    assert app.summary_tree.heading_options["item_name_spec"]["text"] == "품목"
+    assert app.summary_tree.heading_options["item_code"]["text"] == "코드"
+    assert app.summary_tree.heading_options["count"]["text"] == "완료"
+    assert sum(
+        app.summary_tree.column_options[column]["width"]
+        for column in ("item_name_spec", "item_code", "count")
+    ) <= app.summary_tree.pixel_width - 4
+    assert sum(
+        app.parked_tree.column_options[column]["width"]
+        for column in ("item_name", "scan_count")
+    ) <= app.parked_tree.pixel_width - 4
+
+
+def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    root.geometry("700x320+10000+10000")
+    try:
+        # Keep the geometry manager active without showing a test window.
+        root.attributes("-alpha", 0.0)
+        frame = container_audit_module.ttk.Frame(root)
+        frame.pack(fill="both", expand=True)
+        tree = container_audit_module.ttk.Treeview(
+            frame,
+            columns=("item_name_spec", "item_code", "count"),
+            show="headings",
+        )
+        tree.pack(side="left", fill="both", expand=True)
+        scrollbar = container_audit_module.ttk.Scrollbar(frame, orient="vertical")
+        scrollbar.pack(side="right", fill="y")
+
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.scale_factor = 1.4
+        app.summary_tree = tree
+        tree.bind("<Configure>", app._adjust_summary_tree_columns)
+
+        snapshots = []
+        for width in (700, 1200, 700):
+            root.geometry(f"{width}x320+10000+10000")
+            root.update()
+            available_width = tree.winfo_width() - 4
+            column_widths = tuple(
+                int(tree.column(column, "width"))
+                for column in ("item_name_spec", "item_code", "count")
+            )
+            headings = tuple(
+                tree.heading(column, "text")
+                for column in ("item_name_spec", "item_code", "count")
+            )
+            assert sum(column_widths) <= available_width
+            snapshots.append((tree.winfo_width(), column_widths, headings))
+
+        assert snapshots[0] == snapshots[2]
+        assert snapshots[0][2] == ("품목", "코드", "완료")
+        assert snapshots[1][2] == ("품목명", "품목코드", "완료 수량")
+        assert snapshots[1][0] > snapshots[0][0]
+    finally:
+        root.destroy()
+
+
+def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_widths():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    root.withdraw()
+    try:
+        # DISPLAY2 capture evidence reports the process Tk conversion at this
+        # value.  The default test-interpreter scaling was lower and therefore
+        # gave a false pass for Korean action labels.
+        root.tk.call("tk", "scaling", 2.00098)
+        style = container_audit_module.ttk.Style(root)
+        style.theme_use("clam")
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.scale_factor = 1.4
+        for window_width, window_height, center_width, budgets, left_content_width in (
+            (1366, 768, 710, (154, 153, 154, 153), 302),
+            (2560, 1392, 1467, (327, 326, 327, 326), 539),
+        ):
+            profile = container_audit_module.select_layout_profile(
+                window_width,
+                window_height,
+                1.4,
+            )
+            tokens = container_audit_module.build_style_tokens(
+                container_audit_module.StyleProfile(profile.name),
+                1.4,
+            )
+            padding = app._button_style_padding(tokens, window_height)
+            style.configure(
+                "WidthContract.Secondary.TButton",
+                font=(app.DEFAULT_FONT, tokens.fonts.caption, "bold"),
+                padding=padding,
+            )
+            style.configure(
+                "WidthContract.Primary.TButton",
+                font=(app.DEFAULT_FONT, tokens.fonts.body, "bold"),
+                padding=padding,
+            )
+            style.configure(
+                "WidthContract.TCheckbutton",
+                font=(app.DEFAULT_FONT, tokens.fonts.body),
+            )
+            compact = center_width < 960
+            normal = app._action_button_labels(
+                compact=compact,
+                operator_review=False,
+                replacement_active=False,
+                exchange_dialog_open=False,
+                exact_exchange_blocked=False,
+            )
+            review = app._action_button_labels(
+                compact=compact,
+                operator_review=True,
+                replacement_active=False,
+                exchange_dialog_open=False,
+                exact_exchange_blocked=False,
+            )
+            labels_and_styles = (
+                (normal["undo"], "WidthContract.Secondary.TButton", budgets[0]),
+                (normal["park"], "WidthContract.Primary.TButton", budgets[1]),
+                (normal["submit"], "WidthContract.Primary.TButton", budgets[2]),
+                (review["submit"], "WidthContract.Primary.TButton", budgets[2]),
+                (normal["operations"], "WidthContract.Secondary.TButton", budgets[3]),
+            )
+            for label, button_style, available_width in labels_and_styles:
+                button = container_audit_module.ttk.Button(
+                    root,
+                    text=label,
+                    style=button_style,
+                    width=0,
+                )
+                button.update_idletasks()
+                assert button.winfo_reqwidth() <= available_width, (
+                    window_width,
+                    label,
+                    button.winfo_reqwidth(),
+                    available_width,
+                )
+                button.destroy()
+
+            tray_image_label = "트레이 이미지" if compact else "트레이 이미지 보기"
+            checkbox = container_audit_module.ttk.Checkbutton(
+                root,
+                text=tray_image_label,
+                style="WidthContract.TCheckbutton",
+            )
+            checkbox.update_idletasks()
+            assert checkbox.winfo_reqwidth() <= left_content_width, (
+                window_width,
+                tray_image_label,
+                checkbox.winfo_reqwidth(),
+                left_content_width,
+            )
+            checkbox.destroy()
+
+        assert app._button_style_padding(
+            container_audit_module.build_style_tokens(
+                container_audit_module.StyleProfile("compact"),
+                1.4,
+            ),
+            768,
+        ) == (12, 7)
+    finally:
+        root.destroy()
 
 
 def test_right_sidebar_values_show_last_normal_scan_and_next_operator_action(operator_view):

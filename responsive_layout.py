@@ -81,6 +81,7 @@ class ScannedListMetrics:
     header_font_size: int
     horizontal_pad: int
     top_pady: int
+    header_bottom_pady: int
     visible_rows: int
     estimated_row_height: int
 
@@ -333,9 +334,15 @@ def center_layout_metrics(
     height = _dimension(center_height, name="center_height")
     normalized_scale = _scale(scale)
     name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
-    compact_height = height / normalized_scale < 700
-    height_constrained = height < 1080
-    short_large_text = normalized_scale >= 1.2 and height / normalized_scale < 620
+    logical_height = height / normalized_scale
+    compact_height = logical_height < 700
+    height_constrained = logical_height < 1080
+    short_large_text = normalized_scale >= 1.2 and logical_height < 620
+    # A 1.4 preference must enlarge text without turning every fixed center
+    # row into a 1.4x height request on a 768/900 px operator display.  Keep
+    # the requested scale for profile selection, then cap only the fixed-row
+    # typography in this genuinely short logical-height tier.
+    constrained_text_scale = min(normalized_scale, 1.2) if short_large_text else normalized_scale
 
     horizontal_pad = _clamped_int(width * 0.035, 12 * normalized_scale, 48 * normalized_scale)
     item_top = _clamped_int(height * 0.012, 5 * normalized_scale, 15 * normalized_scale)
@@ -368,11 +375,11 @@ def center_layout_metrics(
     # region, but it must not force recovery/reset controls off-screen.
     list_ratio = (
         0.22
-        if height / normalized_scale < 780
+        if logical_height < 780
         else {"compact": 0.32, "standard": 0.36, "wide": 0.39}[name]
     )
     list_cap = max(1, int(round(height * 0.48)))
-    list_floor_base = 96 if height / normalized_scale < 620 else 130
+    list_floor_base = 96 if logical_height < 620 else 130
     list_floor = min(list_cap, max(1, int(round(list_floor_base * normalized_scale))))
     list_ceiling = max(list_floor, min(list_cap, int(round(430 * normalized_scale))))
     list_minsize = _clamped_int(height * list_ratio, list_floor, list_ceiling)
@@ -386,8 +393,11 @@ def center_layout_metrics(
         list_minsize = min(list_minsize, constrained_list_cap)
 
     warning_cap = max(1, int(round(height * 0.12)))
-    warning_floor = min(warning_cap, max(1, int(round(42 * normalized_scale))))
-    warning_ceiling = max(warning_floor, min(warning_cap, int(round(72 * normalized_scale))))
+    warning_floor = min(warning_cap, max(1, int(round(42 * constrained_text_scale))))
+    warning_ceiling = max(
+        warning_floor,
+        min(warning_cap, int(round(72 * constrained_text_scale))),
+    )
     warning_band_height = _clamped_int(height * 0.065, warning_floor, warning_ceiling)
 
     entry_floor = min(max(1, int(round(height * 0.12))), max(1, int(round(22 * normalized_scale))))
@@ -402,29 +412,29 @@ def center_layout_metrics(
     if height_constrained and height < 920:
         entry_font = _clamped_int(
             height * 0.024,
-            17 * normalized_scale,
-            20 * normalized_scale,
+            17 * constrained_text_scale,
+            20 * constrained_text_scale,
         )
         count_font = _clamped_int(
             height * 0.052,
-            36 * normalized_scale,
-            44 * normalized_scale,
+            36 * constrained_text_scale,
+            44 * constrained_text_scale,
         )
-        notice_title_font = max(9, int(round(10 * normalized_scale)))
-        notice_message_font = max(9, int(round(9 * normalized_scale)))
+        notice_title_font = max(9, int(round(10 * constrained_text_scale)))
+        notice_message_font = max(9, int(round(9 * constrained_text_scale)))
     elif height_constrained:
         entry_font = _clamped_int(
             height * 0.024,
-            20 * normalized_scale,
-            24 * normalized_scale,
+            20 * constrained_text_scale,
+            24 * constrained_text_scale,
         )
         count_font = _clamped_int(
             height * 0.052,
-            46 * normalized_scale,
-            54 * normalized_scale,
+            46 * constrained_text_scale,
+            54 * constrained_text_scale,
         )
-        notice_title_font = max(10, int(round(11 * normalized_scale)))
-        notice_message_font = max(9, int(round(10 * normalized_scale)))
+        notice_title_font = max(10, int(round(11 * constrained_text_scale)))
+        notice_message_font = max(9, int(round(10 * constrained_text_scale)))
 
     # The center exposes exactly four short primary actions. Keeping them on
     # one physical row from 620 px prevents large-text settings from pushing
@@ -466,6 +476,7 @@ def scanned_list_metrics(
     height = _dimension(center_height, name="center_height")
     normalized_scale = _scale(scale)
     name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
+    logical_height = height / normalized_scale
     if list_height is None:
         measured_list_height = 0
     else:
@@ -473,11 +484,15 @@ def scanned_list_metrics(
 
     horizontal_pad = _clamped_int(width * 0.045, 10 * normalized_scale, 38 * normalized_scale)
     top_pady = _clamped_int(height * 0.022, 6 * normalized_scale, 24 * normalized_scale)
-    height_constrained = height < 1080
-    short_large_text = normalized_scale >= 1.2 and height / normalized_scale < 620
+    height_constrained = logical_height < 1080
+    short_large_text = normalized_scale >= 1.2 and logical_height < 620
+    constrained_text_scale = min(normalized_scale, 1.2) if short_large_text else normalized_scale
+    header_bottom_pady = (
+        3 if short_large_text else max(4, int(round(6 * normalized_scale)))
+    )
     if short_large_text:
         top_pady = min(top_pady, 10)
-    elif height / normalized_scale < 620:
+    elif logical_height < 620:
         top_pady = min(top_pady, max(1, int(round(12 * normalized_scale))))
 
     fallback_height = max(int(round(120 * normalized_scale)), height - int(round(330 * normalized_scale)))
@@ -502,7 +517,7 @@ def scanned_list_metrics(
     maximum_font = min(25 * normalized_scale, max(minimum_font, width_limited_font))
     font_size = _clamped_int(candidate_font, minimum_font, maximum_font)
     estimated_row_height = max(20, int(round(font_size * 1.65)))
-    minimum_rows = 3 if height / normalized_scale < 620 else 5
+    minimum_rows = 3 if logical_height < 620 else 5
     visible_rows = _clamped_int(list_reference_height / estimated_row_height, minimum_rows, 18)
     header_font_size = max(10, int(round(12 * normalized_scale)))
     if height_constrained:
@@ -510,29 +525,36 @@ def scanned_list_metrics(
         # requests prevent high-DPI rows from crushing the final viewport and
         # action row. New scans remain at index zero.
         if height < 780:
-            font_size = max(
-                10,
-                int(round((14 if normalized_scale > 1.0 else 11) * normalized_scale)),
-            )
-            header_font_size = max(9, int(round(10 * normalized_scale)))
+            # Keep the same 11 pt base at every scale.  The former 14 pt base
+            # switch plus multiplication made 1.0 -> 1.4 jump 11 -> 20 pt,
+            # wider than the real 1366 viewport and too tall for three rows.
+            if normalized_scale >= 2.0:
+                # Preserve the existing explicit extreme-scale contract.  The
+                # 1.4 operator tier uses the stable 11 pt base above; a 2x+
+                # accessibility request remains deliberately oversized.
+                font_size = max(10, int(round(14 * normalized_scale)))
+                header_font_size = max(9, int(round(10 * normalized_scale)))
+            else:
+                font_size = max(10, int(round(11 * constrained_text_scale)))
+                header_font_size = max(9, int(round(10 * constrained_text_scale)))
             visible_rows = 3 if height >= 650 else max(5, visible_rows)
             top_pady = min(top_pady, 4)
         elif height < 850:
-            font_size = max(11, int(round(12 * normalized_scale)))
-            header_font_size = max(10, int(round(11 * normalized_scale)))
+            font_size = max(11, int(round(12 * constrained_text_scale)))
+            header_font_size = max(10, int(round(11 * constrained_text_scale)))
             visible_rows = 5
             top_pady = min(top_pady, 6)
         elif height < 920 and list_reference_height >= 360:
             # An intermediate-height pane with a genuinely roomy measured
             # viewport can retain the standard type size without increasing
             # the fixed list-row minimum used by the supported 900 px window.
-            font_size = max(12, int(round(18 * normalized_scale)))
-            header_font_size = max(10, int(round(12 * normalized_scale)))
+            font_size = max(12, int(round(18 * constrained_text_scale)))
+            header_font_size = max(10, int(round(12 * constrained_text_scale)))
             visible_rows = max(8, visible_rows)
             top_pady = min(top_pady, 6)
         else:
-            font_size = max(12, int(round(14 * normalized_scale)))
-            header_font_size = max(10, int(round(12 * normalized_scale)))
+            font_size = max(12, int(round(14 * constrained_text_scale)))
+            header_font_size = max(10, int(round(12 * constrained_text_scale)))
             visible_rows = 5
             top_pady = min(top_pady, 8)
         horizontal_pad = min(
@@ -547,6 +569,7 @@ def scanned_list_metrics(
         header_font_size=header_font_size,
         horizontal_pad=horizontal_pad,
         top_pady=top_pady,
+        header_bottom_pady=header_bottom_pady,
         visible_rows=visible_rows,
         estimated_row_height=estimated_row_height,
     )
@@ -668,9 +691,9 @@ def right_sidebar_metrics(
     height = _dimension(sidebar_height, name="sidebar_height")
     normalized_scale = _scale(scale)
     name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
-    short_large_text = height < 1080 or (
-        normalized_scale >= 1.2 and height / normalized_scale < 620
-    )
+    logical_height = height / normalized_scale
+    short_large_text = logical_height < 1080
+    very_short_large_text = normalized_scale >= 1.2 and logical_height < 620
 
     if short_large_text:
         # Scaling every spacer and card minimum consumes the available height
@@ -709,6 +732,21 @@ def right_sidebar_metrics(
                 # wrapped labels request more height than their shared card,
                 # so the follow-up text escapes into the secondary statistics.
                 # The primary status/time values remain larger and unchanged.
+                context_value_font = 11
+            if very_short_large_text:
+                # Preserve complete value lines on 768/900 px displays.  An
+                # intact 14/12/11 pt hierarchy is more readable than larger
+                # glyphs clipped by the primary/context cards.  Reclaim only
+                # decorative vertical space: these reductions return 23 px
+                # at 1366x768 while leaving every font unchanged.
+                card_gap = 3
+                date_gap = 1
+                clock_gap = 3
+                card_padding = 4
+                context_padding = 4
+                secondary_card_padding = 4
+                value_font = min(value_font, 14)
+                secondary_value_font = min(secondary_value_font, 12)
                 context_value_font = 11
         else:
             # A 1080 px window leaves a 1012 px sidebar after the status bar.

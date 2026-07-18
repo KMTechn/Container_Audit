@@ -999,6 +999,14 @@ class ContainerAudit:
         self.style.theme_use('clam')
         self.apply_scaling()
 
+    def _button_style_padding(self, tokens, content_height: int) -> tuple[int, int]:
+        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        if scale >= 1.2 and content_height / scale < 620:
+            # Natural-width center actions fit the four-column 1366 layout at
+            # this padding while retaining the requested 17 pt label font.
+            return min(tokens.spacing.lg, 12), min(tokens.spacing.sm, 7)
+        return tokens.spacing.lg, tokens.spacing.sm
+
     def apply_scaling(self):
         try:
             content_width = max(1, int(self.root.winfo_width()))
@@ -1013,7 +1021,7 @@ class ContainerAudit:
         l = tokens.fonts.item_title
         xl = tokens.fonts.stage_title
         xxl = tokens.fonts.counter
-        button_padding = (tokens.spacing.lg, tokens.spacing.sm)
+        button_padding = self._button_style_padding(tokens, content_height)
         self.style.configure('TFrame', background=self.COLOR_BG)
         self.style.configure('Sidebar.TFrame', background=self.COLOR_SIDEBAR_BG)
         self.style.configure('Card.TFrame', background=self.COLOR_CARD_BG, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
@@ -1804,9 +1812,9 @@ class ContainerAudit:
                 max_sash_1 = max(min_sash_1 + 1, total_width - right_min)
                 sash_1_pos = max(min_sash_1, min(sash_1_pos, max_sash_1))
             self._paned_layout_signature = layout_signature
-            if abs(self.paned_window.sashpos(0) - sash_0_pos) > 1:
+            if self.paned_window.sashpos(0) != sash_0_pos:
                 self.paned_window.sashpos(0, sash_0_pos)
-            if abs(self.paned_window.sashpos(1) - sash_1_pos) > 1:
+            if self.paned_window.sashpos(1) != sash_1_pos:
                 self.paned_window.sashpos(1, sash_1_pos)
         except tk.TclError:
             return
@@ -1835,6 +1843,12 @@ class ContainerAudit:
     def _clamped_int(value: float, minimum: int, maximum: int) -> int:
         return max(minimum, min(maximum, int(round(value))))
 
+    def _center_vertical_scale(self, center_height: int) -> float:
+        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        if scale >= 1.2 and center_height / scale < 620:
+            return min(scale, 1.2)
+        return scale
+
     def _get_scanned_listbox_metrics(
         self,
         center_width: int,
@@ -1852,10 +1866,14 @@ class ContainerAudit:
             "header_font_size": metrics.header_font_size,
             "horizontal_pad": metrics.horizontal_pad,
             "top_pady": metrics.top_pady,
+            "header_bottom_pady": metrics.header_bottom_pady,
             "visible_rows": metrics.visible_rows,
         }
 
-    def _schedule_scanned_listbox_layout_refresh(self, event=None) -> None:
+    def _schedule_scanned_listbox_layout_refresh(self, event=None, *, generation=None) -> None:
+        current_generation = getattr(self, "_center_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
         if getattr(self, "_scanned_listbox_layout_job", None):
             return
         root = getattr(self, "root", None)
@@ -1863,17 +1881,28 @@ class ContainerAudit:
             self._apply_scanned_listbox_layout()
             return
         try:
-            self._scanned_listbox_layout_job = root.after_idle(self._apply_scanned_listbox_layout)
+            self._scanned_listbox_layout_job = root.after_idle(
+                self._apply_scanned_listbox_layout,
+                current_generation,
+            )
         except AttributeError:
             try:
-                self._scanned_listbox_layout_job = root.after(0, self._apply_scanned_listbox_layout)
+                self._scanned_listbox_layout_job = root.after(
+                    0,
+                    self._apply_scanned_listbox_layout,
+                    current_generation,
+                )
             except AttributeError:
-                self._apply_scanned_listbox_layout()
+                self._apply_scanned_listbox_layout(current_generation)
         except tk.TclError:
             return
 
-    def _apply_scanned_listbox_layout(self, event=None) -> None:
+    def _apply_scanned_listbox_layout(self, generation=None) -> None:
         self._scanned_listbox_layout_job = None
+        current_generation = getattr(self, "_center_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
+        generation = current_generation
         listbox = getattr(self, "scanned_listbox", None)
         if listbox is None:
             return
@@ -1891,18 +1920,24 @@ class ContainerAudit:
         if center_width <= 1 or center_height <= 1:
             return
 
-        self._apply_center_layout(parent_frame, center_width, center_height)
+        self._apply_center_layout(
+            parent_frame,
+            center_width,
+            center_height,
+            generation=generation,
+        )
         metrics = self._get_scanned_listbox_metrics(center_width, center_height, list_height)
         metrics_key = (
+            generation,
             metrics["font_size"],
             metrics["header_font_size"],
             metrics["horizontal_pad"],
             metrics["top_pady"],
+            metrics["header_bottom_pady"],
             metrics["visible_rows"],
         )
         if metrics_key == getattr(self, "_scanned_listbox_layout_metrics", None):
             return
-        self._scanned_listbox_layout_metrics = metrics_key
 
         try:
             listbox.configure(
@@ -1921,11 +1956,12 @@ class ContainerAudit:
                 )
                 header.grid_configure(
                     padx=metrics["horizontal_pad"],
-                    pady=(metrics["top_pady"], max(4, int(6 * self.scale_factor))),
+                    pady=(metrics["top_pady"], metrics["header_bottom_pady"]),
                 )
             scrollbar = getattr(self, "scanned_list_scrollbar", None)
             if scrollbar is not None:
                 scrollbar.grid_configure(padx=(0, metrics["horizontal_pad"]))
+            self._scanned_listbox_layout_metrics = metrics_key
         except (tk.TclError, AttributeError):
             return
 
@@ -1972,10 +2008,21 @@ class ContainerAudit:
             "action_columns": metrics.action_columns,
         }
 
-    def _apply_center_layout(self, parent_frame=None, center_width: int = 0, center_height: int = 0) -> None:
+    def _apply_center_layout(
+        self,
+        parent_frame=None,
+        center_width: int = 0,
+        center_height: int = 0,
+        *,
+        generation=None,
+    ) -> None:
         parent_frame = parent_frame or getattr(self, "_center_content_frame", None)
         if parent_frame is None:
             return
+        current_generation = getattr(self, "_center_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
+        generation = current_generation
         try:
             center_width = center_width or parent_frame.winfo_width()
             center_height = center_height or parent_frame.winfo_height()
@@ -1984,10 +2031,20 @@ class ContainerAudit:
         if center_width <= 1 or center_height <= 1:
             return
         metrics = self._get_center_layout_metrics(center_width, center_height)
-        metrics_key = tuple(metrics.values())
+        # Action wording changes at 960 px even when all geometry metrics stay
+        # identical.  Include that derived state so a slow sash drag cannot
+        # leave compact/full labels cached on the wrong side of the boundary.
+        compact_action_labels = 1 < int(center_width) < 960
+        scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        compact_notice_message = scale >= 1.2 and center_height / scale < 620
+        metrics_key = (
+            generation,
+            compact_action_labels,
+            compact_notice_message,
+            *metrics.values(),
+        )
         if metrics_key == getattr(self, "_center_layout_metrics", None):
             return
-        self._center_layout_metrics = metrics_key
         try:
             parent_frame.grid_rowconfigure(4, weight=0, minsize=metrics["warning_band_height"])
             parent_frame.grid_rowconfigure(5, weight=3, minsize=metrics["list_minsize"])
@@ -2015,10 +2072,14 @@ class ContainerAudit:
                 self.notice_message_label.configure(
                     font=(self.DEFAULT_FONT, metrics["notice_message_font"])
                 )
+                self.notice_message_label.grid_configure(
+                    padx=4 if compact_notice_message else 8
+                )
             button_frame = getattr(self, "_center_button_frame", None)
             if button_frame is not None:
                 button_frame.grid_configure(pady=(metrics["button_top"], 0))
                 self._layout_center_action_buttons(center_width, metrics["button_pad_x"])
+            self._center_layout_metrics = metrics_key
         except (tk.TclError, AttributeError):
             return
 
@@ -2030,6 +2091,9 @@ class ContainerAudit:
         try:
             if center_width <= 0:
                 center_width = button_frame.winfo_width()
+            center_frame = getattr(self, "_center_content_frame", None)
+            center_height = center_frame.winfo_height() if center_frame is not None else 1080
+            vertical_scale = self._center_vertical_scale(center_height)
             self._refresh_action_button_labels(center_width)
             columns = len(buttons) if center_width >= 620 else 2
             for index, button in enumerate(buttons):
@@ -2039,7 +2103,7 @@ class ContainerAudit:
                     column=index % columns,
                     sticky='ew',
                     padx=pad_x,
-                    pady=(0, max(4, int(6 * self.scale_factor))),
+                    pady=(0, max(4, int(6 * vertical_scale))),
                 )
             for column in range(len(buttons)):
                 button_frame.grid_columnconfigure(
@@ -2137,8 +2201,8 @@ class ContainerAudit:
                 "reset": "리셋",
                 "undo": "스캔 취소",
                 "park": "보류",
-                "submit": "담당자 확인" if operator_review else "트레이 제출",
-                "operations": "운영 작업 ▾",
+                "submit": "확인" if operator_review else "제출",
+                "operations": "운영 작업",
                 "replace": "교체 취소" if replacement_active else "교체",
                 "exchange": (
                     "중앙 교환"
@@ -2148,9 +2212,9 @@ class ContainerAudit:
             }
         return {
             "reset": "현재 작업 리셋",
-            "undo": "마지막 스캔 취소",
+            "undo": "스캔 취소",
             "park": "트레이 보류",
-            "submit": "담당자 확인 필요" if operator_review else "✅ 트레이 제출",
+            "submit": "담당 확인" if operator_review else "트레이 제출",
             "operations": "운영 작업 ▾",
             "replace": "교체 취소" if replacement_active else "🔄 완료 현품표 교체",
             "exchange": (
@@ -2306,6 +2370,13 @@ class ContainerAudit:
             return
         scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
         try:
+            parent_width = int(parent_frame.winfo_width())
+            compact_large_text = scale >= 1.2 and 1 < parent_width < 420
+            tray_image_checkbox = getattr(self, "tray_image_checkbox", None)
+            if tray_image_checkbox is not None:
+                tray_image_checkbox.configure(
+                    text="트레이 이미지" if compact_large_text else "트레이 이미지 보기"
+                )
             if getattr(self, "show_tray_image_var", None) is not None and self.show_tray_image_var.get():
                 parent_frame.grid_rowconfigure(0, weight=3)
                 parent_frame.grid_rowconfigure(1, weight=2, minsize=int(180 * scale))
@@ -2352,10 +2423,14 @@ class ContainerAudit:
             "context_value_font": metrics.context_value_font,
         }
 
-    def _apply_right_sidebar_layout(self, event=None) -> None:
+    def _apply_right_sidebar_layout(self, event=None, *, generation=None) -> None:
         parent_frame = getattr(self, "_right_sidebar_frame", None)
         if parent_frame is None:
             return
+        current_generation = getattr(self, "_right_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
+        generation = current_generation
         try:
             height = parent_frame.winfo_height()
         except (tk.TclError, AttributeError):
@@ -2363,10 +2438,9 @@ class ContainerAudit:
         if height <= 1:
             return
         metrics = self._get_right_sidebar_layout_metrics(height)
-        metrics_key = tuple(metrics.values())
+        metrics_key = (generation, *metrics.values())
         if metrics_key == getattr(self, "_right_sidebar_layout_metrics", None):
             return
-        self._right_sidebar_layout_metrics = metrics_key
         try:
             parent_frame.configure(padding=(metrics["outer_padding"], metrics["outer_padding"]))
             parent_frame.grid_rowconfigure(6, weight=0 if metrics["short_large_text"] else 1)
@@ -2446,18 +2520,44 @@ class ContainerAudit:
                     legend_frame.grid(row=7, column=0, sticky='sew')
                 else:
                     legend_frame.grid_forget()
+            # Cache only after every widget in this generation accepted the
+            # metrics.  A configure event during reconstruction must not make
+            # a partially styled generation look complete.
+            self._right_sidebar_layout_metrics = metrics_key
         except (tk.TclError, AttributeError):
             return
 
     @staticmethod
     def _tree_available_width(tree: ttk.Treeview) -> int:
+        try:
+            tree_width = int(tree.winfo_width())
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            tree_width = 0
+        if tree_width > 1:
+            # Treeview already excludes its sibling scrollbar.  Keep a small
+            # border gutter so the final heading never extends into the edge.
+            return max(1, tree_width - 4)
+
         parent_frame = tree.master
         available_width = parent_frame.winfo_width()
         for child in parent_frame.winfo_children():
-            if isinstance(child, ttk.Scrollbar) and child.winfo_ismapped():
-                available_width -= child.winfo_width()
+            try:
+                is_scrollbar = child.winfo_class() == "TScrollbar"
+            except (AttributeError, tk.TclError):
+                try:
+                    is_scrollbar = isinstance(child, ttk.Scrollbar)
+                except TypeError:
+                    is_scrollbar = False
+            if is_scrollbar:
+                try:
+                    scrollbar_width = int(child.winfo_width())
+                    if scrollbar_width <= 1:
+                        scrollbar_width = int(child.winfo_reqwidth())
+                except (AttributeError, TypeError, ValueError, tk.TclError):
+                    scrollbar_width = 0
+                available_width -= max(0, scrollbar_width)
                 break
-        return max(1, available_width)
+        return max(1, available_width - 4)
 
     def _apply_tree_row_styles(self, tree: ttk.Treeview) -> None:
         tree.tag_configure('even', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT)
@@ -2476,7 +2576,12 @@ class ContainerAudit:
         available_width = self._tree_available_width(self.summary_tree)
         if available_width <= 1:
             return
-        if available_width < 420:
+        scale = max(1.0, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        # Full Korean headings need both a wider baseline than the old 420 px
+        # cutoff and physical room for the configured Treeview heading font.
+        # Prefer the compact wording whenever that room is unavailable.
+        full_heading_threshold = int(round(540 * scale))
+        if available_width < full_heading_threshold:
             headings = {"item_name_spec": "품목", "item_code": "코드", "count": "완료"}
             widths = {
                 "item_name_spec": int(available_width * 0.42),
@@ -2502,7 +2607,9 @@ class ContainerAudit:
         available_width = self._tree_available_width(self.parked_tree)
         if available_width <= 1:
             return
-        if available_width < 380:
+        scale = max(1.0, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        full_heading_threshold = int(round(380 * scale))
+        if available_width < full_heading_threshold:
             item_heading, count_heading = "품목", "수량"
             count_width = max(58, int(available_width * 0.32))
         else:
@@ -2604,8 +2711,11 @@ class ContainerAudit:
         self.summary_tree['yscrollcommand'] = sb1.set
         sb1.grid(row=0, column=1, sticky='ns')
 
-        # tree_frame의 크기가 변경될 때마다 컬럼 너비를 조절하는 함수를 호출하도록 바인딩합니다.
-        tree_frame.bind('<Configure>', self._adjust_summary_tree_columns)
+        # Bind to the Treeview itself.  Its parent receives <Configure> before
+        # geometry propagation finishes, so reading the child width there can
+        # use the previous frame's size during compact/wide round trips.
+        self.summary_tree.bind('<Configure>', self._adjust_summary_tree_columns)
+        self.root.after_idle(self._adjust_summary_tree_columns)
 
         self.parked_title_label = ttk.Label(
             top_frame,
@@ -2632,7 +2742,8 @@ class ContainerAudit:
         sb2 = ttk.Scrollbar(parked_tree_frame, orient='vertical', command=self.parked_tree.yview)
         self.parked_tree['yscrollcommand'] = sb2.set
         sb2.grid(row=0, column=1, sticky='ns')
-        parked_tree_frame.bind('<Configure>', self._adjust_parked_tree_columns)
+        self.parked_tree.bind('<Configure>', self._adjust_parked_tree_columns)
+        self.root.after_idle(self._adjust_parked_tree_columns)
         self.parked_tree.bind("<Double-1>", self.on_parked_tray_select)
         bottom_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         bottom_frame.grid(row=1, column=0, sticky='nsew')
@@ -2642,17 +2753,35 @@ class ContainerAudit:
         self.tray_image_checkbox.grid(row=0, column=0, sticky='w', pady=(10, 5))
         self.tray_image_label = ttk.Label(bottom_frame, background=self.COLOR_SIDEBAR_BG, anchor='center')
         self.tray_image_label.grid(row=1, column=0, sticky='nsew', pady=(0, 10))
+        parent_frame.bind('<Configure>', lambda _event: self._apply_left_sidebar_layout())
         self._apply_left_sidebar_layout()
 
     def _create_center_content(self, parent_frame):
         self._center_content_frame = parent_frame
+        previous_job = getattr(self, "_scanned_listbox_layout_job", None)
+        if previous_job:
+            try:
+                self.root.after_cancel(previous_job)
+            except (AttributeError, tk.TclError):
+                pass
+        if hasattr(parent_frame, "unbind"):
+            try:
+                parent_frame.unbind('<Configure>')
+            except (AttributeError, tk.TclError):
+                pass
+        self._center_widget_generation = getattr(self, "_center_widget_generation", 0) + 1
+        center_generation = self._center_widget_generation
         self._center_layout_metrics = None
-        parent_frame.grid_rowconfigure(5, weight=2, minsize=int(140 * self.scale_factor))
         parent_frame.grid_columnconfigure(0, weight=1)
         self._scanned_listbox_parent_frame = parent_frame
         self._scanned_listbox_layout_job = None
         self._scanned_listbox_layout_metrics = None
         initial_center_metrics = self._get_center_layout_metrics(720, 720)
+        parent_frame.grid_rowconfigure(
+            5,
+            weight=2,
+            minsize=initial_center_metrics["list_minsize"],
+        )
         scanned_metrics = self._get_scanned_listbox_metrics(
             720,
             720,
@@ -2678,8 +2807,8 @@ class ContainerAudit:
         self.main_progress_bar = ttk.Progressbar(parent_frame, orient='horizontal', mode='determinate', maximum=self.TRAY_SIZE, style='Big.Horizontal.TProgressbar')
         self.main_progress_bar.grid(row=2, column=0, sticky='ew', pady=(0, 20), padx=20)
         vcmd = (self.root.register(self._validate_barcode_input), '%P')
-        self.scan_entry = tk.Entry(parent_frame, justify='center', font=(self.DEFAULT_FONT, int(30*self.scale_factor), 'bold'), bd=1, relief=tk.SOLID, bg=self.COLOR_INPUT_BG, fg=self.COLOR_TEXT, insertbackground=self.COLOR_PRIMARY, selectbackground=self.COLOR_PRIMARY, selectforeground='white', highlightbackground=self.COLOR_PRIMARY_SOFT, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2, validate='key', validatecommand=vcmd)
-        self.scan_entry.grid(row=3, column=0, sticky='ew', ipady=int(15*self.scale_factor), padx=30)
+        self.scan_entry = tk.Entry(parent_frame, justify='center', font=(self.DEFAULT_FONT, initial_center_metrics["entry_font"], 'bold'), bd=1, relief=tk.SOLID, bg=self.COLOR_INPUT_BG, fg=self.COLOR_TEXT, insertbackground=self.COLOR_PRIMARY, selectbackground=self.COLOR_PRIMARY, selectforeground='white', highlightbackground=self.COLOR_PRIMARY_SOFT, highlightcolor=self.COLOR_PRIMARY, highlightthickness=2, validate='key', validatecommand=vcmd)
+        self.scan_entry.grid(row=3, column=0, sticky='ew', ipady=initial_center_metrics["entry_ipady"], padx=30)
         self.scan_entry.bind('<Return>', self.process_barcode)
         self.notice_frame = tk.Frame(
             parent_frame,
@@ -2741,7 +2870,7 @@ class ContainerAudit:
             text="현재 트레이 스캔 목록 · 0건",
             style='Subtle.TLabel',
             anchor='w',
-            font=(self.DEFAULT_FONT, max(11, int(12 * self.scale_factor)), 'bold'),
+            font=(self.DEFAULT_FONT, scanned_metrics["header_font_size"], 'bold'),
         )
         self.scanned_list_header_label.grid(
             row=0,
@@ -2756,17 +2885,29 @@ class ContainerAudit:
         self.scanned_list_scrollbar = ttk.Scrollbar(scan_list_frame, orient='vertical', command=self.scanned_listbox.yview)
         self.scanned_listbox.configure(yscrollcommand=self.scanned_list_scrollbar.set)
         self.scanned_list_scrollbar.grid(row=1, column=1, sticky='ns', padx=(0, scanned_metrics["horizontal_pad"]))
-        parent_frame.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
-        self.scanned_listbox.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
-        self.root.after(0, self._apply_scanned_listbox_layout)
+        parent_frame.bind(
+            '<Configure>',
+            lambda event, generation=center_generation: self._schedule_scanned_listbox_layout_refresh(
+                event,
+                generation=generation,
+            ),
+        )
+        self.scanned_listbox.bind(
+            '<Configure>',
+            lambda event, generation=center_generation: self._schedule_scanned_listbox_layout_refresh(
+                event,
+                generation=generation,
+            ),
+        )
+        self.root.after(0, self._apply_scanned_listbox_layout, center_generation)
         button_frame = ttk.Frame(parent_frame)
         self._center_button_frame = button_frame
         button_frame.grid(row=6, column=0, sticky='ew', pady=(30, 0), padx=20)
 
-        self.submit_tray_button = ttk.Button(button_frame, text="트레이 제출", command=self.submit_current_tray, style='Success.TButton')
-        self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton')
-        self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton')
-        self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, style='Secondary.TButton')
+        self.submit_tray_button = ttk.Button(button_frame, text="트레이 제출", command=self.submit_current_tray, style='Success.TButton', width=0)
+        self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton', width=0)
+        self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton', width=0)
+        self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, style='Secondary.TButton', width=0)
         # Compatibility handles for existing state logic and tests. These
         # actions are intentionally exposed only through the operations menu.
         self.reset_button = ttk.Button(button_frame, text="작업 리셋", command=self.reset_current_work, style='Danger.TButton')
@@ -2779,12 +2920,19 @@ class ContainerAudit:
             self.operations_button,
         ]
         self._center_action_groups = []
-        self._layout_center_action_buttons(720, int(8 * self.scale_factor))
+        self._layout_center_action_buttons(720, initial_center_metrics["button_pad_x"])
         self._update_action_button_states()
         self._render_warning_state()
 
     def _create_right_sidebar_content(self, parent_frame):
         self._right_sidebar_frame = parent_frame
+        if hasattr(parent_frame, "unbind"):
+            try:
+                parent_frame.unbind('<Configure>')
+            except (AttributeError, tk.TclError):
+                pass
+        self._right_widget_generation = getattr(self, "_right_widget_generation", 0) + 1
+        right_generation = self._right_widget_generation
         self._right_sidebar_layout_metrics = None
         parent_frame.grid_columnconfigure(0, weight=1)
         parent_frame['padding'] = (10, 10)
@@ -2862,8 +3010,20 @@ class ContainerAudit:
             style='Subtle.TLabel',
             wraplength=280,
         ).pack(anchor='w')
-        parent_frame.bind('<Configure>', self._apply_right_sidebar_layout, add="+")
-        self.root.after(0, self._apply_right_sidebar_layout)
+        parent_frame.bind(
+            '<Configure>',
+            lambda event, generation=right_generation: self._apply_right_sidebar_layout(
+                event,
+                generation=generation,
+            ),
+        )
+        self.root.after(
+            0,
+            lambda generation=right_generation: self._apply_right_sidebar_layout(
+                generation=generation,
+            ),
+        )
+        self._apply_right_sidebar_layout(generation=right_generation)
         self._render_warning_state()
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
@@ -3805,6 +3965,7 @@ class ContainerAudit:
             active_notice = state.active_notice
             if acknowledge_button is not None:
                 if active_notice is not None and active_notice.blocking:
+                    acknowledge_button.grid()
                     acknowledge_button.configure(
                         text="확인",
                         state=tk.NORMAL,
@@ -3814,6 +3975,7 @@ class ContainerAudit:
                         activeforeground="white",
                     )
                 elif state.is_blocking:
+                    acknowledge_button.grid()
                     acknowledge_button.configure(
                         text="담당자 확인 필요",
                         state=tk.DISABLED,
@@ -3821,6 +3983,11 @@ class ContainerAudit:
                         fg=title_color,
                     )
                 else:
+                    # A blank disabled button still reserves its horizontal
+                    # padding (62 px at DISPLAY2 scaling), clipping ordinary
+                    # completion/recovery guidance.  Remove it entirely until
+                    # a blocking state needs an explicit acknowledgement.
+                    acknowledge_button.grid_remove()
                     acknowledge_button.configure(
                         text="",
                         state=tk.DISABLED,

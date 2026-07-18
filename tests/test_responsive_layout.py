@@ -212,8 +212,56 @@ def test_short_large_text_sidebar_caps_decorative_space_and_keeps_follow_up_prim
     assert short.follow_up_minsize > short.primary_card_minsize
     assert short.primary_card_minsize > short.secondary_card_minsize
     assert short.value_font > short.secondary_value_font
-    assert roomy.short_large_text is False
+    # 1324 physical px at 1.4 is only 946 logical px, so it must retain the
+    # constrained tier instead of expanding decorative padding.
+    assert roomy.short_large_text is True
     assert roomy.legend_visible is True
+    assert roomy.card_padding <= 8
+
+
+def test_scale14_uses_logical_height_and_caps_only_short_fixed_rows():
+    compact_center = center_layout_metrics(710, 694, 1.4)
+    compact_list = scanned_list_metrics(
+        710,
+        694,
+        compact_center.list_minsize,
+        1.4,
+    )
+    tall_center = center_layout_metrics(1467, 1310, 1.4)
+    tall_list = scanned_list_metrics(
+        1467,
+        1310,
+        tall_center.list_minsize,
+        1.4,
+    )
+    tall_sidebar = right_sidebar_metrics(502, 1310, 1.4)
+
+    assert compact_center.entry_font <= 20
+    assert compact_center.count_font <= 43
+    assert compact_center.notice_title_font <= 12
+    assert compact_list.font_size <= 13
+    assert compact_list.visible_rows == 3
+    assert compact_list.header_bottom_pady == 3
+
+    assert tall_center.list_minsize <= 300
+    assert tall_center.button_top <= 4
+    assert tall_list.visible_rows == 5
+    assert tall_sidebar.short_large_text is True
+    assert tall_sidebar.card_padding <= 8
+
+
+def test_scale14_short_sidebar_preserves_complete_value_hierarchy():
+    metrics = right_sidebar_metrics(302, 707, 1.4)
+
+    assert metrics.value_font == 14
+    assert metrics.secondary_value_font == 12
+    assert metrics.context_value_font == 11
+    assert metrics.card_gap == 3
+    assert metrics.date_gap == 1
+    assert metrics.clock_gap == 3
+    assert metrics.card_padding == 4
+    assert metrics.context_padding == 4
+    assert metrics.secondary_card_padding == 4
 
 
 def test_short_large_text_sidebar_metrics_round_trip_without_accumulation():
