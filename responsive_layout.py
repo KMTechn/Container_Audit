@@ -703,9 +703,19 @@ def right_sidebar_metrics(
                 11,
                 13,
             )
+            if width < 260:
+                # At the supported 1366x768 geometry the right pane is only
+                # 243 px wide.  Keeping the context values at 13 pt makes both
+                # wrapped labels request more height than their shared card,
+                # so the follow-up text escapes into the secondary statistics.
+                # The primary status/time values remain larger and unchanged.
+                context_value_font = 11
         else:
-            outer_padding = _clamped_int(width * 0.028, 8, 12)
-            card_gap = _clamped_int(height * 0.008, 6, 9)
+            # A 1080 px window leaves a 1012 px sidebar after the status bar.
+            # Cap decorative spacing so the two primary cards and context card
+            # receive their full requested heights without reducing type size.
+            outer_padding = _clamped_int(width * 0.025, 8, 10)
+            card_gap = _clamped_int(height * 0.006, 5, 6)
             primary_card_minsize = _clamped_int(height * 0.120, 112, 126)
             secondary_card_minsize = _clamped_int(height * 0.072, 66, 80)
             follow_up_minsize = _clamped_int(height * 0.205, 190, 220)
@@ -713,8 +723,8 @@ def right_sidebar_metrics(
             legend_visible = True
             date_font = _clamped_int(width * 0.055, 18, 21)
             clock_font = _clamped_int(width * 0.072, 24, 28)
-            date_gap = 3
-            clock_gap = 8
+            date_gap = 2
+            clock_gap = 4
             card_padding = 8
             context_padding = 10
             secondary_card_padding = 7

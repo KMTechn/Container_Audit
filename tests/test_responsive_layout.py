@@ -260,6 +260,23 @@ def test_right_sidebar_reserves_value_lines_through_short_1080p_height():
     assert tall_wide.card_padding > short_wide.card_padding
 
 
+def test_right_sidebar_fits_narrow_context_and_preserves_short_1080p_value_type():
+    narrow_768 = right_sidebar_metrics(243, 704)
+    short_1080 = right_sidebar_metrics(502, 1012)
+
+    assert narrow_768.context_value_font == 11
+    assert narrow_768.value_font > narrow_768.context_value_font
+
+    # Keep the 19 pt primary values from the approved 1080p direction and
+    # reclaim only the decorative 15 px that previously compressed each of
+    # the three weighted cards by 5 px.
+    assert short_1080.value_font == 19
+    assert short_1080.outer_padding == 10
+    assert short_1080.card_gap == 6
+    assert short_1080.date_gap == 2
+    assert short_1080.clock_gap == 4
+
+
 def test_profile_override_is_validated():
     with pytest.raises(ValueError):
         pane_layout_metrics(1440, 900, profile="huge")  # type: ignore[arg-type]
