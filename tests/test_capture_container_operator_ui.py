@@ -9,21 +9,26 @@ from tools.capture_container_operator_ui import (
     DEFAULT_SCALE,
     DEFAULT_SIZES,
     DEFAULT_STATE_IDS,
+    DisplayMonitor,
     MAX_SCALE,
     MIN_SCALE,
     analyze_image,
     apply_cross_capture_contracts,
     assert_descendant,
+    build_monitor_capture_gate,
     build_isolated_app_settings,
     build_parser,
     build_state_fixtures,
     cluster_button_rows,
     evaluate_capture,
     evaluate_clipping_proxy,
+    monitor_preflight_manifest,
     normalize_capture_scan_rows,
     parse_scale,
     parse_sizes,
     parse_states,
+    rect_is_contained,
+    resolve_monitor_target,
 )
 
 
@@ -49,13 +54,102 @@ def test_scale_parser_defaults_to_one_and_accepts_supported_boundaries():
     parser = build_parser()
 
     assert parser.parse_args([]).scale == 1.0
+    assert parser.parse_args([]).monitor_device == ""
     assert parser.parse_args(["--scale", "1.4"]).scale == 1.4
+    assert parser.parse_args(
+        ["--monitor-device", r"\\.\DISPLAY2"]
+    ).monitor_device == r"\\.\DISPLAY2"
     assert parse_scale(str(MIN_SCALE)) == MIN_SCALE
     assert parse_scale(str(MAX_SCALE)) == MAX_SCALE
 
     for value in ("0.69", "2.51", "nan", "inf", "large", True):
         with pytest.raises(argparse.ArgumentTypeError):
             parse_scale(value)
+
+
+def _display_monitors():
+    return (
+        DisplayMonitor(
+            device_name=r"\\.\DISPLAY1",
+            monitor_rect=(0, 0, 2560, 1440),
+            work_rect=(0, 0, 2560, 1392),
+            primary=True,
+        ),
+        DisplayMonitor(
+            device_name=r"\\.\DISPLAY2",
+            monitor_rect=(693, -1440, 3253, 0),
+            work_rect=(693, -1440, 3253, -48),
+            primary=False,
+        ),
+    )
+
+
+def test_explicit_display2_preflight_centers_each_size_and_proves_non_primary():
+    sizes = ((1440, 900), (2560, 1080))
+    target = resolve_monitor_target(
+        r"\\.\DISPLAY2",
+        sizes,
+        monitors=_display_monitors(),
+    )
+    manifest = monitor_preflight_manifest(target, sizes)
+
+    assert target.tk_geometry((1440, 900)) == "1440x900+1253-1194"
+    assert target.tk_geometry((2560, 1080)) == "2560x1080+693-1284"
+    assert manifest["requested_device_name"] == r"\\.\DISPLAY2"
+    assert manifest["resolved_monitor"]["primary"] is False
+    assert manifest["resolved_monitor"]["work_rect"] == [693, -1440, 3253, -48]
+    assert manifest["checks"] == {
+        "requested_device_name_exact_match": True,
+        "target_is_non_primary": True,
+        "all_requested_geometries_contained_in_work_area": True,
+    }
+    assert manifest["passed"] is True
+
+
+def test_explicit_monitor_preflight_rejects_primary_missing_and_oversized_targets():
+    monitors = _display_monitors()
+
+    with pytest.raises(RuntimeError, match="must be non-primary"):
+        resolve_monitor_target(r"\\.\DISPLAY1", ((1440, 900),), monitors=monitors)
+    with pytest.raises(RuntimeError, match="match exactly one"):
+        resolve_monitor_target(r"\\.\DISPLAY9", ((1440, 900),), monitors=monitors)
+    with pytest.raises(RuntimeError, match="does not fit"):
+        resolve_monitor_target(r"\\.\DISPLAY2", ((2561, 1080),), monitors=monitors)
+
+
+def test_per_capture_monitor_gate_records_actual_device_and_containment():
+    monitors = _display_monitors()
+    target = resolve_monitor_target(
+        r"\\.\DISPLAY2",
+        ((1440, 900),),
+        monitors=monitors,
+    )
+    requested_rect = target.requested_client_rect((1440, 900))
+    gate = build_monitor_capture_gate(
+        target,
+        (1440, 900),
+        actual_client_rect=requested_rect,
+        actual_monitor=monitors[1],
+    )
+
+    assert gate["actual_monitor"]["device_name"] == r"\\.\DISPLAY2"
+    assert gate["actual_monitor"]["primary"] is False
+    assert gate["requested_client_rect"] == [1253, -1194, 2693, -294]
+    assert gate["actual_client_rect"] == [1253, -1194, 2693, -294]
+    assert all(gate["checks"].values())
+    assert gate["passed"] is True
+    assert rect_is_contained(requested_rect, monitors[1].work_rect) is True
+
+    wrong_monitor_gate = build_monitor_capture_gate(
+        target,
+        (1440, 900),
+        actual_client_rect=requested_rect,
+        actual_monitor=monitors[0],
+    )
+    assert wrong_monitor_gate["checks"]["actual_monitor_device_matches_target"] is False
+    assert wrong_monitor_gate["checks"]["actual_monitor_is_non_primary"] is False
+    assert wrong_monitor_gate["checks"]["monitor_work_area_unchanged"] is False
+    assert wrong_monitor_gate["passed"] is False
 
 
 def test_isolated_app_settings_keep_default_contract_and_apply_large_text_scale():
@@ -368,6 +462,34 @@ def _scan_row_evaluation_record(state: str, barcodes: list[str], rows: list[str]
             },
         },
     }
+
+
+def test_capture_evaluation_fails_a_false_explicit_monitor_gate():
+    record = _scan_row_evaluation_record("waiting", [], [])
+    record["fixture"] = {
+        "active_tray": False,
+        "scan_count": 0,
+        "last_normal_scan": "",
+        "tray": None,
+    }
+    record["monitor_gate"] = {
+        "gate_applicable": True,
+        "checks": {
+            "requested_device_name_exact_match": True,
+            "target_is_non_primary": True,
+            "requested_geometry_contained_in_target_work_area": True,
+            "actual_monitor_device_matches_target": False,
+            "actual_monitor_is_non_primary": True,
+            "monitor_work_area_unchanged": True,
+            "actual_geometry_contained_in_target_work_area": True,
+            "actual_client_size_matches_requested": True,
+        },
+        "passed": False,
+    }
+
+    assert evaluate_capture(record) == [
+        "monitor_gate_actual_monitor_device_matches_target"
+    ]
 
 
 def test_capture_evaluation_matches_every_fixture_barcode_in_display_order():

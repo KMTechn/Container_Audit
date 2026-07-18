@@ -33,6 +33,10 @@ NEAR_BLACK_FAILURE_RATIO = 0.35
 MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
+PRIMARY_MONITOR_FLAG = 1
+
+
+Rect = tuple[int, int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +77,51 @@ class StateFixture:
     notice: NoticeFixture | None = None
     completion: CompletionFixture | None = None
     completed_tray_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class DisplayMonitor:
+    """Stable subset of Win32 monitor metadata used by capture gates."""
+
+    device_name: str
+    monitor_rect: Rect
+    work_rect: Rect
+    primary: bool
+
+    def as_manifest(self) -> dict[str, Any]:
+        return {
+            "device_name": self.device_name,
+            "monitor_rect": list(self.monitor_rect),
+            "work_rect": list(self.work_rect),
+            "primary": self.primary,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class MonitorTarget:
+    """An explicitly selected non-primary monitor for fixture capture."""
+
+    requested_device_name: str
+    monitor: DisplayMonitor
+
+    def requested_client_rect(self, size: tuple[int, int]) -> Rect:
+        width, height = (int(value) for value in size)
+        work_left, work_top, work_right, work_bottom = self.monitor.work_rect
+        work_width = work_right - work_left
+        work_height = work_bottom - work_top
+        if width > work_width or height > work_height:
+            raise RuntimeError(
+                "capture size does not fit the selected monitor work area: "
+                f"device={self.monitor.device_name!r} size={width}x{height} "
+                f"work={self.monitor.work_rect}"
+            )
+        left = work_left + (work_width - width) // 2
+        top = work_top + (work_height - height) // 2
+        return left, top, left + width, top + height
+
+    def tk_geometry(self, size: tuple[int, int]) -> str:
+        left, top, right, bottom = self.requested_client_rect(size)
+        return _format_tk_geometry(right - left, bottom - top, left, top)
 
 
 def _products(count: int) -> tuple[str, ...]:
@@ -232,6 +281,215 @@ def parse_scale(value: object) -> float:
             f"scale must be between {MIN_SCALE} and {MAX_SCALE}: {scale}"
         )
     return scale
+
+
+def _format_tk_offset(value: int) -> str:
+    return f"+{value}" if value >= 0 else str(value)
+
+
+def _format_tk_geometry(width: int, height: int, left: int, top: int) -> str:
+    return (
+        f"{int(width)}x{int(height)}"
+        f"{_format_tk_offset(int(left))}{_format_tk_offset(int(top))}"
+    )
+
+
+def rect_is_contained(inner: Rect, outer: Rect) -> bool:
+    inner_left, inner_top, inner_right, inner_bottom = inner
+    outer_left, outer_top, outer_right, outer_bottom = outer
+    return bool(
+        inner_left < inner_right
+        and inner_top < inner_bottom
+        and outer_left < outer_right
+        and outer_top < outer_bottom
+        and inner_left >= outer_left
+        and inner_top >= outer_top
+        and inner_right <= outer_right
+        and inner_bottom <= outer_bottom
+    )
+
+
+def _monitor_from_win32_info(info: dict[str, Any]) -> DisplayMonitor:
+    return DisplayMonitor(
+        device_name=str(info.get("Device") or ""),
+        monitor_rect=tuple(int(value) for value in info["Monitor"]),
+        work_rect=tuple(int(value) for value in info["Work"]),
+        primary=bool(int(info.get("Flags", 0) or 0) & PRIMARY_MONITOR_FLAG),
+    )
+
+
+def enumerate_display_monitors() -> tuple[DisplayMonitor, ...]:
+    """Enumerate physical Windows display targets without guessing by position."""
+
+    if os.name != "nt":
+        raise RuntimeError("--monitor-device is supported only on Windows")
+    try:
+        import win32api
+    except ImportError as exc:  # pragma: no cover - Windows dependency guard
+        raise RuntimeError("pywin32 is required for --monitor-device") from exc
+
+    monitors = tuple(
+        _monitor_from_win32_info(win32api.GetMonitorInfo(handle))
+        for handle, _dc, _rect in win32api.EnumDisplayMonitors()
+    )
+    if not monitors:
+        raise RuntimeError("no Windows display monitors were detected")
+    return monitors
+
+
+def resolve_monitor_target(
+    device_name: str,
+    sizes: Sequence[tuple[int, int]],
+    *,
+    monitors: Sequence[DisplayMonitor] | None = None,
+) -> MonitorTarget:
+    """Resolve one exact, non-primary device and preflight every capture size."""
+
+    requested = str(device_name or "").strip()
+    if not requested:
+        raise RuntimeError("an exact monitor device name is required")
+    available = tuple(monitors) if monitors is not None else enumerate_display_monitors()
+    matches = [monitor for monitor in available if monitor.device_name == requested]
+    if len(matches) != 1:
+        available_names = ", ".join(repr(monitor.device_name) for monitor in available)
+        raise RuntimeError(
+            "selected monitor device must match exactly one connected display: "
+            f"requested={requested!r} available=[{available_names}]"
+        )
+    monitor = matches[0]
+    if monitor.primary:
+        raise RuntimeError(
+            "selected monitor must be non-primary: "
+            f"device={monitor.device_name!r} primary={monitor.primary}"
+        )
+    target = MonitorTarget(requested_device_name=requested, monitor=monitor)
+    for size in sizes:
+        requested_rect = target.requested_client_rect(size)
+        if not rect_is_contained(requested_rect, monitor.work_rect):
+            raise RuntimeError(
+                "requested capture geometry is outside the selected monitor work area: "
+                f"device={monitor.device_name!r} requested={requested_rect} "
+                f"work={monitor.work_rect}"
+            )
+    return target
+
+
+def monitor_preflight_manifest(
+    target: MonitorTarget,
+    sizes: Sequence[tuple[int, int]],
+) -> dict[str, Any]:
+    placements = []
+    for size in sizes:
+        requested_rect = target.requested_client_rect(size)
+        placements.append(
+            {
+                "requested_size": [int(size[0]), int(size[1])],
+                "tk_geometry": target.tk_geometry(size),
+                "requested_client_rect": list(requested_rect),
+                "requested_geometry_contained_in_work_area": rect_is_contained(
+                    requested_rect,
+                    target.monitor.work_rect,
+                ),
+            }
+        )
+    checks = {
+        "requested_device_name_exact_match": (
+            target.requested_device_name == target.monitor.device_name
+        ),
+        "target_is_non_primary": target.monitor.primary is False,
+        "all_requested_geometries_contained_in_work_area": all(
+            placement["requested_geometry_contained_in_work_area"]
+            for placement in placements
+        ),
+    }
+    return {
+        "gate_applicable": True,
+        "selection_mode": "explicit_device_name",
+        "requested_device_name": target.requested_device_name,
+        "resolved_monitor": target.monitor.as_manifest(),
+        "placements": placements,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def build_monitor_capture_gate(
+    target: MonitorTarget,
+    size: tuple[int, int],
+    *,
+    actual_client_rect: Rect,
+    actual_monitor: DisplayMonitor,
+) -> dict[str, Any]:
+    """Build the per-capture proof that the client remained on the target."""
+
+    requested_rect = target.requested_client_rect(size)
+    actual_width = actual_client_rect[2] - actual_client_rect[0]
+    actual_height = actual_client_rect[3] - actual_client_rect[1]
+    checks = {
+        "requested_device_name_exact_match": (
+            target.requested_device_name == target.monitor.device_name
+        ),
+        "target_is_non_primary": target.monitor.primary is False,
+        "requested_geometry_contained_in_target_work_area": rect_is_contained(
+            requested_rect,
+            target.monitor.work_rect,
+        ),
+        "actual_monitor_device_matches_target": (
+            actual_monitor.device_name == target.monitor.device_name
+        ),
+        "actual_monitor_is_non_primary": actual_monitor.primary is False,
+        "monitor_work_area_unchanged": (
+            actual_monitor.work_rect == target.monitor.work_rect
+        ),
+        "actual_geometry_contained_in_target_work_area": rect_is_contained(
+            actual_client_rect,
+            target.monitor.work_rect,
+        ),
+        "actual_client_size_matches_requested": (
+            actual_width,
+            actual_height,
+        )
+        == (int(size[0]), int(size[1])),
+    }
+    return {
+        "gate_applicable": True,
+        "requested_device_name": target.requested_device_name,
+        "target_monitor": target.monitor.as_manifest(),
+        "actual_monitor": actual_monitor.as_manifest(),
+        "requested_tk_geometry": target.tk_geometry(size),
+        "requested_client_rect": list(requested_rect),
+        "actual_client_rect": list(actual_client_rect),
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def collect_monitor_capture_gate(
+    root: Any,
+    target: MonitorTarget,
+    size: tuple[int, int],
+) -> dict[str, Any]:
+    """Read the live client rectangle and its owning Win32 monitor."""
+
+    import win32api
+    import win32con
+
+    left = int(root.winfo_rootx())
+    top = int(root.winfo_rooty())
+    width = max(1, int(root.winfo_width()))
+    height = max(1, int(root.winfo_height()))
+    actual_rect = (left, top, left + width, top + height)
+    handle = win32api.MonitorFromRect(
+        actual_rect,
+        win32con.MONITOR_DEFAULTTONEAREST,
+    )
+    actual_monitor = _monitor_from_win32_info(win32api.GetMonitorInfo(handle))
+    return build_monitor_capture_gate(
+        target,
+        size,
+        actual_client_rect=actual_rect,
+        actual_monitor=actual_monitor,
+    )
 
 
 def assert_descendant(path: Path, parent: Path, *, label: str) -> Path:
@@ -1042,6 +1300,23 @@ def _expected_scan_list_rows(fixture: dict[str, Any]) -> list[str]:
 
 def evaluate_capture(record: dict[str, Any]) -> list[str]:
     issues: list[str] = []
+    monitor_gate = record.get("monitor_gate")
+    if monitor_gate is not None:
+        if monitor_gate.get("gate_applicable") is not True:
+            issues.append("monitor_gate_not_applicable")
+        checks = monitor_gate.get("checks")
+        if not isinstance(checks, dict) or not checks:
+            issues.append("monitor_gate_checks_missing")
+        else:
+            issues.extend(
+                f"monitor_gate_{name}"
+                for name, passed in checks.items()
+                if passed is not True
+            )
+        if monitor_gate.get("passed") is not True and not any(
+            issue.startswith("monitor_gate_") for issue in issues
+        ):
+            issues.append("monitor_gate_failed")
     if "requested_scale" in record or "applied_scale_factor" in record:
         try:
             requested_scale = float(record["requested_scale"])
@@ -1198,10 +1473,38 @@ def _cancel_runtime_jobs(app: Any) -> None:
         setattr(app, name, None)
 
 
-def _configure_size(app: Any, size: tuple[int, int]) -> None:
+def _align_tk_client_to_rect(root: Any, requested_rect: Rect) -> None:
+    """Compensate for window chrome so the Tk client uses the requested rect."""
+
+    requested_left, requested_top, requested_right, requested_bottom = requested_rect
+    width = requested_right - requested_left
+    height = requested_bottom - requested_top
+    frame_left = requested_left
+    frame_top = requested_top
+    for _attempt in range(3):
+        root.geometry(_format_tk_geometry(width, height, frame_left, frame_top))
+        pump_tk(root, 140)
+        actual_left = int(root.winfo_rootx())
+        actual_top = int(root.winfo_rooty())
+        delta_left = requested_left - actual_left
+        delta_top = requested_top - actual_top
+        if delta_left == 0 and delta_top == 0:
+            break
+        frame_left += delta_left
+        frame_top += delta_top
+
+
+def _configure_size(
+    app: Any,
+    size: tuple[int, int],
+    monitor_target: MonitorTarget | None = None,
+) -> None:
     width, height = size
     app.root.state("normal")
-    app.root.geometry(f"{width}x{height}+0+0")
+    if monitor_target is None:
+        app.root.geometry(f"{width}x{height}+0+0")
+    else:
+        app.root.geometry(monitor_target.tk_geometry(size))
     app.root.attributes("-topmost", True)
     app.root.deiconify()
     app.root.lift()
@@ -1209,6 +1512,11 @@ def _configure_size(app: Any, size: tuple[int, int]) -> None:
     app.apply_scaling()
     app.show_validation_screen()
     pump_tk(app.root, 420)
+    if monitor_target is not None:
+        _align_tk_client_to_rect(
+            app.root,
+            monitor_target.requested_client_rect(size),
+        )
     _cancel_runtime_jobs(app)
 
 
@@ -1218,9 +1526,27 @@ def run_capture_matrix(
     sizes: Sequence[tuple[int, int]],
     state_ids: Sequence[str],
     scale: object = DEFAULT_SCALE,
+    monitor_device: str = "",
 ) -> tuple[Path, dict[str, Any]]:
     requested_scale = parse_scale(scale)
     isolated_settings = build_isolated_app_settings(requested_scale)
+    monitor_target = (
+        resolve_monitor_target(monitor_device, sizes)
+        if str(monitor_device or "").strip()
+        else None
+    )
+    monitor_preflight = (
+        monitor_preflight_manifest(monitor_target, sizes)
+        if monitor_target is not None
+        else {
+            "gate_applicable": False,
+            "selection_mode": "legacy_default_origin",
+            "requested_device_name": None,
+            "passed": True,
+        }
+    )
+    if monitor_target is not None and monitor_preflight["passed"] is not True:
+        raise RuntimeError("selected monitor failed capture preflight")
     resolved_output = assert_descendant(
         output_root,
         REPO_TMP_ROOT,
@@ -1230,7 +1556,11 @@ def run_capture_matrix(
     screenshot_root = resolved_output / "screenshots"
     screenshot_root.mkdir(parents=True, exist_ok=True)
     data_root = resolved_output / "_isolated_data"
-    geometry = f"{sizes[0][0]}x{sizes[0][1]}+0+0"
+    geometry = (
+        monitor_target.tk_geometry(sizes[0])
+        if monitor_target is not None
+        else f"{sizes[0][0]}x{sizes[0][1]}+0+0"
+    )
     guards = prepare_isolated_environment(data_root, geometry)
     dpi_mode = enable_per_monitor_dpi_awareness()
     module = _load_app_module()
@@ -1249,6 +1579,7 @@ def run_capture_matrix(
         "requested_states": list(state_ids),
         "requested_scale": requested_scale,
         "isolated_app_settings": isolated_settings,
+        "monitor_preflight": monitor_preflight,
         "near_black_failure_ratio": NEAR_BLACK_FAILURE_RATIO,
         "captures": [],
     }
@@ -1263,13 +1594,18 @@ def run_capture_matrix(
         ).replace("\\", "/")
         app.worker_name = "캡처 작업자"
         for size in sizes:
-            _configure_size(app, size)
+            _configure_size(app, size, monitor_target)
             size_dir = screenshot_root / f"{size[0]}x{size[1]}"
             size_dir.mkdir(parents=True, exist_ok=True)
             for state_id in state_ids:
                 fixture = fixtures_by_id[state_id]
                 apply_state_fixture(app, fixture, module)
                 pump_tk(app.root, 260)
+                monitor_gate = (
+                    collect_monitor_capture_gate(app.root, monitor_target, size)
+                    if monitor_target is not None
+                    else None
+                )
                 geometry_record = collect_ui_geometry(app)
                 image, source = capture_tk_client(app.root)
                 path = size_dir / f"{state_id}.png"
@@ -1290,6 +1626,8 @@ def run_capture_matrix(
                     "ui_geometry": geometry_record,
                     "rendered_state": collect_rendered_state(app),
                 }
+                if monitor_gate is not None:
+                    record["monitor_gate"] = monitor_gate
                 record["issues"] = evaluate_capture(record)
                 record["passed"] = not record["issues"]
                 manifest["captures"].append(record)
@@ -1322,6 +1660,15 @@ def run_capture_matrix(
             for capture in captures
         ),
         "issue_counts": issue_counts,
+        "monitor_gate_applicable": monitor_target is not None,
+        "monitor_gate_passed": (
+            all(
+                capture.get("monitor_gate", {}).get("passed") is True
+                for capture in captures
+            )
+            if monitor_target is not None
+            else True
+        ),
         "passed": len(captures) == len(sizes) * len(state_ids) and not issue_counts,
     }
     manifest_path = resolved_output / "manifest.json"
@@ -1365,6 +1712,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"UI scale factor from {MIN_SCALE} to {MAX_SCALE} (default: {DEFAULT_SCALE})",
     )
     parser.add_argument(
+        "--monitor-device",
+        default="",
+        help=(
+            "Exact Win32 non-primary monitor device name, for example "
+            r"\\.\DISPLAY2. Omit to preserve legacy +0+0 placement."
+        ),
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="return an error after writing the manifest when any proxy check fails",
@@ -1379,6 +1734,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         sizes=args.sizes,
         state_ids=args.states,
         scale=args.scale,
+        monitor_device=args.monitor_device,
     )
     summary = manifest["summary"]
     print(
@@ -1387,6 +1743,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "manifest": str(manifest_path),
                 "capture_count": summary["capture_count"],
                 "requested_scale": summary["requested_scale"],
+                "monitor_device": args.monitor_device or None,
+                "monitor_gate_passed": summary["monitor_gate_passed"],
                 "passed": summary["passed"],
                 "issue_counts": summary["issue_counts"],
             },
