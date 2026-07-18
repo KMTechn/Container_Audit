@@ -124,6 +124,7 @@ def _layout_snapshot(app, parent):
         "list_row_config": dict(parent.grid_rows[5]),
         "inner_list_row_config": dict(app._scan_list_frame.grid_rows[1]),
         "font": app.scanned_listbox.options["font"],
+        "header_font": app.scanned_list_header_label.options["font"],
         "height": app.scanned_listbox.options["height"],
         "padx": app.scanned_listbox.grid_options["padx"],
         "pady": app.scanned_listbox.grid_options["pady"],
@@ -192,3 +193,31 @@ def test_scan_list_survives_compact_standard_wide_compact_round_trip(center_view
     assert standard["list_row_config"]["minsize"] > compact_before["list_row_config"]["minsize"]
     assert wide["list_row_config"]["minsize"] >= standard["list_row_config"]["minsize"]
     assert parent.grid_rows.get(4, {}).get("weight", 0) == 0
+
+
+@pytest.mark.parametrize(
+    ("center_width", "center_height", "expected_rows", "max_font", "max_list_minsize"),
+    [
+        (815, 704, 3, 11, 145),
+        (818, 834, 5, 12, 210),
+        (1096, 1012, 5, 14, 300),
+    ],
+)
+def test_scan_list_requests_recent_rows_without_displacing_actions(
+    center_view,
+    center_width,
+    center_height,
+    expected_rows,
+    max_font,
+    max_list_minsize,
+):
+    app, parent = center_view
+    parent.set_size(center_width, center_height)
+    app.scanned_listbox.pixel_height = max_list_minsize
+    app._apply_scanned_listbox_layout()
+
+    assert app.scanned_listbox.options["height"] == expected_rows
+    assert app.scanned_listbox.options["font"][1] <= max_font
+    assert app.scanned_list_header_label.options["font"][1] <= max_font
+    assert parent.grid_rows[5]["minsize"] <= max_list_minsize
+    assert app._center_button_frame.grid_options["pady"][0] <= 4

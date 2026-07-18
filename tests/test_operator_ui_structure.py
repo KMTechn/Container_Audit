@@ -33,6 +33,9 @@ class FakeWidget:
         self.bindings = []
         self.items = []
         self.item_styles = {}
+        self.heading_options = {}
+        self.column_options = {}
+        self.tag_options = {}
         self._mapped = False
         self.pixel_width = 420
         self.pixel_height = 900
@@ -125,6 +128,15 @@ class FakeWidget:
     def set(self, *args):
         self.options["scroll"] = args
 
+    def heading(self, column, **kwargs):
+        self.heading_options[column] = dict(kwargs)
+
+    def column(self, column, **kwargs):
+        self.column_options.setdefault(column, {}).update(kwargs)
+
+    def tag_configure(self, tag, **kwargs):
+        self.tag_options[tag] = dict(kwargs)
+
     def __getitem__(self, key):
         return self.options.get(key)
 
@@ -194,6 +206,47 @@ def operator_view(monkeypatch):
     app._create_center_content(center)
     app._create_right_sidebar_content(right)
     return app, center, right
+
+
+def test_compact_worker_header_gives_name_and_button_full_width(monkeypatch):
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(container_audit_module.tk, name, _factory(f"tk.{name}"))
+    for name in (
+        "Frame",
+        "Label",
+        "Button",
+        "Treeview",
+        "Scrollbar",
+        "Checkbutton",
+    ):
+        monkeypatch.setattr(container_audit_module.ttk, name, _factory(f"ttk.{name}"))
+
+    class HiddenTrayImage:
+        @staticmethod
+        def get():
+            return False
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = FakeRoot()
+    app.scale_factor = 1.0
+    app.worker_name = "캡처 작업자"
+    app.show_tray_image_var = HiddenTrayImage()
+    left = FakeWidget(kind="LeftPane")
+
+    app._create_left_sidebar_content(left)
+
+    worker_frame = app.worker_info_label.master
+    header_frame = worker_frame.master
+    button_frame = app.change_worker_button.master
+    assert worker_frame.grid_options["row"] == 0
+    assert worker_frame.grid_options["column"] == 0
+    assert worker_frame.grid_options["sticky"] == "ew"
+    assert button_frame.master is header_frame
+    assert button_frame.grid_options["row"] == 1
+    assert button_frame.grid_options["column"] == 0
+    assert button_frame.grid_options["sticky"] == "ew"
+    assert app.worker_info_label.grid_options["sticky"] == "ew"
+    assert app.change_worker_button.pack_options["fill"] == container_audit_module.tk.X
 
 
 def test_center_has_the_only_full_scan_history_and_right_has_no_history_table(operator_view):
@@ -525,8 +578,8 @@ def test_short_large_text_sidebar_values_fit_and_legend_restores_on_round_trip(o
     assert compact_before["legend_mapped"] is False
     assert compact_before["date_font"][1] <= 20
     assert compact_before["clock_font"][1] <= 27
-    assert compact_before["status_padding"] == 8
-    assert compact_before["context_padding"] == 10
+    assert compact_before["status_padding"] == 6
+    assert compact_before["context_padding"] == 6
     assert compact_before["spacer_weight"] == 0
 
     for value_label in (
@@ -540,7 +593,7 @@ def test_short_large_text_sidebar_values_fit_and_legend_restores_on_round_trip(o
         assert value_label.options["anchor"] == "center"
         assert value_label.options["justify"] == "center"
 
-    wide = apply_at(510, 1040)
+    wide = apply_at(510, 1324)
     assert wide["legend_mapped"] is True
     assert wide["status_padding"] == 20
     assert wide["context_padding"] == 16

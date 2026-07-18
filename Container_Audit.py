@@ -1849,6 +1849,7 @@ class ContainerAudit:
         )
         return {
             "font_size": metrics.font_size,
+            "header_font_size": metrics.header_font_size,
             "horizontal_pad": metrics.horizontal_pad,
             "top_pady": metrics.top_pady,
             "visible_rows": metrics.visible_rows,
@@ -1894,6 +1895,7 @@ class ContainerAudit:
         metrics = self._get_scanned_listbox_metrics(center_width, center_height, list_height)
         metrics_key = (
             metrics["font_size"],
+            metrics["header_font_size"],
             metrics["horizontal_pad"],
             metrics["top_pady"],
             metrics["visible_rows"],
@@ -1914,6 +1916,9 @@ class ContainerAudit:
             )
             header = getattr(self, "scanned_list_header_label", None)
             if header is not None:
+                header.configure(
+                    font=(self.DEFAULT_FONT, metrics["header_font_size"], 'bold')
+                )
                 header.grid_configure(
                     padx=metrics["horizontal_pad"],
                     pady=(metrics["top_pady"], max(4, int(6 * self.scale_factor))),
@@ -1962,6 +1967,8 @@ class ContainerAudit:
             "list_minsize": metrics.list_minsize,
             "entry_font": metrics.entry_font,
             "count_font": metrics.count_font,
+            "notice_title_font": metrics.notice_title_font,
+            "notice_message_font": metrics.notice_message_font,
             "action_columns": metrics.action_columns,
         }
 
@@ -2000,6 +2007,14 @@ class ContainerAudit:
                 self.scan_entry.grid_configure(ipady=metrics["entry_ipady"], padx=metrics["horizontal_pad"])
             if hasattr(self, "notice_frame"):
                 self.notice_frame.grid_configure(padx=metrics["horizontal_pad"])
+            if hasattr(self, "notice_title_label"):
+                self.notice_title_label.configure(
+                    font=(self.DEFAULT_FONT, metrics["notice_title_font"], 'bold')
+                )
+            if hasattr(self, "notice_message_label"):
+                self.notice_message_label.configure(
+                    font=(self.DEFAULT_FONT, metrics["notice_message_font"])
+                )
             button_frame = getattr(self, "_center_button_frame", None)
             if button_frame is not None:
                 button_frame.grid_configure(pady=(metrics["button_top"], 0))
@@ -2507,10 +2522,10 @@ class ContainerAudit:
         top_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 10))
         top_frame.grid_columnconfigure(0, weight=1)
         header_frame = ttk.Frame(top_frame, style='Sidebar.TFrame')
-        header_frame.grid(row=0, column=0, sticky='ew', pady=(0, 20))
+        header_frame.grid(row=0, column=0, sticky='ew', pady=(0, 12))
         header_frame.grid_columnconfigure(0, weight=1)
         worker_info_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
-        worker_info_frame.grid(row=0, column=0, sticky='ew', padx=(0, 10))
+        worker_info_frame.grid(row=0, column=0, sticky='ew')
         worker_info_frame.grid_columnconfigure(0, weight=1)
         self.worker_info_label = ttk.Label(
             worker_info_frame,
@@ -2518,17 +2533,17 @@ class ContainerAudit:
             style='Sidebar.TLabel',
             justify='left',
         )
-        self.worker_info_label.grid(row=0, column=0, sticky='w')
+        self.worker_info_label.grid(row=0, column=0, sticky='ew')
         self._bind_label_to_container_width(self.worker_info_label, worker_info_frame, padding=8)
         buttons_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
-        buttons_frame.grid(row=0, column=1, sticky='e')
+        buttons_frame.grid(row=1, column=0, sticky='ew', pady=(6, 0))
         self.change_worker_button = ttk.Button(
             buttons_frame,
             text="작업자 변경",
             command=self.change_worker,
             style='Secondary.TButton',
         )
-        self.change_worker_button.pack(side=tk.LEFT, padx=(0, 5))
+        self.change_worker_button.pack(fill=tk.X)
 
         current_work_frame = ttk.Frame(top_frame, style='Card.TFrame', padding=12)
         self._current_work_frame = current_work_frame
@@ -2681,7 +2696,7 @@ class ContainerAudit:
             text="스캐너 준비",
             bg=self.COLOR_SURFACE_ALT,
             fg=self.COLOR_TEXT,
-            font=(self.DEFAULT_FONT, max(11, int(12 * self.scale_factor)), 'bold'),
+            font=(self.DEFAULT_FONT, initial_center_metrics["notice_title_font"], 'bold'),
             anchor='w',
         )
         self.notice_title_label.grid(row=0, column=0, sticky='w', padx=(12, 8), pady=8)
@@ -2690,7 +2705,7 @@ class ContainerAudit:
             text="현품표 또는 제품 바코드를 스캔하세요.",
             bg=self.COLOR_SURFACE_ALT,
             fg=self.COLOR_TEXT_SUBTLE,
-            font=(self.DEFAULT_FONT, max(10, int(11 * self.scale_factor))),
+            font=(self.DEFAULT_FONT, initial_center_metrics["notice_message_font"]),
             anchor='w',
             justify='left',
         )
@@ -2779,7 +2794,7 @@ class ContainerAudit:
         self.clock_label.grid(row=1, column=0, pady=(0,20))
         self.info_cards = {
             'status': self._create_info_card(parent_frame, "현재 작업 상태"),
-            'stopwatch': self._create_info_card(parent_frame, "현재 트레이 소요 시간"),
+            'stopwatch': self._create_info_card(parent_frame, "트레이 소요"),
         }
         self.info_cards['status']['frame'].grid(row=2, column=0, sticky='nsew', pady=(0, 10))
         self.info_cards['stopwatch']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))

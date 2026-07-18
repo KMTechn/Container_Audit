@@ -67,6 +67,8 @@ class CenterLayoutMetrics:
     list_minsize: int
     entry_font: int
     count_font: int
+    notice_title_font: int
+    notice_message_font: int
     action_columns: int
 
 
@@ -76,6 +78,7 @@ class ScannedListMetrics:
 
     profile: LayoutProfileName
     font_size: int
+    header_font_size: int
     horizontal_pad: int
     top_pady: int
     visible_rows: int
@@ -331,6 +334,7 @@ def center_layout_metrics(
     normalized_scale = _scale(scale)
     name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
     compact_height = height / normalized_scale < 700
+    height_constrained = height < 1080
     short_large_text = normalized_scale >= 1.2 and height / normalized_scale < 620
 
     horizontal_pad = _clamped_int(width * 0.035, 12 * normalized_scale, 48 * normalized_scale)
@@ -347,6 +351,17 @@ def center_layout_metrics(
         # space to the scan history. This is the completed-state escape hatch
         # when both the instruction and completion notice wrap at 1366x768.
         button_top = min(button_top, 8)
+    if height_constrained:
+        # Tk font points consume substantially more physical pixels on the
+        # high-DPI operator monitor. Reserve the action row before assigning
+        # flexible history space on both 768 px and 900 px displays.
+        item_top = min(item_top, 6)
+        item_bottom = min(item_bottom, 8)
+        count_top = min(count_top, 5)
+        count_bottom = min(count_bottom, 7)
+        progress_bottom = min(progress_bottom, 7)
+        entry_ipady = min(entry_ipady, 7 if height < 780 else 8)
+        button_top = min(button_top, 4)
 
     # Short operator displays must reserve enough room for the action groups
     # below the list.  The list remains the largest flexible center-lower
@@ -366,6 +381,9 @@ def center_layout_metrics(
         # Its short-display minimum must stay below the fixed action-row budget
         # so a wrapped completion notice cannot push the buttons off-screen.
         list_minsize = min(list_minsize, 128)
+    if height_constrained:
+        constrained_list_cap = 145 if height < 780 else 210 if height < 920 else 300
+        list_minsize = min(list_minsize, constrained_list_cap)
 
     warning_cap = max(1, int(round(height * 0.12)))
     warning_floor = min(warning_cap, max(1, int(round(42 * normalized_scale))))
@@ -379,6 +397,34 @@ def center_layout_metrics(
     count_floor = min(max(1, int(round(height * 0.18))), max(1, int(round(48 * normalized_scale))))
     count_ceiling = max(count_floor, min(int(round(height * 0.22)), int(round(76 * normalized_scale))))
     count_font = _clamped_int(height * (0.082 if compact_height else 0.088), count_floor, count_ceiling)
+    notice_title_font = max(10, int(round(12 * normalized_scale)))
+    notice_message_font = max(9, int(round(11 * normalized_scale)))
+    if height_constrained and height < 920:
+        entry_font = _clamped_int(
+            height * 0.024,
+            17 * normalized_scale,
+            20 * normalized_scale,
+        )
+        count_font = _clamped_int(
+            height * 0.052,
+            36 * normalized_scale,
+            44 * normalized_scale,
+        )
+        notice_title_font = max(9, int(round(10 * normalized_scale)))
+        notice_message_font = max(9, int(round(9 * normalized_scale)))
+    elif height_constrained:
+        entry_font = _clamped_int(
+            height * 0.024,
+            20 * normalized_scale,
+            24 * normalized_scale,
+        )
+        count_font = _clamped_int(
+            height * 0.052,
+            46 * normalized_scale,
+            54 * normalized_scale,
+        )
+        notice_title_font = max(10, int(round(11 * normalized_scale)))
+        notice_message_font = max(9, int(round(10 * normalized_scale)))
 
     # The center exposes exactly four short primary actions. Keeping them on
     # one physical row from 620 px prevents large-text settings from pushing
@@ -400,6 +446,8 @@ def center_layout_metrics(
         list_minsize=list_minsize,
         entry_font=entry_font,
         count_font=count_font,
+        notice_title_font=notice_title_font,
+        notice_message_font=notice_message_font,
         action_columns=action_columns,
     )
 
@@ -425,6 +473,7 @@ def scanned_list_metrics(
 
     horizontal_pad = _clamped_int(width * 0.045, 10 * normalized_scale, 38 * normalized_scale)
     top_pady = _clamped_int(height * 0.022, 6 * normalized_scale, 24 * normalized_scale)
+    height_constrained = height < 1080
     short_large_text = normalized_scale >= 1.2 and height / normalized_scale < 620
     if short_large_text:
         top_pady = min(top_pady, 10)
@@ -455,10 +504,47 @@ def scanned_list_metrics(
     estimated_row_height = max(20, int(round(font_size * 1.65)))
     minimum_rows = 3 if height / normalized_scale < 620 else 5
     visible_rows = _clamped_int(list_reference_height / estimated_row_height, minimum_rows, 18)
+    header_font_size = max(10, int(round(12 * normalized_scale)))
+    if height_constrained:
+        # Listbox height is expressed in text rows. Explicit profile-sized
+        # requests prevent high-DPI rows from crushing the final viewport and
+        # action row. New scans remain at index zero.
+        if height < 780:
+            font_size = max(
+                10,
+                int(round((14 if normalized_scale > 1.0 else 11) * normalized_scale)),
+            )
+            header_font_size = max(9, int(round(10 * normalized_scale)))
+            visible_rows = 3 if height >= 650 else max(5, visible_rows)
+            top_pady = min(top_pady, 4)
+        elif height < 850:
+            font_size = max(11, int(round(12 * normalized_scale)))
+            header_font_size = max(10, int(round(11 * normalized_scale)))
+            visible_rows = 5
+            top_pady = min(top_pady, 6)
+        elif height < 920 and list_reference_height >= 360:
+            # An intermediate-height pane with a genuinely roomy measured
+            # viewport can retain the standard type size without increasing
+            # the fixed list-row minimum used by the supported 900 px window.
+            font_size = max(12, int(round(18 * normalized_scale)))
+            header_font_size = max(10, int(round(12 * normalized_scale)))
+            visible_rows = max(8, visible_rows)
+            top_pady = min(top_pady, 6)
+        else:
+            font_size = max(12, int(round(14 * normalized_scale)))
+            header_font_size = max(10, int(round(12 * normalized_scale)))
+            visible_rows = 5
+            top_pady = min(top_pady, 8)
+        horizontal_pad = min(
+            horizontal_pad,
+            max(12, int(round((22 if height < 920 else 28) * normalized_scale))),
+        )
+        estimated_row_height = max(20, int(round(font_size * 1.65)))
 
     return ScannedListMetrics(
         profile=name,
         font_size=font_size,
+        header_font_size=header_font_size,
         horizontal_pad=horizontal_pad,
         top_pady=top_pady,
         visible_rows=visible_rows,
@@ -582,39 +668,67 @@ def right_sidebar_metrics(
     height = _dimension(sidebar_height, name="sidebar_height")
     normalized_scale = _scale(scale)
     name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
-    short_large_text = normalized_scale >= 1.2 and height / normalized_scale < 620
+    short_large_text = height < 1080 or (
+        normalized_scale >= 1.2 and height / normalized_scale < 620
+    )
 
     if short_large_text:
-        # At 1366x768 with 1.4x text the sidebar has roughly 700 physical
-        # pixels. Scaling every spacer and card minimum consumes more than that
-        # budget before wrapped values are considered. Keep the requested text
-        # preference, but cap the clock/decorative space and give the follow-up
-        # card enough real room for both of its values.
-        outer_padding = _clamped_int(width * 0.025, 6, 10)
-        card_gap = _clamped_int(height * 0.007, 4, 7)
-        primary_card_minsize = _clamped_int(height * 0.105, 72, 92)
-        secondary_card_minsize = _clamped_int(height * 0.064, 46, 62)
-        follow_up_minsize = _clamped_int(height * 0.220, 150, 190)
-        legend_pad_y = 0
-        legend_visible = False
-        date_font = _clamped_int(width * 0.060, 16, 20)
-        clock_font = _clamped_int(width * 0.085, 22, 27)
-        date_gap = 2
-        clock_gap = 7
-        card_padding = 8
-        context_padding = 10
-        secondary_card_padding = 7
-        value_font = _clamped_int(min(width * 0.065, height * 0.035), 18, 21)
-        secondary_value_font = _clamped_int(
-            min(width * 0.050, height * 0.025),
-            14,
-            17,
-        )
-        context_value_font = _clamped_int(
-            min(width * 0.060, height * 0.030),
-            16,
-            19,
-        )
+        # Scaling every spacer and card minimum consumes the available height
+        # before wrapped values are considered on short high-DPI displays.
+        # Keep a slightly roomier tier for 1080p while still reserving every
+        # value line and the follow-up context before secondary decoration.
+        if height < 920:
+            outer_padding = _clamped_int(width * 0.025, 6, 10)
+            card_gap = _clamped_int(height * 0.007, 4, 7)
+            primary_card_minsize = _clamped_int(height * 0.140, 96, 116)
+            secondary_card_minsize = _clamped_int(height * 0.082, 58, 76)
+            follow_up_minsize = _clamped_int(height * 0.285, 200, 248)
+            legend_pad_y = 0
+            legend_visible = False
+            date_font = _clamped_int(width * 0.055, 15, 18)
+            clock_font = _clamped_int(width * 0.075, 20, 24)
+            date_gap = 2
+            clock_gap = 5
+            card_padding = 6
+            context_padding = 6
+            secondary_card_padding = 5
+            value_font = _clamped_int(min(width * 0.055, height * 0.025), 13, 16)
+            secondary_value_font = _clamped_int(
+                min(width * 0.050, height * 0.025),
+                11,
+                14,
+            )
+            context_value_font = _clamped_int(
+                min(width * 0.060, height * 0.030),
+                11,
+                13,
+            )
+        else:
+            outer_padding = _clamped_int(width * 0.028, 8, 12)
+            card_gap = _clamped_int(height * 0.008, 6, 9)
+            primary_card_minsize = _clamped_int(height * 0.120, 112, 126)
+            secondary_card_minsize = _clamped_int(height * 0.072, 66, 80)
+            follow_up_minsize = _clamped_int(height * 0.205, 190, 220)
+            legend_pad_y = 6
+            legend_visible = True
+            date_font = _clamped_int(width * 0.055, 18, 21)
+            clock_font = _clamped_int(width * 0.072, 24, 28)
+            date_gap = 3
+            clock_gap = 8
+            card_padding = 8
+            context_padding = 10
+            secondary_card_padding = 7
+            value_font = _clamped_int(min(width * 0.055, height * 0.030), 16, 19)
+            secondary_value_font = _clamped_int(
+                min(width * 0.045, height * 0.025),
+                13,
+                16,
+            )
+            context_value_font = _clamped_int(
+                min(width * 0.055, height * 0.027),
+                14,
+                16,
+            )
     else:
         outer_padding = _clamped_int(width * 0.035, 8 * normalized_scale, 18 * normalized_scale)
         card_gap = _clamped_int(height * 0.011, 5 * normalized_scale, 14 * normalized_scale)

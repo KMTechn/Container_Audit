@@ -164,15 +164,21 @@ def test_short_large_text_center_reserves_completed_state_action_row():
 
 def test_scanned_list_metrics_keep_readable_rows_at_supported_extremes():
     compact = scanned_list_metrics(720, 700, 220, profile="compact")
+    standard = scanned_list_metrics(820, 834, 210, profile="standard")
+    short_wide = scanned_list_metrics(1100, 1012, 300, profile="wide")
     wide = scanned_list_metrics(1500, 1040, 430, profile="wide")
     large_text = scanned_list_metrics(700, 700, 220, 2.5, profile="compact")
 
-    for metrics in (compact, wide, large_text):
+    for metrics in (compact, standard, short_wide, wide, large_text):
         assert metrics.font_size > 0
         assert metrics.estimated_row_height >= 20
-    assert 5 <= compact.visible_rows <= 18
+    assert compact.visible_rows == 3
+    assert standard.visible_rows == 5
+    assert short_wide.visible_rows == 5
     assert 5 <= wide.visible_rows <= 18
-    assert 3 <= large_text.visible_rows <= 18
+    assert large_text.visible_rows == 3
+    assert compact.header_font_size <= compact.font_size
+    assert standard.header_font_size <= standard.font_size
     assert wide.font_size >= compact.font_size
     assert large_text.font_size >= compact.font_size
 
@@ -184,15 +190,17 @@ def test_right_sidebar_prioritizes_status_and_follow_up_over_secondary_stats():
     for metrics in (compact, wide):
         assert metrics.primary_card_minsize > metrics.secondary_card_minsize
         assert metrics.follow_up_minsize > metrics.secondary_card_minsize
+        assert metrics.follow_up_minsize > metrics.primary_card_minsize
         assert metrics.card_minsize == metrics.primary_card_minsize
         assert metrics.value_font > metrics.secondary_value_font
     assert wide.primary_card_minsize > compact.primary_card_minsize
-    assert wide.follow_up_minsize > compact.follow_up_minsize
+    assert compact.follow_up_minsize >= 200
+    assert wide.follow_up_minsize >= 190
 
 
 def test_short_large_text_sidebar_caps_decorative_space_and_keeps_follow_up_primary():
     short = right_sidebar_metrics(302, 707, 1.4)
-    roomy = right_sidebar_metrics(510, 1040, 1.4)
+    roomy = right_sidebar_metrics(510, 1324, 1.4)
 
     assert short.short_large_text is True
     assert short.legend_visible is False
@@ -215,6 +223,41 @@ def test_short_large_text_sidebar_metrics_round_trip_without_accumulation():
 
     assert wide != compact_before
     assert compact_after == compact_before
+
+
+def test_operator_height_budgets_cover_768_900_and_short_1080p_panes():
+    compact = center_layout_metrics(815, 704)
+    standard = center_layout_metrics(818, 834)
+    short_wide = center_layout_metrics(1096, 1012)
+    tall_wide = center_layout_metrics(1467, 1324)
+
+    assert compact.list_minsize <= 145
+    assert standard.list_minsize <= 210
+    assert short_wide.list_minsize <= 300
+    assert compact.button_top <= 4
+    assert standard.button_top <= 4
+    assert short_wide.button_top <= 4
+    assert compact.count_font < standard.count_font < short_wide.count_font < tall_wide.count_font
+    assert compact.entry_font < standard.entry_font <= short_wide.entry_font < tall_wide.entry_font
+    assert tall_wide.list_minsize > short_wide.list_minsize
+
+
+def test_right_sidebar_reserves_value_lines_through_short_1080p_height():
+    compact = right_sidebar_metrics(243, 704)
+    standard = right_sidebar_metrics(278, 834)
+    short_wide = right_sidebar_metrics(376, 1012)
+    tall_wide = right_sidebar_metrics(502, 1324)
+
+    for metrics in (compact, standard, short_wide):
+        assert metrics.short_large_text is True
+        assert metrics.card_padding <= 8
+        assert metrics.primary_card_minsize >= 96
+        assert metrics.follow_up_minsize >= 190
+    assert compact.legend_visible is False
+    assert standard.legend_visible is False
+    assert short_wide.legend_visible is True
+    assert tall_wide.short_large_text is False
+    assert tall_wide.card_padding > short_wide.card_padding
 
 
 def test_profile_override_is_validated():
