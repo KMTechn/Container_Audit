@@ -43,6 +43,30 @@ MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
 PRIMARY_MONITOR_FLAG = 1
+ROUNDTRIP_KEY_WIDGET_ATTRS = (
+    "paned_window",
+    "left_pane",
+    "center_pane",
+    "right_pane",
+    "stage_label",
+    "current_item_label",
+    "main_count_label",
+    "main_progress_bar",
+    "scan_entry",
+    "notice_frame",
+    "_scan_list_frame",
+    "scanned_list_header_label",
+    "scanned_listbox",
+    "scanned_list_scrollbar",
+    "_center_button_frame",
+    "undo_button",
+    "park_button",
+    "submit_tray_button",
+    "operations_button",
+    "_right_context_frame",
+    "last_scan_value_label",
+    "follow_up_label",
+)
 
 
 Rect = tuple[int, int, int, int]
@@ -1839,10 +1863,26 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
         "rows": structure.get("core_action_rows"),
         "buttons": record.get("rendered_state", {}).get("action_buttons"),
     }
+    widget_identity = record.get("roundtrip_widget_identity") or {}
+    widget_path_signature = {
+        "widget_count": widget_identity.get("widget_count"),
+        "tree": widget_identity.get("tree_paths"),
+        "key_widgets": widget_identity.get("key_widget_paths"),
+    }
+    widget_object_signature = {
+        "widget_count": widget_identity.get("widget_count"),
+        "tree": widget_identity.get("tree_object_ids"),
+        "key_widgets": widget_identity.get("key_widget_object_ids"),
+    }
     return {
         "geometry": geometry_signature,
         "rows": row_signature,
         "actions": action_signature,
+        "widget_paths": widget_path_signature,
+        "widget_objects": widget_object_signature,
+        "widget_identity_complete": roundtrip_widget_identity_is_complete(
+            widget_identity
+        ),
         "geometry_sha256": hashlib.sha256(
             json.dumps(
                 geometry_signature,
@@ -1867,6 +1907,143 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest(),
+        "widget_paths_sha256": hashlib.sha256(
+            json.dumps(
+                widget_path_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "widget_objects_sha256": hashlib.sha256(
+            json.dumps(
+                widget_object_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def roundtrip_widget_identity_is_complete(identity: object) -> bool:
+    if not isinstance(identity, dict):
+        return False
+    widget_count = identity.get("widget_count")
+    tree_paths = identity.get("tree_paths")
+    tree_object_ids = identity.get("tree_object_ids")
+    key_widget_paths = identity.get("key_widget_paths")
+    key_widget_object_ids = identity.get("key_widget_object_ids")
+    if not isinstance(widget_count, int) or isinstance(widget_count, bool):
+        return False
+    if widget_count <= 0:
+        return False
+    if not isinstance(tree_paths, list) or len(tree_paths) != widget_count:
+        return False
+    if not isinstance(tree_object_ids, list) or len(tree_object_ids) != widget_count:
+        return False
+    if not isinstance(key_widget_paths, dict) or not isinstance(
+        key_widget_object_ids, dict
+    ):
+        return False
+    expected_keys = set(ROUNDTRIP_KEY_WIDGET_ATTRS)
+    if set(key_widget_paths) != expected_keys:
+        return False
+    if set(key_widget_object_ids) != expected_keys:
+        return False
+
+    path_records: dict[str, dict[str, Any]] = {}
+    for record in tree_paths:
+        if not isinstance(record, dict):
+            return False
+        path = record.get("path")
+        if not isinstance(path, str) or not path or path in path_records:
+            return False
+        if not isinstance(record.get("master_path"), str):
+            return False
+        if not isinstance(record.get("widget_class"), str) or not record.get(
+            "widget_class"
+        ):
+            return False
+        path_records[path] = record
+
+    object_ids_by_path: dict[str, int] = {}
+    for record in tree_object_ids:
+        if not isinstance(record, dict):
+            return False
+        path = record.get("path")
+        object_id = record.get("python_object_id")
+        if not isinstance(path, str) or not path or path in object_ids_by_path:
+            return False
+        if not isinstance(object_id, int) or isinstance(object_id, bool):
+            return False
+        object_ids_by_path[path] = object_id
+    if set(object_ids_by_path) != set(path_records):
+        return False
+
+    for attr in ROUNDTRIP_KEY_WIDGET_ATTRS:
+        path = key_widget_paths.get(attr)
+        object_id = key_widget_object_ids.get(attr)
+        if not isinstance(path, str) or path not in path_records:
+            return False
+        if not isinstance(object_id, int) or isinstance(object_id, bool):
+            return False
+        if object_ids_by_path[path] != object_id:
+            return False
+    return True
+
+
+def collect_roundtrip_widget_identity(app: Any) -> dict[str, Any]:
+    """Bind roundtrip evidence to the exact live Tk widget objects and paths."""
+
+    tree_paths: list[dict[str, Any]] = []
+    tree_object_ids: list[dict[str, Any]] = []
+
+    def visit(widget: Any) -> None:
+        path = str(widget)
+        master = getattr(widget, "master", None)
+        try:
+            widget_class = str(widget.winfo_class())
+            children = tuple(widget.winfo_children())
+        except Exception as exc:
+            raise RuntimeError(
+                f"roundtrip widget identity collection failed for {path}: {exc}"
+            ) from exc
+        tree_paths.append(
+            {
+                "path": path,
+                "master_path": str(master) if master is not None else "",
+                "widget_class": widget_class,
+            }
+        )
+        tree_object_ids.append(
+            {
+                "path": path,
+                "python_object_id": id(widget),
+            }
+        )
+        for child in children:
+            visit(child)
+
+    visit(app.root)
+    tree_paths.sort(key=lambda item: item["path"])
+    tree_object_ids.sort(key=lambda item: item["path"])
+
+    key_widget_paths: dict[str, str] = {}
+    key_widget_object_ids: dict[str, int] = {}
+    for attr in ROUNDTRIP_KEY_WIDGET_ATTRS:
+        widget = getattr(app, attr, None)
+        if widget is None:
+            raise RuntimeError(f"roundtrip key widget missing: {attr}")
+        key_widget_paths[attr] = str(widget)
+        key_widget_object_ids[attr] = id(widget)
+
+    return {
+        "widget_count": len(tree_paths),
+        "tree_paths": tree_paths,
+        "tree_object_ids": tree_object_ids,
+        "key_widget_paths": key_widget_paths,
+        "key_widget_object_ids": key_widget_object_ids,
     }
 
 
@@ -1898,7 +2075,47 @@ def apply_roundtrip_contracts(captures: Sequence[dict[str, Any]]) -> None:
             continue
         first_signatures = first["roundtrip_signatures"]
         last_signatures = last["roundtrip_signatures"]
+        state_roundtrip = sorted(
+            (
+                capture
+                for capture in roundtrip
+                if str(capture.get("state")) == state
+            ),
+            key=lambda capture: int(capture["sequence_ordinal"]),
+        )
+        ordinal_signatures = [
+            capture.get("roundtrip_signatures") or {}
+            for capture in state_roundtrip
+        ]
+        widget_identity_payload_complete = all(
+            signature.get("widget_identity_complete") is True
+            for signature in ordinal_signatures
+        )
         checks = {
+            "first_ordinal_rebuilt": (
+                first.get("roundtrip_rebuild_applied") is True
+            ),
+            "later_ordinals_not_rebuilt": all(
+                capture.get("roundtrip_rebuild_applied") is False
+                for capture in state_roundtrip[1:]
+            ),
+            "widget_identity_payload_complete": widget_identity_payload_complete,
+            "widget_path_signature_stable": (
+                widget_identity_payload_complete
+                and all(
+                    signature.get("widget_paths")
+                    == first_signatures.get("widget_paths")
+                    for signature in ordinal_signatures
+                )
+            ),
+            "widget_identity_signature_stable": (
+                widget_identity_payload_complete
+                and all(
+                    signature.get("widget_objects")
+                    == first_signatures.get("widget_objects")
+                    for signature in ordinal_signatures
+                )
+            ),
             "compact_size_exact": first.get("requested_size") == last.get("requested_size"),
             "geometry_signature_exact": (
                 first_signatures["geometry"] == last_signatures["geometry"]
@@ -1923,6 +2140,14 @@ def apply_roundtrip_contracts(captures: Sequence[dict[str, Any]]) -> None:
                 for key, value in last_signatures.items()
                 if key.endswith("_sha256")
             },
+            "ordinal_widget_identity_hashes": [
+                {
+                    "ordinal": int(capture["sequence_ordinal"]),
+                    "widget_paths_sha256": signature.get("widget_paths_sha256"),
+                    "widget_objects_sha256": signature.get("widget_objects_sha256"),
+                }
+                for capture, signature in zip(state_roundtrip, ordinal_signatures)
+            ],
             "checks": checks,
             "passed": all(checks.values()),
         }
@@ -2263,7 +2488,9 @@ def _configure_size(
     app: Any,
     size: tuple[int, int],
     monitor_target: MonitorTarget | None = None,
-) -> None:
+    *,
+    rebuild_validation_screen: bool = True,
+) -> dict[str, Any]:
     width, height = size
     app.root.state("normal")
     if monitor_target is None:
@@ -2275,14 +2502,47 @@ def _configure_size(
     app.root.lift()
     pump_tk(app.root, 260)
     app.apply_scaling()
-    app.show_validation_screen()
+    if rebuild_validation_screen:
+        app.show_validation_screen()
+    else:
+        _settle_validation_layout_in_place(app)
     pump_tk(app.root, 420)
     if monitor_target is not None:
         _align_tk_client_to_rect(
             app.root,
             monitor_target.requested_client_rect(size),
         )
+    _settle_validation_layout_in_place(app)
     _cancel_runtime_jobs(app)
+    return {
+        "validation_screen_rebuilt": rebuild_validation_screen,
+    }
+
+
+def _settle_validation_layout_in_place(app: Any) -> None:
+    """Settle responsive styles and geometry without replacing live widgets."""
+
+    for _attempt in range(2):
+        app.root.update_idletasks()
+        app._clamp_paned_sashes_to_width()
+        app._apply_scanned_listbox_layout()
+        pump_tk(app.root, 140)
+
+
+def _configure_roundtrip_size(
+    app: Any,
+    size: tuple[int, int],
+    sequence_ordinal: int,
+    monitor_target: MonitorTarget | None = None,
+) -> dict[str, Any]:
+    if sequence_ordinal < 1:
+        raise ValueError("roundtrip sequence ordinal must be positive")
+    return _configure_size(
+        app,
+        size,
+        monitor_target,
+        rebuild_validation_screen=sequence_ordinal == 1,
+    )
 
 
 def run_capture_matrix(
@@ -2376,16 +2636,27 @@ def run_capture_matrix(
             capture_sequence: str,
             sequence_ordinal: int | None = None,
         ) -> None:
-            _configure_size(app, size, monitor_target)
             if capture_sequence == "roundtrip":
                 if sequence_ordinal is None:
                     raise RuntimeError("roundtrip capture requires an ordinal")
+                size_configuration = _configure_roundtrip_size(
+                    app,
+                    size,
+                    sequence_ordinal,
+                    monitor_target,
+                )
                 size_dir = (
                     screenshot_root
                     / "roundtrip"
                     / f"{sequence_ordinal:03d}_{size[0]}x{size[1]}"
                 )
             else:
+                size_configuration = _configure_size(
+                    app,
+                    size,
+                    monitor_target,
+                    rebuild_validation_screen=True,
+                )
                 size_dir = screenshot_root / f"{size[0]}x{size[1]}"
             size_dir.mkdir(parents=True, exist_ok=True)
             for state_id in state_ids:
@@ -2444,6 +2715,12 @@ def run_capture_matrix(
                 if monitor_gate is not None:
                     record["monitor_gate"] = monitor_gate
                 if capture_sequence == "roundtrip":
+                    record["roundtrip_rebuild_applied"] = bool(
+                        size_configuration["validation_screen_rebuilt"]
+                    )
+                    record["roundtrip_widget_identity"] = (
+                        collect_roundtrip_widget_identity(app)
+                    )
                     record["roundtrip_signatures"] = build_roundtrip_signatures(record)
                 record["issues"] = evaluate_capture(record)
                 record["passed"] = not record["issues"]

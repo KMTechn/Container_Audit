@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 from scan_display import compact_scan_value, format_scan_list_row
+import tools.capture_container_operator_ui as capture_tool
 
 from tools.capture_container_operator_ui import (
     DEFAULT_SCALE,
@@ -230,6 +231,20 @@ def test_scan_list_viewport_gate_fails_closed_for_every_visibility_contract(
 
     assert gate["checks"][failed_check] is False
     assert gate["passed"] is False
+
+
+def test_scan_list_viewport_gate_requires_all_fixture_rows_without_scroll():
+    gate = build_scan_list_viewport_gate(
+        expected_row_count=2,
+        viewport_size=(100, 60),
+        row_bboxes=[(2, 2, 80, 18), (2, 22, 80, 18)],
+        see_zero_applied=True,
+    )
+
+    assert gate["checks"]["every_fixture_row_visible"] is True
+    assert gate["checks"]["every_fixture_row_horizontally_contained"] is True
+    assert gate["checks"]["every_fixture_row_vertically_contained"] is True
+    assert gate["passed"] is True
 
 
 def test_isolated_app_settings_keep_default_contract_and_apply_large_text_scale():
@@ -932,11 +947,35 @@ def test_isolated_data_inventory_hash_gate_detects_any_file_write(tmp_path):
 
 
 def _roundtrip_capture(ordinal, *, size=(1366, 768)):
+    key_widget_paths = {
+        attr: ".scan_list" for attr in capture_tool.ROUNDTRIP_KEY_WIDGET_ATTRS
+    }
+    key_widget_object_ids = {
+        attr: 101 for attr in capture_tool.ROUNDTRIP_KEY_WIDGET_ATTRS
+    }
     record = {
         "capture_sequence": "roundtrip",
         "sequence_ordinal": ordinal,
         "state": "normal",
         "requested_size": list(size),
+        "roundtrip_rebuild_applied": ordinal == 1,
+        "roundtrip_widget_identity": {
+            "widget_count": 2,
+            "tree_paths": [
+                {"path": ".", "master_path": "", "widget_class": "Tk"},
+                {
+                    "path": ".scan_list",
+                    "master_path": ".",
+                    "widget_class": "Listbox",
+                },
+            ],
+            "tree_object_ids": [
+                {"path": ".", "python_object_id": 100},
+                {"path": ".scan_list", "python_object_id": 101},
+            ],
+            "key_widget_paths": key_widget_paths,
+            "key_widget_object_ids": key_widget_object_ids,
+        },
         "ui_geometry": {
             "root_client_size": list(size),
             "widgets": [
@@ -977,6 +1016,12 @@ def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
     ]
     apply_roundtrip_contracts(captures)
     assert captures[-1]["roundtrip_comparison_gate"]["passed"] is True
+    assert captures[-1]["roundtrip_comparison_gate"]["checks"][
+        "first_ordinal_rebuilt"
+    ] is True
+    assert captures[-1]["roundtrip_comparison_gate"]["checks"][
+        "later_ordinals_not_rebuilt"
+    ] is True
 
     changed = copy.deepcopy(captures)
     changed[-1]["ui_geometry"]["widgets"][0]["bbox"][2] += 1
@@ -991,3 +1036,109 @@ def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
     assert checks["row_signature_exact"] is False
     assert checks["action_signature_exact"] is False
     assert changed[-1]["passed"] is False
+
+
+def test_roundtrip_size_rebuilds_first_ordinal_only(monkeypatch):
+    calls = []
+
+    def fake_configure(app, size, monitor_target, *, rebuild_validation_screen):
+        calls.append((size, rebuild_validation_screen))
+        return {"validation_screen_rebuilt": rebuild_validation_screen}
+
+    monkeypatch.setattr(capture_tool, "_configure_size", fake_configure)
+    app = object()
+    capture_tool._configure_size(
+        app,
+        (2560, 1392),
+        None,
+        rebuild_validation_screen=True,
+    )
+    for ordinal, size in enumerate(
+        ((1366, 768), (1920, 1080), (1366, 768)),
+        start=1,
+    ):
+        capture_tool._configure_roundtrip_size(app, size, ordinal)
+
+    assert calls == [
+        ((2560, 1392), True),
+        ((1366, 768), True),
+        ((1920, 1080), False),
+        ((1366, 768), False),
+    ]
+
+
+def test_roundtrip_contract_rejects_later_rebuild_and_object_identity_drift():
+    rebuilt = [
+        _roundtrip_capture(1),
+        _roundtrip_capture(2, size=(1920, 1080)),
+        _roundtrip_capture(3),
+    ]
+    rebuilt[1]["roundtrip_rebuild_applied"] = True
+    apply_roundtrip_contracts(rebuilt)
+    rebuilt_checks = rebuilt[-1]["roundtrip_comparison_gate"]["checks"]
+    assert rebuilt_checks["later_ordinals_not_rebuilt"] is False
+    assert rebuilt[-1]["passed"] is False
+
+    identity_drift = [
+        _roundtrip_capture(1),
+        _roundtrip_capture(2, size=(1920, 1080)),
+        _roundtrip_capture(3),
+    ]
+    identity_drift[1]["roundtrip_widget_identity"]["tree_object_ids"][1][
+        "python_object_id"
+    ] = 202
+    identity_drift[1]["roundtrip_widget_identity"]["key_widget_object_ids"] = {
+        attr: 202 for attr in capture_tool.ROUNDTRIP_KEY_WIDGET_ATTRS
+    }
+    identity_drift[1]["roundtrip_signatures"] = build_roundtrip_signatures(
+        identity_drift[1]
+    )
+    apply_roundtrip_contracts(identity_drift)
+
+    identity_checks = identity_drift[-1]["roundtrip_comparison_gate"]["checks"]
+    assert identity_checks["widget_path_signature_stable"] is True
+    assert identity_checks["widget_identity_signature_stable"] is False
+    assert identity_drift[-1]["passed"] is False
+
+
+def test_roundtrip_contract_rejects_missing_or_empty_identity_payload():
+    captures = [
+        _roundtrip_capture(1),
+        _roundtrip_capture(2, size=(1920, 1080)),
+        _roundtrip_capture(3),
+    ]
+    for capture in captures:
+        capture["roundtrip_widget_identity"] = {}
+        capture["roundtrip_signatures"] = build_roundtrip_signatures(capture)
+
+    apply_roundtrip_contracts(captures)
+
+    checks = captures[-1]["roundtrip_comparison_gate"]["checks"]
+    assert checks["widget_identity_payload_complete"] is False
+    assert checks["widget_path_signature_stable"] is False
+    assert checks["widget_identity_signature_stable"] is False
+    assert captures[-1]["passed"] is False
+
+
+def test_roundtrip_widget_identity_missing_key_widget_fails_closed():
+    class FakeWidget:
+        master = None
+
+        def __str__(self):
+            return "."
+
+        def winfo_class(self):
+            return "Tk"
+
+        def winfo_children(self):
+            return ()
+
+    root = FakeWidget()
+    attrs = {
+        attr: root for attr in capture_tool.ROUNDTRIP_KEY_WIDGET_ATTRS
+    }
+    attrs.pop("follow_up_label")
+    app = SimpleNamespace(root=root, **attrs)
+
+    with pytest.raises(RuntimeError, match="follow_up_label"):
+        capture_tool.collect_roundtrip_widget_identity(app)
