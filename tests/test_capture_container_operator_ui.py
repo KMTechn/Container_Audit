@@ -212,7 +212,6 @@ class _FakeForegroundUser32:
         self.mode = mode
         self.target_hwnd = 701
         self.foreground_hwnd = 900
-        self.attached = False
         self.calls = []
         self.pids = {701: 91, 900: 92}
         self.threads = {701: 11, 900: 12}
@@ -229,30 +228,23 @@ class _FakeForegroundUser32:
 
     def ShowWindow(self, hwnd, command):
         self.calls.append(("restore", hwnd, command))
-        return 1
+        return 0 if self.mode == "hidden_direct_success" else 1
 
     def BringWindowToTop(self, hwnd):
         self.calls.append(("bring", hwnd))
         return 1
 
     def SetForegroundWindow(self, hwnd):
-        self.calls.append(("set", hwnd, self.attached))
-        if self.mode == "direct_success":
+        self.calls.append(("set", hwnd))
+        if self.mode in {"direct_success", "hidden_direct_success"}:
             self.foreground_hwnd = hwnd
             return 1
-        if self.mode in {"attached_success", "detach_failure"} and self.attached:
-            self.foreground_hwnd = hwnd
+        if self.mode == "reported_success_without_ownership":
             return 1
-        if self.mode == "attached_exception" and self.attached:
-            raise OSError("foreground denied")
         return 0
 
-    def AttachThreadInput(self, foreground_thread, target_thread, attach):
-        self.calls.append(("attach", foreground_thread, target_thread, bool(attach)))
-        self.attached = bool(attach)
-        if self.mode == "detach_failure" and not attach:
-            return 0
-        return 1
+    def AttachThreadInput(self, *_args):
+        raise AssertionError("AttachThreadInput must not be called")
 
 
 def test_win32_foreground_acquisition_direct_success_records_api_telemetry():
@@ -262,9 +254,6 @@ def test_win32_foreground_acquisition_direct_success_records_api_telemetry():
         701,
         91,
         user32=user32,
-        timeout_ms=20,
-        poll_interval_ms=10,
-        sleep_fn=lambda _seconds: None,
     )
 
     assert telemetry["passed"] is True
@@ -272,48 +261,55 @@ def test_win32_foreground_acquisition_direct_success_records_api_telemetry():
     assert telemetry["attempts"][0]["phase"] == "direct"
     assert telemetry["attempts"][0]["hwnd_matches"] is True
     assert telemetry["attempts"][0]["pid_matches"] is True
-    assert telemetry["thread_input"]["attach_attempted"] is False
+    assert telemetry["strategy"] == "direct_only_fail_closed"
+    assert telemetry["thread_input"] == {
+        "policy": "disabled_fail_closed",
+        "attach_attempted": False,
+        "attach_succeeded": False,
+        "detach_attempted": False,
+        "detach_succeeded": False,
+    }
     assert [call[0] for call in user32.calls[:3]] == ["restore", "bring", "set"]
 
 
-def test_win32_foreground_acquisition_attaches_then_always_detaches():
-    user32 = _FakeForegroundUser32("attached_success")
+def test_win32_foreground_denial_fails_closed_without_attach_or_retry():
+    user32 = _FakeForegroundUser32("direct_denied")
 
     telemetry = capture_tool.acquire_win32_foreground(
         701,
         91,
         user32=user32,
-        timeout_ms=20,
-        poll_interval_ms=10,
-        sleep_fn=lambda _seconds: None,
     )
 
-    assert telemetry["passed"] is True
-    assert telemetry["attempt_count"] == 2
-    assert telemetry["attempts"][1]["phase"] == "attached"
-    assert telemetry["thread_input"] == {
-        "foreground_thread_id": 12,
-        "target_thread_id": 11,
-        "attach_attempted": True,
-        "attach_succeeded": True,
-        "attach_error": "",
-        "detach_attempted": True,
-        "detach_succeeded": True,
-        "detach_error": "",
-    }
-    assert user32.calls[-1] == ("attach", 12, 11, False)
-    assert user32.attached is False
+    assert telemetry["passed"] is False
+    assert telemetry["ownership_acquired"] is False
+    assert telemetry["attempt_limit"] == 1
+    assert telemetry["attempt_count"] == 1
+    assert [attempt["phase"] for attempt in telemetry["attempts"]] == ["direct"]
+    assert telemetry["thread_input"]["policy"] == "disabled_fail_closed"
+    assert telemetry["thread_input"]["attach_attempted"] is False
+    assert [call[0] for call in user32.calls] == ["restore", "bring", "set"]
 
 
-def test_win32_foreground_denial_detaches_and_focus_gate_fails_fast():
-    user32 = _FakeForegroundUser32("attached_exception")
+def test_win32_foreground_api_success_still_fails_without_observed_ownership():
+    user32 = _FakeForegroundUser32("reported_success_without_ownership")
+
+    telemetry = capture_tool.acquire_win32_foreground(701, 91, user32=user32)
+
+    attempt = telemetry["attempts"][0]
+    assert attempt["api_results"]["SetForegroundWindow"] is True
+    assert attempt["hwnd_matches"] is False
+    assert attempt["pid_matches"] is False
+    assert telemetry["ownership_acquired"] is False
+    assert telemetry["passed"] is False
+
+
+def test_win32_foreground_denial_makes_focus_gate_fail_fast():
+    user32 = _FakeForegroundUser32("direct_denied")
     telemetry = capture_tool.acquire_win32_foreground(
         701,
         91,
         user32=user32,
-        timeout_ms=20,
-        poll_interval_ms=10,
-        sleep_fn=lambda _seconds: None,
     )
     gate = build_capture_focus_gate(
         **_passing_focus_gate_kwargs(),
@@ -321,37 +317,284 @@ def test_win32_foreground_denial_detaches_and_focus_gate_fails_fast():
     )
 
     assert telemetry["passed"] is False
-    assert "SetForegroundWindow" in telemetry["attempts"][-1]["api_errors"]
-    assert telemetry["thread_input"]["detach_attempted"] is True
-    assert telemetry["thread_input"]["detach_succeeded"] is True
-    assert user32.attached is False
     assert gate["checks"]["foreground_acquisition_passed"] is False
     with pytest.raises(RuntimeError, match="failed before evidence") as exc_info:
-        capture_tool.require_capture_focus_gate(gate)
+        capture_tool.require_capture_focus_gate(gate, phase="pre_capture")
+    assert "phase='pre_capture'" in str(exc_info.value)
     assert "acquisition_telemetry=" in str(exc_info.value)
-    assert '"detach_attempted":true' in str(exc_info.value)
+    assert '"attach_attempted":false' in str(exc_info.value)
 
 
-def test_win32_foreground_detach_failure_invalidates_acquisition():
-    user32 = _FakeForegroundUser32("detach_failure")
+def test_show_window_telemetry_records_prior_visibility_not_success():
+    user32 = _FakeForegroundUser32("hidden_direct_success")
 
     telemetry = capture_tool.acquire_win32_foreground(
         701,
         91,
         user32=user32,
-        timeout_ms=20,
-        poll_interval_ms=10,
-        sleep_fn=lambda _seconds: None,
     )
 
-    assert telemetry["ownership_acquired"] is True
-    assert telemetry["thread_input"]["detach_attempted"] is True
-    assert telemetry["thread_input"]["detach_succeeded"] is False
-    assert telemetry["thread_input_cleanup_passed"] is False
-    assert telemetry["failure_reason"] == (
-        "foreground input threads were not detached cleanly"
+    attempt = telemetry["attempts"][0]
+    assert telemetry["passed"] is True
+    assert attempt["show_window"] == {
+        "command": "SW_RESTORE",
+        "call_completed": True,
+        "previously_visible": False,
+        "error": "",
+    }
+    assert "ShowWindow" not in attempt["api_results"]
+
+
+@pytest.mark.parametrize("failed_phase", ("pre_capture", "post_capture"))
+def test_focus_verified_capture_rejects_phase_before_file_save(
+    monkeypatch,
+    tmp_path,
+    failed_phase,
+):
+    events = []
+    expected_acquisition = {
+        "passed": True,
+        "attempt_count": 1,
+        "attempts": [],
+        "thread_input": {"policy": "disabled_fail_closed"},
+    }
+    pre_kwargs = _passing_focus_gate_kwargs()
+    post_kwargs = _passing_focus_gate_kwargs()
+    if failed_phase == "pre_capture":
+        pre_kwargs["foreground_pid"] = 92
+    else:
+        post_kwargs["foreground_pid"] = 92
+    gates = [
+        build_capture_focus_gate(
+            **pre_kwargs,
+            acquisition=expected_acquisition,
+        ),
+        build_capture_focus_gate(**post_kwargs),
+    ]
+
+    class FakeImage:
+        def save(self, *_args, **_kwargs):
+            events.append("save")
+
+    def fake_settle(_app, _state_id):
+        events.append("settle")
+        return expected_acquisition
+
+    def fake_collect(_app, _state_id, *, acquisition=None):
+        index = sum(event.startswith("collect_") for event in events)
+        events.append("collect_pre" if index == 0 else "collect_post")
+        assert acquisition is (expected_acquisition if index == 0 else None)
+        return gates[index]
+
+    def fake_capture(_root, *, pump_events=True):
+        assert pump_events is False
+        events.append("capture")
+        return FakeImage(), "synthetic"
+
+    def fake_viewport(_app, *, expected_row_count):
+        assert expected_row_count == 3
+        events.append("viewport")
+        return {"passed": True}
+
+    def fake_monitor(_root, monitor_target, requested_size):
+        assert monitor_target is monitor
+        assert requested_size == (1, 1)
+        events.append("monitor")
+        return {"passed": True}
+
+    monkeypatch.setattr(capture_tool, "settle_capture_focus", fake_settle)
+    monkeypatch.setattr(capture_tool, "collect_scan_list_viewport_gate", fake_viewport)
+    monkeypatch.setattr(capture_tool, "collect_monitor_capture_gate", fake_monitor)
+    monkeypatch.setattr(
+        capture_tool,
+        "collect_ui_geometry",
+        lambda _app: events.append("geometry") or {"snapshot": "geometry"},
     )
-    assert telemetry["passed"] is False
+    monkeypatch.setattr(
+        capture_tool,
+        "collect_rendered_state",
+        lambda _app: events.append("rendered") or {"snapshot": "rendered"},
+    )
+    monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
+    monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
+    output_path = tmp_path / "rejected.png"
+    monitor = object()
+
+    with pytest.raises(RuntimeError, match=rf"phase='{failed_phase}'"):
+        capture_tool.capture_and_save_focus_verified_tk_client(
+            SimpleNamespace(root=object()),
+            "normal",
+            output_path,
+            expected_row_count=3,
+            monitor_target=monitor,
+            requested_size=(1, 1),
+        )
+
+    assert "save" not in events
+    assert output_path.exists() is False
+    assert ("capture" in events) is (failed_phase == "post_capture")
+    expected_events = [
+        "settle",
+        "viewport",
+        "monitor",
+        "geometry",
+        "rendered",
+        "collect_pre",
+    ]
+    if failed_phase == "post_capture":
+        expected_events.extend(["capture", "collect_post"])
+    assert events == expected_events
+
+
+def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, tmp_path):
+    events = []
+    expected_acquisition = {
+        "passed": True,
+        "attempt_count": 1,
+        "attempts": [],
+        "thread_input": {"policy": "disabled_fail_closed"},
+    }
+    gates = [
+        build_capture_focus_gate(
+            **_passing_focus_gate_kwargs(),
+            acquisition=expected_acquisition,
+        ),
+        build_capture_focus_gate(**_passing_focus_gate_kwargs()),
+    ]
+
+    class FakeImage:
+        def save(self, *_args, **_kwargs):
+            events.append("save")
+
+    monkeypatch.setattr(
+        capture_tool,
+        "settle_capture_focus",
+        lambda _app, _state_id: events.append("settle") or expected_acquisition,
+    )
+
+    def fake_collect(_app, _state_id, *, acquisition=None):
+        index = sum(event.startswith("collect_") for event in events)
+        events.append("collect_pre" if index == 0 else "collect_post")
+        assert acquisition is (expected_acquisition if index == 0 else None)
+        return gates[index]
+
+    def fake_capture(_root, *, pump_events=True):
+        assert pump_events is False
+        events.append("capture")
+        return FakeImage(), "synthetic"
+
+    def fake_viewport(_app, *, expected_row_count):
+        assert expected_row_count == 3
+        events.append("viewport")
+        return {"snapshot": "viewport"}
+
+    monitor = object()
+
+    def fake_monitor(_root, monitor_target, requested_size):
+        assert monitor_target is monitor
+        assert requested_size == (1, 1)
+        events.append("monitor")
+        return {"snapshot": "monitor"}
+
+    monkeypatch.setattr(capture_tool, "collect_scan_list_viewport_gate", fake_viewport)
+    monkeypatch.setattr(capture_tool, "collect_monitor_capture_gate", fake_monitor)
+    monkeypatch.setattr(
+        capture_tool,
+        "collect_ui_geometry",
+        lambda _app: events.append("geometry") or {"snapshot": "geometry"},
+    )
+    monkeypatch.setattr(
+        capture_tool,
+        "collect_rendered_state",
+        lambda _app: events.append("rendered") or {"snapshot": "rendered"},
+    )
+    monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
+    monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
+
+    frame = capture_tool.capture_and_save_focus_verified_tk_client(
+        SimpleNamespace(root=object()),
+        "normal",
+        tmp_path / "accepted.png",
+        expected_row_count=3,
+        monitor_target=monitor,
+        requested_size=(1, 1),
+    )
+
+    assert isinstance(frame["image"], FakeImage)
+    assert frame["source"] == "synthetic"
+    assert frame["focus_gate"]["passed"] is True
+    assert frame["focus_gate"]["checks"]["pre_capture_gate_passed"] is True
+    assert frame["focus_gate"]["checks"]["post_capture_gate_passed"] is True
+    assert frame["scan_list_viewport_gate"] == {"snapshot": "viewport"}
+    assert frame["monitor_gate"] == {"snapshot": "monitor"}
+    assert frame["ui_geometry"] == {"snapshot": "geometry"}
+    assert frame["rendered_state"] == {"snapshot": "rendered"}
+    assert events == [
+        "settle",
+        "viewport",
+        "monitor",
+        "geometry",
+        "rendered",
+        "collect_pre",
+        "capture",
+        "collect_post",
+        "save",
+    ]
+
+
+def test_focus_verified_capture_refuses_stale_target_before_settle(monkeypatch, tmp_path):
+    output_path = tmp_path / "existing.png"
+    output_path.write_bytes(b"prior evidence")
+    settle_calls = []
+    monkeypatch.setattr(
+        capture_tool,
+        "settle_capture_focus",
+        lambda *_args: settle_calls.append(True),
+    )
+
+    with pytest.raises(RuntimeError, match="capture target already exists"):
+        capture_tool.capture_and_save_focus_verified_tk_client(
+            SimpleNamespace(root=object()),
+            "normal",
+            output_path,
+            expected_row_count=0,
+            monitor_target=None,
+            requested_size=(1, 1),
+        )
+
+    assert settle_calls == []
+    assert output_path.read_bytes() == b"prior evidence"
+
+
+def test_capture_output_root_must_be_new(monkeypatch, tmp_path):
+    monkeypatch.setattr(capture_tool, "REPO_TMP_ROOT", tmp_path)
+    output_root = tmp_path / "capture-run"
+
+    assert capture_tool.create_new_capture_output_root(output_root) == output_root.resolve()
+    assert output_root.is_dir()
+    with pytest.raises(RuntimeError, match="output root already exists"):
+        capture_tool.create_new_capture_output_root(output_root)
+
+
+def test_capture_tk_client_skips_tk_pump_for_focus_guarded_frame(monkeypatch):
+    events = []
+    root = SimpleNamespace(
+        update_idletasks=lambda: events.append("update_idletasks"),
+        update=lambda: events.append("update"),
+    )
+    expected_image = Image.new("RGB", (1, 1), "white")
+    monkeypatch.setattr(capture_tool.os, "name", "nt")
+    monkeypatch.setattr(
+        capture_tool,
+        "_capture_client_with_print_window",
+        lambda _root: (expected_image, "synthetic"),
+    )
+
+    image, source = capture_tool.capture_tk_client(root, pump_events=False)
+
+    assert image is expected_image
+    assert source == "synthetic"
+    assert events == []
 
 
 @pytest.mark.parametrize(

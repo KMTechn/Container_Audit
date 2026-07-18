@@ -45,8 +45,6 @@ DEFAULT_SCALE = 1.0
 PRIMARY_MONITOR_FLAG = 1
 GA_ROOT = 2
 SW_RESTORE = 9
-FOREGROUND_ACQUIRE_TIMEOUT_MS = 1200
-FOREGROUND_POLL_INTERVAL_MS = 40
 ROUNDTRIP_KEY_WIDGET_ATTRS = (
     "paned_window",
     "left_pane",
@@ -640,8 +638,23 @@ def _attempt_foreground_acquisition(
 ) -> dict[str, Any]:
     api_results: dict[str, Any] = {}
     api_errors: dict[str, str] = {}
+    show_window = {
+        "command": "SW_RESTORE",
+        "call_completed": False,
+        "previously_visible": None,
+        "error": "",
+    }
+    try:
+        # ShowWindow reports the window's *previous* visibility, not success.
+        show_window["previously_visible"] = bool(
+            user32.ShowWindow(int(target_hwnd), SW_RESTORE)
+        )
+        show_window["call_completed"] = True
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        show_window["error"] = error
+        api_errors["ShowWindow"] = error
     for name, args in (
-        ("ShowWindow", (int(target_hwnd), SW_RESTORE)),
         ("BringWindowToTop", (int(target_hwnd),)),
         ("SetForegroundWindow", (int(target_hwnd),)),
     ):
@@ -660,6 +673,7 @@ def _attempt_foreground_acquisition(
         "phase": str(phase),
         "api_results": api_results,
         "api_errors": api_errors,
+        "show_window": show_window,
         **observation,
         "passed": bool(
             observation["hwnd_matches"] and observation["pid_matches"]
@@ -672,11 +686,8 @@ def acquire_win32_foreground(
     target_pid: int,
     *,
     user32: Any | None = None,
-    timeout_ms: int = FOREGROUND_ACQUIRE_TIMEOUT_MS,
-    poll_interval_ms: int = FOREGROUND_POLL_INTERVAL_MS,
-    sleep_fn: Any = time.sleep,
 ) -> dict[str, Any]:
-    """Acquire foreground ownership and retain enough telemetry to audit it."""
+    """Try direct foreground acquisition once and fail closed if it is denied."""
 
     if user32 is None:
         if os.name != "nt":
@@ -684,9 +695,11 @@ def acquire_win32_foreground(
                 "gate_applicable": False,
                 "target_hwnd": int(target_hwnd),
                 "target_pid": int(target_pid),
+                "strategy": "direct_only_fail_closed",
                 "attempt_count": 0,
                 "attempts": [],
                 "thread_input": {
+                    "policy": "disabled_fail_closed",
                     "attach_attempted": False,
                     "attach_succeeded": False,
                     "detach_attempted": False,
@@ -699,23 +712,15 @@ def acquire_win32_foreground(
             }
         user32 = ctypes.windll.user32
 
-    timeout_ms = max(1, int(timeout_ms))
-    poll_interval_ms = max(1, int(poll_interval_ms))
-    attempt_limit = max(2, int(math.ceil(timeout_ms / poll_interval_ms)))
     started = time.perf_counter()
-    attempts: list[dict[str, Any]] = []
     thread_input: dict[str, Any] = {
-        "foreground_thread_id": 0,
-        "target_thread_id": 0,
+        "policy": "disabled_fail_closed",
         "attach_attempted": False,
         "attach_succeeded": False,
-        "attach_error": "",
         "detach_attempted": False,
         "detach_succeeded": False,
-        "detach_error": "",
     }
-
-    attempts.append(
+    attempts = [
         _attempt_foreground_acquisition(
             user32,
             target_hwnd=target_hwnd,
@@ -723,78 +728,10 @@ def acquire_win32_foreground(
             phase="direct",
             ordinal=1,
         )
-    )
-    if attempts[-1]["passed"] is not True:
-        foreground_hwnd = int(attempts[-1]["foreground_hwnd"] or 0)
-        foreground_thread_id, _foreground_pid = _window_thread_pid_with_user32(
-            user32,
-            foreground_hwnd,
-        )
-        target_thread_id, _target_window_pid = _window_thread_pid_with_user32(
-            user32,
-            target_hwnd,
-        )
-        thread_input.update(
-            {
-                "foreground_thread_id": foreground_thread_id,
-                "target_thread_id": target_thread_id,
-            }
-        )
-        attach_needed = bool(
-            foreground_thread_id
-            and target_thread_id
-            and foreground_thread_id != target_thread_id
-        )
-        if attach_needed:
-            thread_input["attach_attempted"] = True
-            try:
-                thread_input["attach_succeeded"] = bool(
-                    user32.AttachThreadInput(
-                        foreground_thread_id,
-                        target_thread_id,
-                        True,
-                    )
-                )
-            except Exception as exc:
-                thread_input["attach_error"] = f"{type(exc).__name__}: {exc}"
-        try:
-            for ordinal in range(2, attempt_limit + 1):
-                attempts.append(
-                    _attempt_foreground_acquisition(
-                        user32,
-                        target_hwnd=target_hwnd,
-                        target_pid=target_pid,
-                        phase="attached" if attach_needed else "poll",
-                        ordinal=ordinal,
-                    )
-                )
-                if attempts[-1]["passed"] is True:
-                    break
-                if ordinal < attempt_limit:
-                    sleep_fn(poll_interval_ms / 1000.0)
-        finally:
-            if attach_needed:
-                thread_input["detach_attempted"] = True
-                try:
-                    thread_input["detach_succeeded"] = bool(
-                        user32.AttachThreadInput(
-                            foreground_thread_id,
-                            target_thread_id,
-                            False,
-                        )
-                    )
-                except Exception as exc:
-                    thread_input["detach_error"] = f"{type(exc).__name__}: {exc}"
-
+    ]
     ownership_acquired = bool(attempts and attempts[-1]["passed"] is True)
-    thread_input_cleanup_passed = bool(
-        thread_input["attach_attempted"] is not True
-        or (
-            thread_input["detach_attempted"] is True
-            and thread_input["detach_succeeded"] is True
-        )
-    )
-    passed = bool(ownership_acquired and thread_input_cleanup_passed)
+    thread_input_cleanup_passed = True
+    passed = ownership_acquired
     duration_ms = int(round((time.perf_counter() - started) * 1000))
     failure_reason = ""
     if not ownership_acquired:
@@ -804,15 +741,12 @@ def acquire_win32_foreground(
             f"observed_hwnd={latest.get('foreground_root_hwnd', 0)} "
             f"observed_pid={latest.get('foreground_pid', 0)}"
         )
-    elif not thread_input_cleanup_passed:
-        failure_reason = "foreground input threads were not detached cleanly"
     return {
         "gate_applicable": True,
         "target_hwnd": int(target_hwnd),
         "target_pid": int(target_pid),
-        "timeout_ms": timeout_ms,
-        "poll_interval_ms": poll_interval_ms,
-        "attempt_limit": attempt_limit,
+        "strategy": "direct_only_fail_closed",
+        "attempt_limit": 1,
         "attempt_count": len(attempts),
         "duration_ms": duration_ms,
         "attempts": attempts,
@@ -946,7 +880,11 @@ def collect_capture_focus_gate(
     )
 
 
-def require_capture_focus_gate(focus_gate: dict[str, Any]) -> None:
+def require_capture_focus_gate(
+    focus_gate: dict[str, Any],
+    *,
+    phase: str = "capture",
+) -> None:
     """Abort before image evidence when foreground/focus ownership is invalid."""
 
     if focus_gate.get("passed") is True:
@@ -965,6 +903,7 @@ def require_capture_focus_gate(focus_gate: dict[str, Any]) -> None:
     }
     raise RuntimeError(
         "capture focus gate failed before evidence: "
+        f"phase={phase!r} "
         f"state={focus_gate.get('state')!r} "
         f"failed_checks={failed_checks!r} "
         f"acquisition_failure={failure_reason!r} "
@@ -978,12 +917,63 @@ def require_capture_focus_gate(focus_gate: dict[str, Any]) -> None:
     )
 
 
+def combine_capture_focus_gates(
+    pre_capture_gate: dict[str, Any],
+    post_capture_gate: dict[str, Any],
+) -> dict[str, Any]:
+    """Keep phase-specific observations while exposing one strict record gate."""
+
+    checks = {
+        **{
+            f"pre_capture_{name}": passed
+            for name, passed in (pre_capture_gate.get("checks") or {}).items()
+        },
+        **{
+            f"post_capture_{name}": passed
+            for name, passed in (post_capture_gate.get("checks") or {}).items()
+        },
+    }
+    checks["pre_capture_gate_passed"] = pre_capture_gate.get("passed") is True
+    checks["post_capture_gate_passed"] = post_capture_gate.get("passed") is True
+    gate = {
+        "gate_applicable": bool(
+            pre_capture_gate.get("gate_applicable") is True
+            and post_capture_gate.get("gate_applicable") is True
+        ),
+        "state": pre_capture_gate.get("state"),
+        "blocking_state": bool(pre_capture_gate.get("blocking_state")),
+        "checks": checks,
+        "pre_capture": pre_capture_gate,
+        "post_capture": post_capture_gate,
+        "passed": False,
+    }
+    gate["passed"] = bool(gate["gate_applicable"] and all(checks.values()))
+    return gate
+
+
 def assert_descendant(path: Path, parent: Path, *, label: str) -> Path:
     resolved = path.resolve()
     resolved_parent = parent.resolve()
     if resolved == resolved_parent or not resolved.is_relative_to(resolved_parent):
         raise RuntimeError(f"{label} must stay below {resolved_parent}: {resolved}")
     return resolved
+
+
+def create_new_capture_output_root(output_root: Path) -> Path:
+    """Create a new evidence root and refuse to mix with any prior run."""
+
+    resolved_output = assert_descendant(
+        output_root,
+        REPO_TMP_ROOT,
+        label="capture output root",
+    )
+    try:
+        resolved_output.mkdir(parents=True, exist_ok=False)
+    except FileExistsError as exc:
+        raise RuntimeError(
+            f"capture output root already exists; use a new path: {resolved_output}"
+        ) from exc
+    return resolved_output
 
 
 def prepare_isolated_environment(data_root: Path, geometry: str) -> dict[str, str]:
@@ -1103,11 +1093,16 @@ def _capture_client_with_print_window(root: Any) -> tuple[Image.Image, str]:
     return image, "PrintWindow(PW_RENDERFULLCONTENT)+client-crop"
 
 
-def capture_tk_client(root: Any) -> tuple[Image.Image, str]:
+def capture_tk_client(
+    root: Any,
+    *,
+    pump_events: bool = True,
+) -> tuple[Image.Image, str]:
     """Capture the real Tk client area without including OS window chrome."""
 
-    root.update_idletasks()
-    root.update()
+    if pump_events:
+        root.update_idletasks()
+        root.update()
     if os.name == "nt":
         try:
             return _capture_client_with_print_window(root)
@@ -1127,6 +1122,66 @@ def capture_tk_client(root: Any) -> tuple[Image.Image, str]:
         all_screens=True,
     )
     return image, f"ImageGrab(client-bbox); {fallback_reason}"
+
+
+def capture_and_save_focus_verified_tk_client(
+    app: Any,
+    state_id: str,
+    path: Path,
+    *,
+    expected_row_count: int,
+    monitor_target: MonitorTarget | None,
+    requested_size: tuple[int, int],
+) -> dict[str, Any]:
+    """Settle, snapshot metadata, and save one focus-verified frame."""
+
+    if path.exists():
+        raise RuntimeError(f"capture target already exists; refusing overwrite: {path}")
+
+    acquisition = settle_capture_focus(app, state_id)
+    viewport_gate = collect_scan_list_viewport_gate(
+        app,
+        expected_row_count=expected_row_count,
+    )
+    monitor_gate = (
+        collect_monitor_capture_gate(app.root, monitor_target, requested_size)
+        if monitor_target is not None
+        else None
+    )
+    geometry_record = collect_ui_geometry(app)
+    rendered_state = collect_rendered_state(app)
+
+    # All metadata above is collected after the final Tk pump and without
+    # dispatching another event. This fresh observation is the last operation
+    # before the frame capture itself.
+    pre_capture_gate = collect_capture_focus_gate(
+        app,
+        state_id,
+        acquisition=acquisition,
+    )
+    require_capture_focus_gate(pre_capture_gate, phase="pre_capture")
+
+    # Metadata collection above performed any final Tk pump needed for the
+    # viewport. Do not dispatch more Tk events between this observation and
+    # the actual capture.
+    image, source = capture_tk_client(app.root, pump_events=False)
+
+    post_capture_gate = collect_capture_focus_gate(app, state_id)
+    require_capture_focus_gate(post_capture_gate, phase="post_capture")
+    focus_gate = combine_capture_focus_gates(
+        pre_capture_gate,
+        post_capture_gate,
+    )
+    image.save(path, format="PNG", optimize=True)
+    return {
+        "image": image,
+        "source": source,
+        "focus_gate": focus_gate,
+        "scan_list_viewport_gate": viewport_gate,
+        "monitor_gate": monitor_gate,
+        "ui_geometry": geometry_record,
+        "rendered_state": rendered_state,
+    }
 
 
 def analyze_image(image: Image.Image, expected_size: tuple[int, int]) -> dict[str, Any]:
@@ -2913,12 +2968,7 @@ def run_capture_matrix(
     )
     if monitor_target is not None and monitor_preflight["passed"] is not True:
         raise RuntimeError("selected monitor failed capture preflight")
-    resolved_output = assert_descendant(
-        output_root,
-        REPO_TMP_ROOT,
-        label="capture output root",
-    )
-    resolved_output.mkdir(parents=True, exist_ok=True)
+    resolved_output = create_new_capture_output_root(output_root)
     screenshot_root = resolved_output / "screenshots"
     screenshot_root.mkdir(parents=True, exist_ok=True)
     data_root = resolved_output / "_isolated_data"
@@ -3002,31 +3052,26 @@ def run_capture_matrix(
                 fixture = fixtures_by_id[state_id]
                 apply_state_fixture(app, fixture, module)
                 pump_tk(app.root, 260)
-                viewport_gate = collect_scan_list_viewport_gate(
+                path = size_dir / f"{state_id}.png"
+                frame = capture_and_save_focus_verified_tk_client(
                     app,
+                    state_id,
+                    path,
                     expected_row_count=(
                         len(fixture.tray.scanned_barcodes)
                         if fixture.tray is not None
                         else 0
                     ),
+                    monitor_target=monitor_target,
+                    requested_size=size,
                 )
-                focus_acquisition = settle_capture_focus(app, state_id)
-                focus_gate = collect_capture_focus_gate(
-                    app,
-                    state_id,
-                    acquisition=focus_acquisition,
-                )
-                require_capture_focus_gate(focus_gate)
-                monitor_gate = (
-                    collect_monitor_capture_gate(app.root, monitor_target, size)
-                    if monitor_target is not None
-                    else None
-                )
-                geometry_record = collect_ui_geometry(app)
-                rendered_state = collect_rendered_state(app)
-                image, source = capture_tk_client(app.root)
-                path = size_dir / f"{state_id}.png"
-                image.save(path, format="PNG", optimize=True)
+                image = frame["image"]
+                source = frame["source"]
+                focus_gate = frame["focus_gate"]
+                viewport_gate = frame["scan_list_viewport_gate"]
+                monitor_gate = frame["monitor_gate"]
+                geometry_record = frame["ui_geometry"]
+                rendered_state = frame["rendered_state"]
                 fixture_manifest = _fixture_manifest(fixture)
                 record_id = f"{size[0]}x{size[1]}-{state_id}"
                 if capture_sequence == "roundtrip":
