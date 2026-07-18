@@ -1374,12 +1374,6 @@ class ContainerAudit:
                         messagebox.showerror("작업 기록 실패", "이전 작업 복구 기록을 남기지 못해 상태 파일을 보존합니다.")
                         return
                     self._restore_tray_from_state(saved_state)
-                    if restore_required:
-                        messagebox.showwarning(
-                            "담당자 확인 필요",
-                            "서버 판정 확인이 필요한 트레이를 복구했습니다. "
-                            "스캔 목록을 유지하고 담당자 확인을 받으세요.",
-                        )
                 else:
                     if not self._log_saved_tray_discarded(
                         saved_state,

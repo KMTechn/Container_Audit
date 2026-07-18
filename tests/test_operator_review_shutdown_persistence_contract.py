@@ -107,14 +107,23 @@ def _unexpected_action(name):
     return fail
 
 
-def test_operator_review_guard_survives_close_state_save_and_same_worker_restore(
+def test_operator_review_restore_uses_one_common_notice_and_beep_without_modal(
     monkeypatch,
     tmp_path,
 ):
     closing_app = _save_review_state(tmp_path)
     restored_app = _restore_app(tmp_path, worker_name=closing_app.worker_name)
     logged = []
-    warnings = []
+    presented = []
+    beeps = []
+    original_present_completion = restored_app.warning_presenter.present_completion
+
+    def present_completion(snapshot):
+        presented.append(snapshot)
+        return original_present_completion(snapshot)
+
+    restored_app.warning_presenter.present_completion = present_completion
+    restored_app._start_warning_beep = lambda: beeps.append(True)
     restored_app._log_event = (
         lambda event, detail=None, synchronous=False, **_kwargs:
         logged.append((event, detail, synchronous)) or True
@@ -129,18 +138,21 @@ def test_operator_review_guard_survives_close_state_save_and_same_worker_restore
     monkeypatch.setattr(
         container_audit_module.messagebox,
         "showwarning",
-        lambda *args, **_kwargs: warnings.append(args),
+        _unexpected_action("operator-review restore modal"),
     )
 
     restored_app._load_current_tray_state()
 
     assert restored_app.current_tray.master_label_code == MASTER_LABEL
     assert restored_app.current_tray.scanned_barcodes == [PRODUCT_BARCODE]
+    assert len(presented) == 1
+    assert presented[0].outcome is CompletionOutcome.OPERATOR_REVIEW
+    assert restored_app.warning_presenter.state.active_notice.code == "completion.operator_review"
+    assert beeps == [True]
     assert restored_app._operator_review_blocks_mutation() is True
     assert logged[0][0] == "TRAY_RESTORE"
     assert logged[0][1]["operator_review_restored"] is True
     assert logged[0][2] is True
-    assert warnings and warnings[-1][0] == "담당자 확인 필요"
     assert (tmp_path / "current.json").exists()
 
 
