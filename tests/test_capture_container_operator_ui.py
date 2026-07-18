@@ -4,6 +4,7 @@ import argparse
 
 import pytest
 from PIL import Image
+from scan_display import compact_scan_value, format_scan_list_row
 
 from tools.capture_container_operator_ui import (
     DEFAULT_SCALE,
@@ -29,6 +30,8 @@ from tools.capture_container_operator_ui import (
     parse_states,
     rect_is_contained,
     resolve_monitor_target,
+    _expected_scan_list_rows,
+    _fixture_manifest,
 )
 
 
@@ -190,10 +193,13 @@ def test_fixture_contract_preserves_last_normal_scan_across_duplicate_and_review
 
     assert waiting.tray is None
     assert normal.tray is not None and len(normal.tray.scanned_barcodes) == 3
+    assert "|" in normal.last_normal_scan and "=" in normal.last_normal_scan
     assert duplicate.tray is not None
     assert duplicate.tray.scanned_barcodes == normal.tray.scanned_barcodes
     assert duplicate.last_normal_scan == normal.last_normal_scan
     assert duplicate.notice is not None and duplicate.notice.blocking is True
+    assert duplicate.last_normal_scan not in duplicate.notice.message
+    assert "|" not in duplicate.notice.message and "=" not in duplicate.notice.message
     assert review.tray is not None
     assert len(review.tray.scanned_barcodes) == review.tray.target_count
     assert review.completion is not None
@@ -203,6 +209,23 @@ def test_fixture_contract_preserves_last_normal_scan_across_duplicate_and_review
     assert completed.completion is not None and completed.completion.outcome == "ACKED"
     assert recovered.tray is not None and recovered.tray.restored is True
     assert recovered.notice is not None and recovered.notice.blocking is False
+
+
+def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():
+    normal = next(
+        fixture for fixture in build_state_fixtures() if fixture.state_id == "normal"
+    )
+    manifest = _fixture_manifest(normal)
+    rows = _expected_scan_list_rows(manifest)
+
+    assert normal.tray is not None
+    assert manifest["last_normal_scan"] == normal.last_normal_scan
+    assert manifest["last_normal_scan_display"] == compact_scan_value(
+        normal.last_normal_scan,
+        item_code=normal.last_normal_item_code,
+    )
+    assert all(raw not in row for raw in normal.tray.scanned_barcodes for row in rows)
+    assert all("|" not in row and "=" not in row for row in rows)
 
 
 def test_capture_rows_are_normalized_to_settled_neutral_colors():
@@ -372,15 +395,23 @@ def test_button_row_clustering_preserves_approved_visual_order():
 
 
 def test_capture_evaluation_combines_pixel_geometry_and_history_contracts():
+    last_normal_raw = "PRODUCT-003"
+    last_normal_display = compact_scan_value(last_normal_raw, item_code="PRODUCT")
     record = {
         "state": "normal",
         "requested_scale": 1.4,
         "applied_scale_factor": 1.4,
-        "fixture": {"scan_count": 3, "last_normal_scan": "PRODUCT-003"},
+        "fixture": {
+            "scan_count": 3,
+            "last_normal_scan": last_normal_raw,
+            "last_normal_scan_display": last_normal_display,
+        },
         "rendered_state": {
             "scan_list_row_count": 3,
             "scan_list_rows_neutral": True,
-            "last_normal_scan": "PRODUCT-003",
+            "last_normal_scan": last_normal_display,
+            "last_normal_scan_display": last_normal_display,
+            "presenter_last_normal_scan_raw": last_normal_raw,
             "scan_entry_state": "normal",
             "right_progress_count_texts": {},
         },
@@ -425,20 +456,40 @@ def test_capture_evaluation_combines_pixel_geometry_and_history_contracts():
     assert evaluate_capture(record)[-1] == "blocking_state_scan_entry_enabled"
 
 
-def _scan_row_evaluation_record(state: str, barcodes: list[str], rows: list[str]):
+def _scan_row_evaluation_record(
+    state: str,
+    barcodes: list[str],
+    rows: list[str],
+    *,
+    item_code: str = "PRODUCT",
+):
+    last_normal_raw = barcodes[-1] if barcodes else ""
+    last_normal_display = (
+        compact_scan_value(last_normal_raw, item_code=item_code)
+        if last_normal_raw
+        else "-"
+    )
     return {
         "state": state,
         "fixture": {
             "active_tray": True,
             "scan_count": len(barcodes),
-            "last_normal_scan": barcodes[-1] if barcodes else "",
-            "tray": {"scanned_barcodes": list(barcodes)},
+            "last_normal_scan": last_normal_raw,
+            "last_normal_scan_display": last_normal_display,
+            "tray": {
+                "item_code": item_code,
+                "scanned_barcodes": list(barcodes),
+            },
         },
         "rendered_state": {
             "scan_list_row_count": len(rows),
             "scan_list_rows": list(rows),
             "scan_list_rows_neutral": True,
-            "last_normal_scan": barcodes[-1] if barcodes else "",
+            "last_normal_scan": last_normal_display,
+            "last_normal_scan_display": last_normal_display,
+            "presenter_last_normal_scan_raw": last_normal_raw,
+            "active_tray_scans_raw": list(barcodes),
+            "active_tray_last_scan_raw": last_normal_raw,
             "scan_entry_state": "disabled" if state == "duplicate" else "normal",
             "right_progress_count_texts": {},
         },
@@ -494,7 +545,10 @@ def test_capture_evaluation_fails_a_false_explicit_monitor_gate():
 
 def test_capture_evaluation_matches_every_fixture_barcode_in_display_order():
     barcodes = ["PRODUCT-001", "PRODUCT-002", "PRODUCT-003"]
-    expected_rows = ["(3) PRODUCT-003", "(2) PRODUCT-002", "(1) PRODUCT-001"]
+    expected_rows = [
+        format_scan_list_row(index, barcode, item_code="PRODUCT")
+        for index, barcode in reversed(tuple(enumerate(barcodes, start=1)))
+    ]
     record = _scan_row_evaluation_record("normal", barcodes, expected_rows)
 
     assert evaluate_capture(record) == []
@@ -505,13 +559,43 @@ def test_capture_evaluation_matches_every_fixture_barcode_in_display_order():
 
 def test_capture_evaluation_preserves_exact_normal_rows_in_duplicate_state():
     barcodes = ["PRODUCT-001", "PRODUCT-002", "PRODUCT-003"]
-    expected_rows = ["(3) PRODUCT-003", "(2) PRODUCT-002", "(1) PRODUCT-001"]
+    expected_rows = [
+        format_scan_list_row(index, barcode, item_code="PRODUCT")
+        for index, barcode in reversed(tuple(enumerate(barcodes, start=1)))
+    ]
     normal = _scan_row_evaluation_record("normal", barcodes, expected_rows)
     duplicate = _scan_row_evaluation_record("duplicate", barcodes, expected_rows)
 
     assert evaluate_capture(normal) == []
     assert evaluate_capture(duplicate) == []
     assert duplicate["rendered_state"]["scan_list_rows"] == normal["rendered_state"]["scan_list_rows"]
+
+
+def test_capture_evaluation_rejects_raw_visible_label_but_preserves_raw_sources():
+    barcodes = ["PRODUCT-001", "PRODUCT-002", "PRODUCT-003"]
+    rows = [
+        format_scan_list_row(index, barcode, item_code="PRODUCT")
+        for index, barcode in reversed(tuple(enumerate(barcodes, start=1)))
+    ]
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+
+    record["rendered_state"]["last_normal_scan"] = barcodes[-1]
+    record["rendered_state"]["last_normal_scan_display"] = barcodes[-1]
+
+    assert evaluate_capture(record) == [
+        "last_normal_scan_not_preserved",
+        "last_normal_scan_display_raw_leak",
+    ]
+
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+    record["rendered_state"]["presenter_last_normal_scan_raw"] = "PRODUCT · 003"
+
+    assert evaluate_capture(record) == ["presenter_last_normal_scan_not_preserved"]
+
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+    record["rendered_state"]["active_tray_scans_raw"] = barcodes[:-1]
+
+    assert evaluate_capture(record) == ["active_tray_scans_not_preserved"]
 
 
 def test_capture_evaluation_requires_empty_scan_list_without_active_tray():

@@ -247,7 +247,7 @@ def _build_center(*, scale: float) -> tuple[ContainerAudit, FakeWidget]:
     center = FakeWidget(kind="CenterPane")
     center.set_size(panes.center_width, DISPLAY_HEIGHT)
     app._create_center_content(center)
-    app.scanned_listbox.insert(0, f"(1) {LAST_NORMAL}")
+    app.scanned_listbox.insert(0, app._format_scanned_list_row(1, LAST_NORMAL))
     app._apply_center_layout(center, panes.center_width, DISPLAY_HEIGHT)
     return app, center
 
@@ -376,7 +376,9 @@ def test_duplicate_notice_preserves_scan_list_last_normal_and_center_geometry(fa
     assert tuple(app.scanned_listbox.items) == rows_before
     assert all(REJECTED_DUPLICATE not in row for row in app.scanned_listbox.items)
     assert app.warning_presenter.state.last_normal_scan == LAST_NORMAL
-    assert app.last_scan_value_label.options["text"] == LAST_NORMAL
+    assert app.last_scan_value_label.options["text"] == app._format_last_normal_scan_value(
+        LAST_NORMAL
+    )
     assert _center_geometry_snapshot(app) == geometry_before
     assert {
         _text(widget)

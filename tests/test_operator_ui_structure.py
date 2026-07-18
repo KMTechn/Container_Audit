@@ -282,7 +282,7 @@ def test_four_exposed_actions_use_one_row_then_two_by_two_without_exposing_opera
 def _replace_scan_rows(app, barcodes):
     app.scanned_listbox.delete(0, "end")
     for index, barcode in enumerate(barcodes, start=1):
-        app.scanned_listbox.insert(0, f"({index}) {barcode}")
+        app.scanned_listbox.insert(0, app._format_scanned_list_row(index, barcode))
 
 
 def _scan_list_geometry(app, center):
@@ -317,6 +317,11 @@ def test_scan_list_frame_and_widget_survive_error_completion_and_recovery_states
     app.warning_presenter.record_normal_scan(barcodes[-1])
     app._update_center_display()
     normal_rows = tuple(app.scanned_listbox.items)
+    assert normal_rows == tuple(
+        app._format_scanned_list_row(index, barcode)
+        for index, barcode in reversed(tuple(enumerate(barcodes, start=1)))
+    )
+    assert all(barcode not in row for barcode in barcodes for row in normal_rows)
 
     app.warning_presenter.present(
         Notice(
@@ -430,7 +435,9 @@ def test_duplicate_notice_acknowledgement_restores_working_display_without_chang
     assert app.scan_entry.options["state"] == container_audit_module.tk.NORMAL
     assert tuple(app.scanned_listbox.items) == rows_before_ack
     assert app.warning_presenter.state.last_normal_scan == barcodes[-1]
-    assert app.last_scan_value_label.options["text"] == barcodes[-1]
+    assert app.last_scan_value_label.options["text"] == app._format_last_normal_scan_value(
+        barcodes[-1]
+    )
     assert len(app.root.after_calls) == focus_jobs_before_ack + 1
 
 
@@ -549,7 +556,10 @@ def test_right_sidebar_values_show_last_normal_scan_and_next_operator_action(ope
     app._update_center_display()
     assert "현품표" in app.follow_up_label.options["text"]
 
-    barcode = "AAA2270730100-001"
+    barcode = (
+        "AAA2270730100|SERIAL=SERIAL-000000123456|"
+        "UNRECOGNIZED=FULL-TELEGRAM-PAYLOAD"
+    )
     app.warning_presenter.record_normal_scan(barcode)
     app.current_tray = TraySession(
         master_label_code="PHS=2|CLC=AAA2270730100|QT=3",
@@ -560,7 +570,13 @@ def test_right_sidebar_values_show_last_normal_scan_and_next_operator_action(ope
     )
     app._update_center_display()
 
-    assert barcode in app.last_scan_value_label.options["text"]
+    display_value = app.last_scan_value_label.options["text"]
+    assert display_value == app._format_last_normal_scan_value(barcode)
+    assert barcode not in display_value
+    assert "|" not in display_value
+    assert "=" not in display_value
+    assert app.warning_presenter.state.last_normal_scan == barcode
+    assert app.current_tray.scanned_barcodes == [barcode]
     assert "제품" in app.follow_up_label.options["text"]
 
 

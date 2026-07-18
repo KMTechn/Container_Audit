@@ -5,15 +5,20 @@ import pytest
 import Container_Audit as container_audit_module
 from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
+from scan_display import format_scan_list_row
 from transfer_seal import SealAttempt
 from warning_presenter import CompletionOutcome, WarningPresenter
 
 
 ITEM_CODE = "AAA2270730100"
-FIRST_BARCODE = f"{ITEM_CODE}-001"
-SECOND_BARCODE = f"{ITEM_CODE}-002"
-THIRD_BARCODE = f"{ITEM_CODE}-003"
+FIRST_BARCODE = f"{ITEM_CODE}|SERIAL=SERIAL-0001|TRACE=TRACE-0001"
+SECOND_BARCODE = f"{ITEM_CODE}|SERIAL=SERIAL-0002|TRACE=TRACE-0002"
+THIRD_BARCODE = f"{ITEM_CODE}|SERIAL=SERIAL-0003|TRACE=TRACE-0003"
 MASTER_LABEL = f"PHS=1|CLC={ITEM_CODE}|QT=3"
+
+
+def _display_row(position, barcode):
+    return format_scan_list_row(position, barcode, item_code=ITEM_CODE)
 
 
 class HeadlessRoot:
@@ -93,7 +98,7 @@ def _scan_app(*, save_succeeds, events):
     app.warning_presenter.record_normal_scan(FIRST_BARCODE)
     events.clear()
     app.root = HeadlessRoot()
-    app.scanned_listbox = HeadlessListbox([f"(1) {FIRST_BARCODE}"])
+    app.scanned_listbox = HeadlessListbox([_display_row(1, FIRST_BARCODE)])
     app.undo_button = {"state": container_audit_module.tk.NORMAL}
     app.success_sound = None
     app.error_sound = None
@@ -145,7 +150,11 @@ def _completion_app(*, seal_status, ledger_succeeds, events):
     app.tray_last_end_time = None
     app._scan_callback_epoch = 0
     app.scanned_listbox = HeadlessListbox(
-        [f"(3) {THIRD_BARCODE}", f"(2) {SECOND_BARCODE}", f"(1) {FIRST_BARCODE}"]
+        [
+            _display_row(3, THIRD_BARCODE),
+            _display_row(2, SECOND_BARCODE),
+            _display_row(1, FIRST_BARCODE),
+        ]
     )
     app.undo_button = {"state": container_audit_module.tk.NORMAL}
     app.COLOR_DANGER = "danger"
@@ -205,7 +214,7 @@ def test_state_save_failure_rolls_back_scan_and_preserves_previous_last_normal()
 
     assert app.warning_presenter.state.last_normal_scan == FIRST_BARCODE
     assert app.current_tray.scanned_barcodes == [FIRST_BARCODE]
-    assert app.scanned_listbox.rows == [f"(1) {FIRST_BARCODE}"]
+    assert app.scanned_listbox.rows == [_display_row(1, FIRST_BARCODE)]
     assert not any(event[0] == "record_normal_scan" for event in events)
     assert not any(event[:2] == ("log_event", "SCAN_OK") for event in events)
 
@@ -223,6 +232,9 @@ def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal():
     assert app.scanned_listbox.rows == original_rows
     assert app.warning_presenter.state.last_normal_scan == FIRST_BARCODE
     assert app.warning_presenter.state.active_notice.code == "scan.바코드_중복"
+    assert FIRST_BARCODE not in app.warning_presenter.state.active_notice.message
+    assert "|" not in app.warning_presenter.state.active_notice.message
+    assert "=" not in app.warning_presenter.state.active_notice.message
     assert not any(event[0] == "record_normal_scan" for event in events)
 
 

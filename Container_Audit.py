@@ -59,6 +59,7 @@ from replacement_workflow import (
     REPLACEMENT_REJECT_OLD_QTY,
     compare_replacement_quantities,
 )
+from scan_display import compact_scan_value, format_scan_list_row
 from responsive_layout import (
     center_layout_metrics as calculate_center_layout_metrics,
     pane_layout_metrics as calculate_pane_layout_metrics,
@@ -769,6 +770,7 @@ class ContainerAudit:
         self.tray_last_end_time: Optional[datetime.datetime] = None
         self.info_cards: Dict[str, Dict[str, ttk.Widget]] = {}
         self.logo_photo_ref = None
+        self._last_normal_scan_display_item_code = ""
         self.is_idle = False
         self.last_activity_time: Optional[datetime.datetime] = None
         self.show_tray_image_var = tk.BooleanVar(value=False)
@@ -1708,8 +1710,7 @@ class ContainerAudit:
         if self.current_tray.master_label_code:
             self._update_current_item_label()
             for i, barcode in enumerate(self.current_tray.scanned_barcodes, start=1):
-                self.scanned_listbox.insert(0, f"({i}) {barcode}")
-            self._show_scanned_listbox_suffix()
+                self.scanned_listbox.insert(0, self._format_scanned_list_row(i, barcode))
             if self.current_tray.scanned_barcodes:
                 self.undo_button['state'] = tk.NORMAL
             self._sync_last_normal_scan_from_active_tray()
@@ -1898,7 +1899,6 @@ class ContainerAudit:
             metrics["visible_rows"],
         )
         if metrics_key == getattr(self, "_scanned_listbox_layout_metrics", None):
-            self._show_scanned_listbox_suffix()
             return
         self._scanned_listbox_layout_metrics = metrics_key
 
@@ -1921,33 +1921,25 @@ class ContainerAudit:
             scrollbar = getattr(self, "scanned_list_scrollbar", None)
             if scrollbar is not None:
                 scrollbar.grid_configure(padx=(0, metrics["horizontal_pad"]))
-            horizontal_scrollbar = getattr(self, "scanned_list_horizontal_scrollbar", None)
-            if horizontal_scrollbar is not None:
-                horizontal_scrollbar.grid_configure(
-                    padx=metrics["horizontal_pad"],
-                    pady=(2, 0),
-                )
         except (tk.TclError, AttributeError):
             return
-        self._show_scanned_listbox_suffix()
 
-    def _show_scanned_listbox_suffix(self) -> None:
-        """Keep the useful product identifier suffix visible without truncation.
+    def _format_scanned_list_row(self, position: int, raw_barcode: str) -> str:
+        """Return a compact display row while retaining the raw tray value."""
 
-        Rows remain the exact raw values used by tray state and event logging.
-        Operators can move the horizontal scrollbar back to inspect the full
-        prefix; newly rendered rows start at the distinguishing suffix.
-        """
+        tray = getattr(self, "current_tray", None)
+        item_code = getattr(tray, "item_code", "") if tray is not None else ""
+        return format_scan_list_row(position, raw_barcode, item_code=item_code)
 
-        listbox = getattr(self, "scanned_listbox", None)
-        if listbox is None or not hasattr(listbox, "xview_moveto"):
-            return
-        try:
-            if hasattr(listbox, "winfo_exists") and not listbox.winfo_exists():
-                return
-            listbox.xview_moveto(1.0)
-        except (tk.TclError, AttributeError):
-            return
+    def _format_last_normal_scan_value(self, raw_barcode: str) -> str:
+        """Compact the visible value while the presenter retains its raw scan."""
+
+        if not raw_barcode:
+            return "-"
+        tray = getattr(self, "current_tray", None)
+        active_item_code = getattr(tray, "item_code", "") if tray is not None else ""
+        item_code = active_item_code or getattr(self, "_last_normal_scan_display_item_code", "")
+        return compact_scan_value(raw_barcode, item_code=item_code)
 
     def _get_center_layout_metrics(self, center_width: int, center_height: int) -> Dict[str, int]:
         metrics = calculate_center_layout_metrics(
@@ -2747,23 +2739,8 @@ class ContainerAudit:
         self.scanned_listbox = tk.Listbox(scan_list_frame, font=(self.DEFAULT_FONT, scanned_metrics["font_size"]), relief=tk.SOLID, bd=1, bg=self.COLOR_CARD_BG, fg=self.COLOR_TEXT, highlightbackground=self.COLOR_BORDER, highlightcolor=self.COLOR_PRIMARY, highlightthickness=1, justify='center', selectbackground=self.COLOR_PRIMARY, selectforeground='white', activestyle='none', height=scanned_metrics["visible_rows"])
         self.scanned_listbox.grid(row=1, column=0, sticky='nsew', padx=scanned_metrics["horizontal_pad"])
         self.scanned_list_scrollbar = ttk.Scrollbar(scan_list_frame, orient='vertical', command=self.scanned_listbox.yview)
-        self.scanned_list_horizontal_scrollbar = ttk.Scrollbar(
-            scan_list_frame,
-            orient='horizontal',
-            command=lambda *args: self.scanned_listbox.xview(*args),
-        )
-        self.scanned_listbox.configure(
-            yscrollcommand=self.scanned_list_scrollbar.set,
-            xscrollcommand=self.scanned_list_horizontal_scrollbar.set,
-        )
+        self.scanned_listbox.configure(yscrollcommand=self.scanned_list_scrollbar.set)
         self.scanned_list_scrollbar.grid(row=1, column=1, sticky='ns', padx=(0, scanned_metrics["horizontal_pad"]))
-        self.scanned_list_horizontal_scrollbar.grid(
-            row=2,
-            column=0,
-            sticky='ew',
-            padx=scanned_metrics["horizontal_pad"],
-            pady=(2, 0),
-        )
         parent_frame.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.scanned_listbox.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.root.after(0, self._apply_scanned_listbox_layout)
@@ -3144,7 +3121,15 @@ class ContainerAudit:
             return
         if scan_decision.status == SCAN_DUPLICATE:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
-            self.show_fullscreen_warning("바코드 중복!", f"제품 바코드 '{raw_barcode}'는 이미 스캔되었습니다.", self.COLOR_DANGER)
+            duplicate_display = compact_scan_value(
+                raw_barcode,
+                item_code=self.current_tray.item_code,
+            )
+            self.show_fullscreen_warning(
+                "바코드 중복!",
+                f"이미 스캔된 제품입니다.\n{duplicate_display}",
+                self.COLOR_DANGER,
+            )
             self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             self._save_current_tray_state()
             return
@@ -3197,6 +3182,7 @@ class ContainerAudit:
             self.show_status_message("스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다.", self.COLOR_DANGER)
             return
         presenter = self._warning_state_presenter()
+        self._last_normal_scan_display_item_code = str(self.current_tray.item_code or "")
         presenter.record_normal_scan(raw_barcode)
         presenter.clear()
         self._stop_warning_beep()
@@ -3219,22 +3205,21 @@ class ContainerAudit:
         self.current_tray.scanned_barcodes.append(barcode)
         self.current_tray.scan_times.append(scan_time)
         count = len(self.current_tray.scanned_barcodes)
-        row_text = f"({count}) {barcode}"
+        row_text = self._format_scanned_list_row(count, barcode)
         self.scanned_listbox.insert(0, row_text)
         self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
-        self._show_scanned_listbox_suffix()
         self.root.after(
             400,
             self._reset_scanned_barcode_highlight,
             self.scanned_listbox,
-            row_text,
+            barcode,
             getattr(self, "_scan_callback_epoch", 0),
         )
         self._update_center_display()
         self._update_current_item_label()
         self.undo_button['state'] = tk.NORMAL
 
-    def _reset_scanned_barcode_highlight(self, listbox, row_text: str, scan_epoch: int):
+    def _reset_scanned_barcode_highlight(self, listbox, raw_barcode: str, scan_epoch: int):
         if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
             return
         if listbox is not getattr(self, "scanned_listbox", None):
@@ -3242,11 +3227,13 @@ class ContainerAudit:
         try:
             if not listbox.winfo_exists():
                 return
-            for index in range(listbox.size()):
-                if listbox.get(index) == row_text:
-                    listbox.itemconfig(index, {'bg': self.COLOR_SIDEBAR_BG, 'fg': self.COLOR_TEXT})
-                    return
-        except tk.TclError:
+            raw_rows = getattr(self.current_tray, "scanned_barcodes", [])
+            raw_index = raw_rows.index(raw_barcode)
+            list_index = len(raw_rows) - raw_index - 1
+            expected_row = self._format_scanned_list_row(raw_index + 1, raw_barcode)
+            if list_index < listbox.size() and listbox.get(list_index) == expected_row:
+                listbox.itemconfig(list_index, {'bg': self.COLOR_SIDEBAR_BG, 'fg': self.COLOR_TEXT})
+        except (tk.TclError, AttributeError, ValueError):
             return
 
     def _completion_time_eligible_for_best_time(self, detail: Dict[str, Any]) -> bool:
@@ -3429,11 +3416,10 @@ class ContainerAudit:
         if not self._save_current_tray_state():
             self.current_tray.scanned_barcodes.append(last_barcode)
             self.current_tray.scan_times.append(last_scan_time)
-            row_text = f"({len(self.current_tray.scanned_barcodes)}) {last_barcode}"
+            row_text = self._format_scanned_list_row(len(self.current_tray.scanned_barcodes), last_barcode)
             self.scanned_listbox.insert(0, row_text)
             if hasattr(self.scanned_listbox, 'itemconfig'):
                 self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
-            self._show_scanned_listbox_suffix()
             self._update_center_display()
             self._update_current_item_label()
             self.show_status_message("스캔 취소 상태 저장에 실패했습니다. 기존 스캔을 유지합니다.", self.COLOR_DANGER)
@@ -3443,11 +3429,10 @@ class ContainerAudit:
         if not self._log_event('SCAN_UNDO', detail={'undone_barcode': last_barcode}, synchronous=True):
             self.current_tray.scanned_barcodes.append(last_barcode)
             self.current_tray.scan_times.append(last_scan_time)
-            row_text = f"({len(self.current_tray.scanned_barcodes)}) {last_barcode}"
+            row_text = self._format_scanned_list_row(len(self.current_tray.scanned_barcodes), last_barcode)
             self.scanned_listbox.insert(0, row_text)
             if hasattr(self.scanned_listbox, 'itemconfig'):
                 self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
-            self._show_scanned_listbox_suffix()
             restore_saved = self._save_current_tray_state()
             self._update_center_display()
             self._update_current_item_label()
@@ -3457,7 +3442,11 @@ class ContainerAudit:
             self.show_status_message("스캔 취소 기록 저장에 실패했습니다. 기존 스캔을 유지합니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
             return
-        self.show_status_message(f"'{last_barcode}' 스캔이 취소되었습니다.", self.COLOR_DANGER)
+        cancelled_display = compact_scan_value(
+            last_barcode,
+            item_code=self.current_tray.item_code,
+        )
+        self.show_status_message(f"{cancelled_display} 스캔이 취소되었습니다.", self.COLOR_DANGER)
         self._sync_last_normal_scan_from_active_tray()
         self._update_current_item_label()
         if not self.current_tray.scanned_barcodes: self.undo_button['state'] = tk.DISABLED
@@ -3828,7 +3817,9 @@ class ContainerAudit:
                 scan_entry.configure(state=tk.DISABLED if state.is_blocking else tk.NORMAL)
             last_scan_label = getattr(self, "last_scan_value_label", None)
             if last_scan_label is not None:
-                last_scan_label.configure(text=state.last_normal_scan or "-")
+                last_scan_label.configure(
+                    text=self._format_last_normal_scan_value(state.last_normal_scan)
+                )
             status_card = getattr(self, "info_cards", {}).get('status')
             status_value = status_card.get('value') if status_card else None
             if status_value is not None:
@@ -3962,6 +3953,7 @@ class ContainerAudit:
         presenter.clear_completion()
         presenter.clear_last_normal_scan()
         presenter.clear()
+        self._last_normal_scan_display_item_code = ""
         self._stop_warning_beep()
         self._render_warning_state()
 
@@ -3972,11 +3964,13 @@ class ContainerAudit:
         if not active_tray:
             if clear_when_inactive:
                 presenter.clear_last_normal_scan()
+                self._last_normal_scan_display_item_code = ""
                 self._render_warning_state()
             return
         presenter.clear_last_normal_scan()
         scanned_barcodes = list(getattr(tray, "scanned_barcodes", []) or [])
         if scanned_barcodes:
+            self._last_normal_scan_display_item_code = str(getattr(tray, "item_code", "") or "")
             presenter.record_normal_scan(str(scanned_barcodes[-1]))
         self._render_warning_state()
 

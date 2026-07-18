@@ -247,7 +247,6 @@ class CapturingListbox:
     def __init__(self):
         self.rows = []
         self.configs = []
-        self.xview_calls = []
 
     def insert(self, index, value):
         if index == 0:
@@ -273,10 +272,6 @@ class CapturingListbox:
     def get(self, index):
         return self.rows[index]
 
-    def xview_moveto(self, fraction):
-        self.xview_calls.append(fraction)
-
-
 class CapturingLayoutParent:
     def __init__(self, width, height):
         self.width = width
@@ -295,7 +290,6 @@ class CapturingLayoutListbox:
         self.height = height
         self.configure_calls = []
         self.grid_calls = []
-        self.xview_calls = []
 
     def winfo_exists(self):
         return True
@@ -308,10 +302,6 @@ class CapturingLayoutListbox:
 
     def grid_configure(self, **kwargs):
         self.grid_calls.append(kwargs)
-
-    def xview_moveto(self, fraction):
-        self.xview_calls.append(fraction)
-
 
 class CapturingPanedWindow:
     def __init__(self, width, height):
@@ -398,13 +388,11 @@ def test_apply_scanned_listbox_layout_configures_widget_and_caches_metrics():
     first_grid = app.scanned_listbox.grid_calls[-1]
     assert first_grid["padx"] >= 12
     assert first_grid["pady"][0] <= 28
-    assert app.scanned_listbox.xview_calls == [1.0]
 
     app._apply_scanned_listbox_layout()
 
     assert len(app.scanned_listbox.configure_calls) == 1
     assert len(app.scanned_listbox.grid_calls) == 1
-    assert app.scanned_listbox.xview_calls == [1.0, 1.0]
 
 
 def test_paned_adapter_applies_profile_widths_without_round_trip_accumulation():
@@ -3385,7 +3373,12 @@ def test_current_tray_state_save_includes_active_idle_duration(tmp_path):
 
 def test_show_validation_screen_enables_undo_for_restored_scans():
     app = _headless_app()
-    app.current_tray = TraySession(master_label_code="ACTIVE", scanned_barcodes=["BC-1", "BC-2"])
+    barcodes = ["AAA2270730100-001", "AAA2270730100-002"]
+    app.current_tray = TraySession(
+        master_label_code="ACTIVE",
+        item_code="AAA2270730100",
+        scanned_barcodes=list(barcodes),
+    )
     app.undo_button = {"state": container_audit_module.tk.DISABLED}
     app.TRAY_SIZE = 60
     app.clock_job = None
@@ -3420,7 +3413,11 @@ def test_show_validation_screen_enables_undo_for_restored_scans():
     app.show_validation_screen()
 
     assert app.undo_button["state"] == container_audit_module.tk.NORMAL
-    assert app.scanned_listbox.rows == ["(2) BC-2", "(1) BC-1"]
+    assert app.scanned_listbox.rows == [
+        app._format_scanned_list_row(2, barcodes[1]),
+        app._format_scanned_list_row(1, barcodes[0]),
+    ]
+    assert all(" · " in row for row in app.scanned_listbox.rows)
 
 
 def test_start_clock_cancels_existing_clock_job_before_rescheduling():
@@ -5104,7 +5101,7 @@ def test_show_exchange_dialog_invalidates_pending_main_scan_when_reusing_dialog(
 def test_delayed_scan_highlight_reset_targets_original_row_after_newer_scan():
     app = _headless_app()
     app.root = CapturingRoot()
-    app.current_tray = TraySession(master_label_code="ACTIVE")
+    app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100")
     app.scanned_listbox = CapturingListbox()
     app.undo_button = {"state": container_audit_module.tk.DISABLED}
     app.COLOR_SUCCESS = "success"
@@ -5118,15 +5115,22 @@ def test_delayed_scan_highlight_reset_targets_original_row_after_newer_scan():
 
     app.add_scanned_barcode("AAA2270730100-001", datetime.datetime(2026, 6, 22, 9, 1, 0), 0.0)
     callback, args = app.root.calls[0]
-    app.scanned_listbox.insert(0, "(2) AAA2270730100-002")
+    app.current_tray.scanned_barcodes.append("AAA2270730100-002")
+    app.current_tray.scan_times.append(datetime.datetime(2026, 6, 22, 9, 2, 0))
+    app.scanned_listbox.insert(
+        0,
+        app._format_scanned_list_row(2, "AAA2270730100-002"),
+    )
 
     callback(*args)
 
     assert app.scanned_listbox.configs[0] == (0, {"bg": "success", "fg": "white"})
     assert app.scanned_listbox.configs[1] == (1, {"bg": "sidebar", "fg": "text"})
-    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
-    assert app.scanned_listbox.rows[1] == "(1) AAA2270730100-001"
-    assert app.scanned_listbox.xview_calls == [1.0]
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001", "AAA2270730100-002"]
+    assert app.scanned_listbox.rows[1] == app._format_scanned_list_row(
+        1,
+        "AAA2270730100-001",
+    )
 
 
 def test_delayed_scan_highlight_reset_ignores_stale_epoch():
@@ -5159,11 +5163,16 @@ def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails():
     scan_time_2 = datetime.datetime(2026, 6, 22, 9, 2, 0)
     app.current_tray = TraySession(
         master_label_code="ACTIVE",
-        scanned_barcodes=["BC-1", "BC-2"],
+        item_code="AAA2270730100",
+        scanned_barcodes=["AAA2270730100-001", "AAA2270730100-002"],
         scan_times=[scan_time_1, scan_time_2],
     )
     app.scanned_listbox = CapturingListbox()
-    app.scanned_listbox.rows = ["(2) BC-2", "(1) BC-1"]
+    expected_rows = [
+        app._format_scanned_list_row(2, "AAA2270730100-002"),
+        app._format_scanned_list_row(1, "AAA2270730100-001"),
+    ]
+    app.scanned_listbox.rows = list(expected_rows)
     app.undo_button = {"state": "normal"}
     app.COLOR_SUCCESS = "success"
     app.COLOR_DANGER = "danger"
@@ -5181,9 +5190,9 @@ def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails():
     app.undo_last_scan()
 
     assert app.activity_updated is True
-    assert app.current_tray.scanned_barcodes == ["BC-1", "BC-2"]
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001", "AAA2270730100-002"]
     assert app.current_tray.scan_times == [scan_time_1, scan_time_2]
-    assert app.scanned_listbox.rows == ["(2) BC-2", "(1) BC-1"]
+    assert app.scanned_listbox.rows == expected_rows
     assert app.undo_button["state"] == "normal"
     assert app.center_updated is True
     assert app.item_label_updated is True
@@ -5194,13 +5203,15 @@ def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails():
 def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero():
     app = _headless_app()
     scan_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
+    raw_barcode = "AAA2270730100|SERIAL=SERIAL-0001|TRACE=TRACE-0001"
     app.current_tray = TraySession(
         master_label_code="ACTIVE",
-        scanned_barcodes=["BC-1"],
+        item_code="AAA2270730100",
+        scanned_barcodes=[raw_barcode],
         scan_times=[scan_time],
     )
     app.scanned_listbox = CapturingListbox()
-    app.scanned_listbox.rows = ["(1) BC-1"]
+    app.scanned_listbox.rows = [app._format_scanned_list_row(1, raw_barcode)]
     app.undo_button = {"state": "normal"}
     app.COLOR_DANGER = "danger"
     app._update_last_activity_time = lambda: None
@@ -5213,18 +5224,21 @@ def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero():
     app._log_event = lambda event, detail=None, synchronous=False: logged.append(
         {"event": event, "detail": detail, "saved_before_log": list(saved), "synchronous": synchronous}
     ) or True
-    app.show_status_message = lambda *args, **kwargs: None
+    messages = []
+    app.show_status_message = lambda *args, **kwargs: messages.append(args)
 
     app.undo_last_scan()
 
     assert saved == [[]]
     assert logged == [
-        {"event": "SCAN_UNDO", "detail": {"undone_barcode": "BC-1"}, "saved_before_log": [[]], "synchronous": True}
+        {"event": "SCAN_UNDO", "detail": {"undone_barcode": raw_barcode}, "saved_before_log": [[]], "synchronous": True}
     ]
     assert app.current_tray.scanned_barcodes == []
     assert app.current_tray.scan_times == []
     assert app.scanned_listbox.rows == []
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
+    assert raw_barcode not in messages[-1][0]
+    assert "|" not in messages[-1][0] and "=" not in messages[-1][0]
 
 
 def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
@@ -5232,11 +5246,13 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
     scan_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
     app.current_tray = TraySession(
         master_label_code="ACTIVE",
-        scanned_barcodes=["BC-1"],
+        item_code="AAA2270730100",
+        scanned_barcodes=["AAA2270730100-001"],
         scan_times=[scan_time],
     )
     app.scanned_listbox = CapturingListbox()
-    app.scanned_listbox.rows = ["(1) BC-1"]
+    expected_row = app._format_scanned_list_row(1, "AAA2270730100-001")
+    app.scanned_listbox.rows = [expected_row]
     app.undo_button = {"state": "normal"}
     app.COLOR_SUCCESS = "success"
     app.COLOR_DANGER = "danger"
@@ -5257,11 +5273,11 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
 
     app.undo_last_scan()
 
-    assert saved == [[], ["BC-1"]]
-    assert logged == [{"event": "SCAN_UNDO", "detail": {"undone_barcode": "BC-1"}, "synchronous": True}]
-    assert app.current_tray.scanned_barcodes == ["BC-1"]
+    assert saved == [[], ["AAA2270730100-001"]]
+    assert logged == [{"event": "SCAN_UNDO", "detail": {"undone_barcode": "AAA2270730100-001"}, "synchronous": True}]
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
     assert app.current_tray.scan_times == [scan_time]
-    assert app.scanned_listbox.rows == ["(1) BC-1"]
+    assert app.scanned_listbox.rows == [expected_row]
     assert app.undo_button["state"] == container_audit_module.tk.NORMAL
     assert app.center_updated is True
     assert app.item_label_updated is True
@@ -5345,7 +5361,12 @@ def test_product_scan_saves_before_logging_scan_ok():
     assert saved == [["AAA2270730100-001"]]
     assert logged[0]["event"] == "SCAN_OK"
     assert logged[0]["saved_before_log"] == [["AAA2270730100-001"]]
+    assert logged[0]["detail"]["product_barcode"] == "AAA2270730100-001"
     assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
+    assert app.scanned_listbox.rows == [
+        app._format_scanned_list_row(1, "AAA2270730100-001")
+    ]
+    assert app.scanned_listbox.rows[0] != "(1) AAA2270730100-001"
     assert not hasattr(app, "completed")
 
 

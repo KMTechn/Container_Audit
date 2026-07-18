@@ -19,6 +19,12 @@ from PIL import Image, ImageGrab, ImageStat
 
 ROOT = Path(__file__).resolve().parents[1]
 REPO_TMP_ROOT = ROOT / "tmp"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scan_display import compact_scan_value, format_scan_list_row
+
+
 DEFAULT_SIZES = ((1366, 768), (1440, 900), (1920, 1080), (2560, 1080))
 DEFAULT_STATE_IDS = (
     "waiting",
@@ -74,6 +80,7 @@ class StateFixture:
     state_label: str
     tray: TrayFixture | None = None
     last_normal_scan: str = ""
+    last_normal_item_code: str = ""
     notice: NoticeFixture | None = None
     completion: CompletionFixture | None = None
     completed_tray_count: int = 0
@@ -125,7 +132,14 @@ class MonitorTarget:
 
 
 def _products(count: int) -> tuple[str, ...]:
-    return tuple(f"AAA2270730100-LINE-{index:04d}" for index in range(1, count + 1))
+    return tuple(
+        (
+            "AAA2270730100|"
+            f"SERIAL=CAPTURE-LINE-{index:04d}|"
+            f"TRACE=TRACE-{index:04d}"
+        )
+        for index in range(1, count + 1)
+    )
 
 
 def build_state_fixtures() -> tuple[StateFixture, ...]:
@@ -152,6 +166,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 stopwatch_seconds=74,
             ),
             last_normal_scan=normal_products[-1],
+            last_normal_item_code=common["item_code"],
         ),
         StateFixture(
             state_id="duplicate",
@@ -163,10 +178,17 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 stopwatch_seconds=82,
             ),
             last_normal_scan=normal_products[-1],
+            last_normal_item_code=common["item_code"],
             notice=NoticeFixture(
                 code="capture.duplicate",
                 title="중복 스캔",
-                message=f"이미 스캔된 제품입니다: {normal_products[-1]}",
+                message=(
+                    "이미 스캔된 제품입니다.\n"
+                    + compact_scan_value(
+                        normal_products[-1],
+                        item_code=common["item_code"],
+                    )
+                ),
                 severity="error",
                 blocking=True,
             ),
@@ -181,6 +203,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 stopwatch_seconds=128,
             ),
             last_normal_scan=review_products[-1],
+            last_normal_item_code=common["item_code"],
             completion=CompletionFixture(
                 outcome="OPERATOR_REVIEW",
                 message=(
@@ -193,6 +216,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             state_id="completed",
             state_label="완료",
             last_normal_scan=review_products[-1],
+            last_normal_item_code=common["item_code"],
             completion=CompletionFixture(
                 outcome="ACKED",
                 message="'캡처 기준 품목' 완료 · 서버 이적 확인이 완료되었습니다.",
@@ -211,6 +235,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 restored=True,
             ),
             last_normal_scan=recovered_products[-1],
+            last_normal_item_code=common["item_code"],
             notice=NoticeFixture(
                 code="capture.recovered",
                 title="작업 복구 완료",
@@ -1106,6 +1131,22 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         scan_entry_state = str(app.scan_entry.cget("state"))
     except Exception:
         scan_entry_state = "unknown"
+    try:
+        presenter_last_normal_scan_raw = str(
+            app._warning_state_presenter().state.last_normal_scan or ""
+        )
+    except Exception:
+        presenter_last_normal_scan_raw = ""
+    try:
+        active_tray_scans_raw = [
+            str(value) for value in (app.current_tray.scanned_barcodes or [])
+        ]
+        active_tray_last_scan_raw = (
+            active_tray_scans_raw[-1] if active_tray_scans_raw else ""
+        )
+    except Exception:
+        active_tray_scans_raw = []
+        active_tray_last_scan_raw = ""
     right_texts = {
         "status": _widget_text(app.info_cards["status"]["value"]),
         "stopwatch": _widget_text(app.info_cards["stopwatch"]["value"]),
@@ -1126,6 +1167,10 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         "notice_title": _widget_text(app.notice_title_label),
         "notice_message": _widget_text(app.notice_message_label),
         "last_normal_scan": _widget_text(app.last_scan_value_label),
+        "last_normal_scan_display": _widget_text(app.last_scan_value_label),
+        "presenter_last_normal_scan_raw": presenter_last_normal_scan_raw,
+        "active_tray_scans_raw": active_tray_scans_raw,
+        "active_tray_last_scan_raw": active_tray_last_scan_raw,
         "next_action": _widget_text(app.follow_up_label),
         "status": right_texts["status"],
         "stopwatch": right_texts["stopwatch"],
@@ -1202,10 +1247,18 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
     app.scanned_listbox.delete(0, "end")
     if tray_fixture is not None:
         for index, barcode in enumerate(tray_fixture.scanned_barcodes, start=1):
-            app.scanned_listbox.insert(0, f"({index}) {barcode}")
+            app.scanned_listbox.insert(
+                0,
+                format_scan_list_row(
+                    index,
+                    barcode,
+                    item_code=tray_fixture.item_code,
+                ),
+            )
     normalize_capture_scan_rows(app)
 
     if fixture.last_normal_scan:
+        app._last_normal_scan_display_item_code = fixture.last_normal_item_code
         presenter.record_normal_scan(fixture.last_normal_scan)
     if fixture.notice is not None:
         presenter.present(
@@ -1279,6 +1332,14 @@ def _fixture_manifest(fixture: StateFixture) -> dict[str, Any]:
     record["scan_count"] = len(tray.scanned_barcodes) if tray is not None else 0
     record["target_count"] = tray.target_count if tray is not None else 0
     record["last_normal_scan_preserved"] = bool(fixture.last_normal_scan)
+    record["last_normal_scan_display"] = (
+        compact_scan_value(
+            fixture.last_normal_scan,
+            item_code=fixture.last_normal_item_code,
+        )
+        if fixture.last_normal_scan
+        else "-"
+    )
     return record
 
 
@@ -1291,8 +1352,9 @@ def _expected_scan_list_rows(fixture: dict[str, Any]) -> list[str]:
     if not isinstance(tray, dict):
         return []
     barcodes = tray.get("scanned_barcodes") or ()
+    item_code = tray.get("item_code") or ""
     numbered_rows = [
-        f"({index}) {barcode}"
+        format_scan_list_row(index, barcode, item_code=item_code)
         for index, barcode in enumerate(barcodes, start=1)
     ]
     return list(reversed(numbered_rows))
@@ -1369,10 +1431,37 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
                 issues.append("rendered_scan_rows_do_not_match_fixture")
         if rendered.get("scan_list_rows_neutral") is False:
             issues.append("scan_list_rows_not_settled")
-        expected_last_scan = str(fixture.get("last_normal_scan") or "")
-        rendered_last_scan = str(rendered.get("last_normal_scan") or "")
-        if expected_last_scan and rendered_last_scan != expected_last_scan:
+        expected_last_scan_raw = str(fixture.get("last_normal_scan") or "")
+        expected_last_scan_display = fixture.get("last_normal_scan_display")
+        if expected_last_scan_display is None:
+            expected_last_scan_display = expected_last_scan_raw or "-"
+        rendered_last_scan_display = str(
+            rendered.get("last_normal_scan_display", rendered.get("last_normal_scan")) or ""
+        )
+        if rendered_last_scan_display != str(expected_last_scan_display):
             issues.append("last_normal_scan_not_preserved")
+        if expected_last_scan_raw:
+            if str(rendered.get("presenter_last_normal_scan_raw") or "") != expected_last_scan_raw:
+                issues.append("presenter_last_normal_scan_not_preserved")
+            if fixture.get("active_tray") and (
+                str(rendered.get("active_tray_last_scan_raw") or "") != expected_last_scan_raw
+            ):
+                issues.append("active_tray_last_scan_not_preserved")
+            if (
+                expected_last_scan_raw in rendered_last_scan_display
+                or "|" in rendered_last_scan_display
+                or "=" in rendered_last_scan_display
+            ):
+                issues.append("last_normal_scan_display_raw_leak")
+        if "active_tray" in fixture:
+            fixture_tray = fixture.get("tray")
+            expected_active_scans_raw = (
+                list(fixture_tray.get("scanned_barcodes") or [])
+                if fixture.get("active_tray") and isinstance(fixture_tray, dict)
+                else []
+            )
+            if rendered.get("active_tray_scans_raw") != expected_active_scans_raw:
+                issues.append("active_tray_scans_not_preserved")
         if record.get("state") in {"duplicate", "operator_review"}:
             if str(rendered.get("scan_entry_state")) != "disabled":
                 issues.append("blocking_state_scan_entry_enabled")
