@@ -83,6 +83,25 @@ class ScannedListMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class WorkerLoginLayoutMetrics:
+    """Height-budgeted geometry for the worker login screen."""
+
+    profile: LayoutProfileName
+    short_height: bool
+    horizontal_pad: int
+    logo_max_width: int
+    logo_max_height: int
+    logo_pad_y: tuple[int, int]
+    title_pad_y: tuple[int, int]
+    field_label_pad_y: tuple[int, int]
+    entry_ipady: int
+    button_pad_y: tuple[int, int]
+    button_pad_x: int
+    button_ipady: int
+    estimated_content_height: int
+
+
+@dataclass(frozen=True, slots=True)
 class RightSidebarMetrics:
     """Sizing for status/time/follow-up cards and secondary statistics."""
 
@@ -444,6 +463,109 @@ def scanned_list_metrics(
         top_pady=top_pady,
         visible_rows=visible_rows,
         estimated_row_height=estimated_row_height,
+    )
+
+
+def worker_login_layout_metrics(
+    content_width: object,
+    content_height: object,
+    scale: object = 1.0,
+    *,
+    profile: LayoutProfile | LayoutProfileName | None = None,
+) -> WorkerLoginLayoutMetrics:
+    """Fit the login logo and controls inside the actual client height.
+
+    The legacy login scaled a 400 px logo and every spacer directly with the
+    text preference.  At 1366x768 and 1.4x text that requested more vertical
+    space than the window owned.  These metrics reserve the text/control
+    budget first, then cap the decorative logo with the remaining height.
+    """
+
+    width = _dimension(content_width, name="content_width")
+    height = _dimension(content_height, name="content_height")
+    normalized_scale = _scale(scale)
+    name = _profile_name(profile, width=width, height=height, scale=normalized_scale)
+    short_height = height / normalized_scale < 620
+
+    if short_height:
+        horizontal_pad = _clamped_int(width * 0.025, 10, 30)
+        logo_pad_y = (4, 6)
+        title_pad_y = (3, _clamped_int(height * 0.016, 8, 14))
+        field_label_pad_y = (2, 3)
+        entry_ipady = _clamped_int(height * 0.008, 4, 8)
+        button_pad_y = (_clamped_int(height * 0.018, 8, 16), 0)
+        button_pad_x = _clamped_int(width * 0.008, 6, 12)
+        button_ipady = _clamped_int(height * 0.008, 4, 8)
+        requested_logo_height = _clamped_int(height * 0.28, 96, 220)
+        requested_logo_width = _clamped_int(width * 0.32, 180, 430)
+    else:
+        horizontal_pad = _clamped_int(width * 0.035, 14 * normalized_scale, 48 * normalized_scale)
+        logo_pad_y = (
+            _clamped_int(height * 0.018, 10 * normalized_scale, 22 * normalized_scale),
+            _clamped_int(height * 0.012, 7 * normalized_scale, 15 * normalized_scale),
+        )
+        title_pad_y = (
+            _clamped_int(height * 0.010, 6 * normalized_scale, 14 * normalized_scale),
+            _clamped_int(height * 0.032, 18 * normalized_scale, 34 * normalized_scale),
+        )
+        field_label_pad_y = (
+            _clamped_int(height * 0.007, 4 * normalized_scale, 9 * normalized_scale),
+            _clamped_int(height * 0.005, 3 * normalized_scale, 6 * normalized_scale),
+        )
+        entry_ipady = _clamped_int(height * 0.011, 7 * normalized_scale, 12 * normalized_scale)
+        button_pad_y = (
+            _clamped_int(height * 0.045, 24 * normalized_scale, 46 * normalized_scale),
+            0,
+        )
+        button_pad_x = _clamped_int(width * 0.009, 8 * normalized_scale, 14 * normalized_scale)
+        button_ipady = _clamped_int(height * 0.009, 6 * normalized_scale, 10 * normalized_scale)
+        requested_logo_height = _clamped_int(height * 0.31, 170 * normalized_scale, 320 * normalized_scale)
+        requested_logo_width = _clamped_int(width * 0.30, 280 * normalized_scale, 440 * normalized_scale)
+
+    # Approximate the physical line boxes used by the matching Tk styles. The
+    # result is deliberately conservative: it includes ttk's vertical button
+    # padding and a safety margin before assigning the remaining height to the
+    # logo.  It is a clipping proxy, not a replacement for rendered capture.
+    stage_font = {"compact": 24, "standard": 28, "wide": 32}[name] * normalized_scale
+    label_font = 12 * normalized_scale
+    entry_font = 18 * normalized_scale
+    button_font = {"compact": 12, "standard": 14, "wide": 15}[name] * normalized_scale
+    title_line = int(math.ceil(stage_font * 1.5))
+    label_line = int(math.ceil(label_font * 1.5))
+    entry_line = int(math.ceil(entry_font * 1.5)) + entry_ipady * 2
+    style_button_padding = int(round({"compact": 12, "standard": 16, "wide": 20}[name] * normalized_scale))
+    button_line = int(math.ceil(button_font * 1.5)) + style_button_padding + button_ipady * 2
+    fixed_height = (
+        sum(logo_pad_y)
+        + title_line
+        + sum(title_pad_y)
+        + label_line
+        + sum(field_label_pad_y)
+        + entry_line
+        + sum(button_pad_y)
+        + button_line
+    )
+    safety_margin = _clamped_int(height * 0.035, 16, 36)
+    logo_height_budget = max(64, height - fixed_height - safety_margin)
+    logo_max_height = min(requested_logo_height, logo_height_budget)
+    # Preserve the source logo's 1024:720 aspect even before Pillow loads it.
+    logo_max_width = min(requested_logo_width, max(1, int(round(logo_max_height / 0.703125))))
+    estimated_content_height = fixed_height + logo_max_height
+
+    return WorkerLoginLayoutMetrics(
+        profile=name,
+        short_height=short_height,
+        horizontal_pad=horizontal_pad,
+        logo_max_width=logo_max_width,
+        logo_max_height=logo_max_height,
+        logo_pad_y=logo_pad_y,
+        title_pad_y=title_pad_y,
+        field_label_pad_y=field_label_pad_y,
+        entry_ipady=entry_ipady,
+        button_pad_y=button_pad_y,
+        button_pad_x=button_pad_x,
+        button_ipady=button_ipady,
+        estimated_content_height=estimated_content_height,
     )
 
 

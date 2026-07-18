@@ -247,6 +247,7 @@ class CapturingListbox:
     def __init__(self):
         self.rows = []
         self.configs = []
+        self.xview_calls = []
 
     def insert(self, index, value):
         if index == 0:
@@ -272,6 +273,9 @@ class CapturingListbox:
     def get(self, index):
         return self.rows[index]
 
+    def xview_moveto(self, fraction):
+        self.xview_calls.append(fraction)
+
 
 class CapturingLayoutParent:
     def __init__(self, width, height):
@@ -291,6 +295,7 @@ class CapturingLayoutListbox:
         self.height = height
         self.configure_calls = []
         self.grid_calls = []
+        self.xview_calls = []
 
     def winfo_exists(self):
         return True
@@ -303,6 +308,34 @@ class CapturingLayoutListbox:
 
     def grid_configure(self, **kwargs):
         self.grid_calls.append(kwargs)
+
+    def xview_moveto(self, fraction):
+        self.xview_calls.append(fraction)
+
+
+class CapturingPanedWindow:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+        self.sashes = [1, 2]
+
+    def set_size(self, width, height):
+        self.width = width
+        self.height = height
+
+    def winfo_ismapped(self):
+        return True
+
+    def winfo_width(self):
+        return self.width
+
+    def winfo_height(self):
+        return self.height
+
+    def sashpos(self, index, value=None):
+        if value is not None:
+            self.sashes[index] = value
+        return self.sashes[index]
 
 
 class CapturingTree:
@@ -365,11 +398,45 @@ def test_apply_scanned_listbox_layout_configures_widget_and_caches_metrics():
     first_grid = app.scanned_listbox.grid_calls[-1]
     assert first_grid["padx"] >= 12
     assert first_grid["pady"][0] <= 28
+    assert app.scanned_listbox.xview_calls == [1.0]
 
     app._apply_scanned_listbox_layout()
 
     assert len(app.scanned_listbox.configure_calls) == 1
     assert len(app.scanned_listbox.grid_calls) == 1
+    assert app.scanned_listbox.xview_calls == [1.0, 1.0]
+
+
+def test_paned_adapter_applies_profile_widths_without_round_trip_accumulation():
+    app = _headless_app()
+    app.paned_window = CapturingPanedWindow(width=1366, height=728)
+    app.scale_factor = 1.5
+
+    compact_before = app._get_pane_layout_metrics(1366)
+    app._clamp_paned_sashes_to_width()
+    compact_sashes_before = tuple(app.paned_window.sashes)
+
+    assert compact_before["compressed"] is True
+    assert compact_sashes_before == (
+        compact_before["left_width"],
+        compact_before["left_width"] + compact_before["center_width"],
+    )
+    assert compact_sashes_before[1] - compact_sashes_before[0] >= int(1366 * 0.53)
+
+    app.scale_factor = 1.0
+    app.paned_window.set_size(2560, 1080)
+    wide = app._get_pane_layout_metrics(2560)
+    app._clamp_paned_sashes_to_width()
+    assert tuple(app.paned_window.sashes) == (
+        wide["left_width"],
+        wide["left_width"] + wide["center_width"],
+    )
+
+    app.scale_factor = 1.5
+    app.paned_window.set_size(1366, 728)
+    app._clamp_paned_sashes_to_width()
+
+    assert tuple(app.paned_window.sashes) == compact_sashes_before
 
 
 def test_pane_layout_metrics_cap_sidebars_on_wide_monitors():
@@ -5057,6 +5124,9 @@ def test_delayed_scan_highlight_reset_targets_original_row_after_newer_scan():
 
     assert app.scanned_listbox.configs[0] == (0, {"bg": "success", "fg": "white"})
     assert app.scanned_listbox.configs[1] == (1, {"bg": "sidebar", "fg": "text"})
+    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
+    assert app.scanned_listbox.rows[1] == "(1) AAA2270730100-001"
+    assert app.scanned_listbox.xview_calls == [1.0]
 
 
 def test_delayed_scan_highlight_reset_ignores_stale_epoch():

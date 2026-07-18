@@ -65,6 +65,7 @@ from responsive_layout import (
     right_sidebar_metrics as calculate_right_sidebar_metrics,
     scanned_list_metrics as calculate_scanned_list_metrics,
     select_layout_profile,
+    worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
 from session_history import load_session_history
 from style_tokens import StyleProfile, build_style_tokens
@@ -1075,8 +1076,129 @@ class ContainerAudit:
             self.show_worker_input_screen()
 
     def _clear_main_frames(self):
+        login_layout_job = getattr(self, "_worker_login_layout_job", None)
+        if login_layout_job:
+            try:
+                self.root.after_cancel(login_layout_job)
+            except (AttributeError, tk.TclError):
+                pass
+            self._worker_login_layout_job = None
         self.worker_input_frame.pack_forget()
         self.paned_window.pack_forget()
+
+    def _get_worker_login_layout_metrics(
+        self,
+        content_width: int = 0,
+        content_height: int = 0,
+    ) -> Dict[str, Any]:
+        if content_width <= 1 or content_height <= 1:
+            for widget in (getattr(self, "worker_input_frame", None), getattr(self, "root", None)):
+                try:
+                    candidate_width = int(widget.winfo_width())
+                    candidate_height = int(widget.winfo_height())
+                except (AttributeError, TypeError, ValueError, tk.TclError):
+                    continue
+                if candidate_width > 1 and candidate_height > 1:
+                    content_width = candidate_width
+                    content_height = candidate_height
+                    break
+        metrics = calculate_worker_login_layout_metrics(
+            max(1, content_width),
+            max(1, content_height),
+            getattr(self, "scale_factor", 1.0),
+        )
+        return {
+            "profile": metrics.profile,
+            "short_height": metrics.short_height,
+            "horizontal_pad": metrics.horizontal_pad,
+            "logo_max_width": metrics.logo_max_width,
+            "logo_max_height": metrics.logo_max_height,
+            "logo_pad_y": metrics.logo_pad_y,
+            "title_pad_y": metrics.title_pad_y,
+            "field_label_pad_y": metrics.field_label_pad_y,
+            "entry_ipady": metrics.entry_ipady,
+            "button_pad_y": metrics.button_pad_y,
+            "button_pad_x": metrics.button_pad_x,
+            "button_ipady": metrics.button_ipady,
+            "estimated_content_height": metrics.estimated_content_height,
+        }
+
+    def _schedule_worker_login_layout_refresh(self, event=None) -> None:
+        if getattr(self, "_worker_login_layout_job", None):
+            return
+        try:
+            self._worker_login_layout_job = self.root.after_idle(self._apply_worker_login_layout)
+        except AttributeError:
+            try:
+                self._worker_login_layout_job = self.root.after(0, self._apply_worker_login_layout)
+            except AttributeError:
+                self._apply_worker_login_layout()
+        except tk.TclError:
+            return
+
+    def _apply_worker_login_layout(self, event=None) -> None:
+        self._worker_login_layout_job = None
+        center_frame = getattr(self, "_worker_login_center_frame", None)
+        if center_frame is None:
+            return
+        try:
+            if hasattr(center_frame, "winfo_exists") and not center_frame.winfo_exists():
+                return
+            width = int(self.worker_input_frame.winfo_width())
+            height = int(self.worker_input_frame.winfo_height())
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return
+        if width <= 1 or height <= 1:
+            try:
+                width = int(self.root.winfo_width())
+                height = int(self.root.winfo_height())
+            except (AttributeError, TypeError, ValueError, tk.TclError):
+                return
+        metrics = self._get_worker_login_layout_metrics(width, height)
+        metrics_key = tuple(metrics.items())
+        if metrics_key == getattr(self, "_worker_login_layout_metrics_key", None):
+            return
+        self._worker_login_layout_metrics_key = metrics_key
+        self._worker_login_layout_metrics = metrics
+
+        try:
+            center_frame.grid_configure(padx=metrics["horizontal_pad"])
+            logo_label = getattr(self, "_worker_login_logo_label", None)
+            if logo_label is not None:
+                logo_label.pack_configure(pady=metrics["logo_pad_y"])
+            self._worker_login_title_label.pack_configure(pady=metrics["title_pad_y"])
+            self._worker_login_name_label.pack_configure(pady=metrics["field_label_pad_y"])
+            self.worker_entry.pack_configure(ipady=metrics["entry_ipady"])
+            self._worker_login_button_container.pack_configure(pady=metrics["button_pad_y"])
+            for button in self._worker_login_buttons:
+                button.pack_configure(
+                    padx=metrics["button_pad_x"],
+                    ipady=metrics["button_ipady"],
+                )
+        except (AttributeError, tk.TclError):
+            return
+
+        logo_source = getattr(self, "_worker_login_logo_source", None)
+        logo_label = getattr(self, "_worker_login_logo_label", None)
+        if logo_source is None or logo_label is None:
+            return
+        source_width = max(1, int(logo_source.width))
+        source_height = max(1, int(logo_source.height))
+        target_width = min(metrics["logo_max_width"], source_width)
+        target_height = max(1, int(round(target_width * source_height / source_width)))
+        if target_height > metrics["logo_max_height"]:
+            target_height = metrics["logo_max_height"]
+            target_width = max(1, int(round(target_height * source_width / source_height)))
+        logo_size = (target_width, target_height)
+        if logo_size == getattr(self, "_worker_login_logo_size", None):
+            return
+        try:
+            resized = logo_source.resize(logo_size, Image.Resampling.LANCZOS)
+            self.logo_photo_ref = ImageTk.PhotoImage(resized)
+            logo_label.configure(image=self.logo_photo_ref)
+            self._worker_login_logo_size = logo_size
+        except Exception as exc:
+            print(f"로고 크기 조정 실패: {exc}")
 
     def show_worker_input_screen(self):
         self._clear_main_frames()
@@ -1086,17 +1208,29 @@ class ContainerAudit:
         self.worker_input_frame.grid_columnconfigure(0, weight=1)
         center_frame = ttk.Frame(self.worker_input_frame, style='TFrame')
         center_frame.grid(row=0, column=0)
+        self._worker_login_center_frame = center_frame
+        self._worker_login_layout_job = None
+        self._worker_login_layout_metrics_key = None
+        self._worker_login_logo_source = None
+        self._worker_login_logo_label = None
+        self._worker_login_logo_size = None
         try:
             logo_path = resource_path(os.path.join('assets', 'logo.png'))
-            logo_img = Image.open(logo_path)
-            max_width = 400 * self.scale_factor
-            logo_img_resized = logo_img.resize((int(max_width), int(max_width * (logo_img.height / logo_img.width))), Image.Resampling.LANCZOS)
-            self.logo_photo_ref = ImageTk.PhotoImage(logo_img_resized)
-            ttk.Label(center_frame, image=self.logo_photo_ref, style='TLabel').pack(pady=(40, 20))
+            with Image.open(logo_path) as logo_img:
+                self._worker_login_logo_source = logo_img.copy()
+            self._worker_login_logo_label = ttk.Label(center_frame, style='TLabel')
+            self._worker_login_logo_label.pack()
         except Exception as e:
             print(f"로고 로드 실패: {e}")
-        ttk.Label(center_frame, text=self.APP_TITLE, style='Title.TLabel').pack(pady=(20, 60))
-        ttk.Label(center_frame, text="작업자 이름", style='TLabel', font=(self.DEFAULT_FONT, int(12*self.scale_factor))).pack(pady=(10, 5))
+        self._worker_login_title_label = ttk.Label(center_frame, text=self.APP_TITLE, style='Title.TLabel')
+        self._worker_login_title_label.pack()
+        self._worker_login_name_label = ttk.Label(
+            center_frame,
+            text="작업자 이름",
+            style='TLabel',
+            font=(self.DEFAULT_FONT, int(12*self.scale_factor)),
+        )
+        self._worker_login_name_label.pack()
         workers = self.worker_registry.list_workers()
         self.worker_entry_var = tk.StringVar(value=workers[0] if workers else "")
         self.worker_entry = ttk.Combobox(
@@ -1108,13 +1242,32 @@ class ContainerAudit:
             font=(self.DEFAULT_FONT, int(18*self.scale_factor), 'bold'),
             justify='center',
         )
-        self.worker_entry.pack(ipady=int(12*self.scale_factor))
+        self.worker_entry.pack()
         self.worker_entry.bind('<Return>', self.start_work)
         self.worker_entry.focus()
         button_container = ttk.Frame(center_frame, style='TFrame')
-        button_container.pack(pady=60)
-        ttk.Button(button_container, text="신규 등록", command=self.register_worker_from_login, style='Secondary.TButton', width=16).pack(side=tk.LEFT, padx=10, ipady=int(10*self.scale_factor))
-        ttk.Button(button_container, text="작업 시작", command=self.start_work, style='TButton', width=20).pack(side=tk.LEFT, padx=10, ipady=int(10*self.scale_factor))
+        self._worker_login_button_container = button_container
+        button_container.pack()
+        register_button = ttk.Button(
+            button_container,
+            text="신규 등록",
+            command=self.register_worker_from_login,
+            style='Secondary.TButton',
+            width=16,
+        )
+        start_button = ttk.Button(
+            button_container,
+            text="작업 시작",
+            command=self.start_work,
+            style='TButton',
+            width=20,
+        )
+        self._worker_login_buttons = [register_button, start_button]
+        register_button.pack(side=tk.LEFT)
+        start_button.pack(side=tk.LEFT)
+        self._apply_worker_login_layout()
+        self.worker_input_frame.bind('<Configure>', self._schedule_worker_login_layout_refresh)
+        self.root.after(0, self._apply_worker_login_layout)
 
     def _refresh_worker_entry_options(self):
         if hasattr(self, 'worker_entry') and hasattr(self.worker_entry, 'configure'):
@@ -1556,6 +1709,7 @@ class ContainerAudit:
             self._update_current_item_label()
             for i, barcode in enumerate(self.current_tray.scanned_barcodes, start=1):
                 self.scanned_listbox.insert(0, f"({i}) {barcode}")
+            self._show_scanned_listbox_suffix()
             if self.current_tray.scanned_barcodes:
                 self.undo_button['state'] = tk.NORMAL
             self._sync_last_normal_scan_from_active_tray()
@@ -1588,6 +1742,7 @@ class ContainerAudit:
             "left_min": metrics.left_min,
             "center_min": metrics.center_min,
             "right_min": metrics.right_min,
+            "compressed": metrics.compressed,
         }
 
     def _set_initial_sash_positions(self):
@@ -1602,6 +1757,12 @@ class ContainerAudit:
             sash_1_pos = metrics["left_width"] + metrics["center_width"]
             self.paned_window.sashpos(0, sash_0_pos)
             self.paned_window.sashpos(1, sash_1_pos)
+            self._paned_layout_signature = (
+                total_width,
+                metrics["profile"],
+                sash_0_pos,
+                sash_1_pos,
+            )
         except tk.TclError as e:
             print(f"Could not set initial sash position (ignorable): {e}")
 
@@ -1616,9 +1777,23 @@ class ContainerAudit:
             left_min = metrics["left_min"]
             center_min = metrics["center_min"]
             right_min = metrics["right_min"]
-            if total_width <= left_min + center_min + right_min:
-                sash_0_pos = max(1, int(total_width * 0.28))
-                sash_1_pos = max(sash_0_pos + 1, int(total_width * 0.72))
+            desired_sash_0 = metrics["left_width"]
+            desired_sash_1 = metrics["left_width"] + metrics["center_width"]
+            layout_signature = (
+                total_width,
+                metrics["profile"],
+                desired_sash_0,
+                desired_sash_1,
+            )
+            layout_changed = layout_signature != getattr(self, "_paned_layout_signature", None)
+            if metrics["compressed"] or layout_changed:
+                # Reapply the pure profile widths whenever the actual content
+                # size/scale changes. This makes compact -> wide -> compact
+                # deterministic and keeps the calculated center allocation in
+                # compressed large-text layouts instead of replacing it with
+                # the legacy 28/72 percentages.
+                sash_0_pos = desired_sash_0
+                sash_1_pos = desired_sash_1
             else:
                 sash_0_pos = self.paned_window.sashpos(0)
                 sash_1_pos = self.paned_window.sashpos(1)
@@ -1627,6 +1802,7 @@ class ContainerAudit:
                 min_sash_1 = sash_0_pos + center_min
                 max_sash_1 = max(min_sash_1 + 1, total_width - right_min)
                 sash_1_pos = max(min_sash_1, min(sash_1_pos, max_sash_1))
+            self._paned_layout_signature = layout_signature
             if abs(self.paned_window.sashpos(0) - sash_0_pos) > 1:
                 self.paned_window.sashpos(0, sash_0_pos)
             if abs(self.paned_window.sashpos(1) - sash_1_pos) > 1:
@@ -1722,6 +1898,7 @@ class ContainerAudit:
             metrics["visible_rows"],
         )
         if metrics_key == getattr(self, "_scanned_listbox_layout_metrics", None):
+            self._show_scanned_listbox_suffix()
             return
         self._scanned_listbox_layout_metrics = metrics_key
 
@@ -1744,6 +1921,31 @@ class ContainerAudit:
             scrollbar = getattr(self, "scanned_list_scrollbar", None)
             if scrollbar is not None:
                 scrollbar.grid_configure(padx=(0, metrics["horizontal_pad"]))
+            horizontal_scrollbar = getattr(self, "scanned_list_horizontal_scrollbar", None)
+            if horizontal_scrollbar is not None:
+                horizontal_scrollbar.grid_configure(
+                    padx=metrics["horizontal_pad"],
+                    pady=(2, 0),
+                )
+        except (tk.TclError, AttributeError):
+            return
+        self._show_scanned_listbox_suffix()
+
+    def _show_scanned_listbox_suffix(self) -> None:
+        """Keep the useful product identifier suffix visible without truncation.
+
+        Rows remain the exact raw values used by tray state and event logging.
+        Operators can move the horizontal scrollbar back to inspect the full
+        prefix; newly rendered rows start at the distinguishing suffix.
+        """
+
+        listbox = getattr(self, "scanned_listbox", None)
+        if listbox is None or not hasattr(listbox, "xview_moveto"):
+            return
+        try:
+            if hasattr(listbox, "winfo_exists") and not listbox.winfo_exists():
+                return
+            listbox.xview_moveto(1.0)
         except (tk.TclError, AttributeError):
             return
 
@@ -2545,8 +2747,23 @@ class ContainerAudit:
         self.scanned_listbox = tk.Listbox(scan_list_frame, font=(self.DEFAULT_FONT, scanned_metrics["font_size"]), relief=tk.SOLID, bd=1, bg=self.COLOR_CARD_BG, fg=self.COLOR_TEXT, highlightbackground=self.COLOR_BORDER, highlightcolor=self.COLOR_PRIMARY, highlightthickness=1, justify='center', selectbackground=self.COLOR_PRIMARY, selectforeground='white', activestyle='none', height=scanned_metrics["visible_rows"])
         self.scanned_listbox.grid(row=1, column=0, sticky='nsew', padx=scanned_metrics["horizontal_pad"])
         self.scanned_list_scrollbar = ttk.Scrollbar(scan_list_frame, orient='vertical', command=self.scanned_listbox.yview)
-        self.scanned_listbox.configure(yscrollcommand=self.scanned_list_scrollbar.set)
+        self.scanned_list_horizontal_scrollbar = ttk.Scrollbar(
+            scan_list_frame,
+            orient='horizontal',
+            command=lambda *args: self.scanned_listbox.xview(*args),
+        )
+        self.scanned_listbox.configure(
+            yscrollcommand=self.scanned_list_scrollbar.set,
+            xscrollcommand=self.scanned_list_horizontal_scrollbar.set,
+        )
         self.scanned_list_scrollbar.grid(row=1, column=1, sticky='ns', padx=(0, scanned_metrics["horizontal_pad"]))
+        self.scanned_list_horizontal_scrollbar.grid(
+            row=2,
+            column=0,
+            sticky='ew',
+            padx=scanned_metrics["horizontal_pad"],
+            pady=(2, 0),
+        )
         parent_frame.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.scanned_listbox.bind('<Configure>', self._schedule_scanned_listbox_layout_refresh, add="+")
         self.root.after(0, self._apply_scanned_listbox_layout)
@@ -3005,6 +3222,7 @@ class ContainerAudit:
         row_text = f"({count}) {barcode}"
         self.scanned_listbox.insert(0, row_text)
         self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
+        self._show_scanned_listbox_suffix()
         self.root.after(
             400,
             self._reset_scanned_barcode_highlight,
@@ -3215,6 +3433,7 @@ class ContainerAudit:
             self.scanned_listbox.insert(0, row_text)
             if hasattr(self.scanned_listbox, 'itemconfig'):
                 self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
+            self._show_scanned_listbox_suffix()
             self._update_center_display()
             self._update_current_item_label()
             self.show_status_message("스캔 취소 상태 저장에 실패했습니다. 기존 스캔을 유지합니다.", self.COLOR_DANGER)
@@ -3228,6 +3447,7 @@ class ContainerAudit:
             self.scanned_listbox.insert(0, row_text)
             if hasattr(self.scanned_listbox, 'itemconfig'):
                 self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
+            self._show_scanned_listbox_suffix()
             restore_saved = self._save_current_tray_state()
             self._update_center_display()
             self._update_current_item_label()

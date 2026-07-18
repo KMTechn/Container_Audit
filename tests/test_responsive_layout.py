@@ -12,6 +12,7 @@ from responsive_layout import (
     right_sidebar_metrics,
     scanned_list_metrics,
     select_layout_profile,
+    worker_login_layout_metrics,
 )
 
 
@@ -106,6 +107,26 @@ def test_compact_wide_compact_round_trip_has_no_accumulation():
     compact_before = pane_layout_metrics(1366, 768, 1.0)
     wide = pane_layout_metrics(2560, 1080, 1.0)
     compact_after = pane_layout_metrics(1366, 768, 1.0)
+
+    assert wide != compact_before
+    assert compact_after == compact_before
+
+
+def test_large_text_short_login_reserves_controls_before_logo():
+    metrics = worker_login_layout_metrics(1346, 718, 1.4)
+
+    assert metrics.profile == "compact"
+    assert metrics.short_height is True
+    assert metrics.logo_max_height <= round(718 * 0.28)
+    assert metrics.estimated_content_height <= 718 - 16
+    assert metrics.entry_ipady <= 8
+    assert metrics.button_pad_y[0] <= 16
+
+
+def test_worker_login_layout_round_trip_has_no_accumulation():
+    compact_before = worker_login_layout_metrics(1346, 718, 1.4)
+    wide = worker_login_layout_metrics(2540, 1030, 1.4)
+    compact_after = worker_login_layout_metrics(1346, 718, 1.4)
 
     assert wide != compact_before
     assert compact_after == compact_before

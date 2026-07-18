@@ -121,6 +121,8 @@ def _layout_snapshot(app, parent):
         "header_row": app.scanned_list_header_label.grid_options["row"],
         "list_row": app.scanned_listbox.grid_options["row"],
         "list_sticky": app.scanned_listbox.grid_options["sticky"],
+        "horizontal_scroll_row": app.scanned_list_horizontal_scrollbar.grid_options["row"],
+        "horizontal_scroll_sticky": app.scanned_list_horizontal_scrollbar.grid_options["sticky"],
         "list_row_config": dict(parent.grid_rows[5]),
         "inner_list_row_config": dict(app._scan_list_frame.grid_rows[1]),
         "font": app.scanned_listbox.options["font"],
@@ -158,6 +160,10 @@ def test_current_tray_scan_list_is_the_expanding_row_below_notice(center_view):
     assert app.scanned_list_header_label.grid_options["row"] == 0
     assert app.scanned_listbox.grid_options["row"] == 1
     assert app.scanned_listbox.grid_options["sticky"] == "nsew"
+    assert app.scanned_list_horizontal_scrollbar.master is app._scan_list_frame
+    assert app.scanned_list_horizontal_scrollbar.grid_options["row"] == 2
+    assert app.scanned_list_horizontal_scrollbar.grid_options["sticky"] == "ew"
+    assert callable(app.scanned_listbox.options["xscrollcommand"])
     assert parent.grid_rows[5]["weight"] > 0
     assert parent.grid_rows[5]["minsize"] == expected["list_minsize"]
     assert app._scan_list_frame.grid_rows[1]["weight"] > 0
