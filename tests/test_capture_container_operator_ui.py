@@ -20,12 +20,14 @@ from tools.capture_container_operator_ui import (
     CaptureMutationGuard,
     analyze_image,
     apply_cross_capture_contracts,
+    apply_matrix_roundtrip_parity_contracts,
     apply_roundtrip_contracts,
     assert_descendant,
     build_capture_focus_gate,
     build_compact_display_gate,
     build_isolated_data_gate,
     build_monitor_capture_gate,
+    build_matrix_roundtrip_parity_signatures,
     build_isolated_app_settings,
     build_parser,
     build_roundtrip_signatures,
@@ -1572,6 +1574,13 @@ def test_capture_evaluation_combines_pixel_geometry_and_history_contracts():
     record["state"] = "duplicate"
     assert evaluate_capture(record)[-1] == "blocking_state_scan_entry_enabled"
 
+    record["rendered_state"]["scan_entry_state"] = "disabled"
+    record["rendered_state"]["status_bar_text"] = "스캐너 준비"
+    assert evaluate_capture(record)[-1] == "blocking_state_status_bar_allows_scan"
+
+    record["rendered_state"]["status_bar_text"] = "스캔 중지 · 경고 확인"
+    assert "blocking_state_status_bar_allows_scan" not in evaluate_capture(record)
+
 
 def _scan_row_evaluation_record(
     state: str,
@@ -1962,19 +1971,61 @@ def _roundtrip_capture(ordinal, *, size=(1366, 768)):
             "widgets": [
                 {
                     "name": "scan_list",
+                    "widget_class": "Listbox",
                     "bbox": [300, 400, 900, 610],
                     "size": [600, 210],
                     "requested_size": [600, 210],
                     "mapped": True,
+                    "check_requested_width": False,
+                    "check_requested_height": False,
                 }
             ],
             "structure": {
-                "scan_list_layout_signature": {"frame_grid": {"row": 5}},
+                "scan_list_layout_signature": {
+                    "frame_grid": {"row": 5, "column": 0, "sticky": "nsew"},
+                    "center_row_5": {"weight": 1, "minsize": 0, "pad": 0},
+                    "header_grid": {"row": 0, "column": 0, "sticky": "ew"},
+                    "list_grid": {"row": 1, "column": 0, "sticky": "nsew"},
+                    "frame_row_1": {"weight": 1, "minsize": 0, "pad": 0},
+                },
+                "scan_list_frame_contract": True,
+                "core_action_button_count": 4,
                 "core_action_rows": [["undo", "park"], ["submit", "operations"]],
+                "expected_core_action_rows": [
+                    ["undo", "park"],
+                    ["submit", "operations"],
+                ],
+                "core_action_layout_matches": True,
             },
         },
         "rendered_state": {
+            "stage": "제품 스캔",
+            "current_item": "AAA2270730200",
+            "count": "1 / 60",
+            "notice_title": "정상",
+            "notice_message": "다음 제품을 스캔하세요.",
+            "last_normal_scan": "AAA2270730200 · SN 0001",
+            "last_normal_scan_display": "AAA2270730200 · SN 0001",
+            "next_action": "다음 제품 스캔",
+            "status": "진행 중",
+            "stopwatch": "00:05",
+            "scan_entry_state": "normal",
+            "status_bar_text": "스캐너 준비",
+            "scan_list_row_count": 1,
             "scan_list_rows": ["(1) ITEM · SN 0001"],
+            "scan_list_row_colors": [
+                {"background": "#ffffff", "foreground": "#111111"}
+            ],
+            "scan_list_rows_neutral": True,
+            "scan_list_header": "이번 트레이 스캔 1건",
+            "right_texts": {
+                "status": "진행 중",
+                "stopwatch": "00:05",
+                "last_normal_scan": "AAA2270730200 · SN 0001",
+                "next_action": "다음 제품 스캔",
+                "average": "00:20",
+                "best": "00:18",
+            },
             "action_buttons": {
                 "undo": {"text": "취소", "state": "normal"},
                 "park": {"text": "보류", "state": "normal"},
@@ -1987,6 +2038,117 @@ def _roundtrip_capture(ordinal, *, size=(1366, 768)):
     }
     record["roundtrip_signatures"] = build_roundtrip_signatures(record)
     return record
+
+
+def _matrix_capture_for(roundtrip):
+    record = copy.deepcopy(roundtrip)
+    record["id"] = (
+        f"{record['requested_size'][0]}x{record['requested_size'][1]}-"
+        f"{record['state']}"
+    )
+    record["capture_sequence"] = "matrix"
+    record["sequence_ordinal"] = None
+    record.pop("roundtrip_rebuild_applied", None)
+    record.pop("roundtrip_widget_identity", None)
+    record.pop("roundtrip_signatures", None)
+    return record
+
+
+def test_matrix_roundtrip_parity_matches_every_ordinal_by_size_and_state():
+    compact = _roundtrip_capture(1)
+    wide = _roundtrip_capture(2, size=(1920, 1080))
+    compact_again = _roundtrip_capture(3)
+    captures = [
+        _matrix_capture_for(compact),
+        _matrix_capture_for(wide),
+        compact,
+        wide,
+        compact_again,
+    ]
+
+    apply_matrix_roundtrip_parity_contracts(captures)
+
+    for capture in (compact, wide, compact_again):
+        gate = capture["matrix_roundtrip_parity_gate"]
+        assert gate["matching_matrix_capture_count"] == 1
+        assert gate["passed"] is True
+        assert all(gate["checks"].values())
+
+
+def test_matrix_roundtrip_parity_rejects_geometry_requested_text_and_action_drift():
+    baseline = _roundtrip_capture(2, size=(1920, 1080))
+    baseline["ui_geometry"]["widgets"][0]["check_requested_width"] = True
+    matrix = _matrix_capture_for(baseline)
+    drifted = copy.deepcopy(baseline)
+    drifted["ui_geometry"]["widgets"][0]["bbox"][2] += 1
+    drifted["ui_geometry"]["widgets"][0]["size"][0] += 1
+    drifted["ui_geometry"]["widgets"][0]["requested_size"][0] += 1
+    drifted["rendered_state"]["next_action"] = "다른 다음 행동"
+    drifted["rendered_state"]["action_buttons"]["park"]["text"] = "트레이 보류"
+
+    apply_matrix_roundtrip_parity_contracts([matrix, drifted])
+
+    checks = drifted["matrix_roundtrip_parity_gate"]["checks"]
+    assert checks["geometry_signature_exact"] is False
+    assert checks["requested_signature_exact"] is False
+    assert checks["text_signature_exact"] is False
+    assert checks["action_signature_exact"] is False
+    assert drifted["passed"] is False
+    assert "matrix_roundtrip_parity_requested_signature_exact" in drifted["issues"]
+
+
+def test_matrix_roundtrip_parity_fails_closed_for_missing_or_duplicate_matrix():
+    missing = _roundtrip_capture(1)
+    apply_matrix_roundtrip_parity_contracts([missing])
+    assert missing["matrix_roundtrip_parity_gate"]["checks"][
+        "matrix_capture_unique"
+    ] is False
+    assert missing["passed"] is False
+
+    duplicate = _roundtrip_capture(1)
+    matrix = _matrix_capture_for(duplicate)
+    apply_matrix_roundtrip_parity_contracts(
+        [matrix, copy.deepcopy(matrix), duplicate]
+    )
+    assert duplicate["matrix_roundtrip_parity_gate"][
+        "matching_matrix_capture_count"
+    ] == 2
+    assert duplicate["matrix_roundtrip_parity_gate"]["checks"][
+        "matrix_capture_unique"
+    ] is False
+    assert duplicate["passed"] is False
+
+
+def test_matrix_roundtrip_parity_fails_closed_for_incomplete_signature():
+    roundtrip = _roundtrip_capture(1)
+    matrix = _matrix_capture_for(roundtrip)
+    matrix["rendered_state"].pop("status_bar_text")
+
+    apply_matrix_roundtrip_parity_contracts([matrix, roundtrip])
+
+    checks = roundtrip["matrix_roundtrip_parity_gate"]["checks"]
+    assert checks["matrix_capture_unique"] is True
+    assert checks["matrix_signature_complete"] is False
+    assert checks["text_signature_exact"] is False
+    assert roundtrip["passed"] is False
+
+
+def test_matrix_roundtrip_parity_excludes_dynamic_clock_and_unchecked_request():
+    roundtrip = _roundtrip_capture(1)
+    matrix = _matrix_capture_for(roundtrip)
+    matrix["rendered_state"]["wall_clock"] = "2026-07-19 04:00:00"
+    roundtrip["rendered_state"]["wall_clock"] = "2026-07-19 04:00:05"
+    matrix["rendered_state"]["calendar_date"] = "2026-07-19"
+    roundtrip["rendered_state"]["calendar_date"] = "2026-07-20"
+    roundtrip["ui_geometry"]["widgets"][0]["requested_size"] = [999, 888]
+
+    matrix_signature = build_matrix_roundtrip_parity_signatures(matrix)
+    roundtrip_signature = build_matrix_roundtrip_parity_signatures(roundtrip)
+    assert matrix_signature["text"] == roundtrip_signature["text"]
+    assert matrix_signature["requested"] == roundtrip_signature["requested"]
+
+    apply_matrix_roundtrip_parity_contracts([matrix, roundtrip])
+    assert roundtrip["matrix_roundtrip_parity_gate"]["passed"] is True
 
 
 def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
@@ -2049,6 +2211,31 @@ def test_roundtrip_signature_ignores_stale_geometry_for_unmapped_widgets():
         "mapped": False
     }
     assert first_signature["geometry_sha256"] == final_signature["geometry_sha256"]
+
+
+def test_roundtrip_signature_compares_only_checked_requested_axes():
+    first = _roundtrip_capture(1)
+    final = _roundtrip_capture(3)
+    first_widget = first["ui_geometry"]["widgets"][0]
+    final_widget = final["ui_geometry"]["widgets"][0]
+    final_widget["requested_size"] = [777, 888]
+
+    assert build_roundtrip_signatures(first)["geometry"] == (
+        build_roundtrip_signatures(final)["geometry"]
+    )
+
+    first_widget["check_requested_width"] = True
+    final_widget["check_requested_width"] = True
+    first_widget["check_requested_height"] = False
+    final_widget["check_requested_height"] = False
+    assert build_roundtrip_signatures(first)["geometry"] != (
+        build_roundtrip_signatures(final)["geometry"]
+    )
+
+    final_widget["requested_size"] = [600, 999]
+    assert build_roundtrip_signatures(first)["geometry"] == (
+        build_roundtrip_signatures(final)["geometry"]
+    )
 
 
 def test_roundtrip_signature_still_rejects_unmapped_to_mapped_state_change():

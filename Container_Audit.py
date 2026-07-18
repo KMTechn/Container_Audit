@@ -785,6 +785,7 @@ class ContainerAudit:
         self.stopwatch_job: Optional[str] = None
         self.idle_check_job: Optional[str] = None
         self.focus_return_job: Optional[str] = None
+        self._responsive_style_refresh_job: Optional[str] = None
         self.warning_presenter = WarningPresenter()
         self._pending_operator_review_snapshot: Optional[CompletionOutcomeSnapshot] = None
         self._warning_beep_active = False
@@ -805,6 +806,7 @@ class ContainerAudit:
         
         self._setup_core_ui_structure()
         self._setup_styles()
+        self.root.bind('<Configure>', self._schedule_responsive_style_refresh, add="+")
         self.show_worker_input_screen()
         
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
@@ -1007,6 +1009,60 @@ class ContainerAudit:
             return min(tokens.spacing.lg, 12), min(tokens.spacing.sm, 7)
         return tokens.spacing.lg, tokens.spacing.sm
 
+    def _responsive_style_signature_for_size(
+        self,
+        content_width: int,
+        content_height: int,
+    ) -> tuple[Any, ...]:
+        profile = select_layout_profile(content_width, content_height, self.scale_factor)
+        tokens = build_style_tokens(StyleProfile(profile.name), self.scale_factor)
+        return (
+            profile.name,
+            round(float(self.scale_factor), 4),
+            self._button_style_padding(tokens, content_height),
+        )
+
+    def _schedule_responsive_style_refresh(self, event=None) -> None:
+        event_widget = getattr(event, "widget", None)
+        if event_widget is not None and event_widget is not self.root:
+            return
+        try:
+            content_width = max(1, int(getattr(event, "width", 0) or self.root.winfo_width()))
+            content_height = max(1, int(getattr(event, "height", 0) or self.root.winfo_height()))
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return
+        signature = self._responsive_style_signature_for_size(content_width, content_height)
+        if signature == getattr(self, "_responsive_style_signature", None):
+            return
+        if getattr(self, "_responsive_style_refresh_job", None):
+            return
+        try:
+            self._responsive_style_refresh_job = self.root.after_idle(
+                self._refresh_responsive_styles_if_needed
+            )
+        except (AttributeError, tk.TclError):
+            self._refresh_responsive_styles_if_needed()
+
+    def _refresh_responsive_styles_if_needed(self) -> None:
+        self._responsive_style_refresh_job = None
+        try:
+            content_width = max(1, int(self.root.winfo_width()))
+            content_height = max(1, int(self.root.winfo_height()))
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return
+        signature = self._responsive_style_signature_for_size(content_width, content_height)
+        if signature != getattr(self, "_responsive_style_signature", None):
+            self.apply_scaling()
+            # The right context values are configured directly rather than
+            # exclusively through ttk styles.  Reapply them after the root
+            # token profile changes so compact tokens cannot survive a
+            # compact -> wide transition behind an otherwise identical
+            # sidebar-metrics cache key.
+            self._right_sidebar_layout_metrics = None
+            self._apply_right_sidebar_layout(
+                generation=getattr(self, "_right_widget_generation", 0)
+            )
+
     def apply_scaling(self):
         try:
             content_width = max(1, int(self.root.winfo_width()))
@@ -1015,6 +1071,11 @@ class ContainerAudit:
             content_width, content_height = 1440, 900
         profile = select_layout_profile(content_width, content_height, self.scale_factor)
         tokens = build_style_tokens(StyleProfile(profile.name), self.scale_factor)
+        self._responsive_style_signature = (
+            profile.name,
+            round(float(self.scale_factor), 4),
+            self._button_style_padding(tokens, content_height),
+        )
         self.style_tokens = tokens
         s = tokens.fonts.caption
         m = tokens.fonts.body
@@ -1839,6 +1900,70 @@ class ContainerAudit:
         container.bind("<Configure>", update_wraplength, add="+")
         self.root.after(0, update_wraplength)
 
+    def _schedule_notice_message_wrap_refresh(self, event=None, *, generation=None) -> None:
+        current_generation = getattr(self, "_center_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
+        label = getattr(self, "notice_message_label", None)
+        if label is None:
+            return
+        event_widget = getattr(event, "widget", None)
+        if event_widget is not None and event_widget is not label:
+            return
+        if getattr(self, "_notice_message_wrap_job", None):
+            return
+        root = getattr(self, "root", None)
+        if root is None:
+            self._apply_notice_message_wraplength(current_generation)
+            return
+        try:
+            self._notice_message_wrap_job = root.after_idle(
+                self._apply_notice_message_wraplength,
+                current_generation,
+            )
+        except AttributeError:
+            try:
+                self._notice_message_wrap_job = root.after(
+                    0,
+                    self._apply_notice_message_wraplength,
+                    current_generation,
+                )
+            except AttributeError:
+                self._apply_notice_message_wraplength(current_generation)
+        except tk.TclError:
+            return
+
+    def _apply_notice_message_wraplength(self, generation=None) -> None:
+        self._notice_message_wrap_job = None
+        current_generation = getattr(self, "_center_widget_generation", 0)
+        if generation is not None and generation != current_generation:
+            return
+        generation = current_generation
+        label = getattr(self, "notice_message_label", None)
+        if label is None:
+            return
+        try:
+            if hasattr(label, "winfo_exists") and not label.winfo_exists():
+                return
+            label_width = int(label.winfo_width())
+        except (AttributeError, TypeError, ValueError, tk.TclError):
+            return
+        if label_width <= 1:
+            return
+        # The label's own allocation is the only reliable width after the
+        # title and acknowledgement columns take their state-dependent space.
+        # Keep a small border/glyph gutter so requested width never exceeds
+        # the live column viewport.
+        wraplength = max(80, label_width - 4)
+        metrics_key = (generation, label_width, wraplength)
+        if metrics_key == getattr(self, "_notice_message_wrap_metrics", None):
+            return
+        try:
+            label.configure(wraplength=wraplength)
+            self._notice_message_wrap_metrics = metrics_key
+        except (AttributeError, tk.TclError):
+            return
+
     @staticmethod
     def _clamped_int(value: float, minimum: int, maximum: int) -> int:
         return max(minimum, min(maximum, int(round(value))))
@@ -2400,6 +2525,23 @@ class ContainerAudit:
             sidebar_height,
             getattr(self, "scale_factor", 1.0),
         )
+        context_value_font = metrics.context_value_font
+        if context_value_font <= 0:
+            try:
+                root_width = max(1, int(self.root.winfo_width()))
+                root_height = max(1, int(self.root.winfo_height()))
+            except (AttributeError, TypeError, ValueError, tk.TclError):
+                root_width, root_height = 1440, 900
+            root_profile = select_layout_profile(
+                root_width,
+                root_height,
+                getattr(self, "scale_factor", 1.0),
+            )
+            root_tokens = build_style_tokens(
+                StyleProfile(root_profile.name),
+                getattr(self, "scale_factor", 1.0),
+            )
+            context_value_font = int(root_tokens.fonts.section_title)
         return {
             "profile": metrics.profile,
             "short_large_text": metrics.short_large_text,
@@ -2420,7 +2562,7 @@ class ContainerAudit:
             "secondary_card_padding": metrics.secondary_card_padding,
             "value_font": metrics.value_font,
             "secondary_value_font": metrics.secondary_value_font,
-            "context_value_font": metrics.context_value_font,
+            "context_value_font": context_value_font,
         }
 
     def _apply_right_sidebar_layout(self, event=None, *, generation=None) -> None:
@@ -2584,9 +2726,9 @@ class ContainerAudit:
         if available_width < full_heading_threshold:
             headings = {"item_name_spec": "품목", "item_code": "코드", "count": "완료"}
             widths = {
-                "item_name_spec": int(available_width * 0.42),
-                "item_code": int(available_width * 0.34),
-                "count": available_width - int(available_width * 0.42) - int(available_width * 0.34),
+                "item_name_spec": int(available_width * 0.37),
+                "item_code": int(available_width * 0.33),
+                "count": available_width - int(available_width * 0.37) - int(available_width * 0.33),
             }
         else:
             headings = {"item_name_spec": "품목명", "item_code": "품목코드", "count": "완료 수량"}
@@ -2764,6 +2906,12 @@ class ContainerAudit:
                 self.root.after_cancel(previous_job)
             except (AttributeError, tk.TclError):
                 pass
+        previous_notice_job = getattr(self, "_notice_message_wrap_job", None)
+        if previous_notice_job:
+            try:
+                self.root.after_cancel(previous_notice_job)
+            except (AttributeError, tk.TclError):
+                pass
         if hasattr(parent_frame, "unbind"):
             try:
                 parent_frame.unbind('<Configure>')
@@ -2776,6 +2924,8 @@ class ContainerAudit:
         self._scanned_listbox_parent_frame = parent_frame
         self._scanned_listbox_layout_job = None
         self._scanned_listbox_layout_metrics = None
+        self._notice_message_wrap_job = None
+        self._notice_message_wrap_metrics = None
         initial_center_metrics = self._get_center_layout_metrics(720, 720)
         parent_frame.grid_rowconfigure(
             5,
@@ -2839,11 +2989,12 @@ class ContainerAudit:
             justify='left',
         )
         self.notice_message_label.grid(row=0, column=1, sticky='ew', padx=8, pady=8)
-        self._bind_label_to_container_width(
-            self.notice_message_label,
-            self.notice_frame,
-            padding=max(220, int(220 * min(self.scale_factor, 1.1))),
-            min_wraplength=160,
+        self.notice_message_label.bind(
+            '<Configure>',
+            lambda event, generation=center_generation: self._schedule_notice_message_wrap_refresh(
+                event,
+                generation=generation,
+            ),
         )
         self.notice_ack_button = tk.Button(
             self.notice_frame,
@@ -4017,6 +4168,25 @@ class ContainerAudit:
                     status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
+            status_label = getattr(self, "status_label", None)
+            if status_label is not None:
+                if state.completion is not None and state.completion.blocks_completion:
+                    status_label.configure(
+                        text="스캔 중지 · 담당자 확인",
+                        fg=self.COLOR_DANGER,
+                    )
+                elif state.active_notice is not None and state.active_notice.blocking:
+                    status_label.configure(
+                        text="스캔 중지 · 경고 확인",
+                        fg=self.COLOR_DANGER,
+                    )
+                else:
+                    try:
+                        current_status = str(status_label.cget("text") or "")
+                    except (AttributeError, tk.TclError):
+                        current_status = ""
+                    if current_status.startswith("스캔 중지 ·"):
+                        status_label.configure(text="스캐너 준비", fg=self.COLOR_TEXT)
             follow_up_label = getattr(self, "follow_up_label", None)
             if follow_up_label is not None:
                 tray = getattr(self, "current_tray", None)
@@ -4040,6 +4210,9 @@ class ContainerAudit:
                 follow_up_label.configure(text=follow_up)
         except (tk.TclError, AttributeError):
             return
+        self._schedule_notice_message_wrap_refresh(
+            generation=getattr(self, "_center_widget_generation", 0)
+        )
 
     def _acknowledge_active_notice(self) -> None:
         presenter = self._warning_state_presenter()
@@ -4491,8 +4664,9 @@ class ContainerAudit:
         status_label = getattr(self, "status_label", None)
         if status_label is not None:
             try:
-                status_label['text'] = "확인 필요" if self._warning_state_presenter().state.is_blocking else "스캐너 준비"
-                status_label['fg'] = self.COLOR_TEXT
+                if not self._warning_state_presenter().state.is_blocking:
+                    status_label['text'] = "스캐너 준비"
+                    status_label['fg'] = self.COLOR_TEXT
             except (tk.TclError, KeyError, TypeError):
                 pass
         if presented and duration > 0:
@@ -4511,7 +4685,11 @@ class ContainerAudit:
         self.status_message_job = None
         self._warning_state_presenter().clear()
         self._render_warning_state()
-        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+        if (
+            not self._warning_state_presenter().state.is_blocking
+            and hasattr(self, 'status_label')
+            and self.status_label.winfo_exists()
+        ):
             self.status_label['text'] = "스캐너 준비"; self.status_label['fg'] = self.COLOR_TEXT
 
     def _clear_tray_image_label(self, text: str = "", foreground: Optional[str] = None) -> None:

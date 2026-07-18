@@ -4,6 +4,7 @@ import ast
 import inspect
 import re
 import textwrap
+import tkinter.font as tkfont
 
 import pytest
 
@@ -590,6 +591,44 @@ def test_duplicate_notice_acknowledgement_restores_working_display_without_chang
     assert len(app.root.after_calls) == focus_jobs_before_ack + 1
 
 
+def test_operator_review_keeps_status_bar_in_scan_stop_state_through_status_refreshes(
+    operator_view,
+):
+    app, _center, _right = operator_view
+    app.status_label = FakeWidget(kind="tk.Label", text="스캐너 준비")
+    app.current_tray = TraySession(
+        master_label_code="PHS=2|CLC=AAA2270730100|QT=3",
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        scanned_barcodes=["AAA2270730100-001"],
+        tray_size=3,
+    )
+    app.warning_presenter.present_completion(
+        CompletionOutcomeSnapshot(
+            outcome=CompletionOutcome.OPERATOR_REVIEW,
+            item_name="fixture item",
+            master_label=app.current_tray.master_label_code,
+            scan_count=1,
+            target_count=3,
+            message="서버 판정에 담당자 확인이 필요합니다.",
+        )
+    )
+
+    app._render_warning_state()
+    assert app.scan_entry.options["state"] == container_audit_module.tk.DISABLED
+    assert app.status_label.options["text"] == "스캔 중지 · 담당자 확인"
+
+    app.show_status_message("후속 안내", duration=0)
+    assert app.status_label.options["text"] == "스캔 중지 · 담당자 확인"
+    app._reset_status_message()
+    assert app.status_label.options["text"] == "스캔 중지 · 담당자 확인"
+
+    app.warning_presenter = WarningPresenter()
+    app._render_warning_state()
+    assert app.scan_entry.options["state"] == container_audit_module.tk.NORMAL
+    assert app.status_label.options["text"] == "스캐너 준비"
+
+
 def test_stage_label_tracks_master_then_product_scan_flow(operator_view):
     app, _center, _right = operator_view
 
@@ -730,6 +769,42 @@ def test_rebuilding_operator_panes_replaces_configure_bindings_and_rejects_stale
     assert app._right_sidebar_layout_metrics[0] == app._right_widget_generation
 
 
+def test_notice_message_wrap_rejects_stale_generation_and_uses_live_label_width(
+    operator_view,
+):
+    app, center, _right = operator_view
+    old_label = app.notice_message_label
+    old_generation = app._center_widget_generation
+    old_callback = next(
+        callback
+        for sequence, callback, _add in old_label.bindings
+        if sequence == "<Configure>"
+    )
+    old_label.pixel_width = 488
+    app._notice_message_wrap_job = None
+    app._apply_notice_message_wraplength(old_generation)
+    assert old_label.options["wraplength"] == 484
+
+    app._create_center_content(center)
+    scheduled_before = len(app.root.after_calls)
+    old_callback(None)
+    assert len(app.root.after_calls) == scheduled_before
+
+    current_label = app.notice_message_label
+    current_label.pixel_width = 491
+    current_callback = next(
+        callback
+        for sequence, callback, _add in current_label.bindings
+        if sequence == "<Configure>"
+    )
+    app._notice_message_wrap_job = None
+    current_callback(None)
+    assert len(app.root.after_calls) == scheduled_before + 1
+    _delay, callback, args = app.root.after_calls[-1]
+    callback(*args)
+    assert current_label.options["wraplength"] == 487
+
+
 def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
     app, _center, _right = operator_view
     summary_parent = FakeWidget(kind="SummaryParent")
@@ -783,52 +858,107 @@ def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
         for column in ("item_name", "scan_count")
     ) <= app.parked_tree.pixel_width - 4
 
+    app.scale_factor = 1.0
+    app.summary_tree.pixel_width = 236
+    app._adjust_summary_tree_columns()
+    compact_available_width = app.summary_tree.pixel_width - 4
+    assert app.summary_tree.heading_options["count"]["text"] == "완료"
+    assert app.summary_tree.column_options["count"]["width"] >= int(
+        compact_available_width * 0.30
+    )
+
 
 def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
     try:
         root = container_audit_module.tk.Tk()
     except container_audit_module.tk.TclError:
         pytest.skip("Tk display is unavailable")
-    root.geometry("700x320+10000+10000")
+    root.geometry("310x320+10000+10000")
     try:
         # Keep the geometry manager active without showing a test window.
         root.attributes("-alpha", 0.0)
-        frame = container_audit_module.ttk.Frame(root)
-        frame.pack(fill="both", expand=True)
-        tree = container_audit_module.ttk.Treeview(
-            frame,
-            columns=("item_name_spec", "item_code", "count"),
-            show="headings",
-        )
-        tree.pack(side="left", fill="both", expand=True)
-        scrollbar = container_audit_module.ttk.Scrollbar(frame, orient="vertical")
-        scrollbar.pack(side="right", fill="y")
+        root.tk.call("tk", "scaling", 2.00098)
+        style = container_audit_module.ttk.Style(root)
+        style.theme_use("clam")
+        for scale, compact_tree_width in ((1.0, 236), (1.4, 290)):
+            tokens = container_audit_module.build_style_tokens(
+                container_audit_module.StyleProfile("compact"),
+                scale,
+            )
+            style.configure(
+                "Treeview.Heading",
+                font=(ContainerAudit.DEFAULT_FONT, tokens.fonts.body, "bold"),
+            )
+            frame = container_audit_module.ttk.Frame(root)
+            frame.pack(fill="both", expand=True)
+            tree = container_audit_module.ttk.Treeview(
+                frame,
+                columns=("item_name_spec", "item_code", "count"),
+                show="headings",
+            )
+            tree.pack(side="left", fill="both", expand=True)
+            scrollbar = container_audit_module.ttk.Scrollbar(frame, orient="vertical")
+            scrollbar.pack(side="right", fill="y")
 
-        app = ContainerAudit.__new__(ContainerAudit)
-        app.scale_factor = 1.4
-        app.summary_tree = tree
-        tree.bind("<Configure>", app._adjust_summary_tree_columns)
+            app = ContainerAudit.__new__(ContainerAudit)
+            app.scale_factor = scale
+            app.summary_tree = tree
+            tree.bind("<Configure>", app._adjust_summary_tree_columns)
 
-        snapshots = []
-        for width in (700, 1200, 700):
-            root.geometry(f"{width}x320+10000+10000")
             root.update()
-            available_width = tree.winfo_width() - 4
-            column_widths = tuple(
-                int(tree.column(column, "width"))
-                for column in ("item_name_spec", "item_code", "count")
-            )
-            headings = tuple(
-                tree.heading(column, "text")
-                for column in ("item_name_spec", "item_code", "count")
-            )
-            assert sum(column_widths) <= available_width
-            snapshots.append((tree.winfo_width(), column_widths, headings))
+            compact_root_width = compact_tree_width + scrollbar.winfo_reqwidth()
+            snapshots = []
+            for width in (compact_root_width, 1200, compact_root_width):
+                root.geometry(f"{width}x320+10000+10000")
+                root.update()
+                available_width = tree.winfo_width() - 4
+                column_widths = tuple(
+                    int(tree.column(column, "width"))
+                    for column in ("item_name_spec", "item_code", "count")
+                )
+                headings = tuple(
+                    tree.heading(column, "text")
+                    for column in ("item_name_spec", "item_code", "count")
+                )
+                assert sum(column_widths) <= available_width
+                if width == compact_root_width:
+                    heading_y = next(
+                        y
+                        for y in range(max(1, tree.winfo_height()))
+                        if tree.identify_region(max(2, tree.winfo_width() - 12), y)
+                        == "heading"
+                    )
+                    visible_count_width = sum(
+                        tree.identify_region(x, heading_y) == "heading"
+                        and tree.identify_column(x) == "#3"
+                        for x in range(tree.winfo_width())
+                    )
+                    heading_font = tkfont.Font(
+                        root=root,
+                        font=style.lookup("Treeview.Heading", "font"),
+                    )
+                    padding_parts = root.tk.splitlist(
+                        style.lookup("Treeview.Heading", "padding") or "0"
+                    )
+                    horizontal_padding = (
+                        2 * root.winfo_pixels(padding_parts[0])
+                        if len(padding_parts) == 1
+                        else root.winfo_pixels(padding_parts[0])
+                        + root.winfo_pixels(
+                            padding_parts[2 if len(padding_parts) >= 4 else 0]
+                        )
+                    )
+                    assert heading_font.measure("완료") <= (
+                        visible_count_width - horizontal_padding
+                    )
+                snapshots.append((tree.winfo_width(), column_widths, headings))
 
-        assert snapshots[0] == snapshots[2]
-        assert snapshots[0][2] == ("품목", "코드", "완료")
-        assert snapshots[1][2] == ("품목명", "품목코드", "완료 수량")
-        assert snapshots[1][0] > snapshots[0][0]
+            assert snapshots[0] == snapshots[2]
+            assert snapshots[0][2] == ("품목", "코드", "완료")
+            assert snapshots[1][2] == ("품목명", "품목코드", "완료 수량")
+            assert snapshots[1][0] > snapshots[0][0]
+            frame.destroy()
+            root.update()
     finally:
         root.destroy()
 
@@ -936,6 +1066,269 @@ def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_width
             ),
             768,
         ) == (12, 7)
+    finally:
+        root.destroy()
+
+
+def test_real_root_configure_refreshes_button_styles_compact_wide_compact():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    root.geometry("2560x1392+10000+10000")
+    try:
+        root.attributes("-alpha", 0.0)
+        root.tk.call("tk", "scaling", 2.00098)
+        root.update()
+
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.root = root
+        app.scale_factor = 1.4
+        app.style = container_audit_module.ttk.Style(root)
+        app.style.theme_use("clam")
+        app._responsive_style_refresh_job = None
+        app.apply_scaling()
+        root.bind("<Configure>", app._schedule_responsive_style_refresh, add="+")
+
+        assert app._responsive_style_signature[-1] == (31, 14)
+        compact_snapshots = []
+        for width, height in ((1366, 768), (2560, 1392), (1366, 768)):
+            root.geometry(f"{width}x{height}+10000+10000")
+            root.update()
+            if width == 1366:
+                assert app._responsive_style_signature[-1] == (12, 7)
+                labels = app._action_button_labels(
+                    compact=True,
+                    operator_review=False,
+                    replacement_active=False,
+                    exchange_dialog_open=False,
+                    exact_exchange_blocked=False,
+                )
+                requested_widths = []
+                for key, button_style, available_width in (
+                    ("undo", "Secondary.TButton", 154),
+                    ("park", "Warning.TButton", 153),
+                    ("submit", "Success.TButton", 154),
+                    ("operations", "Secondary.TButton", 153),
+                ):
+                    button = container_audit_module.ttk.Button(
+                        root,
+                        text=labels[key],
+                        style=button_style,
+                        width=0,
+                    )
+                    button.update_idletasks()
+                    requested_widths.append(button.winfo_reqwidth())
+                    assert button.winfo_reqwidth() <= available_width
+                    button.destroy()
+                compact_snapshots.append(
+                    (app._responsive_style_signature, tuple(requested_widths))
+                )
+            else:
+                assert app._responsive_style_signature[-1] == (31, 14)
+
+        assert compact_snapshots[0] == compact_snapshots[1]
+    finally:
+        root.destroy()
+
+
+def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_round_trip():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    root.geometry("2560x1392+10000+10000")
+    try:
+        root.attributes("-alpha", 0.0)
+        root.tk.call("tk", "scaling", 2.00098)
+        root.update()
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.root = root
+        app.scale_factor = 1.0
+        app.style = container_audit_module.ttk.Style(root)
+        app.style.theme_use("clam")
+        app._responsive_style_refresh_job = None
+        app._right_widget_generation = 1
+        app._right_sidebar_layout_metrics = None
+        app.apply_scaling()
+
+        right = container_audit_module.ttk.Frame(root, width=502, height=1310)
+        right.pack()
+        right.pack_propagate(False)
+        right.grid_columnconfigure(0, weight=1)
+        app._right_sidebar_frame = right
+        app.date_label = container_audit_module.ttk.Label(right, text="2026-07-19")
+        app.date_label.grid(row=0, column=0)
+        app.clock_label = container_audit_module.ttk.Label(right, text="03:30:00")
+        app.clock_label.grid(row=1, column=0)
+        app.info_cards = {}
+        for row, key, text_value in (
+            (2, "status", "작업 중"),
+            (3, "stopwatch", "02:08"),
+        ):
+            card = container_audit_module.ttk.Frame(right)
+            card.grid(row=row, column=0, sticky="nsew")
+            value = container_audit_module.ttk.Label(card, text=text_value)
+            value.pack()
+            app.info_cards[key] = {"frame": card, "value": value}
+        context = container_audit_module.ttk.Frame(right)
+        context.grid(row=4, column=0, sticky="nsew")
+        app._right_context_frame = context
+        app.last_scan_value_label = container_audit_module.ttk.Label(
+            context,
+            text="AAA2270730100 · ID 123456",
+        )
+        app.last_scan_value_label.grid(row=1, column=0)
+        app._right_context_separator = container_audit_module.ttk.Separator(context)
+        app._right_context_separator.grid(row=2, column=0)
+        app.follow_up_label = container_audit_module.ttk.Label(
+            context,
+            text="다음 제품 스캔",
+        )
+        app.follow_up_label.grid(row=4, column=0)
+        secondary = container_audit_module.ttk.Frame(right)
+        secondary.grid(row=5, column=0, sticky="nsew")
+        app._secondary_stats_frame = secondary
+        for column, key in enumerate(("avg_time", "best_time")):
+            card = container_audit_module.ttk.Frame(secondary)
+            card.grid(row=0, column=column)
+            value = container_audit_module.ttk.Label(card, text="01:42")
+            value.pack()
+            app.info_cards[key] = {"frame": card, "value": value}
+        app._legend_frame = container_audit_module.ttk.Frame(right)
+        app._legend_frame.grid(row=7, column=0)
+        right.bind(
+            "<Configure>",
+            lambda _event: app._apply_right_sidebar_layout(generation=1),
+        )
+        root.bind("<Configure>", app._schedule_responsive_style_refresh, add="+")
+
+        def snapshot():
+            root.update()
+            return (
+                app.last_scan_value_label.cget("font"),
+                app.follow_up_label.cget("font"),
+                app.last_scan_value_label.winfo_reqwidth(),
+                app.last_scan_value_label.winfo_reqheight(),
+                app.follow_up_label.winfo_reqwidth(),
+                app.follow_up_label.winfo_reqheight(),
+                context.winfo_reqwidth(),
+                context.winfo_reqheight(),
+            )
+
+        app._apply_right_sidebar_layout(generation=1)
+        direct_wide = snapshot()
+        assert app._get_right_sidebar_layout_metrics(1310)["context_value_font"] == 20
+
+        right.configure(width=302, height=694)
+        root.geometry("1366x768+10000+10000")
+        root.update()
+        assert app._get_right_sidebar_layout_metrics(694)["context_value_font"] == 13
+
+        right.configure(width=502, height=1310)
+        root.geometry("2560x1392+10000+10000")
+        root.update()
+        roundtrip_wide = snapshot()
+        assert app._get_right_sidebar_layout_metrics(1310)["context_value_font"] == 20
+        assert roundtrip_wide == direct_wide
+    finally:
+        root.destroy()
+
+
+def test_notice_message_real_tk_tracks_actual_column_through_blocking_round_trip():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    root.geometry("900x300+10000+10000")
+    try:
+        root.attributes("-alpha", 0.0)
+        root.tk.call("tk", "scaling", 2.00098)
+        root.update()
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.root = root
+        app.scale_factor = 1.0
+        app._center_widget_generation = 1
+        app._notice_message_wrap_job = None
+        app._notice_message_wrap_metrics = None
+
+        for center_width, center_height, notice_width in (
+            (821, 694, 761),
+            (824, 826, 764),
+        ):
+            metrics = app._get_center_layout_metrics(center_width, center_height)
+            frame = container_audit_module.tk.Frame(
+                root,
+                width=notice_width,
+                height=100,
+            )
+            frame.pack()
+            frame.grid_propagate(False)
+            frame.grid_columnconfigure(1, weight=1)
+            title = container_audit_module.tk.Label(
+                frame,
+                text="담당자 확인",
+                font=(app.DEFAULT_FONT, metrics["notice_title_font"], "bold"),
+            )
+            title.grid(row=0, column=0, padx=(12, 8), pady=8)
+            message = container_audit_module.tk.Label(
+                frame,
+                text="서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다.",
+                font=(app.DEFAULT_FONT, metrics["notice_message_font"]),
+                anchor="w",
+                justify="left",
+            )
+            message.grid(row=0, column=1, sticky="ew", padx=8, pady=8)
+            acknowledge = container_audit_module.tk.Button(
+                frame,
+                text="담당자 확인 필요",
+                state=container_audit_module.tk.DISABLED,
+                padx=12,
+                pady=4,
+            )
+            acknowledge.grid(row=0, column=2, padx=(8, 10), pady=6)
+            app.notice_message_label = message
+            app._notice_message_wrap_metrics = None
+            message.bind(
+                "<Configure>",
+                lambda event: app._schedule_notice_message_wrap_refresh(
+                    event,
+                    generation=1,
+                ),
+            )
+
+            root.update()
+            app._schedule_notice_message_wrap_refresh(generation=1)
+            root.update()
+            blocked = (
+                message.winfo_width(),
+                message.winfo_reqwidth(),
+                int(message.cget("wraplength")),
+            )
+            assert blocked[0] >= blocked[1]
+            assert blocked[2] <= blocked[0] - 4
+            assert message.winfo_x() + message.winfo_width() <= frame.winfo_width()
+
+            acknowledge.grid_remove()
+            message.configure(text="'캡처 기준 품목' 완료 · 서버 이적 확인이 완료되었습니다.")
+            app._schedule_notice_message_wrap_refresh(generation=1)
+            root.update()
+            assert message.winfo_width() >= message.winfo_reqwidth()
+            assert message.winfo_width() > blocked[0]
+
+            acknowledge.grid()
+            message.configure(
+                text="서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
+            )
+            app._schedule_notice_message_wrap_refresh(generation=1)
+            root.update()
+            assert (
+                message.winfo_width(),
+                message.winfo_reqwidth(),
+                int(message.cget("wraplength")),
+            ) == blocked
+            frame.destroy()
+            root.update()
     finally:
         root.destroy()
 

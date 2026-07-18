@@ -76,6 +76,36 @@ ROUNDTRIP_KEY_WIDGET_ATTRS = (
     "last_scan_value_label",
     "follow_up_label",
 )
+MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS = (
+    "stage",
+    "current_item",
+    "count",
+    "notice_title",
+    "notice_message",
+    "last_normal_scan",
+    "last_normal_scan_display",
+    "next_action",
+    "status",
+    "stopwatch",
+    "scan_entry_state",
+    "status_bar_text",
+    "scan_list_row_count",
+    "scan_list_rows",
+    "scan_list_row_colors",
+    "scan_list_rows_neutral",
+    "scan_list_header",
+    "right_texts",
+)
+MATRIX_ROUNDTRIP_SCAN_LAYOUT_FIELDS = (
+    "frame_grid",
+    "center_row_5",
+    "header_grid",
+    "list_grid",
+    "frame_row_1",
+)
+MATRIX_ROUNDTRIP_ACTION_NAMES = frozenset(
+    ("undo", "park", "submit", "operations")
+)
 
 
 Rect = tuple[int, int, int, int]
@@ -2175,6 +2205,7 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         "status": right_texts["status"],
         "stopwatch": right_texts["stopwatch"],
         "scan_entry_state": scan_entry_state,
+        "status_bar_text": _widget_text(app.status_label),
         "scan_list_row_count": len(scan_rows),
         "scan_list_rows": scan_rows,
         "scan_list_row_colors": scan_row_colors,
@@ -2684,6 +2715,10 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
         if record.get("state") in {"duplicate", "operator_review"}:
             if str(rendered.get("scan_entry_state")) != "disabled":
                 issues.append("blocking_state_scan_entry_enabled")
+            if "status_bar_text" in rendered and not str(
+                rendered.get("status_bar_text") or ""
+            ).startswith("스캔 중지"):
+                issues.append("blocking_state_status_bar_allows_scan")
         if rendered.get("right_progress_count_texts"):
             issues.append("right_progress_count_duplicate")
     return issues
@@ -2735,9 +2770,20 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
                 {
                     "bbox": list(widget.get("bbox") or []),
                     "size": list(widget.get("size") or []),
-                    "requested_size": list(widget.get("requested_size") or []),
                 }
             )
+            requested_size = list(widget.get("requested_size") or [])
+            checked_requested_size: dict[str, Any] = {}
+            if widget.get("check_requested_width") is True:
+                checked_requested_size["width"] = (
+                    requested_size[0] if len(requested_size) >= 1 else None
+                )
+            if widget.get("check_requested_height") is True:
+                checked_requested_size["height"] = (
+                    requested_size[1] if len(requested_size) >= 2 else None
+                )
+            if checked_requested_size:
+                normalized["checked_requested_size"] = checked_requested_size
         widget_geometry[str(widget["name"])] = normalized
     structure = geometry.get("structure") or {}
     geometry_signature = {
@@ -2810,6 +2856,263 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest(),
+    }
+
+
+def _stable_json_sha256(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _is_int_sequence(value: object, length: int) -> bool:
+    return bool(
+        isinstance(value, (list, tuple))
+        and len(value) == length
+        and all(isinstance(item, int) and not isinstance(item, bool) for item in value)
+    )
+
+
+def _parity_widget_signatures(
+    widgets: object,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    actual_geometry: dict[str, Any] = {}
+    checked_requested_geometry: dict[str, Any] = {}
+    complete = isinstance(widgets, list) and bool(widgets)
+    if not isinstance(widgets, list):
+        return actual_geometry, checked_requested_geometry, False
+
+    for widget in widgets:
+        if not isinstance(widget, dict):
+            complete = False
+            continue
+        name = widget.get("name")
+        if not isinstance(name, str) or not name or name in actual_geometry:
+            complete = False
+            continue
+        mapped = widget.get("mapped")
+        check_width = widget.get("check_requested_width")
+        check_height = widget.get("check_requested_height")
+        if not isinstance(mapped, bool):
+            complete = False
+            mapped = bool(mapped)
+        if not isinstance(check_width, bool) or not isinstance(check_height, bool):
+            complete = False
+
+        normalized_actual: dict[str, Any] = {"mapped": mapped}
+        if mapped:
+            widget_class = widget.get("widget_class")
+            bbox = widget.get("bbox")
+            size = widget.get("size")
+            if not isinstance(widget_class, str) or not widget_class:
+                complete = False
+            if not _is_int_sequence(bbox, 4) or not _is_int_sequence(size, 2):
+                complete = False
+            normalized_actual.update(
+                {
+                    "widget_class": widget_class,
+                    "bbox": list(bbox or []),
+                    "size": list(size or []),
+                }
+            )
+        actual_geometry[name] = normalized_actual
+
+        if mapped and (check_width is True or check_height is True):
+            requested_size = widget.get("requested_size")
+            if not _is_int_sequence(requested_size, 2):
+                complete = False
+            normalized_requested: dict[str, Any] = {}
+            if check_width is True:
+                normalized_requested["width"] = (
+                    requested_size[0]
+                    if isinstance(requested_size, (list, tuple))
+                    and len(requested_size) >= 1
+                    else None
+                )
+            if check_height is True:
+                normalized_requested["height"] = (
+                    requested_size[1]
+                    if isinstance(requested_size, (list, tuple))
+                    and len(requested_size) >= 2
+                    else None
+                )
+            checked_requested_geometry[name] = normalized_requested
+
+    return actual_geometry, checked_requested_geometry, complete
+
+
+def _parity_text_signature(rendered_state: object) -> tuple[dict[str, Any], bool]:
+    if not isinstance(rendered_state, dict):
+        return {
+            field: None for field in MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS
+        }, False
+    signature = {
+        field: rendered_state.get(field)
+        for field in MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS
+    }
+    complete = all(
+        field in rendered_state for field in MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS
+    )
+    string_fields = MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS[:12] + (
+        "scan_list_header",
+    )
+    complete = complete and all(
+        isinstance(signature[field], str) for field in string_fields
+    )
+    rows = signature["scan_list_rows"]
+    row_colors = signature["scan_list_row_colors"]
+    row_count = signature["scan_list_row_count"]
+    right_texts = signature["right_texts"]
+    complete = bool(
+        complete
+        and isinstance(row_count, int)
+        and not isinstance(row_count, bool)
+        and isinstance(rows, list)
+        and all(isinstance(row, str) for row in rows)
+        and row_count == len(rows)
+        and isinstance(row_colors, list)
+        and len(row_colors) == len(rows)
+        and all(
+            isinstance(colors, dict)
+            and isinstance(colors.get("background"), str)
+            and isinstance(colors.get("foreground"), str)
+            for colors in row_colors
+        )
+        and isinstance(signature["scan_list_rows_neutral"], bool)
+        and isinstance(right_texts, dict)
+        and bool(right_texts)
+        and all(
+            isinstance(key, str) and isinstance(value, str)
+            for key, value in right_texts.items()
+        )
+    )
+    return signature, complete
+
+
+def _parity_action_signature(
+    structure: object,
+    rendered_state: object,
+) -> tuple[dict[str, Any], bool]:
+    if not isinstance(structure, dict):
+        structure = {}
+    if not isinstance(rendered_state, dict):
+        rendered_state = {}
+    buttons = rendered_state.get("action_buttons")
+    signature = {
+        "button_count": structure.get("core_action_button_count"),
+        "rows": structure.get("core_action_rows"),
+        "expected_rows": structure.get("expected_core_action_rows"),
+        "layout_matches": structure.get("core_action_layout_matches"),
+        "buttons": buttons,
+    }
+    rows = signature["rows"]
+    expected_rows = signature["expected_rows"]
+
+    def rows_are_complete(value: object) -> bool:
+        return bool(
+            isinstance(value, list)
+            and value
+            and all(
+                isinstance(row, list)
+                and row
+                and all(isinstance(name, str) and name for name in row)
+                for row in value
+            )
+        )
+
+    complete = bool(
+        signature["button_count"] == len(MATRIX_ROUNDTRIP_ACTION_NAMES)
+        and rows_are_complete(rows)
+        and rows_are_complete(expected_rows)
+        and isinstance(signature["layout_matches"], bool)
+        and isinstance(buttons, dict)
+        and set(buttons) == MATRIX_ROUNDTRIP_ACTION_NAMES
+        and all(
+            isinstance(button, dict)
+            and isinstance(button.get("text"), str)
+            and isinstance(button.get("state"), str)
+            for button in buttons.values()
+        )
+    )
+    return signature, complete
+
+
+def build_matrix_roundtrip_parity_signatures(
+    record: dict[str, Any],
+) -> dict[str, Any]:
+    """Build path-independent signatures for matrix/roundtrip parity."""
+
+    requested_size = record.get("requested_size")
+    geometry = record.get("ui_geometry")
+    if not isinstance(geometry, dict):
+        geometry = {}
+    root_client_size = geometry.get("root_client_size")
+    actual_widgets, requested_widgets, widgets_complete = (
+        _parity_widget_signatures(geometry.get("widgets"))
+    )
+    structure = geometry.get("structure")
+    if not isinstance(structure, dict):
+        structure = {}
+    scan_layout = structure.get("scan_list_layout_signature")
+    if not isinstance(scan_layout, dict):
+        scan_layout = {}
+    normalized_scan_layout = {
+        field: scan_layout.get(field)
+        for field in MATRIX_ROUNDTRIP_SCAN_LAYOUT_FIELDS
+    }
+    scan_layout_complete = all(
+        field in scan_layout
+        and isinstance(scan_layout.get(field), dict)
+        and bool(scan_layout.get(field))
+        for field in MATRIX_ROUNDTRIP_SCAN_LAYOUT_FIELDS
+    )
+    geometry_signature = {
+        "root_client_size": list(root_client_size or []),
+        "widgets": actual_widgets,
+        "scan_list_layout": normalized_scan_layout,
+        "scan_list_frame_contract": structure.get("scan_list_frame_contract"),
+    }
+    requested_signature = {"widgets": requested_widgets}
+    text_signature, text_complete = _parity_text_signature(
+        record.get("rendered_state")
+    )
+    action_signature, actions_complete = _parity_action_signature(
+        structure,
+        record.get("rendered_state"),
+    )
+    completeness_checks = {
+        "requested_size_valid": _is_int_sequence(requested_size, 2),
+        "root_client_size_valid": _is_int_sequence(root_client_size, 2),
+        "root_matches_requested_size": (
+            _is_int_sequence(requested_size, 2)
+            and _is_int_sequence(root_client_size, 2)
+            and list(root_client_size) == list(requested_size)
+        ),
+        "widget_records_complete": widgets_complete,
+        "scan_list_layout_complete": scan_layout_complete,
+        "scan_list_frame_contract_present": isinstance(
+            structure.get("scan_list_frame_contract"), bool
+        ),
+        "text_fields_complete": text_complete,
+        "action_fields_complete": actions_complete,
+    }
+    return {
+        "schema_version": 1,
+        "geometry": geometry_signature,
+        "requested": requested_signature,
+        "text": text_signature,
+        "actions": action_signature,
+        "completeness_checks": completeness_checks,
+        "complete": all(completeness_checks.values()),
+        "geometry_sha256": _stable_json_sha256(geometry_signature),
+        "requested_sha256": _stable_json_sha256(requested_signature),
+        "text_sha256": _stable_json_sha256(text_signature),
+        "actions_sha256": _stable_json_sha256(action_signature),
     }
 
 
@@ -3042,6 +3345,114 @@ def apply_roundtrip_contracts(captures: Sequence[dict[str, Any]]) -> None:
             f"roundtrip_{name}" for name, passed in checks.items() if passed is not True
         )
         last["passed"] = not last["issues"]
+
+
+def apply_matrix_roundtrip_parity_contracts(
+    captures: Sequence[dict[str, Any]],
+) -> None:
+    """Require every roundtrip frame to equal its matrix size/state baseline."""
+
+    matrix_by_key: dict[tuple[tuple[int, ...], str], list[dict[str, Any]]] = {}
+    for capture in captures:
+        if capture.get("capture_sequence") != "matrix":
+            continue
+        size = capture.get("requested_size")
+        normalized_size = (
+            tuple(size) if isinstance(size, (list, tuple)) else tuple()
+        )
+        key = (normalized_size, str(capture.get("state")))
+        matrix_by_key.setdefault(key, []).append(capture)
+
+    issue_prefix = "matrix_roundtrip_parity_"
+    for roundtrip in captures:
+        if roundtrip.get("capture_sequence") != "roundtrip":
+            continue
+        size = roundtrip.get("requested_size")
+        normalized_size = (
+            tuple(size) if isinstance(size, (list, tuple)) else tuple()
+        )
+        state = str(roundtrip.get("state"))
+        matches = matrix_by_key.get((normalized_size, state), [])
+        matrix = matches[0] if len(matches) == 1 else None
+        roundtrip_signatures = build_matrix_roundtrip_parity_signatures(roundtrip)
+        matrix_signatures = (
+            build_matrix_roundtrip_parity_signatures(matrix)
+            if matrix is not None
+            else None
+        )
+        matrix_complete = bool(
+            matrix_signatures and matrix_signatures.get("complete") is True
+        )
+        roundtrip_complete = roundtrip_signatures.get("complete") is True
+        signatures_complete = matrix_complete and roundtrip_complete
+        checks = {
+            "matrix_capture_unique": len(matches) == 1,
+            "matrix_signature_complete": matrix_complete,
+            "roundtrip_signature_complete": roundtrip_complete,
+            "geometry_signature_exact": bool(
+                signatures_complete
+                and matrix_signatures["geometry"] == roundtrip_signatures["geometry"]
+            ),
+            "requested_signature_exact": bool(
+                signatures_complete
+                and matrix_signatures["requested"]
+                == roundtrip_signatures["requested"]
+            ),
+            "text_signature_exact": bool(
+                signatures_complete
+                and matrix_signatures["text"] == roundtrip_signatures["text"]
+            ),
+            "action_signature_exact": bool(
+                signatures_complete
+                and matrix_signatures["actions"] == roundtrip_signatures["actions"]
+            ),
+        }
+        roundtrip["matrix_roundtrip_parity_gate"] = {
+            "gate_applicable": True,
+            "signature_schema_version": 1,
+            "state": state,
+            "requested_size": list(normalized_size),
+            "sequence_ordinal": roundtrip.get("sequence_ordinal"),
+            "matching_matrix_capture_count": len(matches),
+            "matching_matrix_capture_ids": [
+                capture.get("id") for capture in matches
+            ],
+            "matrix_signature_hashes": (
+                {
+                    key: value
+                    for key, value in matrix_signatures.items()
+                    if key.endswith("_sha256")
+                }
+                if matrix_signatures is not None
+                else None
+            ),
+            "roundtrip_signature_hashes": {
+                key: value
+                for key, value in roundtrip_signatures.items()
+                if key.endswith("_sha256")
+            },
+            "matrix_completeness_checks": (
+                matrix_signatures.get("completeness_checks")
+                if matrix_signatures is not None
+                else None
+            ),
+            "roundtrip_completeness_checks": roundtrip_signatures.get(
+                "completeness_checks"
+            ),
+            "checks": checks,
+            "passed": all(checks.values()),
+        }
+        roundtrip["issues"] = [
+            issue
+            for issue in roundtrip.get("issues", [])
+            if not str(issue).startswith(issue_prefix)
+        ]
+        roundtrip["issues"].extend(
+            f"{issue_prefix}{name}"
+            for name, passed in checks.items()
+            if passed is not True
+        )
+        roundtrip["passed"] = not roundtrip["issues"]
 
 
 def build_isolated_app_settings(scale: object = DEFAULT_SCALE) -> dict[str, Any]:
@@ -3339,6 +3750,8 @@ def _cancel_runtime_jobs(app: Any) -> None:
         "focus_return_job",
         "status_message_job",
         "_scanned_listbox_layout_job",
+        "_responsive_style_refresh_job",
+        "_notice_message_wrap_job",
     ):
         job = getattr(app, name, None)
         if not job:
@@ -3656,6 +4069,7 @@ def run_capture_matrix(
             ]
         )
     apply_roundtrip_contracts(captures)
+    apply_matrix_roundtrip_parity_contracts(captures)
     issue_counts: dict[str, int] = {}
     for capture in captures:
         for issue in capture["issues"]:
