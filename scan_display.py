@@ -15,6 +15,7 @@ UNKNOWN_ITEM_LABEL = "품목 미확인"
 HASH_PREFIX = "ID #"
 HASH_HEX_LENGTH = 10
 MAX_IDENTIFIER_CHARS = 12
+LONG_IDENTIFIER_HASH_HEX_LENGTH = 5
 
 _SAFE_ITEM_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,23}$")
 _SAFE_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*$")
@@ -59,7 +60,12 @@ def _bounded_identifier(value: str) -> str | None:
         return None
     if len(candidate) <= MAX_IDENTIFIER_CHARS:
         return candidate
-    return f"…{candidate[-(MAX_IDENTIFIER_CHARS - 1):]}"
+    digest = hashlib.sha256(candidate.encode("utf-8")).hexdigest()
+    suffix_length = MAX_IDENTIFIER_CHARS - LONG_IDENTIFIER_HASH_HEX_LENGTH - 2
+    return (
+        f"#{digest[:LONG_IDENTIFIER_HASH_HEX_LENGTH]}"
+        f"…{candidate[-suffix_length:]}"
+    )
 
 
 def _structured_identifier(raw_barcode: str) -> str | None:
