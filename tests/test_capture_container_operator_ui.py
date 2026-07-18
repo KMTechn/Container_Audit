@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import copy
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -13,18 +15,28 @@ from tools.capture_container_operator_ui import (
     DisplayMonitor,
     MAX_SCALE,
     MIN_SCALE,
+    CaptureMutationBlocked,
+    CaptureMutationGuard,
     analyze_image,
     apply_cross_capture_contracts,
+    apply_roundtrip_contracts,
     assert_descendant,
+    build_capture_focus_gate,
+    build_compact_display_gate,
+    build_isolated_data_gate,
     build_monitor_capture_gate,
     build_isolated_app_settings,
     build_parser,
+    build_roundtrip_signatures,
+    build_scan_list_viewport_gate,
     build_state_fixtures,
     cluster_button_rows,
     evaluate_capture,
     evaluate_clipping_proxy,
     monitor_preflight_manifest,
     normalize_capture_scan_rows,
+    inventory_isolated_data,
+    parse_roundtrip_sizes,
     parse_scale,
     parse_sizes,
     parse_states,
@@ -155,6 +167,71 @@ def test_per_capture_monitor_gate_records_actual_device_and_containment():
     assert wrong_monitor_gate["passed"] is False
 
 
+def _passing_focus_gate_kwargs(state_id="normal"):
+    return {
+        "state_id": state_id,
+        "process_pid": 91,
+        "root_hwnd": 701,
+        "root_hwnd_pid": 91,
+        "foreground_root_hwnd": 701,
+        "foreground_pid": 91,
+        "tk_focus_path": ".scan_entry" if state_id == "normal" else ".",
+        "scan_entry_path": ".scan_entry",
+        "tk_focus_owned_by_root": True,
+        "scan_entry_enabled": state_id == "normal",
+    }
+
+
+def test_focus_gate_requires_foreground_root_pid_and_state_owned_tk_focus():
+    normal = build_capture_focus_gate(**_passing_focus_gate_kwargs())
+    blocking = build_capture_focus_gate(
+        **_passing_focus_gate_kwargs("operator_review")
+    )
+
+    assert normal["passed"] is True
+    assert blocking["passed"] is True
+
+    mutations = {
+        "foreground_root_hwnd": 702,
+        "foreground_pid": 92,
+        "root_hwnd_pid": 92,
+        "tk_focus_owned_by_root": False,
+        "tk_focus_path": ".other",
+        "scan_entry_enabled": False,
+    }
+    for key, value in mutations.items():
+        kwargs = _passing_focus_gate_kwargs()
+        kwargs[key] = value
+        gate = build_capture_focus_gate(**kwargs)
+        assert gate["passed"] is False, key
+
+
+@pytest.mark.parametrize(
+    ("row_bboxes", "see_zero_applied", "failed_check"),
+    [
+        ([(2, 2, 80, 18), None], True, "every_fixture_row_visible"),
+        ([(2, 2, 80, 18), (2, 22, 120, 18)], True, "every_fixture_row_horizontally_contained"),
+        ([(2, 2, 80, 18), (2, 45, 80, 18)], True, "every_fixture_row_vertically_contained"),
+        ([(2, 2, 80, 18), (2, 22, 80, 18)], False, "see_zero_applied"),
+        ([(2, 2, 80, 18)], True, "row_bbox_count_matches_fixture"),
+    ],
+)
+def test_scan_list_viewport_gate_fails_closed_for_every_visibility_contract(
+    row_bboxes,
+    see_zero_applied,
+    failed_check,
+):
+    gate = build_scan_list_viewport_gate(
+        expected_row_count=2,
+        viewport_size=(100, 60),
+        row_bboxes=row_bboxes,
+        see_zero_applied=see_zero_applied,
+    )
+
+    assert gate["checks"][failed_check] is False
+    assert gate["passed"] is False
+
+
 def test_isolated_app_settings_keep_default_contract_and_apply_large_text_scale():
     assert build_isolated_app_settings() == {
         "scale_factor": 1.0,
@@ -179,6 +256,24 @@ def test_size_and_state_parsers_accept_korean_multiplication_mark_and_deduplicat
         parse_sizes("wide")
     with pytest.raises(argparse.ArgumentTypeError):
         parse_states("unknown")
+
+
+def test_roundtrip_parser_preserves_duplicate_ordinals_and_requires_compact_return():
+    expected = ((1366, 768), (1920, 1080), (1366, 768))
+
+    assert parse_roundtrip_sizes("1366x768,1920×1080,1366x768") == expected
+    assert build_parser().parse_args(
+        ["--roundtrip-sizes", "1366x768,1920x1080,1366x768"]
+    ).roundtrip_sizes == expected
+    assert build_parser().parse_args([]).roundtrip_sizes == ()
+
+    for invalid in (
+        "1366x768,1366x768",
+        "1366x768,1920x1080,1440x900",
+        "1366x768,1366x768,1366x768",
+    ):
+        with pytest.raises(argparse.ArgumentTypeError):
+            parse_roundtrip_sizes(invalid)
 
 
 def test_fixture_contract_preserves_last_normal_scan_across_duplicate_and_review():
@@ -228,6 +323,41 @@ def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():
     assert all("|" not in row and "=" not in row for row in rows)
 
 
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "central_raw",
+        "right_raw",
+        "presenter_raw_changed",
+        "tray_raw_changed",
+    ],
+)
+def test_compact_display_gate_rejects_visible_raw_and_preserves_runtime_raw(mutation):
+    fixture = _fixture_manifest(
+        next(item for item in build_state_fixtures() if item.state_id == "normal")
+    )
+    rendered = {
+        "scan_list_rows": _expected_scan_list_rows(fixture),
+        "last_normal_scan_display": fixture["last_normal_scan_display"],
+        "presenter_last_normal_scan_raw": fixture["last_normal_scan"],
+        "active_tray_scans_raw": list(fixture["tray"]["scanned_barcodes"]),
+    }
+    assert build_compact_display_gate(fixture, rendered)["passed"] is True
+
+    if mutation == "central_raw":
+        rendered["scan_list_rows"][0] = fixture["tray"]["scanned_barcodes"][-1]
+    elif mutation == "right_raw":
+        rendered["last_normal_scan_display"] = fixture["last_normal_scan"]
+    elif mutation == "presenter_raw_changed":
+        rendered["presenter_last_normal_scan_raw"] = "changed"
+    else:
+        rendered["active_tray_scans_raw"] = rendered["active_tray_scans_raw"][:-1]
+
+    gate = build_compact_display_gate(fixture, rendered)
+    assert gate["passed"] is False
+    assert any(passed is False for passed in gate["checks"].values())
+
+
 def test_capture_rows_are_normalized_to_settled_neutral_colors():
     class FakeListbox:
         def __init__(self):
@@ -239,6 +369,9 @@ def test_capture_rows_are_normalized_to_settled_neutral_colors():
 
         def itemconfig(self, index, options):
             self.calls.append((index, dict(options)))
+
+        def see(self, index):
+            self.seen = index
 
     class FakeApp:
         COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -253,6 +386,7 @@ def test_capture_rows_are_normalized_to_settled_neutral_colors():
         (1, {"bg": app.COLOR_SIDEBAR_BG, "fg": app.COLOR_TEXT}),
         (2, {"bg": app.COLOR_SIDEBAR_BG, "fg": app.COLOR_TEXT}),
     ]
+    assert app.scanned_listbox.seen == 0
 
 
 def test_image_analysis_records_exact_size_near_black_and_blank_proxies():
@@ -273,6 +407,29 @@ def test_image_analysis_records_exact_size_near_black_and_blank_proxies():
     assert mixed_metrics["pixel_size_matches"] is False
     assert mixed_metrics["near_black_ratio"] == pytest.approx(0.5)
     assert mixed_metrics["blank_suspected"] is False
+
+
+@pytest.mark.parametrize("noisy", [False, True])
+def test_image_analysis_rejects_thirty_percent_edge_black_stripe(noisy):
+    image = Image.new("RGB", (100, 100), (235, 240, 245))
+    for y in range(70, 100):
+        for x in range(100):
+            if noisy and x % 25 == 0:
+                continue
+            image.putpixel((x, y), (0, 0, 0))
+
+    metrics = analyze_image(image, (100, 100))
+
+    assert metrics["near_black_ratio"] == pytest.approx(0.288 if noisy else 0.30)
+    assert metrics["edge_black_stripe_suspected"] is True
+    assert metrics["contiguous_black_stripe_suspected"] is True
+
+
+def test_image_analysis_rejects_uniform_gray_low_variance_frame():
+    metrics = analyze_image(Image.new("RGB", (160, 90), (128, 128, 128)), (160, 90))
+
+    assert metrics["uniform_low_variance_suspected"] is True
+    assert metrics["luma_stddev"] == 0.0
 
 
 def _widget_record(
@@ -543,6 +700,18 @@ def test_capture_evaluation_fails_a_false_explicit_monitor_gate():
     ]
 
 
+def test_capture_evaluation_schema_v2_fails_closed_when_any_strict_gate_is_missing():
+    record = _scan_row_evaluation_record("normal", ["PRODUCT-001"], ["(1) 001"])
+    record["capture_gate_schema_version"] = 2
+
+    assert evaluate_capture(record) == [
+        "focus_gate_missing",
+        "scan_list_viewport_gate_missing",
+        "compact_display_gate_missing",
+        "rendered_scan_rows_do_not_match_fixture",
+    ]
+
+
 def test_capture_evaluation_matches_every_fixture_barcode_in_display_order():
     barcodes = ["PRODUCT-001", "PRODUCT-002", "PRODUCT-003"]
     expected_rows = [
@@ -675,3 +844,150 @@ def test_isolation_guard_rejects_parent_and_sibling_paths(tmp_path):
         assert_descendant(allowed, allowed, label="data")
     with pytest.raises(RuntimeError):
         assert_descendant(tmp_path / "other", allowed, label="data")
+
+
+def _mutation_guard_fixture():
+    def allowed(*_args, **_kwargs):
+        return "allowed"
+
+    app = SimpleNamespace()
+    from tools.capture_container_operator_ui import (
+        MUTATION_GUARD_APP_METHODS,
+        MUTATION_GUARD_MODULE_METHODS,
+        MUTATION_GUARD_NESTED_METHODS,
+    )
+
+    for names in MUTATION_GUARD_APP_METHODS.values():
+        for name in names:
+            setattr(app, name, allowed)
+    for _category, owner_path, names in MUTATION_GUARD_NESTED_METHODS:
+        current = app
+        parts = owner_path.split(".")
+        for part in parts:
+            if not hasattr(current, part):
+                setattr(current, part, SimpleNamespace())
+            current = getattr(current, part)
+        for name in names:
+            setattr(current, name, allowed)
+    module = SimpleNamespace()
+    for names in MUTATION_GUARD_MODULE_METHODS.values():
+        for name in names:
+            setattr(module, name, allowed)
+    return app, module
+
+
+def test_mutation_guard_arms_every_required_target_counts_and_blocks_calls():
+    app, module = _mutation_guard_fixture()
+    guard = CaptureMutationGuard(app, module)
+
+    guard.arm()
+    armed = guard.manifest()
+    assert armed["armed"] is True
+    assert armed["checks"]["all_required_targets_protected"] is True
+    assert armed["total_protected_target_count"] == sum(
+        armed["protected_target_counts_by_category"].values()
+    )
+    assert armed["total_blocked_call_count"] == 0
+
+    with pytest.raises(CaptureMutationBlocked, match="barcode"):
+        app.process_barcode("raw")
+    blocked = guard.manifest()
+    assert blocked["total_blocked_call_count"] == 1
+    assert blocked["blocked_call_counts_by_category"] == {"barcode": 1}
+    assert blocked["checks"]["no_guarded_mutation_calls"] is False
+    assert blocked["passed"] is False
+
+    guard.restore()
+    assert app.process_barcode("raw") == "allowed"
+
+
+def test_mutation_guard_missing_method_setup_fails_closed_before_arming():
+    app, module = _mutation_guard_fixture()
+    del app.worker_registry.mark_recent
+    guard = CaptureMutationGuard(app, module)
+
+    with pytest.raises(RuntimeError, match="worker_registry.mark_recent"):
+        guard.arm()
+    assert guard.armed is False
+    assert guard.manifest()["total_protected_target_count"] == 0
+
+
+def test_isolated_data_inventory_hash_gate_detects_any_file_write(tmp_path):
+    data_root = tmp_path / "isolated"
+    data_root.mkdir()
+    (data_root / "settings.json").write_text('{"scale": 1}', encoding="utf-8")
+    before = inventory_isolated_data(data_root)
+    unchanged = inventory_isolated_data(data_root)
+
+    assert build_isolated_data_gate(before, unchanged)["passed"] is True
+    assert before["file_count"] == 1
+    assert before["total_bytes"] > 0
+
+    (data_root / "events.csv").write_text("forbidden", encoding="utf-8")
+    after = inventory_isolated_data(data_root)
+    gate = build_isolated_data_gate(before, after)
+    assert gate["passed"] is False
+    assert gate["checks"]["file_count_unchanged"] is False
+    assert gate["checks"]["inventory_hash_unchanged"] is False
+
+
+def _roundtrip_capture(ordinal, *, size=(1366, 768)):
+    record = {
+        "capture_sequence": "roundtrip",
+        "sequence_ordinal": ordinal,
+        "state": "normal",
+        "requested_size": list(size),
+        "ui_geometry": {
+            "root_client_size": list(size),
+            "widgets": [
+                {
+                    "name": "scan_list",
+                    "bbox": [300, 400, 900, 610],
+                    "size": [600, 210],
+                    "requested_size": [600, 210],
+                    "mapped": True,
+                }
+            ],
+            "structure": {
+                "scan_list_layout_signature": {"frame_grid": {"row": 5}},
+                "core_action_rows": [["undo", "park"], ["submit", "operations"]],
+            },
+        },
+        "rendered_state": {
+            "scan_list_rows": ["(1) ITEM · SN 0001"],
+            "action_buttons": {
+                "undo": {"text": "취소", "state": "normal"},
+                "park": {"text": "보류", "state": "normal"},
+                "submit": {"text": "제출", "state": "normal"},
+                "operations": {"text": "작업", "state": "normal"},
+            },
+        },
+        "issues": [],
+        "passed": True,
+    }
+    record["roundtrip_signatures"] = build_roundtrip_signatures(record)
+    return record
+
+
+def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
+    captures = [
+        _roundtrip_capture(1),
+        _roundtrip_capture(2, size=(1920, 1080)),
+        _roundtrip_capture(3),
+    ]
+    apply_roundtrip_contracts(captures)
+    assert captures[-1]["roundtrip_comparison_gate"]["passed"] is True
+
+    changed = copy.deepcopy(captures)
+    changed[-1]["ui_geometry"]["widgets"][0]["bbox"][2] += 1
+    changed[-1]["rendered_state"]["scan_list_rows"].append("(2) ITEM · SN 0002")
+    changed[-1]["rendered_state"]["action_buttons"]["park"]["text"] = "트레이 보류"
+    changed[-1]["roundtrip_signatures"] = build_roundtrip_signatures(changed[-1])
+    changed[-1]["issues"] = []
+    apply_roundtrip_contracts(changed)
+
+    checks = changed[-1]["roundtrip_comparison_gate"]["checks"]
+    assert checks["geometry_signature_exact"] is False
+    assert checks["row_signature_exact"] is False
+    assert checks["action_signature_exact"] is False
+    assert changed[-1]["passed"] is False

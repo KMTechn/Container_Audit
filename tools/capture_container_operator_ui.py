@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ctypes
 import datetime as dt
+import functools
 import hashlib
 import json
 import math
@@ -14,7 +15,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from PIL import Image, ImageGrab, ImageStat
+from PIL import Image, ImageGrab
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scan_display import compact_scan_value, format_scan_list_row
+from tools.capture_quality import (
+    NEAR_BLACK_FAILURE_RATIO,
+    analyze_capture_quality,
+)
 
 
 DEFAULT_SIZES = ((1366, 768), (1440, 900), (1920, 1080), (2560, 1080))
@@ -34,8 +39,6 @@ DEFAULT_STATE_IDS = (
     "completed",
     "recovered",
 )
-NEAR_BLACK_LUMA = 16
-NEAR_BLACK_FAILURE_RATIO = 0.35
 MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
@@ -247,7 +250,11 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
     )
 
 
-def parse_sizes(value: str) -> tuple[tuple[int, int], ...]:
+def _parse_size_sequence(
+    value: str,
+    *,
+    preserve_duplicates: bool,
+) -> tuple[tuple[int, int], ...]:
     sizes: list[tuple[int, int]] = []
     for raw_item in str(value or "").split(","):
         item = raw_item.strip().lower().replace("×", "x")
@@ -265,11 +272,36 @@ def parse_sizes(value: str) -> tuple[tuple[int, int], ...]:
                 f"capture size must be at least 1024x720: {width}x{height}"
             )
         pair = (width, height)
-        if pair not in sizes:
+        if preserve_duplicates or pair not in sizes:
             sizes.append(pair)
     if not sizes:
         raise argparse.ArgumentTypeError("at least one capture size is required")
     return tuple(sizes)
+
+
+def parse_sizes(value: str) -> tuple[tuple[int, int], ...]:
+    return _parse_size_sequence(value, preserve_duplicates=False)
+
+
+def parse_roundtrip_sizes(value: str) -> tuple[tuple[int, int], ...]:
+    """Parse an ordered compact/wide/compact sequence without de-duplication."""
+
+    if not str(value or "").strip():
+        return ()
+    sizes = _parse_size_sequence(value, preserve_duplicates=True)
+    if len(sizes) < 3:
+        raise argparse.ArgumentTypeError(
+            "roundtrip sizes require compact, wide, compact (at least three sizes)"
+        )
+    if sizes[0] != sizes[-1]:
+        raise argparse.ArgumentTypeError(
+            "roundtrip first and last sizes must match exactly"
+        )
+    if not any(size != sizes[0] for size in sizes[1:-1]):
+        raise argparse.ArgumentTypeError(
+            "roundtrip must include a different middle size"
+        )
+    return sizes
 
 
 def parse_states(value: str) -> tuple[str, ...]:
@@ -517,6 +549,124 @@ def collect_monitor_capture_gate(
     )
 
 
+def _root_hwnd(hwnd: int) -> int:
+    if os.name != "nt":
+        return int(hwnd)
+    return int(ctypes.windll.user32.GetAncestor(int(hwnd), 2) or int(hwnd))
+
+
+def _window_pid(hwnd: int) -> int:
+    if os.name != "nt" or not hwnd:
+        return os.getpid() if hwnd else 0
+    pid = ctypes.c_ulong(0)
+    ctypes.windll.user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(pid.value)
+
+
+def build_capture_focus_gate(
+    *,
+    state_id: str,
+    process_pid: int,
+    root_hwnd: int,
+    root_hwnd_pid: int,
+    foreground_root_hwnd: int,
+    foreground_pid: int,
+    tk_focus_path: str,
+    scan_entry_path: str,
+    tk_focus_owned_by_root: bool,
+    scan_entry_enabled: bool,
+) -> dict[str, Any]:
+    blocking = state_id in {"duplicate", "operator_review"}
+    checks = {
+        "root_hwnd_present": int(root_hwnd) > 0,
+        "root_hwnd_pid_matches_process": int(root_hwnd_pid) == int(process_pid),
+        "foreground_root_hwnd_matches_capture_root": (
+            int(foreground_root_hwnd) == int(root_hwnd)
+        ),
+        "foreground_pid_matches_process": int(foreground_pid) == int(process_pid),
+        "tk_focus_owned_by_capture_root": bool(tk_focus_owned_by_root),
+        "state_focus_contract": (
+            bool(tk_focus_owned_by_root)
+            if blocking
+            else (
+                scan_entry_enabled
+                and bool(tk_focus_owned_by_root)
+                and str(tk_focus_path) == str(scan_entry_path)
+            )
+        ),
+    }
+    return {
+        "gate_applicable": True,
+        "state": state_id,
+        "blocking_state": blocking,
+        "process_pid": int(process_pid),
+        "root_hwnd": int(root_hwnd),
+        "root_hwnd_pid": int(root_hwnd_pid),
+        "foreground_root_hwnd": int(foreground_root_hwnd),
+        "foreground_pid": int(foreground_pid),
+        "tk_focus_path": str(tk_focus_path),
+        "scan_entry_path": str(scan_entry_path),
+        "scan_entry_enabled": bool(scan_entry_enabled),
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _widget_is_owned_by_root(widget: Any, root: Any) -> bool:
+    current = widget
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        if current is root:
+            return True
+        seen.add(id(current))
+        current = getattr(current, "master", None)
+    return False
+
+
+def settle_capture_focus(app: Any, state_id: str) -> None:
+    """Put keyboard focus in the state-authoritative widget before evidence."""
+
+    blocking = state_id in {"duplicate", "operator_review"}
+    target = app.root if blocking else app.scan_entry
+    app.root.deiconify()
+    app.root.lift()
+    try:
+        target.focus_force()
+    except Exception as exc:
+        raise RuntimeError(f"capture focus setup failed for {state_id}: {exc}") from exc
+    if os.name == "nt":
+        hwnd = _root_hwnd(int(app.root.winfo_id()))
+        ctypes.windll.user32.SetForegroundWindow(hwnd)
+    pump_tk(app.root, 120)
+
+
+def collect_capture_focus_gate(app: Any, state_id: str) -> dict[str, Any]:
+    root = app.root
+    root_hwnd = _root_hwnd(int(root.winfo_id()))
+    foreground_hwnd = (
+        _root_hwnd(int(ctypes.windll.user32.GetForegroundWindow()))
+        if os.name == "nt"
+        else root_hwnd
+    )
+    focus_widget = root.focus_get()
+    try:
+        scan_entry_enabled = str(app.scan_entry.cget("state")) != "disabled"
+    except Exception:
+        scan_entry_enabled = False
+    return build_capture_focus_gate(
+        state_id=state_id,
+        process_pid=os.getpid(),
+        root_hwnd=root_hwnd,
+        root_hwnd_pid=_window_pid(root_hwnd),
+        foreground_root_hwnd=foreground_hwnd,
+        foreground_pid=_window_pid(foreground_hwnd),
+        tk_focus_path=str(focus_widget or ""),
+        scan_entry_path=str(app.scan_entry),
+        tk_focus_owned_by_root=_widget_is_owned_by_root(focus_widget, root),
+        scan_entry_enabled=scan_entry_enabled,
+    )
+
+
 def assert_descendant(path: Path, parent: Path, *, label: str) -> Path:
     resolved = path.resolve()
     resolved_parent = parent.resolve()
@@ -670,40 +820,21 @@ def capture_tk_client(root: Any) -> tuple[Image.Image, str]:
 
 def analyze_image(image: Image.Image, expected_size: tuple[int, int]) -> dict[str, Any]:
     rgb = image.convert("RGB")
-    gray = rgb.convert("L")
-    histogram = gray.histogram()
-    pixel_count = max(1, rgb.width * rgb.height)
-    near_black_pixels = sum(histogram[: NEAR_BLACK_LUMA + 1])
-    extrema = gray.getextrema() or (0, 0)
-    stat = ImageStat.Stat(gray)
-    luma_mean = float(stat.mean[0])
-    luma_stddev = float(stat.stddev[0])
-
-    sample = rgb.copy()
-    sample.thumbnail((256, 256))
-    colors = sample.getcolors(maxcolors=sample.width * sample.height) or []
-    dominant_ratio = (
-        max((count for count, _color in colors), default=0)
-        / max(1, sample.width * sample.height)
+    quality = analyze_capture_quality(rgb)
+    # Preserve the original fixed-capture blank proxy while adding the shared,
+    # stricter stripe and low-variance evidence used by manual captures.
+    quality["blank_suspected"] = bool(
+        quality["blank_suspected"]
+        or quality["luma_extrema"][1] - quality["luma_extrema"][0] <= 2
+        or quality["luma_stddev"] < 0.75
+        or quality["dominant_color_ratio_sampled"] >= 0.997
     )
-    blank_suspected = bool(
-        extrema[1] - extrema[0] <= 2
-        or luma_stddev < 0.75
-        or dominant_ratio >= 0.997
-    )
-    return {
+    quality.update({
         "expected_pixel_size": [int(expected_size[0]), int(expected_size[1])],
         "pixel_size": [rgb.width, rgb.height],
         "pixel_size_matches": (rgb.width, rgb.height) == expected_size,
-        "near_black_threshold_luma": NEAR_BLACK_LUMA,
-        "near_black_pixels": near_black_pixels,
-        "near_black_ratio": round(near_black_pixels / pixel_count, 6),
-        "luma_mean": round(luma_mean, 3),
-        "luma_stddev": round(luma_stddev, 3),
-        "luma_extrema": [int(extrema[0]), int(extrema[1])],
-        "dominant_color_ratio_sampled": round(dominant_ratio, 6),
-        "blank_suspected": blank_suspected,
-    }
+    })
+    return quality
 
 
 def _descendants(widget: Any) -> Iterable[Any]:
@@ -1160,6 +1291,18 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         for key, text in right_texts.items()
         if re.search(r"\b\d+\s*/\s*\d+\b", text)
     }
+    action_buttons: dict[str, dict[str, str]] = {}
+    for name, button in (
+        ("undo", app.undo_button),
+        ("park", app.park_button),
+        ("submit", app.submit_tray_button),
+        ("operations", app.operations_button),
+    ):
+        try:
+            state = str(button.cget("state"))
+        except Exception:
+            state = "unknown"
+        action_buttons[name] = {"text": _widget_text(button), "state": state}
     return {
         "stage": _widget_text(app.stage_label),
         "current_item": _widget_text(app.current_item_label),
@@ -1182,6 +1325,7 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         "scan_list_header": _widget_text(app.scanned_list_header_label),
         "right_texts": right_texts,
         "right_progress_count_texts": right_progress_count_texts,
+        "action_buttons": action_buttons,
     }
 
 
@@ -1204,7 +1348,89 @@ def normalize_capture_scan_rows(app: Any) -> int:
             row_index,
             {"bg": app.COLOR_SIDEBAR_BG, "fg": app.COLOR_TEXT},
         )
+    if row_count:
+        app.scanned_listbox.see(0)
     return row_count
+
+
+def build_scan_list_viewport_gate(
+    *,
+    expected_row_count: int,
+    viewport_size: tuple[int, int],
+    row_bboxes: Sequence[Sequence[int] | None],
+    see_zero_applied: bool,
+) -> dict[str, Any]:
+    viewport_width, viewport_height = (int(value) for value in viewport_size)
+    rows: list[dict[str, Any]] = []
+    for index in range(expected_row_count):
+        bbox = row_bboxes[index] if index < len(row_bboxes) else None
+        if bbox is None:
+            rows.append(
+                {
+                    "index": index,
+                    "bbox": None,
+                    "visible": False,
+                    "horizontally_contained": False,
+                    "vertically_contained": False,
+                }
+            )
+            continue
+        x, y, width, height = (int(value) for value in bbox)
+        rows.append(
+            {
+                "index": index,
+                "bbox": [x, y, width, height],
+                "visible": width > 0 and height > 0,
+                "horizontally_contained": (
+                    width > 0 and x >= 0 and x + width <= viewport_width
+                ),
+                "vertically_contained": (
+                    height > 0 and y >= 0 and y + height <= viewport_height
+                ),
+            }
+        )
+    checks = {
+        "see_zero_applied": bool(see_zero_applied),
+        "row_bbox_count_matches_fixture": len(row_bboxes) == expected_row_count,
+        "every_fixture_row_visible": all(row["visible"] for row in rows),
+        "every_fixture_row_horizontally_contained": all(
+            row["horizontally_contained"] for row in rows
+        ),
+        "every_fixture_row_vertically_contained": all(
+            row["vertically_contained"] for row in rows
+        ),
+    }
+    return {
+        "gate_applicable": True,
+        "expected_row_count": int(expected_row_count),
+        "viewport_size": [viewport_width, viewport_height],
+        "rows": rows,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def collect_scan_list_viewport_gate(
+    app: Any,
+    *,
+    expected_row_count: int,
+) -> dict[str, Any]:
+    listbox = app.scanned_listbox
+    see_zero_applied = False
+    if expected_row_count:
+        listbox.see(0)
+        see_zero_applied = True
+        pump_tk(app.root, 80)
+    else:
+        # An empty fixture has no row to reveal; the operation is vacuously applied.
+        see_zero_applied = True
+    row_bboxes = [listbox.bbox(index) for index in range(expected_row_count)]
+    return build_scan_list_viewport_gate(
+        expected_row_count=expected_row_count,
+        viewport_size=(int(listbox.winfo_width()), int(listbox.winfo_height())),
+        row_bboxes=row_bboxes,
+        see_zero_applied=see_zero_applied,
+    )
 
 
 def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
@@ -1360,6 +1586,78 @@ def _expected_scan_list_rows(fixture: dict[str, Any]) -> list[str]:
     return list(reversed(numbered_rows))
 
 
+def build_compact_display_gate(
+    fixture: dict[str, Any],
+    rendered: dict[str, Any],
+) -> dict[str, Any]:
+    expected_rows = _expected_scan_list_rows(fixture)
+    actual_rows = [str(value) for value in rendered.get("scan_list_rows") or []]
+    expected_last_raw = str(fixture.get("last_normal_scan") or "")
+    expected_last_display = str(fixture.get("last_normal_scan_display") or "-")
+    tray = fixture.get("tray") if fixture.get("active_tray") else None
+    expected_tray_raw = (
+        [str(value) for value in tray.get("scanned_barcodes") or []]
+        if isinstance(tray, dict)
+        else []
+    )
+    actual_last_display = str(rendered.get("last_normal_scan_display") or "")
+    checks = {
+        "central_rows_exact_compact": actual_rows == expected_rows,
+        "central_rows_have_no_raw_payload_delimiters": all(
+            "|" not in row and "=" not in row for row in actual_rows
+        ),
+        "right_last_normal_exact_compact": actual_last_display == expected_last_display,
+        "right_last_normal_has_no_raw_payload_delimiters": (
+            "|" not in actual_last_display and "=" not in actual_last_display
+        ),
+        "presenter_last_normal_raw_exact": (
+            str(rendered.get("presenter_last_normal_scan_raw") or "")
+            == expected_last_raw
+        ),
+        "current_tray_raw_list_exact": (
+            [str(value) for value in rendered.get("active_tray_scans_raw") or []]
+            == expected_tray_raw
+        ),
+    }
+    return {
+        "gate_applicable": True,
+        "expected_central_rows": expected_rows,
+        "actual_central_rows": actual_rows,
+        "expected_right_last_normal": expected_last_display,
+        "actual_right_last_normal": actual_last_display,
+        "expected_presenter_last_normal_raw": expected_last_raw,
+        "expected_current_tray_raw_list": expected_tray_raw,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _append_gate_issues(
+    issues: list[str],
+    record: dict[str, Any],
+    gate_name: str,
+) -> None:
+    gate = record.get(gate_name)
+    if not isinstance(gate, dict):
+        issues.append(f"{gate_name}_missing")
+        return
+    if gate.get("gate_applicable") is not True:
+        issues.append(f"{gate_name}_not_applicable")
+    checks = gate.get("checks")
+    if not isinstance(checks, dict) or not checks:
+        issues.append(f"{gate_name}_checks_missing")
+    else:
+        issues.extend(
+            f"{gate_name}_{name}"
+            for name, passed in checks.items()
+            if passed is not True
+        )
+    if gate.get("passed") is not True and not any(
+        issue.startswith(f"{gate_name}_") for issue in issues
+    ):
+        issues.append(f"{gate_name}_failed")
+
+
 def evaluate_capture(record: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     monitor_gate = record.get("monitor_gate")
@@ -1397,6 +1695,12 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
         issues.append("blank_image_suspected")
     if image["near_black_ratio"] > NEAR_BLACK_FAILURE_RATIO:
         issues.append("near_black_ratio_high")
+    if image.get("edge_black_stripe_suspected"):
+        issues.append("edge_black_stripe_suspected")
+    if image.get("contiguous_black_stripe_suspected"):
+        issues.append("contiguous_black_stripe_suspected")
+    if image.get("uniform_low_variance_suspected"):
+        issues.append("uniform_low_variance_suspected")
     if geometry["clipping_proxy"]["suspected"]:
         issues.append("clipping_proxy_suspected")
     if not structure["central_scan_list_is_only_center_history"]:
@@ -1419,6 +1723,14 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
         issues.append("secondary_operations_exposed")
     fixture = record.get("fixture") or {}
     rendered = record.get("rendered_state") or {}
+    strict_capture_gates = int(record.get("capture_gate_schema_version", 1)) >= 2
+    for gate_name in (
+        "focus_gate",
+        "scan_list_viewport_gate",
+        "compact_display_gate",
+    ):
+        if strict_capture_gates or gate_name in record:
+            _append_gate_issues(issues, record, gate_name)
     if rendered:
         if int(rendered.get("scan_list_row_count", -1)) != int(fixture.get("scan_count", 0)):
             issues.append("rendered_scan_count_mismatch")
@@ -1505,12 +1817,376 @@ def apply_cross_capture_contracts(captures: Sequence[dict[str, Any]]) -> None:
             capture["passed"] = not capture["issues"]
 
 
+def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
+    geometry = record["ui_geometry"]
+    widget_geometry = {
+        str(widget["name"]): {
+            "bbox": list(widget.get("bbox") or []),
+            "size": list(widget.get("size") or []),
+            "requested_size": list(widget.get("requested_size") or []),
+            "mapped": bool(widget.get("mapped")),
+        }
+        for widget in geometry.get("widgets") or []
+    }
+    structure = geometry.get("structure") or {}
+    geometry_signature = {
+        "root_client_size": list(geometry.get("root_client_size") or []),
+        "widgets": widget_geometry,
+        "scan_list_layout": structure.get("scan_list_layout_signature"),
+    }
+    row_signature = list(record.get("rendered_state", {}).get("scan_list_rows") or [])
+    action_signature = {
+        "rows": structure.get("core_action_rows"),
+        "buttons": record.get("rendered_state", {}).get("action_buttons"),
+    }
+    return {
+        "geometry": geometry_signature,
+        "rows": row_signature,
+        "actions": action_signature,
+        "geometry_sha256": hashlib.sha256(
+            json.dumps(
+                geometry_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "rows_sha256": hashlib.sha256(
+            json.dumps(
+                row_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "actions_sha256": hashlib.sha256(
+            json.dumps(
+                action_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+    }
+
+
+def apply_roundtrip_contracts(captures: Sequence[dict[str, Any]]) -> None:
+    roundtrip = [
+        capture
+        for capture in captures
+        if capture.get("capture_sequence") == "roundtrip"
+    ]
+    if not roundtrip:
+        return
+    ordinals = sorted({int(capture["sequence_ordinal"]) for capture in roundtrip})
+    first_ordinal, last_ordinal = ordinals[0], ordinals[-1]
+    first_by_state = {
+        str(capture["state"]): capture
+        for capture in roundtrip
+        if int(capture["sequence_ordinal"]) == first_ordinal
+    }
+    last_by_state = {
+        str(capture["state"]): capture
+        for capture in roundtrip
+        if int(capture["sequence_ordinal"]) == last_ordinal
+    }
+    for state, first in first_by_state.items():
+        last = last_by_state.get(state)
+        if last is None:
+            first["issues"].append("roundtrip_final_state_missing")
+            first["passed"] = False
+            continue
+        first_signatures = first["roundtrip_signatures"]
+        last_signatures = last["roundtrip_signatures"]
+        checks = {
+            "compact_size_exact": first.get("requested_size") == last.get("requested_size"),
+            "geometry_signature_exact": (
+                first_signatures["geometry"] == last_signatures["geometry"]
+            ),
+            "row_signature_exact": first_signatures["rows"] == last_signatures["rows"],
+            "action_signature_exact": (
+                first_signatures["actions"] == last_signatures["actions"]
+            ),
+        }
+        last["roundtrip_comparison_gate"] = {
+            "gate_applicable": True,
+            "first_ordinal": first_ordinal,
+            "last_ordinal": last_ordinal,
+            "state": state,
+            "first_signature_hashes": {
+                key: value
+                for key, value in first_signatures.items()
+                if key.endswith("_sha256")
+            },
+            "last_signature_hashes": {
+                key: value
+                for key, value in last_signatures.items()
+                if key.endswith("_sha256")
+            },
+            "checks": checks,
+            "passed": all(checks.values()),
+        }
+        last["issues"].extend(
+            f"roundtrip_{name}" for name, passed in checks.items() if passed is not True
+        )
+        last["passed"] = not last["issues"]
+
+
 def build_isolated_app_settings(scale: object = DEFAULT_SCALE) -> dict[str, Any]:
     """Return the only settings allowed for an isolated visual capture."""
 
     return {
         "scale_factor": parse_scale(scale),
         "enable_internal_test_commands": False,
+    }
+
+
+class CaptureMutationBlocked(RuntimeError):
+    pass
+
+
+MUTATION_GUARD_APP_METHODS: dict[str, tuple[str, ...]] = {
+    "barcode": (
+        "process_barcode",
+        "_process_barcode_logic",
+    ),
+    "event_write": (
+        "_log_event",
+        "_event_log_writer",
+    ),
+    "state_write": (
+        "save_settings",
+        "_save_best_time_records",
+        "_update_best_time_records",
+        "_save_current_tray_state",
+        "_save_tray_state_snapshot",
+        "_delete_current_tray_state",
+        "_quarantine_current_tray_state",
+    ),
+    "completion": (
+        "complete_tray",
+        "submit_current_tray",
+        "_complete_current_tray_as_partial",
+    ),
+    "transfer_seal": (
+        "_prepare_and_attempt_transfer_seal",
+        "_retry_pending_transfer_seals",
+    ),
+    "direct_sync": ("_trigger_session_direct_sync",),
+    "worker_write": (
+        "_register_worker_name",
+        "_ensure_worker_login_name",
+        "register_worker_from_login",
+        "start_work",
+        "change_worker",
+    ),
+    "parked_write": (
+        "park_current_tray",
+        "restore_parked_tray",
+    ),
+}
+
+
+MUTATION_GUARD_NESTED_METHODS: tuple[
+    tuple[str, str, tuple[str, ...]], ...
+] = (
+    ("worker_write", "worker_registry", ("_write_payload", "register", "mark_recent")),
+    ("parked_write", "parked_tray_store", ("save_state", "delete")),
+    (
+        "transfer_seal",
+        "transfer_seal_coordinator",
+        ("prepare", "attempt", "drain_pending"),
+    ),
+    (
+        "transfer_seal",
+        "transfer_seal_coordinator.store",
+        (
+            "prepare",
+            "bind_command",
+            "record_error",
+            "record_receipt",
+            "record_exchange_block",
+        ),
+    ),
+    ("event_write", "log_queue", ("put",)),
+)
+
+
+MUTATION_GUARD_MODULE_METHODS: dict[str, tuple[str, ...]] = {
+    "event_write": ("append_event_log_entry",),
+    "state_write": ("atomic_write_json",),
+    "parked_write": ("quarantine_tray_state_file",),
+    "direct_sync": (
+        "start_session_direct_sync",
+        "start_direct_sync_auto_bootstrap",
+    ),
+}
+
+
+def _resolve_attribute_path(owner: Any, path: str) -> Any:
+    current = owner
+    for part in path.split("."):
+        if not hasattr(current, part):
+            raise RuntimeError(f"capture mutation guard target missing: {path}")
+        current = getattr(current, part)
+    return current
+
+
+class CaptureMutationGuard:
+    """Fail closed if isolated visual fixtures enter any business write path."""
+
+    def __init__(self, app: Any, module: Any):
+        self.app = app
+        self.module = module
+        self.armed = False
+        self._originals: list[tuple[Any, str, Any]] = []
+        self._protected: list[dict[str, str]] = []
+        self._calls: list[dict[str, Any]] = []
+
+    def _specs(self) -> list[tuple[str, str, Any, str]]:
+        specs: list[tuple[str, str, Any, str]] = []
+        for category, method_names in MUTATION_GUARD_APP_METHODS.items():
+            specs.extend(
+                (category, f"app.{name}", self.app, name) for name in method_names
+            )
+        for category, owner_path, method_names in MUTATION_GUARD_NESTED_METHODS:
+            owner = _resolve_attribute_path(self.app, owner_path)
+            specs.extend(
+                (category, f"app.{owner_path}.{name}", owner, name)
+                for name in method_names
+            )
+        for category, method_names in MUTATION_GUARD_MODULE_METHODS.items():
+            specs.extend(
+                (category, f"module.{name}", self.module, name)
+                for name in method_names
+            )
+        return specs
+
+    def arm(self) -> None:
+        if self.armed:
+            raise RuntimeError("capture mutation guard is already armed")
+        specs = self._specs()
+        missing = [
+            label
+            for _category, label, owner, name in specs
+            if not callable(getattr(owner, name, None))
+        ]
+        if missing:
+            raise RuntimeError(
+                "capture mutation guard setup failed; missing callable targets: "
+                + ", ".join(sorted(missing))
+            )
+        for category, label, owner, name in specs:
+            original = getattr(owner, name)
+
+            @functools.wraps(original)
+            def blocked(*args: Any, __category=category, __label=label, **kwargs: Any):
+                call = {
+                    "category": __category,
+                    "target": __label,
+                    "positional_argument_count": len(args),
+                    "keyword_names": sorted(str(key) for key in kwargs),
+                }
+                self._calls.append(call)
+                raise CaptureMutationBlocked(
+                    f"capture mutation blocked: {__category} {__label}"
+                )
+
+            self._originals.append((owner, name, original))
+            setattr(owner, name, blocked)
+            self._protected.append({"category": category, "target": label})
+        self.armed = True
+
+    def restore(self) -> None:
+        for owner, name, original in reversed(self._originals):
+            setattr(owner, name, original)
+        self._originals.clear()
+        self.armed = False
+
+    def manifest(self) -> dict[str, Any]:
+        protected_counts: dict[str, int] = {}
+        call_counts: dict[str, int] = {}
+        for item in self._protected:
+            category = item["category"]
+            protected_counts[category] = protected_counts.get(category, 0) + 1
+        for item in self._calls:
+            category = item["category"]
+            call_counts[category] = call_counts.get(category, 0) + 1
+        checks = {
+            "guard_was_armed": bool(self._protected),
+            "all_required_targets_protected": (
+                len(self._protected)
+                == sum(len(names) for names in MUTATION_GUARD_APP_METHODS.values())
+                + sum(len(names) for _category, _owner, names in MUTATION_GUARD_NESTED_METHODS)
+                + sum(len(names) for names in MUTATION_GUARD_MODULE_METHODS.values())
+            ),
+            "no_guarded_mutation_calls": not self._calls,
+        }
+        return {
+            "gate_applicable": True,
+            "armed": self.armed,
+            "protected_targets": list(self._protected),
+            "protected_target_counts_by_category": protected_counts,
+            "total_protected_target_count": len(self._protected),
+            "blocked_calls": list(self._calls),
+            "blocked_call_counts_by_category": call_counts,
+            "total_blocked_call_count": len(self._calls),
+            "checks": checks,
+            "passed": all(checks.values()),
+        }
+
+
+def inventory_isolated_data(data_root: Path) -> dict[str, Any]:
+    resolved = data_root.resolve()
+    files: list[dict[str, Any]] = []
+    total_bytes = 0
+    for path in sorted((item for item in resolved.rglob("*") if item.is_file())):
+        size = path.stat().st_size
+        relative_path = str(path.relative_to(resolved)).replace("\\", "/")
+        file_hash = _sha256(path)
+        files.append(
+            {
+                "path": relative_path,
+                "size_bytes": size,
+                "sha256": file_hash,
+            }
+        )
+        total_bytes += size
+    digest = hashlib.sha256()
+    for item in files:
+        digest.update(item["path"].encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(item["size_bytes"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(item["sha256"].encode("ascii"))
+        digest.update(b"\n")
+    return {
+        "root": str(resolved),
+        "file_count": len(files),
+        "total_bytes": total_bytes,
+        "inventory_sha256": digest.hexdigest(),
+        "files": files,
+    }
+
+
+def build_isolated_data_gate(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    checks = {
+        "file_count_unchanged": before.get("file_count") == after.get("file_count"),
+        "total_bytes_unchanged": before.get("total_bytes") == after.get("total_bytes"),
+        "inventory_hash_unchanged": (
+            before.get("inventory_sha256") == after.get("inventory_sha256")
+        ),
+        "file_inventory_exact": before.get("files") == after.get("files"),
+    }
+    return {
+        "gate_applicable": True,
+        "before": before,
+        "after": after,
+        "checks": checks,
+        "passed": all(checks.values()),
     }
 
 
@@ -1616,16 +2292,18 @@ def run_capture_matrix(
     state_ids: Sequence[str],
     scale: object = DEFAULT_SCALE,
     monitor_device: str = "",
+    roundtrip_sizes: Sequence[tuple[int, int]] = (),
 ) -> tuple[Path, dict[str, Any]]:
     requested_scale = parse_scale(scale)
     isolated_settings = build_isolated_app_settings(requested_scale)
+    all_requested_sizes = tuple(sizes) + tuple(roundtrip_sizes)
     monitor_target = (
-        resolve_monitor_target(monitor_device, sizes)
+        resolve_monitor_target(monitor_device, all_requested_sizes)
         if str(monitor_device or "").strip()
         else None
     )
     monitor_preflight = (
-        monitor_preflight_manifest(monitor_target, sizes)
+        monitor_preflight_manifest(monitor_target, all_requested_sizes)
         if monitor_target is not None
         else {
             "gate_applicable": False,
@@ -1656,7 +2334,7 @@ def run_capture_matrix(
     fixtures_by_id = {fixture.state_id: fixture for fixture in build_state_fixtures()}
 
     manifest: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "tool": "tools/capture_container_operator_ui.py",
         "generated_at": dt.datetime.now(dt.timezone.utc).astimezone().isoformat(),
         "repository_root": str(ROOT),
@@ -1665,6 +2343,9 @@ def run_capture_matrix(
         "isolation_guards": guards,
         "dpi_awareness": dpi_mode,
         "requested_sizes": [[width, height] for width, height in sizes],
+        "roundtrip_sizes": [
+            [width, height] for width, height in roundtrip_sizes
+        ],
         "requested_states": list(state_ids),
         "requested_scale": requested_scale,
         "isolated_app_settings": isolated_settings,
@@ -1674,55 +2355,116 @@ def run_capture_matrix(
     }
 
     app = None
+    mutation_guard: CaptureMutationGuard | None = None
+    isolated_data_before: dict[str, Any] | None = None
+    isolated_data_after: dict[str, Any] | None = None
     try:
         app = _make_capture_app(module, requested_scale)
+        isolated_data_before = inventory_isolated_data(data_root)
+        mutation_guard = CaptureMutationGuard(app, module)
+        mutation_guard.arm()
         manifest["applied_scale_factor"] = float(app.scale_factor)
         settings_path = Path(app.capture_settings_path).resolve()
         manifest["isolated_settings_path"] = str(
             settings_path.relative_to(resolved_output)
         ).replace("\\", "/")
         app.worker_name = "캡처 작업자"
-        for size in sizes:
+
+        def capture_sequence_item(
+            size: tuple[int, int],
+            *,
+            capture_sequence: str,
+            sequence_ordinal: int | None = None,
+        ) -> None:
             _configure_size(app, size, monitor_target)
-            size_dir = screenshot_root / f"{size[0]}x{size[1]}"
+            if capture_sequence == "roundtrip":
+                if sequence_ordinal is None:
+                    raise RuntimeError("roundtrip capture requires an ordinal")
+                size_dir = (
+                    screenshot_root
+                    / "roundtrip"
+                    / f"{sequence_ordinal:03d}_{size[0]}x{size[1]}"
+                )
+            else:
+                size_dir = screenshot_root / f"{size[0]}x{size[1]}"
             size_dir.mkdir(parents=True, exist_ok=True)
             for state_id in state_ids:
                 fixture = fixtures_by_id[state_id]
                 apply_state_fixture(app, fixture, module)
                 pump_tk(app.root, 260)
+                viewport_gate = collect_scan_list_viewport_gate(
+                    app,
+                    expected_row_count=(
+                        len(fixture.tray.scanned_barcodes)
+                        if fixture.tray is not None
+                        else 0
+                    ),
+                )
+                settle_capture_focus(app, state_id)
+                focus_gate = collect_capture_focus_gate(app, state_id)
                 monitor_gate = (
                     collect_monitor_capture_gate(app.root, monitor_target, size)
                     if monitor_target is not None
                     else None
                 )
                 geometry_record = collect_ui_geometry(app)
+                rendered_state = collect_rendered_state(app)
                 image, source = capture_tk_client(app.root)
                 path = size_dir / f"{state_id}.png"
                 image.save(path, format="PNG", optimize=True)
+                fixture_manifest = _fixture_manifest(fixture)
+                record_id = f"{size[0]}x{size[1]}-{state_id}"
+                if capture_sequence == "roundtrip":
+                    record_id = f"roundtrip-{sequence_ordinal:03d}-{record_id}"
                 record = {
-                    "id": f"{size[0]}x{size[1]}-{state_id}",
+                    "id": record_id,
                     "state": state_id,
                     "state_label": fixture.state_label,
+                    "capture_sequence": capture_sequence,
+                    "sequence_ordinal": sequence_ordinal,
                     "requested_size": [size[0], size[1]],
                     "requested_scale": requested_scale,
                     "applied_scale_factor": float(app.scale_factor),
+                    "capture_gate_schema_version": 2,
                     "path": str(path.relative_to(resolved_output)).replace("\\", "/"),
                     "capture_source": source,
                     "sha256": _sha256(path),
                     "file_size_bytes": path.stat().st_size,
-                    "fixture": _fixture_manifest(fixture),
+                    "fixture": fixture_manifest,
                     "image_analysis": analyze_image(image, size),
                     "ui_geometry": geometry_record,
-                    "rendered_state": collect_rendered_state(app),
+                    "rendered_state": rendered_state,
+                    "focus_gate": focus_gate,
+                    "scan_list_viewport_gate": viewport_gate,
+                    "compact_display_gate": build_compact_display_gate(
+                        fixture_manifest,
+                        rendered_state,
+                    ),
                 }
                 if monitor_gate is not None:
                     record["monitor_gate"] = monitor_gate
+                if capture_sequence == "roundtrip":
+                    record["roundtrip_signatures"] = build_roundtrip_signatures(record)
                 record["issues"] = evaluate_capture(record)
                 record["passed"] = not record["issues"]
                 manifest["captures"].append(record)
+
+        for size in sizes:
+            capture_sequence_item(size, capture_sequence="matrix")
+        for ordinal, size in enumerate(roundtrip_sizes, start=1):
+            capture_sequence_item(
+                size,
+                capture_sequence="roundtrip",
+                sequence_ordinal=ordinal,
+            )
     finally:
         if app is not None:
             _cancel_runtime_jobs(app)
+            if isolated_data_before is not None:
+                isolated_data_after = inventory_isolated_data(data_root)
+            if mutation_guard is not None:
+                manifest["mutation_guard"] = mutation_guard.manifest()
+                mutation_guard.restore()
             try:
                 app.root.attributes("-topmost", False)
             except Exception:
@@ -1732,15 +2474,41 @@ def run_capture_matrix(
             except Exception:
                 pass
 
+    if isolated_data_before is None or isolated_data_after is None:
+        raise RuntimeError("isolated data inventory was not completed")
+    manifest["isolated_data_gate"] = build_isolated_data_gate(
+        isolated_data_before,
+        isolated_data_after,
+    )
+
     captures = manifest["captures"]
-    apply_cross_capture_contracts(captures)
+    apply_cross_capture_contracts(
+        [capture for capture in captures if capture["capture_sequence"] == "matrix"]
+    )
+    for ordinal in range(1, len(roundtrip_sizes) + 1):
+        apply_cross_capture_contracts(
+            [
+                capture
+                for capture in captures
+                if capture["capture_sequence"] == "roundtrip"
+                and capture["sequence_ordinal"] == ordinal
+            ]
+        )
+    apply_roundtrip_contracts(captures)
     issue_counts: dict[str, int] = {}
     for capture in captures:
         for issue in capture["issues"]:
             issue_counts[issue] = issue_counts.get(issue, 0) + 1
+    if manifest.get("mutation_guard", {}).get("passed") is not True:
+        issue_counts["mutation_guard_failed"] = 1
+    if manifest["isolated_data_gate"].get("passed") is not True:
+        issue_counts["isolated_data_changed"] = 1
+    expected_capture_count = (
+        len(sizes) + len(roundtrip_sizes)
+    ) * len(state_ids)
     manifest["summary"] = {
         "requested_scale": requested_scale,
-        "expected_capture_count": len(sizes) * len(state_ids),
+        "expected_capture_count": expected_capture_count,
         "capture_count": len(captures),
         "passed_capture_count": sum(1 for capture in captures if capture["passed"]),
         "failed_capture_count": sum(1 for capture in captures if not capture["passed"]),
@@ -1758,7 +2526,20 @@ def run_capture_matrix(
             if monitor_target is not None
             else True
         ),
-        "passed": len(captures) == len(sizes) * len(state_ids) and not issue_counts,
+        "mutation_guard_total_protected_target_count": manifest.get(
+            "mutation_guard", {}
+        ).get("total_protected_target_count", 0),
+        "mutation_guard_total_blocked_call_count": manifest.get(
+            "mutation_guard", {}
+        ).get("total_blocked_call_count", 0),
+        "isolated_data_file_count_before": isolated_data_before["file_count"],
+        "isolated_data_file_count_after": isolated_data_after["file_count"],
+        "isolated_data_total_bytes_before": isolated_data_before["total_bytes"],
+        "isolated_data_total_bytes_after": isolated_data_after["total_bytes"],
+        "roundtrip_capture_count": sum(
+            1 for capture in captures if capture["capture_sequence"] == "roundtrip"
+        ),
+        "passed": len(captures) == expected_capture_count and not issue_counts,
     }
     manifest_path = resolved_output / "manifest.json"
     manifest_path.write_text(
@@ -1809,6 +2590,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--roundtrip-sizes",
+        type=parse_roundtrip_sizes,
+        default=(),
+        help=(
+            "optional ordered same-instance compact,wide,compact sequence; "
+            "duplicates are preserved and screenshots use ordinal paths"
+        ),
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="return an error after writing the manifest when any proxy check fails",
@@ -1824,6 +2614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         state_ids=args.states,
         scale=args.scale,
         monitor_device=args.monitor_device,
+        roundtrip_sizes=args.roundtrip_sizes,
     )
     summary = manifest["summary"]
     print(
@@ -1834,6 +2625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "requested_scale": summary["requested_scale"],
                 "monitor_device": args.monitor_device or None,
                 "monitor_gate_passed": summary["monitor_gate_passed"],
+                "roundtrip_sizes": [list(size) for size in args.roundtrip_sizes],
                 "passed": summary["passed"],
                 "issue_counts": summary["issue_counts"],
             },
