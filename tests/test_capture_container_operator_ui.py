@@ -207,44 +207,210 @@ def test_focus_gate_requires_foreground_root_pid_and_state_owned_tk_focus():
         assert gate["passed"] is False, key
 
 
-@pytest.mark.parametrize(
-    ("row_bboxes", "see_zero_applied", "failed_check"),
-    [
-        ([(2, 2, 80, 18), None], True, "every_fixture_row_visible"),
-        ([(2, 2, 80, 18), (2, 22, 120, 18)], True, "every_fixture_row_horizontally_contained"),
-        ([(2, 2, 80, 18), (2, 45, 80, 18)], True, "every_fixture_row_vertically_contained"),
-        ([(2, 2, 80, 18), (2, 22, 80, 18)], False, "see_zero_applied"),
-        ([(2, 2, 80, 18)], True, "row_bbox_count_matches_fixture"),
-    ],
-)
-def test_scan_list_viewport_gate_fails_closed_for_every_visibility_contract(
-    row_bboxes,
-    see_zero_applied,
-    failed_check,
-):
-    gate = build_scan_list_viewport_gate(
-        expected_row_count=2,
-        viewport_size=(100, 60),
-        row_bboxes=row_bboxes,
-        see_zero_applied=see_zero_applied,
+class _FakeForegroundUser32:
+    def __init__(self, mode):
+        self.mode = mode
+        self.target_hwnd = 701
+        self.foreground_hwnd = 900
+        self.attached = False
+        self.calls = []
+        self.pids = {701: 91, 900: 92}
+        self.threads = {701: 11, 900: 12}
+
+    def GetAncestor(self, hwnd, _flag):
+        return hwnd
+
+    def GetWindowThreadProcessId(self, hwnd, pid_pointer):
+        pid_pointer._obj.value = self.pids.get(hwnd, 0)
+        return self.threads.get(hwnd, 0)
+
+    def GetForegroundWindow(self):
+        return self.foreground_hwnd
+
+    def ShowWindow(self, hwnd, command):
+        self.calls.append(("restore", hwnd, command))
+        return 1
+
+    def BringWindowToTop(self, hwnd):
+        self.calls.append(("bring", hwnd))
+        return 1
+
+    def SetForegroundWindow(self, hwnd):
+        self.calls.append(("set", hwnd, self.attached))
+        if self.mode == "direct_success":
+            self.foreground_hwnd = hwnd
+            return 1
+        if self.mode in {"attached_success", "detach_failure"} and self.attached:
+            self.foreground_hwnd = hwnd
+            return 1
+        if self.mode == "attached_exception" and self.attached:
+            raise OSError("foreground denied")
+        return 0
+
+    def AttachThreadInput(self, foreground_thread, target_thread, attach):
+        self.calls.append(("attach", foreground_thread, target_thread, bool(attach)))
+        self.attached = bool(attach)
+        if self.mode == "detach_failure" and not attach:
+            return 0
+        return 1
+
+
+def test_win32_foreground_acquisition_direct_success_records_api_telemetry():
+    user32 = _FakeForegroundUser32("direct_success")
+
+    telemetry = capture_tool.acquire_win32_foreground(
+        701,
+        91,
+        user32=user32,
+        timeout_ms=20,
+        poll_interval_ms=10,
+        sleep_fn=lambda _seconds: None,
     )
 
-    assert gate["checks"][failed_check] is False
-    assert gate["passed"] is False
+    assert telemetry["passed"] is True
+    assert telemetry["attempt_count"] == 1
+    assert telemetry["attempts"][0]["phase"] == "direct"
+    assert telemetry["attempts"][0]["hwnd_matches"] is True
+    assert telemetry["attempts"][0]["pid_matches"] is True
+    assert telemetry["thread_input"]["attach_attempted"] is False
+    assert [call[0] for call in user32.calls[:3]] == ["restore", "bring", "set"]
 
 
-def test_scan_list_viewport_gate_requires_all_fixture_rows_without_scroll():
+def test_win32_foreground_acquisition_attaches_then_always_detaches():
+    user32 = _FakeForegroundUser32("attached_success")
+
+    telemetry = capture_tool.acquire_win32_foreground(
+        701,
+        91,
+        user32=user32,
+        timeout_ms=20,
+        poll_interval_ms=10,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert telemetry["passed"] is True
+    assert telemetry["attempt_count"] == 2
+    assert telemetry["attempts"][1]["phase"] == "attached"
+    assert telemetry["thread_input"] == {
+        "foreground_thread_id": 12,
+        "target_thread_id": 11,
+        "attach_attempted": True,
+        "attach_succeeded": True,
+        "attach_error": "",
+        "detach_attempted": True,
+        "detach_succeeded": True,
+        "detach_error": "",
+    }
+    assert user32.calls[-1] == ("attach", 12, 11, False)
+    assert user32.attached is False
+
+
+def test_win32_foreground_denial_detaches_and_focus_gate_fails_fast():
+    user32 = _FakeForegroundUser32("attached_exception")
+    telemetry = capture_tool.acquire_win32_foreground(
+        701,
+        91,
+        user32=user32,
+        timeout_ms=20,
+        poll_interval_ms=10,
+        sleep_fn=lambda _seconds: None,
+    )
+    gate = build_capture_focus_gate(
+        **_passing_focus_gate_kwargs(),
+        acquisition=telemetry,
+    )
+
+    assert telemetry["passed"] is False
+    assert "SetForegroundWindow" in telemetry["attempts"][-1]["api_errors"]
+    assert telemetry["thread_input"]["detach_attempted"] is True
+    assert telemetry["thread_input"]["detach_succeeded"] is True
+    assert user32.attached is False
+    assert gate["checks"]["foreground_acquisition_passed"] is False
+    with pytest.raises(RuntimeError, match="failed before evidence") as exc_info:
+        capture_tool.require_capture_focus_gate(gate)
+    assert "acquisition_telemetry=" in str(exc_info.value)
+    assert '"detach_attempted":true' in str(exc_info.value)
+
+
+def test_win32_foreground_detach_failure_invalidates_acquisition():
+    user32 = _FakeForegroundUser32("detach_failure")
+
+    telemetry = capture_tool.acquire_win32_foreground(
+        701,
+        91,
+        user32=user32,
+        timeout_ms=20,
+        poll_interval_ms=10,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert telemetry["ownership_acquired"] is True
+    assert telemetry["thread_input"]["detach_attempted"] is True
+    assert telemetry["thread_input"]["detach_succeeded"] is False
+    assert telemetry["thread_input_cleanup_passed"] is False
+    assert telemetry["failure_reason"] == (
+        "foreground input threads were not detached cleanly"
+    )
+    assert telemetry["passed"] is False
+
+
+@pytest.mark.parametrize(
+    ("configured_rows", "viewport_height", "row_bboxes", "required_rows"),
+    [
+        (3, 60, [(2, 2, 80, 16), (2, 22, 80, 16), (2, 42, 80, 16), None, None, None], 3),
+        (5, 100, [(2, 2, 80, 16), (2, 22, 80, 16), (2, 42, 80, 16), (2, 62, 80, 16), (2, 82, 80, 16), None], 5),
+        (8, 120, [(2, 2, 80, 16), (2, 22, 80, 16), (2, 42, 80, 16), (2, 62, 80, 16), (2, 82, 80, 16), (2, 102, 80, 16)], 6),
+    ],
+)
+def test_scan_list_viewport_gate_requires_responsive_recent_rows(
+    configured_rows,
+    viewport_height,
+    row_bboxes,
+    required_rows,
+):
     gate = build_scan_list_viewport_gate(
-        expected_row_count=2,
-        viewport_size=(100, 60),
-        row_bboxes=[(2, 2, 80, 18), (2, 22, 80, 18)],
+        expected_row_count=6,
+        configured_visible_rows=configured_rows,
+        viewport_size=(100, viewport_height),
+        row_bboxes=row_bboxes,
         see_zero_applied=True,
     )
 
-    assert gate["checks"]["every_fixture_row_visible"] is True
-    assert gate["checks"]["every_fixture_row_horizontally_contained"] is True
-    assert gate["checks"]["every_fixture_row_vertically_contained"] is True
+    assert gate["total_row_count"] == 6
+    assert gate["configured_visible_rows"] == configured_rows
+    assert gate["minimum_recent_row_count"] == 3
+    assert gate["required_visible_row_count"] == required_rows
+    assert gate["visible_recent_row_count"] == required_rows
+    assert gate["fully_contained_recent_row_count"] == required_rows
+    assert gate["checks"]["required_recent_rows_horizontally_contained"] is True
     assert gate["passed"] is True
+
+
+def test_scan_list_viewport_gate_requires_three_even_if_configured_for_two():
+    gate = build_scan_list_viewport_gate(
+        expected_row_count=6,
+        configured_visible_rows=2,
+        viewport_size=(100, 60),
+        row_bboxes=[(2, 2, 80, 16), (2, 22, 80, 16), (2, 42, 80, 16), None, None, None],
+        see_zero_applied=True,
+    )
+
+    assert gate["required_visible_row_count"] == 3
+    assert gate["passed"] is True
+
+
+def test_scan_list_viewport_gate_rejects_clipped_newest_row():
+    gate = build_scan_list_viewport_gate(
+        expected_row_count=6,
+        configured_visible_rows=3,
+        viewport_size=(100, 60),
+        row_bboxes=[(2, 45, 80, 18), (2, 2, 80, 16), (2, 22, 80, 16), None, None, None],
+        see_zero_applied=True,
+    )
+
+    assert gate["checks"]["newest_index_zero_visible"] is True
+    assert gate["checks"]["newest_index_zero_vertically_contained"] is False
+    assert gate["passed"] is False
 
 
 def test_isolated_app_settings_keep_default_contract_and_apply_large_text_scale():
@@ -1036,6 +1202,64 @@ def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
     assert checks["row_signature_exact"] is False
     assert checks["action_signature_exact"] is False
     assert changed[-1]["passed"] is False
+
+
+def test_roundtrip_signature_ignores_stale_geometry_for_unmapped_widgets():
+    first = _roundtrip_capture(1)
+    final = _roundtrip_capture(3)
+    first["ui_geometry"]["widgets"].append(
+        {
+            "name": "hidden_stopwatch",
+            "bbox": [1142, 298, 1393, 299],
+            "size": [251, 1],
+            "requested_size": [97, 52],
+            "mapped": False,
+        }
+    )
+    final["ui_geometry"]["widgets"].append(
+        {
+            "name": "hidden_stopwatch",
+            "bbox": [1142, 355, 1568, 407],
+            "size": [426, 52],
+            "requested_size": [106, 58],
+            "mapped": False,
+        }
+    )
+
+    first_signature = build_roundtrip_signatures(first)
+    final_signature = build_roundtrip_signatures(final)
+
+    assert first_signature["geometry"] == final_signature["geometry"]
+    assert first_signature["geometry"]["widgets"]["hidden_stopwatch"] == {
+        "mapped": False
+    }
+    assert first_signature["geometry_sha256"] == final_signature["geometry_sha256"]
+
+
+def test_roundtrip_signature_still_rejects_unmapped_to_mapped_state_change():
+    first = _roundtrip_capture(1)
+    final = _roundtrip_capture(3)
+    hidden_widget = {
+        "name": "hidden_stopwatch",
+        "bbox": [1142, 298, 1393, 299],
+        "size": [251, 1],
+        "requested_size": [97, 52],
+        "mapped": False,
+    }
+    first["ui_geometry"]["widgets"].append(copy.deepcopy(hidden_widget))
+    final_widget = copy.deepcopy(hidden_widget)
+    final_widget["mapped"] = True
+    final["ui_geometry"]["widgets"].append(final_widget)
+
+    first["roundtrip_signatures"] = build_roundtrip_signatures(first)
+    final["roundtrip_signatures"] = build_roundtrip_signatures(final)
+    captures = [first, _roundtrip_capture(2, size=(1920, 1080)), final]
+    apply_roundtrip_contracts(captures)
+
+    assert captures[-1]["roundtrip_comparison_gate"]["checks"][
+        "geometry_signature_exact"
+    ] is False
+    assert captures[-1]["passed"] is False
 
 
 def test_roundtrip_size_rebuilds_first_ordinal_only(monkeypatch):

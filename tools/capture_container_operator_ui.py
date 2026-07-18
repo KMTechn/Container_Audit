@@ -43,6 +43,10 @@ MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
 PRIMARY_MONITOR_FLAG = 1
+GA_ROOT = 2
+SW_RESTORE = 9
+FOREGROUND_ACQUIRE_TIMEOUT_MS = 1200
+FOREGROUND_POLL_INTERVAL_MS = 40
 ROUNDTRIP_KEY_WIDGET_ATTRS = (
     "paned_window",
     "left_pane",
@@ -573,18 +577,251 @@ def collect_monitor_capture_gate(
     )
 
 
+def _root_hwnd_with_user32(user32: Any, hwnd: int) -> int:
+    return int(user32.GetAncestor(int(hwnd), GA_ROOT) or int(hwnd))
+
+
 def _root_hwnd(hwnd: int) -> int:
     if os.name != "nt":
         return int(hwnd)
-    return int(ctypes.windll.user32.GetAncestor(int(hwnd), 2) or int(hwnd))
+    return _root_hwnd_with_user32(ctypes.windll.user32, hwnd)
+
+
+def _window_thread_pid_with_user32(user32: Any, hwnd: int) -> tuple[int, int]:
+    if not hwnd:
+        return 0, 0
+    pid = ctypes.c_ulong(0)
+    thread_id = user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
+    return int(thread_id or 0), int(pid.value)
 
 
 def _window_pid(hwnd: int) -> int:
     if os.name != "nt" or not hwnd:
         return os.getpid() if hwnd else 0
-    pid = ctypes.c_ulong(0)
-    ctypes.windll.user32.GetWindowThreadProcessId(int(hwnd), ctypes.byref(pid))
-    return int(pid.value)
+    _thread_id, pid = _window_thread_pid_with_user32(
+        ctypes.windll.user32,
+        hwnd,
+    )
+    return pid
+
+
+def _foreground_observation(
+    user32: Any,
+    *,
+    target_hwnd: int,
+    target_pid: int,
+) -> dict[str, Any]:
+    foreground_hwnd = int(user32.GetForegroundWindow() or 0)
+    foreground_root_hwnd = (
+        _root_hwnd_with_user32(user32, foreground_hwnd)
+        if foreground_hwnd
+        else 0
+    )
+    _thread_id, foreground_pid = _window_thread_pid_with_user32(
+        user32,
+        foreground_root_hwnd,
+    )
+    return {
+        "foreground_hwnd": foreground_hwnd,
+        "foreground_root_hwnd": foreground_root_hwnd,
+        "foreground_pid": foreground_pid,
+        "hwnd_matches": foreground_root_hwnd == int(target_hwnd),
+        "pid_matches": foreground_pid == int(target_pid),
+    }
+
+
+def _attempt_foreground_acquisition(
+    user32: Any,
+    *,
+    target_hwnd: int,
+    target_pid: int,
+    phase: str,
+    ordinal: int,
+) -> dict[str, Any]:
+    api_results: dict[str, Any] = {}
+    api_errors: dict[str, str] = {}
+    for name, args in (
+        ("ShowWindow", (int(target_hwnd), SW_RESTORE)),
+        ("BringWindowToTop", (int(target_hwnd),)),
+        ("SetForegroundWindow", (int(target_hwnd),)),
+    ):
+        try:
+            api_results[name] = bool(getattr(user32, name)(*args))
+        except Exception as exc:
+            api_results[name] = False
+            api_errors[name] = f"{type(exc).__name__}: {exc}"
+    observation = _foreground_observation(
+        user32,
+        target_hwnd=target_hwnd,
+        target_pid=target_pid,
+    )
+    return {
+        "ordinal": int(ordinal),
+        "phase": str(phase),
+        "api_results": api_results,
+        "api_errors": api_errors,
+        **observation,
+        "passed": bool(
+            observation["hwnd_matches"] and observation["pid_matches"]
+        ),
+    }
+
+
+def acquire_win32_foreground(
+    target_hwnd: int,
+    target_pid: int,
+    *,
+    user32: Any | None = None,
+    timeout_ms: int = FOREGROUND_ACQUIRE_TIMEOUT_MS,
+    poll_interval_ms: int = FOREGROUND_POLL_INTERVAL_MS,
+    sleep_fn: Any = time.sleep,
+) -> dict[str, Any]:
+    """Acquire foreground ownership and retain enough telemetry to audit it."""
+
+    if user32 is None:
+        if os.name != "nt":
+            return {
+                "gate_applicable": False,
+                "target_hwnd": int(target_hwnd),
+                "target_pid": int(target_pid),
+                "attempt_count": 0,
+                "attempts": [],
+                "thread_input": {
+                    "attach_attempted": False,
+                    "attach_succeeded": False,
+                    "detach_attempted": False,
+                    "detach_succeeded": False,
+                },
+                "ownership_acquired": True,
+                "thread_input_cleanup_passed": True,
+                "failure_reason": "",
+                "passed": True,
+            }
+        user32 = ctypes.windll.user32
+
+    timeout_ms = max(1, int(timeout_ms))
+    poll_interval_ms = max(1, int(poll_interval_ms))
+    attempt_limit = max(2, int(math.ceil(timeout_ms / poll_interval_ms)))
+    started = time.perf_counter()
+    attempts: list[dict[str, Any]] = []
+    thread_input: dict[str, Any] = {
+        "foreground_thread_id": 0,
+        "target_thread_id": 0,
+        "attach_attempted": False,
+        "attach_succeeded": False,
+        "attach_error": "",
+        "detach_attempted": False,
+        "detach_succeeded": False,
+        "detach_error": "",
+    }
+
+    attempts.append(
+        _attempt_foreground_acquisition(
+            user32,
+            target_hwnd=target_hwnd,
+            target_pid=target_pid,
+            phase="direct",
+            ordinal=1,
+        )
+    )
+    if attempts[-1]["passed"] is not True:
+        foreground_hwnd = int(attempts[-1]["foreground_hwnd"] or 0)
+        foreground_thread_id, _foreground_pid = _window_thread_pid_with_user32(
+            user32,
+            foreground_hwnd,
+        )
+        target_thread_id, _target_window_pid = _window_thread_pid_with_user32(
+            user32,
+            target_hwnd,
+        )
+        thread_input.update(
+            {
+                "foreground_thread_id": foreground_thread_id,
+                "target_thread_id": target_thread_id,
+            }
+        )
+        attach_needed = bool(
+            foreground_thread_id
+            and target_thread_id
+            and foreground_thread_id != target_thread_id
+        )
+        if attach_needed:
+            thread_input["attach_attempted"] = True
+            try:
+                thread_input["attach_succeeded"] = bool(
+                    user32.AttachThreadInput(
+                        foreground_thread_id,
+                        target_thread_id,
+                        True,
+                    )
+                )
+            except Exception as exc:
+                thread_input["attach_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            for ordinal in range(2, attempt_limit + 1):
+                attempts.append(
+                    _attempt_foreground_acquisition(
+                        user32,
+                        target_hwnd=target_hwnd,
+                        target_pid=target_pid,
+                        phase="attached" if attach_needed else "poll",
+                        ordinal=ordinal,
+                    )
+                )
+                if attempts[-1]["passed"] is True:
+                    break
+                if ordinal < attempt_limit:
+                    sleep_fn(poll_interval_ms / 1000.0)
+        finally:
+            if attach_needed:
+                thread_input["detach_attempted"] = True
+                try:
+                    thread_input["detach_succeeded"] = bool(
+                        user32.AttachThreadInput(
+                            foreground_thread_id,
+                            target_thread_id,
+                            False,
+                        )
+                    )
+                except Exception as exc:
+                    thread_input["detach_error"] = f"{type(exc).__name__}: {exc}"
+
+    ownership_acquired = bool(attempts and attempts[-1]["passed"] is True)
+    thread_input_cleanup_passed = bool(
+        thread_input["attach_attempted"] is not True
+        or (
+            thread_input["detach_attempted"] is True
+            and thread_input["detach_succeeded"] is True
+        )
+    )
+    passed = bool(ownership_acquired and thread_input_cleanup_passed)
+    duration_ms = int(round((time.perf_counter() - started) * 1000))
+    failure_reason = ""
+    if not ownership_acquired:
+        latest = attempts[-1] if attempts else {}
+        failure_reason = (
+            "foreground ownership not acquired: "
+            f"observed_hwnd={latest.get('foreground_root_hwnd', 0)} "
+            f"observed_pid={latest.get('foreground_pid', 0)}"
+        )
+    elif not thread_input_cleanup_passed:
+        failure_reason = "foreground input threads were not detached cleanly"
+    return {
+        "gate_applicable": True,
+        "target_hwnd": int(target_hwnd),
+        "target_pid": int(target_pid),
+        "timeout_ms": timeout_ms,
+        "poll_interval_ms": poll_interval_ms,
+        "attempt_limit": attempt_limit,
+        "attempt_count": len(attempts),
+        "duration_ms": duration_ms,
+        "attempts": attempts,
+        "thread_input": thread_input,
+        "ownership_acquired": ownership_acquired,
+        "thread_input_cleanup_passed": thread_input_cleanup_passed,
+        "failure_reason": failure_reason,
+        "passed": passed,
+    }
 
 
 def build_capture_focus_gate(
@@ -599,6 +836,7 @@ def build_capture_focus_gate(
     scan_entry_path: str,
     tk_focus_owned_by_root: bool,
     scan_entry_enabled: bool,
+    acquisition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     blocking = state_id in {"duplicate", "operator_review"}
     checks = {
@@ -619,7 +857,11 @@ def build_capture_focus_gate(
             )
         ),
     }
-    return {
+    if acquisition is not None:
+        checks["foreground_acquisition_passed"] = (
+            acquisition.get("passed") is True
+        )
+    gate = {
         "gate_applicable": True,
         "state": state_id,
         "blocking_state": blocking,
@@ -634,6 +876,9 @@ def build_capture_focus_gate(
         "checks": checks,
         "passed": all(checks.values()),
     }
+    if acquisition is not None:
+        gate["acquisition"] = acquisition
+    return gate
 
 
 def _widget_is_owned_by_root(widget: Any, root: Any) -> bool:
@@ -647,7 +892,7 @@ def _widget_is_owned_by_root(widget: Any, root: Any) -> bool:
     return False
 
 
-def settle_capture_focus(app: Any, state_id: str) -> None:
+def settle_capture_focus(app: Any, state_id: str) -> dict[str, Any]:
     """Put keyboard focus in the state-authoritative widget before evidence."""
 
     blocking = state_id in {"duplicate", "operator_review"}
@@ -658,13 +903,22 @@ def settle_capture_focus(app: Any, state_id: str) -> None:
         target.focus_force()
     except Exception as exc:
         raise RuntimeError(f"capture focus setup failed for {state_id}: {exc}") from exc
-    if os.name == "nt":
-        hwnd = _root_hwnd(int(app.root.winfo_id()))
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
     pump_tk(app.root, 120)
+    hwnd = _root_hwnd(int(app.root.winfo_id()))
+    acquisition = acquire_win32_foreground(
+        hwnd,
+        os.getpid(),
+    )
+    pump_tk(app.root, 120)
+    return acquisition
 
 
-def collect_capture_focus_gate(app: Any, state_id: str) -> dict[str, Any]:
+def collect_capture_focus_gate(
+    app: Any,
+    state_id: str,
+    *,
+    acquisition: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     root = app.root
     root_hwnd = _root_hwnd(int(root.winfo_id()))
     foreground_hwnd = (
@@ -688,6 +942,39 @@ def collect_capture_focus_gate(app: Any, state_id: str) -> dict[str, Any]:
         scan_entry_path=str(app.scan_entry),
         tk_focus_owned_by_root=_widget_is_owned_by_root(focus_widget, root),
         scan_entry_enabled=scan_entry_enabled,
+        acquisition=acquisition,
+    )
+
+
+def require_capture_focus_gate(focus_gate: dict[str, Any]) -> None:
+    """Abort before image evidence when foreground/focus ownership is invalid."""
+
+    if focus_gate.get("passed") is True:
+        return
+    checks = focus_gate.get("checks") or {}
+    failed_checks = sorted(
+        str(name) for name, passed in checks.items() if passed is not True
+    )
+    acquisition = focus_gate.get("acquisition") or {}
+    failure_reason = str(acquisition.get("failure_reason") or "")
+    attempts = acquisition.get("attempts") or []
+    acquisition_summary = {
+        "attempt_count": acquisition.get("attempt_count", 0),
+        "last_attempt": attempts[-1] if attempts else None,
+        "thread_input": acquisition.get("thread_input") or {},
+    }
+    raise RuntimeError(
+        "capture focus gate failed before evidence: "
+        f"state={focus_gate.get('state')!r} "
+        f"failed_checks={failed_checks!r} "
+        f"acquisition_failure={failure_reason!r} "
+        "acquisition_telemetry="
+        + json.dumps(
+            acquisition_summary,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     )
 
 
@@ -1380,13 +1667,21 @@ def normalize_capture_scan_rows(app: Any) -> int:
 def build_scan_list_viewport_gate(
     *,
     expected_row_count: int,
+    configured_visible_rows: int,
     viewport_size: tuple[int, int],
     row_bboxes: Sequence[Sequence[int] | None],
     see_zero_applied: bool,
 ) -> dict[str, Any]:
+    total_row_count = max(0, int(expected_row_count))
+    configured_visible_rows = max(0, int(configured_visible_rows))
+    minimum_recent_row_count = min(total_row_count, 3)
+    required_visible_row_count = min(
+        total_row_count,
+        max(minimum_recent_row_count, configured_visible_rows),
+    )
     viewport_width, viewport_height = (int(value) for value in viewport_size)
     rows: list[dict[str, Any]] = []
-    for index in range(expected_row_count):
+    for index in range(total_row_count):
         bbox = row_bboxes[index] if index < len(row_bboxes) else None
         if bbox is None:
             rows.append(
@@ -1394,8 +1689,9 @@ def build_scan_list_viewport_gate(
                     "index": index,
                     "bbox": None,
                     "visible": False,
-                    "horizontally_contained": False,
-                    "vertically_contained": False,
+                    "horizontally_contained": None,
+                    "vertically_contained": None,
+                    "required_recent": index < required_visible_row_count,
                 }
             )
             continue
@@ -1411,22 +1707,56 @@ def build_scan_list_viewport_gate(
                 "vertically_contained": (
                     height > 0 and y >= 0 and y + height <= viewport_height
                 ),
+                "required_recent": index < required_visible_row_count,
             }
         )
+    required_recent_rows = rows[:required_visible_row_count]
+    newest_row = rows[0] if rows else None
+    visible_recent_row_count = sum(
+        row["visible"] is True for row in required_recent_rows
+    )
+    fully_contained_recent_row_count = sum(
+        row["visible"] is True
+        and row["horizontally_contained"] is True
+        and row["vertically_contained"] is True
+        for row in required_recent_rows
+    )
     checks = {
         "see_zero_applied": bool(see_zero_applied),
-        "row_bbox_count_matches_fixture": len(row_bboxes) == expected_row_count,
-        "every_fixture_row_visible": all(row["visible"] for row in rows),
-        "every_fixture_row_horizontally_contained": all(
-            row["horizontally_contained"] for row in rows
+        "newest_index_zero_visible": (
+            newest_row is None or newest_row["visible"] is True
         ),
-        "every_fixture_row_vertically_contained": all(
-            row["vertically_contained"] for row in rows
+        "newest_index_zero_horizontally_contained": (
+            newest_row is None
+            or newest_row["visible"] is not True
+            or newest_row["horizontally_contained"] is True
+        ),
+        "newest_index_zero_vertically_contained": (
+            newest_row is None
+            or newest_row["visible"] is not True
+            or newest_row["vertically_contained"] is True
+        ),
+        "required_recent_rows_visible": all(
+            row["visible"] is True for row in required_recent_rows
+        ),
+        "required_recent_rows_horizontally_contained": all(
+            row["horizontally_contained"] is not False
+            for row in required_recent_rows
+        ),
+        "required_recent_rows_vertically_contained": all(
+            row["vertically_contained"] is not False
+            for row in required_recent_rows
         ),
     }
     return {
         "gate_applicable": True,
-        "expected_row_count": int(expected_row_count),
+        "expected_row_count": total_row_count,
+        "total_row_count": total_row_count,
+        "configured_visible_rows": configured_visible_rows,
+        "minimum_recent_row_count": minimum_recent_row_count,
+        "required_visible_row_count": required_visible_row_count,
+        "visible_recent_row_count": visible_recent_row_count,
+        "fully_contained_recent_row_count": fully_contained_recent_row_count,
         "viewport_size": [viewport_width, viewport_height],
         "rows": rows,
         "checks": checks,
@@ -1449,8 +1779,13 @@ def collect_scan_list_viewport_gate(
         # An empty fixture has no row to reveal; the operation is vacuously applied.
         see_zero_applied = True
     row_bboxes = [listbox.bbox(index) for index in range(expected_row_count)]
+    try:
+        configured_visible_rows = int(listbox.cget("height"))
+    except (TypeError, ValueError, AttributeError):
+        configured_visible_rows = 0
     return build_scan_list_viewport_gate(
         expected_row_count=expected_row_count,
+        configured_visible_rows=configured_visible_rows,
         viewport_size=(int(listbox.winfo_width()), int(listbox.winfo_height())),
         row_bboxes=row_bboxes,
         see_zero_applied=see_zero_applied,
@@ -1843,15 +2178,19 @@ def apply_cross_capture_contracts(captures: Sequence[dict[str, Any]]) -> None:
 
 def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
     geometry = record["ui_geometry"]
-    widget_geometry = {
-        str(widget["name"]): {
-            "bbox": list(widget.get("bbox") or []),
-            "size": list(widget.get("size") or []),
-            "requested_size": list(widget.get("requested_size") or []),
-            "mapped": bool(widget.get("mapped")),
-        }
-        for widget in geometry.get("widgets") or []
-    }
+    widget_geometry: dict[str, dict[str, Any]] = {}
+    for widget in geometry.get("widgets") or []:
+        mapped = bool(widget.get("mapped"))
+        normalized = {"mapped": mapped}
+        if mapped:
+            normalized.update(
+                {
+                    "bbox": list(widget.get("bbox") or []),
+                    "size": list(widget.get("size") or []),
+                    "requested_size": list(widget.get("requested_size") or []),
+                }
+            )
+        widget_geometry[str(widget["name"])] = normalized
     structure = geometry.get("structure") or {}
     geometry_signature = {
         "root_client_size": list(geometry.get("root_client_size") or []),
@@ -2671,8 +3010,13 @@ def run_capture_matrix(
                         else 0
                     ),
                 )
-                settle_capture_focus(app, state_id)
-                focus_gate = collect_capture_focus_gate(app, state_id)
+                focus_acquisition = settle_capture_focus(app, state_id)
+                focus_gate = collect_capture_focus_gate(
+                    app,
+                    state_id,
+                    acquisition=focus_acquisition,
+                )
+                require_capture_focus_gate(focus_gate)
                 monitor_gate = (
                     collect_monitor_capture_gate(app.root, monitor_target, size)
                     if monitor_target is not None
