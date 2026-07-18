@@ -1952,9 +1952,11 @@ class ContainerAudit:
             return
         # The label's own allocation is the only reliable width after the
         # title and acknowledgement columns take their state-dependent space.
-        # Keep a small border/glyph gutter so requested width never exceeds
-        # the live column viewport.
-        wraplength = max(80, label_width - 4)
+        # Keep a border/glyph gutter so requested width never exceeds the live
+        # column viewport.  Tk's requested label width can be a few pixels
+        # wider than wraplength across Windows DPI/font-rendering variants, so
+        # four pixels was not sufficient on the GitHub Windows runner.
+        wraplength = max(80, label_width - 8)
         metrics_key = (generation, label_width, wraplength)
         if metrics_key == getattr(self, "_notice_message_wrap_metrics", None):
             return

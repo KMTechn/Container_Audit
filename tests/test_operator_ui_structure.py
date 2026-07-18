@@ -5,6 +5,7 @@ import inspect
 import re
 import textwrap
 import tkinter.font as tkfont
+from types import SimpleNamespace
 
 import pytest
 
@@ -169,6 +170,28 @@ class FakeRoot(FakeWidget):
 
     def after_idle(self, callback, *args):
         return self.after(0, callback, *args)
+
+
+def _install_deterministic_root_viewport(monkeypatch, root, width: int, height: int):
+    """Keep a real Tk root while isolating profile reads from the host WM.
+
+    GitHub's Windows virtual desktop can clamp an off-screen 2560x1392 root
+    request to its smaller desktop.  Only the two Python size readers used by
+    the application are controlled here; Tcl/Tk widgets, bindings, generated
+    events, and style work continue through the real root.
+    """
+
+    viewport = SimpleNamespace(width=int(width), height=int(height))
+    monkeypatch.setattr(root, "winfo_width", lambda: viewport.width)
+    monkeypatch.setattr(root, "winfo_height", lambda: viewport.height)
+    return viewport
+
+
+def _dispatch_root_viewport(root, viewport, width: int, height: int) -> None:
+    viewport.width = int(width)
+    viewport.height = int(height)
+    root.event_generate("<Configure>", width=width, height=height)
+    root.update()
 
 
 def _factory(kind):
@@ -783,7 +806,7 @@ def test_notice_message_wrap_rejects_stale_generation_and_uses_live_label_width(
     old_label.pixel_width = 488
     app._notice_message_wrap_job = None
     app._apply_notice_message_wraplength(old_generation)
-    assert old_label.options["wraplength"] == 484
+    assert old_label.options["wraplength"] == 480
 
     app._create_center_content(center)
     scheduled_before = len(app.root.after_calls)
@@ -802,7 +825,7 @@ def test_notice_message_wrap_rejects_stale_generation_and_uses_live_label_width(
     assert len(app.root.after_calls) == scheduled_before + 1
     _delay, callback, args = app.root.after_calls[-1]
     callback(*args)
-    assert current_label.options["wraplength"] == 487
+    assert current_label.options["wraplength"] == 483
 
 
 def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
@@ -1070,16 +1093,19 @@ def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_width
         root.destroy()
 
 
-def test_real_root_configure_refreshes_button_styles_compact_wide_compact():
+def test_real_root_configure_refreshes_button_styles_compact_wide_compact(monkeypatch):
     try:
         root = container_audit_module.tk.Tk()
     except container_audit_module.tk.TclError:
         pytest.skip("Tk display is unavailable")
-    root.geometry("2560x1392+10000+10000")
+    root.geometry("900x700+10000+10000")
     try:
         root.attributes("-alpha", 0.0)
         root.tk.call("tk", "scaling", 2.00098)
         root.update()
+        viewport = _install_deterministic_root_viewport(
+            monkeypatch, root, 2560, 1392
+        )
 
         app = ContainerAudit.__new__(ContainerAudit)
         app.root = root
@@ -1089,12 +1115,11 @@ def test_real_root_configure_refreshes_button_styles_compact_wide_compact():
         app._responsive_style_refresh_job = None
         app.apply_scaling()
         root.bind("<Configure>", app._schedule_responsive_style_refresh, add="+")
-
         assert app._responsive_style_signature[-1] == (31, 14)
         compact_snapshots = []
         for width, height in ((1366, 768), (2560, 1392), (1366, 768)):
-            root.geometry(f"{width}x{height}+10000+10000")
-            root.update()
+            _dispatch_root_viewport(root, viewport, width, height)
+            assert app._responsive_style_refresh_job is None
             if width == 1366:
                 assert app._responsive_style_signature[-1] == (12, 7)
                 labels = app._action_button_labels(
@@ -1132,16 +1157,21 @@ def test_real_root_configure_refreshes_button_styles_compact_wide_compact():
         root.destroy()
 
 
-def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_round_trip():
+def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_round_trip(
+    monkeypatch,
+):
     try:
         root = container_audit_module.tk.Tk()
     except container_audit_module.tk.TclError:
         pytest.skip("Tk display is unavailable")
-    root.geometry("2560x1392+10000+10000")
+    root.geometry("900x700+10000+10000")
     try:
         root.attributes("-alpha", 0.0)
         root.tk.call("tk", "scaling", 2.00098)
         root.update()
+        viewport = _install_deterministic_root_viewport(
+            monkeypatch, root, 2560, 1392
+        )
         app = ContainerAudit.__new__(ContainerAudit)
         app.root = root
         app.scale_factor = 1.0
@@ -1151,10 +1181,11 @@ def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_roun
         app._right_widget_generation = 1
         app._right_sidebar_layout_metrics = None
         app.apply_scaling()
+        root.bind("<Configure>", app._schedule_responsive_style_refresh, add="+")
 
         right = container_audit_module.ttk.Frame(root, width=502, height=1310)
-        right.pack()
-        right.pack_propagate(False)
+        right.place(x=0, y=0, width=502, height=1310)
+        right.grid_propagate(False)
         right.grid_columnconfigure(0, weight=1)
         app._right_sidebar_frame = right
         app.date_label = container_audit_module.ttk.Label(right, text="2026-07-19")
@@ -1201,8 +1232,6 @@ def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_roun
             "<Configure>",
             lambda _event: app._apply_right_sidebar_layout(generation=1),
         )
-        root.bind("<Configure>", app._schedule_responsive_style_refresh, add="+")
-
         def snapshot():
             root.update()
             return (
@@ -1218,18 +1247,30 @@ def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_roun
 
         app._apply_right_sidebar_layout(generation=1)
         direct_wide = snapshot()
+        assert (right.winfo_width(), right.winfo_height()) == (502, 1310)
         assert app._get_right_sidebar_layout_metrics(1310)["context_value_font"] == 20
+        assert tkfont.Font(
+            root=root, font=app.last_scan_value_label.cget("font")
+        ).cget("size") == 20
 
-        right.configure(width=302, height=694)
-        root.geometry("1366x768+10000+10000")
-        root.update()
+        right.place_configure(width=302, height=694)
+        _dispatch_root_viewport(root, viewport, 1366, 768)
+        assert app._responsive_style_refresh_job is None
+        assert (right.winfo_width(), right.winfo_height()) == (302, 694)
         assert app._get_right_sidebar_layout_metrics(694)["context_value_font"] == 13
+        assert tkfont.Font(
+            root=root, font=app.last_scan_value_label.cget("font")
+        ).cget("size") == 13
 
-        right.configure(width=502, height=1310)
-        root.geometry("2560x1392+10000+10000")
-        root.update()
+        right.place_configure(width=502, height=1310)
+        _dispatch_root_viewport(root, viewport, 2560, 1392)
         roundtrip_wide = snapshot()
+        assert app._responsive_style_refresh_job is None
+        assert (right.winfo_width(), right.winfo_height()) == (502, 1310)
         assert app._get_right_sidebar_layout_metrics(1310)["context_value_font"] == 20
+        assert tkfont.Font(
+            root=root, font=app.last_scan_value_label.cget("font")
+        ).cget("size") == 20
         assert roundtrip_wide == direct_wide
     finally:
         root.destroy()
@@ -1306,7 +1347,7 @@ def test_notice_message_real_tk_tracks_actual_column_through_blocking_round_trip
                 int(message.cget("wraplength")),
             )
             assert blocked[0] >= blocked[1]
-            assert blocked[2] <= blocked[0] - 4
+            assert blocked[2] <= blocked[0] - 8
             assert message.winfo_x() + message.winfo_width() <= frame.winfo_width()
 
             acknowledge.grid_remove()
