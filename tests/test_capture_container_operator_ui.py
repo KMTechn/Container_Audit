@@ -26,6 +26,7 @@ from tools.capture_container_operator_ui import (
     build_capture_focus_gate,
     build_compact_display_gate,
     build_isolated_data_gate,
+    build_left_sidebar_gate,
     build_monitor_capture_gate,
     build_matrix_roundtrip_parity_signatures,
     build_isolated_app_settings,
@@ -74,7 +75,9 @@ def test_scale_parser_defaults_to_one_and_accepts_supported_boundaries():
 
     assert parser.parse_args([]).scale == 1.0
     assert parser.parse_args([]).monitor_device == ""
+    assert parser.parse_args([]).left_view == "summary"
     assert parser.parse_args(["--scale", "1.4"]).scale == 1.4
+    assert parser.parse_args(["--left-view", "parked"]).left_view == "parked"
     assert parser.parse_args(
         ["--monitor-device", r"\\.\DISPLAY2"]
     ).monitor_device == r"\\.\DISPLAY2"
@@ -376,6 +379,8 @@ def test_focus_verified_capture_rejects_phase_before_file_save(
     ]
 
     class FakeImage:
+        size = (1, 1)
+
         def save(self, *_args, **_kwargs):
             events.append("save")
 
@@ -392,7 +397,7 @@ def test_focus_verified_capture_rejects_phase_before_file_save(
     def fake_capture(_root, *, pump_events=True):
         assert pump_events is False
         events.append("capture")
-        return FakeImage(), "synthetic"
+        return FakeImage(), "ImageGrab(visible-client-bbox)"
 
     def fake_viewport(_app, *, expected_row_count):
         assert expected_row_count == 3
@@ -425,6 +430,11 @@ def test_focus_verified_capture_rejects_phase_before_file_save(
     )
     monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
     monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
+    monkeypatch.setattr(
+        capture_tool,
+        "_client_geometry_snapshot",
+        lambda _root: {"client_rect": [0, 0, 1, 1], "client_size": [1, 1]},
+    )
     output_path = tmp_path / "rejected.png"
     monitor = object()
 
@@ -472,6 +482,8 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     ]
 
     class FakeImage:
+        size = (1, 1)
+
         def save(self, *_args, **_kwargs):
             events.append("save")
 
@@ -490,7 +502,7 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     def fake_capture(_root, *, pump_events=True):
         assert pump_events is False
         events.append("capture")
-        return FakeImage(), "synthetic"
+        return FakeImage(), "ImageGrab(visible-client-bbox)"
 
     def fake_viewport(_app, *, expected_row_count):
         assert expected_row_count == 3
@@ -524,6 +536,11 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     )
     monkeypatch.setattr(capture_tool, "collect_capture_focus_gate", fake_collect)
     monkeypatch.setattr(capture_tool, "capture_tk_client", fake_capture)
+    monkeypatch.setattr(
+        capture_tool,
+        "_client_geometry_snapshot",
+        lambda _root: {"client_rect": [0, 0, 1, 1], "client_size": [1, 1]},
+    )
 
     frame = capture_tool.capture_and_save_focus_verified_tk_client(
         SimpleNamespace(root=object()),
@@ -535,7 +552,7 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     )
 
     assert isinstance(frame["image"], FakeImage)
-    assert frame["source"] == "synthetic"
+    assert frame["source"] == "ImageGrab(visible-client-bbox)"
     assert frame["focus_gate"]["passed"] is True
     assert frame["focus_gate"]["checks"]["pre_capture_gate_passed"] is True
     assert frame["focus_gate"]["checks"]["post_capture_gate_passed"] is True
@@ -544,6 +561,7 @@ def test_focus_verified_capture_saves_only_after_both_observations(monkeypatch, 
     assert frame["ui_geometry"] == {"snapshot": "geometry"}
     assert frame["rendered_state"] == {"snapshot": "rendered"}
     assert frame["tree_heading_fit_gate"] == {"snapshot": "tree_headings"}
+    assert frame["capture_geometry_gate"]["passed"] is True
     assert events == [
         "settle",
         "viewport",
@@ -597,20 +615,53 @@ def test_capture_tk_client_skips_tk_pump_for_focus_guarded_frame(monkeypatch):
     root = SimpleNamespace(
         update_idletasks=lambda: events.append("update_idletasks"),
         update=lambda: events.append("update"),
+        winfo_rootx=lambda: 10,
+        winfo_rooty=lambda: 20,
+        winfo_width=lambda: 1,
+        winfo_height=lambda: 1,
     )
     expected_image = Image.new("RGB", (1, 1), "white")
-    monkeypatch.setattr(capture_tool.os, "name", "nt")
     monkeypatch.setattr(
-        capture_tool,
-        "_capture_client_with_print_window",
-        lambda _root: (expected_image, "synthetic"),
+        capture_tool.ImageGrab,
+        "grab",
+        lambda *, bbox, all_screens: (
+            expected_image
+            if bbox == (10, 20, 11, 21) and all_screens is True
+            else None
+        ),
     )
 
     image, source = capture_tool.capture_tk_client(root, pump_events=False)
 
     assert image is expected_image
-    assert source == "synthetic"
+    assert source == "ImageGrab(visible-client-bbox)"
     assert events == []
+
+
+def test_capture_tk_client_marks_printwindow_as_visible_capture_fallback(monkeypatch):
+    root = SimpleNamespace(
+        winfo_rootx=lambda: 10,
+        winfo_rooty=lambda: 20,
+        winfo_width=lambda: 1,
+        winfo_height=lambda: 1,
+    )
+    expected_image = Image.new("RGB", (1, 1), "white")
+    monkeypatch.setattr(capture_tool.os, "name", "nt")
+    monkeypatch.setattr(
+        capture_tool.ImageGrab,
+        "grab",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("screen unavailable")),
+    )
+    monkeypatch.setattr(
+        capture_tool,
+        "_capture_client_with_print_window",
+        lambda _root: (expected_image, "PrintWindow(test)"),
+    )
+
+    image, source = capture_tool.capture_tk_client(root, pump_events=False)
+
+    assert image is expected_image
+    assert source.startswith("PrintWindow(test); ImageGrab failed:")
 
 
 @pytest.mark.parametrize(
@@ -727,22 +778,28 @@ def test_fixture_contract_preserves_last_normal_scan_across_duplicate_and_review
     recovered = fixtures["recovered"]
 
     assert waiting.tray is None
+    assert waiting.tray_image_visible is False
     assert normal.tray is not None and len(normal.tray.scanned_barcodes) == 3
+    assert normal.tray_image_visible is True
     assert "|" in normal.last_normal_scan and "=" in normal.last_normal_scan
     assert duplicate.tray is not None
+    assert duplicate.tray_image_visible is True
     assert duplicate.tray.scanned_barcodes == normal.tray.scanned_barcodes
     assert duplicate.last_normal_scan == normal.last_normal_scan
     assert duplicate.notice is not None and duplicate.notice.blocking is True
     assert duplicate.last_normal_scan not in duplicate.notice.message
     assert "|" not in duplicate.notice.message and "=" not in duplicate.notice.message
     assert review.tray is not None
+    assert review.tray_image_visible is True
     assert len(review.tray.scanned_barcodes) == review.tray.target_count
     assert review.completion is not None
     assert review.completion.outcome == "OPERATOR_REVIEW"
     assert review.last_normal_scan == review.tray.scanned_barcodes[-1]
     assert completed.tray is None
+    assert completed.tray_image_visible is False
     assert completed.completion is not None and completed.completion.outcome == "ACKED"
     assert recovered.tray is not None and recovered.tray.restored is True
+    assert recovered.tray_image_visible is True
     assert recovered.notice is not None and recovered.notice.blocking is False
 
 
@@ -1115,6 +1172,33 @@ def test_tray_image_checkbox_checks_requested_size_and_left_pane_containment():
     assert result["suspected"] is True
 
 
+def test_compact_left_switch_and_active_tree_are_critical_geometry():
+    checkbox = SimpleNamespace(winfo_ismapped=lambda: True)
+    switch = SimpleNamespace(winfo_ismapped=lambda: True)
+    summary_frame = SimpleNamespace(winfo_ismapped=lambda: True)
+    parked_frame = SimpleNamespace(winfo_ismapped=lambda: False)
+    summary_tree = SimpleNamespace(winfo_ismapped=lambda: True)
+    parked_tree = SimpleNamespace(winfo_ismapped=lambda: False)
+    specs = capture_tool._left_sidebar_critical_widget_specs(
+        SimpleNamespace(
+            tray_image_checkbox=checkbox,
+            left_context_switch_button=switch,
+            _left_sidebar_view="summary",
+            _summary_tree_frame=summary_frame,
+            _parked_tree_frame=parked_frame,
+            summary_tree=summary_tree,
+            parked_tree=parked_tree,
+        )
+    )
+
+    assert specs == {
+        "tray_image_checkbox": (checkbox, True, True),
+        "left_context_switch": (switch, True, True),
+        "left_active_tree_frame": (summary_frame, False, False),
+        "left_active_tree": (summary_tree, False, False),
+    }
+
+
 class _HeadingGateTk:
     def __init__(self, image_widths=None):
         self.image_widths = dict(image_widths or {})
@@ -1138,7 +1222,8 @@ class _HeadingGateFont:
         self.measures = dict(measures)
 
     def measure(self, text):
-        return self.measures[str(text)]
+        value = str(text)
+        return self.measures.get(value, max(1, len(value)) * 8)
 
     @staticmethod
     def actual():
@@ -1150,10 +1235,19 @@ class _HeadingGateFont:
 
 
 class _HeadingGateStyle:
-    @staticmethod
-    def lookup(style_name, option):
-        assert style_name == "Treeview.Heading"
-        return {"font": "capture-heading-font", "padding": "3"}[option]
+    def __init__(self, row_height=46):
+        self.row_height = row_height
+
+    def lookup(self, style_name, option):
+        if style_name == "Treeview.Heading":
+            return {"font": "capture-heading-font", "padding": "3"}[option]
+        if style_name == "Treeview":
+            return {
+                "font": "capture-body-font",
+                "padding": "3",
+                "rowheight": str(self.row_height),
+            }[option]
+        raise AssertionError((style_name, option))
 
 
 class _HeadingGateScrollbar:
@@ -1208,6 +1302,10 @@ class _HeadingGateTree:
         widget_width,
         images=None,
         mapped=True,
+        widget_height=100,
+        row_count=1,
+        row_height=46,
+        data_rows=None,
     ):
         self.tk = tk
         self._columns = tuple(f"c{index}" for index in range(1, len(texts) + 1))
@@ -1215,6 +1313,13 @@ class _HeadingGateTree:
         self._widths = dict(zip(self._columns, configured_widths))
         self._images = dict(zip(self._columns, images or ("",) * len(texts)))
         self._widget_width = widget_width
+        self._widget_height = widget_height
+        self._row_count = row_count
+        self._row_height = row_height
+        self._data_rows = list(
+            data_rows
+            or [tuple(f"v{column}" for column in range(1, len(texts) + 1))]
+        )
         self._mapped = mapped
         self._pixels = {}
         x = 2
@@ -1246,9 +1351,8 @@ class _HeadingGateTree:
     def winfo_width(self):
         return self._widget_width
 
-    @staticmethod
-    def winfo_height():
-        return 48
+    def winfo_height(self):
+        return self._widget_height
 
     @staticmethod
     def winfo_x():
@@ -1261,6 +1365,21 @@ class _HeadingGateTree:
 
     def identify_column(self, x):
         return self._pixels.get(x, ("nothing", ""))[1]
+
+    def get_children(self):
+        return tuple(f"row-{index}" for index in range(self._row_count))
+
+    def bbox(self, _item, column_id=None):
+        if column_id is None:
+            return (0, 50, self._widget_width, self._row_height)
+        index = self._columns.index(column_id)
+        left = sum(self._widths[column] for column in self._columns[:index])
+        return (left, 50, self._widths[column_id], self._row_height)
+
+    def item(self, item_id, option):
+        assert option == "values"
+        index = int(str(item_id).split("-")[-1])
+        return self._data_rows[index % len(self._data_rows)]
 
     def heading(self, column_id):
         return {"text": self._texts[column_id], "image": self._images[column_id]}
@@ -1282,10 +1401,22 @@ def _heading_gate_app(
     image_widths=None,
     summary_mapped=True,
     parked_mapped=True,
-    left_pane_height=900,
+    switch_mapped=True,
+    active_view="summary",
+    tree_height=100,
+    summary_row_count=1,
+    parked_row_count=1,
+    left_pane_height=1200,
     scale_factor=1.0,
+    row_height=46,
+    rendered_row_height=None,
+    summary_data_rows=None,
+    parked_data_rows=None,
 ):
     tk = _HeadingGateTk(image_widths)
+    actual_row_height = (
+        row_height if rendered_row_height is None else rendered_row_height
+    )
     summary = _HeadingGateTree(
         tk=tk,
         texts=("품목", "코드", "완료 수량"),
@@ -1294,6 +1425,10 @@ def _heading_gate_app(
         widget_width=summary_widget_width,
         images=summary_images,
         mapped=summary_mapped,
+        widget_height=tree_height,
+        row_count=summary_row_count,
+        row_height=actual_row_height,
+        data_rows=summary_data_rows,
     )
     parked = _HeadingGateTree(
         tk=tk,
@@ -1302,14 +1437,22 @@ def _heading_gate_app(
         visible_heading_widths=(130, 145),
         widget_width=320,
         mapped=parked_mapped,
+        widget_height=tree_height,
+        row_count=parked_row_count,
+        row_height=actual_row_height,
+        data_rows=parked_data_rows,
     )
     return SimpleNamespace(
         root=SimpleNamespace(tk=tk),
-        style=_HeadingGateStyle(),
+        style=_HeadingGateStyle(row_height),
         scale_factor=scale_factor,
         left_pane=SimpleNamespace(winfo_height=lambda: left_pane_height),
         summary_tree=summary,
         parked_tree=parked,
+        _left_sidebar_view=active_view,
+        left_context_switch_button=SimpleNamespace(
+            winfo_ismapped=lambda: switch_mapped
+        ),
     )
 
 
@@ -1345,7 +1488,9 @@ def test_tree_heading_fit_gate_uses_live_font_measure_and_visible_heading_span()
     assert count["passed"] is False
     assert clipped["checks"]["all_heading_text_fits"] is False
     assert clipped["passed"] is False
-    assert calls and all(font == "capture-heading-font" for _root, font in calls)
+    assert calls and {
+        font for _root, font in calls
+    } == {"capture-heading-font", "capture-body-font"}
 
     widened = build_tree_heading_fit_gate(
         _heading_gate_app(
@@ -1389,6 +1534,88 @@ def test_tree_heading_fit_gate_reserves_explicit_sort_image_width():
     assert count["passed"] is False
 
 
+def test_tree_heading_fit_gate_rejects_data_text_wider_than_visible_cell():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+        "AAA2270730200": 240,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    gate = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_data_rows=(("캡처 기준 품목", "AAA2270730200", "1"),),
+        ),
+        font_factory=font_factory,
+    )
+
+    item_code = gate["trees"][0]["columns"][1]
+    assert item_code["data_cells"][0]["text"] == "AAA2270730200"
+    assert item_code["data_cells"][0]["passed"] is False
+    assert gate["checks"]["all_data_text_fits"] is False
+    assert gate["passed"] is False
+
+
+def test_tree_heading_fit_gate_rejects_rowheight_smaller_than_body_linespace():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+    gate = build_tree_heading_fit_gate(
+        _heading_gate_app(row_height=39),
+        font_factory=font_factory,
+    )
+
+    summary = gate["trees"][0]
+    assert summary["body_font_metrics"]["linespace"] == 41
+    assert summary["minimum_data_row_height_px"] == 45
+    assert summary["checks"]["first_existing_row_fully_visible"] is True
+    assert summary["checks"]["configured_row_height_fits_data_font"] is False
+    assert summary["checks"]["actual_first_row_height_fits_data_font"] is False
+    assert gate["checks"]["all_data_row_heights_fit_fonts"] is False
+    assert gate["passed"] is False
+
+
+def test_tree_heading_fit_gate_rejects_rendered_row_shorter_than_body_font():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+
+    positive = build_tree_heading_fit_gate(
+        _heading_gate_app(row_height=46, rendered_row_height=46),
+        font_factory=font_factory,
+    )
+    positive_summary = positive["trees"][0]
+    assert positive_summary["first_row_height_px"] == 46
+    assert positive_summary["checks"]["configured_row_height_fits_data_font"] is True
+    assert positive_summary["checks"]["actual_first_row_height_fits_data_font"] is True
+    assert positive["checks"]["all_data_row_heights_fit_fonts"] is True
+    assert positive["passed"] is True
+
+    clipped = build_tree_heading_fit_gate(
+        _heading_gate_app(row_height=46, rendered_row_height=39),
+        font_factory=font_factory,
+    )
+    clipped_summary = clipped["trees"][0]
+    assert clipped_summary["configured_row_height_px"] == 46
+    assert clipped_summary["first_row_height_px"] == 39
+    assert clipped_summary["checks"]["configured_row_height_fits_data_font"] is True
+    assert clipped_summary["checks"]["actual_first_row_height_fits_data_font"] is False
+    assert clipped["checks"]["all_data_row_heights_fit_fonts"] is False
+    assert clipped["passed"] is False
+
+
 def test_tree_heading_fit_gate_rejects_columns_extending_into_outer_viewport():
     measures = {
         "품목": 40,
@@ -1416,7 +1643,7 @@ def test_tree_heading_fit_gate_rejects_columns_extending_into_outer_viewport():
     assert gate["passed"] is False
 
 
-def test_tree_heading_fit_gate_allows_only_explicit_compact_optional_unmapped_trees():
+def test_tree_heading_fit_gate_requires_active_compact_tree_and_hidden_tree_affordance():
     measures = {
         "품목": 40,
         "코드": 40,
@@ -1427,7 +1654,7 @@ def test_tree_heading_fit_gate_allows_only_explicit_compact_optional_unmapped_tr
     font_factory, _calls = _heading_font_factory(measures)
     gate = build_tree_heading_fit_gate(
         _heading_gate_app(
-            summary_mapped=False,
+            summary_mapped=True,
             parked_mapped=False,
             left_pane_height=694,
             scale_factor=1.4,
@@ -1440,8 +1667,11 @@ def test_tree_heading_fit_gate_allows_only_explicit_compact_optional_unmapped_tr
     )
     assert gate["visibility_policy"]["visibility_required"] is False
     assert gate["checks"]["required_trees_mapped"] is True
+    assert gate["checks"]["compact_has_active_tree"] is True
     assert all(tree["visibility_required"] is False for tree in gate["trees"])
-    assert all(tree["measurement_applicable"] is False for tree in gate["trees"])
+    assert gate["trees"][0]["measurement_applicable"] is True
+    assert gate["trees"][1]["measurement_applicable"] is False
+    assert gate["trees"][1]["fallback_affordance_mapped"] is True
     assert gate["passed"] is True
 
     mapped_but_clipped = build_tree_heading_fit_gate(
@@ -1458,6 +1688,63 @@ def test_tree_heading_fit_gate_allows_only_explicit_compact_optional_unmapped_tr
     assert mapped_but_clipped["checks"]["all_heading_text_fits"] is False
     assert mapped_but_clipped["passed"] is False
 
+    blank_content = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=False,
+            parked_mapped=False,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert blank_content["checks"]["required_trees_mapped"] is True
+    assert blank_content["checks"]["compact_has_active_tree"] is False
+    assert blank_content["passed"] is False
+
+    parked_unreachable = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=True,
+            parked_mapped=False,
+            switch_mapped=False,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert parked_unreachable["trees"][1]["mapped_or_compact_reachable"] is False
+    assert parked_unreachable["checks"]["required_trees_mapped"] is False
+    assert parked_unreachable["passed"] is False
+
+    parked_view = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=False,
+            parked_mapped=True,
+            active_view="parked",
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert parked_view["checks"]["compact_active_tree_matches_view"] is True
+    assert parked_view["checks"]["all_active_tree_rows_visible"] is True
+    assert parked_view["passed"] is True
+
+    header_only = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=True,
+            parked_mapped=False,
+            tree_height=80,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert header_only["trees"][0]["checks"][
+        "one_body_row_visible_below_heading"
+    ] is False
+    assert header_only["checks"]["all_active_tree_rows_visible"] is False
+    assert header_only["passed"] is False
+
 
 def test_tree_heading_fit_gate_fails_closed_when_required_tree_is_unmapped():
     measures = {
@@ -1472,7 +1759,7 @@ def test_tree_heading_fit_gate_fails_closed_when_required_tree_is_unmapped():
         _heading_gate_app(
             summary_mapped=False,
             parked_mapped=True,
-            left_pane_height=620,
+            left_pane_height=capture_tool.TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT,
             scale_factor=1.0,
         ),
         font_factory=font_factory,
@@ -1482,6 +1769,104 @@ def test_tree_heading_fit_gate_fails_closed_when_required_tree_is_unmapped():
     assert gate["trees"][0]["checks"]["mapped_when_required"] is False
     assert gate["checks"]["required_trees_mapped"] is False
     assert gate["passed"] is False
+
+
+def test_tree_heading_fit_gate_requires_a_real_row_in_each_active_view():
+    measures = {
+        "품목": 40,
+        "코드": 40,
+        "완료 수량": 60,
+        "품목명": 60,
+        "스캔 수량": 80,
+    }
+    font_factory, _calls = _heading_font_factory(measures)
+
+    empty_summary = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=True,
+            parked_mapped=False,
+            active_view="summary",
+            summary_row_count=0,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert empty_summary["checks"]["active_tree_has_data_row"] is False
+    assert empty_summary["checks"]["all_mapped_trees_have_data_row"] is False
+    assert empty_summary["passed"] is False
+
+    empty_parked = build_tree_heading_fit_gate(
+        _heading_gate_app(
+            summary_mapped=False,
+            parked_mapped=True,
+            active_view="parked",
+            parked_row_count=0,
+            left_pane_height=694,
+            scale_factor=1.4,
+        ),
+        font_factory=font_factory,
+    )
+    assert empty_parked["checks"]["active_tree_has_data_row"] is False
+    assert empty_parked["checks"]["parked_view_has_recovery_row"] is False
+    assert empty_parked["passed"] is False
+
+
+def test_left_sidebar_gate_binds_switch_text_counts_and_tree_mapping():
+    compact_summary = {
+        "view": "summary",
+        "compact": True,
+        "switch_text": "보류 1건 보기",
+        "switch_mapped": True,
+        "summary_tree_mapped": True,
+        "parked_tree_mapped": False,
+        "summary_count": 1,
+        "parked_count": 1,
+        "tray_image_requested": False,
+        "tray_image_has_bitmap": False,
+    }
+    assert build_left_sidebar_gate(
+        compact_summary,
+        requested_view="summary",
+        compact_expected=True,
+    )["passed"] is True
+
+    wrong_label = dict(compact_summary, switch_text="보류 0건 보기")
+    gate = build_left_sidebar_gate(
+        wrong_label,
+        requested_view="summary",
+        compact_expected=True,
+    )
+    assert gate["checks"]["switch_text_exact"] is False
+    assert gate["passed"] is False
+
+    missing_bitmap = dict(
+        compact_summary,
+        tray_image_requested=True,
+        tray_image_has_bitmap=False,
+    )
+    gate = build_left_sidebar_gate(
+        missing_bitmap,
+        requested_view="summary",
+        compact_expected=True,
+        tray_image_expected=True,
+    )
+    assert gate["checks"]["tray_image_request_exact"] is True
+    assert gate["checks"]["tray_image_bitmap_exact"] is False
+    assert gate["passed"] is False
+
+    compact_parked = dict(
+        compact_summary,
+        view="parked",
+        switch_text="현재·기록 보기",
+        summary_tree_mapped=False,
+        parked_tree_mapped=True,
+    )
+    assert build_left_sidebar_gate(
+        compact_parked,
+        requested_view="parked",
+        compact_expected=True,
+    )["passed"] is True
 
 
 def test_button_row_clustering_preserves_approved_visual_order():
@@ -1714,6 +2099,55 @@ def test_capture_evaluation_schema_v3_requires_and_enforces_tree_heading_fit_gat
     ]
 
     record["tree_heading_fit_gate"] = _passing_capture_gate()
+    assert evaluate_capture(record) == []
+
+
+def test_capture_evaluation_schema_v4_requires_left_sidebar_gate():
+    barcodes = ["PRODUCT-001"]
+    rows = [format_scan_list_row(1, barcodes[0], item_code="PRODUCT")]
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+    record["capture_gate_schema_version"] = 4
+    record["focus_gate"] = _passing_capture_gate()
+    record["scan_list_viewport_gate"] = _passing_capture_gate()
+    record["compact_display_gate"] = _passing_capture_gate()
+    record["tree_heading_fit_gate"] = _passing_capture_gate()
+
+    assert evaluate_capture(record) == ["left_sidebar_gate_missing"]
+
+    record["left_sidebar_gate"] = _passing_capture_gate()
+    assert evaluate_capture(record) == []
+
+
+def test_capture_evaluation_schema_v5_requires_visible_capture_geometry_gate():
+    barcodes = ["PRODUCT-001"]
+    rows = [format_scan_list_row(1, barcodes[0], item_code="PRODUCT")]
+    record = _scan_row_evaluation_record("normal", barcodes, rows)
+    record["capture_gate_schema_version"] = 5
+    for gate_name in (
+        "focus_gate",
+        "scan_list_viewport_gate",
+        "compact_display_gate",
+        "tree_heading_fit_gate",
+        "left_sidebar_gate",
+    ):
+        record[gate_name] = _passing_capture_gate()
+
+    assert evaluate_capture(record) == ["capture_geometry_gate_missing"]
+
+    record["capture_geometry_gate"] = {
+        "gate_applicable": True,
+        "checks": {
+            "client_geometry_stable_during_capture": True,
+            "captured_pixels_match_client_size": True,
+            "visible_screen_capture_used": False,
+        },
+        "passed": False,
+    }
+    assert evaluate_capture(record) == [
+        "capture_geometry_gate_visible_screen_capture_used"
+    ]
+
+    record["capture_geometry_gate"] = _passing_capture_gate()
     assert evaluate_capture(record) == []
 
 
@@ -2026,6 +2460,18 @@ def _roundtrip_capture(ordinal, *, size=(1366, 768)):
                 "average": "00:20",
                 "best": "00:18",
             },
+            "left_sidebar": {
+                "view": "summary",
+                "compact": True,
+                "switch_text": "보류 1건 보기",
+                "switch_mapped": True,
+                "summary_tree_mapped": True,
+                "parked_tree_mapped": False,
+                "summary_count": 1,
+                "parked_count": 1,
+                "tray_image_requested": True,
+                "tray_image_has_bitmap": True,
+            },
             "action_buttons": {
                 "undo": {"text": "취소", "state": "normal"},
                 "park": {"text": "보류", "state": "normal"},
@@ -2084,6 +2530,7 @@ def test_matrix_roundtrip_parity_rejects_geometry_requested_text_and_action_drif
     drifted["ui_geometry"]["widgets"][0]["size"][0] += 1
     drifted["ui_geometry"]["widgets"][0]["requested_size"][0] += 1
     drifted["rendered_state"]["next_action"] = "다른 다음 행동"
+    drifted["rendered_state"]["left_sidebar"]["switch_text"] = "보류 0건 보기"
     drifted["rendered_state"]["action_buttons"]["park"]["text"] = "트레이 보류"
 
     apply_matrix_roundtrip_parity_contracts([matrix, drifted])
@@ -2170,6 +2617,7 @@ def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
     changed[-1]["ui_geometry"]["widgets"][0]["bbox"][2] += 1
     changed[-1]["rendered_state"]["scan_list_rows"].append("(2) ITEM · SN 0002")
     changed[-1]["rendered_state"]["action_buttons"]["park"]["text"] = "트레이 보류"
+    changed[-1]["rendered_state"]["left_sidebar"]["switch_text"] = "보류 0건 보기"
     changed[-1]["roundtrip_signatures"] = build_roundtrip_signatures(changed[-1])
     changed[-1]["issues"] = []
     apply_roundtrip_contracts(changed)
@@ -2178,6 +2626,7 @@ def test_roundtrip_contract_requires_exact_compact_geometry_rows_and_actions():
     assert checks["geometry_signature_exact"] is False
     assert checks["row_signature_exact"] is False
     assert checks["action_signature_exact"] is False
+    assert checks["left_sidebar_signature_exact"] is False
     assert changed[-1]["passed"] is False
 
 

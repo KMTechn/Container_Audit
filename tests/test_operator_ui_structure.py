@@ -11,6 +11,7 @@ import pytest
 
 import Container_Audit as container_audit_module
 from Container_Audit import ContainerAudit, TraySession
+from tools.capture_container_operator_ui import build_tree_heading_fit_gate
 from warning_presenter import (
     CompletionOutcome,
     CompletionOutcomeSnapshot,
@@ -265,6 +266,9 @@ def test_compact_worker_header_gives_name_and_button_full_width(monkeypatch):
     app.worker_name = "캡처 작업자"
     app.show_tray_image_var = HiddenTrayImage()
     left = FakeWidget(kind="LeftPane")
+    left.pixel_height = int(
+        container_audit_module.LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT + 20
+    )
 
     app._create_left_sidebar_content(left)
 
@@ -319,6 +323,159 @@ def test_large_text_left_tray_image_label_round_trips_without_clipping(monkeypat
     left.pixel_width = 322
     app._apply_left_sidebar_layout()
     assert app.tray_image_checkbox.options["text"] == "트레이 이미지"
+
+
+@pytest.mark.parametrize("pane_height", [694, 826])
+def test_large_text_compact_left_sidebar_keeps_recovery_reachable(monkeypatch, pane_height):
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(container_audit_module.tk, name, _factory(f"tk.{name}"))
+    for name in (
+        "Frame",
+        "Label",
+        "Button",
+        "Treeview",
+        "Scrollbar",
+        "Checkbutton",
+    ):
+        monkeypatch.setattr(container_audit_module.ttk, name, _factory(f"ttk.{name}"))
+
+    class HiddenTrayImage:
+        @staticmethod
+        def get():
+            return False
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = FakeRoot()
+    app.scale_factor = 1.4
+    app.worker_name = "캡처 작업자"
+    app.show_tray_image_var = HiddenTrayImage()
+    left = FakeWidget(kind="LeftPane")
+    left.pixel_width = 322
+    left.pixel_height = pane_height
+
+    app._create_left_sidebar_content(left)
+
+    assert app._left_sidebar_compact is True
+    assert app._left_view_switch_frame.winfo_ismapped() is True
+    assert app.left_context_switch_button.winfo_ismapped() is True
+    assert app.left_context_switch_button.options["text"] == "보류 0건 보기"
+    assert app._summary_tree_frame.winfo_ismapped() is True
+    assert app._parked_tree_frame.winfo_ismapped() is False
+
+    app._show_left_sidebar_view("parked")
+
+    assert app._left_sidebar_view == "parked"
+    assert app._summary_tree_frame.winfo_ismapped() is False
+    assert app._parked_tree_frame.winfo_ismapped() is True
+    assert app.left_context_switch_button.options["text"] == "현재·기록 보기"
+
+
+def test_left_sidebar_compact_wide_compact_round_trip_preserves_view_and_trees(monkeypatch):
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(container_audit_module.tk, name, _factory(f"tk.{name}"))
+    for name in (
+        "Frame",
+        "Label",
+        "Button",
+        "Treeview",
+        "Scrollbar",
+        "Checkbutton",
+    ):
+        monkeypatch.setattr(container_audit_module.ttk, name, _factory(f"ttk.{name}"))
+
+    class HiddenTrayImage:
+        @staticmethod
+        def get():
+            return False
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = FakeRoot()
+    app.scale_factor = 1.4
+    app.worker_name = "캡처 작업자"
+    app.show_tray_image_var = HiddenTrayImage()
+    left = FakeWidget(kind="LeftPane")
+    left.pixel_width = 322
+    left.pixel_height = 694
+    app._create_left_sidebar_content(left)
+    summary_tree_id = id(app.summary_tree)
+    parked_tree_id = id(app.parked_tree)
+    app._show_left_sidebar_view("parked")
+
+    left.pixel_height = int(
+        (container_audit_module.LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT + 20)
+        * app.scale_factor
+    )
+    app._apply_left_sidebar_layout()
+
+    assert app._left_sidebar_compact is False
+    assert app._left_view_switch_frame.winfo_ismapped() is False
+    assert app._summary_tree_frame.winfo_ismapped() is True
+    assert app._parked_tree_frame.winfo_ismapped() is True
+    assert app._left_top_frame.grid_rows[3]["weight"] == 2
+    assert app._left_top_frame.grid_rows[5]["weight"] == 1
+
+    left.pixel_height = 694
+    app._apply_left_sidebar_layout()
+
+    assert app._left_sidebar_compact is True
+    assert app._left_sidebar_view == "parked"
+    assert app._summary_tree_frame.winfo_ismapped() is False
+    assert app._parked_tree_frame.winfo_ismapped() is True
+    assert app._left_top_frame.grid_rows[3]["weight"] == 1
+    assert app._left_top_frame.grid_rows[5]["weight"] == 0
+    assert id(app.summary_tree) == summary_tree_id
+    assert id(app.parked_tree) == parked_tree_id
+
+
+def test_left_sidebar_capture_threshold_matches_runtime_contract():
+    from tools.capture_container_operator_ui import (
+        TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT,
+    )
+
+    assert (
+        TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT
+        == container_audit_module.LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT
+    )
+
+
+def test_left_sidebar_rebuild_keeps_selected_view_and_switch_target_in_sync(monkeypatch):
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(container_audit_module.tk, name, _factory(f"tk.{name}"))
+    for name in (
+        "Frame",
+        "Label",
+        "Button",
+        "Treeview",
+        "Scrollbar",
+        "Checkbutton",
+    ):
+        monkeypatch.setattr(container_audit_module.ttk, name, _factory(f"ttk.{name}"))
+
+    class HiddenTrayImage:
+        @staticmethod
+        def get():
+            return False
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = FakeRoot()
+    app.scale_factor = 1.4
+    app.worker_name = "캡처 작업자"
+    app.show_tray_image_var = HiddenTrayImage()
+    first_left = FakeWidget(kind="LeftPane")
+    first_left.pixel_width = 322
+    first_left.pixel_height = 694
+    app._create_left_sidebar_content(first_left)
+    app._show_left_sidebar_view("parked")
+
+    rebuilt_left = FakeWidget(kind="LeftPane")
+    rebuilt_left.pixel_width = 322
+    rebuilt_left.pixel_height = 694
+    app._create_left_sidebar_content(rebuilt_left)
+
+    assert app._left_sidebar_view == "parked"
+    assert app._summary_tree_frame.winfo_ismapped() is False
+    assert app._parked_tree_frame.winfo_ismapped() is True
+    assert app.left_context_switch_button.options["text"] == "현재·기록 보기"
 
 
 def test_center_has_the_only_full_scan_history_and_right_has_no_history_table(operator_view):
@@ -843,11 +1000,11 @@ def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
     app._adjust_summary_tree_columns()
     app._adjust_parked_tree_columns()
 
-    assert app.summary_tree.heading_options["item_name_spec"]["text"] == "품목"
-    assert app.summary_tree.heading_options["item_code"]["text"] == "코드"
-    assert app.summary_tree.heading_options["count"]["text"] == "완료"
+    assert app.summary_tree.options["displaycolumns"] == ("item_code", "count")
+    assert app.summary_tree.heading_options["item_code"]["text"] == "품목 코드"
+    assert app.summary_tree.heading_options["count"]["text"] == "건"
     assert app.parked_tree.heading_options["item_name"]["text"] == "품목"
-    assert app.parked_tree.heading_options["scan_count"]["text"] == "수량"
+    assert app.parked_tree.heading_options["scan_count"]["text"] == "건"
 
     summary_parent.pixel_width = 800
     parked_parent.pixel_width = 600
@@ -869,12 +1026,12 @@ def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
     app._adjust_summary_tree_columns()
     app._adjust_parked_tree_columns()
 
-    assert app.summary_tree.heading_options["item_name_spec"]["text"] == "품목"
-    assert app.summary_tree.heading_options["item_code"]["text"] == "코드"
-    assert app.summary_tree.heading_options["count"]["text"] == "완료"
+    assert app.summary_tree.options["displaycolumns"] == ("item_code", "count")
+    assert app.summary_tree.heading_options["item_code"]["text"] == "품목 코드"
+    assert app.summary_tree.heading_options["count"]["text"] == "건"
     assert sum(
         app.summary_tree.column_options[column]["width"]
-        for column in ("item_name_spec", "item_code", "count")
+        for column in ("item_code", "count")
     ) <= app.summary_tree.pixel_width - 4
     assert sum(
         app.parked_tree.column_options[column]["width"]
@@ -885,9 +1042,10 @@ def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
     app.summary_tree.pixel_width = 236
     app._adjust_summary_tree_columns()
     compact_available_width = app.summary_tree.pixel_width - 4
-    assert app.summary_tree.heading_options["count"]["text"] == "완료"
-    assert app.summary_tree.column_options["count"]["width"] >= int(
-        compact_available_width * 0.30
+    assert app.summary_tree.heading_options["count"]["text"] == "건"
+    assert app.summary_tree.column_options["count"]["width"] >= max(
+        52,
+        int(compact_available_width * 0.20),
     )
 
 
@@ -912,19 +1070,34 @@ def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
                 "Treeview.Heading",
                 font=(ContainerAudit.DEFAULT_FONT, tokens.fonts.body, "bold"),
             )
+            sidebar_font_size = max(11, min(tokens.fonts.caption, 13))
+            style.configure(
+                "Sidebar.Treeview.Heading",
+                font=(ContainerAudit.DEFAULT_FONT, sidebar_font_size, "bold"),
+            )
+            style.configure(
+                "Sidebar.Treeview",
+                font=(ContainerAudit.DEFAULT_FONT, sidebar_font_size),
+            )
             frame = container_audit_module.ttk.Frame(root)
             frame.pack(fill="both", expand=True)
             tree = container_audit_module.ttk.Treeview(
                 frame,
                 columns=("item_name_spec", "item_code", "count"),
                 show="headings",
+                style="Sidebar.Treeview",
             )
-            tree.pack(side="left", fill="both", expand=True)
+            frame.grid_rowconfigure(0, weight=1)
+            frame.grid_columnconfigure(0, weight=1)
+            tree.grid(row=0, column=0, sticky="nsew")
             scrollbar = container_audit_module.ttk.Scrollbar(frame, orient="vertical")
-            scrollbar.pack(side="right", fill="y")
+            scrollbar.grid(row=0, column=1, sticky="ns")
 
             app = ContainerAudit.__new__(ContainerAudit)
             app.scale_factor = scale
+            app._left_sidebar_compact = True
+            app.root = root
+            app.style = style
             app.summary_tree = tree
             tree.bind("<Configure>", app._adjust_summary_tree_columns)
 
@@ -932,16 +1105,22 @@ def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
             compact_root_width = compact_tree_width + scrollbar.winfo_reqwidth()
             snapshots = []
             for width in (compact_root_width, 1200, compact_root_width):
+                app._left_sidebar_compact = width == compact_root_width
                 root.geometry(f"{width}x320+10000+10000")
                 root.update()
                 available_width = tree.winfo_width() - 4
+                displayed_columns = tuple(
+                    tree.cget("displaycolumns")
+                    if tree.cget("displaycolumns") != "#all"
+                    else tree.cget("columns")
+                )
                 column_widths = tuple(
                     int(tree.column(column, "width"))
-                    for column in ("item_name_spec", "item_code", "count")
+                    for column in displayed_columns
                 )
                 headings = tuple(
                     tree.heading(column, "text")
-                    for column in ("item_name_spec", "item_code", "count")
+                    for column in displayed_columns
                 )
                 assert sum(column_widths) <= available_width
                 if width == compact_root_width:
@@ -953,15 +1132,16 @@ def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
                     )
                     visible_count_width = sum(
                         tree.identify_region(x, heading_y) == "heading"
-                        and tree.identify_column(x) == "#3"
+                        and tree.identify_column(x) == "#2"
                         for x in range(tree.winfo_width())
                     )
+                    tree_style = str(tree.cget("style") or "Treeview")
                     heading_font = tkfont.Font(
                         root=root,
-                        font=style.lookup("Treeview.Heading", "font"),
+                        font=style.lookup(f"{tree_style}.Heading", "font"),
                     )
                     padding_parts = root.tk.splitlist(
-                        style.lookup("Treeview.Heading", "padding") or "0"
+                        style.lookup(f"{tree_style}.Heading", "padding") or "0"
                     )
                     horizontal_padding = (
                         2 * root.winfo_pixels(padding_parts[0])
@@ -971,17 +1151,250 @@ def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
                             padding_parts[2 if len(padding_parts) >= 4 else 0]
                         )
                     )
-                    assert heading_font.measure("완료") <= (
+                    assert heading_font.measure("건") <= (
                         visible_count_width - horizontal_padding
                     )
-                snapshots.append((tree.winfo_width(), column_widths, headings))
+                snapshots.append(
+                    (tree.winfo_width(), displayed_columns, column_widths, headings)
+                )
 
             assert snapshots[0] == snapshots[2]
-            assert snapshots[0][2] == ("품목", "코드", "완료")
-            assert snapshots[1][2] == ("품목명", "품목코드", "완료 수량")
+            assert snapshots[0][1] == ("item_code", "count")
+            assert snapshots[0][3] == ("품목 코드", "건")
+            assert snapshots[1][1] == (
+                "item_name_spec",
+                "item_code",
+                "count",
+            )
+            assert snapshots[1][3] == ("품목명", "품목코드", "완료 수량")
             assert snapshots[1][0] > snapshots[0][0]
             frame.destroy()
             root.update()
+    finally:
+        root.destroy()
+
+
+def _assert_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact(
+    root,
+    scale_factor,
+    compact_tree_width,
+):
+    root.geometry("1366x768+10000+10000")
+    try:
+        root.attributes("-alpha", 0.0)
+        root.tk.call("tk", "scaling", 2.00098)
+        root.update()
+
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.root = root
+        app.style = container_audit_module.ttk.Style(root)
+        app.style.theme_use("clam")
+        app.scale_factor = scale_factor
+        app._left_sidebar_compact = True
+        app._left_sidebar_view = "summary"
+        app.left_context_switch_button = SimpleNamespace(
+            winfo_ismapped=lambda: True
+        )
+        app.apply_scaling()
+
+        host = container_audit_module.ttk.Frame(root)
+        host.place(x=0, y=0, width=compact_tree_width + 20, height=160)
+        host.grid_rowconfigure(0, weight=1)
+        host.grid_columnconfigure(0, weight=1)
+        app.left_pane = host
+
+        tree_specs = {
+            "summary": {
+                "columns": ("item_name_spec", "item_code", "count"),
+                "headings": ("품목명", "품목코드", "완료 수량"),
+                "values": ("캡처 기준 품목", "AAA2270730200", "1"),
+            },
+            "parked": {
+                "columns": ("item_name", "scan_count"),
+                "headings": ("품목명", "스캔 수량"),
+                "values": ("캡처 보류 트레이", "1"),
+            },
+        }
+        frames = {}
+        trees = {}
+        scrollbars = {}
+        for view, spec in tree_specs.items():
+            frame = container_audit_module.ttk.Frame(host)
+            frame.grid(row=0, column=0, sticky="nsew")
+            frame.grid_rowconfigure(0, weight=1)
+            frame.grid_columnconfigure(0, weight=1)
+            tree = container_audit_module.ttk.Treeview(
+                frame,
+                columns=spec["columns"],
+                show="headings",
+                style="Sidebar.Treeview",
+            )
+            for column_id, heading in zip(spec["columns"], spec["headings"]):
+                tree.heading(column_id, text=heading)
+                tree.column(column_id, stretch=container_audit_module.tk.NO)
+            tree.insert("", "end", values=spec["values"])
+            tree.grid(row=0, column=0, sticky="nsew")
+            scrollbar = container_audit_module.ttk.Scrollbar(
+                frame,
+                orient="vertical",
+                command=tree.yview,
+            )
+            tree.configure(yscrollcommand=scrollbar.set)
+            scrollbar.grid(row=0, column=1, sticky="ns")
+            frames[view] = frame
+            trees[view] = tree
+            scrollbars[view] = scrollbar
+        frames["parked"].grid_remove()
+        app.summary_tree = trees["summary"]
+        app.parked_tree = trees["parked"]
+        tree_identities = {view: str(tree) for view, tree in trees.items()}
+
+        root.update()
+        scrollbar_width = max(
+            scrollbar.winfo_reqwidth() for scrollbar in scrollbars.values()
+        )
+        snapshots = {"summary": [], "parked": []}
+        viewports = (
+            (True, (1366, 768), compact_tree_width),
+            (False, (2560, 1392), 800),
+            (True, (1366, 768), compact_tree_width),
+        )
+        for compact, (root_width, root_height), tree_width in viewports:
+            root.geometry(f"{root_width}x{root_height}+10000+10000")
+            root.update()
+            app.apply_scaling()
+            app._left_sidebar_compact = compact
+            host.place_configure(
+                width=tree_width + scrollbar_width,
+                height=max(
+                    120,
+                    int(app._left_tree_minimum_one_row_height) + 16,
+                ),
+            )
+
+            for view in ("summary", "parked"):
+                other_view = "parked" if view == "summary" else "summary"
+                frames[other_view].grid_remove()
+                frames[view].grid(row=0, column=0, sticky="nsew")
+                app._left_sidebar_view = view
+                root.update()
+                if view == "summary":
+                    app._adjust_summary_tree_columns()
+                else:
+                    app._adjust_parked_tree_columns()
+                root.update()
+
+                gate = build_tree_heading_fit_gate(app)
+                assert gate["passed"] is True, {
+                    "scale_factor": scale_factor,
+                    "compact": compact,
+                    "view": view,
+                    "gate_checks_failed": [
+                        key for key, passed in gate["checks"].items() if not passed
+                    ],
+                    "tree_checks_failed": {
+                        tree["name"]: [
+                            key
+                            for key, passed in tree.get("checks", {}).items()
+                            if not passed
+                        ]
+                        for tree in gate["trees"]
+                    },
+                    "trees": gate["trees"],
+                }
+                active = next(
+                    tree
+                    for tree in gate["trees"]
+                    if tree["name"] == f"{view}_tree"
+                )
+                assert active["mapped"] is True
+                assert active["style"] == "Sidebar.Treeview"
+                assert active["heading_style"] == "Sidebar.Treeview.Heading"
+                assert active["checks"]["configured_row_height_fits_data_font"] is True
+                assert active["checks"]["actual_first_row_height_fits_data_font"] is True
+                assert active["first_row_height_px"] >= active["minimum_data_row_height_px"]
+                assert active["first_row_bbox"][3] == active["first_row_height_px"]
+
+                data_cells = [
+                    cell
+                    for column in active["columns"]
+                    for cell in column["data_cells"]
+                ]
+                expected_texts = (
+                    {"AAA2270730200", "1"}
+                    if view == "summary" and compact
+                    else set(tree_specs[view]["values"])
+                )
+                assert {cell["text"] for cell in data_cells} == expected_texts
+                assert all(len(cell["cell_bbox"]) == 4 for cell in data_cells)
+                assert all(cell["visible_cell_width_px"] > 0 for cell in data_cells)
+                assert all(cell["fit_slack_px"] >= 0 for cell in data_cells)
+                assert all(cell["passed"] is True for cell in data_cells)
+
+                raw_displayed_columns = trees[view].cget("displaycolumns")
+                displayed_columns = tuple(
+                    trees[view].cget("columns")
+                    if raw_displayed_columns in ("#all", ("#all",))
+                    else raw_displayed_columns
+                )
+                snapshots[view].append(
+                    {
+                        "tree_width": trees[view].winfo_width(),
+                        "displayed_columns": displayed_columns,
+                        "column_widths": tuple(
+                            int(trees[view].column(column_id, "width"))
+                            for column_id in displayed_columns
+                        ),
+                        "headings": tuple(
+                            trees[view].heading(column_id, "text")
+                            for column_id in displayed_columns
+                        ),
+                        "style": active["style"],
+                        "body_font_actual": active["body_font_actual"],
+                        "configured_row_height": active["configured_row_height_px"],
+                        "first_row_bbox": tuple(active["first_row_bbox"]),
+                        "cell_slacks": tuple(
+                            (cell["text"], cell["fit_slack_px"])
+                            for cell in data_cells
+                        ),
+                    }
+                )
+
+        assert snapshots["summary"][0] == snapshots["summary"][2]
+        assert snapshots["parked"][0] == snapshots["parked"][2]
+        assert snapshots["summary"][0]["displayed_columns"] == (
+            "item_code",
+            "count",
+        )
+        assert snapshots["summary"][1]["displayed_columns"] == (
+            "item_name_spec",
+            "item_code",
+            "count",
+        )
+        assert snapshots["parked"][0]["headings"] == ("품목", "건")
+        assert snapshots["parked"][1]["headings"] == ("품목명", "스캔 수량")
+        assert {view: str(tree) for view, tree in trees.items()} == tree_identities
+    finally:
+        for child in root.winfo_children():
+            child.destroy()
+        root.update_idletasks()
+
+
+def test_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact():
+    try:
+        root = container_audit_module.tk.Tk()
+    except container_audit_module.tk.TclError:
+        pytest.skip("Tk display is unavailable")
+    executed_scales = []
+    try:
+        for scale_factor, compact_tree_width in ((1.0, 236), (1.4, 290)):
+            _assert_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact(
+                root,
+                scale_factor,
+                compact_tree_width,
+            )
+            executed_scales.append(scale_factor)
+        assert executed_scales == [1.0, 1.4]
     finally:
         root.destroy()
 

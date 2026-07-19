@@ -42,16 +42,24 @@ DEFAULT_STATE_IDS = (
 MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
+CAPTURE_SUMMARY_ITEM_CODE = "AAA2270730200"
+CAPTURE_SUMMARY_ROW_COUNT = 1
+CAPTURE_PARKED_ROW_COUNT = 1
 PRIMARY_MONITOR_FLAG = 1
 GA_ROOT = 2
 SW_RESTORE = 9
 TREE_HEADING_GATE_WIDGETS = (
-    ("summary_tree", "summary_tree"),
-    ("parked_tree", "parked_tree"),
+    ("summary_tree", "summary_tree", "left_context_switch_button"),
+    ("parked_tree", "parked_tree", "left_context_switch_button"),
 )
 TREE_HEADING_SCAN_HEIGHT = 128
 TREE_HEADING_IMAGE_GAP_PX = 2
-TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT = 620.0
+TREE_DATA_CELL_GUTTER_PX = 8
+TREE_DATA_VERTICAL_PADDING_PX = 4
+# Keep this capture contract aligned with
+# Container_Audit.LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT.  A dual-tree layout is
+# only acceptable when each tree can show a heading and a complete data row.
+TREE_VISIBILITY_REQUIRED_LOGICAL_HEIGHT = 1030.0
 ROUNDTRIP_KEY_WIDGET_ATTRS = (
     "paned_window",
     "left_pane",
@@ -95,6 +103,7 @@ MATRIX_ROUNDTRIP_PARITY_TEXT_FIELDS = (
     "scan_list_rows_neutral",
     "scan_list_header",
     "right_texts",
+    "left_sidebar",
 )
 MATRIX_ROUNDTRIP_SCAN_LAYOUT_FIELDS = (
     "frame_grid",
@@ -150,6 +159,7 @@ class StateFixture:
     notice: NoticeFixture | None = None
     completion: CompletionFixture | None = None
     completed_tray_count: int = 0
+    tray_image_visible: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,6 +243,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             ),
             last_normal_scan=normal_products[-1],
             last_normal_item_code=common["item_code"],
+            tray_image_visible=True,
         ),
         StateFixture(
             state_id="duplicate",
@@ -258,6 +269,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 severity="error",
                 blocking=True,
             ),
+            tray_image_visible=True,
         ),
         StateFixture(
             state_id="operator_review",
@@ -277,6 +289,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 ),
                 error_code="CAPTURE_REVIEW",
             ),
+            tray_image_visible=True,
         ),
         StateFixture(
             state_id="completed",
@@ -309,6 +322,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 severity="success",
                 blocking=False,
             ),
+            tray_image_visible=True,
         ),
     )
 
@@ -1140,25 +1154,35 @@ def capture_tk_client(
     if pump_events:
         root.update_idletasks()
         root.update()
-    if os.name == "nt":
-        try:
-            return _capture_client_with_print_window(root)
-        except Exception as exc:
-            fallback_reason = f"PrintWindow failed: {type(exc).__name__}: {exc}"
-        else:  # pragma: no cover - kept for static flow clarity
-            fallback_reason = ""
-    else:
-        fallback_reason = "PrintWindow unavailable"
-
     left = int(root.winfo_rootx())
     top = int(root.winfo_rooty())
     width = max(1, int(root.winfo_width()))
     height = max(1, int(root.winfo_height()))
-    image = ImageGrab.grab(
-        bbox=(left, top, left + width, top + height),
-        all_screens=True,
-    )
-    return image, f"ImageGrab(client-bbox); {fallback_reason}"
+    try:
+        image = ImageGrab.grab(
+            bbox=(left, top, left + width, top + height),
+            all_screens=True,
+        )
+        return image, "ImageGrab(visible-client-bbox)"
+    except Exception as exc:
+        visible_capture_failure = (
+            f"ImageGrab failed: {type(exc).__name__}: {exc}"
+        )
+    if os.name == "nt":
+        image, print_window_source = _capture_client_with_print_window(root)
+        return image, f"{print_window_source}; {visible_capture_failure}"
+    raise RuntimeError(visible_capture_failure)
+
+
+def _client_geometry_snapshot(root: Any) -> dict[str, Any]:
+    left = int(root.winfo_rootx())
+    top = int(root.winfo_rooty())
+    width = max(1, int(root.winfo_width()))
+    height = max(1, int(root.winfo_height()))
+    return {
+        "client_rect": [left, top, left + width, top + height],
+        "client_size": [width, height],
+    }
 
 
 def capture_and_save_focus_verified_tk_client(
@@ -1198,11 +1222,31 @@ def capture_and_save_focus_verified_tk_client(
         acquisition=acquisition,
     )
     require_capture_focus_gate(pre_capture_gate, phase="pre_capture")
+    pre_capture_geometry = _client_geometry_snapshot(app.root)
 
     # Metadata collection above performed any final Tk pump needed for the
     # viewport. Do not dispatch more Tk events between this observation and
     # the actual capture.
     image, source = capture_tk_client(app.root, pump_events=False)
+    post_capture_geometry = _client_geometry_snapshot(app.root)
+    capture_geometry_checks = {
+        "client_geometry_stable_during_capture": (
+            pre_capture_geometry == post_capture_geometry
+        ),
+        "captured_pixels_match_client_size": (
+            list(image.size) == pre_capture_geometry["client_size"]
+        ),
+        "visible_screen_capture_used": source == "ImageGrab(visible-client-bbox)",
+    }
+    capture_geometry_gate = {
+        "gate_applicable": True,
+        "pre_capture": pre_capture_geometry,
+        "post_capture": post_capture_geometry,
+        "capture_source": source,
+        "captured_pixel_size": list(image.size),
+        "checks": capture_geometry_checks,
+        "passed": all(capture_geometry_checks.values()),
+    }
 
     post_capture_gate = collect_capture_focus_gate(app, state_id)
     require_capture_focus_gate(post_capture_gate, phase="post_capture")
@@ -1220,6 +1264,7 @@ def capture_and_save_focus_verified_tk_client(
         "ui_geometry": geometry_record,
         "rendered_state": rendered_state,
         "tree_heading_fit_gate": tree_heading_fit_gate,
+        "capture_geometry_gate": capture_geometry_gate,
     }
 
 
@@ -1635,6 +1680,12 @@ def _tree_heading_fit_record(
         padding_value = app.style.lookup(heading_style, "padding")
         padding_left, padding_right = _horizontal_style_padding(tree, padding_value)
         heading_font = font_factory(root=app.root, font=font_spec)
+        body_font_spec = app.style.lookup(tree_style, "font") or "TkDefaultFont"
+        body_padding_value = app.style.lookup(tree_style, "padding")
+        body_padding_left, body_padding_right = _horizontal_style_padding(
+            tree, body_padding_value
+        )
+        body_font = font_factory(root=app.root, font=body_font_spec)
         try:
             font_actual = dict(heading_font.actual())
         except Exception:
@@ -1643,10 +1694,61 @@ def _tree_heading_fit_record(
             font_metrics = dict(heading_font.metrics())
         except Exception:
             font_metrics = {}
+        try:
+            body_font_actual = dict(body_font.actual())
+        except Exception:
+            body_font_actual = {"description": str(body_font_spec)}
+        try:
+            body_font_metrics = dict(body_font.metrics())
+        except Exception:
+            body_font_metrics = {}
+        try:
+            configured_row_height = max(
+                1,
+                int(float(app.style.lookup(tree_style, "rowheight") or 0)),
+            )
+        except Exception:
+            configured_row_height = 1
+        tree_widget_height = max(0, int(tree.winfo_height()))
+        heading_line_height = max(1, int(font_metrics.get("linespace") or 0))
+        body_line_height = max(1, int(body_font_metrics.get("linespace") or 0))
+        minimum_data_row_height = body_line_height + TREE_DATA_VERTICAL_PADDING_PX
+        minimum_one_row_height = heading_line_height + configured_row_height + 4
+        try:
+            tree_children = tuple(tree.get_children())
+        except Exception:
+            tree_children = ()
+        first_row_bbox: list[int] | None = None
+        first_row_height = 0
+        first_existing_row_fully_visible = False
+        if tree_children:
+            try:
+                bbox = tuple(int(value) for value in tree.bbox(tree_children[0]))
+            except Exception:
+                bbox = ()
+            if len(bbox) == 4:
+                first_row_bbox = list(bbox)
+                row_x, row_y, row_width, row_height = bbox
+                first_row_height = max(0, row_height)
+                first_existing_row_fully_visible = (
+                    row_width > 0
+                    and row_height > 0
+                    and row_x >= 0
+                    and row_y >= 0
+                    and row_x + row_width <= int(tree.winfo_width())
+                    and row_y + row_height <= tree_widget_height
+                )
+            else:
+                first_existing_row_fully_visible = False
 
         configured_extent = 0
         all_headings_measured = bool(displayed_columns)
         all_heading_text_fits = bool(displayed_columns)
+        all_data_cells_measured = bool(displayed_columns) and bool(tree_children)
+        all_data_text_fits = bool(displayed_columns) and bool(tree_children)
+        raw_columns = [
+            str(value) for value in _widget_tcl_list(tree, tree.cget("columns"))
+        ]
         for position, column_id in enumerate(displayed_columns, start=1):
             heading_info = dict(tree.heading(column_id))
             heading_text = str(heading_info.get("text") or "")
@@ -1665,6 +1767,57 @@ def _tree_heading_fit_record(
             fits = visible_width > 0 and text_width <= available_text_width
             all_headings_measured = all_headings_measured and visible_width > 0
             all_heading_text_fits = all_heading_text_fits and fits
+            data_cells: list[dict[str, Any]] = []
+            try:
+                value_index = raw_columns.index(column_id)
+            except ValueError:
+                value_index = -1
+            for item_id in tree_children:
+                try:
+                    values = _widget_tcl_list(tree, tree.item(item_id, "values"))
+                    value = str(values[value_index]) if 0 <= value_index < len(values) else ""
+                    cell_bbox = tuple(
+                        int(value)
+                        for value in tree.bbox(item_id, column_id)
+                    )
+                    if len(cell_bbox) != 4:
+                        raise RuntimeError("data cell bbox is unavailable")
+                    cell_x, cell_y, cell_width, cell_height = cell_bbox
+                    visible_cell_width = max(
+                        0,
+                        min(cell_x + cell_width, int(tree.winfo_width()))
+                        - max(cell_x, 0),
+                    )
+                    available_data_width = max(
+                        0, visible_cell_width - TREE_DATA_CELL_GUTTER_PX
+                    )
+                    data_text_width = max(0, int(body_font.measure(value)))
+                    data_fits = (
+                        visible_cell_width > 0
+                        and value_index >= 0
+                        and data_text_width <= available_data_width
+                    )
+                except Exception:
+                    value = ""
+                    cell_bbox = ()
+                    visible_cell_width = 0
+                    available_data_width = 0
+                    data_text_width = 0
+                    data_fits = False
+                all_data_cells_measured = all_data_cells_measured and value_index >= 0
+                all_data_text_fits = all_data_text_fits and data_fits
+                data_cells.append(
+                    {
+                        "item_id": str(item_id),
+                        "text": value,
+                        "cell_bbox": list(cell_bbox),
+                        "visible_cell_width_px": visible_cell_width,
+                        "font_measured_text_width_px": data_text_width,
+                        "available_text_width_px": available_data_width,
+                        "fit_slack_px": available_data_width - data_text_width,
+                        "passed": data_fits,
+                    }
+                )
             record["columns"].append(
                 {
                     "id": column_id,
@@ -1679,6 +1832,7 @@ def _tree_heading_fit_record(
                     "heading_image_gap_px": image_gap,
                     "available_text_width_px": available_text_width,
                     "fit_slack_px": available_text_width - text_width,
+                    "data_cells": data_cells,
                     "passed": fits,
                 }
             )
@@ -1697,7 +1851,19 @@ def _tree_heading_fit_record(
             "all_headings_measured": all_headings_measured,
             "column_extent_within_viewport": column_extent_within_viewport,
             "all_heading_text_fits": all_heading_text_fits,
+            "all_data_cells_measured": all_data_cells_measured,
+            "all_data_text_fits": all_data_text_fits,
+            "configured_row_height_fits_data_font": (
+                configured_row_height >= minimum_data_row_height
+            ),
+            "actual_first_row_height_fits_data_font": (
+                first_row_height >= minimum_data_row_height
+            ),
             "scrollbar_layout_safe": scrollbar_layout_safe,
+            "one_body_row_visible_below_heading": (
+                tree_widget_height >= minimum_one_row_height
+            ),
+            "first_existing_row_fully_visible": first_existing_row_fully_visible,
         }
         record.update(
             {
@@ -1707,6 +1873,17 @@ def _tree_heading_fit_record(
                 "heading_font_actual": font_actual,
                 "heading_font_metrics": font_metrics,
                 "heading_padding": str(padding_value),
+                "body_font": str(body_font_spec),
+                "body_font_actual": body_font_actual,
+                "body_font_metrics": body_font_metrics,
+                "body_padding": str(body_padding_value),
+                "tree_widget_height_px": tree_widget_height,
+                "configured_row_height_px": configured_row_height,
+                "minimum_data_row_height_px": minimum_data_row_height,
+                "minimum_one_row_height_px": minimum_one_row_height,
+                "data_row_count": len(tree_children),
+                "first_row_bbox": first_row_bbox,
+                "first_row_height_px": first_row_height,
                 "configured_column_extent_px": configured_extent,
                 "heading_viewport": heading_pixels,
                 "scrollbar_layout": scrollbar_layout,
@@ -1755,11 +1932,13 @@ def _unmapped_tree_heading_record(
     tree: Any,
     *,
     visibility_required: bool,
+    fallback_affordance_name: str,
+    fallback_affordance_mapped: bool,
 ) -> dict[str, Any]:
-    optional_unmapped = not visibility_required
+    compact_reachable = not visibility_required and fallback_affordance_mapped
     checks = {
-        "mapped_when_required": optional_unmapped,
-        "optional_unmapped_allowed": optional_unmapped,
+        "mapped_when_required": not visibility_required,
+        "compact_fallback_affordance_mapped": compact_reachable,
     }
     return {
         "name": name,
@@ -1767,6 +1946,9 @@ def _unmapped_tree_heading_record(
         "present": True,
         "mapped": False,
         "visibility_required": visibility_required,
+        "fallback_affordance_name": fallback_affordance_name,
+        "fallback_affordance_mapped": fallback_affordance_mapped,
+        "mapped_or_compact_reachable": compact_reachable,
         "measurement_applicable": False,
         "columns": [],
         "checks": checks,
@@ -1789,9 +1971,19 @@ def build_tree_heading_fit_gate(
 
     visibility_policy = _tree_visibility_policy(app)
     visibility_required = bool(visibility_policy["visibility_required"])
+    compact_mode = not visibility_required
+    active_view = str(getattr(app, "_left_sidebar_view", "summary") or "summary")
+    if active_view not in {"summary", "parked"}:
+        active_view = "summary"
+    switch_button = getattr(app, "left_context_switch_button", None)
+    switch_mapped = switch_button is not None and _is_mapped(switch_button)
     trees: list[dict[str, Any]] = []
-    for name, attribute in TREE_HEADING_GATE_WIDGETS:
+    for name, attribute, fallback_attribute in TREE_HEADING_GATE_WIDGETS:
         tree = getattr(app, attribute, None)
+        fallback_affordance = getattr(app, fallback_attribute, None)
+        fallback_affordance_mapped = (
+            fallback_affordance is not None and _is_mapped(fallback_affordance)
+        )
         if tree is None:
             trees.append(
                 {
@@ -1800,6 +1992,9 @@ def build_tree_heading_fit_gate(
                     "present": False,
                     "mapped": False,
                     "visibility_required": visibility_required,
+                    "fallback_affordance_name": fallback_attribute,
+                    "fallback_affordance_mapped": fallback_affordance_mapped,
+                    "mapped_or_compact_reachable": False,
                     "measurement_applicable": False,
                     "columns": [],
                     "checks": {"measurement_completed": False},
@@ -1818,29 +2013,42 @@ def build_tree_heading_fit_gate(
                     name,
                     tree,
                     visibility_required=visibility_required,
+                    fallback_affordance_name=fallback_attribute,
+                    fallback_affordance_mapped=fallback_affordance_mapped,
                 )
             )
             continue
-        trees.append(
-            _tree_heading_fit_record(
-                app,
-                name,
-                tree,
-                font_factory=font_factory,
-                visibility_required=visibility_required,
-            )
+        tree_record = _tree_heading_fit_record(
+            app,
+            name,
+            tree,
+            font_factory=font_factory,
+            visibility_required=visibility_required,
         )
+        tree_record["fallback_affordance_name"] = fallback_attribute
+        tree_record["fallback_affordance_mapped"] = fallback_affordance_mapped
+        tree_record["mapped_or_compact_reachable"] = True
+        trees.append(tree_record)
 
     checks = {
         "visibility_policy_resolved": visibility_policy["resolved"] is True,
         "required_trees_present": all(tree.get("present") is True for tree in trees),
         "required_trees_mapped": all(
             tree.get("present") is True
-            and (
-                tree.get("visibility_required") is not True
-                or tree.get("mapped") is True
-            )
+            and tree.get("mapped_or_compact_reachable") is True
             for tree in trees
+        ),
+        "compact_has_active_tree": (
+            visibility_required or any(tree.get("mapped") is True for tree in trees)
+        ),
+        "compact_switch_mapped": visibility_required or switch_mapped,
+        "compact_active_tree_matches_view": (
+            visibility_required
+            or all(
+                bool(tree.get("mapped"))
+                == (tree.get("name") == f"{active_view}_tree")
+                for tree in trees
+            )
         ),
         "all_measurements_completed": all(not tree.get("error") for tree in trees),
         "all_column_extents_within_viewport": all(
@@ -1867,6 +2075,65 @@ def build_tree_heading_fit_gate(
             )
             for tree in trees
         ),
+        "all_data_text_fits": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or (
+                    tree.get("checks", {}).get("all_data_cells_measured") is True
+                    and tree.get("checks", {}).get("all_data_text_fits") is True
+                )
+            )
+            for tree in trees
+        ),
+        "all_data_row_heights_fit_fonts": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or (
+                    tree.get("checks", {}).get(
+                        "configured_row_height_fits_data_font"
+                    )
+                    is True
+                    and tree.get("checks", {}).get(
+                        "actual_first_row_height_fits_data_font"
+                    )
+                    is True
+                )
+            )
+            for tree in trees
+        ),
+        "all_active_tree_rows_visible": all(
+            tree.get("present") is True
+            and (
+                tree.get("measurement_applicable") is False
+                or (
+                    tree.get("checks", {}).get("one_body_row_visible_below_heading") is True
+                    and tree.get("checks", {}).get("first_existing_row_fully_visible") is True
+                )
+            )
+            for tree in trees
+        ),
+        "active_tree_has_data_row": any(
+            tree.get("name") == f"{active_view}_tree"
+            and tree.get("mapped") is True
+            and int(tree.get("data_row_count") or 0) >= 1
+            for tree in trees
+        ),
+        "all_mapped_trees_have_data_row": all(
+            tree.get("mapped") is not True
+            or int(tree.get("data_row_count") or 0) >= 1
+            for tree in trees
+        ),
+        "parked_view_has_recovery_row": (
+            active_view != "parked"
+            or any(
+                tree.get("name") == "parked_tree"
+                and int(tree.get("data_row_count") or 0) >= 1
+                and tree.get("checks", {}).get("first_existing_row_fully_visible") is True
+                for tree in trees
+            )
+        ),
     }
     try:
         tk_scaling = float(app.root.tk.call("tk", "scaling"))
@@ -1875,11 +2142,14 @@ def build_tree_heading_fit_gate(
     return {
         "gate_applicable": True,
         "method": (
-            "live Tk heading font measure vs identify_region-visible heading span, "
-            "style padding/image allowance, configured extent, and sibling scrollbar layout"
+            "live Tk heading and data font measure vs identify_region-visible column span, "
+            "style padding/image allowance, data row-height, configured extent, and sibling scrollbar layout"
         ),
         "tk_scaling": tk_scaling,
         "visibility_policy": visibility_policy,
+        "compact_mode": compact_mode,
+        "active_view": active_view,
+        "switch_mapped": switch_mapped,
         "trees": trees,
         "checks": checks,
         "passed": all(checks.values()),
@@ -1921,10 +2191,38 @@ def _notice_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]
 
 
 def _left_sidebar_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]:
+    specs: dict[str, tuple[Any, bool, bool]] = {}
     checkbox = getattr(app, "tray_image_checkbox", None)
-    if checkbox is None:
-        return {}
-    return {"tray_image_checkbox": (checkbox, True, True)}
+    if checkbox is not None:
+        specs["tray_image_checkbox"] = (checkbox, True, True)
+    tray_image = getattr(app, "tray_image_label", None)
+    if tray_image is not None and _is_mapped(tray_image):
+        specs["tray_image_display"] = (tray_image, False, False)
+    worker_label = getattr(app, "worker_info_label", None)
+    if worker_label is not None and _is_mapped(worker_label):
+        specs["left_worker_name"] = (worker_label, False, True)
+    change_worker = getattr(app, "change_worker_button", None)
+    if change_worker is not None and _is_mapped(change_worker):
+        specs["left_change_worker"] = (change_worker, True, True)
+    button = getattr(app, "left_context_switch_button", None)
+    if button is not None and _is_mapped(button):
+        specs["left_context_switch"] = (button, True, True)
+    view = str(getattr(app, "_left_sidebar_view", "summary") or "summary")
+    active_frame = getattr(
+        app,
+        "_parked_tree_frame" if view == "parked" else "_summary_tree_frame",
+        None,
+    )
+    active_tree = getattr(
+        app,
+        "parked_tree" if view == "parked" else "summary_tree",
+        None,
+    )
+    if active_frame is not None and _is_mapped(active_frame):
+        specs["left_active_tree_frame"] = (active_frame, False, False)
+    if active_tree is not None and _is_mapped(active_tree):
+        specs["left_active_tree"] = (active_tree, False, False)
+    return specs
 
 
 def collect_ui_geometry(app: Any) -> dict[str, Any]:
@@ -1984,6 +2282,8 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
             ("scan_entry", "notice"),
             ("notice", "scan_list"),
             ("scan_list", "actions"),
+            ("left_context_switch", "left_active_tree_frame"),
+            ("left_active_tree_frame", "tray_image_checkbox"),
         ),
         containment_pairs=(
             ("stage", "center_pane"),
@@ -2004,6 +2304,12 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
             ("action_park", "actions"),
             ("action_submit", "actions"),
             ("action_operations", "actions"),
+            ("left_context_switch", "left_pane"),
+            ("left_worker_name", "left_pane"),
+            ("left_change_worker", "left_pane"),
+            ("left_active_tree_frame", "left_pane"),
+            ("left_active_tree", "left_active_tree_frame"),
+            ("tray_image_checkbox", "left_pane"),
             ("right_status", "right_pane"),
             ("right_status_value", "right_status"),
             ("right_stopwatch", "right_pane"),
@@ -2190,6 +2496,34 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         except Exception:
             state = "unknown"
         action_buttons[name] = {"text": _widget_text(button), "state": state}
+    def tree_row_count(tree: Any) -> int:
+        try:
+            return len(tree.get_children())
+        except Exception:
+            return -1
+
+    left_sidebar = {
+        "view": str(getattr(app, "_left_sidebar_view", "summary") or "summary"),
+        "compact": bool(getattr(app, "_left_sidebar_compact", False)),
+        "switch_text": _widget_text(
+            getattr(app, "left_context_switch_button", None)
+        ),
+        "switch_mapped": _is_mapped(
+            getattr(app, "left_context_switch_button", None)
+        ),
+        "summary_tree_mapped": _is_mapped(getattr(app, "summary_tree", None)),
+        "parked_tree_mapped": _is_mapped(getattr(app, "parked_tree", None)),
+        "summary_count": tree_row_count(getattr(app, "summary_tree", None)),
+        "parked_count": tree_row_count(getattr(app, "parked_tree", None)),
+        "tray_image_requested": bool(
+            getattr(app, "show_tray_image_var", None)
+            and app.show_tray_image_var.get()
+        ),
+        "tray_image_has_bitmap": (
+            getattr(getattr(app, "tray_image_label", None), "image", None)
+            is not None
+        ),
+    }
     return {
         "stage": _widget_text(app.stage_label),
         "current_item": _widget_text(app.current_item_label),
@@ -2214,6 +2548,7 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         "right_texts": right_texts,
         "right_progress_count_texts": right_progress_count_texts,
         "action_buttons": action_buttons,
+        "left_sidebar": left_sidebar,
     }
 
 
@@ -2378,8 +2713,16 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
     app.warning_presenter = presenter
     app.master_label_replace_state = None
     app.replacement_context = {}
-    app.work_summary = {}
-    app.total_tray_count = fixture.completed_tray_count
+    summary_count = max(CAPTURE_SUMMARY_ROW_COUNT, fixture.completed_tray_count)
+    app.work_summary = {
+        CAPTURE_SUMMARY_ITEM_CODE: {
+            "name": "캡처 작업 현황",
+            "spec": "DISPLAY2 fixture",
+            "count": summary_count,
+            "test_count": 0,
+        }
+    }
+    app.total_tray_count = summary_count
     app.completed_tray_times = [142.0, 156.0] if fixture.completed_tray_count else []
     app.best_time_records = {"2026-07-15": 137.0}
 
@@ -2453,7 +2796,9 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
         )
 
     app.is_idle = fixture.state_id in {"waiting", "completed"}
+    app.show_tray_image_var.set(bool(fixture.tray_image_visible))
     app._update_current_item_label()
+    app._update_tray_image_display()
     app._update_all_summaries()
     app._apply_center_layout()
     app._apply_scanned_listbox_layout()
@@ -2568,6 +2913,80 @@ def build_compact_display_gate(
     }
 
 
+def build_left_sidebar_gate(
+    rendered: dict[str, Any],
+    *,
+    requested_view: str,
+    compact_expected: bool,
+    expected_summary_count: int = CAPTURE_SUMMARY_ROW_COUNT,
+    expected_parked_count: int = CAPTURE_PARKED_ROW_COUNT,
+    tray_image_expected: bool = False,
+) -> dict[str, Any]:
+    """Bind the state-switch label and mapped tree to deterministic rows."""
+
+    requested_view = str(requested_view or "summary")
+    expected_switch_text = (
+        "현재·기록 보기"
+        if requested_view == "parked"
+        else f"보류 {expected_parked_count}건 보기"
+    )
+    actual_summary_count = rendered.get("summary_count")
+    actual_parked_count = rendered.get("parked_count")
+    summary_mapped = rendered.get("summary_tree_mapped") is True
+    parked_mapped = rendered.get("parked_tree_mapped") is True
+    compact_actual = rendered.get("compact") is True
+    if compact_expected:
+        expected_summary_mapped = requested_view == "summary"
+        expected_parked_mapped = requested_view == "parked"
+        tree_mapping_matches_mode = (
+            summary_mapped is expected_summary_mapped
+            and parked_mapped is expected_parked_mapped
+        )
+        switch_mapping_matches_mode = rendered.get("switch_mapped") is True
+    else:
+        expected_summary_mapped = True
+        expected_parked_mapped = True
+        tree_mapping_matches_mode = summary_mapped and parked_mapped
+        switch_mapping_matches_mode = rendered.get("switch_mapped") is False
+    checks = {
+        "view_matches_request": rendered.get("view") == requested_view,
+        "compact_mode_matches_policy": compact_actual is bool(compact_expected),
+        "summary_count_exact": (
+            isinstance(actual_summary_count, int)
+            and not isinstance(actual_summary_count, bool)
+            and actual_summary_count == expected_summary_count
+        ),
+        "parked_count_exact": (
+            isinstance(actual_parked_count, int)
+            and not isinstance(actual_parked_count, bool)
+            and actual_parked_count == expected_parked_count
+        ),
+        "tray_image_request_exact": (
+            rendered.get("tray_image_requested") is bool(tray_image_expected)
+        ),
+        "tray_image_bitmap_exact": (
+            rendered.get("tray_image_has_bitmap") is bool(tray_image_expected)
+        ),
+        "switch_text_exact": rendered.get("switch_text") == expected_switch_text,
+        "switch_mapping_matches_mode": switch_mapping_matches_mode,
+        "tree_mapping_matches_mode": tree_mapping_matches_mode,
+    }
+    return {
+        "gate_applicable": True,
+        "requested_view": requested_view,
+        "compact_expected": bool(compact_expected),
+        "expected_switch_text": expected_switch_text,
+        "expected_summary_count": expected_summary_count,
+        "expected_parked_count": expected_parked_count,
+        "tray_image_expected": bool(tray_image_expected),
+        "expected_summary_tree_mapped": expected_summary_mapped,
+        "expected_parked_tree_mapped": expected_parked_mapped,
+        "actual": dict(rendered),
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def _append_gate_issues(
     issues: list[str],
     record: dict[str, Any],
@@ -2669,7 +3088,15 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
             _append_gate_issues(issues, record, gate_name)
     if capture_gate_schema_version >= 3 or "tree_heading_fit_gate" in record:
         _append_gate_issues(issues, record, "tree_heading_fit_gate")
+    if capture_gate_schema_version >= 4 or "left_sidebar_gate" in record:
+        _append_gate_issues(issues, record, "left_sidebar_gate")
+    if capture_gate_schema_version >= 5 or "capture_geometry_gate" in record:
+        _append_gate_issues(issues, record, "capture_geometry_gate")
     if rendered:
+        if "requested_left_view" in record or "left_sidebar" in rendered:
+            requested_left_view = str(record.get("requested_left_view") or "summary")
+            if str((rendered.get("left_sidebar") or {}).get("view") or "") != requested_left_view:
+                issues.append("left_sidebar_view_mismatch")
         if int(rendered.get("scan_list_row_count", -1)) != int(fixture.get("scan_count", 0)):
             issues.append("rendered_scan_count_mismatch")
         if "active_tray" in fixture:
@@ -2796,6 +3223,9 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
         "rows": structure.get("core_action_rows"),
         "buttons": record.get("rendered_state", {}).get("action_buttons"),
     }
+    left_sidebar_signature = dict(
+        record.get("rendered_state", {}).get("left_sidebar") or {}
+    )
     widget_identity = record.get("roundtrip_widget_identity") or {}
     widget_path_signature = {
         "widget_count": widget_identity.get("widget_count"),
@@ -2811,6 +3241,7 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
         "geometry": geometry_signature,
         "rows": row_signature,
         "actions": action_signature,
+        "left_sidebar": left_sidebar_signature,
         "widget_paths": widget_path_signature,
         "widget_objects": widget_object_signature,
         "widget_identity_complete": roundtrip_widget_identity_is_complete(
@@ -2835,6 +3266,14 @@ def build_roundtrip_signatures(record: dict[str, Any]) -> dict[str, Any]:
         "actions_sha256": hashlib.sha256(
             json.dumps(
                 action_signature,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest(),
+        "left_sidebar_sha256": hashlib.sha256(
+            json.dumps(
+                left_sidebar_signature,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -2968,6 +3407,7 @@ def _parity_text_signature(rendered_state: object) -> tuple[dict[str, Any], bool
     row_colors = signature["scan_list_row_colors"]
     row_count = signature["scan_list_row_count"]
     right_texts = signature["right_texts"]
+    left_sidebar = signature["left_sidebar"]
     complete = bool(
         complete
         and isinstance(row_count, int)
@@ -2989,6 +3429,38 @@ def _parity_text_signature(rendered_state: object) -> tuple[dict[str, Any], bool
         and all(
             isinstance(key, str) and isinstance(value, str)
             for key, value in right_texts.items()
+        )
+        and isinstance(left_sidebar, dict)
+        and set(left_sidebar)
+        == {
+            "view",
+            "compact",
+            "switch_text",
+            "switch_mapped",
+            "summary_tree_mapped",
+            "parked_tree_mapped",
+            "summary_count",
+            "parked_count",
+            "tray_image_requested",
+            "tray_image_has_bitmap",
+        }
+        and isinstance(left_sidebar.get("view"), str)
+        and isinstance(left_sidebar.get("switch_text"), str)
+        and all(
+            isinstance(left_sidebar.get(field), bool)
+            for field in (
+                "compact",
+                "switch_mapped",
+                "summary_tree_mapped",
+                "parked_tree_mapped",
+                "tray_image_requested",
+                "tray_image_has_bitmap",
+            )
+        )
+        and all(
+            isinstance(left_sidebar.get(field), int)
+            and not isinstance(left_sidebar.get(field), bool)
+            for field in ("summary_count", "parked_count")
         )
     )
     return signature, complete
@@ -3313,6 +3785,10 @@ def apply_roundtrip_contracts(captures: Sequence[dict[str, Any]]) -> None:
             "row_signature_exact": first_signatures["rows"] == last_signatures["rows"],
             "action_signature_exact": (
                 first_signatures["actions"] == last_signatures["actions"]
+            ),
+            "left_sidebar_signature_exact": (
+                first_signatures["left_sidebar"]
+                == last_signatures["left_sidebar"]
             ),
         }
         last["roundtrip_comparison_gate"] = {
@@ -3730,6 +4206,30 @@ def _make_capture_app(module: Any, scale: object = DEFAULT_SCALE) -> Any:
                 encoding="utf-8",
             )
             self.capture_settings_path = settings_path
+            fixture_session = module.TraySession(
+                master_label_code="PHS=1|CLC=AAA2270730100|QT=8",
+                item_code="AAA2270730100",
+                item_name="캡처 보류 트레이",
+                item_spec="DISPLAY2 recovery fixture",
+                scanned_barcodes=[
+                    "PHS=2|CLC=AAA2270730100|ID=CAPTURE-PARKED-0001"
+                ],
+                scan_times=[dt.datetime(2026, 7, 19, 9, 0, 0)],
+                tray_size=8,
+            )
+            fixture_state = module.tray_session_to_state(
+                fixture_session,
+                worker_name="캡처 작업자",
+            )
+            self.capture_parked_fixture_path = (
+                Path(self.parked_trays_dir) / "parked_capture_fixture.json"
+            )
+            module.atomic_write_json(
+                self.capture_parked_fixture_path,
+                fixture_state,
+                indent=4,
+                ensure_ascii=False,
+            )
 
     return CaptureContainerAudit()
 
@@ -3853,8 +4353,12 @@ def run_capture_matrix(
     scale: object = DEFAULT_SCALE,
     monitor_device: str = "",
     roundtrip_sizes: Sequence[tuple[int, int]] = (),
+    left_view: str = "summary",
 ) -> tuple[Path, dict[str, Any]]:
     requested_scale = parse_scale(scale)
+    requested_left_view = str(left_view or "summary").strip().lower()
+    if requested_left_view not in {"summary", "parked"}:
+        raise ValueError("left_view must be 'summary' or 'parked'")
     isolated_settings = build_isolated_app_settings(requested_scale)
     all_requested_sizes = tuple(sizes) + tuple(roundtrip_sizes)
     monitor_target = (
@@ -3889,7 +4393,7 @@ def run_capture_matrix(
     fixtures_by_id = {fixture.state_id: fixture for fixture in build_state_fixtures()}
 
     manifest: dict[str, Any] = {
-        "schema_version": 3,
+        "schema_version": 5,
         "tool": "tools/capture_container_operator_ui.py",
         "generated_at": dt.datetime.now(dt.timezone.utc).astimezone().isoformat(),
         "repository_root": str(ROOT),
@@ -3903,6 +4407,7 @@ def run_capture_matrix(
         ],
         "requested_states": list(state_ids),
         "requested_scale": requested_scale,
+        "requested_left_view": requested_left_view,
         "isolated_app_settings": isolated_settings,
         "monitor_preflight": monitor_preflight,
         "near_black_failure_ratio": NEAR_BLACK_FAILURE_RATIO,
@@ -3957,6 +4462,7 @@ def run_capture_matrix(
             for state_id in state_ids:
                 fixture = fixtures_by_id[state_id]
                 apply_state_fixture(app, fixture, module)
+                app._show_left_sidebar_view(requested_left_view)
                 pump_tk(app.root, 260)
                 path = size_dir / f"{state_id}.png"
                 frame = capture_and_save_focus_verified_tk_client(
@@ -3979,6 +4485,7 @@ def run_capture_matrix(
                 geometry_record = frame["ui_geometry"]
                 rendered_state = frame["rendered_state"]
                 tree_heading_fit_gate = frame["tree_heading_fit_gate"]
+                capture_geometry_gate = frame["capture_geometry_gate"]
                 fixture_manifest = _fixture_manifest(fixture)
                 record_id = f"{size[0]}x{size[1]}-{state_id}"
                 if capture_sequence == "roundtrip":
@@ -3991,8 +4498,9 @@ def run_capture_matrix(
                     "sequence_ordinal": sequence_ordinal,
                     "requested_size": [size[0], size[1]],
                     "requested_scale": requested_scale,
+                    "requested_left_view": requested_left_view,
                     "applied_scale_factor": float(app.scale_factor),
-                    "capture_gate_schema_version": 3,
+                    "capture_gate_schema_version": 5,
                     "path": str(path.relative_to(resolved_output)).replace("\\", "/"),
                     "capture_source": source,
                     "sha256": _sha256(path),
@@ -4004,6 +4512,15 @@ def run_capture_matrix(
                     "focus_gate": focus_gate,
                     "scan_list_viewport_gate": viewport_gate,
                     "tree_heading_fit_gate": tree_heading_fit_gate,
+                    "capture_geometry_gate": capture_geometry_gate,
+                    "left_sidebar_gate": build_left_sidebar_gate(
+                        rendered_state["left_sidebar"],
+                        requested_view=requested_left_view,
+                        compact_expected=bool(
+                            tree_heading_fit_gate.get("compact_mode")
+                        ),
+                        tray_image_expected=bool(fixture.tray_image_visible),
+                    ),
                     "compact_display_gate": build_compact_display_gate(
                         fixture_manifest,
                         rendered_state,
@@ -4174,6 +4691,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--left-view",
+        choices=("summary", "parked"),
+        default="summary",
+        help=(
+            "compact left context to render; run both summary and parked "
+            "for recovery-reachability evidence"
+        ),
+    )
+    parser.add_argument(
         "--strict",
         action="store_true",
         help="return an error after writing the manifest when any proxy check fails",
@@ -4190,6 +4716,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         scale=args.scale,
         monitor_device=args.monitor_device,
         roundtrip_sizes=args.roundtrip_sizes,
+        left_view=args.left_view,
     )
     summary = manifest["summary"]
     print(
@@ -4201,6 +4728,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "monitor_device": args.monitor_device or None,
                 "monitor_gate_passed": summary["monitor_gate_passed"],
                 "roundtrip_sizes": [list(size) for size in args.roundtrip_sizes],
+                "left_view": args.left_view,
                 "passed": summary["passed"],
                 "issue_counts": summary["issue_counts"],
             },

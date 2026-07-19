@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
+from tkinter import font as tkfont
 import csv
 import datetime
 import os
@@ -124,6 +125,10 @@ from warning_presenter import (
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
 CURRENT_VERSION = "v2.0.31"
+# Two large-text trees need enough vertical space for both headings and at
+# least one complete recovery row.  Below this logical height the sidebar
+# keeps the same work context and exposes the trees through one state switch.
+LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT = 1030.0
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
@@ -1063,6 +1068,21 @@ class ContainerAudit:
                 generation=getattr(self, "_right_widget_generation", 0)
             )
 
+    def _font_linespace_px(self, size: int, *, weight: str = "normal") -> int:
+        """Measure a Tk font in device pixels, with a headless-safe fallback."""
+
+        normalized_size = max(1, int(size))
+        try:
+            measured_font = tkfont.Font(
+                root=self.root,
+                family=self.DEFAULT_FONT,
+                size=normalized_size,
+                weight=weight,
+            )
+            return max(1, int(measured_font.metrics("linespace")))
+        except (AttributeError, RuntimeError, tk.TclError, TypeError, ValueError):
+            return max(1, int(round(normalized_size * 1.65)))
+
     def apply_scaling(self):
         try:
             content_width = max(1, int(self.root.winfo_width()))
@@ -1083,6 +1103,25 @@ class ContainerAudit:
         xl = tokens.fonts.stage_title
         xxl = tokens.fonts.counter
         button_padding = self._button_style_padding(tokens, content_height)
+        tree_row_padding = max(6, int(round(4 * self.scale_factor)))
+        tree_row_height = max(
+            tokens.components.row_height,
+            self._font_linespace_px(m) + tree_row_padding,
+        )
+        sidebar_tree_font = (
+            max(11, min(s, 13))
+            if profile.name == "compact"
+            else max(11, s)
+        )
+        sidebar_tree_row_height = max(
+            26,
+            self._font_linespace_px(sidebar_tree_font) + tree_row_padding,
+        )
+        self._left_tree_minimum_one_row_height = (
+            self._font_linespace_px(sidebar_tree_font, weight="bold")
+            + sidebar_tree_row_height
+            + max(14, int(round(9 * self.scale_factor)))
+        )
         self.style.configure('TFrame', background=self.COLOR_BG)
         self.style.configure('Sidebar.TFrame', background=self.COLOR_SIDEBAR_BG)
         self.style.configure('Card.TFrame', background=self.COLOR_CARD_BG, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
@@ -1123,8 +1162,11 @@ class ContainerAudit:
         self.style.configure('Velvet.Subtle.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
         self.style.configure('Velvet.Value.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('Treeview.Heading', font=(self.DEFAULT_FONT, m, 'bold'), background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, relief='flat', bordercolor=self.COLOR_BORDER)
-        self.style.configure('Treeview', rowheight=tokens.components.row_height, font=(self.DEFAULT_FONT, m), background=self.COLOR_CARD_BG, fieldbackground=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER)
+        self.style.configure('Treeview', rowheight=tree_row_height, font=(self.DEFAULT_FONT, m), background=self.COLOR_CARD_BG, fieldbackground=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER)
         self.style.map('Treeview', background=[('selected', self.COLOR_PRIMARY)], foreground=[('selected', 'white')])
+        self.style.configure('Sidebar.Treeview.Heading', font=(self.DEFAULT_FONT, sidebar_tree_font, 'bold'), background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, relief='flat', bordercolor=self.COLOR_BORDER)
+        self.style.configure('Sidebar.Treeview', rowheight=sidebar_tree_row_height, font=(self.DEFAULT_FONT, sidebar_tree_font), background=self.COLOR_CARD_BG, fieldbackground=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER)
+        self.style.map('Sidebar.Treeview', background=[('selected', self.COLOR_PRIMARY)], foreground=[('selected', 'white')])
         self.style.configure('Vertical.TScrollbar', background='#CBD5E1', troughcolor=self.COLOR_SURFACE_ALT, bordercolor=self.COLOR_SURFACE_ALT, arrowcolor=self.COLOR_TEXT_SUBTLE, relief='flat')
         self.style.map('Vertical.TScrollbar', background=[('active', '#94A3B8')])
         self.style.configure('TEntry', fieldbackground=self.COLOR_INPUT_BG, foreground=self.COLOR_TEXT, bordercolor=self.COLOR_BORDER, lightcolor=self.COLOR_BORDER, darkcolor=self.COLOR_BORDER, insertcolor=self.COLOR_PRIMARY)
@@ -2491,14 +2533,69 @@ class ContainerAudit:
             except tk.TclError:
                 pass
 
+    def _show_left_sidebar_view(self, view: str) -> None:
+        """Switch the compact left context without rebuilding either tree."""
+
+        if view not in {"summary", "parked"}:
+            return
+        self._left_sidebar_view = view
+        self._sync_left_sidebar_switch()
+        self._apply_left_sidebar_layout()
+        try:
+            self._schedule_focus_return()
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _toggle_left_sidebar_view(self) -> None:
+        current = getattr(self, "_left_sidebar_view", "summary")
+        self._show_left_sidebar_view("summary" if current == "parked" else "parked")
+
+    def _sync_left_sidebar_switch(self) -> None:
+        button = getattr(self, "left_context_switch_button", None)
+        if button is None:
+            return
+        view = getattr(self, "_left_sidebar_view", "summary")
+        count = max(0, int(getattr(self, "_parked_tray_count", 0) or 0))
+        text = "현재·기록 보기" if view == "parked" else f"보류 {count}건 보기"
+        try:
+            button.configure(text=text, style="Secondary.TButton")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _update_parked_recovery_affordance(self) -> int:
+        """Keep the compact recovery entry point truthful after list refreshes."""
+
+        count = 0
+        tree = getattr(self, "parked_tree", None)
+        if tree is not None:
+            try:
+                count = len(tree.get_children())
+            except (tk.TclError, AttributeError, TypeError):
+                count = 0
+        title = getattr(self, "parked_title_label", None)
+        if title is not None:
+            try:
+                title.configure(text=f"보류 중인 트레이 {count}건 (더블클릭으로 복원)")
+            except (tk.TclError, AttributeError):
+                pass
+        self._parked_tray_count = count
+        self._sync_left_sidebar_switch()
+        return count
+
     def _apply_left_sidebar_layout(self) -> None:
         parent_frame = getattr(self, "_left_sidebar_frame", None)
         if parent_frame is None:
             return
         scale = max(0.7, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        previous_compact_height = getattr(self, "_left_sidebar_compact", None)
         try:
             parent_width = int(parent_frame.winfo_width())
+            parent_height = int(parent_frame.winfo_height())
             compact_large_text = scale >= 1.2 and 1 < parent_width < 420
+            compact_height = (
+                parent_height > 1
+                and parent_height / scale < LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT
+            )
             tray_image_checkbox = getattr(self, "tray_image_checkbox", None)
             if tray_image_checkbox is not None:
                 tray_image_checkbox.configure(
@@ -2510,6 +2607,141 @@ class ContainerAudit:
             else:
                 parent_frame.grid_rowconfigure(0, weight=1)
                 parent_frame.grid_rowconfigure(1, weight=0, minsize=int(42 * scale))
+
+            top_frame = getattr(self, "_left_top_frame", None)
+            switch_frame = getattr(self, "_left_view_switch_frame", None)
+            summary_title = getattr(self, "summary_title_label", None)
+            summary_frame = getattr(self, "_summary_tree_frame", None)
+            parked_title = getattr(self, "parked_title_label", None)
+            parked_frame = getattr(self, "_parked_tree_frame", None)
+            if any(
+                value is None
+                for value in (
+                    top_frame,
+                    switch_frame,
+                    summary_title,
+                    summary_frame,
+                    parked_title,
+                    parked_frame,
+                )
+            ):
+                return
+
+            for row in (2, 3, 4, 5):
+                top_frame.grid_rowconfigure(row, weight=0, minsize=0)
+            view = getattr(self, "_left_sidebar_view", "summary")
+            if view not in {"summary", "parked"}:
+                view = "summary"
+                self._left_sidebar_view = view
+
+            header_frame = getattr(self, "_left_header_frame", None)
+            worker_info_frame = getattr(self, "_worker_info_frame", None)
+            worker_buttons_frame = getattr(self, "_worker_buttons_frame", None)
+            current_work_frame = getattr(self, "_current_work_frame", None)
+            current_work_title = getattr(self, "current_work_title_label", None)
+            fonts = getattr(getattr(self, "style_tokens", None), "fonts", None)
+            roomy_sidebar_font = int(
+                getattr(fonts, "sidebar", max(12, int(13 * scale)))
+            )
+            roomy_name_font = int(
+                getattr(fonts, "section_title", max(14, int(15 * scale)))
+            )
+            roomy_detail_font = int(
+                getattr(fonts, "caption", max(11, int(12 * scale)))
+            )
+
+            if compact_height:
+                if header_frame is not None and worker_info_frame is not None and worker_buttons_frame is not None:
+                    header_frame.grid_columnconfigure(0, weight=1)
+                    header_frame.grid_columnconfigure(1, weight=0)
+                    header_frame.grid_configure(pady=(0, 8))
+                    worker_info_frame.grid(row=0, column=0, sticky="ew")
+                    worker_buttons_frame.grid(row=0, column=1, sticky="e", padx=(8, 0), pady=0)
+                    self.worker_info_label.configure(
+                        text=str(self.worker_name),
+                        font=(self.DEFAULT_FONT, max(12, int(11 * scale)), "bold"),
+                    )
+                    self.change_worker_button.configure(
+                        text="변경",
+                        style="Secondary.TButton",
+                        width=4,
+                    )
+                if current_work_frame is not None:
+                    current_work_frame.configure(padding=8)
+                    current_work_frame.grid_configure(pady=(0, 8))
+                if current_work_title is not None:
+                    current_work_title.grid_remove()
+                self.current_work_name_label.configure(
+                    font=(self.DEFAULT_FONT, max(15, int(13 * scale)), "bold")
+                )
+                self.current_work_name_label.grid_configure(pady=(0, 2))
+                self.current_work_detail_label.configure(
+                    font=(self.DEFAULT_FONT, max(12, int(10 * scale)))
+                )
+                switch_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+                summary_title.grid_remove()
+                parked_title.grid_remove()
+                if view == "parked":
+                    summary_frame.grid_remove()
+                    parked_frame.grid(row=3, column=0, sticky="nsew")
+                    self.root.after_idle(self._adjust_parked_tree_columns)
+                else:
+                    parked_frame.grid_remove()
+                    summary_frame.grid(row=3, column=0, sticky="nsew")
+                    self.root.after_idle(self._adjust_summary_tree_columns)
+                top_frame.grid_rowconfigure(
+                    3,
+                    weight=1,
+                    minsize=max(
+                        92,
+                        int(72 * scale),
+                        int(getattr(self, "_left_tree_minimum_one_row_height", 0) or 0),
+                    ),
+                )
+            else:
+                if header_frame is not None and worker_info_frame is not None and worker_buttons_frame is not None:
+                    header_frame.grid_columnconfigure(0, weight=1)
+                    header_frame.grid_columnconfigure(1, weight=0)
+                    header_frame.grid_configure(pady=(0, 12))
+                    worker_info_frame.grid(row=0, column=0, sticky="ew")
+                    worker_buttons_frame.grid(row=1, column=0, sticky="ew", padx=0, pady=(6, 0))
+                    self.worker_info_label.configure(
+                        text=f"작업자: {self.worker_name}",
+                        font=(self.DEFAULT_FONT, roomy_sidebar_font),
+                    )
+                    self.change_worker_button.configure(
+                        text="작업자 변경",
+                        style="Secondary.TButton",
+                        width=0,
+                    )
+                if current_work_frame is not None:
+                    current_work_frame.configure(padding=12)
+                    current_work_frame.grid_configure(pady=(0, 14))
+                if current_work_title is not None:
+                    current_work_title.grid(row=0, column=0, sticky="ew")
+                self.current_work_name_label.configure(
+                    font=(self.DEFAULT_FONT, roomy_name_font, "bold")
+                )
+                self.current_work_name_label.grid_configure(pady=(3, 2))
+                self.current_work_detail_label.configure(
+                    font=(self.DEFAULT_FONT, roomy_detail_font)
+                )
+                switch_frame.grid_remove()
+                summary_title.grid(row=2, column=0, sticky="ew", pady=(0, 10))
+                summary_frame.grid(row=3, column=0, sticky="nsew")
+                parked_title.grid(row=4, column=0, sticky="ew", pady=(20, 10))
+                parked_frame.grid(row=5, column=0, sticky="nsew")
+                top_frame.grid_rowconfigure(3, weight=2, minsize=0)
+                top_frame.grid_rowconfigure(5, weight=1, minsize=0)
+                self.root.after_idle(self._adjust_summary_tree_columns)
+                self.root.after_idle(self._adjust_parked_tree_columns)
+            self._left_sidebar_compact = compact_height
+            if (
+                previous_compact_height is None
+                or bool(previous_compact_height) != compact_height
+            ):
+                self._update_operator_context()
+            self._sync_left_sidebar_switch()
         except (tk.TclError, AttributeError):
             return
 
@@ -2714,33 +2946,162 @@ class ContainerAudit:
         except TypeError:
             return tree.insert(parent, index, values=values, iid=iid)
 
+    def _tree_column_required_width(
+        self,
+        tree: ttk.Treeview,
+        column_id: str,
+        heading_text: str,
+        *,
+        fallback: int,
+    ) -> int:
+        """Return the measured width needed by a heading and current row values."""
+
+        try:
+            style_name = str(tree.cget("style") or "Treeview")
+            body_spec = self.style.lookup(style_name, "font") or "TkDefaultFont"
+            heading_spec = (
+                self.style.lookup(f"{style_name}.Heading", "font")
+                or "TkHeadingFont"
+            )
+            body_font = tkfont.Font(root=self.root, font=body_spec)
+            heading_font = tkfont.Font(root=self.root, font=heading_spec)
+            raw_columns = tree.cget("columns")
+            if isinstance(raw_columns, (tuple, list)):
+                columns = tuple(str(value) for value in raw_columns)
+            else:
+                columns = tuple(str(value) for value in tree.tk.splitlist(raw_columns))
+            column_index = columns.index(column_id)
+            widths = [int(heading_font.measure(str(heading_text or "")))]
+            for item_id in tree.get_children():
+                values = tuple(tree.item(item_id, "values") or ())
+                if column_index < len(values):
+                    widths.append(int(body_font.measure(str(values[column_index] or ""))))
+            cell_gutter = max(18, int(round(12 * self.scale_factor)))
+            return max(int(fallback), max(widths, default=0) + cell_gutter)
+        except (
+            AttributeError,
+            RuntimeError,
+            tk.TclError,
+            TypeError,
+            ValueError,
+        ):
+            return max(1, int(fallback))
+
     def _adjust_summary_tree_columns(self, event=None):
         if not (hasattr(self, 'summary_tree') and self.summary_tree.winfo_exists()):
             return
         available_width = self._tree_available_width(self.summary_tree)
         if available_width <= 1:
             return
+        def apply_display_columns(columns) -> None:
+            desired = tuple(columns)
+            raw_current = self.summary_tree.cget("displaycolumns")
+            if raw_current in ("#all", ("#all",), ["#all"]):
+                raw_current = self.summary_tree.cget("columns")
+            if isinstance(raw_current, (tuple, list)):
+                current = tuple(str(value) for value in raw_current)
+            else:
+                current = tuple(str(raw_current or "").split())
+            if current != desired:
+                self.summary_tree["displaycolumns"] = desired
+
         scale = max(1.0, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        def apply_compact_columns() -> None:
+            # The current-work card already carries the item name.  On a
+            # narrow/large-text sidebar, keep the actionable historical keys
+            # (code + completed count) fully readable instead of squeezing
+            # three data columns into the same width.
+            apply_display_columns(("item_code", "count"))
+            count_fallback = max(52, int(round(32 * scale)), int(available_width * 0.16))
+            count_width = self._tree_column_required_width(
+                self.summary_tree,
+                "count",
+                "건",
+                fallback=count_fallback,
+            )
+            item_required = self._tree_column_required_width(
+                self.summary_tree,
+                "item_code",
+                "품목 코드",
+                fallback=max(140, int(round(120 * scale))),
+            )
+            if item_required + count_width > available_width:
+                count_width = max(
+                    count_fallback,
+                    min(count_width, max(1, available_width - item_required)),
+                )
+            count_width = min(count_width, max(1, available_width - 1))
+            self.summary_tree.heading("item_code", text="품목 코드")
+            self.summary_tree.heading("count", text="건")
+            self.summary_tree.column(
+                "item_code",
+                width=max(1, available_width - count_width),
+                stretch=tk.NO,
+            )
+            self.summary_tree.column(
+                "count",
+                width=count_width,
+                stretch=tk.NO,
+            )
+        full_heading_threshold = int(round(540 * scale))
+        if (
+            bool(getattr(self, "_left_sidebar_compact", False))
+            or available_width < full_heading_threshold
+        ):
+            apply_compact_columns()
+            return
+
         # Full Korean headings need both a wider baseline than the old 420 px
         # cutoff and physical room for the configured Treeview heading font.
-        # Prefer the compact wording whenever that room is unavailable.
-        full_heading_threshold = int(round(540 * scale))
-        if available_width < full_heading_threshold:
-            headings = {"item_name_spec": "품목", "item_code": "코드", "count": "완료"}
-            widths = {
-                "item_name_spec": int(available_width * 0.37),
-                "item_code": int(available_width * 0.33),
-                "count": available_width - int(available_width * 0.37) - int(available_width * 0.33),
-            }
-        else:
-            headings = {"item_name_spec": "품목명", "item_code": "품목코드", "count": "완료 수량"}
-            count_width = max(100, min(150, int(available_width * 0.22)))
-            code_width = max(130, min(210, int(available_width * 0.32)))
-            widths = {
-                "item_name_spec": max(1, available_width - code_width - count_width),
-                "item_code": code_width,
-                "count": count_width,
-            }
+        # Prefer the compact wording whenever that room or the current row data
+        # is unavailable at the live sidebar font size.
+        headings = {"item_name_spec": "품목명", "item_code": "품목코드", "count": "완료 수량"}
+        required_widths = {
+            "item_name_spec": self._tree_column_required_width(
+                self.summary_tree,
+                "item_name_spec",
+                headings["item_name_spec"],
+                fallback=max(150, int(round(120 * scale))),
+            ),
+            "item_code": self._tree_column_required_width(
+                self.summary_tree,
+                "item_code",
+                headings["item_code"],
+                fallback=max(130, int(round(120 * scale))),
+            ),
+            "count": self._tree_column_required_width(
+                self.summary_tree,
+                "count",
+                headings["count"],
+                fallback=max(100, int(round(72 * scale))),
+            ),
+        }
+        if sum(required_widths.values()) > available_width:
+            apply_compact_columns()
+            return
+
+        apply_display_columns(("item_name_spec", "item_code", "count"))
+        count_width = max(
+            required_widths["count"],
+            max(100, min(150, int(available_width * 0.22))),
+        )
+        code_width = max(
+            required_widths["item_code"],
+            max(130, min(210, int(available_width * 0.32))),
+        )
+        if (
+            count_width
+            + code_width
+            + required_widths["item_name_spec"]
+            > available_width
+        ):
+            count_width = required_widths["count"]
+            code_width = required_widths["item_code"]
+        widths = {
+            "item_name_spec": max(1, available_width - code_width - count_width),
+            "item_code": code_width,
+            "count": count_width,
+        }
         for col_id, heading in headings.items():
             self.summary_tree.heading(col_id, text=heading)
             self.summary_tree.column(col_id, width=max(1, widths[col_id]), stretch=tk.NO)
@@ -2752,13 +3113,54 @@ class ContainerAudit:
         if available_width <= 1:
             return
         scale = max(1.0, min(2.5, float(getattr(self, "scale_factor", 1.0) or 1.0)))
+        def compact_widths() -> tuple[str, str, int, int]:
+            item_heading, count_heading = "품목", "건"
+            count_fallback = max(52, int(round(36 * scale)), int(available_width * 0.18))
+            count_width = self._tree_column_required_width(
+                self.parked_tree,
+                "scan_count",
+                count_heading,
+                fallback=count_fallback,
+            )
+            item_required = self._tree_column_required_width(
+                self.parked_tree,
+                "item_name",
+                item_heading,
+                fallback=max(140, int(round(110 * scale))),
+            )
+            if item_required + count_width > available_width:
+                count_width = max(
+                    count_fallback,
+                    min(count_width, max(1, available_width - item_required)),
+                )
+            return item_heading, count_heading, item_required, count_width
+
         full_heading_threshold = int(round(380 * scale))
         if available_width < full_heading_threshold:
-            item_heading, count_heading = "품목", "수량"
-            count_width = max(58, int(available_width * 0.32))
+            item_heading, count_heading, _item_required, count_width = compact_widths()
         else:
             item_heading, count_heading = "품목명", "스캔 수량"
-            count_width = max(128, min(180, int(available_width * 0.30)))
+            item_required = self._tree_column_required_width(
+                self.parked_tree,
+                "item_name",
+                item_heading,
+                fallback=max(160, int(round(120 * scale))),
+            )
+            count_required = self._tree_column_required_width(
+                self.parked_tree,
+                "scan_count",
+                count_heading,
+                fallback=max(128, int(round(84 * scale))),
+            )
+            if item_required + count_required > available_width:
+                item_heading, count_heading, _item_required, count_width = compact_widths()
+            else:
+                count_width = max(
+                    count_required,
+                    max(128, min(180, int(available_width * 0.30))),
+                )
+                if item_required + count_width > available_width:
+                    count_width = count_required
         count_width = min(count_width, max(1, available_width - 1))
         self.parked_tree.heading('item_name', text=item_heading)
         self.parked_tree.heading('scan_count', text=count_heading)
@@ -2767,15 +3169,20 @@ class ContainerAudit:
 
     def _create_left_sidebar_content(self, parent_frame):
         self._left_sidebar_frame = parent_frame
+        if getattr(self, "_left_sidebar_view", None) not in {"summary", "parked"}:
+            self._left_sidebar_view = "summary"
         parent_frame.grid_columnconfigure(0, weight=1)
         parent_frame['padding'] = (10, 10)
         top_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
+        self._left_top_frame = top_frame
         top_frame.grid(row=0, column=0, sticky='nsew', pady=(0, 10))
         top_frame.grid_columnconfigure(0, weight=1)
         header_frame = ttk.Frame(top_frame, style='Sidebar.TFrame')
+        self._left_header_frame = header_frame
         header_frame.grid(row=0, column=0, sticky='ew', pady=(0, 12))
         header_frame.grid_columnconfigure(0, weight=1)
         worker_info_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
+        self._worker_info_frame = worker_info_frame
         worker_info_frame.grid(row=0, column=0, sticky='ew')
         worker_info_frame.grid_columnconfigure(0, weight=1)
         self.worker_info_label = ttk.Label(
@@ -2787,6 +3194,7 @@ class ContainerAudit:
         self.worker_info_label.grid(row=0, column=0, sticky='ew')
         self._bind_label_to_container_width(self.worker_info_label, worker_info_frame, padding=8)
         buttons_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
+        self._worker_buttons_frame = buttons_frame
         buttons_frame.grid(row=1, column=0, sticky='ew', pady=(6, 0))
         self.change_worker_button = ttk.Button(
             buttons_frame,
@@ -2800,12 +3208,13 @@ class ContainerAudit:
         self._current_work_frame = current_work_frame
         current_work_frame.grid(row=1, column=0, sticky='ew', pady=(0, 14))
         current_work_frame.grid_columnconfigure(0, weight=1)
-        ttk.Label(
+        self.current_work_title_label = ttk.Label(
             current_work_frame,
             text="현재 작업",
             style='Card.Subtle.TLabel',
             anchor='w',
-        ).grid(row=0, column=0, sticky='ew')
+        )
+        self.current_work_title_label.grid(row=0, column=0, sticky='ew')
         self.current_work_name_label = ttk.Label(
             current_work_frame,
             text="현품표 대기",
@@ -2824,6 +3233,19 @@ class ContainerAudit:
         self.current_work_detail_label.grid(row=2, column=0, sticky='ew')
         self._bind_label_to_container_width(self.current_work_name_label, current_work_frame, padding=24)
         self._bind_label_to_container_width(self.current_work_detail_label, current_work_frame, padding=24)
+        switch_frame = ttk.Frame(top_frame, style='Sidebar.TFrame')
+        self._left_view_switch_frame = switch_frame
+        switch_frame.grid_columnconfigure(0, weight=1)
+        self.left_context_switch_button = ttk.Button(
+            switch_frame,
+            text="보류 0건 보기",
+            command=self._toggle_left_sidebar_view,
+            style='Secondary.TButton',
+            width=0,
+        )
+        self.left_context_switch_button.grid(row=0, column=0, sticky='ew')
+        switch_frame.grid_remove()
+
         self.summary_title_label = ttk.Label(
             top_frame,
             text="누적 작업 현황",
@@ -2834,12 +3256,13 @@ class ContainerAudit:
         self.summary_title_label.grid(row=2, column=0, sticky='ew', pady=(0,10))
         self._bind_label_to_container_width(self.summary_title_label, top_frame, padding=8)
         tree_frame = ttk.Frame(top_frame)
+        self._summary_tree_frame = tree_frame
         tree_frame.grid(row=3, column=0, sticky='nsew')
         top_frame.grid_rowconfigure(3, weight=2)
         tree_frame.grid_columnconfigure(0, weight=1)
         tree_frame.grid_rowconfigure(0, weight=1)
         cols = ('item_name_spec', 'item_code', 'count')
-        self.summary_tree = ttk.Treeview(tree_frame, columns=cols, show='headings', style='Treeview')
+        self.summary_tree = ttk.Treeview(tree_frame, columns=cols, show='headings', style='Sidebar.Treeview')
         self.summary_tree.heading('item_name_spec', text='품목명')
         self.summary_tree.heading('item_code', text='품목코드')
         self.summary_tree.heading('count', text='완료 수량')
@@ -2871,12 +3294,13 @@ class ContainerAudit:
         self.parked_title_label.grid(row=4, column=0, sticky='ew', pady=(20,10))
         self._bind_label_to_container_width(self.parked_title_label, top_frame, padding=8)
         parked_tree_frame = ttk.Frame(top_frame)
+        self._parked_tree_frame = parked_tree_frame
         parked_tree_frame.grid(row=5, column=0, sticky='nsew')
         top_frame.grid_rowconfigure(5, weight=1)
         parked_tree_frame.grid_columnconfigure(0, weight=1)
         parked_tree_frame.grid_rowconfigure(0, weight=1)
         parked_cols = ('item_name', 'scan_count')
-        self.parked_tree = ttk.Treeview(parked_tree_frame, columns=parked_cols, show='headings', style='Treeview', height=4)
+        self.parked_tree = ttk.Treeview(parked_tree_frame, columns=parked_cols, show='headings', style='Sidebar.Treeview', height=4)
         self.parked_tree.heading('item_name', text='품목명')
         self.parked_tree.heading('scan_count', text='스캔 수량')
         self.parked_tree.column('item_name', anchor='w', stretch=tk.YES)
@@ -2889,6 +3313,7 @@ class ContainerAudit:
         self.parked_tree.bind('<Configure>', self._adjust_parked_tree_columns)
         self.root.after_idle(self._adjust_parked_tree_columns)
         self.parked_tree.bind("<Double-1>", self.on_parked_tray_select)
+        self._update_parked_recovery_affordance()
         bottom_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         bottom_frame.grid(row=1, column=0, sticky='nsew')
         bottom_frame.grid_columnconfigure(0, weight=1)
@@ -3236,6 +3661,7 @@ class ContainerAudit:
             return
         tray = getattr(self, "current_tray", None)
         active_tray = bool(getattr(tray, "master_label_code", ""))
+        compact_sidebar = bool(getattr(self, "_left_sidebar_compact", False))
         try:
             if active_tray:
                 item_name = str(getattr(tray, "item_name", "") or "이름 미등록")
@@ -3245,10 +3671,18 @@ class ContainerAudit:
                 target = max(0, int(getattr(tray, "tray_size", 0) or 0))
                 count = len(getattr(tray, "scanned_barcodes", []) or [])
                 name_label.configure(text=display_name)
-                detail_label.configure(text=f"품목 코드 {item_code} · 목표 {target}")
+                detail_label.configure(
+                    text=(
+                        f"{item_code} · 목표 {target}"
+                        if compact_sidebar
+                        else f"품목 코드 {item_code} · 목표 {target}"
+                    )
+                )
             else:
                 name_label.configure(text="현품표 대기")
-                detail_label.configure(text="품목 코드 - · 목표 -")
+                detail_label.configure(
+                    text="- · 목표 -" if compact_sidebar else "품목 코드 - · 목표 -"
+                )
         except (tk.TclError, AttributeError, TypeError, ValueError):
             return
 
@@ -3850,11 +4284,16 @@ class ContainerAudit:
         if not (hasattr(self, 'summary_tree') and self.summary_tree.winfo_exists()): return
         for i in self.summary_tree.get_children(): self.summary_tree.delete(i)
         for row_index, (item_code, data) in enumerate(sorted(self.work_summary.items())):
-            count_display = f"{data.get('count', 0)} 파렛트"
-            if data.get('test_count', 0) > 0: count_display += f" (테스트: {data['test_count']})"
+            count_display = str(data.get('count', 0))
+            if data.get('test_count', 0) > 0:
+                count_display += f" (T{data['test_count']})"
             item_name_spec = f"{data.get('name', '')}"
             tag = 'even' if row_index % 2 == 0 else 'odd'
             self._insert_tree_row(self.summary_tree, '', 'end', values=(item_name_spec, item_code, count_display), tags=(tag,))
+        try:
+            self.root.after_idle(self._adjust_summary_tree_columns)
+        except (AttributeError, tk.TclError):
+            pass
 
     def _update_avg_time(self):
         card = self.info_cards.get('avg_time')
@@ -4801,6 +5240,7 @@ class ContainerAudit:
             self._update_all_summaries()
 
             self._update_parked_trays_list()
+            self._show_left_sidebar_view("parked")
             self.show_status_message("작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
             return True
 
@@ -4819,9 +5259,15 @@ class ContainerAudit:
             self._quarantine_invalid_parked_tray_files()
             for row_index, summary in enumerate(self._parked_store().list_for_worker(self.worker_name)):
                 tag = 'even' if row_index % 2 == 0 else 'odd'
-                self._insert_tree_row(self.parked_tree, '', 'end', values=(summary.item_name, f"{summary.scan_count} 개"), iid=str(summary.path), tags=(tag,))
+                self._insert_tree_row(self.parked_tree, '', 'end', values=(summary.item_name, str(summary.scan_count)), iid=str(summary.path), tags=(tag,))
         except Exception as e:
             print(f"보류 목록 갱신 중 오류: {e}")
+        finally:
+            self._update_parked_recovery_affordance()
+            try:
+                self.root.after_idle(self._adjust_parked_tree_columns)
+            except (AttributeError, tk.TclError):
+                pass
 
     def _quarantine_invalid_parked_tray_files(self):
         store = self._parked_store()
@@ -5000,7 +5446,8 @@ class ContainerAudit:
             self._restore_operator_review_from_state(saved_state)
             self._invalidate_pending_scan_callbacks()
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
-            
+
+            self._left_sidebar_view = "summary"
             self.show_validation_screen()
 
             # 복원 후 이미지 자동 표시

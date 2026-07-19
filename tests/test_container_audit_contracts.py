@@ -6612,6 +6612,7 @@ def test_park_current_tray_logs_identifying_detail(tmp_path):
     assert logged[0]["detail"]["tray_capacity"] == 60
     assert logged[0]["synchronous"] is True
     assert app.current_tray.master_label_code == ""
+    assert app._left_sidebar_view == "parked"
 
 
 def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
@@ -6806,6 +6807,7 @@ def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp
     app.restore_parked_tray(str(parked_file))
 
     assert not parked_file.exists()
+    assert app._left_sidebar_view == "summary"
     assert (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == "PHS=1|CLC=AAA2270730100|QT=60"
     assert logged[0]["event"] == "TRAY_RESTORED_FROM_PARK"
@@ -6985,7 +6987,7 @@ def test_update_parked_trays_list_quarantines_invalid_utf8_file_and_keeps_valid_
 
     assert not corrupt_file.exists()
     assert list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
-    assert app.parked_tree.rows == {str(valid_file): ("valid parked", "2 개")}
+    assert app.parked_tree.rows == {str(valid_file): ("valid parked", "2")}
     assert messages
 
 
