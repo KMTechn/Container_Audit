@@ -119,6 +119,73 @@ from warning_presenter import (
     notice_for_completion,
 )
 
+
+_TK_GEOMETRY_RE = re.compile(
+    r"^(?P<width>[0-9]{3,5})x(?P<height>[0-9]{3,5})"
+    r"(?P<left>[+-][0-9]{1,6})(?P<top>[+-][0-9]{1,6})$"
+)
+
+
+def parse_startup_geometry(value: str) -> tuple[int, int, int, int]:
+    """Parse capture startup geometry as absolute virtual-screen coordinates."""
+
+    match = _TK_GEOMETRY_RE.fullmatch(str(value).strip())
+    if match is None:
+        raise ValueError(f"invalid startup geometry: {value!r}")
+    return tuple(int(match.group(name)) for name in ("width", "height", "left", "top"))
+
+
+def _position_tk_root_absolute(root: Any, left: int, top: int) -> None:
+    """Place Tk's native top-level at absolute virtual-screen coordinates."""
+
+    if os.name != "nt":
+        return
+
+    import ctypes
+    from ctypes import wintypes
+
+    ga_root = 2
+    swp_nosize = 0x0001
+    swp_nozorder = 0x0004
+    swp_noactivate = 0x0010
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.SetWindowPos.argtypes = (
+        wintypes.HWND,
+        wintypes.HWND,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        ctypes.c_int,
+        wintypes.UINT,
+    )
+    user32.SetWindowPos.restype = wintypes.BOOL
+    hwnd = user32.GetAncestor(wintypes.HWND(int(root.winfo_id())), ga_root)
+    if not hwnd:
+        raise ctypes.WinError(ctypes.get_last_error())
+    flags = swp_nosize | swp_nozorder | swp_noactivate
+    if not user32.SetWindowPos(hwnd, 0, int(left), int(top), 0, 0, flags):
+        raise ctypes.WinError(ctypes.get_last_error())
+
+
+def apply_startup_geometry(
+    root: Any,
+    geometry: str,
+    *,
+    absolute_positioner: Any = None,
+) -> tuple[int, int, int, int]:
+    """Size with Tk, then correct its negative-offset semantics while hidden."""
+
+    parsed = parse_startup_geometry(geometry)
+    _width, _height, left, top = parsed
+    root.geometry(geometry)
+    root.update_idletasks()
+    positioner = absolute_positioner or _position_tk_root_absolute
+    positioner(root, left, top)
+    root.update_idletasks()
+    return parsed
+
 # ####################################################################
 # # 자동 업데이트 기능
 # ####################################################################
@@ -708,8 +775,7 @@ class ContainerAudit:
         self.root.title(self.APP_TITLE)
         self.root.minsize(self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
         if startup_geometry:
-            self.root.geometry(startup_geometry)
-            self.root.update_idletasks()
+            apply_startup_geometry(self.root, startup_geometry)
             self.root.deiconify()
         else:
             self.root.geometry(self.DEFAULT_RESTORED_GEOMETRY)
