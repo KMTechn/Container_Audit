@@ -73,6 +73,13 @@ v2.0.31은 `Inspection_worker v2.0.49`의 작업 중심 UI 원칙을 Container A
 
 GitHub Release에는 workflow 계약상 ZIP과 SHA-256 파일만 업로드합니다. private manifest와 서명은 설정된 사내 HTTPS update feed로만 발행합니다.
 
+### GitHub Release와 private update feed 분리
+
+- 태그 workflow는 기본적으로 전체 테스트, 버전 검사, PyInstaller 빌드, archive smoke와 GitHub Release 자산 게시만 수행합니다.
+- 사내 private update manifest 생성·서명·업로드는 저장소 변수 `ENABLE_PRIVATE_UPDATE_FEED_PUBLISH`가 정확히 `true`일 때만 실행합니다. 변수가 없거나 `false`이면 기존 private feed URL 변수가 남아 있어도 실행하지 않습니다.
+- opt-in이 없으면 release config의 updater provider는 `github`로 고정됩니다. opt-in 시에는 기존 private manifest URL·공개키, HTTPS artifact URL, Ed25519 signing key, HTTPS upload URL·token, checksum 및 rollout 검사를 그대로 적용합니다.
+- 이 opt-in은 feed 게시 권한을 대신하지 않습니다. WorkerAnalysis 복구, feed 무결성 검증과 별도 게시 승인이 끝난 경우에만 `true`로 전환해야 합니다.
+
 ## 외부 릴리스 게이트
 
 다음 항목은 이번 로컬 준비 작업에 포함되지 않았으며, 모두 통과하기 전에는 배포 완료로 간주하지 않습니다.
@@ -83,7 +90,7 @@ GitHub Release에는 workflow 계약상 ZIP과 SHA-256 파일만 업로드합니
 4. 원격 `main` push 전 전체 CI 통과 및 변경 승인
 5. `CURRENT_VERSION`과 정확히 같은 `v2.0.31` 태그 생성 승인
 6. 태그 workflow의 전체 pytest, release config 검사, PyInstaller 빌드, archive smoke, checksum 성공
-7. private update 사용 시 HTTPS artifact URL, manifest URL·공개키, Ed25519 signing key, upload URL·token 및 rollout 설정 검증
+7. private update 사용 시 별도 게시 승인 후 `ENABLE_PRIVATE_UPDATE_FEED_PUBLISH=true` 설정 및 HTTPS artifact URL, manifest URL·공개키, Ed25519 signing key, upload URL·token과 rollout 설정 검증
 8. GitHub Release와 private feed 발행 승인, 한 현장 canary 완료 후 단계적 rollout
 
 이 문서 작성 시점에는 commit, push, tag, GitHub Release, private update publish를 실행하지 않았습니다.

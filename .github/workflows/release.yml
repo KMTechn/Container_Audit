@@ -36,13 +36,29 @@ jobs:
       - name: Check release version
         run: python tools/check_release_version.py --tag "${{ github.ref_name }}"
 
+      - name: Resolve private update feed publish mode
+        id: private_feed
+        shell: pwsh
+        env:
+          PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ vars.ENABLE_PRIVATE_UPDATE_FEED_PUBLISH }}
+        run: |
+          $privateFeedMode = if ($null -eq $env:PRIVATE_UPDATE_FEED_PUBLISH_MODE) { "" } else { $env:PRIVATE_UPDATE_FEED_PUBLISH_MODE }
+          if (@("", "false", "true") -cnotcontains $privateFeedMode) {
+            throw "ENABLE_PRIVATE_UPDATE_FEED_PUBLISH must be exactly 'true', 'false', or unset."
+          }
+          $enabled = if ($privateFeedMode -ceq "true") { "true" } else { "false" }
+          "enabled=$enabled" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
       - name: Prepare release config
         shell: pwsh
         env:
+          PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ steps.private_feed.outputs.enabled }}
           PRIVATE_UPDATE_MANIFEST_URL: ${{ vars.PRIVATE_UPDATE_MANIFEST_URL }}
           PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL: ${{ vars.PRIVATE_UPDATE_MANIFEST_SIGNATURE_URL }}
           PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY: ${{ vars.PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY }}
           PRIVATE_UPDATE_CHANNEL: ${{ vars.PRIVATE_UPDATE_CHANNEL }}
+          PRIVATE_UPDATE_ARTIFACT_BASE_URL: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}
+          COMPANY_UPDATE_UPLOAD_URL: ${{ vars.COMPANY_UPDATE_UPLOAD_URL }}
         run: |
           Remove-Item -LiteralPath build/release_config -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path build/release_config | Out-Null
@@ -50,9 +66,19 @@ jobs:
           $settingsPath = "build/release_config/container_audit_settings.json"
           $settings = Get-Content -Raw -Encoding UTF8 -LiteralPath $settingsPath | ConvertFrom-Json
           $channel = if ([string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_CHANNEL)) { "stable" } else { $env:PRIVATE_UPDATE_CHANNEL.Trim() }
-          if (-not [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_URL) -or -not [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY)) {
+          $privateFeedMode = if ($null -eq $env:PRIVATE_UPDATE_FEED_PUBLISH_MODE) { "" } else { $env:PRIVATE_UPDATE_FEED_PUBLISH_MODE }
+          if (@("", "false", "true") -cnotcontains $privateFeedMode) {
+            throw "ENABLE_PRIVATE_UPDATE_FEED_PUBLISH must be exactly 'true', 'false', or unset."
+          }
+          $publishPrivateFeed = $privateFeedMode -ceq "true"
+          if ($publishPrivateFeed) {
             if ([string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_URL) -or [string]::IsNullOrWhiteSpace($env:PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY)) {
               throw "PRIVATE_UPDATE_MANIFEST_URL and PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY must be set together."
+            }
+            foreach ($name in @("PRIVATE_UPDATE_ARTIFACT_BASE_URL", "COMPANY_UPDATE_UPLOAD_URL")) {
+              if ([string]::IsNullOrWhiteSpace((Get-Item "Env:$name").Value)) {
+                throw "$name is required when ENABLE_PRIVATE_UPDATE_FEED_PUBLISH is true."
+              }
             }
             $updateSettings = [ordered]@{
               provider = "private_manifest"
@@ -102,6 +128,10 @@ jobs:
 
       - name: Smoke check release archive
         shell: pwsh
+        env:
+          PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ steps.private_feed.outputs.enabled }}
+          PRIVATE_UPDATE_ARTIFACT_BASE_URL: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}
+          PRIVATE_UPDATE_ROLLOUT_PERCENTAGE: ${{ vars.PRIVATE_UPDATE_ROLLOUT_PERCENTAGE }}
         run: |
           $zipPath = "Container_Audit-${{ github.ref_name }}.zip"
           $smokeDir = Join-Path $env:RUNNER_TEMP "container-audit-release-smoke"
@@ -142,10 +172,10 @@ jobs:
           $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256
           "$($hash.Hash.ToLowerInvariant())  $zipPath" | Set-Content -LiteralPath "$zipPath.sha256" -Encoding ascii
           $zipInfo = Get-Item -LiteralPath $zipPath
-          if (-not [string]::IsNullOrWhiteSpace("${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}")) {
+          if ($env:PRIVATE_UPDATE_FEED_PUBLISH_MODE -ceq "true") {
             $manifestPath = "Container_Audit-${{ github.ref_name }}.manifest.json"
-            $baseUrl = "${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL }}".Trim().TrimEnd("/")
-            $rolloutPercentageRaw = "${{ vars.PRIVATE_UPDATE_ROLLOUT_PERCENTAGE }}"
+            $baseUrl = $env:PRIVATE_UPDATE_ARTIFACT_BASE_URL.Trim().TrimEnd("/")
+            $rolloutPercentageRaw = $env:PRIVATE_UPDATE_ROLLOUT_PERCENTAGE
             $baseUri = [System.Uri]$baseUrl
             if ($baseUri.Scheme -ne "https") {
               throw "PRIVATE_UPDATE_ARTIFACT_BASE_URL must use HTTPS."
@@ -209,7 +239,7 @@ jobs:
           }
 
       - name: Sign private update manifest
-        if: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL != '' }}
+        if: ${{ steps.private_feed.outputs.enabled == 'true' }}
         shell: pwsh
         env:
           PRIVATE_UPDATE_MANIFEST_SIGNING_KEY: ${{ secrets.PRIVATE_UPDATE_MANIFEST_SIGNING_KEY }}
@@ -250,7 +280,7 @@ jobs:
           }
 
       - name: Publish private update feed
-        if: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL != '' }}
+        if: ${{ steps.private_feed.outputs.enabled == 'true' }}
         shell: pwsh
         env:
           COMPANY_UPDATE_UPLOAD_URL: ${{ vars.COMPANY_UPDATE_UPLOAD_URL }}

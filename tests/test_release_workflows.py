@@ -73,6 +73,36 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "Container_Audit-${{ github.ref_name }}.manifest.json" not in upload_block
 
 
+def test_release_workflow_requires_explicit_private_feed_publish_opt_in():
+    root = Path(__file__).resolve().parents[1]
+    release_text = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    explicit_opt_in = "${{ steps.private_feed.outputs.enabled == 'true' }}"
+
+    assert "PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ vars.ENABLE_PRIVATE_UPDATE_FEED_PUBLISH }}" in release_text
+    assert "id: private_feed" in release_text
+    assert 'ENABLE_PRIVATE_UPDATE_FEED_PUBLISH must be exactly \'true\', \'false\', or unset.' in release_text
+    assert '$enabled = if ($privateFeedMode -ceq "true") { "true" } else { "false" }' in release_text
+    assert '"enabled=$enabled" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append' in release_text
+    assert release_text.count("PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ steps.private_feed.outputs.enabled }}") == 2
+    assert '$publishPrivateFeed = $privateFeedMode -ceq "true"' in release_text
+    assert 'if ($env:PRIVATE_UPDATE_FEED_PUBLISH_MODE -ceq "true")' in release_text
+    assert release_text.count(f"if: {explicit_opt_in}") == 2
+    assert "if: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL != '' }}" not in release_text
+    assert 'provider = "github"' in release_text
+    assert 'provider = "private_manifest"' in release_text
+
+    sign_block = release_text[
+        release_text.index("- name: Sign private update manifest"):
+        release_text.index("- name: Publish private update feed")
+    ]
+    publish_block = release_text[
+        release_text.index("- name: Publish private update feed"):
+        release_text.index("- name: Create Release and Upload Asset")
+    ]
+    assert f"if: {explicit_opt_in}" in sign_block
+    assert f"if: {explicit_opt_in}" in publish_block
+
+
 def test_ci_workflow_tests_supported_python_minors():
     root = Path(__file__).resolve().parents[1]
     ci_text = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
