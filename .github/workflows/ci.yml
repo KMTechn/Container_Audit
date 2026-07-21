@@ -56,9 +56,11 @@ jobs:
           Copy-Item -LiteralPath tools/direct_sync_relay_install_pack.py -Destination build/release_tools/direct_sync_relay_install_pack.py
           Copy-Item -LiteralPath tools/direct_sync_relay_operator.py -Destination build/release_tools/direct_sync_relay_operator.py
           Copy-Item -LiteralPath tools/register_container_audit_worker_pc.py -Destination build/release_tools/register_container_audit_worker_pc.py
+          Copy-Item -LiteralPath tools/install_logistics_runtime_profile.py -Destination build/release_tools/install_logistics_runtime_profile.py
+          Copy-Item -LiteralPath tools/check_logistics_runtime_profile.py -Destination build/release_tools/check_logistics_runtime_profile.py
 
       - name: Build PyInstaller smoke artifact
-        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "direct_sync_operator.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
+        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "direct_sync_operator.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
 
       - name: Build bundled direct-sync relay executable
         run: python -m PyInstaller --name "Container_Audit_DirectSync_Relay" --onefile --console --distpath dist/Container_Audit --workpath build/direct_sync_relay_pyinstaller --specpath build/direct_sync_relay_pyinstaller tools/direct_sync_relay_runner.py
@@ -68,6 +70,12 @@ jobs:
 
       - name: Build bundled worker-PC registration executable
         run: python -m PyInstaller --name "Container_Audit_Worker_PC_Register" --onefile --console --distpath dist/Container_Audit --workpath build/worker_pc_register_pyinstaller --specpath build/worker_pc_register_pyinstaller tools/register_container_audit_worker_pc.py
+
+      - name: Build bundled logistics profile tools
+        run: |
+          python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Install" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_install_pyinstaller --specpath build/logistics_profile_install_pyinstaller tools/install_logistics_runtime_profile.py
+          python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Check" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_check_pyinstaller --specpath build/logistics_profile_check_pyinstaller tools/check_logistics_runtime_profile.py
+          Copy-Item -LiteralPath docs/LOGISTICS_RUNTIME_PROFILE.md -Destination dist/Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md
 
       - name: Smoke check CI update archive
         shell: pwsh
