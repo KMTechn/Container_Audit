@@ -127,6 +127,7 @@ class LogisticsTransferClient:
         authority_scope_id: str = "",
         authority_epoch: int = 0,
         authority_plane: str = "",
+        ledger_plane: str = "",
         plane_epoch: int = 0,
         authoritative_required: bool = False,
     ) -> None:
@@ -138,6 +139,7 @@ class LogisticsTransferClient:
         self.authority_scope_id = str(authority_scope_id or "").strip()
         self.authority_epoch = int(authority_epoch or 0)
         self.authority_plane = str(authority_plane or "").strip().upper()
+        self.ledger_plane = str(ledger_plane or authority_plane or "").strip().upper()
         self.plane_epoch = int(plane_epoch or 0)
         self.authoritative_required = bool(authoritative_required)
         if not self.base_url or not self.token or not self.source_host_id:
@@ -156,6 +158,7 @@ class LogisticsTransferClient:
             not self.authority_scope_id
             or self.authority_epoch < 1
             or self.authority_plane != "AUTHORITATIVE"
+            or self.ledger_plane not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}
             or self.plane_epoch < 1
         ):
             raise ValueError("authoritative logistics profile is incomplete")
@@ -181,7 +184,7 @@ class LogisticsTransferClient:
             )
         if self.authority_epoch and authority_epoch is not None and int(authority_epoch) != self.authority_epoch:
             raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "authority epoch가 설치 프로필과 다릅니다.")
-        if self.authority_plane and ledger_plane and str(ledger_plane).upper() != self.authority_plane:
+        if self.ledger_plane and ledger_plane and str(ledger_plane).upper() != self.ledger_plane:
             raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "ledger plane이 설치 프로필과 다릅니다.")
         if self.plane_epoch and plane_epoch is not None and int(plane_epoch) != self.plane_epoch:
             raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "plane epoch가 설치 프로필과 다릅니다.")
@@ -1155,6 +1158,7 @@ def logistics_transfer_client_from_env(
             authority_scope_id=profile.authority_scope,
             authority_epoch=profile.authority_epoch,
             authority_plane=profile.authority_plane,
+            ledger_plane=profile.ledger_plane,
             plane_epoch=profile.plane_epoch,
             authoritative_required=required,
         )

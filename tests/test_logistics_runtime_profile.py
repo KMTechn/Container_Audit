@@ -15,7 +15,7 @@ from logistics_runtime_profile import (
     protect_machine_secret,
     unprotect_machine_secret,
 )
-from transfer_seal import logistics_transfer_client_from_env
+from transfer_seal import TransferSealError, logistics_transfer_client_from_env
 from tools.install_logistics_runtime_profile import (
     install_runtime_profile,
     main as install_main,
@@ -114,7 +114,37 @@ def test_machine_profile_uses_dpapi_reference_and_redacts_token(tmp_path, monkey
     assert resolved is not None
     assert resolved.authority_scope == "scope-machine"
     assert resolved.authority_plane == "AUTHORITATIVE"
+    assert resolved.ledger_plane == "AUTHORITATIVE"
     assert "machine-secret" not in repr(resolved)
+
+
+def test_required_profile_separates_authority_mode_from_selected_ledger_plane(
+    tmp_path, monkeypatch
+):
+    path = _profile(tmp_path, ledger_plane="SHADOW_CANDIDATE")
+    _env(monkeypatch, path)
+
+    client = logistics_transfer_client_from_env(
+        session=_Session(),
+        profile_decryptor=lambda _value: "machine-secret",
+    )
+
+    assert client is not None
+    assert client.authority_plane == "AUTHORITATIVE"
+    assert client.ledger_plane == "SHADOW_CANDIDATE"
+    client.assert_authority(
+        "scope-machine",
+        authority_epoch=7,
+        ledger_plane="SHADOW_CANDIDATE",
+        plane_epoch=3,
+    )
+    with pytest.raises(TransferSealError, match="ledger plane"):
+        client.assert_authority(
+            "scope-machine",
+            authority_epoch=7,
+            ledger_plane="AUTHORITATIVE",
+            plane_epoch=3,
+        )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows DPAPI round-trip")
@@ -164,6 +194,7 @@ def test_dpapi_secret_path_rejects_reparse_before_resolving(
         ({"base_url": "https://logistics.example.invalid:99999"}, "valid URL"),
         ({"base_url": "https://127.0.0.1:8443"}, "loopback"),
         ({"authority_plane": "SHADOW_CANDIDATE"}, "AUTHORITATIVE"),
+        ({"ledger_plane": "UNKNOWN"}, "ledger_plane"),
         ({"bearer_token_ref": "dpapi:../token.dpapi"}, "profile directory"),
         ({"bearer_token": "plaintext"}, "plaintext"),
     ],
@@ -295,6 +326,7 @@ def test_installer_dry_run_is_write_free_and_never_prints_token(tmp_path, monkey
             "--base-url", "https://logistics.example.invalid",
             "--authority-scope", "scope-machine",
             "--authority-epoch", "7",
+            "--ledger-plane", "SHADOW_CANDIDATE",
             "--plane-epoch", "3",
             "--device-id", "container-pc-01",
             "--source-host-id", "container-host-01",
@@ -306,6 +338,9 @@ def test_installer_dry_run_is_write_free_and_never_prints_token(tmp_path, monkey
 
     assert result == 0
     assert token not in captured.out + captured.err
+    report = json.loads(captured.out)
+    assert report["authority_plane"] == "AUTHORITATIVE"
+    assert report["ledger_plane"] == "SHADOW_CANDIDATE"
     assert not target.parent.exists()
 
 
