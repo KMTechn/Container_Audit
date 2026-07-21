@@ -8,7 +8,7 @@ from event_contracts import stable_hash
 
 
 EXCHANGE_CONTRACT_VERSION = "container-audit-product-exchange-v1"
-MAX_EXCHANGE_TARGET_QUANTITY = 10
+MAX_EXCHANGE_TARGET_QUANTITY = 2
 
 
 @dataclass
@@ -154,6 +154,7 @@ def validate_exchange_completion(session: ProductExchangeSession) -> ExchangeSca
         isinstance(session.target_quantity, bool)
         or not isinstance(session.target_quantity, int)
         or session.target_quantity <= 0
+        or session.target_quantity > MAX_EXCHANGE_TARGET_QUANTITY
     ):
         return ExchangeScanResult(status="error", title="교환 오류", message="교환 목표 수량이 올바르지 않습니다.")
     if not isinstance(session.item_code, str) or not session.item_code.strip():

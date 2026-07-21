@@ -12,7 +12,13 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping
-from urllib.parse import quote, urlencode
+from urllib.parse import quote, unquote, urlencode, urlsplit
+
+from logistics_runtime_profile import (
+    LogisticsRuntimeConfigurationError,
+    load_logistics_runtime_profile,
+    logistics_runtime_required,
+)
 
 
 SCHEMA_VERSION = "container-audit-transfer-seal-v1"
@@ -66,11 +72,12 @@ def source_identity_from_label(master_label_fields: Mapping[str, Any]) -> dict[s
     input_tag_label_id = str(fields.get("LBL") or "").strip()
     source_kind = str(fields.get("SRC") or "").strip()
     compat_work_order_id = str(fields.get("WID") or fields.get("WORK_ORDER_ID") or "").strip()
-    is_input_tag = source_kind.upper() == "KMTECH_INPUT_TAG" or bool(
-        input_tag_id and input_tag_label_id
-    )
+    is_input_tag = source_kind.upper() == "KMTECH_INPUT_TAG" or bool(input_tag_id)
     source_bundle_id = str(
         fields.get("BND") or fields.get("BUNDLE_ID") or fields.get("SOURCE_BUNDLE_ID") or ""
+    ).strip()
+    authority_scope_id = str(
+        fields.get("AUTH_SCOPE") or fields.get("AUTHORITY_SCOPE_ID") or ""
     ).strip()
     return {
         "source_bundle_id": source_bundle_id,
@@ -81,6 +88,7 @@ def source_identity_from_label(master_label_fields: Mapping[str, Any]) -> dict[s
         "external_label": "" if is_input_tag else str(
             fields.get("PHS_EXTERNAL_ID") or compat_work_order_id or ""
         ).strip(),
+        "authority_scope_id": authority_scope_id,
         "item_id": item_id,
     }
 
@@ -116,19 +124,67 @@ class LogisticsTransferClient:
         device_id: str = "",
         timeout_seconds: float = 10.0,
         session: Any = None,
+        authority_scope_id: str = "",
+        authority_epoch: int = 0,
+        authority_plane: str = "",
+        plane_epoch: int = 0,
+        authoritative_required: bool = False,
     ) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.token = str(token or "").strip()
         self.source_host_id = str(source_host_id or "").strip()
         self.device_id = str(device_id or source_host_id or "").strip()
         self.timeout_seconds = max(float(timeout_seconds), 0.1)
+        self.authority_scope_id = str(authority_scope_id or "").strip()
+        self.authority_epoch = int(authority_epoch or 0)
+        self.authority_plane = str(authority_plane or "").strip().upper()
+        self.plane_epoch = int(plane_epoch or 0)
+        self.authoritative_required = bool(authoritative_required)
         if not self.base_url or not self.token or not self.source_host_id:
             raise ValueError("base_url, token, and source_host_id are required")
+        parsed = urlsplit(self.base_url)
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("logistics base_url must be credential-free HTTPS")
+        if self.authoritative_required and (
+            not self.authority_scope_id
+            or self.authority_epoch < 1
+            or self.authority_plane != "AUTHORITATIVE"
+            or self.plane_epoch < 1
+        ):
+            raise ValueError("authoritative logistics profile is incomplete")
         if session is None:
             import requests
 
             session = requests.Session()
         self.session = session
+
+    def assert_authority(
+        self,
+        scope_id: str,
+        *,
+        authority_epoch: int | None = None,
+        ledger_plane: str = "",
+        plane_epoch: int | None = None,
+    ) -> None:
+        scope = str(scope_id or "").strip()
+        if self.authority_scope_id and scope != self.authority_scope_id:
+            raise TransferSealError(
+                "AUTHORITY_PROFILE_MISMATCH",
+                "스캔 데이터의 authority scope가 설치된 물류 프로필과 다릅니다.",
+            )
+        if self.authority_epoch and authority_epoch is not None and int(authority_epoch) != self.authority_epoch:
+            raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "authority epoch가 설치 프로필과 다릅니다.")
+        if self.authority_plane and ledger_plane and str(ledger_plane).upper() != self.authority_plane:
+            raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "ledger plane이 설치 프로필과 다릅니다.")
+        if self.plane_epoch and plane_epoch is not None and int(plane_epoch) != self.plane_epoch:
+            raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "plane epoch가 설치 프로필과 다릅니다.")
 
     def _headers(self, idempotency_key: str = "") -> dict[str, str]:
         headers = {
@@ -193,6 +249,11 @@ class LogisticsTransferClient:
             if str(identity.get(key) or "").strip()
         }
         params["bundle_role"] = "TRANSFER_SOURCE"
+        if self.authority_scope_id:
+            supplied_scope = str(params.get("authority_scope_id") or "").strip()
+            if supplied_scope and supplied_scope != self.authority_scope_id:
+                self.assert_authority(supplied_scope)
+            params["authority_scope_id"] = self.authority_scope_id
         if not any(params.get(key) for key in ("bundle_id", "input_tag_id", "external_label")):
             raise TransferSealError(
                 "SOURCE_IDENTITY_REQUIRED",
@@ -202,12 +263,33 @@ class LogisticsTransferClient:
         return dict(result or {})
 
     def get_authority(self, scope_id: str) -> dict[str, Any]:
+        self.assert_authority(scope_id)
         result = self._request(
             "GET", f"/logistics/api/v1/authority/{quote(str(scope_id), safe='')}"
         )
         return dict(result or {})
 
+    def get_capabilities(self) -> dict[str, Any]:
+        result = self._request("GET", "/logistics/api/v1/capabilities")
+        return dict(result or {})
+
+    def resolve_good_source(
+        self, *, authority_scope_id: str, barcode: str
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        normalized_barcode = normalize_barcode(barcode)
+        query = urlencode(
+            {"authority_scope_id": scope, "barcode": normalized_barcode}
+        )
+        result = self._request(
+            "GET",
+            "/logistics/api/v1/replacements/good-source/resolve?" + query,
+        )
+        return dict(result or {})
+
     def get_receipt(self, scope_id: str, idempotency_key: str) -> dict[str, Any] | None:
+        self.assert_authority(scope_id)
         return self._request(
             "GET",
             "/logistics/api/v1/receipts/"
@@ -220,6 +302,12 @@ class LogisticsTransferClient:
         idempotency_key = str(context.get("idempotency_key") or "").strip()
         if not scope_id or not idempotency_key:
             raise ValueError("command context requires scope and idempotency key")
+        self.assert_authority(
+            scope_id,
+            authority_epoch=context.get("authority_epoch"),
+            ledger_plane=str(context.get("ledger_plane") or ""),
+            plane_epoch=context.get("plane_epoch"),
+        )
         try:
             result = self._request(
                 "POST",
@@ -245,6 +333,66 @@ class LogisticsTransferClient:
             raise TransferSealError(
                 "TRANSPORT_ERROR",
                 "물류 서버 응답을 확인하지 못했습니다.",
+                retryable=True,
+                committed=None,
+                details={"exception_type": exc.__class__.__name__},
+            ) from exc
+
+    def replace_bundle_members(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        scope_id = str(context.get("authority_scope_id") or "").strip()
+        idempotency_key = str(context.get("idempotency_key") or "").strip()
+        payload = context.get("payload")
+        target_bundle_id = (
+            str(payload.get("target_bundle_id") or "").strip()
+            if isinstance(payload, Mapping)
+            else ""
+        )
+        if not scope_id or not idempotency_key or not target_bundle_id:
+            raise ValueError("exchange command requires scope, idempotency key, and target bundle")
+        self.assert_authority(
+            scope_id,
+            authority_epoch=context.get("authority_epoch"),
+            ledger_plane=str(context.get("ledger_plane") or ""),
+            plane_epoch=context.get("plane_epoch"),
+        )
+        path = (
+            "/logistics/api/v1/bundles/"
+            + quote(target_bundle_id, safe="")
+            + "/members/replace"
+        )
+        try:
+            result = self._request(
+                "POST",
+                path,
+                payload=context,
+                idempotency_key=idempotency_key,
+            )
+            return dict(result or {})
+        except TransferSealError as exc:
+            should_recover_receipt = (
+                exc.committed is True
+                or exc.committed is None
+                or exc.status_code >= 500
+            )
+            if not should_recover_receipt:
+                raise
+            try:
+                recovered = self.get_receipt(scope_id, idempotency_key)
+            except Exception:
+                raise exc
+            if recovered is not None:
+                return recovered
+            raise exc
+        except Exception as exc:
+            try:
+                recovered = self.get_receipt(scope_id, idempotency_key)
+            except Exception:
+                recovered = None
+            if recovered is not None:
+                return recovered
+            raise TransferSealError(
+                "TRANSPORT_ERROR",
+                "중앙 제품 교체 응답을 확인하지 못했습니다.",
                 retryable=True,
                 committed=None,
                 details={"exception_type": exc.__class__.__name__},
@@ -450,7 +598,10 @@ class TransferSealStore:
             "RECEIPT_MEMBERSHIP_MISMATCH",
             "SOURCE_IDENTITY_REQUIRED",
             "AUTHORITY_INVALID",
+            "AUTHORITY_PROFILE_MISMATCH",
+            "RESOLVER_CONTRACT_INVALID",
         }
+        terminal_cas_conflict = error.status_code in {409, 412}
         terminal_client_error = (
             400 <= error.status_code < 500
             and error.status_code != 404
@@ -458,7 +609,11 @@ class TransferSealStore:
         )
         status = (
             "OPERATOR_REVIEW"
-            if error.code.upper() in operator_review_codes or terminal_client_error
+            if (
+                error.code.upper() in operator_review_codes
+                or terminal_cas_conflict
+                or terminal_client_error
+            )
             else "RETRY_WAIT"
         )
         with self._connect() as conn:
@@ -602,10 +757,11 @@ class TransferSealCoordinator:
             "bundle_id": identity.get("source_bundle_id"),
             "input_tag_id": identity.get("input_tag_id"),
             "external_label": identity.get("external_label"),
+            "authority_scope_id": identity.get("authority_scope_id"),
             "item_id": identity.get("item_id") or row["item_id"],
         }
         try:
-            bundle = self.client.resolve_source(resolve_identity)
+            resolved = self.client.resolve_source(resolve_identity)
         except TransferSealError as exc:
             if exc.status_code == 404:
                 raise TransferSealError(
@@ -615,6 +771,23 @@ class TransferSealCoordinator:
                     details=exc.details,
                 ) from exc
             raise
+        bundle_value = resolved.get("bundle") if isinstance(resolved, Mapping) else None
+        if not isinstance(bundle_value, Mapping):
+            raise TransferSealError(
+                "RESOLVER_CONTRACT_INVALID",
+                "서버 PHS resolver 응답에 정본 bundle projection이 없습니다.",
+            )
+        candidate_count = resolved.get("candidate_count")
+        if (
+            isinstance(candidate_count, bool)
+            or not isinstance(candidate_count, int)
+            or candidate_count != 1
+        ):
+            raise TransferSealError(
+                "AMBIGUOUS_BUNDLE",
+                "서버 PHS resolver가 이적 원본을 정확히 하나로 확정하지 못했습니다.",
+            )
+        bundle = dict(bundle_value)
         source_bundle_id = _normalize_identifier(bundle.get("bundle_id"), "source_bundle_id")
         if (
             bundle.get("bundle_role") != "TRANSFER_SOURCE"
@@ -628,18 +801,43 @@ class TransferSealCoordinator:
             raise TransferSealError(
                 "SOURCE_IDENTITY_MISMATCH", "서버 원본 bundle의 품목이 현품표와 일치하지 않습니다."
             )
-        source_members = [str(value) for value in bundle.get("member_ids") or []]
-        if not source_members or len(set(source_members)) != len(source_members):
+        raw_source_members = bundle.get("member_ids")
+        if not isinstance(raw_source_members, list):
+            raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS exact membership이 없습니다.")
+        source_members = [str(value or "").strip() for value in raw_source_members]
+        source_member_count = bundle.get("member_count")
+        if (
+            not source_members
+            or any(not value for value in source_members)
+            or len(set(source_members)) != len(source_members)
+            or isinstance(source_member_count, bool)
+            or not isinstance(source_member_count, int)
+            or source_member_count != len(source_members)
+        ):
             raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS membership이 비어 있거나 중복됐습니다.")
         if membership_hash(source_members) != str(bundle.get("membership_hash") or ""):
             raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS membership hash가 일치하지 않습니다.")
-        source_barcodes = sorted(
-            normalize_barcode(member.get("normalized_barcode"))
-            for member in bundle.get("members") or []
-            if isinstance(member, Mapping)
-        )
+        member_rows = bundle.get("members")
+        if not isinstance(member_rows, list) or len(member_rows) != len(source_members):
+            raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS barcode mapping이 일부만 제공됐습니다.")
+        row_unit_ids: list[str] = []
+        source_barcodes: list[str] = []
+        for member in member_rows:
+            if not isinstance(member, Mapping):
+                raise TransferSealError("MEMBERSHIP_CONFLICT", "서버 membership 형식이 잘못되었습니다.")
+            unit_id = str(member.get("unit_id") or "").strip()
+            barcode = str(member.get("normalized_barcode") or "").strip()
+            if not unit_id or not barcode:
+                raise TransferSealError("MEMBERSHIP_CONFLICT", "서버 membership 식별자가 누락됐습니다.")
+            row_unit_ids.append(unit_id)
+            source_barcodes.append(normalize_barcode(barcode))
+        source_barcodes.sort()
         if (
-            len(source_barcodes) != len(source_members)
+            len(set(row_unit_ids)) != len(row_unit_ids)
+            or set(row_unit_ids) != set(source_members)
+            or len(set(source_barcodes)) != len(source_barcodes)
+            or isinstance(bundle.get("barcode_member_count"), bool)
+            or not isinstance(bundle.get("barcode_member_count"), int)
             or bundle.get("barcode_member_count") != len(source_barcodes)
             or bundle.get("barcode_membership_hash") != membership_hash(source_barcodes)
             or not str(bundle.get("source_iin") or "").strip()
@@ -687,7 +885,7 @@ class TransferSealCoordinator:
             raise TransferSealError("AUTHORITY_INVALID", "서버 plane epoch가 잘못됐습니다.")
         if str(bundle.get("ledger_plane") or "") not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}:
             raise TransferSealError("AUTHORITY_INVALID", "서버 ledger plane이 이적 가능한 상태가 아닙니다.")
-        if not isinstance(entity_version, int) or isinstance(entity_version, bool) or entity_version < 0:
+        if not isinstance(entity_version, int) or isinstance(entity_version, bool) or entity_version < 1:
             raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS version이 잘못됐습니다.")
         idempotency_key = f"container-seal:{row['intent_hash']}"
         return {
@@ -710,20 +908,16 @@ class TransferSealCoordinator:
 
     @staticmethod
     def _seal_qr(context: Mapping[str, Any], data: Mapping[str, Any]) -> str:
-        payload = context["payload"]
-        return "|".join(
-            (
-                "TRF=1",
-                f"BND={payload['transfer_bundle_id']}",
-                f"AUTH_SCOPE={context['authority_scope_id']}",
-                f"CLC={data.get('item_id') or payload.get('item_id') or ''}",
-                f"QT={len(payload['member_ids'])}",
-                f"HSH={payload['membership_hash']}",
-                f"EPOCH={context['authority_epoch']}",
-                f"PLANE={context['ledger_plane']}",
-                f"PE={context['plane_epoch']}",
+        # The server is the sole issuer of the opaque seal identity/token.  A
+        # desktop-generated compatibility QR cannot later be invalidated
+        # safely, so never synthesize one from membership data.
+        qr_payload = str(data.get("seal_qr_payload") or "").strip()
+        if not qr_payload:
+            raise TransferSealError(
+                "RECEIPT_MEMBERSHIP_MISMATCH",
+                "서버 receipt에 이적 seal QR이 없습니다.",
             )
-        )
+        return qr_payload
 
     @staticmethod
     def _validate_receipt(context: Mapping[str, Any], receipt: Mapping[str, Any]) -> dict[str, Any]:
@@ -743,8 +937,62 @@ class TransferSealCoordinator:
         source_member_ids = sorted(
             str(value) for value in evidence.get("source_member_ids") or []
         )
+        actual_member_pairs = sorted(
+            (
+                str(row.get("unit_id") or ""),
+                normalize_barcode(row.get("normalized_barcode")),
+            )
+            for row in (data.get("members") or [])
+            if isinstance(row, Mapping)
+        )
+        sealed_member_pairs = sorted(
+            (
+                str(row.get("unit_id") or ""),
+                normalize_barcode(row.get("normalized_barcode")),
+            )
+            for row in (data.get("sealed_members") or [])
+            if isinstance(row, Mapping)
+        )
+        seal_qr_payload = str(data.get("seal_qr_payload") or "").strip()
+        seal_fields = {
+            key.strip().upper(): unquote(value.strip())
+            for key, value in (
+                part.split("=", 1)
+                for part in seal_qr_payload.split("|")
+                if "=" in part
+            )
+        }
+        raw_versions = receipt.get("entity_versions")
+        if not isinstance(raw_versions, Mapping):
+            raw_versions = data.get("entity_versions")
+        actual_versions = dict(raw_versions) if isinstance(raw_versions, Mapping) else {}
+        expected_versions = {
+            str(key): int(value) + 1
+            for key, value in context.get("expected_versions", {}).items()
+        }
+        expected_versions[f"bundle:{payload['transfer_bundle_id']}"] = 1
+        if payload.get("remainder_bundle_id"):
+            expected_versions[f"bundle:{payload['remainder_bundle_id']}"] = 1
         if (
-            data.get("transfer_bundle_id") != payload["transfer_bundle_id"]
+            not str(receipt.get("receipt_id") or "").strip()
+            or receipt.get("contract_version") != CONTRACT_VERSION
+            or receipt.get("command_type") != COMMAND_TYPE
+            or str(receipt.get("status") or "").upper() != "COMMITTED"
+            or receipt.get("authority_scope_id") != context["authority_scope_id"]
+            or receipt.get("authority_epoch") != context["authority_epoch"]
+            or str(receipt.get("resolved_ledger_plane") or "").upper()
+            != str(context["ledger_plane"]).upper()
+            or receipt.get("resolved_plane_epoch") != context["plane_epoch"]
+            or not str(receipt.get("committed_at") or "").strip()
+            or not isinstance(receipt.get("event_ids"), (list, tuple))
+            or not receipt.get("event_ids")
+            or not isinstance(receipt.get("outbox_ids"), (list, tuple))
+            or not receipt.get("outbox_ids")
+            or any(
+                actual_versions.get(key) != version
+                for key, version in expected_versions.items()
+            )
+            or data.get("transfer_bundle_id") != payload["transfer_bundle_id"]
             or data.get("item_id") != payload["item_id"]
             or actual_ids != sorted(payload["member_ids"])
             or data.get("member_count") != len(payload["member_ids"])
@@ -760,7 +1008,42 @@ class TransferSealCoordinator:
             or bool(set(actual_ids) & set(actual_remainder_ids))
             or not str(data.get("inbound_iin") or "").strip()
             or not str(data.get("uom") or "").strip()
-            or data.get("post_seal_exchange_policy") != "BLOCKED_REQUIRES_TWO_BUNDLE_CAS"
+            or data.get("seal_contract_version") != "transfer-seal-qr-v1"
+            or data.get("seal_state") != "ACTIVE"
+            or not str(data.get("seal_id") or "").strip()
+            or data.get("seal_revision") != 1
+            or not str(data.get("seal_token") or "").strip()
+            or data.get("sealed_bundle_id") != payload["transfer_bundle_id"]
+            or data.get("sealed_bundle_version") != 1
+            or sorted(str(value) for value in data.get("sealed_member_ids") or [])
+            != sorted(payload["member_ids"])
+            or len(actual_member_pairs) != len(payload["member_ids"])
+            or sealed_member_pairs != actual_member_pairs
+            or len({unit_id for unit_id, _barcode in sealed_member_pairs})
+            != len(sealed_member_pairs)
+            or len({barcode for _unit_id, barcode in sealed_member_pairs})
+            != len(sealed_member_pairs)
+            or data.get("sealed_member_count") != len(payload["member_ids"])
+            or data.get("sealed_membership_hash") != payload["membership_hash"]
+            or sorted(
+                normalize_barcode(value)
+                for value in data.get("sealed_normalized_barcodes") or []
+            )
+            != expected_barcodes
+            or data.get("sealed_barcode_membership_hash")
+            != membership_hash(expected_barcodes)
+            or seal_fields.get("TRF") != "1"
+            or seal_fields.get("BND") != payload["transfer_bundle_id"]
+            or seal_fields.get("AUTH_SCOPE") != context["authority_scope_id"]
+            or seal_fields.get("CLC") != payload["item_id"]
+            or seal_fields.get("QT") != str(len(payload["member_ids"]))
+            or seal_fields.get("HSH") != payload["membership_hash"]
+            or seal_fields.get("EPOCH") != str(context["authority_epoch"])
+            or seal_fields.get("PLANE") != context["ledger_plane"]
+            or seal_fields.get("PE") != str(context["plane_epoch"])
+            or seal_fields.get("SID") != data.get("seal_id")
+            or seal_fields.get("SREV") != str(data.get("seal_revision"))
+            or seal_fields.get("STK") != data.get("seal_token")
         ):
             raise TransferSealError(
                 "RECEIPT_MEMBERSHIP_MISMATCH",
@@ -847,31 +1130,133 @@ class TransferSealCoordinator:
         )
 
 
+def logistics_transfer_client_from_env(
+    *,
+    session: Any = None,
+    probe_required: bool = True,
+    environ: Mapping[str, str] | None = None,
+    profile_decryptor: Any = None,
+) -> LogisticsTransferClient | None:
+    values = os.environ if environ is None else environ
+    required = logistics_runtime_required(environ)
+    profile = load_logistics_runtime_profile(
+        required,
+        environ=environ,
+        decryptor=profile_decryptor,
+    )
+    if profile is not None:
+        client = LogisticsTransferClient(
+            profile.base_url,
+            profile.bearer_token,
+            profile.source_host_id,
+            device_id=profile.device_id,
+            timeout_seconds=profile.timeout_seconds,
+            session=session,
+            authority_scope_id=profile.authority_scope,
+            authority_epoch=profile.authority_epoch,
+            authority_plane=profile.authority_plane,
+            plane_epoch=profile.plane_epoch,
+            authoritative_required=required,
+        )
+    else:
+        legacy_fields = {
+            "base_url": str(
+                values.get("WORKER_ANALYSIS_LOGISTICS_API_BASE_URL")
+                or values.get("WORKER_ANALYSIS_SERVER_URL")
+                or ""
+            ).strip(),
+            "token": str(values.get("WORKER_ANALYSIS_LOGISTICS_API_TOKEN") or "").strip(),
+            "source_host_id": str(
+                values.get("WORKER_ANALYSIS_LOGISTICS_SOURCE_HOST_ID")
+                or values.get("COMPUTERNAME")
+                or ""
+            ).strip(),
+        }
+        explicitly_configured = bool(
+            legacy_fields["base_url"] or legacy_fields["token"]
+        )
+        if not explicitly_configured:
+            return None
+        if not all(legacy_fields.values()):
+            raise LogisticsRuntimeConfigurationError(
+                "legacy Container logistics environment profile is incomplete"
+            )
+        try:
+            timeout = float(values.get("WORKER_ANALYSIS_LOGISTICS_TIMEOUT_SECONDS", "10"))
+            client = LogisticsTransferClient(
+                legacy_fields["base_url"],
+                legacy_fields["token"],
+                legacy_fields["source_host_id"],
+                device_id=values.get(
+                    "WORKER_ANALYSIS_LOGISTICS_DEVICE_ID",
+                    legacy_fields["source_host_id"],
+                ),
+                timeout_seconds=timeout,
+                session=session,
+            )
+        except (TypeError, ValueError) as exc:
+            raise LogisticsRuntimeConfigurationError(
+                "legacy Container logistics environment profile is invalid"
+            ) from exc
+    if required and probe_required:
+        try:
+            capabilities = client.get_capabilities()
+            capability = (capabilities.get("capabilities") or {}).get(
+                "bundle_member_replacement_v1"
+            )
+            if (
+                "bundle_member_replacement_v1"
+                not in (capabilities.get("capability_ids") or [])
+                or not isinstance(capability, Mapping)
+                or capability.get("enabled") is not True
+                or capability.get("command_type") != "REPLACE_BUNDLE_MEMBERS"
+                or capability.get("resolver_contract_version")
+                != "logistics-good-replacement-source-v1"
+                or capability.get("resolver_path")
+                != "/logistics/api/v1/replacements/good-source/resolve"
+                or capability.get("max_pairs") != 2
+                or capability.get("atomic") is not True
+                or capability.get("two_bundle_cas") is not True
+                or capability.get("sealed_transfer_package") is not False
+                or capability.get("replacement_source_bundle_cardinality")
+                != "EXACTLY_ONE_ACTIVE_MEMBER"
+                or capability.get("multi_member_source_policy")
+                != "REJECT_STALE_PHYSICAL_LABEL"
+                or capability.get("multi_member_source_error_code")
+                != "REPLACEMENT_SOURCE_NOT_SINGLETON"
+                or capability.get("target_label_action") != "RETAIN_IDENTITY_LABEL"
+                or capability.get("target_label_identity_remains_valid") is not True
+                or capability.get("target_label_membership_bound") is not False
+            ):
+                raise LogisticsRuntimeConfigurationError(
+                    "authoritative logistics capability readiness is incomplete"
+                )
+        except LogisticsRuntimeConfigurationError:
+            raise
+        except TransferSealError as exc:
+            raise LogisticsRuntimeConfigurationError(
+                f"authoritative logistics readiness failed: {exc.code}"
+            ) from exc
+        except Exception as exc:
+            raise LogisticsRuntimeConfigurationError(
+                f"authoritative logistics readiness failed: {exc.__class__.__name__}"
+            ) from exc
+    return client
+
+
 def transfer_seal_coordinator_from_env(
-    db_path: str | os.PathLike[str], *, session: Any = None
+    db_path: str | os.PathLike[str],
+    *,
+    session: Any = None,
+    probe_required: bool = True,
+    profile_decryptor: Any = None,
 ) -> TransferSealCoordinator:
     store = TransferSealStore(db_path)
-    base_url = str(
-        os.environ.get("WORKER_ANALYSIS_LOGISTICS_API_BASE_URL")
-        or os.environ.get("WORKER_ANALYSIS_SERVER_URL")
-        or ""
-    ).strip()
-    token = str(os.environ.get("WORKER_ANALYSIS_LOGISTICS_API_TOKEN") or "").strip()
-    source_host_id = str(
-        os.environ.get("WORKER_ANALYSIS_LOGISTICS_SOURCE_HOST_ID")
-        or os.environ.get("COMPUTERNAME")
-        or ""
-    ).strip()
-    client = None
-    if base_url and token and source_host_id:
-        client = LogisticsTransferClient(
-            base_url,
-            token,
-            source_host_id,
-            device_id=os.environ.get("WORKER_ANALYSIS_LOGISTICS_DEVICE_ID", source_host_id),
-            timeout_seconds=float(os.environ.get("WORKER_ANALYSIS_LOGISTICS_TIMEOUT_SECONDS", "10")),
-            session=session,
-        )
+    client = logistics_transfer_client_from_env(
+        session=session,
+        probe_required=probe_required,
+        profile_decryptor=profile_decryptor,
+    )
     return TransferSealCoordinator(store, client)
 
 
@@ -882,6 +1267,7 @@ __all__ = [
     "TransferSealError",
     "TransferSealStore",
     "membership_hash",
+    "logistics_transfer_client_from_env",
     "normalize_barcode",
     "source_identity_from_label",
     "transfer_seal_coordinator_from_env",

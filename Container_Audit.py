@@ -20,6 +20,7 @@ import subprocess
 import random
 import tempfile
 import shutil
+import sqlite3
 from pathlib import Path
 
 from container_audit_test_harness import parse_internal_test_command
@@ -82,7 +83,19 @@ from tray_state import (
     tray_session_to_state,
     validate_tray_state,
 )
-from transfer_seal import SealAttempt, transfer_seal_coordinator_from_env
+from transfer_seal import (
+    SealAttempt,
+    TransferSealCoordinator,
+    TransferSealStore,
+    logistics_transfer_client_from_env,
+    normalize_barcode,
+    transfer_seal_coordinator_from_env,
+)
+from transfer_member_exchange import (
+    MemberExchangeAttempt,
+    TransferMemberExchangeCoordinator,
+    TransferMemberExchangeStore,
+)
 from update_service import (
     UPDATE_CHANNEL_ENV,
     UPDATE_DEFAULT_CHANNEL,
@@ -191,7 +204,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.31"
+CURRENT_VERSION = "v2.0.32"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -768,6 +781,10 @@ class ContainerAudit:
     MIN_WINDOW_HEIGHT = 720
 
     def __init__(self):
+        # Required authoritative mode is checked before Tcl or background
+        # workers start. A missing/invalid profile or failed authenticated
+        # capability probe therefore cannot degrade into silent retry.
+        startup_logistics_client = logistics_transfer_client_from_env()
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
         self.root = tk.Tk()
         if startup_geometry:
@@ -800,8 +817,15 @@ class ContainerAudit:
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
         self._setup_paths_and_dirs()
-        self.transfer_seal_coordinator = transfer_seal_coordinator_from_env(
-            Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
+        self.transfer_seal_coordinator = TransferSealCoordinator(
+            TransferSealStore(
+                Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
+            ),
+            startup_logistics_client,
+        )
+        self.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
+            TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
+            self.transfer_seal_coordinator.client,
         )
         if self.transfer_seal_coordinator.client is not None:
             threading.Thread(
@@ -832,6 +856,9 @@ class ContainerAudit:
         self._scan_callback_epoch = 0
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
+        self._active_transfer_exchange_mode = False
+        self._active_transfer_exchange_master_label = ""
+        self._active_transfer_exchange_intent_id = ""
         self.items_data = self.load_items()
         self.item_catalog = ItemCatalog(self.items_data)
         
@@ -1517,6 +1544,8 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
+        if self._transfer_member_exchange_blocks_local_action("작업자 변경"):
+            return
         msg = "작업자를 변경하시겠습니까?"
         if self.current_tray.master_label_code:
             msg += "\n\n진행 중인 작업은 다음 로그인 시 복구할 수 있도록 저장됩니다."
@@ -1885,7 +1914,9 @@ class ContainerAudit:
         self._update_all_summaries()
         self._update_parked_trays_list()
         if self.current_tray.master_label_code:
+            self._reconcile_pending_local_member_exchanges()
             self._update_current_item_label()
+            self.scanned_listbox.delete(0, tk.END)
             for i, barcode in enumerate(self.current_tray.scanned_barcodes, start=1):
                 self.scanned_listbox.insert(0, self._format_scanned_list_row(i, barcode))
             if self.current_tray.scanned_barcodes:
@@ -2430,6 +2461,7 @@ class ContainerAudit:
         replacement_active: bool,
         exchange_dialog_open: bool,
         exact_exchange_blocked: bool,
+        active_transfer_exchange_available: bool = False,
     ) -> Dict[str, str]:
         if compact:
             return {
@@ -2438,9 +2470,15 @@ class ContainerAudit:
                 "park": "보류",
                 "submit": "확인" if operator_review else "제출",
                 "operations": "운영 작업",
-                "replace": "교체 취소" if replacement_active else "교체",
+                "replace": (
+                    "교체 취소"
+                    if replacement_active
+                    else ("중앙 교체" if exact_exchange_blocked else "교체")
+                ),
                 "exchange": (
-                    "중앙 교환"
+                    "현재 제품 교체"
+                    if active_transfer_exchange_available
+                    else "중앙 교환"
                     if exact_exchange_blocked
                     else ("교환 창" if exchange_dialog_open else "교환")
                 ),
@@ -2451,9 +2489,19 @@ class ContainerAudit:
             "park": "트레이 보류",
             "submit": "담당 확인" if operator_review else "트레이 제출",
             "operations": "운영 작업 ▾",
-            "replace": "교체 취소" if replacement_active else "🔄 완료 현품표 교체",
+            "replace": (
+                "교체 취소"
+                if replacement_active
+                else (
+                    "중앙 교체 워크플로 필요"
+                    if exact_exchange_blocked
+                    else "🔄 완료 현품표 교체"
+                )
+            ),
             "exchange": (
-                "중앙 교환 워크플로 필요"
+                "🔁 현재 이적 제품 교체"
+                if active_transfer_exchange_available
+                else "중앙 교환 워크플로 필요"
                 if exact_exchange_blocked
                 else ("교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환")
             ),
@@ -2467,12 +2515,19 @@ class ContainerAudit:
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = bool(getattr(self, "_exact_exchange_mode_active", False))
+        tray = getattr(self, "current_tray", None)
+        active_transfer_exchange_available = bool(
+            exact_exchange_blocked
+            and getattr(tray, "master_label_code", "")
+            and (getattr(tray, "scanned_barcodes", None) or [])
+        )
         labels = self._action_button_labels(
             compact=1 < int(center_width or 0) < 960,
             operator_review=operator_review,
             replacement_active=replacement_active,
             exchange_dialog_open=exchange_dialog_open,
             exact_exchange_blocked=exact_exchange_blocked,
+            active_transfer_exchange_available=active_transfer_exchange_available,
         )
         for key, widget_name in (
             ("reset", "reset_button"),
@@ -2492,6 +2547,9 @@ class ContainerAudit:
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+        active_transfer_exchange_available = bool(
+            exact_exchange_blocked and active_tray and scanned_count
+        )
         compact_labels = self._use_compact_action_labels()
         labels = self._action_button_labels(
             compact=compact_labels,
@@ -2499,6 +2557,7 @@ class ContainerAudit:
             replacement_active=replacement_active,
             exchange_dialog_open=exchange_dialog_open,
             exact_exchange_blocked=exact_exchange_blocked,
+            active_transfer_exchange_available=active_transfer_exchange_available,
         )
 
         mutation_state = tk.DISABLED if operator_review else tk.NORMAL
@@ -2546,13 +2605,28 @@ class ContainerAudit:
                 getattr(self, "replace_master_label_button", None),
                 text=labels["replace"],
                 style='Secondary.TButton',
-                state=tk.DISABLED if operator_review or active_tray or exchange_dialog_open else tk.NORMAL,
+                state=(
+                    tk.DISABLED
+                    if operator_review
+                    or active_tray
+                    or exchange_dialog_open
+                    or (exact_exchange_blocked and not replacement_active)
+                    else tk.NORMAL
+                ),
             )
 
         self._configure_widget_options(
             getattr(self, "exchange_button", None),
             text=labels["exchange"],
-            state=tk.DISABLED if operator_review or active_tray or replacement_active or exact_exchange_blocked else tk.NORMAL,
+            state=(
+                tk.NORMAL
+                if active_transfer_exchange_available
+                and not operator_review
+                and not replacement_active
+                else tk.DISABLED
+                if operator_review or active_tray or replacement_active or exact_exchange_blocked
+                else tk.NORMAL
+            ),
         )
 
     def _show_operations_menu(self) -> None:
@@ -2565,6 +2639,12 @@ class ContainerAudit:
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+        scanned_count = len(
+            getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or []
+        )
+        active_transfer_exchange_available = bool(
+            exact_exchange_blocked and active_tray and scanned_count
+        )
 
         menu = tk.Menu(self.root, tearoff=False)
         menu.add_command(
@@ -2574,14 +2654,43 @@ class ContainerAudit:
         )
         menu.add_separator()
         menu.add_command(
-            label="현품표 교체 취소" if replacement_active else "완료 현품표 교체",
+            label=(
+                "현품표 교체 취소"
+                if replacement_active
+                else (
+                    "중앙 교체 절차 필요"
+                    if exact_exchange_blocked
+                    else "완료 현품표 교체"
+                )
+            ),
             command=self.initiate_master_label_replacement,
-            state=tk.NORMAL if replacement_active or (not active_tray and not exchange_dialog_open) else tk.DISABLED,
+            state=(
+                tk.NORMAL
+                if replacement_active
+                or (
+                    not exact_exchange_blocked
+                    and not active_tray
+                    and not exchange_dialog_open
+                )
+                else tk.DISABLED
+            ),
         )
         menu.add_command(
-            label="중앙 교환 절차 필요" if exact_exchange_blocked else "개별 제품 교환",
+            label=(
+                "현재 이적 제품 교체"
+                if active_transfer_exchange_available
+                else "중앙 교환 절차 필요"
+                if exact_exchange_blocked
+                else "개별 제품 교환"
+            ),
             command=self.show_exchange_dialog,
-            state=tk.DISABLED if active_tray or replacement_active or exact_exchange_blocked else tk.NORMAL,
+            state=(
+                tk.NORMAL
+                if active_transfer_exchange_available and not replacement_active
+                else tk.DISABLED
+                if active_tray or replacement_active or exact_exchange_blocked
+                else tk.NORMAL
+            ),
         )
         button = getattr(self, "operations_button", None)
         try:
@@ -4093,6 +4202,8 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return False
+        if self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
+            return False
         is_test = self.current_tray.is_test_tray
         has_error = self.current_tray.has_error_or_reset
         is_partial = self.current_tray.is_partial_submission
@@ -4236,6 +4347,8 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
+        if self._transfer_member_exchange_blocks_local_action("마지막 스캔 취소"):
+            return
         self._update_last_activity_time()
         if not self.current_tray.scanned_barcodes: return
         last_barcode = self.current_tray.scanned_barcodes.pop()
@@ -4284,6 +4397,8 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
+        if self._transfer_member_exchange_blocks_local_action("현재 작업 초기화"):
+            return
         self._update_last_activity_time()
         if self.current_tray.master_label_code and messagebox.askyesno("확인", "현재 진행중인 작업을 초기화하시겠습니까?"):
             reset_detail = {
@@ -4317,6 +4432,8 @@ class ContainerAudit:
     def submit_current_tray(self):
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
+            return
+        if self._transfer_member_exchange_blocks_local_action("현재 트레이 제출"):
             return
         self._update_last_activity_time()
         if not self.current_tray.master_label_code or not self.current_tray.scanned_barcodes:
@@ -5031,6 +5148,62 @@ class ContainerAudit:
         self.transfer_seal_coordinator = coordinator
         return coordinator
 
+    def _transfer_member_exchange_runtime(self):
+        coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
+        if coordinator is not None:
+            return coordinator
+        seal_coordinator = self._transfer_seal_runtime()
+        coordinator = TransferMemberExchangeCoordinator(
+            TransferMemberExchangeStore(seal_coordinator.store.db_path),
+            seal_coordinator.client,
+        )
+        self.transfer_member_exchange_coordinator = coordinator
+        return coordinator
+
+    def _current_transfer_member_exchange_attempt(self):
+        coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
+        tray = getattr(self, "current_tray", None)
+        master_label = str(getattr(tray, "master_label_code", "") or "").strip()
+        if coordinator is None or not master_label:
+            return None
+        rows = coordinator.store.blocking_rows(master_label=master_label)
+        if not rows:
+            return None
+        return coordinator._attempt(rows[-1])
+
+    def _transfer_member_exchange_blocks_local_action(self, action: str) -> bool:
+        attempt = self._current_transfer_member_exchange_attempt()
+        if attempt is None:
+            return False
+        if attempt.status == "ACKED" and attempt.local_apply_status == "PENDING":
+            self._reconcile_pending_local_member_exchanges()
+            attempt = self._current_transfer_member_exchange_attempt()
+            if attempt is None:
+                return False
+        if (
+            attempt.status == "OPERATOR_REVIEW"
+            or attempt.local_apply_status == "OPERATOR_REVIEW"
+        ):
+            title = "중앙 제품 교체 확인 필요"
+            message = (
+                "중앙 제품 교체 결과가 운영자 확인 잠금 상태입니다.\n"
+                f"{action} 작업을 진행하지 말고 idempotency receipt와 현재 트레이를 확인하세요."
+            )
+        elif attempt.status == "ACKED":
+            title = "중앙 제품 교체 복구 필요"
+            message = (
+                "중앙 제품 교체는 완료됐지만 현재 트레이에 원자적으로 반영되지 않았습니다.\n"
+                f"로컬 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
+            )
+        else:
+            title = "중앙 제품 교체 응답 대기"
+            message = (
+                "중앙 제품 교체의 commit 여부를 확인 중입니다.\n"
+                f"receipt 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
+            )
+        messagebox.showerror(title, message, parent=getattr(self, "root", None))
+        return True
+
     def _prepare_and_attempt_transfer_seal(
         self,
         *,
@@ -5087,6 +5260,17 @@ class ContainerAudit:
                     )
         except Exception as exc:
             print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")
+        try:
+            exchange_coordinator = self._transfer_member_exchange_runtime()
+            exchange_results = exchange_coordinator.drain_pending()
+            for result in exchange_results:
+                if result.status == "OPERATOR_REVIEW":
+                    print(
+                        "중앙 제품 교체 복구에 작업자 확인이 필요합니다: "
+                        f"{result.intent_id} {result.error_code}"
+                    )
+        except Exception as exc:
+            print(f"중앙 제품 교체 재시작 복구 실패: {exc.__class__.__name__}")
 
     def _exact_transfer_exchange_blocked(self) -> bool:
         if getattr(self, "_exact_exchange_mode_active", False):
@@ -5109,7 +5293,10 @@ class ContainerAudit:
                 reason_code="BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
                 details={
                     "operator": str(getattr(self, "worker_name", "") or ""),
-                    "policy": "post_seal_exchange_requires_transfer_and_counterpart_versions",
+                    "policy": "pre_seal_phs_exchange_requires_target_and_source_versions",
+                    "server_command": "REPLACE_BUNDLE_MEMBERS",
+                    "missing_client_contract": "exact_good_barcode_source_bundle_resolver",
+                    "post_seal_policy": "POST_SEAL_REPLACEMENT_UNSUPPORTED",
                 },
             )
         if getattr(self, "worker_name", "") and getattr(self, "log_file_path", ""):
@@ -5118,14 +5305,48 @@ class ContainerAudit:
                 detail={
                     "reason_code": "BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
                     "restriction_receipt_id": receipt_id,
-                    "message": "target sealed transfer QR and two-bundle CAS are required",
+                    "message": "target/source PHS resolution and multi-bundle CAS are required",
                 },
                 synchronous=True,
             )
         messagebox.showwarning(
             "중앙 교환 워크플로 필요",
             "정확 membership 이력이 있어 기존 개별 교환은 사용할 수 없습니다.\n"
-            "대상 sealed transfer QR과 상대 bundle을 함께 검증하는 중앙 교환 절차가 필요합니다.",
+            "교체 대상 PHS와 새 양품의 소유 PHS를 각각 exact resolve하고 모든 bundle version을 "
+            "한 명령에서 CAS하는 중앙 교환 절차가 필요합니다.\n"
+            "이미 봉인된 TRANSFER/PACKAGE는 서버 정책상 교체할 수 없습니다.",
+        )
+        return True
+
+    def _block_unsafe_exact_master_label_replacement(self) -> bool:
+        if not self._exact_transfer_exchange_blocked():
+            return False
+        coordinator = getattr(self, "transfer_seal_coordinator", None)
+        receipt_id = ""
+        if coordinator is not None:
+            receipt_id = coordinator.store.record_exchange_block(
+                reason_code="BLOCKED_REQUIRES_REPLACE_BUNDLE_MEMBERS_CAS",
+                details={
+                    "operator": str(getattr(self, "worker_name", "") or ""),
+                    "operation": "completed_master_label_replacement",
+                    "policy": "physical_open_reseal_and_exact_bundle_cas_required",
+                },
+            )
+        if getattr(self, "worker_name", "") and getattr(self, "log_file_path", ""):
+            self._log_event(
+                "MASTER_LABEL_REPLACEMENT_BLOCKED_EXACT_MEMBERSHIP",
+                detail={
+                    "reason_code": "BLOCKED_REQUIRES_REPLACE_BUNDLE_MEMBERS_CAS",
+                    "restriction_receipt_id": receipt_id,
+                    "message": "physical open/reseal policy and exact bundle CAS are required",
+                },
+                synchronous=True,
+            )
+        messagebox.showwarning(
+            "중앙 교체 워크플로 필요",
+            "정확 membership 이력이 있어 기존 완료 현품표 교체는 사용할 수 없습니다.\n"
+            "대상 sealed transfer QR, 교체 제품의 원본 bundle, 개봉·재봉인 확인을 함께 "
+            "검증하는 중앙 교체 절차가 필요합니다.",
         )
         return True
 
@@ -5245,6 +5466,8 @@ class ContainerAudit:
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
+            return False
+        if self._transfer_member_exchange_blocks_local_action("현재 트레이 보류"):
             return False
         if not self.current_tray.master_label_code:
             self.show_status_message("보류할 작업이 없습니다.", self.COLOR_DANGER)
@@ -5766,6 +5989,9 @@ class ContainerAudit:
         if self.master_label_replace_state:
             self.cancel_master_label_replacement()
         else:
+            if self._block_unsafe_exact_master_label_replacement():
+                self._update_action_button_states()
+                return
             if not self._log_event('HISTORICAL_REPLACE_START', synchronous=True):
                 messagebox.showerror("교체 시작 기록 실패", "현품표 교체 시작 기록을 남기지 못했습니다. 다시 시도해주세요.")
                 return
@@ -6038,10 +6264,27 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
-        if self._block_unsafe_exact_exchange():
+        if self._transfer_member_exchange_blocks_local_action("다음 스캔"):
             return
-        if self.current_tray.master_label_code:
-            messagebox.showwarning("작업 중", "진행 중인 트레이 작업이 있습니다.\n트레이를 제출한 후 개별 제품 교환을 사용하세요.")
+        exact_mode = self._exact_transfer_exchange_blocked()
+        active_tray = bool(self.current_tray.master_label_code)
+        active_transfer_exchange = bool(
+            exact_mode and active_tray and self.current_tray.scanned_barcodes
+        )
+        if exact_mode and not active_transfer_exchange:
+            if active_tray:
+                messagebox.showwarning(
+                    "교체 대상 없음",
+                    "현재 이적 트레이에 제품을 한 개 이상 스캔한 뒤 교체를 시작하세요.",
+                )
+                return
+            if self._block_unsafe_exact_exchange():
+                return
+        if active_tray and not active_transfer_exchange:
+            messagebox.showwarning(
+                "작업 중",
+                "진행 중인 트레이 작업이 있습니다.\n정확 중앙 원장이 활성화된 작업에서만 현재 제품을 교체할 수 있습니다.",
+            )
             return
         self._invalidate_pending_scan_callbacks()
         existing_dialog = getattr(self, "exchange_dialog", None)
@@ -6058,7 +6301,9 @@ class ContainerAudit:
 
         # 교환 다이얼로그 창 생성
         exchange_dialog = tk.Toplevel(self.root)
-        exchange_dialog.title("개별 제품 교환")
+        exchange_dialog.title(
+            "현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환"
+        )
         exchange_dialog.geometry("800x600")
         exchange_dialog.transient(self.root)
         exchange_dialog.grab_set()
@@ -6068,7 +6313,9 @@ class ContainerAudit:
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # 제목
-        title_label = ttk.Label(main_frame, text="개별 제품 교환",
+        title_label = ttk.Label(
+            main_frame,
+            text="현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환",
                                font=(self.DEFAULT_FONT, 16, 'bold'))
         title_label.pack(pady=(0, 20))
 
@@ -6080,7 +6327,13 @@ class ContainerAudit:
                  font=(self.DEFAULT_FONT, 12, 'bold')).pack(side=tk.LEFT)
 
         self.exchange_quantity_var = tk.IntVar(value=1)
-        quantity_spin = ttk.Spinbox(quantity_frame, from_=1, to=10,
+        max_quantity = min(
+            2,
+            len(self.current_tray.scanned_barcodes)
+            if active_transfer_exchange
+            else 2,
+        )
+        quantity_spin = ttk.Spinbox(quantity_frame, from_=1, to=max_quantity,
                                    textvariable=self.exchange_quantity_var, width=5,
                                    font=(self.DEFAULT_FONT, 12))
         self.exchange_quantity_spin = quantity_spin
@@ -6154,6 +6407,15 @@ class ContainerAudit:
 
         # 교환 세션 초기화
         self.current_exchange_session = ProductExchangeSession()
+        if active_transfer_exchange:
+            self.current_exchange_session.item_code = self.current_tray.item_code
+            self.current_exchange_session.item_name = self.current_tray.item_name
+            self.current_exchange_session.item_spec = self.current_tray.item_spec
+        self._active_transfer_exchange_mode = active_transfer_exchange
+        self._active_transfer_exchange_master_label = (
+            self.current_tray.master_label_code if active_transfer_exchange else ""
+        )
+        self._active_transfer_exchange_intent_id = ""
         self.exchange_dialog = exchange_dialog
         self._update_action_button_states()
         exchange_dialog.protocol("WM_DELETE_WINDOW", self._cancel_exchange)
@@ -6185,7 +6447,7 @@ class ContainerAudit:
             quantity = int(raw_quantity)
         except (TypeError, ValueError):
             return None
-        if quantity < 1 or quantity > 10:
+        if quantity < 1 or quantity > 2:
             return None
         return quantity
 
@@ -6208,6 +6470,27 @@ class ContainerAudit:
 
         if session.current_step not in ["scan_defective", "scan_good"]:
             return
+
+        if getattr(self, "_active_transfer_exchange_mode", False):
+            try:
+                current = tuple(self.current_tray.scanned_barcodes)
+                normalized_current = {normalize_barcode(value) for value in current}
+                normalized_scan = normalize_barcode(barcode)
+            except ValueError:
+                messagebox.showerror("바코드 형식 오류", "제품 바코드가 올바르지 않습니다.")
+                return
+            if session.current_step == "scan_defective" and normalized_scan not in normalized_current:
+                messagebox.showerror(
+                    "교체 대상 아님",
+                    "교체 대상은 현재 이적 트레이에 이미 스캔된 제품이어야 합니다.",
+                )
+                return
+            if session.current_step == "scan_good" and normalized_scan in normalized_current:
+                messagebox.showerror(
+                    "이미 현재 트레이에 포함됨",
+                    "새 양품은 현재 이적 트레이에 아직 포함되지 않은 제품이어야 합니다.",
+                )
+                return
 
         result = apply_exchange_scan(
             session,
@@ -6279,8 +6562,208 @@ class ContainerAudit:
 
         self.exchange_status_label.config(text=status)
 
+    def _member_exchange_apply_plan(
+        self, attempt: MemberExchangeAttempt
+    ) -> tuple[List[str], List[datetime.datetime], Dict[str, Any]]:
+        if attempt.status != "ACKED":
+            raise ValueError("central member exchange is not ACKED")
+        if (
+            attempt.target_label_action != "RETAIN_IDENTITY_LABEL"
+            or attempt.target_label_identity_remains_valid is not True
+            or attempt.target_label_membership_bound is not False
+        ):
+            raise ValueError(
+                "central receipt does not prove the scanned PHS identity label remains valid"
+            )
+        if not 1 <= len(attempt.old_barcodes) <= 2:
+            raise ValueError("central member exchange pair count is invalid")
+        if len(attempt.old_barcodes) != len(attempt.new_barcodes):
+            raise ValueError("central member exchange pair counts differ")
+        current_master = str(self.current_tray.master_label_code or "")
+        expected_master = str(
+            getattr(self, "_active_transfer_exchange_master_label", "") or current_master
+        )
+        if not current_master or current_master != expected_master:
+            raise ValueError("active tray master label changed after central exchange")
+        before = list(self.current_tray.scanned_barcodes)
+        before_normalized = [normalize_barcode(value) for value in before]
+        old_values = [normalize_barcode(value) for value in attempt.old_barcodes]
+        new_values = [normalize_barcode(value) for value in attempt.new_barcodes]
+        if len(before_normalized) != len(set(before_normalized)):
+            raise ValueError("active tray contains normalized duplicate barcodes")
+        if any(before_normalized.count(value) != 1 for value in old_values):
+            raise ValueError("one or more damaged barcodes are no longer in the active tray")
+        remaining = set(before_normalized) - set(old_values)
+        if remaining & set(new_values) or len(set(new_values)) != len(new_values):
+            raise ValueError("one or more replacement barcodes already belong to the active tray")
+        after = list(before)
+        for old_value, new_value in zip(old_values, new_values, strict=True):
+            after[before_normalized.index(old_value)] = new_value
+        evidence = {
+            "exchange_contract_version": "container-audit-central-member-exchange-v1",
+            "exchange_intent_id": attempt.intent_id,
+            "idempotency_key": attempt.idempotency_key,
+            "central_receipt_id": attempt.receipt_id,
+            "target_bundle_id": attempt.target_bundle_id,
+            "damage_bundle_id": attempt.damage_bundle_id,
+            "entity_versions": dict(attempt.entity_versions),
+            "exchange_pairs": [
+                {"defective": old, "good": new}
+                for old, new in zip(old_values, new_values, strict=True)
+            ],
+            "defective_barcodes": old_values,
+            "good_barcodes": new_values,
+            "pair_count": len(old_values),
+            "before_selection_hash": stable_hash(
+                sorted(normalize_barcode(value) for value in before)
+            ),
+            "after_selection_hash": stable_hash(
+                sorted(normalize_barcode(value) for value in after)
+            ),
+            "central_atomic": True,
+            "central_command_type": "REPLACE_BUNDLE_MEMBERS",
+            "post_seal_replacement": False,
+            "target_label_action": attempt.target_label_action,
+            "target_label_identity_remains_valid": (
+                attempt.target_label_identity_remains_valid
+            ),
+            "target_label_membership_bound": attempt.target_label_membership_bound,
+        }
+        evidence["evidence_hash"] = stable_hash(evidence)
+        return after, list(self.current_tray.scan_times), evidence
+
+    def _redraw_active_tray_scans(self) -> None:
+        listbox = getattr(self, "scanned_listbox", None)
+        if listbox is not None:
+            try:
+                listbox.delete(0, tk.END)
+                for index, barcode in enumerate(self.current_tray.scanned_barcodes, start=1):
+                    listbox.insert(0, self._format_scanned_list_row(index, barcode))
+            except (tk.TclError, AttributeError):
+                pass
+        self._sync_last_normal_scan_from_active_tray()
+        self._update_center_display()
+        self._update_current_item_label()
+        self._update_action_button_states()
+
+    def _apply_acked_member_exchange(
+        self, attempt: MemberExchangeAttempt, *, recovery: bool = False
+    ) -> bool:
+        coordinator = self._transfer_member_exchange_runtime()
+        try:
+            after, scan_times, evidence = self._member_exchange_apply_plan(attempt)
+        except (TypeError, ValueError) as exc:
+            coordinator.store.mark_local_review(attempt.intent_id, str(exc))
+            return False
+        before = list(self.current_tray.scanned_barcodes)
+        before_times = list(self.current_tray.scan_times)
+        before_error_state = bool(self.current_tray.has_error_or_reset)
+        self.current_tray.scanned_barcodes = after
+        self.current_tray.scan_times = scan_times
+        self.current_tray.has_error_or_reset = True
+        if not self._save_current_tray_state():
+            self.current_tray.scanned_barcodes = before
+            self.current_tray.scan_times = before_times
+            self.current_tray.has_error_or_reset = before_error_state
+            return False
+        event_type = (
+            "PRODUCT_EXCHANGE_LOCAL_RECONCILED"
+            if recovery
+            else "PRODUCT_EXCHANGE_COMPLETED"
+        )
+        if not self._log_event(event_type, detail=evidence, synchronous=True):
+            self.current_tray.scanned_barcodes = before
+            self.current_tray.scan_times = before_times
+            self.current_tray.has_error_or_reset = before_error_state
+            if not self._save_current_tray_state():
+                coordinator.store.mark_local_review(
+                    attempt.intent_id,
+                    "central exchange committed but local state rollback failed after log error",
+                )
+            return False
+        try:
+            coordinator.store.mark_local_applied(attempt.intent_id, evidence)
+        except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+            # The state and append-only event are already durable.  Leave the
+            # intent PENDING so restart reconciliation can idempotently close it.
+            print(f"중앙 제품 교체 local receipt 저장 실패: {exc.__class__.__name__}")
+        self._redraw_active_tray_scans()
+        return True
+
+    def _reconcile_pending_local_member_exchanges(self) -> None:
+        if not getattr(self.current_tray, "master_label_code", ""):
+            return
+        coordinator = self._transfer_member_exchange_runtime()
+        attempts = coordinator.pending_local_attempts(
+            master_label=self.current_tray.master_label_code
+        )
+        for attempt in attempts:
+            current = {
+                normalize_barcode(value) for value in self.current_tray.scanned_barcodes
+            }
+            old_values = {normalize_barcode(value) for value in attempt.old_barcodes}
+            new_values = {normalize_barcode(value) for value in attempt.new_barcodes}
+            if old_values.issubset(current) and not (new_values & current):
+                self._active_transfer_exchange_master_label = (
+                    self.current_tray.master_label_code
+                )
+                if not self._apply_acked_member_exchange(attempt, recovery=True):
+                    messagebox.showerror(
+                        "중앙 교체 복구 실패",
+                        "서버에서 완료된 제품 교체를 현재 트레이에 복구하지 못했습니다. 담당자 확인이 필요합니다.",
+                    )
+                    return
+                continue
+            if not (old_values & current) and new_values.issubset(current):
+                evidence = {
+                    "exchange_intent_id": attempt.intent_id,
+                    "central_receipt_id": attempt.receipt_id,
+                    "reconciled_existing_state": True,
+                    "after_selection_hash": stable_hash(sorted(current)),
+                }
+                try:
+                    coordinator.store.mark_local_applied(attempt.intent_id, evidence)
+                except ValueError:
+                    pass
+                continue
+            coordinator.store.mark_local_review(
+                attempt.intent_id,
+                "active tray membership is neither the before nor after exchange set",
+            )
+            messagebox.showerror(
+                "중앙 교체 상태 충돌",
+                "서버 교체 receipt와 현재 트레이 제품 목록이 부분적으로만 일치합니다. 작업을 중단하고 담당자에게 확인하세요.",
+            )
+            return
+
     def _cancel_exchange(self, *, reason: str = "operator_cancel") -> bool:
         """진행 중인 제품 교환을 취소하고 필요한 감사 로그를 남깁니다."""
+        intent_id = str(
+            getattr(self, "_active_transfer_exchange_intent_id", "") or ""
+        )
+        if intent_id:
+            coordinator = self._transfer_member_exchange_runtime()
+            attempt = coordinator.attempt(intent_id)
+            if attempt.status == "ACKED" and attempt.local_apply_status == "PENDING":
+                if not self._apply_acked_member_exchange(attempt, recovery=True):
+                    messagebox.showerror(
+                        "교체 취소 불가",
+                        "중앙에서 완료된 제품 교체를 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
+                    )
+                    return False
+            elif attempt.status in {
+                "PREPARED",
+                "COMMAND_READY",
+                "RETRY_WAIT",
+                "OPERATOR_REVIEW",
+            }:
+                messagebox.showerror(
+                    "교체 취소 불가",
+                    "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+                )
+                return False
+        if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
+            return False
         session = self.current_exchange_session
         has_scans = bool(session.defective_barcodes or session.good_barcodes)
         if has_scans:
@@ -6310,12 +6793,18 @@ class ContainerAudit:
                 pass
         self.exchange_dialog = None
         self.exchange_quantity_spin = None
+        self._active_transfer_exchange_mode = False
+        self._active_transfer_exchange_master_label = ""
+        self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
         return True
 
     def _complete_exchange(self):
         """제품 교환을 완료합니다."""
-        if self._block_unsafe_exact_exchange():
+        active_transfer_exchange = bool(
+            getattr(self, "_active_transfer_exchange_mode", False)
+        )
+        if not active_transfer_exchange and self._block_unsafe_exact_exchange():
             return
         session = self.current_exchange_session
         if session.current_step == "completed":
@@ -6329,6 +6818,73 @@ class ContainerAudit:
         if hasattr(self, "exchange_complete_button"):
             self.exchange_complete_button.config(state=tk.DISABLED)
         session.exchange_pairs = build_exchange_pairs(session)
+
+        if active_transfer_exchange:
+            master_fields = parse_new_format_qr(self.current_tray.master_label_code)
+            if not master_fields:
+                self.exchange_complete_button.config(state=tk.NORMAL)
+                messagebox.showerror(
+                    "중앙 교체 차단",
+                    "현재 현품표에 중앙 PHS를 식별할 BND/ITG 구조 정보가 없습니다.",
+                )
+                return
+            coordinator = self._transfer_member_exchange_runtime()
+            try:
+                prepared = coordinator.prepare(
+                    master_label=self.current_tray.master_label_code,
+                    master_label_fields=master_fields,
+                    item_id=self.current_tray.item_code,
+                    operator=self.worker_name,
+                    old_barcodes=session.defective_barcodes,
+                    new_barcodes=session.good_barcodes,
+                )
+                self._active_transfer_exchange_intent_id = prepared.intent_id
+                attempt = coordinator.attempt(prepared.intent_id)
+            except (TypeError, ValueError) as exc:
+                self.exchange_complete_button.config(state=tk.NORMAL)
+                messagebox.showerror("중앙 교체 차단", str(exc))
+                return
+            if attempt.status != "ACKED":
+                self.exchange_complete_button.config(state=tk.NORMAL)
+                title = (
+                    "중앙 교체 담당자 확인 필요"
+                    if attempt.status == "OPERATOR_REVIEW"
+                    else "중앙 교체 응답 대기"
+                )
+                messagebox.showerror(
+                    title,
+                    f"{attempt.error_code or attempt.status}: "
+                    f"{attempt.error_message or '중앙 receipt가 확정되지 않았습니다.'}",
+                )
+                return
+            if not self._apply_acked_member_exchange(attempt):
+                self.exchange_complete_button.config(state=tk.NORMAL)
+                messagebox.showerror(
+                    "교체 반영 실패",
+                    "중앙 교체는 완료됐지만 현재 트레이 상태에 반영하지 못했습니다. 창을 닫지 말고 담당자에게 알리세요.",
+                )
+                return
+            session.current_step = "completed"
+            messagebox.showinfo(
+                "중앙 교체 완료",
+                f"{len(session.exchange_pairs)}개의 제품을 원자적으로 교체했습니다.\n\n"
+                f"품목: {session.item_name}\n"
+                f"교체 제품은 공정 불량 보류 위치로 이동했습니다.",
+            )
+            dialog = getattr(self, "exchange_dialog", None)
+            if dialog is not None:
+                try:
+                    dialog.destroy()
+                except tk.TclError:
+                    pass
+            self.exchange_dialog = None
+            self.exchange_quantity_spin = None
+            self.current_exchange_session = ProductExchangeSession()
+            self._active_transfer_exchange_mode = False
+            self._active_transfer_exchange_master_label = ""
+            self._active_transfer_exchange_intent_id = ""
+            self._update_action_button_states()
+            return
 
         # 로그 기록
         if not self._log_event('PRODUCT_EXCHANGE_COMPLETED', detail=build_exchange_completion_detail(session), synchronous=True):
@@ -6353,6 +6909,9 @@ class ContainerAudit:
         self.exchange_dialog = None
         self.exchange_quantity_spin = None
         self.current_exchange_session = ProductExchangeSession()
+        self._active_transfer_exchange_mode = False
+        self._active_transfer_exchange_master_label = ""
+        self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
 
 def main():

@@ -28,9 +28,15 @@ def test_ci_and_release_workflows_package_clean_release_config():
         assert "Container_Audit_DirectSync_Install" in text
         assert "Container_Audit_DirectSync_Relay" in text
         assert "Container_Audit_Worker_PC_Register" in text
+        assert "KMTech_Logistics_Profile_Install" in text
+        assert "KMTech_Logistics_Profile_Check" in text
+        assert "CENTRAL_LOGISTICS_PC_ROLLOUT.md" in text
         assert "tools/register_container_audit_worker_pc.py" in text
+        assert "tools/install_logistics_runtime_profile.py" in text
+        assert "tools/check_logistics_runtime_profile.py" in text
         assert '--add-data "storage_policy.py;."' in text
         assert '--add-data "storage_utils.py;."' in text
+        assert '--add-data "logistics_runtime_profile.py;."' in text
         assert 'python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"' in text
         assert 'python tools/check_release_config.py --config-dir "$releaseConfigDir"' in text
     release_text = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
