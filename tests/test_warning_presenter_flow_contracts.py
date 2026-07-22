@@ -147,7 +147,7 @@ def test_settled_completion_wording_distinguishes_acked_from_retry_wait(
     assert forbidden_text not in notice.message
     assert "서버 응답 상세" in notice.message
     assert snapshot.server_confirmed is confirmed
-    assert notice.blocking is False
+    assert notice.blocking is (outcome is CompletionOutcome.RETRY_WAIT)
 
 
 def test_failed_completion_ledger_gate_leaves_no_acked_or_retry_wait_snapshot():
@@ -172,6 +172,6 @@ def test_later_business_result_can_replace_operator_review_but_ack_alone_cannot(
 
     presenter.present_completion(_completion(CompletionOutcome.RETRY_WAIT))
 
-    assert presenter.state.is_blocking is False
+    assert presenter.state.is_blocking is True
     assert presenter.state.completion.outcome is CompletionOutcome.RETRY_WAIT
     assert presenter.state.active_notice.severity is NoticeSeverity.WARNING

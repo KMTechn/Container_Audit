@@ -28,6 +28,7 @@ from transfer_seal import (
     membership_hash,
     normalize_barcode,
     source_identity_from_label,
+    validate_compact_phs2_preflight,
 )
 
 
@@ -407,6 +408,19 @@ class TransferMemberExchangeStore:
             "RECEIPT_MEMBERSHIP_MISMATCH",
             "RESOLVER_CONTRACT_INVALID",
             "POST_SEAL_REPLACEMENT_UNSUPPORTED",
+            "PHS2_CANONICAL_EVIDENCE_REQUIRED",
+            "PHS2_COMPACT_FORMAT_REQUIRED",
+            "PHS2_CENTRAL_SOURCE_REQUIRED",
+            "PHS2_IDENTITY_INVALID",
+            "PHS2_HASH_PREFIX_INVALID",
+            "PHS2_SOURCE_AMBIGUOUS",
+            "PHS2_REGISTRY_EVIDENCE_REQUIRED",
+            "PHS2_REGISTRY_IDENTITY_MISMATCH",
+            "PHS2_REGISTRY_HASH_INVALID",
+            "PHS2_SOURCE_IDENTITY_MISMATCH",
+            "PHS2_MEMBERSHIP_INVALID",
+            "PHS2_MIXED_MEMBERSHIP",
+            "PHS2_MEMBER_NOT_AVAILABLE",
         }
         terminal_http = error.status_code in {400, 403, 409, 412, 422}
         status = (
@@ -735,11 +749,25 @@ class TransferMemberExchangeCoordinator:
             {
                 "bundle_id": identity.get("source_bundle_id"),
                 "input_tag_id": identity.get("input_tag_id"),
+                "input_tag_label_id": identity.get("input_tag_label_id"),
+                "input_tag_hash_prefix": identity.get("input_tag_hash_prefix"),
                 "external_label": identity.get("external_label"),
                 "authority_scope_id": identity.get("authority_scope_id"),
                 "item_id": identity.get("item_id") or row["item_id"],
             }
         )
+        if str(identity.get("input_tag_hash_prefix") or "").strip():
+            validate_compact_phs2_preflight(
+                {
+                    "PHS": "2",
+                    "SRC": identity.get("source_kind"),
+                    "ITG": identity.get("input_tag_id"),
+                    "CLC": identity.get("item_id") or row["item_id"],
+                    "LBL": identity.get("input_tag_label_id"),
+                    "HSH": identity.get("input_tag_hash_prefix"),
+                },
+                resolved_target,
+            )
         target = self._target_projection(resolved_target)
         if target["item_id"] != str(row["item_id"]):
             raise TransferSealError(

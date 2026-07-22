@@ -90,8 +90,10 @@ def _validate_pending_operator_review(
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} must be a JSON object")
     if payload.get("schema_version") != OPERATOR_REVIEW_STATE_SCHEMA_VERSION:
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} has an unsupported schema version")
-    if payload.get("outcome") != "OPERATOR_REVIEW":
-        raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} outcome must be OPERATOR_REVIEW")
+    if payload.get("outcome") not in {"OPERATOR_REVIEW", "RETRY_WAIT"}:
+        raise TrayStateValidationError(
+            f"{OPERATOR_REVIEW_STATE_KEY} outcome must be OPERATOR_REVIEW or RETRY_WAIT"
+        )
     for key in ("item_name", "master_label", "message", "receipt_id", "error_code"):
         if not isinstance(payload.get(key), str):
             raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY}.{key} must be a string")

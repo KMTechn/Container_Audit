@@ -25,6 +25,15 @@ OLD_1 = f"{ITEM}-OLD-1"
 OLD_2 = f"{ITEM}-OLD-2"
 NEW_1 = f"{ITEM}-NEW-1"
 MASTER = f"PHS=2|BND={TARGET}|AUTH_SCOPE={SCOPE}|CLC={ITEM}|QT=2"
+INPUT_TAG = "ITAG-PHS2-EXCHANGE"
+INPUT_LABEL = "LBL-PHS2-EXCHANGE"
+INPUT_LABEL_HASH = "a" * 64
+INPUT_CORE_HASH = "b" * 64
+INPUT_HASH_PREFIX = INPUT_LABEL_HASH[:16]
+PHS2_MASTER = (
+    f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={INPUT_TAG}|CLC={ITEM}|"
+    f"LBL={INPUT_LABEL}|HSH={INPUT_HASH_PREFIX}"
+)
 
 
 class _Response:
@@ -112,6 +121,38 @@ def _target_projection():
             ],
         },
     }
+
+
+def _phs2_target_projection():
+    resolved = _target_projection()
+    bundle = resolved["bundle"]
+    bundle.update(
+        {
+            "external_label": PHS2_MASTER,
+            "source_session_id": INPUT_TAG,
+            "current_locations": ["PHS_GOOD"],
+        }
+    )
+    for member in bundle["members"]:
+        member.update(
+            {
+                "inbound_iin": IIN,
+                "current_inbound_iin": IIN,
+                "item_id": ITEM,
+                "uom": "EA",
+            }
+        )
+    resolved["input_tag"] = {
+        "input_tag_id": INPUT_TAG,
+        "label_id": INPUT_LABEL,
+        "item_id": ITEM,
+        "tag_core_hash": INPUT_CORE_HASH,
+        "label_instance_hash": INPUT_LABEL_HASH,
+        "hash_prefix": INPUT_HASH_PREFIX,
+        "lifecycle": "INSPECTION_COMPLETED",
+        "qr_payload": PHS2_MASTER,
+    }
+    return resolved
 
 
 def _good_projection(*, singleton=True):
@@ -275,7 +316,13 @@ def _receipt(command):
     }
 
 
-def _runtime(tmp_path, *, mutate_receipt=None, multi_member_source=False):
+def _runtime(
+    tmp_path,
+    *,
+    mutate_receipt=None,
+    multi_member_source=False,
+    target_response=None,
+):
     posted = []
 
     def handler(call):
@@ -283,7 +330,13 @@ def _runtime(tmp_path, *, mutate_receipt=None, multi_member_source=False):
         if path.endswith("/capabilities"):
             return _Response(200, {"ok": True, "data": _capabilities()})
         if path.endswith("/bundles/resolve"):
-            return _Response(200, {"ok": True, "data": _target_projection()})
+            return _Response(
+                200,
+                {
+                    "ok": True,
+                    "data": target_response or _target_projection(),
+                },
+            )
         if path.endswith("/replacements/good-source/resolve"):
             query = parse_qs(urlsplit(call["url"]).query)
             assert query == {"authority_scope_id": [SCOPE], "barcode": [NEW_1]}
@@ -357,6 +410,71 @@ def test_preseal_exchange_posts_one_atomic_multi_bundle_cas_and_persists_receipt
     assert reopened["command_json"] == json.dumps(
         command, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
     )
+
+
+def test_phs2_preseal_exchange_revalidates_registry_qr_and_forwards_label_evidence(tmp_path):
+    coordinator, posted, session = _runtime(
+        tmp_path,
+        target_response=_phs2_target_projection(),
+    )
+    prepared = coordinator.prepare(
+        master_label=PHS2_MASTER,
+        master_label_fields={
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": INPUT_TAG,
+            "CLC": ITEM,
+            "LBL": INPUT_LABEL,
+            "HSH": INPUT_HASH_PREFIX,
+        },
+        item_id=ITEM,
+        operator="tester",
+        old_barcodes=[OLD_1],
+        new_barcodes=[NEW_1],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "ACKED"
+    assert len(posted) == 1
+    resolve_call = next(
+        call for call in session.calls if urlsplit(call["url"]).path.endswith("/bundles/resolve")
+    )
+    query = parse_qs(urlsplit(resolve_call["url"]).query)
+    assert query["input_tag_id"] == [INPUT_TAG]
+    assert query["input_tag_label_id"] == [INPUT_LABEL]
+    assert query["input_tag_hash_prefix"] == [INPUT_HASH_PREFIX]
+    assert query["item_id"] == [ITEM]
+
+
+def test_phs2_preseal_exchange_fails_closed_when_registry_qr_drifts(tmp_path):
+    target = _phs2_target_projection()
+    target["input_tag"]["qr_payload"] = target["input_tag"]["qr_payload"].replace(
+        INPUT_LABEL,
+        "OTHER-LABEL",
+    )
+    coordinator, posted, _session = _runtime(tmp_path, target_response=target)
+    prepared = coordinator.prepare(
+        master_label=PHS2_MASTER,
+        master_label_fields={
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": INPUT_TAG,
+            "CLC": ITEM,
+            "LBL": INPUT_LABEL,
+            "HSH": INPUT_HASH_PREFIX,
+        },
+        item_id=ITEM,
+        operator="tester",
+        old_barcodes=[OLD_1],
+        new_barcodes=[NEW_1],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert result.error_code == "PHS2_REGISTRY_IDENTITY_MISMATCH"
+    assert posted == []
 
 
 def test_receipt_mismatch_is_operator_review_and_never_locally_applied(tmp_path):

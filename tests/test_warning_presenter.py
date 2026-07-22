@@ -123,7 +123,7 @@ def test_error_and_clear_do_not_erase_last_normal_scan():
     ("outcome", "severity", "blocking", "confirmed"),
     [
         (CompletionOutcome.ACKED, NoticeSeverity.SUCCESS, False, True),
-        (CompletionOutcome.RETRY_WAIT, NoticeSeverity.WARNING, False, False),
+        (CompletionOutcome.RETRY_WAIT, NoticeSeverity.WARNING, True, False),
         (CompletionOutcome.OPERATOR_REVIEW, NoticeSeverity.ERROR, True, False),
     ],
 )

@@ -1,4 +1,10 @@
+import base64
+import json
+import os
 import re
+import shutil
+import subprocess
+import textwrap
 from pathlib import Path
 
 import update_service
@@ -56,6 +62,11 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert ".githubusercontent.com" in release_text
     assert "PRIVATE_UPDATE_ROLLOUT_PERCENTAGE" in release_text
     assert "PRIVATE_UPDATE_ROLLOUT_PERCENTAGE must be an integer from 0 to 100." in release_text
+    assert "PRIVATE_UPDATE_ALLOW_PC_IDS" in release_text
+    assert "PRIVATE_UPDATE_DENY_PC_IDS" in release_text
+    assert "ConvertTo-CanonicalPcIds" in release_text
+    assert "^[a-z0-9][a-z0-9._-]{0,63}$" in release_text
+    assert "must not overlap" in release_text
     assert "$artifactUrl = \"$baseUrl/$zipPath\"" in release_text
     assert "releases/download" not in release_text
     assert "legacy_sha256_url" in release_text
@@ -107,6 +118,141 @@ def test_release_workflow_requires_explicit_private_feed_publish_opt_in():
     ]
     assert f"if: {explicit_opt_in}" in sign_block
     assert f"if: {explicit_opt_in}" in publish_block
+    assert "canary_release.outputs" not in sign_block
+    assert "canary_release.outputs" not in publish_block
+
+    assert "id: canary_release" in release_text
+    assert (
+        "PRIVATE_UPDATE_CANARY_PRERELEASE: "
+        "${{ vars.PRIVATE_UPDATE_CANARY_PRERELEASE }}"
+    ) in release_text
+    assert (
+        "PRIVATE_UPDATE_CANARY_PRERELEASE must be exactly 'true', 'false', or unset."
+        in release_text
+    )
+    assert (
+        '$enabled = if ($canaryMode -ceq "true") { "true" } else { "false" }'
+        in release_text
+    )
+    release_block = release_text[
+        release_text.index("- name: Create Release and Upload Asset") :
+    ]
+    assert (
+        "prerelease: ${{ steps.canary_release.outputs.enabled == 'true' }}"
+        in release_block
+    )
+    assert "prerelease: false" not in release_block
+    assert (
+        "make_latest: ${{ steps.canary_release.outputs.make_latest }}"
+        in release_block
+    )
+
+
+def test_private_feed_pc_id_lists_are_canonical_deduplicated_and_fail_closed():
+    root = Path(__file__).resolve().parents[1]
+    release_text = (root / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    start = release_text.index("function ConvertTo-CanonicalPcIds {")
+    end = release_text.index('$artifactUrl = "$baseUrl/$zipPath"', start)
+    parser_script = textwrap.dedent(release_text[start:end]) + """
+[ordered]@{
+  allow = @($allowPcIds)
+  deny = @($denyPcIds)
+} | ConvertTo-Json -Compress
+"""
+    powershell = next(
+        (
+            executable
+            for name in ("pwsh", "powershell", "powershell.exe")
+            if (executable := shutil.which(name))
+        ),
+        None,
+    )
+    assert powershell is not None
+
+    def run_parser(allow, deny):
+        env = os.environ.copy()
+        env["PRIVATE_UPDATE_ALLOW_PC_IDS"] = allow
+        env["PRIVATE_UPDATE_DENY_PC_IDS"] = deny
+        encoded = base64.b64encode(parser_script.encode("utf-16le")).decode("ascii")
+        return subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+            check=False,
+        )
+
+    accepted = run_parser(" TEST1, test1\nLINE-A_01 ", " BLOCKED-1,blocked-1 ")
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    parsed = json.loads(accepted.stdout.strip())
+    assert parsed == {"allow": ["test1", "line-a_01"], "deny": ["blocked-1"]}
+
+    invalid = run_parser("test1,bad token", "")
+    assert invalid.returncode != 0
+    assert "invalid PC id token" in invalid.stderr
+
+    overlap = run_parser("TEST1", "test1")
+    assert overlap.returncode != 0
+    assert "must not overlap" in overlap.stderr
+
+
+def test_canary_prerelease_gate_accepts_only_exact_lowercase_values(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    release_text = (root / ".github" / "workflows" / "release.yml").read_text(
+        encoding="utf-8"
+    )
+    start = release_text.index("- name: Resolve canary prerelease mode")
+    end = release_text.index("\n      - name:", start + 1)
+    step = release_text[start:end]
+    script = textwrap.dedent(step.split("        run: |\n", 1)[1]).strip()
+    powershell = next(
+        (
+            executable
+            for name in ("pwsh", "powershell", "powershell.exe")
+            if (executable := shutil.which(name))
+        ),
+        None,
+    )
+    assert powershell is not None
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+
+    def run_gate(value):
+        output = tmp_path / "github-output.txt"
+        output.unlink(missing_ok=True)
+        env = os.environ.copy()
+        env["GITHUB_OUTPUT"] = str(output)
+        if value is None:
+            env.pop("PRIVATE_UPDATE_CANARY_PRERELEASE", None)
+        else:
+            env["PRIVATE_UPDATE_CANARY_PRERELEASE"] = value
+        completed = subprocess.run(
+            [powershell, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+            check=False,
+        )
+        return completed, output.read_text(encoding="utf-8-sig") if output.exists() else ""
+
+    for value, expected, expected_latest in (
+        (None, "false", "legacy"),
+        ("false", "false", "legacy"),
+        ("true", "true", "false"),
+    ):
+        completed, output = run_gate(value)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert f"enabled={expected}" in output
+        assert f"make_latest={expected_latest}" in output
+
+    for invalid in ("TRUE", "False", "1", " true "):
+        completed, output = run_gate(invalid)
+        assert completed.returncode != 0
+        assert output == ""
+        assert "must be exactly" in completed.stderr
 
 
 def test_ci_workflow_tests_supported_python_minors():
