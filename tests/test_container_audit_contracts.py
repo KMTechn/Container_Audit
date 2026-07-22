@@ -900,7 +900,10 @@ def test_preserve_verifier_records_matching_pre_post_hashes_and_rejects_drift(tm
     evidence = tmp_path / "evidence.log"
     evidence.write_text("state=BACKUP_COMPLETED\n", encoding="utf-8")
     verifier = tmp_path / "verify.ps1"
-    verifier.write_text(container_audit_module._preserve_verifier_source(), encoding="utf-8")
+    verifier_source = container_audit_module._preserve_verifier_source()
+    assert "Get-FileHash" not in verifier_source
+    assert "[Security.Cryptography.SHA256]::Create()" in verifier_source
+    verifier.write_text(verifier_source, encoding="utf-8")
     command = [
         powershell,
         "-NoLogo",

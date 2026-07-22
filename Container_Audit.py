@@ -499,6 +499,17 @@ def _preserve_verifier_source() -> str:
 )
 $ErrorActionPreference = "Stop"
 
+function Get-FileSha256([string]$Path) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+    try {
+        return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 function Get-PreservedTree([string]$RootPath) {
     if (-not (Test-Path -LiteralPath $RootPath)) {
         return ,@("MISSING")
@@ -508,7 +519,7 @@ function Get-PreservedTree([string]$RootPath) {
         throw "reparse points are not allowed in preserved update paths"
     }
     if (-not $root.PSIsContainer) {
-        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $root.FullName).Hash.ToLowerInvariant()
+        $hash = Get-FileSha256 $root.FullName
         return ,@("FILE|$($root.Length)|$hash")
     }
 
@@ -523,7 +534,7 @@ function Get-PreservedTree([string]$RootPath) {
         if ($entry.PSIsContainer) {
             $rows.Add("DIR|$relative")
         } else {
-            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $entry.FullName).Hash.ToLowerInvariant()
+            $hash = Get-FileSha256 $entry.FullName
             $rows.Add("FILE|$relative|$($entry.Length)|$hash")
         }
     }
