@@ -4,6 +4,7 @@ import datetime
 import hashlib
 import json
 import multiprocessing
+import os
 from pathlib import Path
 import queue
 import shutil
@@ -849,6 +850,7 @@ def test_updater_script_backs_up_before_copy_and_rolls_back_on_failure():
     assert "taskkill" not in script.lower()
     assert script.count("robocopy ") == 3
     assert script.count(" /MIR ") == 3
+    assert script.count(" /IS ") == 2
     assert "move /Y" in script
     assert "state=BACKUP_COMPLETED" in script
     assert "state=UPDATE_COMPLETED" in script
@@ -991,6 +993,10 @@ def test_robocopy_mirror_exclusions_preserve_all_runtime_state(tmp_path):
     (application / "config" / "settings.json").write_text("operator-settings", encoding="utf-8")
     (application / "logs" / "runtime.log").write_text("operator-log", encoding="utf-8")
     (application / "ledger" / "ledger.db").write_bytes(b"operator-ledger")
+    assert len(b"new-executable") == len(b"old-executable")
+    fixed_ns = 1_700_000_000_000_000_000
+    os.utime(source / "Container_Audit.exe", ns=(fixed_ns, fixed_ns))
+    os.utime(application / "Container_Audit.exe", ns=(fixed_ns, fixed_ns))
 
     exclusions = container_audit_module._preserve_exclusion_paths(
         str(source),
@@ -1003,6 +1009,7 @@ def test_robocopy_mirror_exclusions_preserve_all_runtime_state(tmp_path):
             str(source),
             str(application),
             "/MIR",
+            "/IS",
             "/COPY:DAT",
             "/DCOPY:DAT",
             "/R:1",
@@ -1042,10 +1049,22 @@ def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_res
     for relative in ("config", "logs", "ledger"):
         (application / relative).mkdir()
         (application / relative / "state.bin").write_bytes(f"{relative}-state".encode())
-    (application / "Container_Audit.exe").write_bytes(b"original-executable")
-    (application / "runtime.dll").write_bytes(b"original-runtime")
+    (application / "Container_Audit.exe").write_bytes(b"AAAA")
+    (application / "runtime.dll").write_bytes(b"1111")
 
-    source = tmp_path / "missing-payload"
+    source = tmp_path / "payload"
+    source.mkdir()
+    (source / "Container_Audit.exe").write_bytes(b"BBBB")
+    (source / "runtime.dll").write_bytes(b"2222")
+    fixed_ns = 1_700_000_000_000_000_000
+    for path in (
+        application / "Container_Audit.exe",
+        application / "runtime.dll",
+        source / "Container_Audit.exe",
+        source / "runtime.dll",
+    ):
+        os.utime(path, ns=(fixed_ns, fixed_ns))
+
     temp_path = tmp_path / "handoff"
     temp_path.mkdir()
     backup_root = application.parent / ".current.update-backups"
@@ -1059,7 +1078,7 @@ def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_res
     preserve_json = temp_path / "preserve-paths.json"
     preserve_json.write_text('["config", "logs", "ledger"]', encoding="utf-8")
     verifier = temp_path / "verify-preserved-paths.ps1"
-    verifier.write_text(container_audit_module._preserve_verifier_source(), encoding="utf-8")
+    verifier.write_text("exit 55\n", encoding="utf-8")
     process_guard = temp_path / "stop-update-process.ps1"
     process_guard.write_text(container_audit_module._process_stop_guard_source(), encoding="utf-8")
     updater = temp_path / "updater.bat"
@@ -1077,7 +1096,7 @@ def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_res
             preserve_json_path=str(preserve_json),
             preserve_verifier_path=str(verifier),
             process_stop_guard_path=str(process_guard),
-            target_version="v2.0.35",
+            target_version="v2.0.36",
         ),
         encoding="utf-8",
     )
@@ -1095,15 +1114,16 @@ def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_res
     assert "state=PROCESS_STOP_CONFIRMED" in evidence_text
     assert "state=BACKUP_COMPLETED" in evidence_text
     assert "state=UPDATE_APPLY_FAILED" in evidence_text
+    assert "apply_exit=55" in evidence_text
     assert "state=ROLLBACK_COMPLETED" in evidence_text
     assert "restart=BLOCKED" in evidence_text
     assert "restart=REQUESTED" not in evidence_text
     assert backup_path.is_dir()
     assert not backup_partial.exists()
-    assert (backup_path / "Container_Audit.exe").read_bytes() == b"original-executable"
-    assert (backup_path / "runtime.dll").read_bytes() == b"original-runtime"
-    assert (application / "Container_Audit.exe").read_bytes() == b"original-executable"
-    assert (application / "runtime.dll").read_bytes() == b"original-runtime"
+    assert (backup_path / "Container_Audit.exe").read_bytes() == b"AAAA"
+    assert (backup_path / "runtime.dll").read_bytes() == b"1111"
+    assert (application / "Container_Audit.exe").read_bytes() == b"AAAA"
+    assert (application / "runtime.dll").read_bytes() == b"1111"
 
 
 def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monkeypatch):
