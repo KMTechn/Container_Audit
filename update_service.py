@@ -130,6 +130,9 @@ UPDATE_DEFAULT_CHANNEL = "stable"
 UPDATE_APP_ID = "Container_Audit"
 UPDATE_PC_ID_ENV = "CONTAINER_AUDIT_UPDATE_PC_ID"
 UPDATE_ALLOWED_INSTALL_STRATEGIES = {"manual", "robocopy_backup_then_mirror", "replace_exe", "none"}
+UPDATE_AUTOMATIC_INSTALL_STRATEGY = "robocopy_backup_then_mirror"
+UPDATE_REQUIRED_PRESERVE_PATHS = ("config", "logs", "ledger")
+UPDATE_RESTART_EXECUTABLE = "Container_Audit.exe"
 UPDATE_SECRET_QUERY_KEYS = {
     "access_token",
     "api_key",
@@ -249,6 +252,71 @@ def validate_relative_manifest_path(value: str, field_name: str) -> None:
         raise ValueError(f"업데이트 manifest {field_name}은 상대 경로여야 합니다.")
     if any(part in {"", ".", ".."} or ":" in part for part in normalized.split("/")):
         raise ValueError(f"업데이트 manifest {field_name}에 안전하지 않은 경로가 포함되어 있습니다.")
+
+
+def normalize_relative_manifest_path(value: str) -> str:
+    return str(value or "").strip().replace("\\", "/")
+
+
+def automatic_install_policy_from_manifest(install: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the exact install contract accepted by the automatic updater."""
+
+    if not isinstance(install, Mapping):
+        raise ValueError("업데이트 manifest install이 올바르지 않습니다.")
+    strategy = str(install.get("strategy") or "").strip()
+    if strategy != UPDATE_AUTOMATIC_INSTALL_STRATEGY:
+        raise ValueError("자동 업데이트는 robocopy_backup_then_mirror 전략이 필요합니다.")
+
+    raw_preserve_paths = install.get("preserve_paths")
+    if not isinstance(raw_preserve_paths, list) or not raw_preserve_paths:
+        raise ValueError("자동 업데이트 preserve_paths는 비어 있지 않은 목록이어야 합니다.")
+    preserve_paths: list[str] = []
+    seen: set[str] = set()
+    for item in raw_preserve_paths:
+        validate_relative_manifest_path(item, "install.preserve_paths[]")
+        normalized = normalize_relative_manifest_path(item)
+        if re.fullmatch(r"[A-Za-z0-9._/-]+", normalized) is None:
+            raise ValueError("자동 업데이트 preserve_paths에 안전하지 않은 문자가 포함되어 있습니다.")
+        key = normalized.casefold()
+        if key in seen:
+            raise ValueError("자동 업데이트 preserve_paths에 중복 경로가 포함되어 있습니다.")
+        seen.add(key)
+        preserve_paths.append(normalized)
+
+    required = {path.casefold() for path in UPDATE_REQUIRED_PRESERVE_PATHS}
+    missing_required = [
+        path for path in UPDATE_REQUIRED_PRESERVE_PATHS if path.casefold() not in seen
+    ]
+    unexpected = [path for path in preserve_paths if path.casefold() not in required]
+    if missing_required or unexpected:
+        details = []
+        if missing_required:
+            details.append("누락: " + ", ".join(missing_required))
+        if unexpected:
+            details.append("허용되지 않음: " + ", ".join(unexpected))
+        raise ValueError(
+            "자동 업데이트 preserve_paths는 config, logs, ledger와 정확히 일치해야 합니다 ("
+            + "; ".join(details)
+            + ")"
+        )
+
+    restart_executable = normalize_relative_manifest_path(
+        install.get("restart_executable") or ""
+    )
+    validate_relative_manifest_path(
+        restart_executable,
+        "install.restart_executable",
+    )
+    if restart_executable.casefold() != UPDATE_RESTART_EXECUTABLE.casefold():
+        raise ValueError(
+            f"자동 업데이트 restart_executable은 {UPDATE_RESTART_EXECUTABLE}이어야 합니다."
+        )
+
+    return {
+        "strategy": strategy,
+        "preserve_paths": preserve_paths,
+        "restart_executable": restart_executable,
+    }
 
 
 def canonical_update_pc_id() -> str:
@@ -581,16 +649,7 @@ def update_candidate_from_private_manifest(
     if archive.get("top_level") is not None:
         validate_relative_manifest_path(str(archive.get("top_level") or ""), "archive.top_level")
 
-    install = manifest.get("install")
-    if not isinstance(install, Mapping):
-        raise ValueError("업데이트 manifest install이 올바르지 않습니다.")
-    if install.get("strategy") not in UPDATE_ALLOWED_INSTALL_STRATEGIES:
-        raise ValueError("업데이트 manifest install.strategy가 올바르지 않습니다.")
-    preserve_paths = install.get("preserve_paths", [])
-    if not isinstance(preserve_paths, list) or not all(isinstance(item, str) for item in preserve_paths):
-        raise ValueError("업데이트 manifest install.preserve_paths가 올바르지 않습니다.")
-    for item in preserve_paths:
-        validate_relative_manifest_path(item, "install.preserve_paths[]")
+    install_policy = automatic_install_policy_from_manifest(manifest.get("install"))
 
     if not rollout_allows_current_pc(manifest):
         return None
@@ -600,6 +659,7 @@ def update_candidate_from_private_manifest(
         "sha256": expected_sha256,
         "provider": UPDATE_PROVIDER_PRIVATE_MANIFEST,
         "archive_policy": archive_policy_from_manifest(archive),
+        "install_policy": install_policy,
     }
 
 
