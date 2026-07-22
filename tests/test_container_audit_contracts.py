@@ -6,6 +6,8 @@ import json
 import multiprocessing
 from pathlib import Path
 import queue
+import shutil
+import subprocess
 
 import pytest
 
@@ -809,79 +811,309 @@ def test_update_download_removes_partial_file_when_stream_exceeds_limit(tmp_path
     assert not zip_path.exists()
 
 
+def _automatic_install_policy():
+    return {
+        "strategy": "robocopy_backup_then_mirror",
+        "preserve_paths": ["config", "logs", "ledger"],
+        "restart_executable": "Container_Audit.exe",
+    }
+
+
+def _updater_script_kwargs():
+    return {
+        "current_pid": 12345,
+        "source_path": r"C:\Temp\update\extracted\Container_Audit",
+        "application_path": r"C:\KMTech\Apps\Container_Audit\current",
+        "backup_partial_path": r"C:\KMTech\Apps\Container_Audit\.current.update-backups\run.partial",
+        "backup_path": r"C:\KMTech\Apps\Container_Audit\.current.update-backups\run",
+        "temp_path": r"C:\Temp\update",
+        "restart_path": r"C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe",
+        "evidence_path": r"C:\KMTech\Apps\Container_Audit\.current.update-evidence\run.log",
+        "preserve_paths": ["config", "logs", "ledger"],
+        "preserve_json_path": r"C:\Temp\update\preserve-paths.json",
+        "preserve_verifier_path": r"C:\Temp\update\verify-preserved-paths.ps1",
+        "process_stop_guard_path": r"C:\Temp\update\stop-update-process.ps1",
+        "target_version": "v2.0.35",
+    }
+
+
 def test_updater_script_backs_up_before_copy_and_rolls_back_on_failure():
     script = container_audit_module._build_updater_script(
-        executable_name="Container_Audit.exe",
-        application_path=r"C:\Company Apps\Container Audit",
-        new_program_folder_path=r"C:\Temp\update\extracted\Container_Audit",
-        update_temp_root=r"C:\Temp\update",
-        current_pid=12345,
+        **_updater_script_kwargs(),
     )
 
-    assert 'set "CURRENT_PID=12345"' in script
-    assert "taskkill /F /PID %CURRENT_PID%" in script
-    assert '/IM "Container_Audit.exe"' not in script
-    assert 'set "BACKUP_PATH=C:\\Temp\\update\\backup"' in script
-    assert 'set "PRESERVE_PATH=C:\\Temp\\update\\preserve_config"' in script
-    assert 'robocopy "%APP_PATH%" "%BACKUP_PATH%" /MIR' in script
-    assert "if errorlevel 8 goto BACKUP_FAILED" in script
-    assert 'robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "container_audit_settings.json"' in script
-    assert 'robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "worker_registry.json"' in script
-    assert 'robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "best_time_records.json"' in script
-    assert 'robocopy "%APP_PATH%\\config\\parked_trays" "%PRESERVE_PATH%\\config\\parked_trays" /MIR' in script
-    assert 'robocopy "%NEW_PATH%" "%APP_PATH%" /MIR' in script
-    assert "if errorlevel 8 goto ROLLBACK" in script
-    assert 'robocopy "%PRESERVE_PATH%\\config" "%APP_PATH%\\config" "container_audit_settings.json"' in script
-    assert 'robocopy "%PRESERVE_PATH%\\config\\parked_trays" "%APP_PATH%\\config\\parked_trays" /MIR' in script
+    assert "-TargetProcessId 12345" in script
+    assert "-ExpectedExecutable" in script
+    assert "state=PROCESS_STOP_CONFIRMED" in script
+    assert "state=PROCESS_STOP_GUARD_FAILED" in script
+    assert "taskkill" not in script.lower()
+    assert script.count("robocopy ") == 3
+    assert script.count(" /MIR ") == 3
+    assert "move /Y" in script
+    assert "state=BACKUP_COMPLETED" in script
+    assert "state=UPDATE_COMPLETED" in script
+    assert "state=ROLLBACK_COMPLETED" in script
+    assert "state=ROLLBACK_FAILED" in script
+    assert "restart=ALLOWED" in script
+    assert "restart=REQUESTED" in script
+    assert "restart=BLOCKED" in script.split(":ROLLBACK", 1)[1]
+    assert 'start ""' not in script.split(":ROLLBACK", 1)[1]
+    assert "/XD" in script and "/XF" in script
+    for relative_path in ("config", "logs", "ledger"):
+        assert relative_path in script
     assert "xcopy" not in script
     assert ":ROLLBACK" in script
-    assert ":PRESERVE_FAILED" in script
-    assert script.index('robocopy "%APP_PATH%" "%BACKUP_PATH%" /MIR') < script.index(
-        'robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "container_audit_settings.json"'
-    )
-    assert script.index('robocopy "%APP_PATH%\\config\\parked_trays" "%PRESERVE_PATH%\\config\\parked_trays" /MIR') < script.index(
-        'robocopy "%NEW_PATH%" "%APP_PATH%" /MIR'
-    )
-    assert script.index('robocopy "%NEW_PATH%" "%APP_PATH%" /MIR') < script.index(
-        'robocopy "%PRESERVE_PATH%\\config" "%APP_PATH%\\config" "container_audit_settings.json"'
-    )
-    assert script.index('robocopy "%PRESERVE_PATH%\\config\\parked_trays" "%APP_PATH%\\config\\parked_trays" /MIR') < script.index(
-        'rmdir /s /q "%UPDATE_TEMP_ROOT%"'
-    )
-    assert script.index("exit /b 0") < script.index(":ROLLBACK")
-    assert 'robocopy "%BACKUP_PATH%" "%APP_PATH%" /MIR' in script
-    assert "if errorlevel 8 goto ROLLBACK_FAILED" in script
+    assert "pause" not in script.lower()
+    assert script.index("state=BACKUP_COMPLETED") < script.index('set "APPLY_EXIT=')
 
 
 @pytest.mark.parametrize(
     ("field", "value"),
     [
         ("application_path", r"C:\Company%Apps\Container Audit"),
-        ("new_program_folder_path", r"C:\Temp\update&run\Container_Audit"),
-        ("update_temp_root", "C:\\Temp\\update\nnext"),
-        ("executable_name", "Container_Audit^2.exe"),
+        ("source_path", r"C:\Temp\update&run\Container_Audit"),
+        ("temp_path", "C:\\Temp\\update\nnext"),
+        ("restart_path", r"C:\KMTech\Apps\Container_Audit\current\Container_Audit^2.exe"),
     ],
 )
 def test_updater_script_rejects_batch_metacharacter_paths(field, value):
-    kwargs = {
-        "executable_name": "Container_Audit.exe",
-        "application_path": r"C:\Company Apps\Container Audit",
-        "new_program_folder_path": r"C:\Temp\update\extracted\Container_Audit",
-        "update_temp_root": r"C:\Temp\update",
-        "current_pid": 1234,
-    }
+    kwargs = _updater_script_kwargs()
     kwargs[field] = value
 
     with pytest.raises(ValueError, match="배치 문자"):
         container_audit_module._build_updater_script(**kwargs)
 
 
+def test_preserve_verifier_records_matching_pre_post_hashes_and_rejects_drift(tmp_path):
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        pytest.skip("Windows PowerShell is required for updater verifier contract")
+
+    application = tmp_path / "application"
+    backup = tmp_path / "backup"
+    for base in (application, backup):
+        for relative in ("config", "logs", "ledger"):
+            (base / relative).mkdir(parents=True)
+            (base / relative / "state.bin").write_bytes(f"{relative}-state".encode())
+    preserve_json = tmp_path / "preserve.json"
+    preserve_json.write_text('["config", "logs", "ledger"]', encoding="utf-8")
+    evidence = tmp_path / "evidence.log"
+    evidence.write_text("state=BACKUP_COMPLETED\n", encoding="utf-8")
+    verifier = tmp_path / "verify.ps1"
+    verifier.write_text(container_audit_module._preserve_verifier_source(), encoding="utf-8")
+    command = [
+        powershell,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(verifier),
+        "-ApplicationPath",
+        str(application),
+        "-BackupPath",
+        str(backup),
+        "-PreserveJsonPath",
+        str(preserve_json),
+        "-EvidencePath",
+        str(evidence),
+    ]
+
+    matching = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert matching.returncode == 0, matching.stderr
+    evidence_text = evidence.read_text(encoding="utf-8-sig")
+    assert evidence_text.count("preserve_path=") == 3
+    assert evidence_text.count("preserve_before_sha256=") == 3
+    assert evidence_text.count("preserve_after_sha256=") == 3
+    assert evidence_text.count("preserve_match=true") == 3
+
+    (application / "ledger" / "state.bin").write_bytes(b"changed")
+    drifted = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert drifted.returncode != 0
+    assert "preserve_match=false" in evidence.read_text(encoding="utf-8-sig")
+
+
+def test_process_stop_guard_rejects_pid_reuse_without_killing_process(tmp_path):
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        pytest.skip("Windows PowerShell is required for updater process guard")
+
+    guard = tmp_path / "stop-update-process.ps1"
+    guard.write_text(container_audit_module._process_stop_guard_source(), encoding="utf-8")
+    base_command = [
+        powershell,
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(guard),
+        "-TargetProcessId",
+    ]
+    absent = subprocess.run(
+        [*base_command, "2147483647", "-ExpectedExecutable", r"C:\missing.exe"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert absent.returncode == 0, absent.stderr
+
+    mismatched = subprocess.run(
+        [*base_command, str(container_audit_module.os.getpid()), "-ExpectedExecutable", r"C:\different.exe"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert mismatched.returncode != 0
+
+
+def test_robocopy_mirror_exclusions_preserve_all_runtime_state(tmp_path):
+    robocopy = shutil.which("robocopy.exe")
+    if not robocopy:
+        pytest.skip("robocopy is required for updater mirror contract")
+
+    source = tmp_path / "payload"
+    application = tmp_path / "application"
+    for base in (source, application):
+        for relative in ("config", "logs", "ledger"):
+            (base / relative).mkdir(parents=True)
+    (source / "Container_Audit.exe").write_bytes(b"new-executable")
+    (source / "config" / "settings.json").write_text("new-settings", encoding="utf-8")
+    (source / "logs" / "runtime.log").write_text("new-log", encoding="utf-8")
+    (source / "ledger" / "ledger.db").write_bytes(b"new-ledger")
+    (application / "Container_Audit.exe").write_bytes(b"old-executable")
+    (application / "obsolete.dll").write_bytes(b"obsolete")
+    (application / "config" / "settings.json").write_text("operator-settings", encoding="utf-8")
+    (application / "logs" / "runtime.log").write_text("operator-log", encoding="utf-8")
+    (application / "ledger" / "ledger.db").write_bytes(b"operator-ledger")
+
+    exclusions = container_audit_module._preserve_exclusion_paths(
+        str(source),
+        str(application),
+        ["config", "logs", "ledger"],
+    )
+    completed = subprocess.run(
+        [
+            robocopy,
+            str(source),
+            str(application),
+            "/MIR",
+            "/COPY:DAT",
+            "/DCOPY:DAT",
+            "/R:1",
+            "/W:1",
+            "/XJ",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+            "/NP",
+            "/XD",
+            *exclusions,
+            "/XF",
+            *exclusions,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode < 8, completed.stdout + completed.stderr
+    assert (application / "Container_Audit.exe").read_bytes() == b"new-executable"
+    assert not (application / "obsolete.dll").exists()
+    assert (application / "config" / "settings.json").read_text(encoding="utf-8") == "operator-settings"
+    assert (application / "logs" / "runtime.log").read_text(encoding="utf-8") == "operator-log"
+    assert (application / "ledger" / "ledger.db").read_bytes() == b"operator-ledger"
+
+
+def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_restart(tmp_path):
+    cmd = shutil.which("cmd.exe")
+    powershell = shutil.which("powershell.exe")
+    robocopy = shutil.which("robocopy.exe")
+    if not all((cmd, powershell, robocopy)):
+        pytest.skip("Windows update command tools are required")
+
+    application = tmp_path / "apps" / "Container_Audit" / "current"
+    application.mkdir(parents=True)
+    for relative in ("config", "logs", "ledger"):
+        (application / relative).mkdir()
+        (application / relative / "state.bin").write_bytes(f"{relative}-state".encode())
+    (application / "Container_Audit.exe").write_bytes(b"original-executable")
+    (application / "runtime.dll").write_bytes(b"original-runtime")
+
+    source = tmp_path / "missing-payload"
+    temp_path = tmp_path / "handoff"
+    temp_path.mkdir()
+    backup_root = application.parent / ".current.update-backups"
+    evidence_root = application.parent / ".current.update-evidence"
+    backup_root.mkdir()
+    evidence_root.mkdir()
+    backup_path = backup_root / "rollback-run"
+    backup_partial = backup_root / "rollback-run.partial"
+    evidence = evidence_root / "rollback-run.log"
+    evidence.write_text("state=PREPARED\n", encoding="utf-8")
+    preserve_json = temp_path / "preserve-paths.json"
+    preserve_json.write_text('["config", "logs", "ledger"]', encoding="utf-8")
+    verifier = temp_path / "verify-preserved-paths.ps1"
+    verifier.write_text(container_audit_module._preserve_verifier_source(), encoding="utf-8")
+    process_guard = temp_path / "stop-update-process.ps1"
+    process_guard.write_text(container_audit_module._process_stop_guard_source(), encoding="utf-8")
+    updater = temp_path / "updater.bat"
+    updater.write_text(
+        container_audit_module._build_updater_script(
+            current_pid=2147483647,
+            source_path=str(source),
+            application_path=str(application),
+            backup_partial_path=str(backup_partial),
+            backup_path=str(backup_path),
+            temp_path=str(temp_path),
+            restart_path=str(application / "Container_Audit.exe"),
+            evidence_path=str(evidence),
+            preserve_paths=["config", "logs", "ledger"],
+            preserve_json_path=str(preserve_json),
+            preserve_verifier_path=str(verifier),
+            process_stop_guard_path=str(process_guard),
+            target_version="v2.0.35",
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [cmd, "/d", "/c", str(updater)],
+        capture_output=True,
+        text=True,
+        timeout=45,
+        check=False,
+    )
+
+    assert completed.returncode == 31, completed.stdout + completed.stderr
+    evidence_text = evidence.read_text(encoding="utf-8-sig")
+    assert "state=PROCESS_STOP_CONFIRMED" in evidence_text
+    assert "state=BACKUP_COMPLETED" in evidence_text
+    assert "state=UPDATE_APPLY_FAILED" in evidence_text
+    assert "state=ROLLBACK_COMPLETED" in evidence_text
+    assert "restart=BLOCKED" in evidence_text
+    assert "restart=REQUESTED" not in evidence_text
+    assert backup_path.is_dir()
+    assert not backup_partial.exists()
+    assert (backup_path / "Container_Audit.exe").read_bytes() == b"original-executable"
+    assert (backup_path / "runtime.dll").read_bytes() == b"original-runtime"
+    assert (application / "Container_Audit.exe").read_bytes() == b"original-executable"
+    assert (application / "runtime.dll").read_bytes() == b"original-runtime"
+
+
 def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monkeypatch):
     update_root = tmp_path / "update-root"
+    application = tmp_path / "apps" / "Container_Audit" / "current"
+    application.mkdir(parents=True)
+    running_executable = application / "Container_Audit.exe"
+    running_executable.write_bytes(b"old-exe")
     popen_paths = []
     requests_seen = []
     extract_kwargs = []
     monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(container_audit_module.sys, "executable", str(running_executable))
 
     class FakeResponse:
         def __init__(self, *, content=b"zip-bytes", text=""):
@@ -922,6 +1154,8 @@ def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monk
         container_audit_module.download_and_apply_update(
             "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
             checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
+            install_policy=_automatic_install_policy(),
+            target_version="v2.0.10",
         )
 
     updater_path = update_root / "updater.bat"
@@ -932,14 +1166,28 @@ def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monk
     assert popen_paths == [[str(updater_path)]]
     assert updater_path.is_file()
     assert update_root.exists()
+    backup_root = application.parent / ".current.update-backups"
+    evidence_root = application.parent / ".current.update-evidence"
+    evidence_files = list(evidence_root.glob("*.log"))
+    assert backup_root.is_dir()
+    assert len(evidence_files) == 1
+    evidence = evidence_files[0].read_text(encoding="utf-8")
+    assert "schema=container-audit-update-evidence-v1" in evidence
+    assert "state=PREPARED" in evidence
+    assert "preserve_paths=config;logs;ledger" in evidence
 
 
 def test_download_and_apply_update_accepts_manifest_sha256_without_checksum_url(tmp_path, monkeypatch):
     update_root = tmp_path / "update-root"
+    application = tmp_path / "apps" / "Container_Audit" / "current"
+    application.mkdir(parents=True)
+    running_executable = application / "Container_Audit.exe"
+    running_executable.write_bytes(b"old-exe")
     popen_paths = []
     requests_seen = []
     extract_kwargs = []
     monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(container_audit_module.sys, "executable", str(running_executable))
 
     class FakeResponse:
         headers = {}
@@ -978,6 +1226,8 @@ def test_download_and_apply_update_accepts_manifest_sha256_without_checksum_url(
                 "top_level": "Container_Audit",
                 "required_files": ["Container_Audit/Container_Audit.exe"],
             },
+            install_policy=_automatic_install_policy(),
+            target_version="v2.0.10",
         )
 
     assert [call[0] for call in requests_seen] == [
@@ -1056,6 +1306,8 @@ def test_download_and_apply_update_cleans_temp_root_when_extract_fails(tmp_path,
     container_audit_module.download_and_apply_update(
         "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
         checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
+        install_policy=_automatic_install_policy(),
+        target_version="v2.0.10",
     )
 
     assert requests_seen[1][1]["stream"] is True
@@ -1095,6 +1347,8 @@ def test_download_and_apply_update_rejects_source_mode_before_network(monkeypatc
     container_audit_module.download_and_apply_update(
         "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
         checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
+        install_policy=_automatic_install_policy(),
+        target_version="v2.0.10",
     )
 
     assert errors
@@ -1136,6 +1390,46 @@ def test_download_and_apply_update_requires_checksum_before_network_or_extract(m
 
     assert errors
     assert "SHA256" in errors[0][1]
+
+
+def test_download_and_apply_update_rejects_install_policy_before_network(monkeypatch):
+    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        container_audit_module.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("invalid install policy must fail before network")
+        ),
+    )
+    errors = []
+
+    class FakeTk:
+        def withdraw(self):
+            return None
+
+        def destroy(self):
+            return None
+
+    monkeypatch.setattr(container_audit_module.tk, "Tk", FakeTk)
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    container_audit_module.download_and_apply_update(
+        "https://updates.example/Container_Audit-v2.0.10.zip",
+        expected_sha256="a" * 64,
+        install_policy={
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        target_version="v2.0.10",
+    )
+
+    assert errors
+    assert "preserve_paths" in errors[0][1]
 
 
 def test_check_for_updates_defaults_off_before_network(monkeypatch):

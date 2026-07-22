@@ -101,6 +101,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeStore,
 )
 from update_service import (
+    UPDATE_AUTOMATIC_INSTALL_STRATEGY,
     UPDATE_CHANNEL_ENV,
     UPDATE_DEFAULT_CHANNEL,
     UPDATE_MANIFEST_PUBLIC_KEY_ENV,
@@ -110,6 +111,9 @@ from update_service import (
     UPDATE_PROVIDER_GITHUB,
     UPDATE_PROVIDER_OFF,
     UPDATE_PROVIDER_PRIVATE_MANIFEST,
+    UPDATE_REQUIRED_PRESERVE_PATHS,
+    UPDATE_RESTART_EXECUTABLE,
+    automatic_install_policy_from_manifest,
     assert_https_update_url,
     find_release_asset_update_info,
     find_release_asset_urls,
@@ -208,7 +212,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.34"
+CURRENT_VERSION = "v2.0.35"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -216,6 +220,15 @@ LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT = 1030.0
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
+UPDATE_EVIDENCE_SCHEMA = "container-audit-update-evidence-v1"
+
+
+def _default_automatic_install_policy() -> Dict[str, Any]:
+    return {
+        "strategy": UPDATE_AUTOMATIC_INSTALL_STRATEGY,
+        "preserve_paths": list(UPDATE_REQUIRED_PRESERVE_PATHS),
+        "restart_executable": UPDATE_RESTART_EXECUTABLE,
+    }
 
 def _parse_version_tag(version: str) -> Optional[tuple[int, int, int]]:
     return parse_version_tag(version)
@@ -331,7 +344,7 @@ def _get_update_manifest_public_key() -> str:
     return str(os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV) or settings.get("manifest_public_key") or "").strip()
 
 
-def _check_github_release_for_updates() -> Optional[Dict[str, str]]:
+def _check_github_release_for_updates() -> Optional[Dict[str, Any]]:
     api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
     response = requests.get(api_url, timeout=5)
     response.raise_for_status()
@@ -364,6 +377,7 @@ def _check_github_release_for_updates() -> Optional[Dict[str, str]]:
             "checksum_url": checksum_url,
             "sha256": expected_sha256,
             "provider": UPDATE_PROVIDER_GITHUB,
+            "install_policy": _default_automatic_install_policy(),
         }
     download_url, checksum_url = _find_release_asset_urls(latest_release_data, expected_version=latest_version)
     if download_url:
@@ -427,6 +441,172 @@ def _validate_updater_batch_value(name: str, value: str) -> str:
     if any(char in UPDATER_BATCH_UNSAFE_CHARS for char in text):
         raise ValueError(f"업데이트 스크립트 {name} 값에 안전하지 않은 배치 문자가 포함되어 있습니다.")
     return text
+
+
+def _windows_quote(path: str) -> str:
+    """Quote a validated filesystem path for the generated cmd.exe script."""
+
+    value = str(path or "")
+    if value.startswith('"') and value.endswith('"'):
+        value = value[1:-1]
+    return f'"{_validate_updater_batch_value("path", value)}"'
+
+
+def _path_on_same_volume(first: str, second: str) -> bool:
+    first_drive = os.path.splitdrive(os.path.abspath(first))[0].casefold()
+    second_drive = os.path.splitdrive(os.path.abspath(second))[0].casefold()
+    return bool(first_drive) and first_drive == second_drive
+
+
+def _is_update_reparse_point(path: str) -> bool:
+    if not os.path.lexists(path):
+        return False
+    if os.path.islink(path):
+        return True
+    try:
+        stat_result = os.stat(path, follow_symlinks=False)
+    except OSError:
+        return True
+    return bool(getattr(stat_result, "st_file_attributes", 0) & 0x400)
+
+
+def _prepare_update_sibling_root(application_path: str, sibling_root: str) -> None:
+    """Create a persistent sibling root without following a link or junction."""
+
+    if not _path_on_same_volume(application_path, sibling_root):
+        raise ValueError("업데이트 백업/증거 폴더는 애플리케이션과 같은 볼륨이어야 합니다.")
+    if _is_update_reparse_point(sibling_root):
+        raise ValueError("업데이트 백업/증거 폴더에 링크 또는 reparse point를 사용할 수 없습니다.")
+    os.makedirs(sibling_root, exist_ok=True)
+    if _is_update_reparse_point(sibling_root):
+        raise ValueError("업데이트 백업/증거 폴더에 링크 또는 reparse point를 사용할 수 없습니다.")
+
+    application_real = os.path.normcase(os.path.realpath(application_path))
+    sibling_real = os.path.normcase(os.path.realpath(sibling_root))
+    try:
+        if os.path.commonpath((application_real, sibling_real)) == application_real:
+            raise ValueError("업데이트 백업/증거 폴더는 애플리케이션 폴더 밖에 있어야 합니다.")
+    except ValueError as exc:
+        raise ValueError("업데이트 백업/증거 폴더 경로를 확인할 수 없습니다.") from exc
+
+
+def _preserve_verifier_source() -> str:
+    return r'''param(
+    [Parameter(Mandatory=$true)][string]$ApplicationPath,
+    [Parameter(Mandatory=$true)][string]$BackupPath,
+    [Parameter(Mandatory=$true)][string]$PreserveJsonPath,
+    [Parameter(Mandatory=$true)][string]$EvidencePath
+)
+$ErrorActionPreference = "Stop"
+
+function Get-PreservedTree([string]$RootPath) {
+    if (-not (Test-Path -LiteralPath $RootPath)) {
+        return ,@("MISSING")
+    }
+    $root = Get-Item -Force -LiteralPath $RootPath
+    if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "reparse points are not allowed in preserved update paths"
+    }
+    if (-not $root.PSIsContainer) {
+        $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $root.FullName).Hash.ToLowerInvariant()
+        return ,@("FILE|$($root.Length)|$hash")
+    }
+
+    $base = $root.FullName.TrimEnd("\") + "\"
+    $rows = [System.Collections.Generic.List[string]]::new()
+    $rows.Add("DIR|.")
+    foreach ($entry in Get-ChildItem -Force -Recurse -LiteralPath $root.FullName | Sort-Object FullName) {
+        if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "reparse points are not allowed in preserved update paths"
+        }
+        $relative = $entry.FullName.Substring($base.Length).Replace("\", "/")
+        if ($entry.PSIsContainer) {
+            $rows.Add("DIR|$relative")
+        } else {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $entry.FullName).Hash.ToLowerInvariant()
+            $rows.Add("FILE|$relative|$($entry.Length)|$hash")
+        }
+    }
+    return ,$rows.ToArray()
+}
+
+function Get-TreeSha256([string[]]$Rows) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [Text.Encoding]::UTF8.GetBytes([string]::Join("`n", $Rows))
+        return ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $algorithm.Dispose()
+    }
+}
+
+$decodedPreservePaths = Get-Content -Raw -Encoding UTF8 -LiteralPath $PreserveJsonPath | ConvertFrom-Json
+$preservePaths = @()
+foreach ($decodedPath in $decodedPreservePaths) {
+    $preservePaths += [string]$decodedPath
+}
+foreach ($relativePath in $preservePaths) {
+    $relativeWindows = ([string]$relativePath).Replace("/", "\")
+    $beforePath = Join-Path $BackupPath $relativeWindows
+    $afterPath = Join-Path $ApplicationPath $relativeWindows
+    $before = @(Get-PreservedTree $beforePath)
+    $after = @(Get-PreservedTree $afterPath)
+    $beforeSha = Get-TreeSha256 $before
+    $afterSha = Get-TreeSha256 $after
+    $matches = $null -eq (Compare-Object -ReferenceObject $before -DifferenceObject $after)
+    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_path=$relativePath"
+    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_before_sha256=$beforeSha"
+    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_after_sha256=$afterSha"
+    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_match=$($matches.ToString().ToLowerInvariant())"
+    if (-not $matches) {
+        throw "preserved update path changed: $relativePath"
+    }
+}
+'''
+
+
+def _process_stop_guard_source() -> str:
+    return r'''param(
+    [Parameter(Mandatory=$true)][int]$TargetProcessId,
+    [Parameter(Mandatory=$true)][string]$ExpectedExecutable
+)
+$ErrorActionPreference = "Stop"
+$process = Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue
+if ($null -eq $process) {
+    exit 0
+}
+$actualExecutable = $process.Path
+if ([string]::IsNullOrWhiteSpace($actualExecutable)) {
+    throw "cannot verify updater target process executable"
+}
+$expectedFullPath = [IO.Path]::GetFullPath($ExpectedExecutable)
+$actualFullPath = [IO.Path]::GetFullPath($actualExecutable)
+if (-not [string]::Equals($expectedFullPath, $actualFullPath, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "updater target PID belongs to a different executable"
+}
+Stop-Process -Id $TargetProcessId -Force
+Wait-Process -Id $TargetProcessId -Timeout 10 -ErrorAction SilentlyContinue
+if ($null -ne (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue)) {
+    throw "updater target process did not stop"
+}
+'''
+
+
+def _preserve_exclusion_paths(
+    source_path: str,
+    application_path: str,
+    preserve_paths: List[str],
+) -> List[str]:
+    exclusions: List[str] = []
+    for relative_path in preserve_paths:
+        path_parts = relative_path.replace("\\", "/").split("/")
+        exclusions.extend(
+            (
+                os.path.join(source_path, *path_parts),
+                os.path.join(application_path, *path_parts),
+            )
+        )
+    return exclusions
 
 
 def _write_update_download(response: Any, zip_path: str, *, max_bytes: int = MAX_UPDATE_DOWNLOAD_BYTES) -> None:
@@ -493,16 +673,22 @@ def download_and_apply_update(
     *,
     expected_sha256=None,
     archive_policy=None,
+    install_policy=None,
+    target_version=None,
     allow_source_mode: bool = False,
 ):
-    """업데이트 .zip 파일을 다운로드하고, 압축 해제 후 적용 스크립트를 실행합니다."""
+    """Download a verified release and hand it to the transactional updater."""
     update_temp_root = ""
     updater_launched = False
+    evidence_path = ""
     try:
         if not checksum_url and not expected_sha256:
             raise ValueError("업데이트 SHA256 체크섬 URL 또는 예상 해시가 필요합니다.")
         if expected_sha256 and not is_sha256(str(expected_sha256).strip()):
             raise ValueError("업데이트 SHA256 예상 해시 형식이 올바르지 않습니다.")
+        if re.fullmatch(r"v\d+\.\d+\.\d+", str(target_version or "")) is None:
+            raise ValueError("자동 업데이트 대상 버전은 정식 vX.Y.Z 태그여야 합니다.")
+        validated_install_policy = automatic_install_policy_from_manifest(install_policy)
         if not allow_source_mode and not _release_runtime_mode():
             raise ValueError("소스 실행 모드에서는 자동 업데이트를 적용하지 않습니다.")
         download_url = assert_https_update_url(url, require_zip=True) if expected_sha256 else validate_release_asset_url(url)
@@ -536,14 +722,70 @@ def download_and_apply_update(
             new_program_folder_path = os.path.join(temp_update_folder, extracted_content[0])
         else:
             new_program_folder_path = temp_update_folder
+
+        restart_executable = validated_install_policy["restart_executable"]
+        if os.path.basename(sys.executable).casefold() != restart_executable.casefold():
+            raise ValueError("업데이트 재시작 실행 파일이 현재 실행 파일과 일치하지 않습니다.")
+        payload_executable = os.path.join(new_program_folder_path, restart_executable)
+        if not os.path.isfile(payload_executable):
+            raise ValueError(f"업데이트 ZIP에 {restart_executable} 파일이 없습니다.")
+
+        application_path = os.path.abspath(application_path)
+        app_parent = os.path.dirname(application_path)
+        app_name = os.path.basename(application_path)
+        backup_root = os.path.join(app_parent, f".{app_name}.update-backups")
+        evidence_root = os.path.join(app_parent, f".{app_name}.update-evidence")
+        _prepare_update_sibling_root(application_path, backup_root)
+        _prepare_update_sibling_root(application_path, evidence_root)
+
+        run_suffix = re.sub(
+            r"[^A-Za-z0-9._-]",
+            "-",
+            f"{target_version}-{time.strftime('%Y%m%d%H%M%S')}-{os.getpid()}-{os.path.basename(update_temp_root)}",
+        )
+        backup_path = os.path.join(backup_root, run_suffix)
+        backup_partial_path = f"{backup_path}.partial"
+        evidence_path = os.path.join(evidence_root, f"{run_suffix}.log")
+        if os.path.exists(backup_path) or os.path.exists(backup_partial_path):
+            raise ValueError("고유 업데이트 백업 경로가 이미 존재합니다.")
+
+        preserve_json_path = os.path.join(update_temp_root, "preserve-paths.json")
+        preserve_verifier_path = os.path.join(update_temp_root, "verify-preserved-paths.ps1")
+        process_stop_guard_path = os.path.join(update_temp_root, "stop-update-process.ps1")
+        with open(preserve_json_path, "w", encoding="utf-8") as preserve_file:
+            json.dump(validated_install_policy["preserve_paths"], preserve_file, ensure_ascii=True)
+        with open(preserve_verifier_path, "w", encoding="utf-8") as verifier_file:
+            verifier_file.write(_preserve_verifier_source())
+        with open(process_stop_guard_path, "w", encoding="utf-8") as guard_file:
+            guard_file.write(_process_stop_guard_source())
+        with open(evidence_path, "x", encoding="utf-8") as evidence_file:
+            evidence_file.write(f"schema={UPDATE_EVIDENCE_SCHEMA}\n")
+            evidence_file.write("state=PREPARED\n")
+            evidence_file.write(f"target_version={target_version}\n")
+            evidence_file.write(f"application_path={application_path}\n")
+            evidence_file.write(f"backup_path={backup_path}\n")
+            evidence_file.write(
+                "preserve_paths="
+                + ";".join(validated_install_policy["preserve_paths"])
+                + "\n"
+            )
+
         with open(updater_script_path, "w", encoding='utf-8') as bat_file:
             bat_file.write(
                 _build_updater_script(
-                    executable_name=os.path.basename(sys.executable),
-                    application_path=application_path,
-                    new_program_folder_path=new_program_folder_path,
-                    update_temp_root=update_temp_root,
                     current_pid=os.getpid(),
+                    source_path=new_program_folder_path,
+                    application_path=application_path,
+                    backup_partial_path=backup_partial_path,
+                    backup_path=backup_path,
+                    temp_path=update_temp_root,
+                    restart_path=os.path.join(application_path, restart_executable),
+                    evidence_path=evidence_path,
+                    preserve_paths=validated_install_policy["preserve_paths"],
+                    preserve_json_path=preserve_json_path,
+                    preserve_verifier_path=preserve_verifier_path,
+                    process_stop_guard_path=process_stop_guard_path,
+                    target_version=str(target_version),
                 )
             )
         subprocess.Popen([updater_script_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
@@ -552,6 +794,13 @@ def download_and_apply_update(
     except Exception as e:
         if update_temp_root and not updater_launched:
             shutil.rmtree(update_temp_root, ignore_errors=True)
+        if evidence_path:
+            try:
+                with open(evidence_path, "a", encoding="utf-8") as evidence_file:
+                    evidence_file.write("state=HANDOFF_FAILED\n")
+                    evidence_file.write("restart=BLOCKED\n")
+            except OSError:
+                pass
         root_alert = tk.Tk()
         root_alert.withdraw()
         messagebox.showerror("업데이트 실패", f"업데이트 적용 중 오류가 발생했습니다.\n\n{e}\n\n프로그램을 다시 시작해주세요.", parent=root_alert)
@@ -560,108 +809,126 @@ def download_and_apply_update(
 
 def _build_updater_script(
     *,
-    executable_name: str,
+    current_pid: int,
+    source_path: str,
     application_path: str,
-    new_program_folder_path: str,
-    update_temp_root: str,
-    current_pid: int | None = None,
+    backup_partial_path: str,
+    backup_path: str,
+    temp_path: str,
+    restart_path: str,
+    evidence_path: str,
+    preserve_paths: List[str],
+    preserve_json_path: str,
+    preserve_verifier_path: str,
+    process_stop_guard_path: str,
+    target_version: str,
 ) -> str:
-    executable_name = _validate_updater_batch_value("executable_name", executable_name)
-    application_path = _validate_updater_batch_value("application_path", application_path)
-    new_program_folder_path = _validate_updater_batch_value("new_program_folder_path", new_program_folder_path)
-    update_temp_root = _validate_updater_batch_value("update_temp_root", update_temp_root)
-    backup_path = os.path.join(update_temp_root, "backup")
-    preserve_path = os.path.join(update_temp_root, "preserve_config")
-    restart_path = os.path.join(application_path, executable_name)
-    pid_to_stop = int(current_pid or os.getpid())
+    safe_source = _windows_quote(source_path)
+    safe_application = _windows_quote(application_path)
+    safe_backup_partial = _windows_quote(backup_partial_path)
+    safe_backup = _windows_quote(backup_path)
+    safe_temp = _windows_quote(temp_path)
+    safe_restart = _windows_quote(restart_path)
+    safe_evidence = _windows_quote(evidence_path)
+    safe_preserve_json = _windows_quote(preserve_json_path)
+    safe_preserve_verifier = _windows_quote(preserve_verifier_path)
+    safe_process_stop_guard = _windows_quote(process_stop_guard_path)
+
+    exclusions = _preserve_exclusion_paths(source_path, application_path, preserve_paths)
+    quoted_exclusions = " ".join(_windows_quote(path) for path in exclusions)
+    if not quoted_exclusions:
+        raise ValueError("자동 업데이트에는 보존 경로 제외 목록이 필요합니다.")
+    mirror_exclusions = f"/XD {quoted_exclusions} /XF {quoted_exclusions}"
+    if re.fullmatch(r"v\d+\.\d+\.\d+", str(target_version or "")) is None:
+        raise ValueError("업데이트 증거 대상 버전이 올바르지 않습니다.")
+
     return f"""@echo off
 chcp 65001 > nul
-set "APP_PATH={application_path}"
-set "NEW_PATH={new_program_folder_path}"
-set "BACKUP_PATH={backup_path}"
-set "PRESERVE_PATH={preserve_path}"
-set "UPDATE_TEMP_ROOT={update_temp_root}"
-set "RESTART_PATH={restart_path}"
-set "CURRENT_PID={pid_to_stop}"
-echo.
-echo ==========================================================
-echo  프로그램을 업데이트합니다. 이 창을 닫지 마세요.
-echo ==========================================================
-echo.
-echo 잠시 후 프로그램이 자동으로 종료됩니다...
-timeout /t 3 /nobreak > nul
-taskkill /F /PID %CURRENT_PID% > nul 2> nul
-echo.
-echo 기존 파일을 백업합니다...
-if exist "%BACKUP_PATH%" rmdir /s /q "%BACKUP_PATH%"
-robocopy "%APP_PATH%" "%BACKUP_PATH%" /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto BACKUP_FAILED
-echo.
-echo 로컬 설정을 보존합니다...
-if exist "%PRESERVE_PATH%" rmdir /s /q "%PRESERVE_PATH%"
-if exist "%APP_PATH%\\config\\container_audit_settings.json" robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "container_audit_settings.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto PRESERVE_FAILED
-if exist "%APP_PATH%\\config\\worker_registry.json" robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "worker_registry.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto PRESERVE_FAILED
-if exist "%APP_PATH%\\config\\best_time_records.json" robocopy "%APP_PATH%\\config" "%PRESERVE_PATH%\\config" "best_time_records.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto PRESERVE_FAILED
-if exist "%APP_PATH%\\config\\parked_trays" robocopy "%APP_PATH%\\config\\parked_trays" "%PRESERVE_PATH%\\config\\parked_trays" /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto PRESERVE_FAILED
-echo.
-echo 새 파일로 교체합니다...
-robocopy "%NEW_PATH%" "%APP_PATH%" /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK
-echo.
-echo 로컬 설정을 복원합니다...
-if exist "%PRESERVE_PATH%\\config\\container_audit_settings.json" robocopy "%PRESERVE_PATH%\\config" "%APP_PATH%\\config" "container_audit_settings.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK
-if exist "%PRESERVE_PATH%\\config\\worker_registry.json" robocopy "%PRESERVE_PATH%\\config" "%APP_PATH%\\config" "worker_registry.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK
-if exist "%PRESERVE_PATH%\\config\\best_time_records.json" robocopy "%PRESERVE_PATH%\\config" "%APP_PATH%\\config" "best_time_records.json" /COPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK
-if exist "%PRESERVE_PATH%\\config\\parked_trays" robocopy "%PRESERVE_PATH%\\config\\parked_trays" "%APP_PATH%\\config\\parked_trays" /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK
-echo.
-echo 임시 업데이트 파일을 삭제합니다...
-rmdir /s /q "%UPDATE_TEMP_ROOT%"
-echo.
-echo ========================================
-echo  업데이트 완료!
-echo ========================================
-echo.
-echo 3초 후에 프로그램을 다시 시작합니다.
-timeout /t 3 /nobreak > nul
-start "" "%RESTART_PATH%"
-del "%~f0"
+setlocal EnableExtensions DisableDelayedExpansion
+>> {safe_evidence} echo state=UPDATER_STARTED
+>> {safe_evidence} echo started_at=%DATE%_%TIME%
+>> {safe_evidence} echo temporary_path={safe_temp}
+timeout /t 2 /nobreak > nul
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_process_stop_guard} -TargetProcessId {int(current_pid)} -ExpectedExecutable {safe_restart}
+if errorlevel 1 (
+    >> {safe_evidence} echo state=PROCESS_STOP_GUARD_FAILED
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 20
+)
+>> {safe_evidence} echo state=PROCESS_STOP_CONFIRMED
+
+if exist {safe_backup_partial} (
+    >> {safe_evidence} echo state=BACKUP_PARTIAL_ALREADY_EXISTS
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 21
+)
+if exist {safe_backup} (
+    >> {safe_evidence} echo state=BACKUP_ALREADY_EXISTS
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 22
+)
+mkdir {safe_backup_partial} > nul 2>&1
+if errorlevel 1 (
+    >> {safe_evidence} echo state=BACKUP_DIRECTORY_CREATE_FAILED
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 23
+)
+
+robocopy {safe_application} {safe_backup_partial} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
+set "BACKUP_EXIT=%ERRORLEVEL%"
+if %BACKUP_EXIT% GEQ 8 (
+    >> {safe_evidence} echo state=BACKUP_COPY_FAILED
+    >> {safe_evidence} echo backup_exit=%BACKUP_EXIT%
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b %BACKUP_EXIT%
+)
+move /Y {safe_backup_partial} {safe_backup} > nul
+if errorlevel 1 (
+    >> {safe_evidence} echo state=BACKUP_FINALIZE_FAILED
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 24
+)
+>> {safe_evidence} echo state=BACKUP_COMPLETED
+
+robocopy {safe_source} {safe_application} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
+set "APPLY_EXIT=%ERRORLEVEL%"
+if %APPLY_EXIT% GEQ 8 goto ROLLBACK
+
+powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_preserve_verifier} -ApplicationPath {safe_application} -BackupPath {safe_backup} -PreserveJsonPath {safe_preserve_json} -EvidencePath {safe_evidence}
+set "PRESERVE_EXIT=%ERRORLEVEL%"
+if not %PRESERVE_EXIT% EQU 0 (
+    set "APPLY_EXIT=%PRESERVE_EXIT%"
+    goto ROLLBACK
+)
+
+>> {safe_evidence} echo state=UPDATE_COMPLETED
+>> {safe_evidence} echo target_version={target_version}
+>> {safe_evidence} echo restart=ALLOWED
+start "" {safe_restart}
+if errorlevel 1 (
+    >> {safe_evidence} echo restart=FAILED
+    exit /b 32
+)
+>> {safe_evidence} echo restart=REQUESTED
+rmdir /s /q {safe_temp} > nul 2>&1
 exit /b 0
 
 :ROLLBACK
-echo.
-echo 업데이트 파일 복사에 실패했습니다. 백업을 복원합니다...
-robocopy "%BACKUP_PATH%" "%APP_PATH%" /MIR /COPY:DAT /DCOPY:DAT /R:2 /W:1 /NFL /NDL /NJH /NJS /NP > nul
-if errorlevel 8 goto ROLLBACK_FAILED
-echo 복원 작업이 끝났습니다. 프로그램을 직접 다시 실행해주세요.
-pause
-exit /b 1
-
-:ROLLBACK_FAILED
-echo.
-echo 백업 복원에 실패했습니다. 백업 폴더를 확인해주세요: %BACKUP_PATH%
-pause
-exit /b 1
-
-:PRESERVE_FAILED
-echo.
-echo 로컬 설정 보존에 실패해 업데이트를 중단합니다.
-pause
-exit /b 1
-
-:BACKUP_FAILED
-echo.
-echo 기존 파일 백업에 실패해 업데이트를 중단합니다.
-pause
-exit /b 1
-            """
+>> {safe_evidence} echo state=UPDATE_APPLY_FAILED
+>> {safe_evidence} echo apply_exit=%APPLY_EXIT%
+robocopy {safe_backup} {safe_application} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
+set "ROLLBACK_EXIT=%ERRORLEVEL%"
+if %ROLLBACK_EXIT% GEQ 8 (
+    >> {safe_evidence} echo state=ROLLBACK_FAILED
+    >> {safe_evidence} echo rollback_exit=%ROLLBACK_EXIT%
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b %ROLLBACK_EXIT%
+)
+>> {safe_evidence} echo state=ROLLBACK_COMPLETED
+>> {safe_evidence} echo rollback_exit=%ROLLBACK_EXIT%
+>> {safe_evidence} echo restart=BLOCKED
+exit /b 31
+"""
 
 def check_and_apply_updates():
     if not _release_runtime_mode():
@@ -691,6 +958,8 @@ def _prompt_and_apply_update(candidate, parent=None):
                 checksum_url=candidate.get("checksum_url"),
                 expected_sha256=candidate.get("sha256"),
                 archive_policy=candidate.get("archive_policy"),
+                install_policy=candidate.get("install_policy"),
+                target_version=new_version,
             )
     finally:
         if created_alert_root is not None:
