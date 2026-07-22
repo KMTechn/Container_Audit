@@ -212,7 +212,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.35"
+CURRENT_VERSION = "v2.0.36"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -901,7 +901,7 @@ if errorlevel 1 (
 )
 >> {safe_evidence} echo state=BACKUP_COMPLETED
 
-robocopy {safe_source} {safe_application} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
+robocopy {safe_source} {safe_application} /MIR /IS /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
 set "APPLY_EXIT=%ERRORLEVEL%"
 if %APPLY_EXIT% GEQ 8 goto ROLLBACK
 
@@ -927,7 +927,7 @@ exit /b 0
 :ROLLBACK
 >> {safe_evidence} echo state=UPDATE_APPLY_FAILED
 >> {safe_evidence} echo apply_exit=%APPLY_EXIT%
-robocopy {safe_backup} {safe_application} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
+robocopy {safe_backup} {safe_application} /MIR /IS /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
 set "ROLLBACK_EXIT=%ERRORLEVEL%"
 if %ROLLBACK_EXIT% GEQ 8 (
     >> {safe_evidence} echo state=ROLLBACK_FAILED
