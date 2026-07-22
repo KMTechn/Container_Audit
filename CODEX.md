@@ -6,14 +6,14 @@
 
 ## 프로젝트 목적
 
-`Container_Audit`는 제조 라인의 이적 검사/트레이 검사를 위한 Windows 데스크톱 앱이다. 작업자는 현품표를 스캔한 뒤 제품 바코드를 순차 스캔하고, 기본 60개 단위의 트레이 완료 내역을 로컬 이벤트 폴더에 CSV로 먼저 남긴다. 배포 전환 기준은 Syncthing 없이 HTTPS direct-sync 릴레이가 그 로컬 이벤트 폴더를 서버로 업로드하는 구조다.
+`Container_Audit`는 제조 라인의 이적 검사/트레이 검사를 위한 Windows 데스크톱 앱이다. 표준 작업은 검사 전에 발행되어 검사 완료까지 유지된 exact 6필드 PHS2를 중앙 조회하고, 서버가 확정한 GOOD member count만큼 제품 바코드를 순차 스캔한다. PHS2 수량을 기본 60으로 추정하거나 QR에 `QT`를 추가하지 않는다. 배포 전환 기준은 Syncthing 없이 HTTPS direct-sync 릴레이가 로컬 이벤트를 서버로 업로드하는 구조다.
 
 ## 주요 기능
 
-- 현품표 스캔 후 품목 정보와 목표 수량을 잡고 제품 바코드를 검증한다.
+- exact PHS2의 `ITG/LBL/HSH`를 중앙 registry와 대조한 뒤 품목·현재 GOOD 목표 수량을 잡고 제품 바코드를 검증한다.
 - 트레이 완료, 부분 제출, 마지막 스캔 취소, 현재 작업 리셋을 처리한다.
 - 작업 중인 트레이를 보류/복구하고, 비정상 종료 후 현재 트레이 상태를 복구한다.
-- 완료 현품표 교체와 개별 제품 교환 흐름을 지원한다.
+- seal 전 중앙 PHS2 트레이에서 개별 제품 1~2개를 two-bundle CAS로 원자 교체하며, 원래 PHS2 identity는 유지한다.
 - `pygame` 기반 성공/오류 사운드와 Tkinter GUI를 제공한다.
 - GitHub Release 기반 자동 업데이트 코드는 `main()`에서 호출된다. 다만 frozen/release 모드가 아니면 업데이트 확인은 즉시 반환한다.
 - 기본 데이터 루트는 `%LOCALAPPDATA%\KMTech\ContainerAudit`이며 `events`는 앱 로컬 저장소, `direct_sync`는 HTTPS 릴레이 큐/스풀/상태 저장소다.

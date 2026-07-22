@@ -71,6 +71,12 @@ def source_identity_from_label(master_label_fields: Mapping[str, Any]) -> dict[s
     input_tag_id = str(fields.get("ITG") or "").strip()
     input_tag_label_id = str(fields.get("LBL") or "").strip()
     source_kind = str(fields.get("SRC") or "").strip()
+    input_tag_hash_prefix = (
+        str(fields.get("HSH") or "").strip().lower()
+        if str(fields.get("PHS") or "").strip() == "2"
+        and source_kind.upper() == "KMTECH_INPUT_TAG"
+        else ""
+    )
     compat_work_order_id = str(fields.get("WID") or fields.get("WORK_ORDER_ID") or "").strip()
     is_input_tag = source_kind.upper() == "KMTECH_INPUT_TAG" or bool(input_tag_id)
     source_bundle_id = str(
@@ -83,6 +89,7 @@ def source_identity_from_label(master_label_fields: Mapping[str, Any]) -> dict[s
         "source_bundle_id": source_bundle_id,
         "input_tag_id": input_tag_id,
         "input_tag_label_id": input_tag_label_id,
+        "input_tag_hash_prefix": input_tag_hash_prefix,
         "compat_work_order_id": compat_work_order_id,
         "source_kind": source_kind,
         "external_label": "" if is_input_tag else str(
@@ -110,6 +117,329 @@ class TransferSealError(RuntimeError):
         self.retryable = bool(retryable)
         self.committed = committed
         self.details = dict(details or {})
+
+
+@dataclass(frozen=True)
+class TransferSourcePreflight:
+    """Validated completed PHS source used to size one transfer tray."""
+
+    source_bundle_id: str
+    source_session_id: str
+    authority_scope_id: str
+    ledger_plane: str
+    plane_epoch: int
+    item_id: str
+    uom: str
+    source_iin: str
+    member_ids: tuple[str, ...]
+    normalized_barcodes: tuple[str, ...]
+    membership_hash: str
+    barcode_membership_hash: str
+    input_tag_id: str
+    input_tag_label_id: str
+    input_tag_hash_prefix: str
+    input_tag_core_hash: str
+    input_tag_label_hash: str
+
+    @property
+    def member_count(self) -> int:
+        return len(self.member_ids)
+
+    def audit_detail(self) -> dict[str, Any]:
+        return {
+            "contract_version": "container-audit-phs2-preflight-v1",
+            "quantity_basis": "CENTRAL_EXACT_MEMBERSHIP",
+            "source_bundle_id": self.source_bundle_id,
+            "source_session_id": self.source_session_id,
+            "authority_scope_id": self.authority_scope_id,
+            "ledger_plane": self.ledger_plane,
+            "plane_epoch": self.plane_epoch,
+            "item_id": self.item_id,
+            "uom": self.uom,
+            "source_iin": self.source_iin,
+            "member_count": self.member_count,
+            "membership_hash": self.membership_hash,
+            "barcode_membership_hash": self.barcode_membership_hash,
+            "input_tag_id": self.input_tag_id,
+            "input_tag_label_id": self.input_tag_label_id,
+            "input_tag_hash_prefix": self.input_tag_hash_prefix,
+            "input_tag_lifecycle": "INSPECTION_COMPLETED",
+        }
+
+
+def _phs2_contract_error(code: str, message: str, **details: Any) -> TransferSealError:
+    return TransferSealError(code, message, details=details)
+
+
+def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict[str, str]:
+    """Validate the compact central PHS=2 QR without trusting a QR quantity."""
+
+    fields = {
+        unicodedata.normalize("NFKC", str(key)).strip().upper():
+        unicodedata.normalize("NFKC", str(value)).strip()
+        for key, value in dict(master_label_fields or {}).items()
+    }
+    required = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
+    missing = [key for key in required if not fields.get(key)]
+    unexpected = sorted(set(fields) - set(required))
+    if missing:
+        raise _phs2_contract_error(
+            "PHS2_CANONICAL_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 현품표의 ITG/LBL/HSH 식별 증거가 누락됐습니다.",
+            missing_fields=missing,
+        )
+    if unexpected:
+        raise _phs2_contract_error(
+            "PHS2_COMPACT_FORMAT_REQUIRED",
+            "중앙 PHS=2 현품표는 QT 없는 compact 식별 형식이어야 합니다.",
+            unexpected_fields=unexpected,
+        )
+    if fields["PHS"] != "2" or fields["SRC"].upper() != "KMTECH_INPUT_TAG":
+        raise _phs2_contract_error(
+            "PHS2_CENTRAL_SOURCE_REQUIRED",
+            "PHS=2 현품표는 중앙 KMTECH_INPUT_TAG 형식만 이적할 수 있습니다.",
+        )
+    for key in ("ITG", "CLC", "LBL"):
+        value = fields[key]
+        if len(value) > 256 or "\x00" in value or any(
+            unicodedata.category(character).startswith("C") for character in value
+        ):
+            raise _phs2_contract_error(
+                "PHS2_IDENTITY_INVALID",
+                f"중앙 PHS=2 {key} 식별자가 올바르지 않습니다.",
+                field=key,
+            )
+    hash_prefix = fields["HSH"].lower()
+    if len(hash_prefix) != 16 or any(value not in "0123456789abcdef" for value in hash_prefix):
+        raise _phs2_contract_error(
+            "PHS2_HASH_PREFIX_INVALID",
+            "중앙 PHS=2 HSH는 16자리 SHA-256 축약값이어야 합니다.",
+        )
+    fields["HSH"] = hash_prefix
+    return fields
+
+
+def validate_compact_phs2_preflight(
+    master_label_fields: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+) -> TransferSourcePreflight:
+    """Fail closed unless one completed central input tag owns one exact PHS."""
+
+    fields = validate_compact_phs2_fields(master_label_fields)
+    response = dict(resolved or {})
+    candidate_count = response.get("candidate_count")
+    bundle_value = response.get("bundle")
+    if (
+        isinstance(candidate_count, bool)
+        or not isinstance(candidate_count, int)
+        or candidate_count != 1
+        or not isinstance(bundle_value, Mapping)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_AMBIGUOUS",
+            "중앙 PHS=2 현품표가 완료 PHS를 정확히 하나로 확정하지 못했습니다.",
+            candidate_count=candidate_count,
+        )
+    bundle = dict(bundle_value)
+    input_tag_value = response.get("input_tag")
+    if not isinstance(input_tag_value, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 registry 검증 증거가 없습니다.",
+        )
+    input_tag = dict(input_tag_value)
+    canonical_input_tag_fields = (
+        "input_tag_id",
+        "label_id",
+        "item_id",
+        "tag_core_hash",
+        "label_instance_hash",
+        "hash_prefix",
+        "lifecycle",
+        "qr_payload",
+    )
+    missing_registry = [key for key in canonical_input_tag_fields if input_tag.get(key) in (None, "")]
+    if missing_registry:
+        raise _phs2_contract_error(
+            "PHS2_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 registry 응답이 불완전합니다.",
+            missing_fields=missing_registry,
+        )
+
+    input_tag_id = str(input_tag["input_tag_id"]).strip()
+    label_id = str(input_tag["label_id"]).strip()
+    registry_item = str(input_tag["item_id"]).strip()
+    core_hash = str(input_tag["tag_core_hash"]).strip().lower()
+    label_hash = str(input_tag["label_instance_hash"]).strip().lower()
+    hash_prefix = str(input_tag["hash_prefix"]).strip().lower()
+    lifecycle = str(input_tag["lifecycle"]).strip().upper()
+    expected_qr_payload = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={fields['ITG']}|CLC={fields['CLC']}|"
+        f"LBL={fields['LBL']}|HSH={fields['HSH']}"
+    )
+    registry_qr_payload = unicodedata.normalize(
+        "NFKC", str(input_tag["qr_payload"])
+    ).strip()
+    bundle_external_label = unicodedata.normalize(
+        "NFKC", str(bundle.get("external_label") or "")
+    ).strip()
+    if (
+        input_tag_id != fields["ITG"]
+        or label_id != fields["LBL"]
+        or registry_item != fields["CLC"]
+        or hash_prefix != fields["HSH"]
+        or lifecycle != "INSPECTION_COMPLETED"
+        or registry_qr_payload != expected_qr_payload
+        or bundle_external_label != expected_qr_payload
+    ):
+        raise _phs2_contract_error(
+            "PHS2_REGISTRY_IDENTITY_MISMATCH",
+            "중앙 PHS=2 QR, 완료 registry, PHS 외부 라벨 식별자가 일치하지 않습니다.",
+        )
+    if (
+        len(core_hash) != 64
+        or len(label_hash) != 64
+        or any(value not in "0123456789abcdef" for value in core_hash + label_hash)
+        or label_hash[:16] != hash_prefix
+    ):
+        raise _phs2_contract_error(
+            "PHS2_REGISTRY_HASH_INVALID",
+            "중앙 PHS=2 registry hash 증거가 올바르지 않습니다.",
+        )
+
+    source_bundle_id = str(bundle.get("bundle_id") or "").strip()
+    source_session_id = str(bundle.get("source_session_id") or "").strip()
+    item_id = str(bundle.get("item_id") or "").strip()
+    uom = str(bundle.get("uom") or "").strip()
+    source_iin = str(bundle.get("source_iin") or "").strip()
+    authority_scope_id = str(bundle.get("authority_scope_id") or "").strip()
+    ledger_plane = str(bundle.get("ledger_plane") or "").strip().upper()
+    plane_epoch = bundle.get("plane_epoch")
+    if (
+        bundle.get("bundle_role") != "TRANSFER_SOURCE"
+        or bundle.get("bundle_type") != "PHS"
+        or bundle.get("bundle_state") != "AVAILABLE"
+        or not source_bundle_id
+        or source_session_id != fields["ITG"]
+        or item_id != fields["CLC"]
+        or not uom
+        or not source_iin
+        or not authority_scope_id
+        or ledger_plane not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}
+        or isinstance(plane_epoch, bool)
+        or not isinstance(plane_epoch, int)
+        or plane_epoch < 1
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_IDENTITY_MISMATCH",
+            "중앙 PHS=2 완료 PHS의 품목·세션·authority 상태가 일치하지 않습니다.",
+        )
+
+    raw_member_ids = bundle.get("member_ids")
+    raw_members = bundle.get("members")
+    member_count = bundle.get("member_count")
+    barcode_member_count = bundle.get("barcode_member_count")
+    if not isinstance(raw_member_ids, list) or not isinstance(raw_members, list):
+        raise _phs2_contract_error(
+            "PHS2_MEMBERSHIP_INVALID",
+            "중앙 PHS=2 exact membership 응답이 없습니다.",
+        )
+    try:
+        member_ids = tuple(sorted(_normalize_identifier(value, "member_id") for value in raw_member_ids))
+    except (TypeError, ValueError) as exc:
+        raise _phs2_contract_error(
+            "PHS2_MEMBERSHIP_INVALID",
+            "중앙 PHS=2 member 식별자가 올바르지 않습니다.",
+        ) from exc
+    if (
+        not member_ids
+        or len(member_ids) != len(set(member_ids))
+        or isinstance(member_count, bool)
+        or not isinstance(member_count, int)
+        or member_count != len(member_ids)
+        or str(bundle.get("membership_hash") or "") != membership_hash(member_ids)
+        or isinstance(barcode_member_count, bool)
+        or not isinstance(barcode_member_count, int)
+        or barcode_member_count != len(member_ids)
+        or len(raw_members) != len(member_ids)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_MEMBERSHIP_INVALID",
+            "중앙 PHS=2 member 수량 또는 membership hash가 일치하지 않습니다.",
+        )
+
+    mapped_ids: list[str] = []
+    normalized_barcodes: list[str] = []
+    member_locations: set[str] = set()
+    member_items: set[str] = set()
+    member_uoms: set[str] = set()
+    member_accounting_iins: set[str] = set()
+    for member in raw_members:
+        if not isinstance(member, Mapping):
+            raise _phs2_contract_error(
+                "PHS2_MEMBERSHIP_INVALID",
+                "중앙 PHS=2 member mapping이 올바르지 않습니다.",
+            )
+        try:
+            mapped_ids.append(_normalize_identifier(member.get("unit_id"), "unit_id"))
+            normalized_barcodes.append(normalize_barcode(member.get("normalized_barcode")))
+        except (TypeError, ValueError) as exc:
+            raise _phs2_contract_error(
+                "PHS2_MEMBERSHIP_INVALID",
+                "중앙 PHS=2 제품 식별자가 올바르지 않습니다.",
+            ) from exc
+        member_locations.add(str(member.get("location_code") or "").strip())
+        member_items.add(str(member.get("item_id") or "").strip())
+        member_uoms.add(str(member.get("uom") or "").strip())
+        member_accounting_iins.add(str(member.get("current_inbound_iin") or "").strip())
+        if str(member.get("unit_state") or "").strip().upper() not in {
+            "AVAILABLE",
+            "CONSUMED",
+        }:
+            raise _phs2_contract_error(
+                "PHS2_MEMBER_NOT_AVAILABLE",
+                "중앙 PHS=2에 이적 불가능한 제품 상태가 섞여 있습니다.",
+            )
+
+    current_locations = bundle.get("current_locations")
+    if not isinstance(current_locations, list):
+        current_locations = []
+    if (
+        tuple(sorted(mapped_ids)) != member_ids
+        or len(normalized_barcodes) != len(set(normalized_barcodes))
+        or str(bundle.get("barcode_membership_hash") or "")
+        != membership_hash(normalized_barcodes)
+        or member_locations != {"PHS_GOOD"}
+        or str(bundle.get("current_location") or "").strip() != "PHS_GOOD"
+        or {str(value or "").strip() for value in current_locations} != {"PHS_GOOD"}
+        or member_items != {item_id}
+        or member_uoms != {uom}
+        or member_accounting_iins != {source_iin}
+    ):
+        raise _phs2_contract_error(
+            "PHS2_MIXED_MEMBERSHIP",
+            "중앙 PHS=2에 서로 다른 품목·위치·회계 귀속 제품이 섞여 있습니다.",
+        )
+
+    return TransferSourcePreflight(
+        source_bundle_id=source_bundle_id,
+        source_session_id=source_session_id,
+        authority_scope_id=authority_scope_id,
+        ledger_plane=ledger_plane,
+        plane_epoch=plane_epoch,
+        item_id=item_id,
+        uom=uom,
+        source_iin=source_iin,
+        member_ids=member_ids,
+        normalized_barcodes=tuple(sorted(normalized_barcodes)),
+        membership_hash=membership_hash(member_ids),
+        barcode_membership_hash=membership_hash(normalized_barcodes),
+        input_tag_id=input_tag_id,
+        input_tag_label_id=label_id,
+        input_tag_hash_prefix=hash_prefix,
+        input_tag_core_hash=core_hash,
+        input_tag_label_hash=label_hash,
+    )
 
 
 class LogisticsTransferClient:
@@ -248,9 +578,25 @@ class LogisticsTransferClient:
     def resolve_source(self, identity: Mapping[str, Any]) -> dict[str, Any]:
         params = {
             key: str(identity.get(key) or "").strip()
-            for key in ("bundle_id", "input_tag_id", "external_label", "item_id", "authority_scope_id")
+            for key in (
+                "bundle_id",
+                "input_tag_id",
+                "external_label",
+                "item_id",
+                "authority_scope_id",
+            )
             if str(identity.get(key) or "").strip()
         }
+        input_tag_hash_prefix = str(identity.get("input_tag_hash_prefix") or "").strip()
+        if input_tag_hash_prefix:
+            input_tag_label_id = str(identity.get("input_tag_label_id") or "").strip()
+            if not input_tag_label_id:
+                raise TransferSealError(
+                    "SOURCE_IDENTITY_REQUIRED",
+                    "중앙 PHS=2 현품표에 LBL 식별자가 없습니다.",
+                )
+            params["input_tag_label_id"] = input_tag_label_id
+            params["input_tag_hash_prefix"] = input_tag_hash_prefix
         params["bundle_role"] = "TRANSFER_SOURCE"
         if self.authority_scope_id:
             supplied_scope = str(params.get("authority_scope_id") or "").strip()
@@ -260,7 +606,7 @@ class LogisticsTransferClient:
         if not any(params.get(key) for key in ("bundle_id", "input_tag_id", "external_label")):
             raise TransferSealError(
                 "SOURCE_IDENTITY_REQUIRED",
-                "현품표에 서버 PHS를 식별할 BND, ITG 또는 LBL 값이 없습니다.",
+                "현품표에 서버 PHS를 식별할 BND, ITG 또는 외부 라벨 값이 없습니다.",
             )
         result = self._request("GET", f"/logistics/api/v1/bundles/resolve?{urlencode(params)}")
         return dict(result or {})
@@ -597,6 +943,7 @@ class TransferSealStore:
             "MEMBERSHIP_CONFLICT",
             "BARCODE_NOT_IN_SOURCE_BUNDLE",
             "BARCODE_MAPPING_AMBIGUOUS",
+            "PARTIAL_PHS_TRANSFER_FORBIDDEN",
             "STALE_VERSION",
             "RECEIPT_MEMBERSHIP_MISMATCH",
             "SOURCE_IDENTITY_REQUIRED",
@@ -759,6 +1106,8 @@ class TransferSealCoordinator:
         resolve_identity = {
             "bundle_id": identity.get("source_bundle_id"),
             "input_tag_id": identity.get("input_tag_id"),
+            "input_tag_label_id": identity.get("input_tag_label_id"),
+            "input_tag_hash_prefix": identity.get("input_tag_hash_prefix"),
             "external_label": identity.get("external_label"),
             "authority_scope_id": identity.get("authority_scope_id"),
             "item_id": identity.get("item_id") or row["item_id"],
@@ -851,6 +1200,11 @@ class TransferSealCoordinator:
             )
         scans = list(json.loads(row["scanned_barcodes_json"]))
         selected = self._map_scans(bundle, scans)
+        if bundle.get("bundle_type") == "PHS" and selected != sorted(source_members):
+            raise TransferSealError(
+                "PARTIAL_PHS_TRANSFER_FORBIDDEN",
+                "PHS=2 현품표는 exact membership 전량만 이적할 수 있습니다. 잔량은 RSL1을 사용하세요.",
+            )
         selected_hash = membership_hash(selected)
         transfer_bundle_id = _deterministic_id(
             "TRANSFER", {"source_bundle_id": source_bundle_id, "member_ids": selected}
@@ -1267,6 +1621,7 @@ def transfer_seal_coordinator_from_env(
 __all__ = [
     "LogisticsTransferClient",
     "SealAttempt",
+    "TransferSourcePreflight",
     "TransferSealCoordinator",
     "TransferSealError",
     "TransferSealStore",
@@ -1275,4 +1630,6 @@ __all__ = [
     "normalize_barcode",
     "source_identity_from_label",
     "transfer_seal_coordinator_from_env",
+    "validate_compact_phs2_fields",
+    "validate_compact_phs2_preflight",
 ]

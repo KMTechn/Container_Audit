@@ -81,7 +81,11 @@ class CompletionOutcomeSnapshot:
 
     @property
     def blocks_completion(self) -> bool:
-        return self.outcome is CompletionOutcome.OPERATOR_REVIEW
+        # A transfer is not locally complete until the central ledger ACKs it.
+        # RETRY_WAIT therefore owns the active tray just like a terminal review:
+        # scans and destructive tray actions stay locked while the same durable
+        # intent is retried.  ACKED is the only settled/non-blocking outcome.
+        return self.outcome is not CompletionOutcome.ACKED
 
     @property
     def server_confirmed(self) -> bool:
@@ -130,7 +134,7 @@ _COMPLETION_NOTICE_DEFAULTS = {
         "서버 이적 확인 대기",
         "서버 이적 확인이 아직 완료되지 않았습니다. 자동 재시도를 기다려 주세요.",
         NoticeSeverity.WARNING,
-        False,
+        True,
     ),
     CompletionOutcome.OPERATOR_REVIEW: (
         "completion.operator_review",

@@ -180,6 +180,7 @@ def _completion_app(*, seal_status, ledger_succeeds, events):
         return True
 
     app._log_event = log_event
+    app._save_current_tray_state = lambda: events.append(("save_state", None)) or True
     app.show_status_message = lambda *args, **kwargs: events.append(("status", args[0]))
     app._stop_stopwatch = lambda: events.append(("stop_stopwatch", None))
     app._stop_idle_checker = lambda: events.append(("stop_idle", None))
@@ -269,31 +270,46 @@ def test_acknowledging_operator_notice_does_not_release_completion_block():
     assert app.warning_presenter.state.is_blocking is True
 
 
-@pytest.mark.parametrize(
-    ("seal_status", "expected_outcome"),
-    [("ACKED", CompletionOutcome.ACKED), ("RETRY_WAIT", CompletionOutcome.RETRY_WAIT)],
-)
-def test_acked_and_retry_wait_snapshots_are_published_after_synchronous_tray_complete(
-    seal_status,
-    expected_outcome,
-):
+def test_acked_snapshot_is_published_after_synchronous_tray_complete():
     events = []
-    app = _completion_app(seal_status=seal_status, ledger_succeeds=True, events=events)
+    app = _completion_app(seal_status="ACKED", ledger_succeeds=True, events=events)
 
     assert app.complete_tray() is True
 
     completion_event = ("log_event", "TRAY_COMPLETE", True)
-    snapshot_event = ("present_completion", expected_outcome)
+    snapshot_event = ("present_completion", CompletionOutcome.ACKED)
     assert completion_event in events
     assert snapshot_event in events
     assert events.index(completion_event) < events.index(snapshot_event)
-    assert app.warning_presenter.state.completion.outcome is expected_outcome
+    assert app.warning_presenter.state.completion.outcome is CompletionOutcome.ACKED
 
 
-@pytest.mark.parametrize("seal_status", ["ACKED", "RETRY_WAIT"])
-def test_completion_log_failure_does_not_publish_snapshot_or_reset_active_tray(seal_status):
+def test_retry_wait_locks_and_preserves_tray_before_local_completion():
     events = []
-    app = _completion_app(seal_status=seal_status, ledger_succeeds=False, events=events)
+    app = _completion_app(seal_status="RETRY_WAIT", ledger_succeeds=True, events=events)
+    app.current_tray.master_label_code = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-RETRY|CLC={ITEM_CODE}|"
+        "LBL=LBL-RETRY|HSH=0123456789abcdef"
+    )
+    original_tray = app.current_tray
+    original_rows = list(app.scanned_listbox.rows)
+
+    assert app.complete_tray() is False
+
+    assert ("save_state", None) in events
+    assert ("present_completion", CompletionOutcome.RETRY_WAIT) in events
+    assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)
+    assert not any(event[0] == "remember_label" for event in events)
+    assert not any(event[0] == "delete_state" for event in events)
+    assert not any(event[0] == "reset_ui" for event in events)
+    assert app.current_tray is original_tray
+    assert app.scanned_listbox.rows == original_rows
+    assert app.warning_presenter.state.is_blocking is True
+
+
+def test_completion_log_failure_does_not_publish_snapshot_or_reset_active_tray():
+    events = []
+    app = _completion_app(seal_status="ACKED", ledger_succeeds=False, events=events)
     original_tray = app.current_tray
     original_rows = list(app.scanned_listbox.rows)
 

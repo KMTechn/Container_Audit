@@ -11,12 +11,17 @@ from transfer_seal import (
     TransferSealStore,
     membership_hash,
     source_identity_from_label,
+    validate_compact_phs2_fields,
+    validate_compact_phs2_preflight,
 )
 
 
 SCOPE = "PLANT-01"
 ITEM = "AAA2270730100"
 SOURCE = "PHS-SERVER-001"
+PHS2_LABEL_HASH = "a" * 64
+PHS2_CORE_HASH = "b" * 64
+PHS2_HASH_PREFIX = PHS2_LABEL_HASH[:16]
 
 
 class FakeResponse:
@@ -74,6 +79,85 @@ def _bundle(barcodes=("BC-1", "BC-2", "BC-3")):
 
 def _resolved_bundle(barcodes=("BC-1", "BC-2", "BC-3")):
     return {"candidate_count": 1, "bundle": _bundle(barcodes)}
+
+
+def _compact_phs2_fields(**overrides):
+    fields = {
+        "PHS": "2",
+        "SRC": "KMTECH_INPUT_TAG",
+        "ITG": "ITAG-001",
+        "CLC": ITEM,
+        "LBL": "INPUT-LABEL-001",
+        "HSH": PHS2_HASH_PREFIX,
+    }
+    fields.update(overrides)
+    return fields
+
+
+def _compact_phs2_qr(**overrides):
+    fields = _compact_phs2_fields(**overrides)
+    return "|".join(
+        f"{key}={fields[key]}" for key in ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
+    )
+
+
+def _resolved_compact_phs2(count=15):
+    members = [
+        {
+            "unit_id": f"unit-{index:03d}",
+            "normalized_barcode": f"{ITEM}-SERIAL-{index:03d}",
+            "inbound_iin": f"ORIGIN-IIN-{index % 2}",
+            "current_inbound_iin": "IIN-001",
+            "item_id": ITEM,
+            "uom": "EA",
+            "unit_state": "AVAILABLE",
+            "location_code": "PHS_GOOD",
+        }
+        for index in range(1, count + 1)
+    ]
+    member_ids = [member["unit_id"] for member in members]
+    barcodes = [member["normalized_barcode"] for member in members]
+    bundle = {
+        "authority_scope_id": SCOPE,
+        "authority_epoch": 7,
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 3,
+        "bundle_id": SOURCE,
+        "bundle_role": "TRANSFER_SOURCE",
+        "bundle_type": "PHS",
+        "bundle_state": "AVAILABLE",
+        "external_label": _compact_phs2_qr(),
+        "source_session_id": "ITAG-001",
+        "item_id": ITEM,
+        "uom": "EA",
+        "source_iin": "IIN-001",
+        "source_iins": ["ORIGIN-IIN-0", "ORIGIN-IIN-1"],
+        "origin_inbound_iins": ["ORIGIN-IIN-0", "ORIGIN-IIN-1"],
+        "current_location": "PHS_GOOD",
+        "current_locations": ["PHS_GOOD"],
+        "member_ids": member_ids,
+        "member_count": count,
+        "membership_hash": membership_hash(member_ids),
+        "barcode_member_count": count,
+        "barcode_membership_hash": membership_hash(barcodes),
+        "entity_version": 4,
+        "entity_versions": {f"bundle:{SOURCE}": 4},
+        "members": members,
+    }
+    return {
+        "candidate_count": 1,
+        "bundle": bundle,
+        "input_tag": {
+            "input_tag_id": "ITAG-001",
+            "label_id": "INPUT-LABEL-001",
+            "item_id": ITEM,
+            "tag_core_hash": PHS2_CORE_HASH,
+            "label_instance_hash": PHS2_LABEL_HASH,
+            "hash_prefix": PHS2_HASH_PREFIX,
+            "lifecycle": "INSPECTION_COMPLETED",
+            "qr_payload": _compact_phs2_qr(),
+        },
+    }
 
 
 def _receipt(context):
@@ -202,6 +286,7 @@ def test_source_identity_keeps_input_label_as_evidence_not_external_identity():
         "source_bundle_id": "",
         "input_tag_id": "ITAG-1",
         "input_tag_label_id": "INPUT-LABEL",
+        "input_tag_hash_prefix": "",
         "compat_work_order_id": "WORK-1",
         "source_kind": "",
         "external_label": "",
@@ -224,6 +309,135 @@ def test_source_identity_keeps_input_label_as_evidence_not_external_identity():
 
     regular_phs = source_identity_from_label({"WID": "WORK-REGULAR", "CLC": ITEM})
     assert regular_phs["external_label"] == "WORK-REGULAR"
+
+    phs1_membership_hash = source_identity_from_label(
+        {"PHS": "1", "ITG": "ITAG-3", "HSH": "f" * 64, "CLC": ITEM}
+    )
+    assert phs1_membership_hash["input_tag_hash_prefix"] == ""
+
+
+def test_compact_phs2_requires_canonical_registry_identity_without_qt():
+    fields = validate_compact_phs2_fields(_compact_phs2_fields())
+
+    assert fields == _compact_phs2_fields()
+    assert "QT" not in fields
+
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_fields({"PHS": "2", "CLC": ITEM, "QT": "60"})
+
+    assert exc_info.value.code == "PHS2_CANONICAL_EVIDENCE_REQUIRED"
+
+
+def test_compact_phs2_preflight_uses_completed_exact_member_count_without_qr_qt():
+    fields = _compact_phs2_fields()
+    result = validate_compact_phs2_preflight(fields, _resolved_compact_phs2(count=15))
+
+    assert result.member_count == 15
+    assert result.item_id == ITEM
+    assert result.source_session_id == fields["ITG"]
+    assert result.input_tag_label_id == fields["LBL"]
+    assert result.input_tag_hash_prefix == fields["HSH"]
+    assert result.audit_detail()["quantity_basis"] == "CENTRAL_EXACT_MEMBERSHIP"
+
+
+def test_compact_phs2_rejects_qt_even_when_registry_identity_fields_are_present():
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_fields(_compact_phs2_fields(QT="60"))
+
+    assert exc_info.value.code == "PHS2_COMPACT_FORMAT_REQUIRED"
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda value: value["input_tag"].update({"lifecycle": "ISSUED"}),
+            "PHS2_REGISTRY_IDENTITY_MISMATCH",
+        ),
+        (
+            lambda value: value["bundle"].update({"bundle_state": "CONSUMED"}),
+            "PHS2_SOURCE_IDENTITY_MISMATCH",
+        ),
+        (
+            lambda value: value["bundle"]["members"][0].update({"item_id": "OTHER"}),
+            "PHS2_MIXED_MEMBERSHIP",
+        ),
+        (
+            lambda value: value["bundle"]["members"][0].update(
+                {"current_inbound_iin": "OTHER-IIN"}
+            ),
+            "PHS2_MIXED_MEMBERSHIP",
+        ),
+        (
+            lambda value: value["bundle"]["members"][0].update(
+                {"unit_state": "CLAIMED"}
+            ),
+            "PHS2_MEMBER_NOT_AVAILABLE",
+        ),
+    ],
+)
+def test_compact_phs2_preflight_fails_closed_for_incomplete_or_mixed_source(
+    mutate,
+    expected_code,
+):
+    resolved = json.loads(json.dumps(_resolved_compact_phs2(count=3)))
+    mutate(resolved)
+
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_preflight(_compact_phs2_fields(), resolved)
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda value: value["input_tag"].update(
+            {"qr_payload": _compact_phs2_qr(LBL="OTHER-LABEL")}
+        ),
+        lambda value: value["bundle"].update(
+            {"external_label": _compact_phs2_qr(ITG="OTHER-INPUT-TAG")}
+        ),
+    ],
+)
+def test_compact_phs2_preflight_rejects_registry_or_bundle_qr_identity_drift(mutate):
+    resolved = json.loads(json.dumps(_resolved_compact_phs2(count=3)))
+    mutate(resolved)
+
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_preflight(_compact_phs2_fields(), resolved)
+
+    assert exc_info.value.code == "PHS2_REGISTRY_IDENTITY_MISMATCH"
+
+
+def test_compact_phs2_preflight_accepts_completed_consumed_member_state():
+    resolved = _resolved_compact_phs2(count=2)
+    for member in resolved["bundle"]["members"]:
+        member["unit_state"] = "CONSUMED"
+
+    result = validate_compact_phs2_preflight(_compact_phs2_fields(), resolved)
+
+    assert result.member_count == 2
+
+
+def test_compact_phs2_resolver_sends_itg_label_and_hash_prefix():
+    observed_query = {}
+
+    def handler(call):
+        observed_query.update(parse_qs(urlsplit(call["url"]).query))
+        return FakeResponse(200, {"ok": True, "data": _resolved_compact_phs2(count=2)})
+
+    client, _session = _client(handler)
+    identity = source_identity_from_label(_compact_phs2_fields())
+
+    client.resolve_source(identity)
+
+    assert observed_query["bundle_role"] == ["TRANSFER_SOURCE"]
+    assert observed_query["input_tag_id"] == ["ITAG-001"]
+    assert observed_query["input_tag_label_id"] == ["INPUT-LABEL-001"]
+    assert observed_query["input_tag_hash_prefix"] == [PHS2_HASH_PREFIX]
+    assert observed_query["item_id"] == [ITEM]
+    assert "external_label" not in observed_query
 
 
 def test_store_prepare_is_idempotent_and_rejects_normalized_duplicate(tmp_path):
@@ -342,28 +556,22 @@ def test_full_transfer_seal_sends_exact_server_units_and_builds_memberless_qr(tm
     assert "BC-1" not in result.seal_qr_payload
 
 
-def test_partial_seal_creates_exact_remainder_without_relabeling_original_phs(tmp_path):
+def test_partial_phs_seal_is_blocked_before_post(tmp_path):
     posted = []
 
     def handler(call):
         if call["method"] == "GET":
             return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
-        context = call["json"]
-        posted.append(context)
-        return FakeResponse(200, {"ok": True, "data": _receipt(context)})
+        posted.append(call["json"])
+        raise AssertionError("partial PHS transfer must not be posted")
 
     client, _session = _client(handler)
     coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "seal.db"), client)
     prepared = _prepare(coordinator, ("BC-1", "BC-3"))
     result = coordinator.attempt(prepared.intent_id)
-    payload = posted[0]["payload"]
-
-    assert result.status == "ACKED"
-    assert payload["member_ids"] == ["unit-1", "unit-3"]
-    assert payload["external_label"] == payload["transfer_bundle_id"]
-    assert payload["remainder_bundle_id"].startswith("TRANSFER-REMAINDER-")
-    assert "remainder_external_label" not in payload
-    assert payload["scanned_barcodes"] == ["BC-1", "BC-3"]
+    assert result.status == "OPERATOR_REVIEW"
+    assert result.error_code == "PARTIAL_PHS_TRANSFER_FORBIDDEN"
+    assert posted == []
 
 
 def test_restart_reuses_immutable_command_and_recovers_lost_ack(tmp_path):
@@ -382,7 +590,7 @@ def test_restart_reuses_immutable_command_and_recovers_lost_ack(tmp_path):
 
     client1, _session1 = _client(first_handler)
     coordinator1 = TransferSealCoordinator(TransferSealStore(db_path), client1)
-    prepared = _prepare(coordinator1, ("BC-1", "BC-2"))
+    prepared = _prepare(coordinator1)
     waiting = coordinator1.attempt(prepared.intent_id)
     durable_before = coordinator1.store.load(prepared.intent_id)
 
@@ -514,7 +722,7 @@ def test_receipt_barcode_membership_mismatch_is_not_acked(tmp_path):
 
     client, _session = _client(handler)
     coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "seal.db"), client)
-    prepared = _prepare(coordinator, ("BC-1", "BC-2"))
+    prepared = _prepare(coordinator)
     result = coordinator.attempt(prepared.intent_id)
 
     assert result.status == "OPERATOR_REVIEW"
