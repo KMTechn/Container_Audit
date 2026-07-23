@@ -141,6 +141,24 @@ _TK_GEOMETRY_RE = re.compile(
     r"^(?P<width>[0-9]{3,5})x(?P<height>[0-9]{3,5})"
     r"(?P<left>[+-][0-9]{1,6})(?P<top>[+-][0-9]{1,6})$"
 )
+EXCHANGE_DIALOG_DEFAULT_WIDTH = 800
+EXCHANGE_DIALOG_DEFAULT_HEIGHT = 600
+EXCHANGE_DIALOG_SCREEN_MARGIN = 48
+
+
+def calculate_exchange_dialog_size(
+    required_width: int,
+    required_height: int,
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int]:
+    """Fit the exchange dialog's natural size within the current screen."""
+
+    available_width = max(1, int(screen_width) - (EXCHANGE_DIALOG_SCREEN_MARGIN * 2))
+    available_height = max(1, int(screen_height) - (EXCHANGE_DIALOG_SCREEN_MARGIN * 2))
+    width = max(EXCHANGE_DIALOG_DEFAULT_WIDTH, int(required_width))
+    height = max(EXCHANGE_DIALOG_DEFAULT_HEIGHT, int(required_height))
+    return min(width, available_width), min(height, available_height)
 
 
 def parse_startup_geometry(value: str) -> tuple[int, int, int, int]:
@@ -6613,7 +6631,9 @@ class ContainerAudit:
         exchange_dialog.title(
             "현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환"
         )
-        exchange_dialog.geometry("800x600")
+        exchange_dialog.geometry(
+            f"{EXCHANGE_DIALOG_DEFAULT_WIDTH}x{EXCHANGE_DIALOG_DEFAULT_HEIGHT}"
+        )
         exchange_dialog.transient(self.root)
         exchange_dialog.grab_set()
 
@@ -6728,6 +6748,19 @@ class ContainerAudit:
         self.exchange_dialog = exchange_dialog
         self._update_action_button_states()
         exchange_dialog.protocol("WM_DELETE_WINDOW", self._cancel_exchange)
+
+        # Windows display scaling can make the natural content taller than the
+        # old fixed 800x600 client area.  Size after layout so the scan input
+        # and action buttons remain visible without changing exchange logic.
+        exchange_dialog.update_idletasks()
+        dialog_width, dialog_height = calculate_exchange_dialog_size(
+            exchange_dialog.winfo_reqwidth(),
+            exchange_dialog.winfo_reqheight(),
+            exchange_dialog.winfo_screenwidth(),
+            exchange_dialog.winfo_screenheight(),
+        )
+        exchange_dialog.geometry(f"{dialog_width}x{dialog_height}")
+        exchange_dialog.minsize(dialog_width, dialog_height)
 
         # 스캔 엔트리에 포커스
         self.exchange_scan_entry.focus()
