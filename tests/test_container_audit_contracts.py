@@ -58,6 +58,30 @@ def test_container_audit_restored_window_has_operable_minimum_size():
     assert ContainerAudit.MIN_WINDOW_HEIGHT >= 720
 
 
+def test_exchange_dialog_grows_to_natural_dpi_scaled_content_size():
+    assert container_audit_module.calculate_exchange_dialog_size(
+        required_width=860,
+        required_height=735,
+        screen_width=2560,
+        screen_height=1440,
+    ) == (860, 735)
+
+
+def test_exchange_dialog_keeps_default_size_and_stays_screen_bounded():
+    assert container_audit_module.calculate_exchange_dialog_size(
+        required_width=640,
+        required_height=480,
+        screen_width=2560,
+        screen_height=1440,
+    ) == (800, 600)
+    assert container_audit_module.calculate_exchange_dialog_size(
+        required_width=1600,
+        required_height=1200,
+        screen_width=1280,
+        screen_height=800,
+    ) == (1184, 704)
+
+
 def test_normalize_app_settings_clamps_numeric_scale_and_drops_malformed_values():
     settings = container_audit_module.normalize_app_settings(
         {
