@@ -35,6 +35,7 @@ from event_payloads import (
     product_barcodes_from_completion,
 )
 from item_catalog import ItemCatalog
+from item_catalog_sync import ACTIVE_PATH_ENV, refresh_item_catalog
 from label_qr import (
     canonical_master_label_key,
     inspection_master_item_code,
@@ -230,7 +231,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.38"
+CURRENT_VERSION = "v2.0.39"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -1322,7 +1323,7 @@ class ContainerAudit:
             print(f"설정 저장 오류: {e}")
 
     def load_items(self) -> List[Dict[str, str]]:
-        item_path = resource_path(os.path.join('assets', 'Item.csv'))
+        item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
@@ -7536,7 +7537,15 @@ class ContainerAudit:
         self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
 
+def prepare_startup_item_catalog() -> str:
+    bundled_path = Path(resource_path(os.path.join("assets", "Item.csv")))
+    active_path = refresh_item_catalog(bundled_path)
+    os.environ[ACTIVE_PATH_ENV] = str(active_path)
+    return str(active_path)
+
+
 def main():
+    prepare_startup_item_catalog()
     app = ContainerAudit()
     app.root.after(500, lambda: schedule_update_check(app.root))
     app.run()
