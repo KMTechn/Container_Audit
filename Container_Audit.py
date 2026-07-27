@@ -231,7 +231,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.39"
+CURRENT_VERSION = "v2.0.40"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -7380,11 +7380,23 @@ class ContainerAudit:
                 "RETRY_WAIT",
                 "OPERATOR_REVIEW",
             }:
-                messagebox.showerror(
-                    "교체 취소 불가",
-                    "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
-                )
-                return False
+                if not attempt.idempotency_key:
+                    try:
+                        coordinator.store.dismiss_without_durable_command(
+                            intent_id, reason
+                        )
+                    except (KeyError, TypeError, ValueError, sqlite3.Error):
+                        messagebox.showerror(
+                            "교체 취소 기록 실패",
+                            "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+                        )
+                        return False
+                else:
+                    messagebox.showerror(
+                        "교체 취소 불가",
+                        "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+                    )
+                    return False
         if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
             return False
         session = self.current_exchange_session

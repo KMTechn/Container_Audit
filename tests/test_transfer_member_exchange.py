@@ -4,7 +4,7 @@ import datetime
 import json
 from urllib.parse import parse_qs, urlsplit
 
-from Container_Audit import ContainerAudit, TraySession
+from Container_Audit import ContainerAudit, ProductExchangeSession, TraySession
 from transfer_member_exchange import (
     EXCHANGE_CAPABILITY_ID,
     GOOD_SOURCE_CONTRACT_VERSION,
@@ -662,6 +662,42 @@ def test_multi_member_donor_is_rejected_before_replace_command(tmp_path):
     assert result.status == "OPERATOR_REVIEW"
     assert result.error_code == "REPLACEMENT_SOURCE_NOT_SINGLETON"
     assert posted == []
+
+
+def test_preflight_review_without_central_command_can_be_cancelled(
+    tmp_path, monkeypatch
+):
+    coordinator, posted, _session = _runtime(tmp_path, multi_member_source=True)
+    result = coordinator.attempt(_prepare(coordinator).intent_id)
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(master_label_code=MASTER)
+    app.transfer_member_exchange_coordinator = coordinator
+    app._active_transfer_exchange_intent_id = result.intent_id
+    app.current_exchange_session = ProductExchangeSession()
+    app.exchange_dialog = None
+    app._update_action_button_states = lambda: None
+    errors = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert result.idempotency_key == ""
+    assert posted == []
+    assert coordinator.store.blocking_rows(master_label=MASTER)
+    assert app._cancel_exchange(reason="operator_cancel_after_preflight") is True
+    assert errors == []
+    assert coordinator.store.blocking_rows(master_label=MASTER) == []
+    assert coordinator.drain_pending() == []
+    with coordinator.store._connect() as conn:
+        dismissal = conn.execute(
+            """SELECT reason FROM transfer_member_exchange_dismissals
+                WHERE intent_id=?""",
+            (result.intent_id,),
+        ).fetchone()
+    assert dismissal["reason"] == "operator_cancel_after_preflight"
+    assert coordinator.store.load(result.intent_id)["status"] == "OPERATOR_REVIEW"
 
 
 def test_target_identity_label_must_be_explicitly_retained_by_receipt(tmp_path):
