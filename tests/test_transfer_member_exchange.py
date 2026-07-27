@@ -322,6 +322,7 @@ def _runtime(
     mutate_receipt=None,
     multi_member_source=False,
     target_response=None,
+    replace_error=None,
 ):
     posted = []
 
@@ -350,6 +351,8 @@ def _runtime(
         if path.endswith(f"/bundles/{TARGET}/members/replace"):
             command = call["json"]
             posted.append(command)
+            if replace_error is not None:
+                raise replace_error
             receipt = _receipt(command)
             if mutate_receipt is not None:
                 mutate_receipt(receipt)
@@ -698,6 +701,282 @@ def test_preflight_review_without_central_command_can_be_cancelled(
         ).fetchone()
     assert dismissal["reason"] == "operator_cancel_after_preflight"
     assert coordinator.store.load(result.intent_id)["status"] == "OPERATOR_REVIEW"
+
+
+class _NeverCentralClient:
+    def __init__(self):
+        self.calls = []
+
+    def get_capabilities(self, *args, **kwargs):
+        self.calls.append(("get_capabilities", args, kwargs))
+        raise AssertionError("dismissed preflight must not query the central server")
+
+    def resolve_source(self, *args, **kwargs):
+        self.calls.append(("resolve_source", args, kwargs))
+        raise AssertionError("dismissed preflight must not query the central server")
+
+    def resolve_good_source(self, *args, **kwargs):
+        self.calls.append(("resolve_good_source", args, kwargs))
+        raise AssertionError("dismissed preflight must not query the central server")
+
+    def get_receipt(self, *args, **kwargs):
+        self.calls.append(("get_receipt", args, kwargs))
+        raise AssertionError("explicit preflight retry must not query the central server")
+
+    def replace_bundle_members(self, *args, **kwargs):
+        self.calls.append(("replace_bundle_members", args, kwargs))
+        raise AssertionError("explicit preflight retry must not write the central server")
+
+
+def _explicit_retry_app(coordinator):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = None
+    app.current_tray = TraySession(master_label_code=MASTER)
+    app.transfer_member_exchange_coordinator = coordinator
+    app._operator_review_blocks_mutation = lambda: False
+    app._render_warning_state = lambda: None
+    app._exact_transfer_exchange_blocked = lambda: True
+    app._block_unsafe_exact_exchange = lambda: True
+    return app
+
+
+def test_restart_explicit_retry_dismisses_only_preflight_review_without_central_io(
+    tmp_path, monkeypatch
+):
+    coordinator, posted, _session = _runtime(tmp_path, multi_member_source=True)
+    result = coordinator.attempt(_prepare(coordinator).intent_id)
+    central = _NeverCentralClient()
+    restarted = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(coordinator.store.db_path),
+        central,
+    )
+    app = _explicit_retry_app(restarted)
+    warnings = []
+    errors = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showwarning",
+        lambda *args, **kwargs: warnings.append(args),
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app.show_exchange_dialog()
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert posted == []
+    assert central.calls == []
+    assert errors == []
+    assert warnings and warnings[0][0] == "교체 대상 없음"
+    assert restarted.store.blocking_rows(master_label=MASTER) == []
+    with restarted.store._connect() as conn:
+        dismissal = conn.execute(
+            """SELECT reason FROM transfer_member_exchange_dismissals
+                WHERE intent_id=?""",
+            (result.intent_id,),
+        ).fetchone()
+    assert dismissal["reason"] == "operator_retry_after_preflight"
+
+
+def test_restart_explicit_retry_keeps_durable_review_locked_without_central_io(
+    tmp_path, monkeypatch
+):
+    coordinator, _posted, _session = _runtime(tmp_path)
+    prepared = _prepare(coordinator)
+    with coordinator.store._connect() as conn:
+        conn.execute(
+            """UPDATE transfer_member_exchange_intents
+                  SET status='OPERATOR_REVIEW',command_id='durable-command',
+                      command_json='{}',command_hash='durable-hash'
+                WHERE intent_id=?""",
+            (prepared.intent_id,),
+        )
+        conn.execute(
+            """INSERT INTO transfer_member_exchange_dismissals (
+                   intent_id,reason,dismissed_at
+               ) VALUES (?,?,?)""",
+            (prepared.intent_id, "legacy_race_tombstone", "2026-07-28T00:00:00Z"),
+        )
+        conn.commit()
+    central = _NeverCentralClient()
+    restarted = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(coordinator.store.db_path),
+        central,
+    )
+    app = _explicit_retry_app(restarted)
+    errors = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app.show_exchange_dialog()
+
+    assert central.calls == []
+    assert restarted.store.blocking_rows(master_label=MASTER)
+    with restarted.store._connect() as conn:
+        dismissal_count = conn.execute(
+            """SELECT COUNT(*) FROM transfer_member_exchange_dismissals
+                WHERE intent_id=?""",
+            (prepared.intent_id,),
+        ).fetchone()[0]
+    assert dismissal_count == 1
+    assert errors and errors[0][0] == "중앙 제품 교체 확인 필요"
+
+
+def test_restart_explicit_retry_keeps_invalid_command_ready_attempt_locked(
+    tmp_path, monkeypatch
+):
+    coordinator, _posted, _session = _runtime(tmp_path)
+    prepared = _prepare(coordinator)
+    with coordinator.store._connect() as conn:
+        conn.execute(
+            """UPDATE transfer_member_exchange_intents
+                  SET status='COMMAND_READY'
+                WHERE intent_id=?""",
+            (prepared.intent_id,),
+        )
+        conn.commit()
+    central = _NeverCentralClient()
+    restarted = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(coordinator.store.db_path),
+        central,
+    )
+    app = _explicit_retry_app(restarted)
+    errors = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app.show_exchange_dialog()
+
+    assert central.calls == []
+    assert restarted.store.blocking_rows(master_label=MASTER)
+    assert errors and errors[0][0] == "중앙 제품 교체 응답 대기"
+
+
+def test_restart_explicit_retry_dismissal_failure_keeps_preflight_lock(
+    tmp_path, monkeypatch
+):
+    coordinator, _posted, _session = _runtime(tmp_path, multi_member_source=True)
+    result = coordinator.attempt(_prepare(coordinator).intent_id)
+    central = _NeverCentralClient()
+    restarted = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(coordinator.store.db_path),
+        central,
+    )
+    app = _explicit_retry_app(restarted)
+    errors = []
+
+    def fail_dismissal(*_args, **_kwargs):
+        raise ValueError("simulated guarded dismissal failure")
+
+    monkeypatch.setattr(
+        restarted.store,
+        "dismiss_without_durable_command",
+        fail_dismissal,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
+
+    app.show_exchange_dialog()
+
+    assert central.calls == []
+    assert restarted.store.blocking_rows(master_label=MASTER)
+    assert errors and errors[0][0] == "교체 다시 시작 실패"
+    with restarted.store._connect() as conn:
+        dismissal_count = conn.execute(
+            """SELECT COUNT(*) FROM transfer_member_exchange_dismissals
+                WHERE intent_id=?""",
+            (result.intent_id,),
+        ).fetchone()[0]
+    assert dismissal_count == 0
+
+
+def test_dismissed_prepared_attempt_is_fenced_before_central_read_or_write(tmp_path):
+    coordinator, _posted, _session = _runtime(tmp_path)
+    prepared = _prepare(coordinator)
+    coordinator.store.dismiss_without_durable_command(
+        prepared.intent_id,
+        "operator_retry_after_preflight",
+    )
+    central = _NeverCentralClient()
+    restarted = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(coordinator.store.db_path),
+        central,
+    )
+
+    result = restarted.attempt(prepared.intent_id)
+
+    assert result.status == "PREPARED"
+    assert result.idempotency_key == ""
+    assert central.calls == []
+    assert restarted.store.blocking_rows(master_label=MASTER) == []
+
+
+def test_dismissal_racing_after_preflight_fences_command_binding_and_post(
+    tmp_path, monkeypatch
+):
+    coordinator, posted, _session = _runtime(tmp_path)
+    prepared = _prepare(coordinator)
+    original_bind = coordinator.store.bind_command
+
+    def dismiss_then_bind(intent_id, command):
+        coordinator.store.dismiss_without_durable_command(
+            intent_id,
+            "operator_retry_after_preflight",
+        )
+        return original_bind(intent_id, command)
+
+    monkeypatch.setattr(coordinator.store, "bind_command", dismiss_then_bind)
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "RETRY_WAIT"
+    assert result.idempotency_key == ""
+    assert posted == []
+    row = coordinator.store.load(prepared.intent_id)
+    assert row["command_id"] is None
+    assert row["command_json"] is None
+    assert row["receipt_json"] is None
+    assert coordinator.store.blocking_rows(master_label=MASTER) == []
+
+
+def test_same_key_prepare_revives_dismissed_preflight_and_uncertain_post_stays_blocked(
+    tmp_path
+):
+    first, first_posts, _session = _runtime(tmp_path, multi_member_source=True)
+    reviewed = first.attempt(_prepare(first).intent_id)
+    first.store.dismiss_without_durable_command(
+        reviewed.intent_id,
+        "operator_retry_after_preflight",
+    )
+    restarted, restarted_posts, _session = _runtime(
+        tmp_path,
+        replace_error=TimeoutError("response lost after possible commit"),
+    )
+
+    revived = _prepare(restarted)
+    result = restarted.attempt(revived.intent_id)
+
+    assert first_posts == []
+    assert revived.status == "PREPARED"
+    assert result.status == "RETRY_WAIT"
+    assert result.idempotency_key
+    assert len(restarted_posts) == 1
+    assert restarted.store.blocking_rows(master_label=MASTER)
+    assert restarted.store.pending_ids() == [reviewed.intent_id]
+    with restarted.store._connect() as conn:
+        dismissal_count = conn.execute(
+            """SELECT COUNT(*) FROM transfer_member_exchange_dismissals
+                WHERE intent_id=?""",
+            (reviewed.intent_id,),
+        ).fetchone()[0]
+    assert dismissal_count == 0
 
 
 def test_target_identity_label_must_be_explicitly_retained_by_receipt(tmp_path):

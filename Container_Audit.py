@@ -97,6 +97,7 @@ from transfer_seal import (
     validate_compact_phs2_preflight,
 )
 from transfer_member_exchange import (
+    DISMISSIBLE_PREFLIGHT_STATUSES,
     MemberExchangeAttempt,
     TransferMemberExchangeCoordinator,
     TransferMemberExchangeStore,
@@ -231,7 +232,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.40"
+CURRENT_VERSION = "v2.0.41"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -5812,6 +5813,44 @@ class ContainerAudit:
         messagebox.showerror(title, message, parent=getattr(self, "root", None))
         return True
 
+    def _dismiss_transfer_exchange_preflight_for_explicit_retry(self) -> bool:
+        """Release only preflight failures when the operator explicitly retries."""
+        tray = getattr(self, "current_tray", None)
+        master_label = str(getattr(tray, "master_label_code", "") or "").strip()
+        if not master_label:
+            return True
+
+        coordinator = self._transfer_member_exchange_runtime()
+        rows = coordinator.store.blocking_rows(master_label=master_label)
+        if not rows:
+            return True
+
+        dismissible_rows = []
+        for row in rows:
+            if (
+                row["status"] not in DISMISSIBLE_PREFLIGHT_STATUSES
+                or row["command_json"] is not None
+                or row["command_id"] is not None
+                or row["receipt_json"] is not None
+            ):
+                return True
+            dismissible_rows.append(row)
+
+        try:
+            for row in dismissible_rows:
+                coordinator.store.dismiss_without_durable_command(
+                    str(row["intent_id"]),
+                    "operator_retry_after_preflight",
+                )
+        except (KeyError, TypeError, ValueError, sqlite3.Error):
+            messagebox.showerror(
+                "교체 다시 시작 실패",
+                "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        return True
+
     def _prepare_and_attempt_transfer_seal(
         self,
         *,
@@ -6871,6 +6910,8 @@ class ContainerAudit:
         """개별 제품 교환 다이얼로그를 표시합니다."""
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
+            return
+        if not self._dismiss_transfer_exchange_preflight_for_explicit_retry():
             return
         if self._transfer_member_exchange_blocks_local_action("다음 스캔"):
             return
