@@ -18,6 +18,14 @@ COMPACT_QR = (
     f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={INPUT_TAG}|CLC={ITEM}|"
     f"LBL={LABEL_ID}|HSH={HASH_PREFIX}"
 )
+GOAL_ITEM = "AAA2270730200"
+GOAL_INPUT_TAG = "ITAG-20260727-170859-F6EAEC"
+GOAL_LABEL_ID = "LBL-20260727-170859-437CA6"
+GOAL_PHS2 = (
+    "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-20260727-170859-F6EAEC|"
+    "CLC=AAA2270730200|LBL=LBL-20260727-170859-437CA6|"
+    "HSH=257f29e4f09d392e"
+)
 
 
 class ScheduledRoot:
@@ -204,6 +212,43 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert detail["resolved_tray_quantity"] == 15
     assert detail["central_source_preflight"]["quantity_basis"] == "CENTRAL_EXACT_MEMBERSHIP"
     assert "QT" not in detail
+
+
+def test_active_tray_exact_phs2_is_never_routed_as_product(tmp_path, monkeypatch):
+    client = BlockingClient(_resolved(count=2))
+    app = _app(tmp_path, client)
+    existing_barcode = f"{GOAL_ITEM}GOAL27C001"
+    app.current_tray = TraySession(
+        master_label_code=GOAL_PHS2,
+        item_code=GOAL_ITEM,
+        item_name="goal item",
+        scanned_barcodes=[existing_barcode],
+        tray_size=2,
+        mismatch_error_count=0,
+    )
+    focus_returns = []
+    app._schedule_focus_return = lambda *args, **kwargs: focus_returns.append(True)
+
+    def fail_product_scan(*args, **kwargs):
+        raise AssertionError("PHS=2 label reached the product scan path")
+
+    monkeypatch.setattr("Container_Audit.decide_product_scan", fail_product_scan)
+
+    app._process_barcode_logic(GOAL_PHS2)
+
+    assert app.current_tray.scanned_barcodes == [existing_barcode]
+    assert app.current_tray.mismatch_error_count == 0
+    assert client.identities == []
+    assert app._master_preflight_pending is False
+    assert app.root.jobs == []
+    event_name, detail, kwargs = app.events[-1]
+    assert event_name == "ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED"
+    assert detail["current_input_tag_id"] == GOAL_INPUT_TAG
+    assert detail["scanned_input_tag_id"] == GOAL_INPUT_TAG
+    assert detail["scanned_label_id"] == GOAL_LABEL_ID
+    assert kwargs == {}
+    assert "제품으로 등록하지 않았습니다" in app.statuses[-1][0]
+    assert focus_returns == [True]
 
 
 def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path):

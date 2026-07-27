@@ -4452,6 +4452,54 @@ class ContainerAudit:
             event_name="MASTER_LABEL_SCANNED_NEW",
             event_detail=detail,
         )
+
+    def _intercept_active_tray_phs2_scan(self, raw_barcode: str) -> bool:
+        """Prevent a PHS=2 label from being counted as a product barcode."""
+        if not self.current_tray.master_label_code:
+            return False
+
+        barcode = normalize_master_label_input(raw_barcode)
+        qr_data = self._parse_new_format_qr(barcode)
+        if not qr_data or str(qr_data.get("PHS") or "").strip() != "2":
+            return False
+
+        try:
+            canonical_fields = validate_compact_phs2_fields(qr_data)
+        except TransferSealError as exc:
+            self._log_event(
+                "ACTIVE_TRAY_PHS2_SCAN_REJECTED",
+                detail={
+                    "contract_version": "container-audit-active-phs2-guard-v1",
+                    "error_code": exc.code,
+                },
+            )
+            self.show_status_message(
+                "PHS=2 현품표는 제품 바코드로 등록하지 않았습니다. "
+                "올바른 현품표를 확인해 주세요.",
+                self.COLOR_DANGER,
+            )
+            self._schedule_focus_return()
+            return True
+
+        current_fields = self._parse_new_format_qr(
+            normalize_master_label_input(self.current_tray.master_label_code)
+        ) or {}
+        self._log_event(
+            "ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED",
+            detail={
+                "contract_version": "container-audit-active-phs2-guard-v1",
+                "current_input_tag_id": str(current_fields.get("ITG") or ""),
+                "scanned_input_tag_id": canonical_fields["ITG"],
+                "scanned_label_id": canonical_fields["LBL"],
+            },
+        )
+        self.show_status_message(
+            "작업 중 스캔한 PHS=2 현품표는 제품으로 등록하지 않았습니다. "
+            "현재 작업을 계속하려면 다음 제품 바코드를 스캔하세요.",
+            self.COLOR_PRIMARY,
+        )
+        self._schedule_focus_return()
+        return True
     
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
@@ -4514,6 +4562,9 @@ class ContainerAudit:
                 self.root.after(0, self._prompt_for_test_item)
             elif test_command.action == "error":
                 messagebox.showerror("오류", f"보류 데이터 생성 코드 형식 오류입니다.\n{test_command.error_message}")
+            return
+
+        if self._intercept_active_tray_phs2_scan(raw_barcode):
             return
 
         # --- 현품표 스캔 로직 ---
