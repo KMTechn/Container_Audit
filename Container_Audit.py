@@ -35,6 +35,7 @@ from event_payloads import (
     product_barcodes_from_completion,
 )
 from item_catalog import ItemCatalog
+from item_catalog_sync import ACTIVE_PATH_ENV, refresh_item_catalog
 from label_qr import (
     canonical_master_label_key,
     inspection_master_item_code,
@@ -145,6 +146,24 @@ _TK_GEOMETRY_RE = re.compile(
     r"^(?P<width>[0-9]{3,5})x(?P<height>[0-9]{3,5})"
     r"(?P<left>[+-][0-9]{1,6})(?P<top>[+-][0-9]{1,6})$"
 )
+EXCHANGE_DIALOG_DEFAULT_WIDTH = 800
+EXCHANGE_DIALOG_DEFAULT_HEIGHT = 600
+EXCHANGE_DIALOG_SCREEN_MARGIN = 48
+
+
+def calculate_exchange_dialog_size(
+    required_width: int,
+    required_height: int,
+    screen_width: int,
+    screen_height: int,
+) -> tuple[int, int]:
+    """Fit the exchange dialog's natural size within the current screen."""
+
+    available_width = max(1, int(screen_width) - (EXCHANGE_DIALOG_SCREEN_MARGIN * 2))
+    available_height = max(1, int(screen_height) - (EXCHANGE_DIALOG_SCREEN_MARGIN * 2))
+    width = max(EXCHANGE_DIALOG_DEFAULT_WIDTH, int(required_width))
+    height = max(EXCHANGE_DIALOG_DEFAULT_HEIGHT, int(required_height))
+    return min(width, available_width), min(height, available_height)
 
 
 def parse_startup_geometry(value: str) -> tuple[int, int, int, int]:
@@ -212,7 +231,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.37"
+CURRENT_VERSION = "v2.0.40"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -1304,7 +1323,7 @@ class ContainerAudit:
             print(f"설정 저장 오류: {e}")
 
     def load_items(self) -> List[Dict[str, str]]:
-        item_path = resource_path(os.path.join('assets', 'Item.csv'))
+        item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
@@ -6893,7 +6912,9 @@ class ContainerAudit:
         exchange_dialog.title(
             "현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환"
         )
-        exchange_dialog.geometry("800x600")
+        exchange_dialog.geometry(
+            f"{EXCHANGE_DIALOG_DEFAULT_WIDTH}x{EXCHANGE_DIALOG_DEFAULT_HEIGHT}"
+        )
         exchange_dialog.transient(self.root)
         exchange_dialog.grab_set()
 
@@ -7008,6 +7029,19 @@ class ContainerAudit:
         self.exchange_dialog = exchange_dialog
         self._update_action_button_states()
         exchange_dialog.protocol("WM_DELETE_WINDOW", self._cancel_exchange)
+
+        # Windows display scaling can make the natural content taller than the
+        # old fixed 800x600 client area.  Size after layout so the scan input
+        # and action buttons remain visible without changing exchange logic.
+        exchange_dialog.update_idletasks()
+        dialog_width, dialog_height = calculate_exchange_dialog_size(
+            exchange_dialog.winfo_reqwidth(),
+            exchange_dialog.winfo_reqheight(),
+            exchange_dialog.winfo_screenwidth(),
+            exchange_dialog.winfo_screenheight(),
+        )
+        exchange_dialog.geometry(f"{dialog_width}x{dialog_height}")
+        exchange_dialog.minsize(dialog_width, dialog_height)
 
         # 스캔 엔트리에 포커스
         self.exchange_scan_entry.focus()
@@ -7346,11 +7380,23 @@ class ContainerAudit:
                 "RETRY_WAIT",
                 "OPERATOR_REVIEW",
             }:
-                messagebox.showerror(
-                    "교체 취소 불가",
-                    "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
-                )
-                return False
+                if not attempt.idempotency_key:
+                    try:
+                        coordinator.store.dismiss_without_durable_command(
+                            intent_id, reason
+                        )
+                    except (KeyError, TypeError, ValueError, sqlite3.Error):
+                        messagebox.showerror(
+                            "교체 취소 기록 실패",
+                            "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+                        )
+                        return False
+                else:
+                    messagebox.showerror(
+                        "교체 취소 불가",
+                        "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+                    )
+                    return False
         if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
             return False
         session = self.current_exchange_session
@@ -7503,7 +7549,15 @@ class ContainerAudit:
         self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
 
+def prepare_startup_item_catalog() -> str:
+    bundled_path = Path(resource_path(os.path.join("assets", "Item.csv")))
+    active_path = refresh_item_catalog(bundled_path)
+    os.environ[ACTIVE_PATH_ENV] = str(active_path)
+    return str(active_path)
+
+
 def main():
+    prepare_startup_item_catalog()
     app = ContainerAudit()
     app.root.after(500, lambda: schedule_update_check(app.root))
     app.run()

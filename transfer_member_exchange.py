@@ -269,6 +269,13 @@ class TransferMemberExchangeStore:
                 );
                 CREATE INDEX IF NOT EXISTS ix_transfer_member_exchange_pending
                     ON transfer_member_exchange_intents(status,local_apply_status,created_at);
+                CREATE TABLE IF NOT EXISTS transfer_member_exchange_dismissals (
+                    intent_id TEXT PRIMARY KEY,
+                    reason TEXT NOT NULL,
+                    dismissed_at TEXT NOT NULL,
+                    FOREIGN KEY(intent_id)
+                        REFERENCES transfer_member_exchange_intents(intent_id)
+                );
                 CREATE TRIGGER IF NOT EXISTS trg_transfer_member_exchange_command_immutable
                 BEFORE UPDATE OF command_id,command_json,command_hash
                 ON transfer_member_exchange_intents
@@ -518,10 +525,58 @@ class TransferMemberExchangeStore:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""SELECT intent_id FROM transfer_member_exchange_intents
-                      WHERE status IN ({placeholders}) ORDER BY created_at""",
+                      WHERE status IN ({placeholders})
+                        AND NOT EXISTS (
+                            SELECT 1 FROM transfer_member_exchange_dismissals d
+                             WHERE d.intent_id=transfer_member_exchange_intents.intent_id
+                        )
+                      ORDER BY created_at""",
                 PENDING_EXCHANGE_STATUSES,
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
+
+    def dismiss_without_durable_command(
+        self, intent_id: str, reason: str
+    ) -> sqlite3.Row:
+        """Dismiss a resolver/preflight failure that could not have reached POST."""
+
+        dismissal_reason = str(reason or "").strip()
+        if not dismissal_reason:
+            raise ValueError("dismissal reason is required")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT * FROM transfer_member_exchange_intents WHERE intent_id=?",
+                (intent_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError(intent_id)
+            if (
+                row["command_json"] is not None
+                or row["command_id"] is not None
+                or row["receipt_json"] is not None
+                or row["status"] not in {"PREPARED", "RETRY_WAIT", "OPERATOR_REVIEW"}
+            ):
+                raise ValueError(
+                    "only an exchange without a durable central command can be dismissed"
+                )
+            conn.execute(
+                """INSERT OR IGNORE INTO transfer_member_exchange_dismissals (
+                       intent_id,reason,dismissed_at
+                   ) VALUES (?,?,?)""",
+                (intent_id, dismissal_reason, _utc_now()),
+            )
+            dismissed = conn.execute(
+                """SELECT i.* FROM transfer_member_exchange_intents i
+                     JOIN transfer_member_exchange_dismissals d
+                       ON d.intent_id=i.intent_id
+                    WHERE i.intent_id=?""",
+                (intent_id,),
+            ).fetchone()
+            conn.commit()
+        if dismissed is None:
+            raise sqlite3.IntegrityError("exchange dismissal was not persisted")
+        return dismissed
 
     def pending_local_rows(self, *, master_label: str = "") -> list[sqlite3.Row]:
         query = (
@@ -538,9 +593,12 @@ class TransferMemberExchangeStore:
 
     def blocking_rows(self, *, master_label: str = "") -> list[sqlite3.Row]:
         query = (
-            "SELECT * FROM transfer_member_exchange_intents WHERE "
+            "SELECT * FROM transfer_member_exchange_intents i WHERE "
             "(status IN ('PREPARED','COMMAND_READY','RETRY_WAIT','OPERATOR_REVIEW') OR "
-            " (status='ACKED' AND local_apply_status!='APPLIED'))"
+            " (status='ACKED' AND local_apply_status!='APPLIED')) "
+            "AND NOT EXISTS ("
+            " SELECT 1 FROM transfer_member_exchange_dismissals d"
+            " WHERE d.intent_id=i.intent_id)"
         )
         params: tuple[Any, ...] = ()
         if master_label:
