@@ -80,6 +80,7 @@ def _resolved(
     resolution_kind="OVERLAY_ACTIVE",
     effective=None,
     status="ACTIVE",
+    ledger_plane="AUTHORITATIVE",
 ):
     members = [
         {
@@ -103,7 +104,7 @@ def _resolved(
         "bundle": {
             "authority_scope_id": SCOPE,
             "authority_epoch": 7,
-            "ledger_plane": "AUTHORITATIVE",
+            "ledger_plane": ledger_plane,
             "plane_epoch": 3,
             "bundle_id": "PHS-SERVER-001",
             "bundle_role": "TRANSFER_SOURCE",
@@ -139,7 +140,7 @@ def _resolved(
             "status": status,
             "resolution": resolution_kind,
             "authority_scope_id": SCOPE,
-            "ledger_plane": "AUTHORITATIVE",
+            "ledger_plane": ledger_plane,
             "plane_epoch": 3,
             "scanned_label": scan_label,
             "effective_labels": effective,
@@ -506,6 +507,58 @@ def test_mid_session_exchange_preserves_exact_local_tray_state(tmp_path):
     assert persisted == [True]
     assert client.prepare_write_count == 1
     assert len(client.activate_calls) == 1
+
+
+def test_promoted_authoritative_scope_accepts_shadow_candidate_plane(
+    tmp_path,
+):
+    class PromotedCentral(FakeCentral):
+        authority_scope_id = SCOPE
+        authority_plane = "AUTHORITATIVE"
+        ledger_plane = "SHADOW_CANDIDATE"
+        plane_epoch = 3
+
+        def resolve_source(self, _identity):
+            return _resolved(ledger_plane=self.ledger_plane)
+
+    tray = _tray()
+    client = PromotedCentral()
+    coordinator = _coordinator(tmp_path, client)
+
+    result = coordinator.execute_single(
+        tray,
+        _target_candidate(),
+        persist_tray=lambda: True,
+    )
+
+    assert client.authority_plane == "AUTHORITATIVE"
+    assert client.ledger_plane == "SHADOW_CANDIDATE"
+    assert result.success is True
+    assert client.prepare_write_count == 1
+    assert len(client.activate_calls) == 1
+
+
+def test_promoted_scope_rejects_selected_plane_profile_mismatch(tmp_path):
+    class MismatchedCentral(FakeCentral):
+        authority_scope_id = SCOPE
+        authority_plane = "AUTHORITATIVE"
+        ledger_plane = "AUTHORITATIVE"
+        plane_epoch = 3
+
+        def resolve_source(self, _identity):
+            return _resolved(ledger_plane="SHADOW_CANDIDATE")
+
+    coordinator = _coordinator(tmp_path, MismatchedCentral())
+
+    result = coordinator.execute_single(
+        _tray(),
+        _target_candidate(),
+        persist_tray=lambda: True,
+    )
+
+    assert result.success is False
+    assert result.error_code == "PHS_LABEL_TRAY_ANCHOR_MISMATCH"
+    assert "authoritative canonical" in result.message
 
 
 def test_print_failure_keeps_old_label_and_never_activates(tmp_path):

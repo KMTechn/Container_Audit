@@ -605,8 +605,40 @@ class PHSLabelExchangeCoordinator:
         tray_size = _positive_integer(
             getattr(tray, "tray_size", 0), "tray_size"
         )
+        expected_scope = str(
+            getattr(self.client, "authority_scope_id", "") or ""
+        ).strip()
+        expected_authority_plane = str(
+            getattr(self.client, "authority_plane", "") or ""
+        ).strip().upper()
+        expected_ledger_plane = str(
+            getattr(self.client, "ledger_plane", "") or ""
+        ).strip().upper()
+        try:
+            expected_plane_epoch = int(
+                getattr(self.client, "plane_epoch", 0) or 0
+            )
+        except (TypeError, ValueError):
+            expected_plane_epoch = -1
         if (
-            preflight.ledger_plane != "AUTHORITATIVE"
+            preflight.ledger_plane
+            not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}
+            or (
+                expected_scope
+                and preflight.authority_scope_id != expected_scope
+            )
+            or (
+                expected_authority_plane
+                and expected_authority_plane != "AUTHORITATIVE"
+            )
+            or (
+                expected_ledger_plane
+                and preflight.ledger_plane != expected_ledger_plane
+            )
+            or (
+                expected_plane_epoch
+                and preflight.plane_epoch != expected_plane_epoch
+            )
             or canonical_master != preflight.canonical_input_tag_qr
             or item_code != preflight.item_id
             or tray_size != preflight.member_count
