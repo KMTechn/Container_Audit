@@ -13,6 +13,7 @@ from Container_Audit import ContainerAudit, TraySession
 from phs_label_workflow import (
     PHSLabelExchangeCoordinator,
     PHSLabelExchangeJournal,
+    PHSLabelWorkflowError,
     PhysicalPrintEvidence,
     RenderedPHSLabel,
 )
@@ -96,7 +97,17 @@ def _process_membership(members: list[str]) -> list[dict]:
 
 def _resolution(kind: str) -> dict:
     kind = kind.upper()
-    if kind == "BATCH":
+    if kind == "SINGLE":
+        action_specs = [
+            (
+                "EXCHANGE_DATE",
+                [_source(1, _members("U1", "U2"))],
+                [_target(1, 2)],
+                {},
+            ),
+        ]
+        mode = "SINGLE_EXCHANGE_DATE"
+    elif kind == "BATCH":
         action_specs = [
             (
                 "EXCHANGE_DATE",
@@ -159,9 +170,7 @@ def _resolution(kind: str) -> dict:
                 "exchange_id": None,
                 "item_id": ITEM,
                 "before_qty_pcs": len(union),
-                "after_qty_pcs": sum(
-                    int(target["qty_pcs"]) for target in targets
-                ),
+                "after_qty_pcs": 0,
                 "sources": sources,
                 "targets": targets,
                 "source_member_union_count": len(union),
@@ -550,7 +559,7 @@ def _coordinator(tmp_path, client, *, printer=None):
     )
 
 
-@pytest.mark.parametrize("kind", ("BATCH", "SPLIT", "MERGE"))
+@pytest.mark.parametrize("kind", ("SINGLE", "BATCH", "SPLIT", "MERGE"))
 def test_reconciliation_topologies_print_all_targets_then_activate_once(
     tmp_path, kind
 ):
@@ -572,6 +581,45 @@ def test_reconciliation_topologies_print_all_targets_then_activate_once(
         coordinator.reconciliation.recover()
         is None
     )
+
+
+def test_partial_split_accepts_plan_coverage_below_physical_source_union():
+    resolution = _resolution("SPLIT")
+    resolution["actions"][0]["before_qty_pcs"] = 2
+    resolution["actions"][0]["targets"][1]["business_date"] = DAY
+
+    context = PHSReconciliationExchangeCoordinator.validate_resolution(
+        resolution,
+        authority_scope_id=SCOPE,
+        scan_payload=resolution["scan"]["active_qr_payload"],
+    )
+
+    assert context["actions"][0]["before_qty_pcs"] == 2
+    assert context["actions"][0]["source_member_union_count"] == 4
+    assert context["actions"][0]["after_qty_pcs"] == 0
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("before_qty_pcs", 5),
+        ("after_qty_pcs", 1),
+        ("after_qty_pcs", -1),
+    ),
+)
+def test_action_plan_quantity_outside_server_contract_fails_closed(
+    field,
+    value,
+):
+    resolution = _resolution("SINGLE")
+    resolution["actions"][0][field] = value
+
+    with pytest.raises(PHSLabelWorkflowError):
+        PHSReconciliationExchangeCoordinator.validate_resolution(
+            resolution,
+            authority_scope_id=SCOPE,
+            scan_payload=resolution["scan"]["active_qr_payload"],
+        )
 
 
 def test_lost_prepare_and_activate_responses_replay_without_duplicate_writes(

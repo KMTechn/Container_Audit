@@ -58,6 +58,27 @@ def _positive_integer(value: Any, field: str) -> int:
     return parsed
 
 
+def _nonnegative_integer(value: Any, field: str) -> int:
+    if isinstance(value, bool):
+        raise PHSLabelWorkflowError(
+            "PHS_RECONCILIATION_EVIDENCE_INVALID",
+            f"{field} 값이 올바르지 않습니다.",
+        )
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise PHSLabelWorkflowError(
+            "PHS_RECONCILIATION_EVIDENCE_INVALID",
+            f"{field} 값이 올바르지 않습니다.",
+        ) from exc
+    if parsed < 0:
+        raise PHSLabelWorkflowError(
+            "PHS_RECONCILIATION_EVIDENCE_INVALID",
+            f"{field} 값이 올바르지 않습니다.",
+        )
+    return parsed
+
+
 def _canonical_members(values: Sequence[Any]) -> tuple[str, ...]:
     members = tuple(
         sorted(
@@ -420,6 +441,14 @@ class PHSReconciliationExchangeCoordinator:
             linked_exchange_id = str(
                 action.get("exchange_id") or ""
             ).strip()
+            before_qty_pcs = _positive_integer(
+                action.get("before_qty_pcs"),
+                "action.before_qty_pcs",
+            )
+            after_qty_pcs = _nonnegative_integer(
+                action.get("after_qty_pcs"),
+                "action.after_qty_pcs",
+            )
             if (
                 not action_id
                 or not item_id
@@ -449,16 +478,8 @@ class PHSReconciliationExchangeCoordinator:
                     list(action.get("source_member_ids") or [])
                 )
                 != source_members
-                or _positive_integer(
-                    action.get("before_qty_pcs"),
-                    "action.before_qty_pcs",
-                )
-                != sum(source["qty_pcs"] for source in sources)
-                or _positive_integer(
-                    action.get("after_qty_pcs"),
-                    "action.after_qty_pcs",
-                )
-                != sum(target["qty_pcs"] for target in targets)
+                or before_qty_pcs > len(source_members)
+                or after_qty_pcs != 0
             ):
                 raise PHSLabelWorkflowError(
                     "PHS_RECONCILIATION_TOPOLOGY_INVALID",

@@ -238,7 +238,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.43"
+CURRENT_VERSION = "v2.0.44"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
