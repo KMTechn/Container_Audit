@@ -35,7 +35,8 @@ def _private_update_manifest(*, version="v2.0.10", sha256="a" * 64, url=None):
         },
         "install": {
             "strategy": "robocopy_backup_then_mirror",
-            "preserve_paths": ["config/container_audit_settings.json"],
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
         },
         "rollout": {
             "percentage": 100,
@@ -196,7 +197,8 @@ def test_update_service_verifies_private_manifest_signature_and_candidate():
         },
         "install": {
             "strategy": "robocopy_backup_then_mirror",
-            "preserve_paths": ["config/container_audit_settings.json"],
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
         },
         "rollout": {
             "percentage": 100,
@@ -221,6 +223,11 @@ def test_update_service_verifies_private_manifest_signature_and_candidate():
         "archive_policy": {
             "top_level": "Container_Audit",
             "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+        "install_policy": {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
         },
     }
 
@@ -254,7 +261,8 @@ def test_update_service_rejects_private_manifest_github_hosted_artifact_url(arti
         },
         "install": {
             "strategy": "robocopy_backup_then_mirror",
-            "preserve_paths": ["config/container_audit_settings.json"],
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
         },
         "rollout": {
             "percentage": 100,
@@ -376,6 +384,60 @@ def test_update_service_private_manifest_rollout_blocks_and_allowlists_current_p
     assert candidate["download_url"] == "https://updates.example/Container_Audit-v2.0.10.zip"
     assert candidate["sha256"] == "c" * 64
     assert candidate["archive_policy"]["required_files"] == ["Container_Audit/Container_Audit.exe"]
+    assert candidate["install_policy"] == {
+        "strategy": "robocopy_backup_then_mirror",
+        "preserve_paths": ["config", "logs", "ledger"],
+        "restart_executable": "Container_Audit.exe",
+    }
+
+
+@pytest.mark.parametrize(
+    "install",
+    [
+        None,
+        {},
+        {
+            "strategy": "manual",
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs", "ledger", "bin"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "CONFIG", "logs", "ledger"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs", "../ledger"],
+            "restart_executable": "Container_Audit.exe",
+        },
+        {
+            "strategy": "robocopy_backup_then_mirror",
+            "preserve_paths": ["config", "logs", "ledger"],
+            "restart_executable": "other.exe",
+        },
+    ],
+)
+def test_update_service_rejects_non_exact_automatic_install_policy(install):
+    manifest = _private_update_manifest()
+    manifest["install"] = install
+
+    with pytest.raises(ValueError):
+        update_service.update_candidate_from_private_manifest(
+            manifest,
+            current_version="v2.0.9",
+            expected_channel="stable",
+        )
 
 
 def test_update_service_skips_assets_with_untrusted_urls():

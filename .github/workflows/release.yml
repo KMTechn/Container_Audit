@@ -294,7 +294,7 @@ jobs:
               }
               install = [ordered]@{
                 strategy = "robocopy_backup_then_mirror"
-                preserve_paths = @("config/container_audit_settings.json")
+                preserve_paths = @("config", "logs", "ledger")
                 restart_executable = "Container_Audit.exe"
               }
               rollout = [ordered]@{

@@ -71,6 +71,9 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "releases/download" not in release_text
     assert "legacy_sha256_url" in release_text
     assert "required_files = $required" in release_text
+    assert 'strategy = "robocopy_backup_then_mirror"' in release_text
+    assert 'preserve_paths = @("config", "logs", "ledger")' in release_text
+    assert 'restart_executable = "Container_Audit.exe"' in release_text
     assert "percentage = $rolloutPercentage" in release_text
     assert "Container_Audit-${{ github.ref_name }}.manifest.json" in release_text
     assert "- name: Sign private update manifest" in release_text
