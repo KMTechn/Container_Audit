@@ -1197,6 +1197,112 @@ def test_reconciliation_ui_execution_preserves_tray_scan_progress_and_focus(
     assert ("focus",) in calls
 
 
+@pytest.mark.parametrize("approved", (False, True))
+def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
+    monkeypatch,
+    approved,
+):
+    calls = []
+    recovery_context = {"expected_exchange_kind": "SINGLE"}
+    recovery = {
+        "workflow_kind": "RECONCILIATION",
+        "status": "LOCAL_PRINT_STARTING",
+        "reconciliation_context": recovery_context,
+    }
+    result = type(
+        "Result",
+        (),
+        {
+            "success": True,
+            "status": "COMMITTED",
+            "message": "완료",
+            "error_code": "",
+            "exchange_id": "PHSX-RECOVERY",
+            "journal_state": {},
+        },
+    )()
+
+    class Journal:
+        @staticmethod
+        def load():
+            calls.append(("journal_load",))
+            return recovery
+
+    class Reconciliation:
+        available = True
+
+        @staticmethod
+        def execute(context, **kwargs):
+            calls.append(("execute", context, kwargs))
+            return result
+
+    def askyesno(title, message, **kwargs):
+        calls.append(("prompt", title, message, kwargs))
+        return approved
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(
+        master_label_code="CURRENT",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app.phs_label_exchange_coordinator = type(
+        "Coordinator",
+        (),
+        {
+            "journal": Journal(),
+            "reconciliation": Reconciliation(),
+        },
+    )()
+    app._phs_reconciliation_context = None
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app.phs_label_reprint_confirm_var = _Value(False)
+    app._update_action_button_states = lambda: calls.append(("buttons",))
+    app.show_status_message = lambda message, *_args, **_kwargs: calls.append(
+        ("status", message)
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+    app._phs_exchange_status_from_worker = lambda message: calls.append(
+        ("worker_status", message)
+    )
+    app._set_phs_reconciliation_context = lambda value: setattr(
+        app, "_phs_reconciliation_context", value
+    )
+    app._log_event = lambda event, **_kwargs: calls.append(("event", event))
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    monkeypatch.setattr(container_module.messagebox, "askyesno", askyesno)
+    monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)
+
+    app._schedule_phs_label_exchange_recovery()
+
+    prompts = [call for call in calls if call[0] == "prompt"]
+    assert len(prompts) == 1
+    assert "Y 승인 / N 취소" in prompts[0][2]
+    assert prompts[0][3]["parent"] is app.root
+    assert prompts[0][3]["default"] == container_module.messagebox.NO
+    assert ("focus",) in calls
+    execute_calls = [call for call in calls if call[0] == "execute"]
+    if approved:
+        assert len(execute_calls) == 1
+        assert execute_calls[0][1] is None
+        assert execute_calls[0][2]["confirm_ambiguous_reprint"] is True
+        assert app._phs_reconciliation_context is None
+        assert app.phs_label_reprint_confirm_var.get() is False
+        assert app._phs_label_exchange_pending is False
+    else:
+        assert execute_calls == []
+        assert app._phs_reconciliation_context is recovery_context
+        assert app.phs_label_reprint_confirm_var.get() is False
+        assert app._phs_label_exchange_pending is False
+        assert any(
+            call[0] == "status" and "보존했습니다" in call[1]
+            for call in calls
+        )
+
+
 def test_target_summary_never_exposes_instruction_or_label_ids():
     context = (
         PHSReconciliationExchangeCoordinator.validate_resolution(

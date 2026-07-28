@@ -238,7 +238,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.45"
+CURRENT_VERSION = "v2.0.46"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -3939,6 +3939,75 @@ class ContainerAudit:
             daemon=True,
         ).start()
 
+    def _confirm_phs_reconciliation_ambiguous_reprint(
+        self,
+        *,
+        already_confirmed: bool,
+    ) -> Optional[bool]:
+        if already_confirmed:
+            return True
+        journal = getattr(
+            getattr(self, "phs_label_exchange_coordinator", None),
+            "journal",
+            None,
+        )
+        load_recovery = getattr(journal, "load", None)
+        if not callable(load_recovery):
+            return False
+        try:
+            recovery = load_recovery()
+        except Exception as exc:
+            self.show_status_message(
+                f"현품표 교체 복구 journal 오류: {exc}",
+                self.COLOR_DANGER,
+                duration=10000,
+            )
+            self._schedule_focus_return()
+            return None
+        if not isinstance(recovery, Mapping):
+            return False
+        if (
+            str(recovery.get("workflow_kind") or "").strip().upper()
+            != "RECONCILIATION"
+            or str(recovery.get("status") or "").strip().upper()
+            != "LOCAL_PRINT_STARTING"
+        ):
+            return False
+        try:
+            approved = bool(
+                messagebox.askyesno(
+                    "실물 현품표 재출력 확인",
+                    "이전 실행이 실제 프린터 제출 중 종료되어 출력 여부가 "
+                    "불확실합니다.\n\n실물 라벨을 확인했습니다. 같은 target "
+                    "현품표를 재출력할까요?\n\n"
+                    "키보드: Y 승인 / N 취소",
+                    parent=self.root,
+                    default=messagebox.NO,
+                )
+            )
+        except (tk.TclError, AttributeError) as exc:
+            self.show_status_message(
+                f"현품표 재출력 확인창 오류: {exc}",
+                self.COLOR_DANGER,
+                duration=10000,
+            )
+            self._schedule_focus_return()
+            return None
+        if not approved:
+            self.show_status_message(
+                "미완료 현품표 교체를 보존했습니다. 실물 라벨을 확인한 뒤 "
+                "F8로 다시 복구할 수 있습니다.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return None
+        try:
+            self.phs_label_reprint_confirm_var.set(True)
+        except (tk.TclError, AttributeError):
+            pass
+        return True
+
     def _execute_phs_reconciliation_exchange(
         self,
         *,
@@ -3989,6 +4058,14 @@ class ContainerAudit:
                 lambda: False,
             )()
         )
+        confirm_reprint_result = (
+            self._confirm_phs_reconciliation_ambiguous_reprint(
+                already_confirmed=confirm_reprint,
+            )
+        )
+        if confirm_reprint_result is None:
+            return
+        confirm_reprint = confirm_reprint_result
         self._phs_label_exchange_pending = True
         self._update_action_button_states()
         self.show_status_message(
