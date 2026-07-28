@@ -786,8 +786,10 @@ def test_ui_keeps_fixed_exchange_button_and_f8_shortcut():
     center_source = inspect.getsource(ContainerAudit._create_center_content)
     init_source = inspect.getsource(ContainerAudit.__init__)
 
-    assert 'text="현품표 날짜 교환"' in center_source
+    assert 'text="현품표 교체"' in center_source
+    assert "command=self._on_phs_label_exchange_shortcut" in center_source
     assert "'<F8>'" in init_source
+    assert "'<Shift-F8>'" in init_source
 
 
 def parse_fields(payload):

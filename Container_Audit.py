@@ -238,7 +238,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.44"
+CURRENT_VERSION = "v2.0.45"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -1257,6 +1257,11 @@ class ContainerAudit:
         
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
         self.root.bind('<F8>', self._on_phs_label_exchange_shortcut, add="+")
+        self.root.bind(
+            '<Shift-F8>',
+            self._show_phs_label_legacy_single_fallback,
+            add="+",
+        )
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     ####################################################################
@@ -3054,7 +3059,19 @@ class ContainerAudit:
             text="현품표 교체",
             state=(
                 tk.NORMAL
-                if single_available and not operator_review and not phs_busy
+                if phs_available and not operator_review and not phs_busy
+                else tk.DISABLED
+            ),
+        )
+        self._configure_widget_options(
+            getattr(self, "phs_label_legacy_fallback_button", None),
+            state=(
+                tk.NORMAL
+                if single_available
+                and reconciliation_available
+                and not operator_review
+                and not phs_busy
+                and not phs_transition_blocked
                 else tk.DISABLED
             ),
         )
@@ -3219,10 +3236,15 @@ class ContainerAudit:
                 + " / ".join(summaries[:3])
                 + " · F8 실행"
             )
-        elif not self._phs_label_exchange_available_for_tray():
-            text = (
-                "F8 → 현재/완료 이적 현품표 스캔 → F8 실행"
+        elif (
+            self._phs_reconciliation_exchange_available()
+            and not getattr(
+                self, "_phs_legacy_single_fallback_mode", False
             )
+        ):
+            text = "F8 → 현재/완료 이적 현품표 스캔 → F8 실행"
+        elif not self._phs_label_exchange_available_for_tray():
+            text = "현품표 교체 API 설정이 없습니다."
         else:
             business_date = str(
                 getattr(tray, "active_label_business_date", "") or ""
@@ -3267,14 +3289,125 @@ class ContainerAudit:
             self._schedule_focus_return()
         return "break"
 
+    def _set_phs_label_exchange_panel_mode(
+        self, *, reconciliation_mode: bool
+    ) -> None:
+        """Keep central reconciliation separate from legacy manual SINGLE input."""
+
+        self._phs_legacy_single_fallback_mode = not reconciliation_mode
+
+        def set_visible(widget, visible: bool) -> None:
+            if widget is None:
+                return
+            try:
+                if visible:
+                    widget.grid()
+                elif hasattr(widget, "grid_remove"):
+                    widget.grid_remove()
+                else:
+                    widget.grid_forget()
+            except (tk.TclError, AttributeError):
+                return
+
+        set_visible(
+            getattr(self, "phs_reconciliation_instruction_label", None),
+            reconciliation_mode,
+        )
+        set_visible(
+            getattr(self, "phs_label_legacy_single_controls_frame", None),
+            not reconciliation_mode,
+        )
+        set_visible(
+            getattr(self, "phs_label_candidate_combo", None),
+            not reconciliation_mode,
+        )
+        set_visible(
+            getattr(self, "phs_label_legacy_fallback_button", None),
+            reconciliation_mode
+            and self._phs_label_exchange_available_for_tray(),
+        )
+
+    def _show_phs_label_legacy_single_fallback(self, _event=None):
+        """Expose the legacy SINGLE controls only as an explicit fallback."""
+
+        busy = bool(
+            getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        )
+        operator_review = self._active_blocking_completion_snapshot() is not None
+        transition_pending = self._phs_label_exchange_transition_pending()
+        if busy or operator_review or transition_pending:
+            self.show_status_message(
+                "진행 중인 현품표 교체 또는 복구를 먼저 완료하세요.",
+                self.COLOR_DANGER,
+                duration=6000,
+            )
+            self._schedule_focus_return()
+            return "break"
+        if not self._phs_label_exchange_available_for_tray():
+            self.show_status_message(
+                "현재 ACTIVE 현품표에는 보조 날짜 교환을 사용할 수 없습니다.",
+                self.COLOR_DANGER,
+                duration=6000,
+            )
+            self._schedule_focus_return()
+            return "break"
+        panel = getattr(self, "phs_label_exchange_frame", None)
+        try:
+            if panel is not None:
+                panel.grid()
+        except (tk.TclError, AttributeError):
+            self.show_status_message(
+                "보조 날짜 교환 화면을 열 수 없습니다.",
+                self.COLOR_DANGER,
+                duration=6000,
+            )
+            self._schedule_focus_return()
+            return "break"
+        self._phs_reconciliation_scan_armed = False
+        self._phs_reconciliation_context = None
+        self._set_phs_label_candidates([])
+        self._configure_widget_options(
+            getattr(self, "phs_label_exchange_execute_button", None),
+            text="선택 교환 실행",
+        )
+        self._set_phs_label_exchange_panel_mode(reconciliation_mode=False)
+        self._refresh_phs_active_label_info()
+        self._update_action_button_states()
+        self.show_status_message(
+            "보조 기능입니다. 현재 ACTIVE 현품표의 교환 작업일과 "
+            "후보를 선택하세요.",
+            self.COLOR_PRIMARY,
+            duration=8000,
+        )
+
+        def focus_target_date() -> None:
+            target = getattr(self, "phs_label_target_date_entry", None)
+            try:
+                if target is not None:
+                    target.focus_set()
+                    target.selection_range(0, tk.END)
+            except (tk.TclError, AttributeError):
+                self._schedule_focus_return()
+
+        root = getattr(self, "root", None)
+        try:
+            if root is not None:
+                root.after(0, focus_target_date)
+            else:
+                focus_target_date()
+        except (tk.TclError, AttributeError):
+            focus_target_date()
+        return "break"
+
     def _toggle_phs_label_exchange_panel(self) -> None:
         panel = getattr(self, "phs_label_exchange_frame", None)
         if panel is None:
             return
-        if not (
-            self._phs_label_exchange_available_for_tray()
-            or self._phs_reconciliation_exchange_available()
-        ):
+        reconciliation_mode = self._phs_reconciliation_exchange_available()
+        legacy_single_available = self._phs_label_exchange_available_for_tray()
+        if not (legacy_single_available or reconciliation_mode):
             self.show_status_message(
                 "중앙 현품표 교체 API 설정이 없습니다.",
                 self.COLOR_DANGER,
@@ -3282,19 +3415,28 @@ class ContainerAudit:
             )
             self._schedule_focus_return()
             return
+        self._set_phs_label_exchange_panel_mode(
+            reconciliation_mode=reconciliation_mode
+        )
         try:
             if panel.winfo_ismapped():
-                self._phs_reconciliation_scan_armed = True
+                self._phs_reconciliation_scan_armed = reconciliation_mode
             else:
                 panel.grid()
-                self._phs_reconciliation_scan_armed = True
-                self.show_status_message(
-                    "현재 또는 완료된 이적 현품표를 스캔하면 서버가 적용할 "
-                    "교체 지시를 조회합니다. 현재 트레이의 기존 날짜 교환도 "
-                    "그대로 사용할 수 있습니다.",
-                    self.COLOR_PRIMARY,
-                    duration=8000,
-                )
+                self._phs_reconciliation_scan_armed = reconciliation_mode
+                if reconciliation_mode:
+                    self.show_status_message(
+                        "현재 또는 완료된 이적 현품표를 스캔하면 서버가 적용할 "
+                        "교체 지시를 조회합니다.",
+                        self.COLOR_PRIMARY,
+                        duration=8000,
+                    )
+                else:
+                    self.show_status_message(
+                        "현재 ACTIVE 현품표의 교환 작업일과 후보를 선택하세요.",
+                        self.COLOR_PRIMARY,
+                        duration=8000,
+                    )
         except (tk.TclError, AttributeError):
             return
         self._schedule_focus_return()
@@ -3439,6 +3581,9 @@ class ContainerAudit:
                 getattr(self, "phs_label_exchange_execute_button", None),
                 text="선택 교환 실행",
             )
+            self._set_phs_label_exchange_panel_mode(
+                reconciliation_mode=self._phs_reconciliation_exchange_available()
+            )
             self._refresh_phs_active_label_info()
             self._update_action_button_states()
             return
@@ -3460,6 +3605,7 @@ class ContainerAudit:
             getattr(self, "phs_label_exchange_execute_button", None),
             text="서버 지시 교체 실행",
         )
+        self._set_phs_label_exchange_panel_mode(reconciliation_mode=True)
         self._refresh_phs_active_label_info()
         self._update_action_button_states()
 
@@ -5023,8 +5169,8 @@ class ContainerAudit:
         self.notice_ack_button.bind('<Escape>', lambda _event: self._acknowledge_active_notice())
         self.phs_label_exchange_button = ttk.Button(
             self.notice_frame,
-            text="현품표 날짜 교환",
-            command=self._toggle_phs_label_exchange_panel,
+            text="현품표 교체",
+            command=self._on_phs_label_exchange_shortcut,
             style="Secondary.TButton",
         )
         self.phs_label_exchange_button.grid(
@@ -5064,8 +5210,42 @@ class ContainerAudit:
             pady=(0, 10),
         )
         self.phs_label_exchange_frame.grid_columnconfigure(3, weight=1)
-        ttk.Label(
+        self.phs_reconciliation_instruction_label = ttk.Label(
             self.phs_label_exchange_frame,
+            text="현재 또는 완료된 이적 현품표를 스캔하세요.",
+            style="TLabel",
+        )
+        self.phs_reconciliation_instruction_label.grid(
+            row=0,
+            column=0,
+            columnspan=3,
+            sticky="w",
+            padx=(0, 6),
+        )
+        self.phs_label_legacy_fallback_button = ttk.Button(
+            self.phs_label_exchange_frame,
+            text="보조 교환 (Shift+F8)",
+            command=self._show_phs_label_legacy_single_fallback,
+            style="Secondary.TButton",
+        )
+        self.phs_label_legacy_fallback_button.grid(
+            row=0,
+            column=3,
+            sticky="e",
+            padx=(0, 6),
+        )
+        self.phs_label_legacy_single_controls_frame = ttk.Frame(
+            self.phs_label_exchange_frame,
+            style="TFrame",
+        )
+        self.phs_label_legacy_single_controls_frame.grid(
+            row=0,
+            column=0,
+            columnspan=3,
+            sticky="w",
+        )
+        ttk.Label(
+            self.phs_label_legacy_single_controls_frame,
             text="교환 작업일",
             style="TLabel",
         ).grid(row=0, column=0, sticky="w", padx=(0, 6))
@@ -5079,7 +5259,7 @@ class ContainerAudit:
             else _LocalValueVar(datetime.date.today().isoformat())
         )
         self.phs_label_target_date_entry = tk.Entry(
-            self.phs_label_exchange_frame,
+            self.phs_label_legacy_single_controls_frame,
             textvariable=self.phs_label_target_date_var,
             width=12,
         )
@@ -5087,7 +5267,7 @@ class ContainerAudit:
             row=0, column=1, sticky="w", padx=(0, 6)
         )
         self.phs_label_candidate_load_button = ttk.Button(
-            self.phs_label_exchange_frame,
+            self.phs_label_legacy_single_controls_frame,
             text="후보 조회",
             command=self._load_phs_label_exchange_candidates,
             style="Secondary.TButton",
@@ -5149,6 +5329,9 @@ class ContainerAudit:
             columnspan=5,
             sticky="w",
             pady=(6, 0),
+        )
+        self._set_phs_label_exchange_panel_mode(
+            reconciliation_mode=self._phs_reconciliation_exchange_available()
         )
         if hasattr(self.phs_label_exchange_frame, "grid_remove"):
             self.phs_label_exchange_frame.grid_remove()

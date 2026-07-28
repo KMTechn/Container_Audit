@@ -795,6 +795,253 @@ class _Value:
         self.value = value
 
 
+class _GridWidget:
+    def __init__(self, *, mapped=False):
+        self.mapped = mapped
+        self.options = {}
+
+    def grid(self, **_kwargs):
+        self.mapped = True
+
+    def grid_remove(self):
+        self.mapped = False
+
+    def grid_forget(self):
+        self.mapped = False
+
+    def winfo_ismapped(self):
+        return self.mapped
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+
+
+class _FocusEntry(_GridWidget):
+    def __init__(self):
+        super().__init__(mapped=True)
+        self.focused = False
+        self.selection = None
+
+    def focus_set(self):
+        self.focused = True
+
+    def selection_range(self, start, end):
+        self.selection = (start, end)
+
+
+def test_idle_reconciliation_keeps_visible_button_enabled():
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._active_blocking_completion_snapshot = lambda: None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: False
+    app._phs_reconciliation_exchange_available = lambda: True
+    app._refresh_phs_active_label_info = lambda: None
+    app.phs_label_exchange_button = _GridWidget()
+    app.phs_label_exchange_coordinator = type(
+        "Coordinator",
+        (),
+        {"journal": type("Journal", (), {"load": lambda _self: {}})()},
+    )()
+
+    app._update_action_button_states()
+
+    assert app.phs_label_exchange_button.options["text"] == "현품표 교체"
+    assert (
+        app.phs_label_exchange_button.options["state"]
+        == container_module.tk.NORMAL
+    )
+
+
+def test_legacy_fallback_button_is_disabled_while_exchange_is_busy():
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._active_blocking_completion_snapshot = lambda: None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app._phs_reconciliation_exchange_available = lambda: True
+    app._refresh_phs_active_label_info = lambda: None
+    app.phs_label_legacy_fallback_button = _GridWidget()
+    app.phs_label_exchange_coordinator = type(
+        "Coordinator",
+        (),
+        {"journal": type("Journal", (), {"load": lambda _self: {}})()},
+    )()
+    app._phs_label_exchange_pending = False
+    app._phs_label_candidate_pending = False
+    app._phs_label_refresh_pending = False
+
+    app._update_action_button_states()
+    assert (
+        app.phs_label_legacy_fallback_button.options["state"]
+        == container_module.tk.NORMAL
+    )
+
+    app._phs_label_candidate_pending = True
+    app._update_action_button_states()
+    assert (
+        app.phs_label_legacy_fallback_button.options["state"]
+        == container_module.tk.DISABLED
+    )
+
+
+def test_central_reconciliation_hides_legacy_manual_single_controls():
+    calls = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._phs_label_exchange_pending = False
+    app._phs_reconciliation_context = None
+    app._phs_reconciliation_scan_armed = False
+    app.phs_label_exchange_frame = _GridWidget(mapped=False)
+    app.phs_reconciliation_instruction_label = _GridWidget(mapped=False)
+    app.phs_label_legacy_single_controls_frame = _GridWidget(mapped=True)
+    app.phs_label_candidate_combo = _GridWidget(mapped=True)
+    app.phs_label_legacy_fallback_button = _GridWidget(mapped=False)
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app.phs_label_exchange_coordinator = type(
+        "Coordinator",
+        (),
+        {
+            "journal": type("Journal", (), {"load": lambda _self: {}})(),
+            "reconciliation": type(
+                "Reconciliation", (), {"available": True}
+            )(),
+        },
+    )()
+    app.show_status_message = (
+        lambda message, *_args, **_kwargs: calls.append(("status", message))
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+
+    assert app._on_phs_label_exchange_shortcut() == "break"
+
+    assert app.phs_label_exchange_frame.mapped is True
+    assert app.phs_reconciliation_instruction_label.mapped is True
+    assert app.phs_label_legacy_single_controls_frame.mapped is False
+    assert app.phs_label_candidate_combo.mapped is False
+    assert app.phs_label_legacy_fallback_button.mapped is True
+    assert app._phs_reconciliation_scan_armed is True
+    status_messages = [
+        call[1] for call in calls if call and call[0] == "status"
+    ]
+    assert all(
+        "교환 작업일" not in value and "후보" not in value
+        for value in status_messages
+    )
+
+    app._phs_reconciliation_context = {"selection": {}}
+    app._set_phs_label_exchange_panel_mode(reconciliation_mode=True)
+    assert app.phs_label_candidate_combo.mapped is False
+
+    app._set_phs_label_exchange_panel_mode(reconciliation_mode=False)
+    assert app.phs_reconciliation_instruction_label.mapped is False
+    assert app.phs_label_legacy_single_controls_frame.mapped is True
+    assert app.phs_label_candidate_combo.mapped is True
+    assert app.phs_label_legacy_fallback_button.mapped is False
+
+
+def test_explicit_legacy_single_fallback_can_return_to_central_scan_mode():
+    calls = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._phs_label_exchange_pending = False
+    app._phs_label_candidate_pending = False
+    app._phs_label_refresh_pending = False
+    app._phs_reconciliation_context = {"selection": {}}
+    app._phs_reconciliation_scan_armed = True
+    app.root = _ImmediateRoot()
+    app.phs_label_exchange_frame = _GridWidget(mapped=False)
+    app.phs_reconciliation_instruction_label = _GridWidget(mapped=True)
+    app.phs_label_legacy_single_controls_frame = _GridWidget(mapped=False)
+    app.phs_label_candidate_combo = _GridWidget(mapped=False)
+    app.phs_label_legacy_fallback_button = _GridWidget(mapped=True)
+    app.phs_label_exchange_execute_button = _GridWidget(mapped=True)
+    app.phs_label_target_date_entry = _FocusEntry()
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app._phs_reconciliation_exchange_available = lambda: True
+    app._active_blocking_completion_snapshot = lambda: None
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._refresh_phs_active_label_info = lambda: calls.append(("refresh",))
+    app._update_action_button_states = lambda: calls.append(("states",))
+    app.show_status_message = (
+        lambda message, *_args, **_kwargs: calls.append(("status", message))
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+
+    assert app._show_phs_label_legacy_single_fallback() == "break"
+
+    assert app._phs_reconciliation_context is None
+    assert app._phs_reconciliation_scan_armed is False
+    assert app._phs_legacy_single_fallback_mode is True
+    assert app.phs_label_exchange_frame.mapped is True
+    assert app.phs_reconciliation_instruction_label.mapped is False
+    assert app.phs_label_legacy_single_controls_frame.mapped is True
+    assert app.phs_label_candidate_combo.mapped is True
+    assert app.phs_label_legacy_fallback_button.mapped is False
+    assert app.phs_label_exchange_execute_button.options["text"] == (
+        "선택 교환 실행"
+    )
+    assert any(
+        call[0] == "status" and "보조 기능" in call[1]
+        for call in calls
+    )
+    assert app.phs_label_target_date_entry.focused is True
+    assert app.phs_label_target_date_entry.selection == (
+        0,
+        container_module.tk.END,
+    )
+
+    app._toggle_phs_label_exchange_panel()
+
+    assert app._phs_reconciliation_scan_armed is True
+    assert app._phs_legacy_single_fallback_mode is False
+    assert app.phs_reconciliation_instruction_label.mapped is True
+    assert app.phs_label_legacy_single_controls_frame.mapped is False
+    assert app.phs_label_candidate_combo.mapped is False
+    assert app.phs_label_legacy_fallback_button.mapped is True
+
+
+@pytest.mark.parametrize(
+    "busy_field",
+    (
+        "_phs_label_exchange_pending",
+        "_phs_label_candidate_pending",
+        "_phs_label_refresh_pending",
+    ),
+)
+def test_legacy_single_fallback_does_not_clear_central_context_while_busy(
+    busy_field,
+):
+    calls = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._phs_label_exchange_pending = False
+    app._phs_label_candidate_pending = False
+    app._phs_label_refresh_pending = False
+    setattr(app, busy_field, True)
+    context = {"selection": {"action_ids": ["action-1"]}}
+    app._phs_reconciliation_context = context
+    app._phs_reconciliation_scan_armed = False
+    app._active_blocking_completion_snapshot = lambda: None
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app.show_status_message = (
+        lambda message, *_args, **_kwargs: calls.append(("status", message))
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+
+    assert app._show_phs_label_legacy_single_fallback() == "break"
+
+    assert app._phs_reconciliation_context is context
+    assert any(
+        call[0] == "status" and "먼저 완료" in call[1]
+        for call in calls
+    )
+    assert ("focus",) in calls
+
+
 @pytest.mark.parametrize("completed", (False, True))
 def test_current_and_completed_transfer_label_scan_resolves_without_mutating_work(
     monkeypatch,
