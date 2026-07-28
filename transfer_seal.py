@@ -140,6 +140,14 @@ class TransferSourcePreflight:
     input_tag_hash_prefix: str
     input_tag_core_hash: str
     input_tag_label_hash: str
+    canonical_input_tag_qr: str = ""
+    active_label_qr_payload: str = ""
+    active_label_id: str = ""
+    active_label_business_date: str = ""
+    active_label_worker_code: str = ""
+    active_label_resolution: str = "LEGACY_ACTIVE"
+    scanned_label_id: str = ""
+    replaced_scan: bool = False
 
     @property
     def member_count(self) -> int:
@@ -164,6 +172,14 @@ class TransferSourcePreflight:
             "input_tag_label_id": self.input_tag_label_id,
             "input_tag_hash_prefix": self.input_tag_hash_prefix,
             "input_tag_lifecycle": "INSPECTION_COMPLETED",
+            "canonical_input_tag_qr": self.canonical_input_tag_qr,
+            "active_label_qr_payload": self.active_label_qr_payload,
+            "active_label_id": self.active_label_id,
+            "active_label_business_date": self.active_label_business_date,
+            "active_label_worker_code": self.active_label_worker_code,
+            "active_label_resolution": self.active_label_resolution,
+            "scanned_label_id": self.scanned_label_id,
+            "replaced_scan": self.replaced_scan,
         }
 
 
@@ -217,6 +233,170 @@ def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict
         )
     fields["HSH"] = hash_prefix
     return fields
+
+
+def _compact_phs2_fields_from_payload(payload: Any) -> dict[str, str]:
+    normalized = unicodedata.normalize("NFKC", str(payload or "")).strip()
+    parsed: dict[str, str] = {}
+    for segment in normalized.split("|"):
+        if "=" not in segment:
+            raise _phs2_contract_error(
+                "PHS2_COMPACT_FORMAT_REQUIRED",
+                "중앙 PHS=2 현품표 QR 형식이 올바르지 않습니다.",
+            )
+        key, value = segment.split("=", 1)
+        key = unicodedata.normalize("NFKC", key).strip().upper()
+        if not key or key in parsed:
+            raise _phs2_contract_error(
+                "PHS2_COMPACT_FORMAT_REQUIRED",
+                "중앙 PHS=2 현품표 QR에 중복되거나 빈 필드가 있습니다.",
+            )
+        parsed[key] = unicodedata.normalize("NFKC", value).strip()
+    return validate_compact_phs2_fields(parsed)
+
+
+def _physical_label_from_resolution(
+    *,
+    scanned_fields: Mapping[str, str],
+    response: Mapping[str, Any],
+    canonical_fields: Mapping[str, str],
+) -> tuple[dict[str, Any], str, str, bool]:
+    """Resolve one physical ACTIVE label while retaining the immutable tag."""
+
+    raw_resolution = response.get("phs_label_resolution")
+    if raw_resolution is None:
+        if any(
+            scanned_fields[key] != canonical_fields[key]
+            for key in ("ITG", "CLC", "LBL", "HSH")
+        ):
+            raise _phs2_contract_error(
+                "PHS2_REGISTRY_IDENTITY_MISMATCH",
+                "중앙 PHS=2 QR과 immutable input-tag registry가 일치하지 않습니다.",
+            )
+        return (
+            {
+                "label_id": canonical_fields["LBL"],
+                "qr_payload": (
+                    f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={canonical_fields['ITG']}|"
+                    f"CLC={canonical_fields['CLC']}|LBL={canonical_fields['LBL']}|"
+                    f"HSH={canonical_fields['HSH']}"
+                ),
+                "hash_prefix": canonical_fields["HSH"],
+                "scan_anchor_input_tag_id": canonical_fields["ITG"],
+                "item_id": canonical_fields["CLC"],
+                "state": "ACTIVE",
+            },
+            "LEGACY_ACTIVE",
+            canonical_fields["LBL"],
+            False,
+        )
+    if not isinstance(raw_resolution, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_LABEL_RESOLUTION_CORRUPT",
+            "중앙 PHS=2 physical label resolution이 올바르지 않습니다.",
+        )
+    resolution = dict(raw_resolution)
+    resolution_kind = str(resolution.get("resolution") or "").strip().upper()
+    status = str(resolution.get("status") or "").strip().upper()
+    scanned = resolution.get("scanned_label")
+    if not isinstance(scanned, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_LABEL_RESOLUTION_CORRUPT",
+            "중앙 physical label resolution에 scanned label 증거가 없습니다.",
+        )
+    scanned = dict(scanned)
+    scanned_qr = unicodedata.normalize(
+        "NFKC", str(scanned.get("qr_payload") or "")
+    ).strip()
+    parsed_scanned = _compact_phs2_fields_from_payload(scanned_qr)
+    if (
+        any(
+            parsed_scanned[key] != scanned_fields[key]
+            for key in ("ITG", "CLC", "LBL", "HSH")
+        )
+        or str(scanned.get("label_id") or "").strip() != scanned_fields["LBL"]
+        or str(scanned.get("hash_prefix") or "").strip().lower()
+        != scanned_fields["HSH"]
+        or str(scanned.get("scan_anchor_input_tag_id") or "").strip()
+        != scanned_fields["ITG"]
+        or str(scanned.get("item_id") or "").strip() != scanned_fields["CLC"]
+    ):
+        raise _phs2_contract_error(
+            "PHS2_LABEL_RESOLUTION_MISMATCH",
+            "스캔한 PHS=2 physical label과 중앙 resolution 증거가 일치하지 않습니다.",
+        )
+    if resolution_kind == "OVERLAY_NOT_ACTIVE" or status in {
+        "PENDING_ACTIVATION",
+        "PRINT_FAILED",
+    }:
+        raise _phs2_contract_error(
+            "PHS2_LABEL_NOT_ACTIVE",
+            "아직 ACTIVE가 아닌 새 현품표는 이적 작업에 사용할 수 없습니다.",
+            label_id=scanned_fields["LBL"],
+            label_state=status,
+        )
+    if resolution_kind not in {
+        "OVERLAY_ACTIVE",
+        "OVERLAY_REPLACED",
+        "LEGACY_ACTIVE",
+    }:
+        raise _phs2_contract_error(
+            "PHS2_LABEL_RESOLUTION_CORRUPT",
+            "중앙 PHS=2 physical label resolution 상태를 확정할 수 없습니다.",
+            resolution=resolution_kind,
+        )
+    effective = resolution.get("effective_labels")
+    if (
+        not isinstance(effective, list)
+        or len(effective) != 1
+        or not isinstance(effective[0], Mapping)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_ACTIVE_LABEL_AMBIGUOUS",
+            "중앙 PHS=2 현품표의 현재 ACTIVE successor를 하나로 확정하지 못했습니다.",
+            active_label_count=len(effective) if isinstance(effective, list) else None,
+        )
+    active = dict(effective[0])
+    active_qr = unicodedata.normalize(
+        "NFKC", str(active.get("qr_payload") or "")
+    ).strip()
+    active_fields = _compact_phs2_fields_from_payload(active_qr)
+    if (
+        str(active.get("state") or "").strip().upper() != "ACTIVE"
+        or active_fields["ITG"] != canonical_fields["ITG"]
+        or active_fields["CLC"] != canonical_fields["CLC"]
+        or str(active.get("label_id") or "").strip() != active_fields["LBL"]
+        or str(active.get("hash_prefix") or "").strip().lower()
+        != active_fields["HSH"]
+        or str(active.get("scan_anchor_input_tag_id") or "").strip()
+        != canonical_fields["ITG"]
+        or str(active.get("item_id") or "").strip() != canonical_fields["CLC"]
+    ):
+        raise _phs2_contract_error(
+            "PHS2_ACTIVE_LABEL_INVALID",
+            "중앙 PHS=2 ACTIVE physical label이 immutable input-tag anchor와 다릅니다.",
+        )
+    replaced = resolution_kind == "OVERLAY_REPLACED"
+    if replaced and status != "REPLACED":
+        raise _phs2_contract_error(
+            "PHS2_LABEL_RESOLUTION_CORRUPT",
+            "교체된 PHS=2 라벨의 중앙 상태가 일치하지 않습니다.",
+        )
+    if not replaced and status != "ACTIVE":
+        raise _phs2_contract_error(
+            "PHS2_LABEL_NOT_ACTIVE",
+            "현재 ACTIVE가 아닌 PHS=2 현품표는 사용할 수 없습니다.",
+            label_state=status,
+        )
+    if resolution_kind in {"OVERLAY_ACTIVE", "LEGACY_ACTIVE"} and (
+        active_fields["LBL"] != scanned_fields["LBL"]
+        or active_fields["HSH"] != scanned_fields["HSH"]
+    ):
+        raise _phs2_contract_error(
+            "PHS2_ACTIVE_LABEL_INVALID",
+            "현재 ACTIVE physical label과 스캔한 라벨이 일치하지 않습니다.",
+        )
+    return active, resolution_kind, scanned_fields["LBL"], replaced
 
 
 def validate_compact_phs2_preflight(
@@ -273,21 +453,25 @@ def validate_compact_phs2_preflight(
     label_hash = str(input_tag["label_instance_hash"]).strip().lower()
     hash_prefix = str(input_tag["hash_prefix"]).strip().lower()
     lifecycle = str(input_tag["lifecycle"]).strip().upper()
-    expected_qr_payload = (
-        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={fields['ITG']}|CLC={fields['CLC']}|"
-        f"LBL={fields['LBL']}|HSH={fields['HSH']}"
-    )
     registry_qr_payload = unicodedata.normalize(
         "NFKC", str(input_tag["qr_payload"])
     ).strip()
+    canonical_fields = _compact_phs2_fields_from_payload(registry_qr_payload)
+    expected_qr_payload = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={canonical_fields['ITG']}|"
+        f"CLC={canonical_fields['CLC']}|LBL={canonical_fields['LBL']}|"
+        f"HSH={canonical_fields['HSH']}"
+    )
     bundle_external_label = unicodedata.normalize(
         "NFKC", str(bundle.get("external_label") or "")
     ).strip()
     if (
         input_tag_id != fields["ITG"]
-        or label_id != fields["LBL"]
+        or input_tag_id != canonical_fields["ITG"]
+        or label_id != canonical_fields["LBL"]
         or registry_item != fields["CLC"]
-        or hash_prefix != fields["HSH"]
+        or registry_item != canonical_fields["CLC"]
+        or hash_prefix != canonical_fields["HSH"]
         or lifecycle != "INSPECTION_COMPLETED"
         or registry_qr_payload != expected_qr_payload
         or bundle_external_label != expected_qr_payload
@@ -306,6 +490,26 @@ def validate_compact_phs2_preflight(
             "PHS2_REGISTRY_HASH_INVALID",
             "중앙 PHS=2 registry hash 증거가 올바르지 않습니다.",
         )
+    (
+        active_label,
+        active_label_resolution,
+        scanned_label_id,
+        replaced_scan,
+    ) = _physical_label_from_resolution(
+        scanned_fields=fields,
+        response=response,
+        canonical_fields=canonical_fields,
+    )
+    active_label_qr_payload = unicodedata.normalize(
+        "NFKC", str(active_label.get("qr_payload") or "")
+    ).strip()
+    active_label_id = str(active_label.get("label_id") or "").strip()
+    active_label_business_date = str(
+        active_label.get("business_date") or ""
+    ).strip()
+    active_label_worker_code = str(
+        active_label.get("worker_code") or ""
+    ).strip()
 
     source_bundle_id = str(bundle.get("bundle_id") or "").strip()
     source_session_id = str(bundle.get("source_session_id") or "").strip()
@@ -315,6 +519,12 @@ def validate_compact_phs2_preflight(
     authority_scope_id = str(bundle.get("authority_scope_id") or "").strip()
     ledger_plane = str(bundle.get("ledger_plane") or "").strip().upper()
     plane_epoch = bundle.get("plane_epoch")
+    label_resolution_value = response.get("phs_label_resolution")
+    resolution_scope = (
+        str(label_resolution_value.get("authority_scope_id") or "").strip()
+        if isinstance(label_resolution_value, Mapping)
+        else ""
+    )
     if (
         bundle.get("bundle_role") != "TRANSFER_SOURCE"
         or bundle.get("bundle_type") != "PHS"
@@ -325,6 +535,7 @@ def validate_compact_phs2_preflight(
         or not uom
         or not source_iin
         or not authority_scope_id
+        or (resolution_scope and resolution_scope != authority_scope_id)
         or ledger_plane not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}
         or isinstance(plane_epoch, bool)
         or not isinstance(plane_epoch, int)
@@ -439,6 +650,14 @@ def validate_compact_phs2_preflight(
         input_tag_hash_prefix=hash_prefix,
         input_tag_core_hash=core_hash,
         input_tag_label_hash=label_hash,
+        canonical_input_tag_qr=registry_qr_payload,
+        active_label_qr_payload=active_label_qr_payload,
+        active_label_id=active_label_id,
+        active_label_business_date=active_label_business_date,
+        active_label_worker_code=active_label_worker_code,
+        active_label_resolution=active_label_resolution,
+        scanned_label_id=scanned_label_id,
+        replaced_scan=replaced_scan,
     )
 
 
@@ -609,6 +828,209 @@ class LogisticsTransferClient:
                 "현품표에 서버 PHS를 식별할 BND, ITG 또는 외부 라벨 값이 없습니다.",
             )
         result = self._request("GET", f"/logistics/api/v1/bundles/resolve?{urlencode(params)}")
+        return dict(result or {})
+
+    def resolve_phs_label(
+        self,
+        *,
+        authority_scope_id: str,
+        scan_payload: str,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        query = urlencode(
+            {
+                "authority_scope_id": scope,
+                "scan_payload": _normalize_identifier(
+                    scan_payload, "scan_payload"
+                ),
+            }
+        )
+        result = self._request(
+            "GET", f"/logistics/api/v1/phs-labels/resolve?{query}"
+        )
+        return dict(result or {})
+
+    def list_phs_work_instruction_candidates(
+        self,
+        *,
+        authority_scope_id: str,
+        business_date: str,
+        item_id: str,
+        target_qty_pcs: int,
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        query = urlencode(
+            {
+                "authority_scope_id": scope,
+                "business_date": _normalize_identifier(
+                    business_date, "business_date"
+                ),
+                "item_id": _normalize_identifier(item_id, "item_id"),
+                "target_qty_pcs": int(target_qty_pcs),
+                "limit": int(limit),
+            }
+        )
+        result = self._request(
+            "GET",
+            f"/logistics/api/v1/phs-work-instructions/candidates?{query}",
+        )
+        return dict(result or {})
+
+    def adopt_phs_label(
+        self,
+        *,
+        authority_scope_id: str,
+        qr_payload: str,
+        business_date: str = "",
+        expected_session_version: int | None = None,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        payload: dict[str, Any] = {
+            "authority_scope_id": scope,
+            "qr_payload": _normalize_identifier(qr_payload, "qr_payload"),
+        }
+        if str(business_date or "").strip():
+            payload["business_date"] = str(business_date).strip()
+        if expected_session_version is not None:
+            payload["expected_session_version"] = int(
+                expected_session_version
+            )
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-labels/adopt",
+            payload=payload,
+        )
+        return dict(result or {})
+
+    def prepare_phs_label_exchange(
+        self,
+        *,
+        authority_scope_id: str,
+        exchange_kind: str,
+        sources: list[dict[str, Any]],
+        targets: list[dict[str, Any]],
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-label-exchanges/prepare",
+            payload={
+                "authority_scope_id": scope,
+                "exchange_kind": str(exchange_kind or "").strip().upper(),
+                "sources": list(sources),
+                "targets": list(targets),
+            },
+            idempotency_key=_normalize_identifier(
+                idempotency_key, "idempotency_key"
+            ),
+        )
+        return dict(result or {})
+
+    def get_phs_label_exchange(
+        self,
+        exchange_id: str,
+        *,
+        authority_scope_id: str,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        query = urlencode({"authority_scope_id": scope})
+        result = self._request(
+            "GET",
+            "/logistics/api/v1/phs-label-exchanges/"
+            f"{quote(_normalize_identifier(exchange_id, 'exchange_id'), safe='')}"
+            f"?{query}",
+        )
+        return dict(result or {})
+
+    def request_phs_label_print(
+        self,
+        exchange_id: str,
+        *,
+        authority_scope_id: str,
+        label_id: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-label-exchanges/"
+            f"{quote(_normalize_identifier(exchange_id, 'exchange_id'), safe='')}"
+            "/prints",
+            payload={
+                "authority_scope_id": scope,
+                "label_id": _normalize_identifier(label_id, "label_id"),
+            },
+            idempotency_key=_normalize_identifier(
+                idempotency_key, "idempotency_key"
+            ),
+        )
+        return dict(result or {})
+
+    def complete_phs_label_print(
+        self,
+        print_attempt_id: str,
+        *,
+        authority_scope_id: str,
+        succeeded: bool,
+        rendered_artifact_hash: str = "",
+        proof: Mapping[str, Any] | None = None,
+        error_code: str = "",
+        error_message: str = "",
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        payload: dict[str, Any] = {
+            "authority_scope_id": scope,
+            "succeeded": bool(succeeded),
+        }
+        if succeeded:
+            payload["rendered_artifact_hash"] = str(
+                rendered_artifact_hash or ""
+            ).strip().lower()
+            payload["proof"] = dict(proof or {})
+        else:
+            payload["error_code"] = str(error_code or "").strip()
+            payload["error_message"] = str(error_message or "").strip()
+            if proof is not None:
+                payload["proof"] = dict(proof)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-label-print-attempts/"
+            f"{quote(_normalize_identifier(print_attempt_id, 'print_attempt_id'), safe='')}"
+            "/complete",
+            payload=payload,
+        )
+        return dict(result or {})
+
+    def activate_phs_label_exchange(
+        self,
+        exchange_id: str,
+        *,
+        authority_scope_id: str,
+        expected_exchange_version: int,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-label-exchanges/"
+            f"{quote(_normalize_identifier(exchange_id, 'exchange_id'), safe='')}"
+            "/activate",
+            payload={
+                "authority_scope_id": scope,
+                "expected_exchange_version": int(
+                    expected_exchange_version
+                ),
+            },
+        )
         return dict(result or {})
 
     def get_authority(self, scope_id: str) -> dict[str, Any]:

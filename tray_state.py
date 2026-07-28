@@ -15,9 +15,25 @@ OPERATOR_REVIEW_STATE_SCHEMA_VERSION = 1
 
 
 def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
+    master_label = str(tray.master_label_code or "")
+    canonical_input_tag_qr = str(
+        getattr(tray, "canonical_input_tag_qr", "") or master_label
+    )
+    active_label_qr_payload = str(
+        getattr(tray, "active_label_qr_payload", "") or master_label
+    )
     return {
         "worker_name": worker_name,
-        "master_label_code": tray.master_label_code,
+        "master_label_code": master_label,
+        "canonical_input_tag_qr": canonical_input_tag_qr,
+        "active_label_qr_payload": active_label_qr_payload,
+        "active_label_id": str(getattr(tray, "active_label_id", "") or ""),
+        "active_label_business_date": str(
+            getattr(tray, "active_label_business_date", "") or ""
+        ),
+        "active_label_worker_code": str(
+            getattr(tray, "active_label_worker_code", "") or ""
+        ),
         "item_code": tray.item_code,
         "item_name": tray.item_name,
         "item_spec": tray.item_spec,
@@ -75,6 +91,87 @@ def _validate_master_label_consistency(state: Mapping[str, Any], *, tray_size: i
     parsed_tray_size = parse_positive_quantity(master_label_fields)
     if parsed_tray_size is not None and parsed_tray_size != tray_size:
         raise TrayStateValidationError("master_label_code QT must match tray_size")
+
+
+def _validate_phs_label_state(state: Mapping[str, Any]) -> None:
+    master_label = str(state.get("master_label_code") or "")
+    canonical = state.get("canonical_input_tag_qr", master_label)
+    active = state.get("active_label_qr_payload", master_label)
+    active_label_id = state.get("active_label_id", "")
+    active_business_date = state.get("active_label_business_date", "")
+    active_worker_code = state.get("active_label_worker_code", "")
+    for key, value in (
+        ("canonical_input_tag_qr", canonical),
+        ("active_label_qr_payload", active),
+        ("active_label_id", active_label_id),
+        ("active_label_business_date", active_business_date),
+        ("active_label_worker_code", active_worker_code),
+    ):
+        if not isinstance(value, str):
+            raise TrayStateValidationError(f"{key} must be a string")
+
+    master_fields = parse_new_format_qr(master_label)
+    if str((master_fields or {}).get("PHS") or "").strip() != "2":
+        return
+    canonical_fields = parse_new_format_qr(canonical)
+    active_fields = parse_new_format_qr(active)
+    required = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
+    if (
+        canonical != master_label
+        or set(canonical_fields or {}) != set(required)
+        or set(active_fields or {}) != set(required)
+        or any(not str((canonical_fields or {}).get(key) or "").strip() for key in required)
+        or any(not str((active_fields or {}).get(key) or "").strip() for key in required)
+        or str(canonical_fields.get("PHS") or "").strip() != "2"
+        or str(active_fields.get("PHS") or "").strip() != "2"
+        or str(canonical_fields.get("SRC") or "").strip().upper()
+        != "KMTECH_INPUT_TAG"
+        or str(active_fields.get("SRC") or "").strip().upper()
+        != "KMTECH_INPUT_TAG"
+        or len(str(canonical_fields.get("HSH") or "").strip()) != 16
+        or any(
+            value not in "0123456789abcdef"
+            for value in str(
+                canonical_fields.get("HSH") or ""
+            ).strip().lower()
+        )
+        or len(str(active_fields.get("HSH") or "").strip()) != 16
+        or any(
+            value not in "0123456789abcdef"
+            for value in str(
+                active_fields.get("HSH") or ""
+            ).strip().lower()
+        )
+        or str(canonical_fields.get("ITG") or "").strip()
+        != str(master_fields.get("ITG") or "").strip()
+        or str(canonical_fields.get("CLC") or "").strip()
+        != str(master_fields.get("CLC") or "").strip()
+        or str(active_fields.get("ITG") or "").strip()
+        != str(canonical_fields.get("ITG") or "").strip()
+        or str(active_fields.get("CLC") or "").strip()
+        != str(canonical_fields.get("CLC") or "").strip()
+    ):
+        raise TrayStateValidationError(
+            "canonical and active PHS2 labels must retain the master ITG/item anchor"
+        )
+    parsed_active_label_id = str(active_fields.get("LBL") or "").strip()
+    if active_label_id and active_label_id != parsed_active_label_id:
+        raise TrayStateValidationError(
+            "active_label_id must match active_label_qr_payload LBL"
+        )
+    if active_business_date:
+        try:
+            parsed_date = datetime.datetime.strptime(
+                active_business_date, "%Y-%m-%d"
+            )
+        except ValueError as exc:
+            raise TrayStateValidationError(
+                "active_label_business_date must be YYYY-MM-DD"
+            ) from exc
+        if parsed_date.strftime("%Y-%m-%d") != active_business_date:
+            raise TrayStateValidationError(
+                "active_label_business_date must be YYYY-MM-DD"
+            )
 
 
 def _validate_pending_operator_review(
@@ -237,6 +334,7 @@ def validate_tray_state(
             raise TrayStateValidationError(f"{key} must be a boolean")
 
     _validate_master_label_consistency(state, tray_size=tray_size)
+    _validate_phs_label_state(state)
     _validate_pending_operator_review(
         state,
         scanned_barcodes=scanned_barcodes,
@@ -264,8 +362,24 @@ def tray_session_from_state(
     session_factory: Callable[..., Any],
     default_tray_size: int,
 ) -> Any:
+    active_label_qr_payload = state.get(
+        "active_label_qr_payload", state["master_label_code"]
+    )
+    active_fields = parse_new_format_qr(active_label_qr_payload) or {}
+    active_label_id = state.get("active_label_id") or str(
+        active_fields.get("LBL") or ""
+    ).strip()
     return session_factory(
         master_label_code=state["master_label_code"],
+        canonical_input_tag_qr=state.get(
+            "canonical_input_tag_qr", state["master_label_code"]
+        ),
+        active_label_qr_payload=active_label_qr_payload,
+        active_label_id=active_label_id,
+        active_label_business_date=state.get(
+            "active_label_business_date", ""
+        ),
+        active_label_worker_code=state.get("active_label_worker_code", ""),
         item_code=state["item_code"],
         item_name=state["item_name"],
         item_spec=state["item_spec"],

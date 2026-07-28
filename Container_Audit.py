@@ -9,7 +9,7 @@ import threading
 import time
 import json
 import re
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Mapping, Sequence
 from PIL import Image, ImageTk
 from dataclasses import dataclass, field
 import queue
@@ -35,6 +35,7 @@ from event_payloads import (
     product_barcodes_from_completion,
 )
 from item_catalog import ItemCatalog
+from item_catalog_sync import ACTIVE_PATH_ENV, refresh_item_catalog
 from label_qr import (
     canonical_master_label_key,
     inspection_master_item_code,
@@ -43,6 +44,12 @@ from label_qr import (
     parse_positive_quantity,
 )
 from parked_tray_store import ParkedTrayStore, sanitize_filename
+from phs_label_workflow import (
+    PHSLabelExchangeCoordinator,
+    PHSLabelExchangeJournal,
+    PHSLabelRenderer,
+    PHSLabelWorkflowError,
+)
 from product_scan import SCAN_DUPLICATE, SCAN_FORMAT_ERROR, SCAN_MISMATCH, SCAN_TRAY_FULL, decide_product_scan
 from product_exchange import (
     ProductExchangeSession,
@@ -750,6 +757,24 @@ class TraySession:
     is_test_tray: bool = False
     is_partial_submission: bool = False
     is_restored_session: bool = False
+    canonical_input_tag_qr: str = ""
+    active_label_qr_payload: str = ""
+    active_label_id: str = ""
+    active_label_business_date: str = ""
+    active_label_worker_code: str = ""
+
+
+class _LocalValueVar:
+    """Small test/headless stand-in for Tk variables."""
+
+    def __init__(self, value: Any = None):
+        self._value = value
+
+    def get(self):
+        return self._value
+
+    def set(self, value: Any):
+        self._value = value
 
 
 def resource_path(relative_path: str) -> str:
@@ -849,6 +874,15 @@ class ContainerAudit:
             TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
             self.transfer_seal_coordinator.client,
         )
+        self.phs_label_exchange_coordinator = PHSLabelExchangeCoordinator(
+            PHSLabelExchangeJournal(
+                Path(self.data_root)
+                / "phs_label_exchange"
+                / "phs_label_exchange_recovery.json"
+            ),
+            self.transfer_seal_coordinator.client,
+            renderer=PHSLabelRenderer(Path(self.data_root) / "labels"),
+        )
         if self.transfer_seal_coordinator.client is not None:
             threading.Thread(
                 target=self._retry_pending_transfer_seals,
@@ -880,6 +914,11 @@ class ContainerAudit:
         self._master_preflight_pending = False
         self._master_preflight_queue: queue.Queue = queue.Queue(maxsize=1)
         self._master_preflight_poll_job: Optional[str] = None
+        self._phs_label_refresh_pending = False
+        self._phs_label_exchange_pending = False
+        self._phs_label_candidate_pending = False
+        self._phs_label_candidates: List[Dict[str, Any]] = []
+        self._tray_state_persist_lock = threading.RLock()
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
         self._active_transfer_exchange_mode = False
@@ -934,6 +973,7 @@ class ContainerAudit:
         self.show_worker_input_screen()
         
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
+        self.root.bind('<F8>', self._on_phs_label_exchange_shortcut, add="+")
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     ####################################################################
@@ -1042,7 +1082,7 @@ class ContainerAudit:
             print(f"설정 저장 오류: {e}")
 
     def load_items(self) -> List[Dict[str, str]]:
-        item_path = resource_path(os.path.join('assets', 'Item.csv'))
+        item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
@@ -1570,6 +1610,8 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
+        if self._phs_label_exchange_blocks_tray_transition("작업자 변경"):
+            return
         if self._transfer_member_exchange_blocks_local_action("작업자 변경"):
             return
         msg = "작업자를 변경하시겠습니까?"
@@ -1618,18 +1660,32 @@ class ContainerAudit:
             self.show_status_message(f"금일 작업 현황을 불러왔습니다. (총 {self.total_tray_count} 파렛트)", self.COLOR_PRIMARY)
 
     def _save_current_tray_state(self) -> bool:
-        if not self.current_tray.master_label_code: return False
-        state = self._current_tray_state_snapshot()
-        return self._save_tray_state_snapshot(state)
+        lock = getattr(self, "_tray_state_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tray_state_persist_lock = lock
+        with lock:
+            if not self.current_tray.master_label_code:
+                return False
+            state = self._current_tray_state_snapshot()
+            return self._save_tray_state_snapshot(state)
 
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
-        try:
-            state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
-            atomic_write_json(state_path, state, indent=4)
-            return True
-        except Exception as e:
-            print(f"현재 트레이 상태 저장 실패: {e}")
-            return False
+        lock = getattr(self, "_tray_state_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tray_state_persist_lock = lock
+        with lock:
+            try:
+                state_path = os.path.join(
+                    self.save_folder,
+                    self.CURRENT_TRAY_STATE_FILE,
+                )
+                atomic_write_json(state_path, state, indent=4)
+                return True
+            except Exception as e:
+                print(f"현재 트레이 상태 저장 실패: {e}")
+                return False
 
     def _active_operator_review_snapshot(self) -> Optional[CompletionOutcomeSnapshot]:
         pending = getattr(self, "_pending_operator_review_snapshot", None)
@@ -1971,6 +2027,7 @@ class ContainerAudit:
         else:
             self._reset_ui_to_waiting_state()
         self.scan_entry.focus()
+        self.root.after(100, self._schedule_phs_label_exchange_recovery)
 
     def _get_pane_layout_metrics(self, total_width: int) -> Dict[str, int]:
         total_height = 768
@@ -2596,6 +2653,7 @@ class ContainerAudit:
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+        phs_transition_blocked = self._phs_label_exchange_transition_pending()
         active_transfer_exchange_available = bool(
             exact_exchange_blocked and active_tray and scanned_count
         )
@@ -2611,7 +2669,11 @@ class ContainerAudit:
         if retry_wait:
             labels["submit"] = "서버 재확인" if not compact_labels else "재확인"
 
-        mutation_state = tk.DISABLED if operator_review else tk.NORMAL
+        mutation_state = (
+            tk.DISABLED
+            if operator_review or phs_transition_blocked
+            else tk.NORMAL
+        )
         self._configure_widget_options(
             getattr(self, "reset_button", None),
             text=labels["reset"],
@@ -2631,7 +2693,10 @@ class ContainerAudit:
             getattr(self, "submit_tray_button", None),
             state=(
                 tk.NORMAL
-                if active_tray and scanned_count and (not operator_review or retry_wait)
+                if active_tray
+                and scanned_count
+                and not phs_transition_blocked
+                and (not operator_review or retry_wait)
                 else tk.DISABLED
             ),
             text=labels["submit"],
@@ -2641,11 +2706,19 @@ class ContainerAudit:
         self._configure_widget_options(
             getattr(self, "operations_button", None),
             text=labels["operations"],
-            state=tk.DISABLED if operator_review else tk.NORMAL,
+            state=(
+                tk.DISABLED
+                if operator_review or phs_transition_blocked
+                else tk.NORMAL
+            ),
         )
         self._configure_widget_options(
             getattr(self, "change_worker_button", None),
-            state=tk.DISABLED if operator_review else tk.NORMAL,
+            state=(
+                tk.DISABLED
+                if operator_review or phs_transition_blocked
+                else tk.NORMAL
+            ),
         )
 
         if replacement_active:
@@ -2683,6 +2756,533 @@ class ContainerAudit:
                 else tk.NORMAL
             ),
         )
+        phs_available = self._phs_label_exchange_available_for_tray()
+        phs_busy = bool(
+            getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        )
+        self._configure_widget_options(
+            getattr(self, "phs_label_exchange_button", None),
+            text="현품표 날짜 교환",
+            state=(
+                tk.NORMAL
+                if phs_available and not operator_review and not phs_busy
+                else tk.DISABLED
+            ),
+        )
+        self._configure_widget_options(
+            getattr(self, "phs_label_candidate_load_button", None),
+            state=(
+                tk.NORMAL
+                if phs_available and not operator_review and not phs_busy
+                else tk.DISABLED
+            ),
+        )
+        candidate_selected = bool(
+            str(
+                getattr(
+                    getattr(self, "phs_label_candidate_var", None),
+                    "get",
+                    lambda: "",
+                )()
+                or ""
+            ).strip()
+        )
+        recovery_pending = False
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        if phs_available and coordinator is not None:
+            try:
+                recovery = coordinator.journal.load()
+                recovery_pending = bool(
+                    recovery
+                    and str(recovery.get("status") or "").strip().upper()
+                    not in {"COMMITTED", "CANCELLED"}
+                    and str(recovery.get("canonical_input_tag_qr") or "").strip()
+                    == str(
+                        getattr(self.current_tray, "master_label_code", "") or ""
+                    ).strip()
+                )
+            except Exception:
+                recovery_pending = True
+        self._configure_widget_options(
+            getattr(self, "phs_label_exchange_execute_button", None),
+            state=(
+                tk.NORMAL
+                if phs_available
+                and not operator_review
+                and not phs_busy
+                and (candidate_selected or recovery_pending)
+                else tk.DISABLED
+            ),
+        )
+        self._refresh_phs_active_label_info()
+
+    def _phs_label_exchange_available_for_tray(self) -> bool:
+        tray = getattr(self, "current_tray", None)
+        if tray is None or not getattr(tray, "master_label_code", ""):
+            return False
+        fields = self._parse_new_format_qr(
+            str(
+                getattr(tray, "active_label_qr_payload", "")
+                or tray.master_label_code
+            )
+        )
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        return bool(
+            isinstance(fields, dict)
+            and str(fields.get("PHS") or "").strip() == "2"
+            and str(fields.get("ITG") or "").strip()
+            and str(fields.get("LBL") or "").strip()
+            and str(fields.get("HSH") or "").strip()
+            and coordinator is not None
+            and coordinator.available
+        )
+
+    def _phs_label_exchange_transition_pending(self) -> bool:
+        if getattr(self, "_phs_label_exchange_pending", False):
+            return True
+        tray = getattr(self, "current_tray", None)
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        if (
+            tray is None
+            or not getattr(tray, "master_label_code", "")
+            or coordinator is None
+        ):
+            return False
+        try:
+            recovery = coordinator.journal.load()
+        except Exception:
+            return True
+        return bool(
+            recovery
+            and str(recovery.get("status") or "").strip().upper()
+            not in {"COMMITTED", "CANCELLED"}
+            and str(recovery.get("canonical_input_tag_qr") or "").strip()
+            == str(tray.master_label_code or "").strip()
+        )
+
+    def _phs_label_exchange_blocks_tray_transition(self, action: str) -> bool:
+        if not self._phs_label_exchange_transition_pending():
+            return False
+        self.show_status_message(
+            "현품표 날짜 교환의 중앙 ACK/출력/활성화 복구가 끝날 때까지 "
+            f"{action} 작업을 진행할 수 없습니다. 제품 스캔은 계속할 수 있습니다.",
+            self.COLOR_DANGER,
+            duration=8000,
+        )
+        self._schedule_focus_return()
+        return True
+
+    def _refresh_phs_active_label_info(self) -> None:
+        label = getattr(self, "phs_active_label_info_label", None)
+        if label is None:
+            return
+        tray = getattr(self, "current_tray", None)
+        if not self._phs_label_exchange_available_for_tray():
+            text = "PHS2 ACTIVE 현품표에서 사용할 수 있습니다. · 단축키 F8"
+        else:
+            label_id = str(getattr(tray, "active_label_id", "") or "").strip()
+            business_date = str(
+                getattr(tray, "active_label_business_date", "") or ""
+            ).strip()
+            worker_code = str(
+                getattr(tray, "active_label_worker_code", "") or ""
+            ).strip()
+            details = " · ".join(
+                value
+                for value in (
+                    business_date,
+                    worker_code,
+                    label_id,
+                )
+                if value
+            )
+            text = f"현재 ACTIVE · {details}" if details else "현재 ACTIVE PHS2"
+            text += " · 단축키 F8"
+        try:
+            label.configure(text=text)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _on_phs_label_exchange_shortcut(self, _event=None):
+        if self._phs_label_exchange_available_for_tray():
+            self._toggle_phs_label_exchange_panel()
+        else:
+            self.show_status_message(
+                "현품표 날짜 교환은 현재 exact PHS2 트레이에서만 사용할 수 있습니다.",
+                self.COLOR_DANGER,
+                duration=6000,
+            )
+            self._schedule_focus_return()
+        return "break"
+
+    def _toggle_phs_label_exchange_panel(self) -> None:
+        panel = getattr(self, "phs_label_exchange_frame", None)
+        if panel is None:
+            return
+        if not self._phs_label_exchange_available_for_tray():
+            self.show_status_message(
+                "현품표 날짜 교환은 중앙 ACTIVE exact PHS2 트레이가 필요합니다.",
+                self.COLOR_DANGER,
+                duration=6000,
+            )
+            self._schedule_focus_return()
+            return
+        try:
+            if panel.winfo_ismapped():
+                panel.grid_remove()
+            else:
+                panel.grid()
+                self.show_status_message(
+                    "교환 작업일을 입력하고 중앙 PLANNED 후보를 조회하세요. "
+                    "제품 스캔은 계속할 수 있습니다.",
+                    self.COLOR_PRIMARY,
+                    duration=8000,
+                )
+        except (tk.TclError, AttributeError):
+            return
+        self._schedule_focus_return()
+
+    def _set_phs_label_candidates(
+        self, candidates: Sequence[Mapping[str, Any]]
+    ) -> None:
+        self._phs_label_candidates = [dict(value) for value in candidates]
+        values = [
+            (
+                f"{value.get('worker_code')} · "
+                f"{value.get('instruction_id')} · "
+                f"#{value.get('item_daily_ordinal')}"
+            )
+            for value in self._phs_label_candidates
+        ]
+        combo = getattr(self, "phs_label_candidate_combo", None)
+        variable = getattr(self, "phs_label_candidate_var", None)
+        try:
+            if combo is not None:
+                combo.configure(values=values)
+            if variable is not None:
+                variable.set(values[0] if values else "")
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _load_phs_label_exchange_candidates(self) -> None:
+        if (
+            not self._phs_label_exchange_available_for_tray()
+            or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        ):
+            self._schedule_focus_return()
+            return
+        business_date = str(
+            getattr(
+                getattr(self, "phs_label_target_date_var", None),
+                "get",
+                lambda: "",
+            )()
+            or ""
+        ).strip()
+        tray = self.current_tray
+        self._phs_label_candidate_pending = True
+        self._set_phs_label_candidates([])
+        self._update_action_button_states()
+        self.show_status_message(
+            "동일 품목·member-count의 중앙 PLANNED 작업지시를 조회합니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+
+        def worker() -> None:
+            try:
+                candidates = (
+                    self.phs_label_exchange_coordinator.list_candidates(
+                        tray, business_date
+                    )
+                )
+                error = None
+            except Exception as exc:
+                candidates = []
+                error = exc
+
+            def finish() -> None:
+                self._phs_label_candidate_pending = False
+                if tray is not self.current_tray:
+                    self._update_action_button_states()
+                    self._schedule_focus_return()
+                    return
+                self._set_phs_label_candidates(candidates)
+                if error is not None:
+                    code = getattr(error, "code", "PHS_TARGET_LOOKUP_FAILED")
+                    self.show_status_message(
+                        f"{code}: {error}",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                elif candidates:
+                    self.show_status_message(
+                        f"교환 가능한 중앙 작업지시 {len(candidates)}건을 "
+                        "확인했습니다.",
+                        self.COLOR_PRIMARY,
+                        duration=6000,
+                    )
+                else:
+                    self.show_status_message(
+                        "해당 날짜에 동일 품목·member-count의 PLANNED 후보가 없습니다.",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                self._update_action_button_states()
+                self._schedule_focus_return()
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_candidate_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-label-candidates",
+            daemon=True,
+        ).start()
+
+    def _selected_phs_label_candidate(self) -> Optional[Dict[str, Any]]:
+        variable = getattr(self, "phs_label_candidate_var", None)
+        selected = str(
+            getattr(variable, "get", lambda: "")() or ""
+        ).strip()
+        combo = getattr(self, "phs_label_candidate_combo", None)
+        try:
+            index = int(combo.current()) if combo is not None else -1
+        except (tk.TclError, AttributeError, TypeError, ValueError):
+            index = -1
+        if 0 <= index < len(getattr(self, "_phs_label_candidates", [])):
+            return dict(self._phs_label_candidates[index])
+        for index_value, candidate in enumerate(
+            getattr(self, "_phs_label_candidates", [])
+        ):
+            display = (
+                f"{candidate.get('worker_code')} · "
+                f"{candidate.get('instruction_id')} · "
+                f"#{candidate.get('item_daily_ordinal')}"
+            )
+            if display == selected:
+                return dict(candidate)
+        return None
+
+    def _phs_exchange_status_from_worker(self, message: str) -> None:
+        try:
+            self.root.after(
+                0,
+                lambda: self.show_status_message(
+                    message,
+                    self.COLOR_PRIMARY,
+                    duration=0,
+                ),
+            )
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _execute_selected_phs_label_exchange(self) -> None:
+        if (
+            not self._phs_label_exchange_available_for_tray()
+            or getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        ):
+            self._schedule_focus_return()
+            return
+        candidate = self._selected_phs_label_candidate()
+        coordinator = self.phs_label_exchange_coordinator
+        if candidate is None:
+            try:
+                recovery = coordinator.journal.load()
+            except Exception as exc:
+                self.show_status_message(
+                    f"현품표 교환 journal 오류: {exc}",
+                    self.COLOR_DANGER,
+                    duration=8000,
+                )
+                self._schedule_focus_return()
+                return
+            if not recovery or str(recovery.get("status") or "").upper() in {
+                "COMMITTED",
+                "CANCELLED",
+            }:
+                self.show_status_message(
+                    "먼저 중앙 작업지시 후보를 조회하고 선택하세요.",
+                    self.COLOR_DANGER,
+                    duration=6000,
+                )
+                self._schedule_focus_return()
+                return
+            candidate = (
+                dict(recovery.get("target_instruction"))
+                if isinstance(recovery.get("target_instruction"), dict)
+                else None
+            )
+        tray = self.current_tray
+        confirm_reprint = bool(
+            getattr(
+                getattr(self, "phs_label_reprint_confirm_var", None),
+                "get",
+                lambda: False,
+            )()
+        )
+        self._phs_label_exchange_pending = True
+        self._update_action_button_states()
+        self.show_status_message(
+            "현품표 날짜 교환을 시작했습니다. 스캔 포커스와 현재 트레이 "
+            "진행은 유지됩니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+        self._schedule_focus_return()
+
+        def worker() -> None:
+            result = coordinator.execute_single(
+                tray,
+                candidate,
+                persist_tray=self._save_current_tray_state,
+                confirm_ambiguous_reprint=confirm_reprint,
+                status_callback=self._phs_exchange_status_from_worker,
+            )
+
+            def finish() -> None:
+                self._phs_label_exchange_pending = False
+                if result.success:
+                    self._set_phs_label_candidates([])
+                    try:
+                        self.phs_label_reprint_confirm_var.set(False)
+                    except (tk.TclError, AttributeError):
+                        pass
+                    try:
+                        self._log_event(
+                            "PHS_LABEL_DATE_EXCHANGED",
+                            detail={
+                                "exchange_id": result.exchange_id,
+                                "canonical_input_tag_qr": (
+                                    tray.canonical_input_tag_qr
+                                ),
+                                "active_label_id": tray.active_label_id,
+                                "active_label_business_date": (
+                                    tray.active_label_business_date
+                                ),
+                                "active_label_worker_code": (
+                                    tray.active_label_worker_code
+                                ),
+                                "local_progress_preserved": True,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    color = self.COLOR_SUCCESS
+                else:
+                    color = self.COLOR_DANGER
+                self.show_status_message(
+                    (
+                        result.message
+                        if not result.error_code
+                        else f"{result.error_code}: {result.message}"
+                    ),
+                    color,
+                    duration=10000,
+                )
+                self._update_current_item_label()
+                self._update_center_display()
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                if (
+                    result.success
+                    and tray is self.current_tray
+                    and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
+                ):
+                    self.root.after(0, self.complete_tray)
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_exchange_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-label-exchange",
+            daemon=True,
+        ).start()
+
+    def _schedule_phs_label_exchange_recovery(self) -> None:
+        if (
+            not self._phs_label_exchange_available_for_tray()
+            or getattr(self, "_phs_label_exchange_pending", False)
+        ):
+            return
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        try:
+            recovery = coordinator.journal.load()
+        except Exception as exc:
+            self.show_status_message(
+                f"현품표 교환 복구 journal 오류: {exc}",
+                self.COLOR_DANGER,
+                duration=10000,
+            )
+            return
+        if (
+            not recovery
+            or str(recovery.get("status") or "").strip().upper()
+            in {"COMMITTED", "CANCELLED"}
+            or str(recovery.get("canonical_input_tag_qr") or "").strip()
+            != str(self.current_tray.master_label_code or "").strip()
+        ):
+            return
+        tray = self.current_tray
+        self._phs_label_exchange_pending = True
+        self._update_action_button_states()
+        self.show_status_message(
+            "미완료 현품표 날짜 교환을 중앙 ACK에서 복구하고 있습니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+
+        def worker() -> None:
+            result = coordinator.recover_for_tray(
+                tray,
+                persist_tray=self._save_current_tray_state,
+                status_callback=self._phs_exchange_status_from_worker,
+            )
+
+            def finish() -> None:
+                self._phs_label_exchange_pending = False
+                if result is not None:
+                    self.show_status_message(
+                        (
+                            result.message
+                            if not result.error_code
+                            else f"{result.error_code}: {result.message}"
+                        ),
+                        self.COLOR_SUCCESS if result.success else self.COLOR_DANGER,
+                        duration=10000,
+                    )
+                self._update_current_item_label()
+                self._update_center_display()
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                if (
+                    result is not None
+                    and result.success
+                    and tray is self.current_tray
+                    and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
+                ):
+                    self.root.after(0, self.complete_tray)
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_exchange_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-label-recovery",
+            daemon=True,
+        ).start()
 
     def _show_operations_menu(self) -> None:
         """Show secondary and destructive actions without growing the center pane."""
@@ -3668,6 +4268,139 @@ class ContainerAudit:
         self.notice_ack_button.grid(row=0, column=2, sticky='e', padx=(8, 10), pady=6)
         self.notice_ack_button.bind('<Return>', lambda _event: self._acknowledge_active_notice())
         self.notice_ack_button.bind('<Escape>', lambda _event: self._acknowledge_active_notice())
+        self.phs_label_exchange_button = ttk.Button(
+            self.notice_frame,
+            text="현품표 날짜 교환",
+            command=self._toggle_phs_label_exchange_panel,
+            style="Secondary.TButton",
+        )
+        self.phs_label_exchange_button.grid(
+            row=1,
+            column=0,
+            sticky="w",
+            padx=(12, 8),
+            pady=(0, 8),
+        )
+        self.phs_active_label_info_label = tk.Label(
+            self.notice_frame,
+            text="PHS2 ACTIVE 현품표에서 사용할 수 있습니다. · 단축키 F8",
+            bg=self.COLOR_SURFACE_ALT,
+            fg=self.COLOR_TEXT_SUBTLE,
+            font=(self.DEFAULT_FONT, max(9, initial_center_metrics["notice_message_font"] - 1)),
+            anchor="w",
+            justify="left",
+        )
+        self.phs_active_label_info_label.grid(
+            row=1,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            padx=(8, 10),
+            pady=(0, 8),
+        )
+        self.phs_label_exchange_frame = ttk.Frame(
+            self.notice_frame,
+            style="TFrame",
+        )
+        self.phs_label_exchange_frame.grid(
+            row=2,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            padx=10,
+            pady=(0, 10),
+        )
+        self.phs_label_exchange_frame.grid_columnconfigure(3, weight=1)
+        ttk.Label(
+            self.phs_label_exchange_frame,
+            text="교환 작업일",
+            style="TLabel",
+        ).grid(row=0, column=0, sticky="w", padx=(0, 6))
+        has_tk_runtime = hasattr(self.root, "tk")
+        self.phs_label_target_date_var = (
+            tk.StringVar(
+                master=self.root,
+                value=datetime.date.today().isoformat(),
+            )
+            if has_tk_runtime
+            else _LocalValueVar(datetime.date.today().isoformat())
+        )
+        self.phs_label_target_date_entry = tk.Entry(
+            self.phs_label_exchange_frame,
+            textvariable=self.phs_label_target_date_var,
+            width=12,
+        )
+        self.phs_label_target_date_entry.grid(
+            row=0, column=1, sticky="w", padx=(0, 6)
+        )
+        self.phs_label_candidate_load_button = ttk.Button(
+            self.phs_label_exchange_frame,
+            text="후보 조회",
+            command=self._load_phs_label_exchange_candidates,
+            style="Secondary.TButton",
+        )
+        self.phs_label_candidate_load_button.grid(
+            row=0, column=2, sticky="w", padx=(0, 6)
+        )
+        self.phs_label_candidate_var = (
+            tk.StringVar(master=self.root, value="")
+            if has_tk_runtime
+            else _LocalValueVar("")
+        )
+        if has_tk_runtime:
+            self.phs_label_candidate_combo = ttk.Combobox(
+                self.phs_label_exchange_frame,
+                textvariable=self.phs_label_candidate_var,
+                values=(),
+                state="readonly",
+                width=38,
+            )
+        else:
+            self.phs_label_candidate_combo = tk.Entry(
+                self.phs_label_exchange_frame,
+                textvariable=self.phs_label_candidate_var,
+                width=38,
+            )
+        self.phs_label_candidate_combo.grid(
+            row=0, column=3, sticky="ew", padx=(0, 6)
+        )
+        self.phs_label_exchange_execute_button = ttk.Button(
+            self.phs_label_exchange_frame,
+            text="선택 교환 실행",
+            command=self._execute_selected_phs_label_exchange,
+            style="Success.TButton",
+        )
+        self.phs_label_exchange_execute_button.grid(
+            row=0, column=4, sticky="e"
+        )
+        self.phs_label_reprint_confirm_var = (
+            tk.BooleanVar(master=self.root, value=False)
+            if has_tk_runtime
+            else _LocalValueVar(False)
+        )
+        if has_tk_runtime:
+            self.phs_label_reprint_confirm_check = ttk.Checkbutton(
+                self.phs_label_exchange_frame,
+                text="이전 실물 출력 확인 후 재출력 승인",
+                variable=self.phs_label_reprint_confirm_var,
+                style="TCheckbutton",
+            )
+        else:
+            self.phs_label_reprint_confirm_check = tk.Button(
+                self.phs_label_exchange_frame,
+                text="이전 실물 출력 확인 후 재출력 승인",
+            )
+        self.phs_label_reprint_confirm_check.grid(
+            row=1,
+            column=0,
+            columnspan=5,
+            sticky="w",
+            pady=(6, 0),
+        )
+        if hasattr(self.phs_label_exchange_frame, "grid_remove"):
+            self.phs_label_exchange_frame.grid_remove()
+        else:
+            self.phs_label_exchange_frame.grid_forget()
         scan_list_frame = ttk.Frame(parent_frame, style='TFrame')
         self._scan_list_frame = scan_list_frame
         scan_list_frame.grid(row=5, column=0, sticky='nsew')
@@ -3982,9 +4715,19 @@ class ContainerAudit:
         matched_item: Dict[str, Any],
         event_name: str,
         event_detail: Dict[str, Any],
+        canonical_input_tag_qr: str = "",
+        active_label_qr_payload: str = "",
+        active_label_id: str = "",
+        active_label_business_date: str = "",
+        active_label_worker_code: str = "",
     ) -> bool:
         self.current_tray = TraySession(
             master_label_code=barcode,
+            canonical_input_tag_qr=canonical_input_tag_qr or barcode,
+            active_label_qr_payload=active_label_qr_payload or barcode,
+            active_label_id=active_label_id,
+            active_label_business_date=active_label_business_date,
+            active_label_worker_code=active_label_worker_code,
             item_code=item_code,
             tray_size=tray_quantity,
             item_name=matched_item.get('Item Name', ''),
@@ -4162,14 +4905,215 @@ class ContainerAudit:
         detail = dict(canonical_fields)
         detail["central_source_preflight"] = preflight.audit_detail()
         detail["resolved_tray_quantity"] = preflight.member_count
-        self._activate_master_label_tray(
-            barcode=barcode,
+        detail["scanned_physical_label_qr"] = barcode
+        activated = self._activate_master_label_tray(
+            barcode=preflight.canonical_input_tag_qr,
             item_code=preflight.item_id,
             tray_quantity=preflight.member_count,
             matched_item=matched_item,
             event_name="MASTER_LABEL_SCANNED_NEW",
             event_detail=detail,
+            canonical_input_tag_qr=preflight.canonical_input_tag_qr,
+            active_label_qr_payload=preflight.active_label_qr_payload,
+            active_label_id=preflight.active_label_id,
+            active_label_business_date=preflight.active_label_business_date,
+            active_label_worker_code=preflight.active_label_worker_code,
         )
+        if activated and preflight.replaced_scan:
+            self.show_status_message(
+                "기존 현품표가 교체되었습니다. 현재 ACTIVE 현품표 "
+                f"{preflight.active_label_id}로 자동 전환해 이적을 시작합니다.",
+                self.COLOR_PRIMARY,
+                duration=8000,
+            )
+        self._update_action_button_states()
+
+    def _begin_active_phs_label_refresh(self, raw_barcode: str) -> None:
+        """Resolve a PHS2 rescan without disturbing the active tray."""
+
+        if (
+            getattr(self, "_phs_label_exchange_pending", False)
+            or self._phs_label_exchange_transition_pending()
+        ):
+            self.show_status_message(
+                "현품표 날짜 교환의 중앙 상태가 확정될 때까지 현품표 "
+                "재확인은 잠시 보류됩니다. 제품 스캔은 계속할 수 있습니다.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        if getattr(self, "_phs_label_refresh_pending", False):
+            self.show_status_message(
+                "현품표 ACTIVE 상태를 이미 중앙에서 확인하고 있습니다.",
+                self.COLOR_PRIMARY,
+            )
+            self._schedule_focus_return()
+            return
+        scanned_payload = normalize_master_label_input(raw_barcode)
+        scanned_fields = self._parse_new_format_qr(scanned_payload) or {}
+        try:
+            canonical_fields = validate_compact_phs2_fields(scanned_fields)
+        except TransferSealError as exc:
+            self.show_status_message(
+                f"{exc.code}: {exc}",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        tray = self.current_tray
+        tray_master = str(getattr(tray, "master_label_code", "") or "")
+        tray_fields = self._parse_new_format_qr(tray_master) or {}
+        if (
+            str(tray_fields.get("PHS") or "").strip() != "2"
+            or str(tray_fields.get("ITG") or "").strip()
+            != canonical_fields["ITG"]
+            or str(tray_fields.get("CLC") or "").strip()
+            != canonical_fields["CLC"]
+        ):
+            self.show_status_message(
+                "현재 트레이와 다른 ITG/품목의 PHS2 현품표입니다.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        client = getattr(coordinator, "client", None)
+        if client is None:
+            self.show_status_message(
+                "중앙 현품표 ACTIVE 조회 설정이 없습니다.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        self._phs_label_refresh_pending = True
+        self._update_action_button_states()
+        self.show_status_message(
+            "스캔한 현품표의 현재 ACTIVE successor를 확인하고 있습니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+
+        def worker() -> None:
+            try:
+                resolved = client.resolve_source(
+                    source_identity_from_label(canonical_fields)
+                )
+                preflight = validate_compact_phs2_preflight(
+                    canonical_fields, resolved
+                )
+                outcome = (preflight, None)
+            except Exception as exc:
+                outcome = (None, exc)
+
+            def finish() -> None:
+                self._phs_label_refresh_pending = False
+                self._update_action_button_states()
+                preflight, error = outcome
+                if self.current_tray is not tray or tray.master_label_code != tray_master:
+                    self._schedule_focus_return()
+                    return
+                if preflight is None:
+                    code = (
+                        error.code
+                        if isinstance(error, (TransferSealError, PHSLabelWorkflowError))
+                        else "PHS2_ACTIVE_REFRESH_FAILED"
+                    )
+                    self.show_status_message(
+                        f"{code}: {error}",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                    self._schedule_focus_return()
+                    return
+                if (
+                    preflight.canonical_input_tag_qr != tray.master_label_code
+                    or preflight.item_id != tray.item_code
+                    or preflight.member_count != tray.tray_size
+                ):
+                    self.show_status_message(
+                        "중앙 ACTIVE 라벨의 canonical/item/member-count가 현재 "
+                        "트레이와 다릅니다.",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                    self._schedule_focus_return()
+                    return
+                before = {
+                    "canonical_input_tag_qr": tray.canonical_input_tag_qr,
+                    "active_label_qr_payload": tray.active_label_qr_payload,
+                    "active_label_id": tray.active_label_id,
+                    "active_label_business_date": tray.active_label_business_date,
+                    "active_label_worker_code": tray.active_label_worker_code,
+                }
+                tray.canonical_input_tag_qr = preflight.canonical_input_tag_qr
+                tray.active_label_qr_payload = preflight.active_label_qr_payload
+                tray.active_label_id = preflight.active_label_id
+                tray.active_label_business_date = (
+                    preflight.active_label_business_date
+                )
+                tray.active_label_worker_code = preflight.active_label_worker_code
+                if not self._save_current_tray_state():
+                    for field_name, value in before.items():
+                        setattr(tray, field_name, value)
+                    self.show_status_message(
+                        "ACTIVE 현품표 상태를 저장하지 못해 기존 표시를 유지합니다.",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                    self._schedule_focus_return()
+                    return
+                try:
+                    self._log_event(
+                        "PHS_LABEL_ACTIVE_REFRESHED",
+                        detail={
+                            "canonical_input_tag_qr": tray.master_label_code,
+                            "scanned_label_id": preflight.scanned_label_id,
+                            "active_label_id": preflight.active_label_id,
+                            "active_label_business_date": (
+                                preflight.active_label_business_date
+                            ),
+                            "active_label_worker_code": (
+                                preflight.active_label_worker_code
+                            ),
+                            "resolution": preflight.active_label_resolution,
+                            "replaced_scan": preflight.replaced_scan,
+                        },
+                    )
+                except Exception:
+                    pass
+                if preflight.replaced_scan:
+                    message = (
+                        f"기존 현품표 {preflight.scanned_label_id}는 교체됐습니다. "
+                        f"현재 ACTIVE {preflight.active_label_id}로 전환했습니다."
+                    )
+                else:
+                    message = (
+                        f"현재 ACTIVE 현품표 {preflight.active_label_id}를 "
+                        "확인했습니다."
+                    )
+                self.show_status_message(
+                    message,
+                    self.COLOR_PRIMARY,
+                    duration=8000,
+                )
+                self._update_current_item_label()
+                self._update_action_button_states()
+                self._schedule_focus_return()
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_refresh_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-label-active-refresh",
+            daemon=True,
+        ).start()
     
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
@@ -4311,6 +5255,15 @@ class ContainerAudit:
             return
             
         # --- 제품 스캔 로직 ---
+        possible_phs_label = self._parse_new_format_qr(
+            normalize_master_label_input(raw_barcode)
+        )
+        if (
+            isinstance(possible_phs_label, dict)
+            and str(possible_phs_label.get("PHS") or "").strip() == "2"
+        ):
+            self._begin_active_phs_label_refresh(raw_barcode)
+            return
         scan_decision = decide_product_scan(self.current_tray, raw_barcode, item_code_length=self.ITEM_CODE_LENGTH)
         if scan_decision.status == SCAN_FORMAT_ERROR:
             if scan_decision.event_name:
@@ -4472,6 +5425,10 @@ class ContainerAudit:
             and self._operator_review_blocks_mutation()
         ):
             self._render_warning_state()
+            return False
+        if self._phs_label_exchange_blocks_tray_transition(
+            "이적 봉인 및 완료"
+        ):
             return False
         if self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
             return False
@@ -4685,6 +5642,8 @@ class ContainerAudit:
         self._schedule_focus_return()
 
     def reset_current_work(self):
+        if self._phs_label_exchange_blocks_tray_transition("현재 작업 초기화"):
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
@@ -5036,6 +5995,7 @@ class ContainerAudit:
         frame = getattr(self, "notice_frame", None)
         title_label = getattr(self, "notice_title_label", None)
         message_label = getattr(self, "notice_message_label", None)
+        phs_label_info = getattr(self, "phs_active_label_info_label", None)
         acknowledge_button = getattr(self, "notice_ack_button", None)
         try:
             if frame is not None:
@@ -5048,6 +6008,8 @@ class ContainerAudit:
                 title_label.configure(text=title, bg=background, fg=title_color)
             if message_label is not None:
                 message_label.configure(text=message, bg=background, fg=message_color)
+            if phs_label_info is not None:
+                phs_label_info.configure(bg=background, fg=message_color)
             active_notice = state.active_notice
             if acknowledge_button is not None:
                 if active_notice is not None and active_notice.blocking:
@@ -5791,6 +6753,8 @@ class ContainerAudit:
 
     def park_current_tray(self, *, confirm: bool = True) -> bool:
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
+        if self._phs_label_exchange_blocks_tray_transition("현재 트레이 보류"):
+            return False
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return False
@@ -7162,7 +8126,11 @@ class ContainerAudit:
         session.exchange_pairs = build_exchange_pairs(session)
 
         if active_transfer_exchange:
-            master_fields = parse_new_format_qr(self.current_tray.master_label_code)
+            source_label_payload = str(
+                getattr(self.current_tray, "active_label_qr_payload", "")
+                or self.current_tray.master_label_code
+            )
+            master_fields = parse_new_format_qr(source_label_payload)
             if not master_fields:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 messagebox.showerror(
@@ -7256,7 +8224,15 @@ class ContainerAudit:
         self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
 
+def prepare_startup_item_catalog() -> str:
+    bundled_path = Path(resource_path(os.path.join("assets", "Item.csv")))
+    active_path = refresh_item_catalog(bundled_path)
+    os.environ[ACTIVE_PATH_ENV] = str(active_path)
+    return str(active_path)
+
+
 def main():
+    prepare_startup_item_catalog()
     app = ContainerAudit()
     app.root.after(500, lambda: schedule_update_check(app.root))
     app.run()
