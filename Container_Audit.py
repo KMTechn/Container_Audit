@@ -238,7 +238,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.42"
+CURRENT_VERSION = "v2.0.43"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -1199,6 +1199,8 @@ class ContainerAudit:
         self._phs_label_exchange_pending = False
         self._phs_label_candidate_pending = False
         self._phs_label_candidates: List[Dict[str, Any]] = []
+        self._phs_reconciliation_scan_armed = False
+        self._phs_reconciliation_context: Optional[Dict[str, Any]] = None
         self._tray_state_persist_lock = threading.RLock()
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
@@ -3037,7 +3039,11 @@ class ContainerAudit:
                 else tk.NORMAL
             ),
         )
-        phs_available = self._phs_label_exchange_available_for_tray()
+        single_available = self._phs_label_exchange_available_for_tray()
+        reconciliation_available = (
+            self._phs_reconciliation_exchange_available()
+        )
+        phs_available = single_available or reconciliation_available
         phs_busy = bool(
             getattr(self, "_phs_label_exchange_pending", False)
             or getattr(self, "_phs_label_candidate_pending", False)
@@ -3045,10 +3051,10 @@ class ContainerAudit:
         )
         self._configure_widget_options(
             getattr(self, "phs_label_exchange_button", None),
-            text="현품표 날짜 교환",
+            text="현품표 교체",
             state=(
                 tk.NORMAL
-                if phs_available and not operator_review and not phs_busy
+                if single_available and not operator_review and not phs_busy
                 else tk.DISABLED
             ),
         )
@@ -3079,10 +3085,24 @@ class ContainerAudit:
                     recovery
                     and str(recovery.get("status") or "").strip().upper()
                     not in {"COMMITTED", "CANCELLED"}
-                    and str(recovery.get("canonical_input_tag_qr") or "").strip()
-                    == str(
-                        getattr(self.current_tray, "master_label_code", "") or ""
-                    ).strip()
+                    and (
+                        str(recovery.get("workflow_kind") or "")
+                        == "RECONCILIATION"
+                        or (
+                            single_available
+                            and str(
+                                recovery.get("canonical_input_tag_qr") or ""
+                            ).strip()
+                            == str(
+                                getattr(
+                                    self.current_tray,
+                                    "master_label_code",
+                                    "",
+                                )
+                                or ""
+                            ).strip()
+                        )
+                    )
                 )
             except Exception:
                 recovery_pending = True
@@ -3093,11 +3113,28 @@ class ContainerAudit:
                 if phs_available
                 and not operator_review
                 and not phs_busy
-                and (candidate_selected or recovery_pending)
+                and (
+                    candidate_selected
+                    or recovery_pending
+                    or bool(
+                        getattr(
+                            self,
+                            "_phs_reconciliation_context",
+                            None,
+                        )
+                    )
+                )
                 else tk.DISABLED
             ),
         )
         self._refresh_phs_active_label_info()
+
+    def _phs_reconciliation_exchange_available(self) -> bool:
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        reconciliation = getattr(coordinator, "reconciliation", None)
+        return bool(
+            reconciliation is not None and reconciliation.available
+        )
 
     def _phs_label_exchange_available_for_tray(self) -> bool:
         tray = getattr(self, "current_tray", None)
@@ -3123,18 +3160,24 @@ class ContainerAudit:
     def _phs_label_exchange_transition_pending(self) -> bool:
         if getattr(self, "_phs_label_exchange_pending", False):
             return True
-        tray = getattr(self, "current_tray", None)
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
-        if (
-            tray is None
-            or not getattr(tray, "master_label_code", "")
-            or coordinator is None
-        ):
+        if coordinator is None:
             return False
         try:
             recovery = coordinator.journal.load()
         except Exception:
             return True
+        if (
+            recovery
+            and str(recovery.get("status") or "").strip().upper()
+            not in {"COMMITTED", "CANCELLED"}
+            and str(recovery.get("workflow_kind") or "")
+            == "RECONCILIATION"
+        ):
+            return True
+        tray = getattr(self, "current_tray", None)
+        if tray is None or not getattr(tray, "master_label_code", ""):
+            return False
         return bool(
             recovery
             and str(recovery.get("status") or "").strip().upper()
@@ -3160,10 +3203,27 @@ class ContainerAudit:
         if label is None:
             return
         tray = getattr(self, "current_tray", None)
-        if not self._phs_label_exchange_available_for_tray():
-            text = "PHS2 ACTIVE 현품표에서 사용할 수 있습니다. · 단축키 F8"
+        reconciliation = getattr(
+            self, "_phs_reconciliation_context", None
+        )
+        if isinstance(reconciliation, Mapping):
+            summaries = (
+                self.phs_label_exchange_coordinator.reconciliation
+                .target_summaries(reconciliation)
+            )
+            exchange_kind = str(
+                reconciliation.get("expected_exchange_kind") or ""
+            )
+            text = (
+                f"서버 지시 {exchange_kind} · {len(summaries)}장 · "
+                + " / ".join(summaries[:3])
+                + " · F8 실행"
+            )
+        elif not self._phs_label_exchange_available_for_tray():
+            text = (
+                "F8 → 현재/완료 이적 현품표 스캔 → F8 실행"
+            )
         else:
-            label_id = str(getattr(tray, "active_label_id", "") or "").strip()
             business_date = str(
                 getattr(tray, "active_label_business_date", "") or ""
             ).strip()
@@ -3175,7 +3235,7 @@ class ContainerAudit:
                 for value in (
                     business_date,
                     worker_code,
-                    label_id,
+                    f"{int(getattr(tray, 'tray_size', 0) or 0)} Pcs",
                 )
                 if value
             )
@@ -3187,11 +3247,20 @@ class ContainerAudit:
             pass
 
     def _on_phs_label_exchange_shortcut(self, _event=None):
-        if self._phs_label_exchange_available_for_tray():
+        if getattr(self, "_phs_label_exchange_pending", False):
+            self._schedule_focus_return()
+        elif getattr(self, "_phs_reconciliation_context", None):
+            self._execute_selected_phs_label_exchange()
+        elif self._phs_label_exchange_transition_pending():
+            self._execute_selected_phs_label_exchange()
+        elif (
+            self._phs_label_exchange_available_for_tray()
+            or self._phs_reconciliation_exchange_available()
+        ):
             self._toggle_phs_label_exchange_panel()
         else:
             self.show_status_message(
-                "현품표 날짜 교환은 현재 exact PHS2 트레이에서만 사용할 수 있습니다.",
+                "중앙 현품표 reconciliation 교체 API 설정이 없습니다.",
                 self.COLOR_DANGER,
                 duration=6000,
             )
@@ -3202,9 +3271,12 @@ class ContainerAudit:
         panel = getattr(self, "phs_label_exchange_frame", None)
         if panel is None:
             return
-        if not self._phs_label_exchange_available_for_tray():
+        if not (
+            self._phs_label_exchange_available_for_tray()
+            or self._phs_reconciliation_exchange_available()
+        ):
             self.show_status_message(
-                "현품표 날짜 교환은 중앙 ACTIVE exact PHS2 트레이가 필요합니다.",
+                "중앙 현품표 교체 API 설정이 없습니다.",
                 self.COLOR_DANGER,
                 duration=6000,
             )
@@ -3212,12 +3284,14 @@ class ContainerAudit:
             return
         try:
             if panel.winfo_ismapped():
-                panel.grid_remove()
+                self._phs_reconciliation_scan_armed = True
             else:
                 panel.grid()
+                self._phs_reconciliation_scan_armed = True
                 self.show_status_message(
-                    "교환 작업일을 입력하고 중앙 PLANNED 후보를 조회하세요. "
-                    "제품 스캔은 계속할 수 있습니다.",
+                    "현재 또는 완료된 이적 현품표를 스캔하면 서버가 적용할 "
+                    "교체 지시를 조회합니다. 현재 트레이의 기존 날짜 교환도 "
+                    "그대로 사용할 수 있습니다.",
                     self.COLOR_PRIMARY,
                     duration=8000,
                 )
@@ -3231,9 +3305,9 @@ class ContainerAudit:
         self._phs_label_candidates = [dict(value) for value in candidates]
         values = [
             (
+                f"{value.get('business_date')} · "
                 f"{value.get('worker_code')} · "
-                f"{value.get('instruction_id')} · "
-                f"#{value.get('item_daily_ordinal')}"
+                f"{int(value.get('target_qty_pcs') or 0)} Pcs"
             )
             for value in self._phs_label_candidates
         ]
@@ -3264,6 +3338,7 @@ class ContainerAudit:
             )()
             or ""
         ).strip()
+        self._phs_reconciliation_context = None
         tray = self.current_tray
         self._phs_label_candidate_pending = True
         self._set_phs_label_candidates([])
@@ -3343,13 +3418,208 @@ class ContainerAudit:
             getattr(self, "_phs_label_candidates", [])
         ):
             display = (
+                f"{candidate.get('business_date')} · "
                 f"{candidate.get('worker_code')} · "
-                f"{candidate.get('instruction_id')} · "
-                f"#{candidate.get('item_daily_ordinal')}"
+                f"{int(candidate.get('target_qty_pcs') or 0)} Pcs"
             )
             if display == selected:
                 return dict(candidate)
         return None
+
+    def _set_phs_reconciliation_context(
+        self,
+        context: Optional[Mapping[str, Any]],
+    ) -> None:
+        self._phs_reconciliation_context = (
+            dict(context) if isinstance(context, Mapping) else None
+        )
+        if context is None:
+            self._set_phs_label_candidates([])
+            self._configure_widget_options(
+                getattr(self, "phs_label_exchange_execute_button", None),
+                text="선택 교환 실행",
+            )
+            self._refresh_phs_active_label_info()
+            self._update_action_button_states()
+            return
+        summaries = (
+            self.phs_label_exchange_coordinator.reconciliation
+            .target_summaries(context)
+        )
+        combo = getattr(self, "phs_label_candidate_combo", None)
+        variable = getattr(self, "phs_label_candidate_var", None)
+        try:
+            if combo is not None:
+                combo.configure(values=tuple(summaries))
+            if variable is not None:
+                variable.set(summaries[0] if summaries else "")
+        except (tk.TclError, AttributeError):
+            pass
+        self._phs_label_candidates = []
+        self._configure_widget_options(
+            getattr(self, "phs_label_exchange_execute_button", None),
+            text="서버 지시 교체 실행",
+        )
+        self._refresh_phs_active_label_info()
+        self._update_action_button_states()
+
+    def _intercept_phs_reconciliation_scan(
+        self,
+        raw_barcode: str,
+    ) -> bool:
+        if not getattr(self, "_phs_reconciliation_scan_armed", False):
+            return False
+        payload = normalize_master_label_input(raw_barcode)
+        fields = self._parse_new_format_qr(payload)
+        if not fields or str(fields.get("PHS") or "").strip() != "2":
+            return False
+        try:
+            validate_compact_phs2_fields(fields)
+        except TransferSealError as exc:
+            self.show_status_message(
+                f"{exc.code}: {exc}",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return True
+        # F8 arms exactly one reconciliation scan.  Leaving this armed after a
+        # valid capture would steal later, ordinary PHS2 scans from the normal
+        # transfer workflow.
+        self._phs_reconciliation_scan_armed = False
+        if (
+            getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_label_exchange_pending", False)
+        ):
+            self.show_status_message(
+                "현품표 교체 조회 또는 실행이 이미 진행 중입니다.",
+                self.COLOR_PRIMARY,
+                duration=4000,
+            )
+            self._schedule_focus_return()
+            return True
+        reconciliation = getattr(
+            getattr(self, "phs_label_exchange_coordinator", None),
+            "reconciliation",
+            None,
+        )
+        if reconciliation is None or not reconciliation.available:
+            self.show_status_message(
+                "중앙 reconciliation 교체 API 설정이 없습니다.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return True
+
+        tray = self.current_tray
+        scans_object = getattr(tray, "scanned_barcodes", None)
+        scans_before = (
+            tuple(scans_object) if isinstance(scans_object, list) else None
+        )
+        progress_before = (
+            tray,
+            str(getattr(tray, "master_label_code", "") or ""),
+            scans_object,
+            scans_before,
+        )
+        self._phs_label_candidate_pending = True
+        self._set_phs_reconciliation_context(None)
+        self.show_status_message(
+            "스캔 현품표의 이적 공정 reconciliation action을 중앙에서 "
+            "조회합니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+        self._schedule_focus_return()
+
+        def worker() -> None:
+            try:
+                context = reconciliation.resolve(payload)
+                error = None
+            except Exception as exc:
+                context = None
+                error = exc
+
+            def finish() -> None:
+                self._phs_label_candidate_pending = False
+                current = self.current_tray
+                preserved = bool(
+                    current is progress_before[0]
+                    and str(
+                        getattr(current, "master_label_code", "") or ""
+                    )
+                    == progress_before[1]
+                    and getattr(current, "scanned_barcodes", None)
+                    is progress_before[2]
+                    and (
+                        progress_before[3] is None
+                        or tuple(
+                            getattr(current, "scanned_barcodes", [])
+                        )
+                        == progress_before[3]
+                    )
+                )
+                if not preserved:
+                    self.show_status_message(
+                        "현품표 조회 중 현재 이적 작업 상태가 변경되어 결과를 "
+                        "적용하지 않았습니다.",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                elif error is not None:
+                    code = getattr(
+                        error,
+                        "code",
+                        "PHS_RECONCILIATION_LOOKUP_FAILED",
+                    )
+                    self.show_status_message(
+                        f"{code}: {error}",
+                        self.COLOR_DANGER,
+                        duration=8000,
+                    )
+                else:
+                    self._set_phs_reconciliation_context(context)
+                    summaries = reconciliation.target_summaries(context)
+                    self.show_status_message(
+                        f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
+                        "F8로 출력·활성화를 계속하세요.",
+                        self.COLOR_PRIMARY,
+                        duration=8000,
+                    )
+                    try:
+                        self._log_event(
+                            "PHS_RECONCILIATION_ACTION_RESOLVED",
+                            detail={
+                                "reconciliation_id": context[
+                                    "reconciliation"
+                                ]["reconciliation_id"],
+                                "action_ids": list(
+                                    context["selection"]["action_ids"]
+                                ),
+                                "exchange_kind": context[
+                                    "expected_exchange_kind"
+                                ],
+                                "target_count": len(summaries),
+                                "local_progress_preserved": True,
+                            },
+                        )
+                    except Exception:
+                        pass
+                self._update_action_button_states()
+                self._schedule_focus_return()
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_candidate_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-reconciliation-resolve",
+            daemon=True,
+        ).start()
+        return True
 
     def _phs_exchange_status_from_worker(self, message: str) -> None:
         try:
@@ -3365,6 +3635,39 @@ class ContainerAudit:
             pass
 
     def _execute_selected_phs_label_exchange(self) -> None:
+        coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        try:
+            recovery = (
+                coordinator.journal.load()
+                if coordinator is not None
+                else {}
+            )
+        except Exception as exc:
+            self.show_status_message(
+                f"현품표 교환 journal 오류: {exc}",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        reconciliation_pending = bool(
+            recovery
+            and str(recovery.get("status") or "").strip().upper()
+            not in {"COMMITTED", "CANCELLED"}
+            and str(recovery.get("workflow_kind") or "")
+            == "RECONCILIATION"
+        )
+        if (
+            getattr(self, "_phs_reconciliation_context", None)
+            or reconciliation_pending
+        ):
+            self._execute_phs_reconciliation_exchange(
+                recovery_only=reconciliation_pending
+                and not getattr(
+                    self, "_phs_reconciliation_context", None
+                )
+            )
+            return
         if (
             not self._phs_label_exchange_available_for_tray()
             or getattr(self, "_phs_label_exchange_pending", False)
@@ -3490,13 +3793,166 @@ class ContainerAudit:
             daemon=True,
         ).start()
 
-    def _schedule_phs_label_exchange_recovery(self) -> None:
+    def _execute_phs_reconciliation_exchange(
+        self,
+        *,
+        recovery_only: bool = False,
+    ) -> None:
+        coordinator = getattr(
+            getattr(self, "phs_label_exchange_coordinator", None),
+            "reconciliation",
+            None,
+        )
         if (
-            not self._phs_label_exchange_available_for_tray()
+            coordinator is None
+            or not coordinator.available
             or getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
         ):
+            self._schedule_focus_return()
+            return
+        context = (
+            None
+            if recovery_only
+            else getattr(self, "_phs_reconciliation_context", None)
+        )
+        if context is None and not recovery_only:
+            self.show_status_message(
+                "먼저 F8을 누르고 현재 또는 완료된 이적 현품표를 스캔하세요.",
+                self.COLOR_DANGER,
+                duration=7000,
+            )
+            self._schedule_focus_return()
+            return
+        tray = self.current_tray
+        scans_object = getattr(tray, "scanned_barcodes", None)
+        scans_before = (
+            tuple(scans_object) if isinstance(scans_object, list) else None
+        )
+        snapshot = (
+            tray,
+            str(getattr(tray, "master_label_code", "") or ""),
+            scans_object,
+            scans_before,
+            int(getattr(tray, "tray_size", 0) or 0),
+        )
+        confirm_reprint = bool(
+            getattr(
+                getattr(self, "phs_label_reprint_confirm_var", None),
+                "get",
+                lambda: False,
+            )()
+        )
+        self._phs_label_exchange_pending = True
+        self._update_action_button_states()
+        self.show_status_message(
+            "서버 지시 topology를 유지한 채 target 현품표 출력·활성화를 "
+            "진행합니다. 현재 이적 작업은 그대로 유지됩니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+        self._schedule_focus_return()
+
+        def worker() -> None:
+            result = coordinator.execute(
+                context,
+                confirm_ambiguous_reprint=confirm_reprint,
+                status_callback=self._phs_exchange_status_from_worker,
+            )
+
+            def finish() -> None:
+                self._phs_label_exchange_pending = False
+                current = self.current_tray
+                preserved = bool(
+                    current is snapshot[0]
+                    and str(
+                        getattr(current, "master_label_code", "") or ""
+                    )
+                    == snapshot[1]
+                    and getattr(current, "scanned_barcodes", None)
+                    is snapshot[2]
+                    and int(getattr(current, "tray_size", 0) or 0)
+                    == snapshot[4]
+                    and (
+                        snapshot[3] is None
+                        or tuple(
+                            getattr(current, "scanned_barcodes", [])
+                        )
+                        == snapshot[3]
+                    )
+                )
+                if not preserved:
+                    self.show_status_message(
+                        "현품표 교체 중 현재 이적 작업 상태가 변경됐습니다. "
+                        "추가 작업을 중지하고 journal을 확인하세요.",
+                        self.COLOR_DANGER,
+                        duration=10000,
+                    )
+                elif result.success:
+                    self._set_phs_reconciliation_context(None)
+                    try:
+                        self.phs_label_reprint_confirm_var.set(False)
+                    except (tk.TclError, AttributeError):
+                        pass
+                    try:
+                        self._log_event(
+                            "PHS_RECONCILIATION_LABEL_EXCHANGED",
+                            detail={
+                                "exchange_id": result.exchange_id,
+                                "status": result.status,
+                                "local_progress_preserved": True,
+                            },
+                        )
+                    except Exception:
+                        pass
+                    self.show_status_message(
+                        result.message,
+                        self.COLOR_SUCCESS,
+                        duration=10000,
+                    )
+                else:
+                    journal_context = (
+                        result.journal_state.get(
+                            "reconciliation_context"
+                        )
+                        if isinstance(result.journal_state, Mapping)
+                        else None
+                    )
+                    if isinstance(journal_context, Mapping):
+                        self._set_phs_reconciliation_context(
+                            journal_context
+                        )
+                    self.show_status_message(
+                        (
+                            result.message
+                            if not result.error_code
+                            else f"{result.error_code}: {result.message}"
+                        ),
+                        self.COLOR_DANGER,
+                        duration=10000,
+                    )
+                self._update_current_item_label()
+                self._update_center_display()
+                self._update_action_button_states()
+                self._schedule_focus_return()
+
+            try:
+                self.root.after(0, finish)
+            except (tk.TclError, AttributeError):
+                self._phs_label_exchange_pending = False
+
+        threading.Thread(
+            target=worker,
+            name="container-audit-phs-reconciliation-exchange",
+            daemon=True,
+        ).start()
+
+    def _schedule_phs_label_exchange_recovery(self) -> None:
+        if getattr(self, "_phs_label_exchange_pending", False):
             return
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
+        if coordinator is None:
+            return
         try:
             recovery = coordinator.journal.load()
         except Exception as exc:
@@ -3505,6 +3961,22 @@ class ContainerAudit:
                 self.COLOR_DANGER,
                 duration=10000,
             )
+            return
+        if (
+            recovery
+            and str(recovery.get("status") or "").strip().upper()
+            not in {"COMMITTED", "CANCELLED"}
+            and str(recovery.get("workflow_kind") or "")
+            == "RECONCILIATION"
+        ):
+            context = recovery.get("reconciliation_context")
+            if isinstance(context, Mapping):
+                self._set_phs_reconciliation_context(context)
+            self._execute_phs_reconciliation_exchange(
+                recovery_only=True
+            )
+            return
+        if not self._phs_label_exchange_available_for_tray():
             return
         if (
             not recovery
@@ -4564,7 +5036,7 @@ class ContainerAudit:
         )
         self.phs_active_label_info_label = tk.Label(
             self.notice_frame,
-            text="PHS2 ACTIVE 현품표에서 사용할 수 있습니다. · 단축키 F8",
+            text="F8 → 현재/완료 이적 현품표 스캔 → F8 실행",
             bg=self.COLOR_SURFACE_ALT,
             fg=self.COLOR_TEXT_SUBTLE,
             font=(self.DEFAULT_FONT, max(9, initial_center_metrics["notice_message_font"] - 1)),
@@ -5202,8 +5674,10 @@ class ContainerAudit:
         )
         if activated and preflight.replaced_scan:
             self.show_status_message(
-                "기존 현품표가 교체되었습니다. 현재 ACTIVE 현품표 "
-                f"{preflight.active_label_id}로 자동 전환해 이적을 시작합니다.",
+                "기존 현품표는 교체됐습니다. 현재 ACTIVE "
+                f"{preflight.active_label_business_date or '날짜 미표기'} · "
+                f"{preflight.active_label_worker_code or '작업코드 미배정'}로 "
+                "자동 전환해 이적을 시작합니다.",
                 self.COLOR_PRIMARY,
                 duration=8000,
             )
@@ -5368,12 +5842,16 @@ class ContainerAudit:
                     pass
                 if preflight.replaced_scan:
                     message = (
-                        f"기존 현품표 {preflight.scanned_label_id}는 교체됐습니다. "
-                        f"현재 ACTIVE {preflight.active_label_id}로 전환했습니다."
+                        "기존 현품표는 교체됐습니다. 현재 ACTIVE "
+                        f"{preflight.active_label_business_date or '날짜 미표기'} · "
+                        f"{preflight.active_label_worker_code or '작업코드 미배정'}로 "
+                        "전환했습니다."
                     )
                 else:
                     message = (
-                        f"현재 ACTIVE 현품표 {preflight.active_label_id}를 "
+                        "현재 ACTIVE "
+                        f"{preflight.active_label_business_date or '날짜 미표기'} · "
+                        f"{preflight.active_label_worker_code or '작업코드 미배정'}를 "
                         "확인했습니다."
                     )
                 self.show_status_message(
@@ -5500,6 +5978,9 @@ class ContainerAudit:
                 self.root.after(0, self._prompt_for_test_item)
             elif test_command.action == "error":
                 messagebox.showerror("오류", f"보류 데이터 생성 코드 형식 오류입니다.\n{test_command.error_message}")
+            return
+
+        if self._intercept_phs_reconciliation_scan(raw_barcode):
             return
 
         if self._intercept_active_tray_phs2_scan(raw_barcode):

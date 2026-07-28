@@ -484,7 +484,7 @@ class PHSLabelRenderer:
         )
         draw.text(
             (530, 490),
-            f"Label  {label_id[:38]}",
+            "QR을 스캔해 현품표 상태를 확인하세요",
             fill="black",
             font=self._font(18),
         )
@@ -537,6 +537,17 @@ class PHSLabelExchangeCoordinator:
             printer if printer is not None else WindowsGDIPhysicalLabelPrinter()
         )
         self._execution_lock = threading.Lock()
+        from phs_reconciliation_workflow import (
+            PHSReconciliationExchangeCoordinator,
+        )
+
+        self.reconciliation = PHSReconciliationExchangeCoordinator(
+            journal,
+            client,
+            renderer=renderer,
+            printer=self.printer,
+            execution_lock=self._execution_lock,
+        )
 
     @property
     def available(self) -> bool:

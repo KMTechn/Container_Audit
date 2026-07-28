@@ -851,6 +851,37 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    def resolve_phs_reconciliation_actions(
+        self,
+        *,
+        authority_scope_id: str,
+        scan_payload: str,
+        process_context: str = "transfer",
+        limit: int = 20,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        query = urlencode(
+            {
+                "authority_scope_id": scope,
+                "scan_payload": _normalize_identifier(
+                    scan_payload, "scan_payload"
+                ),
+                "process_context": str(
+                    process_context or ""
+                ).strip().lower(),
+                "limit": int(limit),
+            }
+        )
+        result = self._request(
+            "GET",
+            (
+                "/logistics/api/v1/phs-work-reconciliations/"
+                f"actions/resolve?{query}"
+            ),
+        )
+        return dict(result or {})
+
     def list_phs_work_instruction_candidates(
         self,
         *,
@@ -925,6 +956,38 @@ class LogisticsTransferClient:
                 "exchange_kind": str(exchange_kind or "").strip().upper(),
                 "sources": list(sources),
                 "targets": list(targets),
+            },
+            idempotency_key=_normalize_identifier(
+                idempotency_key, "idempotency_key"
+            ),
+        )
+        return dict(result or {})
+
+    def prepare_phs_reconciliation_label_exchange(
+        self,
+        reconciliation_id: str,
+        *,
+        authority_scope_id: str,
+        action_ids: list[str],
+        expected_reconciliation_version: int,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        scope = _normalize_identifier(authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/phs-work-reconciliations/"
+            f"{quote(_normalize_identifier(reconciliation_id, 'reconciliation_id'), safe='')}"
+            "/label-exchange/prepare",
+            payload={
+                "authority_scope_id": scope,
+                "action_ids": [
+                    _normalize_identifier(value, "action_id")
+                    for value in list(action_ids or [])
+                ],
+                "expected_reconciliation_version": int(
+                    expected_reconciliation_version
+                ),
             },
             idempotency_key=_normalize_identifier(
                 idempotency_key, "idempotency_key"
