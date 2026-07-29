@@ -6601,6 +6601,97 @@ def test_internal_test_tray_never_calls_exact_transfer_server(tmp_path):
     assert details["transfer_seal_idempotency_key"] is None
 
 
+def test_complete_tray_keeps_canonical_fields_for_log_and_seal_gate_after_split(tmp_path):
+    app = _completion_app(tmp_path)
+    original = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input_tag_split|"
+        "CLC=AAA2270730100|LBL=PHSL-ORIGINAL|HSH=1111111111111111"
+    )
+    successor = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input_tag_split|"
+        "CLC=AAA2270730100|LBL=PHSL-SUCCESSOR|HSH=2222222222222222"
+    )
+    app.current_tray.master_label_code = original
+    app.current_tray.active_label_qr_payload = successor
+    app.current_tray.tray_size = 2
+    captured = {}
+
+    def prepare_and_attempt(**kwargs):
+        captured.update(kwargs)
+        return container_audit_module.SealAttempt(
+            intent_id="intent-active-successor",
+            status="ACKED",
+        )
+
+    app._prepare_and_attempt_transfer_seal = prepare_and_attempt
+
+    assert app.complete_tray() is True
+
+    assert captured["master_label_fields"]["LBL"] == "PHSL-ORIGINAL"
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as handle:
+        details = json.loads(next(csv.DictReader(handle))["details"])
+    assert details["master_label_fields"]["LBL"] == "PHSL-ORIGINAL"
+
+
+@pytest.mark.parametrize(
+    ("active_label", "expected_label"),
+    [
+        (
+            "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input_tag_split|"
+            "CLC=AAA2270730100|LBL=PHSL-SUCCESSOR|HSH=2222222222222222",
+            "PHSL-SUCCESSOR",
+        ),
+        ("", "PHSL-ORIGINAL"),
+    ],
+)
+def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
+    active_label,
+    expected_label,
+):
+    original = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input_tag_split|"
+        "CLC=AAA2270730100|LBL=PHSL-ORIGINAL|HSH=1111111111111111"
+    )
+    app = _headless_app()
+    app.current_tray = TraySession(
+        master_label_code=original,
+        active_label_qr_payload=active_label,
+        item_code="AAA2270730100",
+    )
+    app.worker_name = "홍길동"
+    captured = {}
+
+    class Coordinator:
+        def prepare(self, **kwargs):
+            captured.update(kwargs)
+            return container_audit_module.SealAttempt(
+                intent_id="intent-physical-label",
+                status="PREPARED",
+            )
+
+        def attempt(self, intent_id):
+            assert intent_id == "intent-physical-label"
+            return container_audit_module.SealAttempt(
+                intent_id=intent_id,
+                status="ACKED",
+            )
+
+    app._transfer_seal_runtime = lambda: Coordinator()
+    fields = app._parse_new_format_qr(original)
+
+    result = app._prepare_and_attempt_transfer_seal(
+        master_label_fields=fields,
+        log_detail={"product_barcodes": ["AAA2270730100GOAL29P003"]},
+    )
+
+    assert result.status == "ACKED"
+    assert captured["master_label"].split("|LBL=", 1)[1].split("|", 1)[0] == expected_label
+    assert captured["master_label_fields"]["LBL"] == expected_label
+    assert captured["master_label_fields"]["HSH"] == (
+        "2222222222222222" if active_label else "1111111111111111"
+    )
+
+
 @pytest.mark.parametrize(
     ("work_time", "expected_updates"),
     [

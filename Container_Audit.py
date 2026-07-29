@@ -238,7 +238,7 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.48"
+CURRENT_VERSION = "v2.0.49"
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -7597,9 +7597,19 @@ class ContainerAudit:
         log_detail: Dict[str, Any],
     ) -> SealAttempt:
         coordinator = self._transfer_seal_runtime()
+        source_label_payload = str(
+            getattr(self.current_tray, "active_label_qr_payload", "")
+            or self.current_tray.master_label_code
+        )
+        source_label_fields = self._parse_new_format_qr(source_label_payload)
+        if not source_label_fields:
+            raise TransferSealError(
+                "PHS2_ACTIVE_LABEL_INVALID",
+                "현재 ACTIVE 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
+            )
         prepared = coordinator.prepare(
-            master_label=self.current_tray.master_label_code,
-            master_label_fields=master_label_fields,
+            master_label=source_label_payload,
+            master_label_fields=source_label_fields,
             item_id=self.current_tray.item_code,
             operator=self.worker_name,
             scanned_barcodes=log_detail.get("product_barcodes") or (),
