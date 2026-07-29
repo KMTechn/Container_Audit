@@ -18,13 +18,14 @@ from phs_label_workflow import (
     RenderedPHSLabel,
 )
 from phs_reconciliation_workflow import PHSReconciliationExchangeCoordinator
-from transfer_seal import LogisticsTransferClient
+from transfer_seal import LogisticsTransferClient, TransferSealError
 
 
 SCOPE = "scope-transfer-reconciliation"
 ITEM = "AAA2270730200"
 DAY = "2026-07-28"
 TARGET_DAY = "2026-07-29"
+TEST1_SCOPE = "TEST1-GOAL-20260722-EXACT-SIX"
 
 
 def _members(*values: str) -> list[str]:
@@ -597,6 +598,28 @@ def test_partial_split_accepts_plan_coverage_below_physical_source_union():
     assert context["actions"][0]["before_qty_pcs"] == 2
     assert context["actions"][0]["source_member_union_count"] == 4
     assert context["actions"][0]["after_qty_pcs"] == 0
+
+
+def test_completed_phs_source_resolves_for_transfer_reconciliation():
+    resolution = _resolution("SINGLE")
+    for member in resolution["actions"][0]["process_membership"]:
+        member.update(
+            owner_type="PACKAGE",
+            bundle_type="PHS",
+            bundle_state="AVAILABLE",
+            location_code="PHS_GOOD",
+            unit_state="CONSUMED",
+        )
+
+    context = PHSReconciliationExchangeCoordinator.validate_resolution(
+        resolution,
+        authority_scope_id=SCOPE,
+        scan_payload=resolution["scan"]["active_qr_payload"],
+    )
+
+    assert context["actions"][0]["process_membership"] == (
+        resolution["actions"][0]["process_membership"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -1386,3 +1409,146 @@ def test_logistics_client_uses_exact_machine_resolve_and_prepare_contract():
         calls[1][2]["headers"]["Idempotency-Key"]
         == "container-reconciliation-prepare"
     )
+
+
+def test_logistics_client_test1_prepare_ack_gate_is_one_shot(monkeypatch):
+    calls = []
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "ok": True,
+                "data": {"exchange": {"exchange_id": "PHSX-TEST1-1"}},
+            }
+
+    class Session:
+        @staticmethod
+        def request(method, url, **kwargs):
+            calls.append((method, url, kwargs))
+            return Response()
+
+    reconciliation_id = "PHSR-TEST1-1"
+    monkeypatch.setenv(
+        "KMTECH_TEST1_DROP_PHS_RECONCILIATION_PREPARE_ACK_ONCE",
+        reconciliation_id,
+    )
+    client = LogisticsTransferClient(
+        "https://server.example",
+        "token",
+        "TEST1",
+        device_id="test1-common-host",
+        session=Session(),
+        authority_scope_id=TEST1_SCOPE,
+    )
+    arguments = {
+        "authority_scope_id": TEST1_SCOPE,
+        "action_ids": ["PHSA-1"],
+        "expected_reconciliation_version": 1,
+        "idempotency_key": "container-reconciliation-prepare",
+    }
+
+    with pytest.raises(TransferSealError) as raised:
+        client.prepare_phs_reconciliation_label_exchange(
+            reconciliation_id,
+            **arguments,
+        )
+
+    assert raised.value.code == "PHS_RECONCILIATION_PREPARE_ACK_UNKNOWN"
+    assert raised.value.retryable is True
+    assert raised.value.committed is None
+    assert raised.value.details == {
+        "reconciliation_id": reconciliation_id,
+        "exchange_id": "PHSX-TEST1-1",
+    }
+    assert len(calls) == 1
+
+    response = client.prepare_phs_reconciliation_label_exchange(
+        reconciliation_id,
+        **arguments,
+    )
+
+    assert response["exchange"]["exchange_id"] == "PHSX-TEST1-1"
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("scope", "device_id", "reconciliation_id", "configured_id", "exchange_id"),
+    (
+        (
+            "OTHER-SCOPE",
+            "test1-common-host",
+            "PHSR-TEST1-1",
+            "PHSR-TEST1-1",
+            "PHSX-TEST1-1",
+        ),
+        (
+            TEST1_SCOPE,
+            "other-device",
+            "PHSR-TEST1-1",
+            "PHSR-TEST1-1",
+            "PHSX-TEST1-1",
+        ),
+        (
+            TEST1_SCOPE,
+            "test1-common-host",
+            "PHSR-OTHER",
+            "PHSR-TEST1-1",
+            "PHSX-TEST1-1",
+        ),
+        (
+            TEST1_SCOPE,
+            "test1-common-host",
+            "PHSR-TEST1-1",
+            "PHSR-TEST1-1",
+            "",
+        ),
+    ),
+)
+def test_logistics_client_test1_prepare_ack_gate_rejects_wrong_identity(
+    monkeypatch,
+    scope,
+    device_id,
+    reconciliation_id,
+    configured_id,
+    exchange_id,
+):
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "ok": True,
+                "data": {"exchange": {"exchange_id": exchange_id}},
+            }
+
+    class Session:
+        @staticmethod
+        def request(_method, _url, **_kwargs):
+            return Response()
+
+    monkeypatch.setenv(
+        "KMTECH_TEST1_DROP_PHS_RECONCILIATION_PREPARE_ACK_ONCE",
+        configured_id,
+    )
+    client = LogisticsTransferClient(
+        "https://server.example",
+        "token",
+        "TEST1",
+        device_id=device_id,
+        session=Session(),
+        authority_scope_id=scope,
+    )
+
+    response = client.prepare_phs_reconciliation_label_exchange(
+        reconciliation_id,
+        authority_scope_id=scope,
+        action_ids=["PHSA-1"],
+        expected_reconciliation_version=1,
+        idempotency_key="container-reconciliation-prepare",
+    )
+
+    assert response["exchange"]["exchange_id"] == exchange_id

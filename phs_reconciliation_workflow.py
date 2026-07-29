@@ -31,6 +31,7 @@ _EXCHANGE_STATES = frozenset(
 _TRANSFER_SIGNATURES = frozenset(
     {
         ("PACKAGE", "PHS", "PHS_GOOD", "AVAILABLE"),
+        ("PACKAGE", "PHS", "PHS_GOOD", "CONSUMED"),
         ("RESIDUAL", "RESIDUAL", "INSPECTION_RESIDUAL", "AVAILABLE"),
         ("PACKAGE", "TRANSFER", "TRANSFER", "AVAILABLE"),
     }
