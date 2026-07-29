@@ -9,6 +9,8 @@ from transfer_seal import (
     TransferSealCoordinator,
     TransferSealError,
     TransferSealStore,
+    _deterministic_id,
+    _sha256,
     membership_hash,
     source_identity_from_label,
     validate_compact_phs2_fields,
@@ -22,6 +24,10 @@ SOURCE = "PHS-SERVER-001"
 PHS2_LABEL_HASH = "a" * 64
 PHS2_CORE_HASH = "b" * 64
 PHS2_HASH_PREFIX = PHS2_LABEL_HASH[:16]
+SOURCE_PHS2_LABEL_HASH = "c" * 64
+SOURCE_PHS2_CORE_HASH = "d" * 64
+SOURCE_PHS2_HASH_PREFIX = SOURCE_PHS2_LABEL_HASH[:16]
+ACTIVE_PHS2_HASH_PREFIX = "e" * 16
 
 
 class FakeResponse:
@@ -160,6 +166,614 @@ def _resolved_compact_phs2(count=15):
     }
 
 
+def _resolved_non_anchor_compact_phs2(count=3):
+    resolved = json.loads(json.dumps(_resolved_compact_phs2(count=count)))
+    source_qr = _compact_phs2_qr(
+        ITG="ITAG-002",
+        LBL="INPUT-LABEL-002",
+        HSH=SOURCE_PHS2_HASH_PREFIX,
+    )
+    active_qr = _compact_phs2_qr(
+        LBL="WORK-LABEL-002",
+        HSH=ACTIVE_PHS2_HASH_PREFIX,
+    )
+    bundle = resolved["bundle"]
+    bundle["source_session_id"] = "ITAG-002"
+    bundle["external_label"] = source_qr
+    active_label = {
+        "group_id": "PHSG-WORK-002",
+        "label_id": "WORK-LABEL-002",
+        "qr_payload": active_qr,
+        "hash_prefix": ACTIVE_PHS2_HASH_PREFIX,
+        "scan_anchor_input_tag_id": "ITAG-001",
+        "item_id": ITEM,
+        "state": "ACTIVE",
+        "member_ids": list(bundle["member_ids"]),
+        "member_count": bundle["member_count"],
+        "membership_hash": bundle["membership_hash"],
+        "membership_version": 3,
+        "label_version": 2,
+        "entity_version": 2,
+        "business_date": "2026-07-30",
+        "worker_code": "2270730100-002",
+    }
+    resolved.update(
+        {
+            "source_resolution_basis": "PHS_WORK_GROUP_EXACT_MEMBERSHIP",
+            "source_input_tag": {
+                "input_tag_id": "ITAG-002",
+                "label_id": "INPUT-LABEL-002",
+                "item_id": ITEM,
+                "uom": "EA",
+                "tag_core_hash": SOURCE_PHS2_CORE_HASH,
+                "label_instance_hash": SOURCE_PHS2_LABEL_HASH,
+                "hash_prefix": SOURCE_PHS2_HASH_PREFIX,
+                "lifecycle": "INSPECTION_COMPLETED",
+                "qr_payload": source_qr,
+                "session_id": "ITAG-002",
+                "member_count": bundle["member_count"],
+                "membership_hash": bundle["membership_hash"],
+            },
+            "phs_work_group": dict(active_label),
+            "phs_label_resolution": {
+                "status": "ACTIVE",
+                "resolution": "OVERLAY_ACTIVE",
+                "authority_scope_id": SCOPE,
+                "ledger_plane": "AUTHORITATIVE",
+                "plane_epoch": 3,
+                "scanned_label": dict(active_label),
+                "effective_labels": [dict(active_label)],
+            },
+        }
+    )
+    return resolved
+
+
+def _completed_input_tag(
+    *,
+    input_tag_id,
+    label_id,
+    label_hash,
+    core_hash,
+    member_ids,
+):
+    qr = _compact_phs2_qr(
+        ITG=input_tag_id,
+        LBL=label_id,
+        HSH=label_hash[:16],
+    )
+    return {
+        "input_tag_id": input_tag_id,
+        "label_id": label_id,
+        "item_id": ITEM,
+        "uom": "EA",
+        "tag_core_hash": core_hash,
+        "label_instance_hash": label_hash,
+        "hash_prefix": label_hash[:16],
+        "lifecycle": "INSPECTION_COMPLETED",
+        "qr_payload": qr,
+        "session_id": input_tag_id,
+        "session_state": "COMPLETED",
+        "entity_version": 4,
+        "member_count": len(member_ids),
+        "membership_hash": membership_hash(member_ids),
+    }
+
+
+def _resolved_work_group_phs2(*, mode="merge"):
+    if mode not in {"merge", "split"}:
+        raise ValueError(mode)
+    rows = [
+        {
+            "unit_id": f"unit-{index:03d}",
+            "normalized_barcode": f"{ITEM}-SERIAL-{index:03d}",
+            "inbound_iin": f"ORIGIN-IIN-{index}",
+            "current_inbound_iin": "IIN-001",
+            "item_id": ITEM,
+            "uom": "EA",
+            "unit_state": "AVAILABLE",
+            "location_code": "PHS_GOOD",
+        }
+        for index in range(1, 5)
+    ]
+    all_ids = [row["unit_id"] for row in rows]
+    source_tags = [
+        _completed_input_tag(
+            input_tag_id="ITAG-001",
+            label_id="INPUT-LABEL-001",
+            label_hash=PHS2_LABEL_HASH,
+            core_hash=PHS2_CORE_HASH,
+            member_ids=all_ids if mode == "split" else all_ids[:2],
+        )
+    ]
+    source_specs = []
+    if mode == "merge":
+        source_tags.append(
+            _completed_input_tag(
+                input_tag_id="ITAG-002",
+                label_id="INPUT-LABEL-002",
+                label_hash=SOURCE_PHS2_LABEL_HASH,
+                core_hash=SOURCE_PHS2_CORE_HASH,
+                member_ids=all_ids[2:],
+            )
+        )
+        partitions = [
+            (
+                SOURCE,
+                "ITAG-001",
+                source_tags[0]["qr_payload"],
+                all_ids[:2],
+                all_ids[:2],
+                [],
+                4,
+            ),
+            (
+                "PHS-SERVER-002",
+                "ITAG-002",
+                source_tags[1]["qr_payload"],
+                all_ids[2:],
+                all_ids[2:],
+                [],
+                6,
+            ),
+        ]
+        group_ids = all_ids
+        cover_groups = []
+    else:
+        remainder_ids = all_ids[2:]
+        remainder_bundle_id = (
+            "PHS-WORK-REMAINDER-"
+            + _sha256(
+                {
+                    "source_bundle_id": SOURCE,
+                    "member_ids": remainder_ids,
+                }
+            )[:24].upper()
+        )
+        partitions = [
+            (
+                SOURCE,
+                "ITAG-001",
+                source_tags[0]["qr_payload"],
+                all_ids,
+                all_ids[:2],
+                remainder_ids,
+                4,
+            ),
+        ]
+        group_ids = all_ids[:2]
+        cover_qr = _compact_phs2_qr(
+            LBL="WORK-LABEL-COVER",
+            HSH="f" * 16,
+        )
+        cover_groups = [
+            {
+                "group_id": "PHSG-WORK-COVER",
+                "label_id": "WORK-LABEL-COVER",
+                "scan_payload": cover_qr,
+                "scan_anchor_input_tag_id": "ITAG-001",
+                "item_id": ITEM,
+                "uom": "EA",
+                "member_ids": remainder_ids,
+                "member_count": len(remainder_ids),
+                "membership_hash": membership_hash(remainder_ids),
+                "covered_member_ids": remainder_ids,
+                "covered_member_count": len(remainder_ids),
+                "covered_membership_hash": membership_hash(remainder_ids),
+                "membership_version": 5,
+                "label_version": 3,
+                "group_entity_version": 7,
+                "label_entity_version": 4,
+            }
+        ]
+        assert remainder_bundle_id
+    for (
+        source_id,
+        source_session_id,
+        external_label,
+        full,
+        selected,
+        remainder,
+        version,
+    ) in partitions:
+        remainder_bundle_id = (
+            "PHS-WORK-REMAINDER-"
+            + _sha256(
+                {
+                    "source_bundle_id": source_id,
+                    "member_ids": remainder,
+                }
+            )[:24].upper()
+            if remainder
+            else None
+        )
+        source_specs.append(
+            {
+                "bundle_id": source_id,
+                "bundle_type": "PHS",
+                "bundle_state": "AVAILABLE",
+                "entity_version": version,
+                "source_session_id": source_session_id,
+                "external_label": external_label,
+                "accounting_inbound_iin": "IIN-001",
+                "source_member_ids": list(full),
+                "source_member_count": len(full),
+                "source_membership_hash": membership_hash(full),
+                "selected_member_ids": list(selected),
+                "selected_member_count": len(selected),
+                "selected_membership_hash": membership_hash(selected),
+                "remainder_member_ids": list(remainder),
+                "remainder_member_count": len(remainder),
+                "remainder_membership_hash": (
+                    membership_hash(remainder) if remainder else None
+                ),
+                "remainder_bundle_id": remainder_bundle_id,
+                "remainder_external_label": (
+                    f"WORK-REMAINDER::{remainder_bundle_id}"
+                    if remainder_bundle_id
+                    else None
+                ),
+                "remainder_cover_group_ids": (
+                    ["PHSG-WORK-COVER"] if remainder else []
+                ),
+            }
+        )
+    active_qr = _compact_phs2_qr(
+        LBL="WORK-LABEL-002",
+        HSH=ACTIVE_PHS2_HASH_PREFIX,
+    )
+    group = {
+        "group_id": "PHSG-WORK-002",
+        "label_id": "WORK-LABEL-002",
+        "state": "ACTIVE",
+        "scan_payload": active_qr,
+        "scan_anchor_input_tag_id": "ITAG-001",
+        "item_id": ITEM,
+        "uom": "EA",
+        "member_ids": list(group_ids),
+        "member_count": len(group_ids),
+        "membership_hash": membership_hash(group_ids),
+        "membership_version": 3,
+        "label_version": 2,
+        "group_entity_version": 5,
+        "label_entity_version": 2,
+    }
+    active_label = {
+        **group,
+        "qr_payload": group["scan_payload"],
+        "hash_prefix": ACTIVE_PHS2_HASH_PREFIX,
+        "entity_version": group["label_entity_version"],
+        "business_date": "2026-07-30",
+        "worker_code": "2270730100-002",
+    }
+    transfer_id = _deterministic_id(
+        "TRANSFER",
+        {
+            "group_id": group["group_id"],
+            "label_id": group["label_id"],
+            "member_ids": list(group_ids),
+        },
+    )
+    versions = {
+        f"phs_work_group:{group['group_id']}": group[
+            "group_entity_version"
+        ],
+        f"phs_work_membership:{group['group_id']}": group[
+            "membership_version"
+        ],
+        f"phs_work_label_version:{group['group_id']}": group[
+            "label_version"
+        ],
+        f"phs_label:{group['label_id']}": group[
+            "label_entity_version"
+        ],
+        **{
+            f"bundle:{source['bundle_id']}": source["entity_version"]
+            for source in source_specs
+        },
+        f"bundle:{transfer_id}": 0,
+    }
+    for cover in cover_groups:
+        versions.update(
+            {
+                f"phs_work_group:{cover['group_id']}": cover[
+                    "group_entity_version"
+                ],
+                f"phs_work_membership:{cover['group_id']}": cover[
+                    "membership_version"
+                ],
+                f"phs_work_label_version:{cover['group_id']}": cover[
+                    "label_version"
+                ],
+                f"phs_label:{cover['label_id']}": cover[
+                    "label_entity_version"
+                ],
+            }
+        )
+    selected_rows = [
+        row for row in rows if row["unit_id"] in set(group_ids)
+    ]
+    barcodes = [row["normalized_barcode"] for row in selected_rows]
+    work_source = {
+        "authority_scope_id": SCOPE,
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 3,
+        "item_id": ITEM,
+        "uom": "EA",
+        "source_iin": "IIN-001",
+        "member_ids": list(group_ids),
+        "member_count": len(group_ids),
+        "membership_hash": membership_hash(group_ids),
+        "barcode_member_count": len(barcodes),
+        "barcode_membership_hash": membership_hash(barcodes),
+        "members": selected_rows,
+        "source_bundles": source_specs,
+        "source_bundle_count": len(source_specs),
+        "source_bundle_ids": [
+            source["bundle_id"] for source in source_specs
+        ],
+        "source_session_ids": sorted(
+            {source["source_session_id"] for source in source_specs}
+        ),
+        "transfer_bundle_id": transfer_id,
+        "transfer_external_label": transfer_id,
+        "remainder_cover_groups": cover_groups,
+        "entity_versions": versions,
+    }
+    topology_hash = _sha256(
+        {
+            "phs_work_group": group,
+            "source_bundles": source_specs,
+            "remainder_cover_groups": cover_groups,
+            "source_iin": "IIN-001",
+            "barcode_membership_hash": membership_hash(barcodes),
+            "transfer_bundle_id": transfer_id,
+        }
+    )
+    work_source["topology_hash"] = topology_hash
+    return {
+        "candidate_count": 1,
+        "source_resolution_basis": "PHS_WORK_GROUP_EXACT_MEMBERSHIP",
+        "authority_scope_id": SCOPE,
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 3,
+        "input_tag": source_tags[0],
+        "source_input_tags": source_tags,
+        "phs_label_resolution": {
+            "status": "ACTIVE",
+            "resolution": "OVERLAY_ACTIVE",
+            "authority_scope_id": SCOPE,
+            "ledger_plane": "AUTHORITATIVE",
+            "plane_epoch": 3,
+            "scanned_label": dict(active_label),
+            "effective_labels": [dict(active_label)],
+        },
+        "phs_work_group": group,
+        "work_group_source": work_source,
+        "topology_hash": topology_hash,
+        "entity_versions": versions,
+    }
+
+
+def _work_group_receipt(context):
+    payload = context["payload"]
+    receipt_id = "receipt-work-group-seal-1"
+    source_specs = payload["source_bundles"]
+    source_ids = [source["bundle_id"] for source in source_specs]
+    source_sessions = sorted(
+        {source["source_session_id"] for source in source_specs}
+    )
+    evidence = context["client_exact_evidence"]
+    pairs = list(evidence["member_barcode_pairs"])
+    normalized_barcodes = sorted(
+        value.upper() for value in payload["scanned_barcodes"]
+    )
+    source_transitions = []
+    remainders = []
+    remainder_by_source = {}
+    for source in source_specs:
+        remainder_id = source.get("remainder_bundle_id")
+        if remainder_id:
+            remainder_by_source[source["bundle_id"]] = remainder_id
+            remainders.append(
+                {
+                    "source_bundle_id": source["bundle_id"],
+                    "remainder_bundle_id": remainder_id,
+                    "remainder_external_label": (
+                        f"WORK-REMAINDER::{remainder_id}"
+                    ),
+                    "remainder_external_label_kind": (
+                        "INTERNAL_LOGISTICS_ALIAS_NOT_PHYSICAL"
+                    ),
+                    "member_ids": source["remainder_member_ids"],
+                    "member_count": source["remainder_member_count"],
+                    "membership_hash": source[
+                        "remainder_membership_hash"
+                    ],
+                }
+            )
+        source_transitions.append(
+            {
+                "source_bundle_id": source["bundle_id"],
+                "entity_version_before": source["entity_version"],
+                "entity_version_after": source["entity_version"] + 1,
+                "state_before": "AVAILABLE",
+                "state_after": "CONSUMED",
+                "source_member_ids": source["source_member_ids"],
+                "source_member_count": source["source_member_count"],
+                "source_membership_hash": source[
+                    "source_membership_hash"
+                ],
+                "selected_member_ids": source["selected_member_ids"],
+                "selected_member_count": source[
+                    "selected_member_count"
+                ],
+                "selected_membership_hash": source[
+                    "selected_membership_hash"
+                ],
+                "remainder_bundle_id": remainder_id,
+            }
+        )
+    root_specs = {
+        (
+            payload["phs_work_group"]["group_id"],
+            "TRANSFER_BUNDLE",
+            payload["transfer_bundle_id"],
+        )
+    }
+    for source in source_specs:
+        remainder_id = remainder_by_source.get(source["bundle_id"])
+        if not remainder_id:
+            continue
+        for cover_group_id in source["remainder_cover_group_ids"]:
+            root_specs.add(
+                (cover_group_id, "PHS_BUNDLE", remainder_id)
+            )
+    root_proof = [
+        {
+            "group_id": group_id,
+            "root_type": root_type,
+            "root_id": root_id,
+            "root_role": "SOURCE",
+            "added_receipt_id": receipt_id,
+        }
+        for group_id, root_type, root_id in sorted(root_specs)
+    ]
+    group_versions_after = {
+        payload["phs_work_group"]["group_id"]: payload[
+            "phs_work_group"
+        ]["group_entity_version"]
+        + 1,
+        **{
+            cover["group_id"]: cover["group_entity_version"] + 1
+            for cover in payload["remainder_cover_groups"]
+        },
+    }
+    versions = {}
+    for key, value in context["expected_versions"].items():
+        if key in {f"bundle:{source_id}" for source_id in source_ids}:
+            versions[key] = value + 1
+        elif key == f"bundle:{payload['transfer_bundle_id']}":
+            versions[key] = 1
+        elif key.startswith("phs_work_group:"):
+            versions[key] = value + 1
+        else:
+            versions[key] = value
+    for remainder in remainders:
+        versions[f"bundle:{remainder['remainder_bundle_id']}"] = 1
+    seal_id = "transfer-seal-work-group-1"
+    seal_token = "transfer-seal-work-group-token-1"
+    seal_qr_payload = "|".join(
+        (
+            "TRF=1",
+            f"BND={payload['transfer_bundle_id']}",
+            f"AUTH_SCOPE={context['authority_scope_id']}",
+            f"CLC={payload['item_id']}",
+            f"QT={len(payload['member_ids'])}",
+            f"HSH={payload['membership_hash']}",
+            f"EPOCH={context['authority_epoch']}",
+            f"PLANE={context['ledger_plane']}",
+            f"PE={context['plane_epoch']}",
+            f"SID={seal_id}",
+            "SREV=1",
+            f"STK={seal_token}",
+        )
+    )
+    remainder_ids = [
+        remainder["remainder_bundle_id"] for remainder in remainders
+    ]
+    topology_hash_after = _sha256(
+        {
+            "topology_hash_before": payload["topology_hash"],
+            "transfer_bundle_id": payload["transfer_bundle_id"],
+            "remainder_bundle_ids": remainder_ids,
+            "root_proof": root_proof,
+            "group_entity_versions": group_versions_after,
+        }
+    )
+    data = {
+        "source_bundle_id": (
+            source_ids[0] if len(source_ids) == 1 else None
+        ),
+        "source_bundle_ids": source_ids,
+        "source_bundle_count": len(source_ids),
+        "source_session_ids": source_sessions,
+        "scan_anchor_input_tag_id": payload["phs_work_group"][
+            "scan_anchor_input_tag_id"
+        ],
+        "transfer_bundle_id": payload["transfer_bundle_id"],
+        "transfer_external_label": payload["external_label"],
+        "member_ids": payload["member_ids"],
+        "members": pairs,
+        "member_count": len(payload["member_ids"]),
+        "membership_hash": payload["membership_hash"],
+        "scanned_barcodes": normalized_barcodes,
+        "scanned_barcode_count": len(normalized_barcodes),
+        "scanned_barcode_hash": membership_hash(normalized_barcodes),
+        "inbound_iin": "IIN-001",
+        "origin_inbound_iins": ["ORIGIN-IIN-1", "ORIGIN-IIN-2"],
+        "item_id": payload["item_id"],
+        "uom": payload["uom"],
+        "movement_id": "movement-work-group-1",
+        "source_transitions": source_transitions,
+        "remainder_bundles": remainders,
+        "remainder_bundle_ids": remainder_ids,
+        "post_seal_exchange_policy": (
+            "BLOCKED_REQUIRES_TWO_BUNDLE_CAS"
+        ),
+        "atomic": True,
+        "receipt_contract_version": "PHS_WORK_GROUP_TRANSFER_V1",
+        "source_resolution_basis": (
+            "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+        ),
+        "phs_work_group": payload["phs_work_group"],
+        "remainder_cover_groups": payload["remainder_cover_groups"],
+        "source_bundles": payload["source_bundles"],
+        "topology_hash_before": payload["topology_hash"],
+        "topology_hash_after": topology_hash_after,
+        "root_proof": root_proof,
+        "group_entity_versions_after": group_versions_after,
+        "seal_contract_version": "transfer-seal-qr-v1",
+        "seal_state": "ACTIVE",
+        "seal_id": seal_id,
+        "seal_revision": 1,
+        "seal_token": seal_token,
+        "seal_qr_payload": seal_qr_payload,
+        "sealed_bundle_id": payload["transfer_bundle_id"],
+        "sealed_bundle_version": 1,
+        "sealed_member_ids": payload["member_ids"],
+        "sealed_members": pairs,
+        "sealed_member_count": len(payload["member_ids"]),
+        "sealed_membership_hash": payload["membership_hash"],
+        "sealed_normalized_barcodes": normalized_barcodes,
+        "sealed_barcode_membership_hash": membership_hash(
+            normalized_barcodes
+        ),
+    }
+    return {
+        "receipt_id": receipt_id,
+        "contract_version": "logistics-v1",
+        "command_type": "SEAL_TRANSFER_BUNDLE",
+        "status": "COMMITTED",
+        "authority_scope_id": context["authority_scope_id"],
+        "authority_epoch": context["authority_epoch"],
+        "resolved_ledger_plane": context["ledger_plane"],
+        "resolved_plane_epoch": context["plane_epoch"],
+        "committed_at": "2026-07-30T00:00:00Z",
+        "event_ids": ["event-work-group-1"],
+        "outbox_ids": ["outbox-work-group-1"],
+        "entity_versions": versions,
+        "data": data,
+    }
+
+
+def _fields_from_compact_qr(qr_payload):
+    return {
+        segment.split("=", 1)[0]: segment.split("=", 1)[1]
+        for segment in qr_payload.split("|")
+    }
+
+
 def _receipt(context):
     payload = context["payload"]
     normalized_barcodes = sorted(value.upper() for value in payload["scanned_barcodes"])
@@ -258,6 +872,22 @@ def _client(handler):
     ), session
 
 
+def _work_group_client(handler):
+    session = FakeSession(handler)
+    return LogisticsTransferClient(
+        "https://server.example",
+        "secret-token",
+        "PC-01",
+        session=session,
+        authority_scope_id=SCOPE,
+        authority_epoch=7,
+        authority_plane="AUTHORITATIVE",
+        ledger_plane="AUTHORITATIVE",
+        plane_epoch=3,
+        authoritative_required=True,
+    ), session
+
+
 def _prepare(coordinator, barcodes=("BC-1", "BC-2", "BC-3"), *, include_bundle=True):
     fields = {
         "ITG": "ITAG-001",
@@ -338,6 +968,167 @@ def test_compact_phs2_preflight_uses_completed_exact_member_count_without_qr_qt(
     assert result.input_tag_label_id == fields["LBL"]
     assert result.input_tag_hash_prefix == fields["HSH"]
     assert result.audit_detail()["quantity_basis"] == "CENTRAL_EXACT_MEMBERSHIP"
+
+
+def test_compact_phs2_preflight_accepts_exact_non_anchor_work_group_source():
+    resolved = _resolved_non_anchor_compact_phs2(count=3)
+    fields = _compact_phs2_fields(
+        LBL="WORK-LABEL-002",
+        HSH=ACTIVE_PHS2_HASH_PREFIX,
+    )
+
+    result = validate_compact_phs2_preflight(fields, resolved)
+
+    assert result.input_tag_id == "ITAG-001"
+    assert result.source_session_id == "ITAG-002"
+    assert result.active_label_id == "WORK-LABEL-002"
+    assert result.member_ids == tuple(sorted(resolved["bundle"]["member_ids"]))
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda value: value.pop("source_input_tag"),
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+        ),
+        (
+            lambda value: value["phs_label_resolution"]["effective_labels"][
+                0
+            ].update(
+                {
+                    "member_ids": ["unit-foreign"],
+                    "member_count": 1,
+                    "membership_hash": membership_hash(["unit-foreign"]),
+                }
+            ),
+            "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+        ),
+        (
+            lambda value: value["source_input_tag"].update(
+                {"membership_hash": membership_hash(["unit-foreign"])}
+            ),
+            "PHS2_SOURCE_REGISTRY_MEMBERSHIP_MISMATCH",
+        ),
+    ],
+)
+def test_compact_phs2_non_anchor_source_fails_closed_for_inexact_proof(
+    mutate,
+    expected_code,
+):
+    resolved = _resolved_non_anchor_compact_phs2(count=3)
+    mutate(resolved)
+
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_preflight(
+            _compact_phs2_fields(
+                LBL="WORK-LABEL-002",
+                HSH=ACTIVE_PHS2_HASH_PREFIX,
+            ),
+            resolved,
+        )
+
+    assert exc_info.value.code == expected_code
+
+
+@pytest.mark.parametrize("mode", ["merge", "split"])
+def test_work_group_preflight_validates_all_current_sources_and_topology(mode):
+    resolved = _resolved_work_group_phs2(mode=mode)
+    fields = _fields_from_compact_qr(
+        resolved["phs_work_group"]["scan_payload"]
+    )
+
+    result = validate_compact_phs2_preflight(fields, resolved)
+
+    source = resolved["work_group_source"]
+    assert result.source_resolution_basis == (
+        "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+    )
+    assert result.source_bundle_ids == tuple(source["source_bundle_ids"])
+    assert result.source_session_ids == tuple(source["source_session_ids"])
+    assert result.member_ids == tuple(source["member_ids"])
+    assert result.entity_versions == source["entity_versions"]
+    assert result.topology_hash == source["topology_hash"]
+    assert result.transfer_bundle_id == source["transfer_bundle_id"]
+    assert result.canonical_input_tag_qr == resolved["input_tag"][
+        "qr_payload"
+    ]
+    if mode == "merge":
+        assert result.source_bundle_id == ""
+        assert len(result.source_bundle_ids) == 2
+    else:
+        assert result.source_bundle_id == SOURCE
+        assert len(result.remainder_cover_groups) == 1
+        assert resolved["source_input_tags"][0]["member_count"] == 4
+        assert result.member_count == 2
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected_code"),
+    [
+        (
+            lambda value: value["work_group_source"].update(
+                {"topology_hash": "0" * 64}
+            ),
+            "PHS2_WORK_GROUP_TOPOLOGY_HASH_MISMATCH",
+        ),
+        (
+            lambda value: value.pop("source_input_tags"),
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+        ),
+        (
+            lambda value: value["work_group_source"][
+                "source_bundles"
+            ][0]["selected_member_ids"].append("unit-001"),
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+        ),
+        (
+            lambda value: value["work_group_source"][
+                "remainder_cover_groups"
+            ][0].update(
+                {
+                    "covered_member_ids": ["unit-004"],
+                    "covered_member_count": 1,
+                    "covered_membership_hash": membership_hash(
+                        ["unit-004"]
+                    ),
+                }
+            ),
+            "PHS2_WORK_GROUP_REMAINDER_COVER_MISMATCH",
+        ),
+        (
+            lambda value: (
+                value["work_group_source"]["entity_versions"].update(
+                    {
+                        f"phs_work_group:{value['phs_work_group']['group_id']}": 99
+                    }
+                ),
+                value["entity_versions"].update(
+                    {
+                        f"phs_work_group:{value['phs_work_group']['group_id']}": 99
+                    }
+                ),
+            ),
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+        ),
+    ],
+)
+def test_work_group_preflight_fails_closed_for_malformed_topology(
+    mutate,
+    expected_code,
+):
+    resolved = _resolved_work_group_phs2(mode="split")
+    mutate(resolved)
+
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_preflight(
+            _fields_from_compact_qr(
+                resolved["phs_work_group"]["scan_payload"]
+            ),
+            resolved,
+        )
+
+    assert exc_info.value.code == expected_code
 
 
 def test_compact_phs2_rejects_qt_even_when_registry_identity_fields_are_present():
@@ -554,6 +1345,301 @@ def test_full_transfer_seal_sends_exact_server_units_and_builds_memberless_qr(tm
     assert f"CLC={ITEM}" in result.seal_qr_payload
     assert "unit-1" not in result.seal_qr_payload
     assert "BC-1" not in result.seal_qr_payload
+
+
+def test_non_anchor_work_group_seals_actual_source_once(tmp_path):
+    resolved = _resolved_non_anchor_compact_phs2(count=3)
+    posted = []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": resolved})
+        if call["method"] == "POST" and call["url"].endswith("/transfers/seal"):
+            posted.append(call)
+            context = call["json"]
+            assert context["payload"]["source_bundle_id"] == SOURCE
+            assert context["expected_versions"] == {f"bundle:{SOURCE}": 4}
+            return FakeResponse(
+                200,
+                {"ok": True, "status": "committed", "data": _receipt(context)},
+            )
+        raise AssertionError(call)
+
+    client, session = _client(handler)
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "non-anchor.db"),
+        client,
+    )
+    fields = _compact_phs2_fields(
+        LBL="WORK-LABEL-002",
+        HSH=ACTIVE_PHS2_HASH_PREFIX,
+    )
+    prepared = coordinator.prepare(
+        master_label=_compact_phs2_qr(
+            LBL="WORK-LABEL-002",
+            HSH=ACTIVE_PHS2_HASH_PREFIX,
+        ),
+        master_label_fields=fields,
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=[
+            member["normalized_barcode"]
+            for member in resolved["bundle"]["members"]
+        ],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "ACKED"
+    assert len(posted) == 1
+    assert [call["method"] for call in session.calls] == ["GET", "POST"]
+
+
+@pytest.mark.parametrize("mode", ["merge", "split"])
+def test_work_group_command_seals_exact_topology_once(tmp_path, mode):
+    resolved = _resolved_work_group_phs2(mode=mode)
+    posted = []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": resolved})
+        if call["method"] == "POST" and call["url"].endswith(
+            "/transfers/seal"
+        ):
+            posted.append(call)
+            context = call["json"]
+            source = resolved["work_group_source"]
+            assert context["payload"]["source_resolution_basis"] == (
+                "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+            )
+            assert context["payload"]["source_bundles"] == source[
+                "source_bundles"
+            ]
+            assert context["payload"]["remainder_cover_groups"] == source[
+                "remainder_cover_groups"
+            ]
+            assert context["payload"]["uom"] == "EA"
+            assert context["expected_versions"] == source[
+                "entity_versions"
+            ]
+            assert context["expected_versions"][
+                f"bundle:{source['transfer_bundle_id']}"
+            ] == 0
+            return FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "status": "committed",
+                    "data": _work_group_receipt(context),
+                },
+            )
+        raise AssertionError(call)
+
+    client, session = _work_group_client(handler)
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / f"work-group-{mode}.db"),
+        client,
+    )
+    master_label = resolved["phs_work_group"]["scan_payload"]
+    fields = _fields_from_compact_qr(master_label)
+    prepared = coordinator.prepare(
+        master_label=master_label,
+        master_label_fields=fields,
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=[
+            member["normalized_barcode"]
+            for member in resolved["work_group_source"]["members"]
+        ],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "ACKED"
+    assert result.transfer_bundle_id == resolved["work_group_source"][
+        "transfer_bundle_id"
+    ]
+    assert len(posted) == 1
+    assert [call["method"] for call in session.calls] == ["GET", "POST"]
+    if mode == "merge":
+        assert result.source_bundle_id == ""
+        assert result.remainder_bundle_id == ""
+    else:
+        assert result.source_bundle_id == SOURCE
+        assert result.remainder_bundle_id == resolved[
+            "work_group_source"
+        ]["source_bundles"][0]["remainder_bundle_id"]
+
+
+def test_work_group_bound_command_retry_does_not_resolve_again(tmp_path):
+    resolved = _resolved_work_group_phs2(mode="merge")
+    post_count = 0
+
+    def handler(call):
+        nonlocal post_count
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": resolved})
+        if call["method"] == "POST" and call["url"].endswith(
+            "/transfers/seal"
+        ):
+            post_count += 1
+            if post_count == 1:
+                return FakeResponse(
+                    503,
+                    {
+                        "ok": False,
+                        "retryable": True,
+                        "committed": False,
+                        "error": {
+                            "code": "TEMPORARY_UNAVAILABLE",
+                            "message": "retry",
+                        },
+                    },
+                )
+            return FakeResponse(
+                200,
+                {
+                    "ok": True,
+                    "data": _work_group_receipt(call["json"]),
+                },
+            )
+        raise AssertionError(call)
+
+    client, session = _work_group_client(handler)
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "work-group-retry.db"),
+        client,
+    )
+    master_label = resolved["phs_work_group"]["scan_payload"]
+    prepared = coordinator.prepare(
+        master_label=master_label,
+        master_label_fields=_fields_from_compact_qr(master_label),
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=[
+            member["normalized_barcode"]
+            for member in resolved["work_group_source"]["members"]
+        ],
+    )
+
+    waiting = coordinator.attempt(prepared.intent_id)
+    recovered = coordinator.attempt(prepared.intent_id)
+
+    assert waiting.status == "RETRY_WAIT"
+    assert recovered.status == "ACKED"
+    assert [call["method"] for call in session.calls] == [
+        "GET",
+        "POST",
+        "POST",
+    ]
+
+
+def test_work_group_lost_ack_recovers_receipt_without_second_write(tmp_path):
+    resolved = _resolved_work_group_phs2(mode="merge")
+    committed_receipt = None
+    post_count = 0
+
+    def handler(call):
+        nonlocal committed_receipt, post_count
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": resolved})
+        if call["method"] == "POST" and call["url"].endswith(
+            "/transfers/seal"
+        ):
+            post_count += 1
+            committed_receipt = _work_group_receipt(call["json"])
+            raise ConnectionError("lost ack")
+        if call["method"] == "GET" and "/receipts/" in call["url"]:
+            assert committed_receipt is not None
+            return FakeResponse(
+                200,
+                {"ok": True, "data": committed_receipt},
+            )
+        raise AssertionError(call)
+
+    client, session = _work_group_client(handler)
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "work-group-lost-ack.db"),
+        client,
+    )
+    master_label = resolved["phs_work_group"]["scan_payload"]
+    prepared = coordinator.prepare(
+        master_label=master_label,
+        master_label_fields=_fields_from_compact_qr(master_label),
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=[
+            member["normalized_barcode"]
+            for member in resolved["work_group_source"]["members"]
+        ],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "ACKED"
+    assert post_count == 1
+    assert [call["method"] for call in session.calls] == [
+        "GET",
+        "POST",
+        "GET",
+    ]
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda receipt: receipt["data"]["phs_work_group"].update(
+            {"group_id": "PHSG-WRONG"}
+        ),
+        lambda receipt: receipt["data"]["source_transitions"][0].update(
+            {"selected_membership_hash": "0" * 64}
+        ),
+        lambda receipt: receipt["data"].update(
+            {"topology_hash_after": "0" * 64}
+        ),
+        lambda receipt: receipt["data"]["root_proof"][0].update(
+            {"root_id": "PHS-WRONG"}
+        ),
+    ],
+)
+def test_work_group_receipt_drift_is_never_acked(tmp_path, mutate):
+    resolved = _resolved_work_group_phs2(mode="split")
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": resolved})
+        if call["method"] == "POST" and call["url"].endswith(
+            "/transfers/seal"
+        ):
+            receipt = json.loads(
+                json.dumps(_work_group_receipt(call["json"]))
+            )
+            mutate(receipt)
+            return FakeResponse(200, {"ok": True, "data": receipt})
+        raise AssertionError(call)
+
+    client, _session = _work_group_client(handler)
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "work-group-bad-receipt.db"),
+        client,
+    )
+    master_label = resolved["phs_work_group"]["scan_payload"]
+    prepared = coordinator.prepare(
+        master_label=master_label,
+        master_label_fields=_fields_from_compact_qr(master_label),
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=[
+            member["normalized_barcode"]
+            for member in resolved["work_group_source"]["members"]
+        ],
+    )
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert result.error_code == "RECEIPT_MEMBERSHIP_MISMATCH"
+    assert not result.receipt_id
 
 
 def test_partial_phs_seal_is_blocked_before_post(tmp_path):

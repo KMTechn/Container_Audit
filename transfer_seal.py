@@ -140,6 +140,16 @@ class TransferSourcePreflight:
     input_tag_hash_prefix: str
     input_tag_core_hash: str
     input_tag_label_hash: str
+    source_resolution_basis: str = "IMMUTABLE_INPUT_TAG"
+    source_bundle_ids: tuple[str, ...] = ()
+    source_session_ids: tuple[str, ...] = ()
+    source_bundles: tuple[dict[str, Any], ...] = ()
+    entity_versions: dict[str, int] = field(default_factory=dict)
+    phs_work_group: dict[str, Any] = field(default_factory=dict)
+    remainder_cover_groups: tuple[dict[str, Any], ...] = ()
+    topology_hash: str = ""
+    transfer_bundle_id: str = ""
+    transfer_external_label: str = ""
     canonical_input_tag_qr: str = ""
     active_label_qr_payload: str = ""
     active_label_id: str = ""
@@ -172,6 +182,12 @@ class TransferSourcePreflight:
             "input_tag_label_id": self.input_tag_label_id,
             "input_tag_hash_prefix": self.input_tag_hash_prefix,
             "input_tag_lifecycle": "INSPECTION_COMPLETED",
+            "source_resolution_basis": self.source_resolution_basis,
+            "source_bundle_ids": list(self.source_bundle_ids),
+            "source_session_ids": list(self.source_session_ids),
+            "source_bundle_count": len(self.source_bundle_ids),
+            "topology_hash": self.topology_hash,
+            "transfer_bundle_id": self.transfer_bundle_id,
             "canonical_input_tag_qr": self.canonical_input_tag_qr,
             "active_label_qr_payload": self.active_label_qr_payload,
             "active_label_id": self.active_label_id,
@@ -399,14 +415,784 @@ def _physical_label_from_resolution(
     return active, resolution_kind, scanned_fields["LBL"], replaced
 
 
+def _work_group_members(
+    value: Any,
+    *,
+    field_name: str,
+    allow_empty: bool = False,
+) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology의 제품 목록 형식이 올바르지 않습니다.",
+            field=field_name,
+        )
+    try:
+        members = tuple(
+            sorted(_normalize_identifier(member, field_name) for member in value)
+        )
+    except (TypeError, ValueError) as exc:
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology의 제품 식별자가 올바르지 않습니다.",
+            field=field_name,
+        ) from exc
+    if (
+        len(members) != len(value)
+        or len(members) != len(set(members))
+        or (not allow_empty and not members)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology의 제품 목록이 비어 있거나 중복됐습니다.",
+            field=field_name,
+        )
+    return members
+
+
+def _work_group_version(value: Any, *, field_name: str, minimum: int = 1) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology의 version 증거가 올바르지 않습니다.",
+            field=field_name,
+        )
+    return value
+
+
+def _validated_completed_input_tag(
+    value: Any,
+    *,
+    expected_item_id: str,
+    expected_uom: str,
+    field_name: str,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    if not isinstance(value, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 완료 registry 검증 증거가 없습니다.",
+            field=field_name,
+        )
+    projection = dict(value)
+    required = (
+        "input_tag_id",
+        "label_id",
+        "item_id",
+        "uom",
+        "tag_core_hash",
+        "label_instance_hash",
+        "hash_prefix",
+        "lifecycle",
+        "qr_payload",
+        "session_id",
+    )
+    missing = [key for key in required if projection.get(key) in (None, "")]
+    if missing:
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 완료 registry 응답이 불완전합니다.",
+            field=field_name,
+            missing_fields=missing,
+        )
+    qr_payload = unicodedata.normalize(
+        "NFKC", str(projection["qr_payload"])
+    ).strip()
+    qr_fields = _compact_phs2_fields_from_payload(qr_payload)
+    input_tag_id = str(projection["input_tag_id"]).strip()
+    label_id = str(projection["label_id"]).strip()
+    item_id = str(projection["item_id"]).strip()
+    uom = str(projection["uom"]).strip()
+    core_hash = str(projection["tag_core_hash"]).strip().lower()
+    label_hash = str(projection["label_instance_hash"]).strip().lower()
+    hash_prefix = str(projection["hash_prefix"]).strip().lower()
+    if (
+        input_tag_id != qr_fields["ITG"]
+        or str(projection["session_id"]).strip() != input_tag_id
+        or label_id != qr_fields["LBL"]
+        or item_id != qr_fields["CLC"]
+        or item_id != expected_item_id
+        or uom != expected_uom
+        or hash_prefix != qr_fields["HSH"]
+        or str(projection["lifecycle"]).strip().upper()
+        != "INSPECTION_COMPLETED"
+        or len(core_hash) != 64
+        or len(label_hash) != 64
+        or any(
+            character not in "0123456789abcdef"
+            for character in core_hash + label_hash
+        )
+        or label_hash[:16] != hash_prefix
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH",
+            "중앙 PHS=2 완료 registry 식별자가 올바르지 않습니다.",
+            field=field_name,
+        )
+    return projection, qr_fields
+
+
+def _validated_work_group_proof(
+    value: Any,
+    *,
+    field_name: str,
+    expected_item_id: str,
+    expected_uom: str,
+    require_state: bool,
+) -> tuple[dict[str, Any], tuple[str, ...]]:
+    if not isinstance(value, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 group 증거가 없습니다.",
+            field=field_name,
+        )
+    proof = dict(value)
+    group_id = str(proof.get("group_id") or "").strip()
+    label_id = str(proof.get("label_id") or "").strip()
+    scan_payload = unicodedata.normalize(
+        "NFKC", str(proof.get("scan_payload") or "")
+    ).strip()
+    anchor_id = str(proof.get("scan_anchor_input_tag_id") or "").strip()
+    item_id = str(proof.get("item_id") or "").strip()
+    uom = str(proof.get("uom") or "").strip()
+    members = _work_group_members(
+        proof.get("member_ids"),
+        field_name=f"{field_name}.member_ids",
+    )
+    if (
+        not group_id
+        or not label_id
+        or not scan_payload
+        or not anchor_id
+        or item_id != expected_item_id
+        or uom != expected_uom
+        or (
+            require_state
+            and str(proof.get("state") or "").strip().upper() != "ACTIVE"
+        )
+        or isinstance(proof.get("member_count"), bool)
+        or not isinstance(proof.get("member_count"), int)
+        or proof.get("member_count") != len(members)
+        or str(proof.get("membership_hash") or "")
+        != membership_hash(members)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 group의 identity 또는 membership이 일치하지 않습니다.",
+            field=field_name,
+        )
+    scan_fields = _compact_phs2_fields_from_payload(scan_payload)
+    if (
+        scan_fields["ITG"] != anchor_id
+        or scan_fields["CLC"] != item_id
+        or scan_fields["LBL"] != label_id
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 group과 physical label 식별자가 일치하지 않습니다.",
+            field=field_name,
+        )
+    for version_field in (
+        "membership_version",
+        "label_version",
+        "group_entity_version",
+        "label_entity_version",
+    ):
+        _work_group_version(
+            proof.get(version_field),
+            field_name=f"{field_name}.{version_field}",
+        )
+    return proof, members
+
+
+def _validate_work_group_phs2_preflight(
+    fields: Mapping[str, str],
+    response: Mapping[str, Any],
+) -> TransferSourcePreflight:
+    """Validate one ACTIVE physical work label across all current PHS owners."""
+
+    candidate_count = response.get("candidate_count")
+    if (
+        isinstance(candidate_count, bool)
+        or not isinstance(candidate_count, int)
+        or candidate_count != 1
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_AMBIGUOUS",
+            "중앙 현품표가 이적 원본 topology를 하나로 확정하지 못했습니다.",
+            candidate_count=candidate_count,
+        )
+    source_value = response.get("work_group_source")
+    if not isinstance(source_value, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 source topology가 없습니다.",
+        )
+    source = dict(source_value)
+    authority_scope_id = str(source.get("authority_scope_id") or "").strip()
+    ledger_plane = str(source.get("ledger_plane") or "").strip().upper()
+    plane_epoch = _work_group_version(
+        source.get("plane_epoch"),
+        field_name="work_group_source.plane_epoch",
+    )
+    item_id = str(source.get("item_id") or "").strip()
+    uom = str(source.get("uom") or "").strip()
+    source_iin = str(source.get("source_iin") or "").strip()
+    if (
+        not authority_scope_id
+        or ledger_plane not in {"AUTHORITATIVE", "SHADOW_CANDIDATE"}
+        or item_id != fields["CLC"]
+        or not uom
+        or not source_iin
+        or str(response.get("authority_scope_id") or "").strip()
+        != authority_scope_id
+        or str(response.get("ledger_plane") or "").strip().upper()
+        != ledger_plane
+        or response.get("plane_epoch") != plane_epoch
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_SOURCE_IDENTITY_MISMATCH",
+            "중앙 현품표 source의 품목·UOM·authority 상태가 일치하지 않습니다.",
+        )
+
+    anchor_tag, anchor_fields = _validated_completed_input_tag(
+        response.get("input_tag"),
+        expected_item_id=item_id,
+        expected_uom=uom,
+        field_name="input_tag",
+    )
+    if anchor_fields["ITG"] != fields["ITG"]:
+        raise _phs2_contract_error(
+            "PHS2_REGISTRY_IDENTITY_MISMATCH",
+            "스캔한 physical label의 immutable input-tag anchor가 일치하지 않습니다.",
+        )
+    (
+        active_label,
+        active_label_resolution,
+        scanned_label_id,
+        replaced_scan,
+    ) = _physical_label_from_resolution(
+        scanned_fields=fields,
+        response=response,
+        canonical_fields=anchor_fields,
+    )
+    group, group_members = _validated_work_group_proof(
+        response.get("phs_work_group"),
+        field_name="phs_work_group",
+        expected_item_id=item_id,
+        expected_uom=uom,
+        require_state=True,
+    )
+    active_members = _work_group_members(
+        active_label.get("member_ids"),
+        field_name="phs_label_resolution.effective_labels[0].member_ids",
+    )
+    scanned_qr = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={fields['ITG']}|"
+        f"CLC={fields['CLC']}|LBL={fields['LBL']}|HSH={fields['HSH']}"
+    )
+    if (
+        str(group["scan_anchor_input_tag_id"]) != fields["ITG"]
+        or str(group["scan_payload"]) != scanned_qr
+        or str(group["group_id"]) != str(active_label.get("group_id") or "")
+        or str(group["label_id"]) != str(active_label.get("label_id") or "")
+        or str(group["scan_payload"])
+        != str(active_label.get("qr_payload") or "")
+        or group_members != active_members
+        or active_label.get("member_count") != len(group_members)
+        or str(active_label.get("membership_hash") or "")
+        != membership_hash(group_members)
+        or active_label.get("membership_version")
+        != group["membership_version"]
+        or active_label.get("label_version") != group["label_version"]
+        or active_label.get("entity_version")
+        != group["label_entity_version"]
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+            "스캔한 ACTIVE physical label과 중앙 work group이 일치하지 않습니다.",
+        )
+
+    source_members = _work_group_members(
+        source.get("member_ids"),
+        field_name="work_group_source.member_ids",
+    )
+    raw_member_rows = source.get("members")
+    if not isinstance(raw_member_rows, list):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+            "중앙 현품표의 제품 barcode mapping이 없습니다.",
+        )
+    mapped_ids: list[str] = []
+    normalized_barcodes: list[str] = []
+    for member in raw_member_rows:
+        if not isinstance(member, Mapping):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+                "중앙 현품표 제품 mapping 형식이 올바르지 않습니다.",
+            )
+        try:
+            unit_id = _normalize_identifier(member.get("unit_id"), "unit_id")
+            barcode = normalize_barcode(member.get("normalized_barcode"))
+        except (TypeError, ValueError) as exc:
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+                "중앙 현품표 제품 식별자가 올바르지 않습니다.",
+            ) from exc
+        if (
+            str(member.get("current_inbound_iin") or "").strip() != source_iin
+            or str(member.get("item_id") or "").strip() != item_id
+            or str(member.get("uom") or "").strip() != uom
+            or str(member.get("location_code") or "").strip() != "PHS_GOOD"
+            or str(member.get("unit_state") or "").strip().upper()
+            not in {"AVAILABLE", "CONSUMED"}
+        ):
+            raise _phs2_contract_error(
+                "PHS2_MIXED_MEMBERSHIP",
+                "중앙 현품표에 서로 다른 품목·위치·회계 귀속 제품이 섞여 있습니다.",
+            )
+        mapped_ids.append(unit_id)
+        normalized_barcodes.append(barcode)
+    if (
+        source_members != group_members
+        or tuple(sorted(mapped_ids)) != source_members
+        or len(mapped_ids) != len(set(mapped_ids))
+        or len(normalized_barcodes) != len(set(normalized_barcodes))
+        or isinstance(source.get("member_count"), bool)
+        or source.get("member_count") != len(source_members)
+        or str(source.get("membership_hash") or "")
+        != membership_hash(source_members)
+        or isinstance(source.get("barcode_member_count"), bool)
+        or source.get("barcode_member_count") != len(normalized_barcodes)
+        or str(source.get("barcode_membership_hash") or "")
+        != membership_hash(normalized_barcodes)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+            "중앙 현품표의 exact 제품·barcode membership이 일치하지 않습니다.",
+        )
+
+    raw_sources = source.get("source_bundles")
+    if not isinstance(raw_sources, list) or not raw_sources:
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표의 current PHS source partitions가 없습니다.",
+        )
+    source_bundles: list[dict[str, Any]] = []
+    source_bundle_ids: list[str] = []
+    source_session_ids: set[str] = set()
+    selected_union: set[str] = set()
+    full_union: set[str] = set()
+    all_remainders: set[str] = set()
+    source_remainders: dict[str, set[str]] = {}
+    source_cover_ids: dict[str, set[str]] = {}
+    source_versions: dict[str, int] = {}
+    for index, raw_source in enumerate(raw_sources):
+        if not isinstance(raw_source, Mapping):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+                "중앙 현품표 source partition 형식이 올바르지 않습니다.",
+                source_index=index,
+            )
+        frozen = dict(raw_source)
+        source_id = str(frozen.get("bundle_id") or "").strip()
+        source_session_id = str(
+            frozen.get("source_session_id") or ""
+        ).strip()
+        accounting_iin = str(
+            frozen.get("accounting_inbound_iin") or ""
+        ).strip()
+        version = _work_group_version(
+            frozen.get("entity_version"),
+            field_name=f"source_bundles[{index}].entity_version",
+        )
+        full = _work_group_members(
+            frozen.get("source_member_ids"),
+            field_name=f"source_bundles[{index}].source_member_ids",
+        )
+        selected = _work_group_members(
+            frozen.get("selected_member_ids"),
+            field_name=f"source_bundles[{index}].selected_member_ids",
+        )
+        remainder = _work_group_members(
+            frozen.get("remainder_member_ids"),
+            field_name=f"source_bundles[{index}].remainder_member_ids",
+            allow_empty=True,
+        )
+        raw_cover_ids = frozen.get("remainder_cover_group_ids")
+        if not isinstance(raw_cover_ids, list):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+                "중앙 현품표 source의 remainder cover 증거가 없습니다.",
+                source_bundle_id=source_id,
+            )
+        cover_ids = {
+            _normalize_identifier(value, "remainder_cover_group_id")
+            for value in raw_cover_ids
+        }
+        expected_remainder_id = (
+            "PHS-WORK-REMAINDER-"
+            + _sha256(
+                {
+                    "source_bundle_id": source_id,
+                    "member_ids": list(remainder),
+                }
+            )[:24].upper()
+            if remainder
+            else None
+        )
+        expected_remainder_label = (
+            f"WORK-REMAINDER::{expected_remainder_id}"
+            if expected_remainder_id
+            else None
+        )
+        if (
+            not source_id
+            or source_id in source_bundle_ids
+            or not source_session_id
+            or not accounting_iin
+            or accounting_iin != source_iin
+            or str(frozen.get("bundle_type") or "") != "PHS"
+            or str(frozen.get("bundle_state") or "") != "AVAILABLE"
+            or isinstance(frozen.get("source_member_count"), bool)
+            or frozen.get("source_member_count") != len(full)
+            or str(frozen.get("source_membership_hash") or "")
+            != membership_hash(full)
+            or isinstance(frozen.get("selected_member_count"), bool)
+            or frozen.get("selected_member_count") != len(selected)
+            or str(frozen.get("selected_membership_hash") or "")
+            != membership_hash(selected)
+            or isinstance(frozen.get("remainder_member_count"), bool)
+            or frozen.get("remainder_member_count") != len(remainder)
+            or (
+                str(frozen.get("remainder_membership_hash") or "")
+                if remainder
+                else None
+            )
+            != (membership_hash(remainder) if remainder else None)
+            or sorted(full) != sorted((*selected, *remainder))
+            or bool(set(selected) & set(remainder))
+            or str(frozen.get("remainder_bundle_id") or "")
+            != str(expected_remainder_id or "")
+            or str(frozen.get("remainder_external_label") or "")
+            != str(expected_remainder_label or "")
+            or len(cover_ids) != len(raw_cover_ids)
+            or (not remainder and cover_ids)
+            or bool(full_union.intersection(full))
+            or bool(selected_union.intersection(selected))
+        ):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_SOURCE_PARTITION_MISMATCH",
+                "중앙 현품표 source의 full/selected/remainder partition이 일치하지 않습니다.",
+                source_bundle_id=source_id,
+            )
+        source_bundle_ids.append(source_id)
+        source_session_ids.add(source_session_id)
+        source_versions[source_id] = version
+        source_remainders[source_id] = set(remainder)
+        source_cover_ids[source_id] = cover_ids
+        selected_union.update(selected)
+        full_union.update(full)
+        all_remainders.update(remainder)
+        source_bundles.append(frozen)
+    if (
+        source_bundle_ids != sorted(source_bundle_ids)
+        or selected_union != set(group_members)
+        or source.get("source_bundle_count") != len(source_bundle_ids)
+        or list(source.get("source_bundle_ids") or []) != source_bundle_ids
+        or list(source.get("source_session_ids") or [])
+        != sorted(source_session_ids)
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_SOURCE_PARTITION_MISMATCH",
+            "중앙 현품표 source partitions가 work-group membership을 정확히 덮지 않습니다.",
+        )
+
+    raw_covers = source.get("remainder_cover_groups")
+    if not isinstance(raw_covers, list):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 remainder cover topology가 없습니다.",
+        )
+    cover_groups: list[dict[str, Any]] = []
+    cover_members_by_group: dict[str, set[str]] = {}
+    covered_union: set[str] = set()
+    cover_label_ids: set[str] = set()
+    for index, raw_cover in enumerate(raw_covers):
+        cover, cover_members = _validated_work_group_proof(
+            raw_cover,
+            field_name=f"remainder_cover_groups[{index}]",
+            expected_item_id=item_id,
+            expected_uom=uom,
+            require_state=False,
+        )
+        covered = _work_group_members(
+            cover.get("covered_member_ids"),
+            field_name=f"remainder_cover_groups[{index}].covered_member_ids",
+        )
+        cover_id = str(cover["group_id"])
+        cover_label_id = str(cover["label_id"])
+        if (
+            cover_id == str(group["group_id"])
+            or cover_id in cover_members_by_group
+            or cover_label_id in cover_label_ids
+            or covered != cover_members
+            or isinstance(cover.get("covered_member_count"), bool)
+            or cover.get("covered_member_count") != len(covered)
+            or str(cover.get("covered_membership_hash") or "")
+            != membership_hash(covered)
+            or bool(covered_union.intersection(covered))
+        ):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_REMAINDER_COVER_MISMATCH",
+                "중앙 현품표 remainder successor label topology가 일치하지 않습니다.",
+                group_id=cover_id,
+            )
+        cover_members_by_group[cover_id] = set(covered)
+        cover_label_ids.add(cover_label_id)
+        covered_union.update(covered)
+        cover_groups.append(cover)
+    if covered_union != all_remainders:
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_REMAINDER_COVER_MISMATCH",
+            "중앙 현품표 remainder를 ACTIVE successor label이 정확히 덮지 않습니다.",
+        )
+    for source_id, remainder in source_remainders.items():
+        expected_cover_ids = {
+            cover_id
+            for cover_id, cover_members in cover_members_by_group.items()
+            if remainder.intersection(cover_members)
+        }
+        if source_cover_ids[source_id] != expected_cover_ids:
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_REMAINDER_COVER_MISMATCH",
+                "중앙 현품표 source와 remainder successor label 연결이 일치하지 않습니다.",
+                source_bundle_id=source_id,
+            )
+
+    raw_source_tags = response.get("source_input_tags")
+    if not isinstance(raw_source_tags, list):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 현품표 실제 source input-tag registry 증거가 없습니다.",
+        )
+    source_tags: dict[str, dict[str, Any]] = {}
+    source_tag_fields: dict[str, dict[str, str]] = {}
+    for index, raw_tag in enumerate(raw_source_tags):
+        tag, tag_fields = _validated_completed_input_tag(
+            raw_tag,
+            expected_item_id=item_id,
+            expected_uom=uom,
+            field_name=f"source_input_tags[{index}]",
+        )
+        session_id = str(tag["input_tag_id"]).strip()
+        if session_id in source_tags:
+            raise _phs2_contract_error(
+                "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH",
+                "중앙 현품표 source input-tag registry가 중복됐습니다.",
+            )
+        source_tags[session_id] = tag
+        source_tag_fields[session_id] = tag_fields
+    if set(source_tags) != source_session_ids:
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH",
+            "중앙 현품표 source sessions와 immutable input-tag registry가 일치하지 않습니다.",
+        )
+    for source_bundle in source_bundles:
+        source_id = str(source_bundle["bundle_id"])
+        source_session_id = str(source_bundle["source_session_id"])
+        external_label = str(source_bundle.get("external_label") or "")
+        source_qr = str(source_tags[source_session_id]["qr_payload"])
+        internal_alias = f"WORK-REMAINDER::{source_id}"
+        if external_label not in {source_qr, internal_alias}:
+            raise _phs2_contract_error(
+                "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH",
+                "중앙 PHS source의 immutable label identity가 registry와 일치하지 않습니다.",
+                source_bundle_id=source_id,
+            )
+
+    transfer_bundle_id = str(
+        source.get("transfer_bundle_id") or ""
+    ).strip()
+    transfer_external_label = str(
+        source.get("transfer_external_label") or ""
+    ).strip()
+    expected_transfer_id = _deterministic_id(
+        "TRANSFER",
+        {
+            "group_id": str(group["group_id"]),
+            "label_id": str(group["label_id"]),
+            "member_ids": list(group_members),
+        },
+    )
+    topology_hash = str(source.get("topology_hash") or "").strip().lower()
+    expected_topology_hash = _sha256(
+        {
+            "phs_work_group": group,
+            "source_bundles": source_bundles,
+            "remainder_cover_groups": cover_groups,
+            "source_iin": source_iin,
+            "barcode_membership_hash": membership_hash(normalized_barcodes),
+            "transfer_bundle_id": transfer_bundle_id,
+        }
+    )
+    if (
+        transfer_bundle_id != expected_transfer_id
+        or transfer_external_label != transfer_bundle_id
+        or topology_hash != expected_topology_hash
+        or str(response.get("topology_hash") or "").strip().lower()
+        != topology_hash
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_HASH_MISMATCH",
+            "중앙 현품표의 deterministic transfer identity 또는 topology hash가 일치하지 않습니다.",
+        )
+
+    raw_versions = source.get("entity_versions")
+    top_versions = response.get("entity_versions")
+    if not isinstance(raw_versions, Mapping) or not isinstance(
+        top_versions, Mapping
+    ):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology CAS version 증거가 없습니다.",
+        )
+    versions = dict(raw_versions)
+    if versions != dict(top_versions):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology CAS version 응답이 일치하지 않습니다.",
+        )
+    expected_versions: dict[str, int] = {
+        f"phs_work_group:{group['group_id']}": group[
+            "group_entity_version"
+        ],
+        f"phs_work_membership:{group['group_id']}": group[
+            "membership_version"
+        ],
+        f"phs_work_label_version:{group['group_id']}": group[
+            "label_version"
+        ],
+        f"phs_label:{group['label_id']}": group["label_entity_version"],
+        **{
+            f"bundle:{source_id}": version
+            for source_id, version in source_versions.items()
+        },
+        f"bundle:{transfer_bundle_id}": 0,
+    }
+    for cover in cover_groups:
+        cover_id = str(cover["group_id"])
+        expected_versions.update(
+            {
+                f"phs_work_group:{cover_id}": cover[
+                    "group_entity_version"
+                ],
+                f"phs_work_membership:{cover_id}": cover[
+                    "membership_version"
+                ],
+                f"phs_work_label_version:{cover_id}": cover[
+                    "label_version"
+                ],
+                f"phs_label:{cover['label_id']}": cover[
+                    "label_entity_version"
+                ],
+            }
+        )
+    if set(versions) != set(expected_versions):
+        raise _phs2_contract_error(
+            "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+            "중앙 현품표 topology CAS version key가 불완전합니다.",
+        )
+    for entity_key, expected_version in expected_versions.items():
+        minimum = 0 if entity_key == f"bundle:{transfer_bundle_id}" else 1
+        actual_version = _work_group_version(
+            versions.get(entity_key),
+            field_name=f"entity_versions.{entity_key}",
+            minimum=minimum,
+        )
+        if actual_version != expected_version:
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_TOPOLOGY_INVALID",
+                "중앙 현품표 topology CAS version 값이 proof와 일치하지 않습니다.",
+                entity_key=entity_key,
+            )
+
+    return TransferSourcePreflight(
+        source_bundle_id=(
+            source_bundle_ids[0] if len(source_bundle_ids) == 1 else ""
+        ),
+        source_session_id=(
+            next(iter(source_session_ids))
+            if len(source_session_ids) == 1
+            else ""
+        ),
+        authority_scope_id=authority_scope_id,
+        ledger_plane=ledger_plane,
+        plane_epoch=plane_epoch,
+        item_id=item_id,
+        uom=uom,
+        source_iin=source_iin,
+        member_ids=source_members,
+        normalized_barcodes=tuple(sorted(normalized_barcodes)),
+        membership_hash=membership_hash(source_members),
+        barcode_membership_hash=membership_hash(normalized_barcodes),
+        input_tag_id=str(anchor_tag["input_tag_id"]),
+        input_tag_label_id=str(anchor_tag["label_id"]),
+        input_tag_hash_prefix=str(anchor_tag["hash_prefix"]).lower(),
+        input_tag_core_hash=str(anchor_tag["tag_core_hash"]).lower(),
+        input_tag_label_hash=str(
+            anchor_tag["label_instance_hash"]
+        ).lower(),
+        source_resolution_basis="PHS_WORK_GROUP_EXACT_MEMBERSHIP",
+        source_bundle_ids=tuple(source_bundle_ids),
+        source_session_ids=tuple(sorted(source_session_ids)),
+        source_bundles=tuple(source_bundles),
+        entity_versions={
+            str(key): int(value) for key, value in versions.items()
+        },
+        phs_work_group=group,
+        remainder_cover_groups=tuple(cover_groups),
+        topology_hash=topology_hash,
+        transfer_bundle_id=transfer_bundle_id,
+        transfer_external_label=transfer_external_label,
+        canonical_input_tag_qr=str(anchor_tag["qr_payload"]),
+        active_label_qr_payload=str(active_label.get("qr_payload") or ""),
+        active_label_id=str(active_label.get("label_id") or ""),
+        active_label_business_date=str(
+            active_label.get("business_date") or ""
+        ),
+        active_label_worker_code=str(
+            active_label.get("worker_code") or ""
+        ),
+        active_label_resolution=active_label_resolution,
+        scanned_label_id=scanned_label_id,
+        replaced_scan=replaced_scan,
+    )
+
+
 def validate_compact_phs2_preflight(
     master_label_fields: Mapping[str, Any],
     resolved: Mapping[str, Any],
 ) -> TransferSourcePreflight:
-    """Fail closed unless one completed central input tag owns one exact PHS."""
+    """Fail closed unless one completed central source owns one exact PHS."""
 
     fields = validate_compact_phs2_fields(master_label_fields)
     response = dict(resolved or {})
+    source_resolution_basis = str(
+        response.get("source_resolution_basis") or "IMMUTABLE_INPUT_TAG"
+    ).strip().upper()
+    if source_resolution_basis not in {
+        "IMMUTABLE_INPUT_TAG",
+        "PHS_WORK_GROUP_EXACT_MEMBERSHIP",
+    }:
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_RESOLUTION_INVALID",
+            "중앙 PHS=2 원본 선택 근거를 확인할 수 없습니다.",
+        )
+    work_group_resolution = (
+        source_resolution_basis == "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+    )
+    if work_group_resolution and "work_group_source" in response:
+        return _validate_work_group_phs2_preflight(fields, response)
     candidate_count = response.get("candidate_count")
     bundle_value = response.get("bundle")
     if (
@@ -474,11 +1260,14 @@ def validate_compact_phs2_preflight(
         or hash_prefix != canonical_fields["HSH"]
         or lifecycle != "INSPECTION_COMPLETED"
         or registry_qr_payload != expected_qr_payload
-        or bundle_external_label != expected_qr_payload
+        or (
+            not work_group_resolution
+            and bundle_external_label != expected_qr_payload
+        )
     ):
         raise _phs2_contract_error(
             "PHS2_REGISTRY_IDENTITY_MISMATCH",
-            "중앙 PHS=2 QR, 완료 registry, PHS 외부 라벨 식별자가 일치하지 않습니다.",
+            "중앙 PHS=2 QR과 완료 registry 식별자가 일치하지 않습니다.",
         )
     if (
         len(core_hash) != 64
@@ -510,6 +1299,65 @@ def validate_compact_phs2_preflight(
     active_label_worker_code = str(
         active_label.get("worker_code") or ""
     ).strip()
+    source_input_tag_value = (
+        response.get("source_input_tag")
+        if work_group_resolution
+        else input_tag
+    )
+    if not isinstance(source_input_tag_value, Mapping):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 실제 원본 registry 검증 증거가 없습니다.",
+        )
+    source_input_tag = dict(source_input_tag_value)
+    missing_source_registry = [
+        key
+        for key in canonical_input_tag_fields
+        if source_input_tag.get(key) in (None, "")
+    ]
+    if missing_source_registry:
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_EVIDENCE_REQUIRED",
+            "중앙 PHS=2 실제 원본 registry 응답이 불완전합니다.",
+            missing_fields=missing_source_registry,
+        )
+    source_registry_qr = unicodedata.normalize(
+        "NFKC", str(source_input_tag["qr_payload"])
+    ).strip()
+    source_registry_fields = _compact_phs2_fields_from_payload(
+        source_registry_qr
+    )
+    source_registry_core_hash = str(
+        source_input_tag["tag_core_hash"]
+    ).strip().lower()
+    source_registry_label_hash = str(
+        source_input_tag["label_instance_hash"]
+    ).strip().lower()
+    source_registry_hash_prefix = str(
+        source_input_tag["hash_prefix"]
+    ).strip().lower()
+    if (
+        str(source_input_tag["input_tag_id"]).strip()
+        != source_registry_fields["ITG"]
+        or str(source_input_tag["label_id"]).strip()
+        != source_registry_fields["LBL"]
+        or str(source_input_tag["item_id"]).strip()
+        != source_registry_fields["CLC"]
+        or source_registry_hash_prefix != source_registry_fields["HSH"]
+        or str(source_input_tag["lifecycle"]).strip().upper()
+        != "INSPECTION_COMPLETED"
+        or len(source_registry_core_hash) != 64
+        or len(source_registry_label_hash) != 64
+        or any(
+            value not in "0123456789abcdef"
+            for value in source_registry_core_hash + source_registry_label_hash
+        )
+        or source_registry_label_hash[:16] != source_registry_hash_prefix
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH",
+            "중앙 PHS=2 실제 원본 registry 식별자가 올바르지 않습니다.",
+        )
 
     source_bundle_id = str(bundle.get("bundle_id") or "").strip()
     source_session_id = str(bundle.get("source_session_id") or "").strip()
@@ -530,8 +1378,15 @@ def validate_compact_phs2_preflight(
         or bundle.get("bundle_type") != "PHS"
         or bundle.get("bundle_state") != "AVAILABLE"
         or not source_bundle_id
-        or source_session_id != fields["ITG"]
+        or (
+            not work_group_resolution
+            and source_session_id != fields["ITG"]
+        )
+        or source_session_id
+        != str(source_input_tag["input_tag_id"]).strip()
+        or bundle_external_label != source_registry_qr
         or item_id != fields["CLC"]
+        or item_id != str(source_input_tag["item_id"]).strip()
         or not uom
         or not source_iin
         or not authority_scope_id
@@ -577,6 +1432,53 @@ def validate_compact_phs2_preflight(
         raise _phs2_contract_error(
             "PHS2_MEMBERSHIP_INVALID",
             "중앙 PHS=2 member 수량 또는 membership hash가 일치하지 않습니다.",
+        )
+    if work_group_resolution:
+        raw_work_group_members = active_label.get("member_ids")
+        try:
+            work_group_members = (
+                tuple(
+                    sorted(
+                        _normalize_identifier(value, "member_id")
+                        for value in raw_work_group_members
+                    )
+                )
+                if isinstance(raw_work_group_members, list)
+                else ()
+            )
+        except (TypeError, ValueError) as exc:
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+                "현재 ACTIVE 현품표의 제품 식별자가 올바르지 않습니다.",
+            ) from exc
+        if (
+            work_group_members != member_ids
+            or isinstance(active_label.get("member_count"), bool)
+            or not isinstance(active_label.get("member_count"), int)
+            or active_label.get("member_count") != len(member_ids)
+            or str(active_label.get("membership_hash") or "")
+            != membership_hash(member_ids)
+        ):
+            raise _phs2_contract_error(
+                "PHS2_WORK_GROUP_MEMBERSHIP_MISMATCH",
+                "현재 ACTIVE 현품표와 실제 원본 PHS membership이 일치하지 않습니다.",
+            )
+    if (
+        work_group_resolution
+        and (
+            str(source_input_tag.get("session_id") or "").strip()
+            != source_session_id
+            or str(source_input_tag.get("uom") or "").strip() != uom
+            or isinstance(source_input_tag.get("member_count"), bool)
+            or not isinstance(source_input_tag.get("member_count"), int)
+            or source_input_tag.get("member_count") != len(member_ids)
+            or str(source_input_tag.get("membership_hash") or "")
+            != membership_hash(member_ids)
+        )
+    ):
+        raise _phs2_contract_error(
+            "PHS2_SOURCE_REGISTRY_MEMBERSHIP_MISMATCH",
+            "실제 원본 registry와 PHS bundle membership이 일치하지 않습니다.",
         )
 
     mapped_ids: list[str] = []
@@ -1511,12 +2413,17 @@ class TransferSealStore:
             and error.status_code != 404
             and not error.retryable
         )
+        local_contract_error = (
+            error.code.upper().startswith("PHS2_")
+            and not error.retryable
+        )
         status = (
             "OPERATOR_REVIEW"
             if (
                 error.code.upper() in operator_review_codes
                 or terminal_cas_conflict
                 or terminal_client_error
+                or local_contract_error
             )
             else "RETRY_WAIT"
         )
@@ -1649,6 +2556,133 @@ class TransferSealCoordinator:
             raise TransferSealError("MEMBERSHIP_CONFLICT", "선택 membership이 원본 PHS 범위를 벗어났습니다.")
         return sorted(selected)
 
+    def _build_work_group_command(
+        self,
+        row: sqlite3.Row,
+        identity: Mapping[str, Any],
+        resolved: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        if self.client is None:
+            raise TransferSealError(
+                "LOGISTICS_CLIENT_NOT_CONFIGURED",
+                "물류 서버 설정이 없어 이적 seal을 보류했습니다.",
+                retryable=True,
+            )
+        fields = {
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": str(identity.get("input_tag_id") or "").strip(),
+            "CLC": str(identity.get("item_id") or row["item_id"]).strip(),
+            "LBL": str(identity.get("input_tag_label_id") or "").strip(),
+            "HSH": str(identity.get("input_tag_hash_prefix") or "").strip(),
+        }
+        preflight = validate_compact_phs2_preflight(fields, resolved)
+        if preflight.item_id != str(row["item_id"]):
+            raise TransferSealError(
+                "SOURCE_IDENTITY_MISMATCH",
+                "재조회한 중앙 현품표의 품목이 저장된 이적 작업과 일치하지 않습니다.",
+            )
+        source_value = resolved.get("work_group_source")
+        if not isinstance(source_value, Mapping):
+            raise TransferSealError(
+                "RESOLVER_CONTRACT_INVALID",
+                "서버 현품표 resolver 응답에 exact source topology가 없습니다.",
+            )
+        work_source = dict(source_value)
+        scans = list(json.loads(row["scanned_barcodes_json"]))
+        selected = self._map_scans(work_source, scans)
+        if selected != list(preflight.member_ids):
+            raise TransferSealError(
+                "PARTIAL_PHS_TRANSFER_FORBIDDEN",
+                "현재 physical 현품표의 exact membership 전량을 스캔해야 이적할 수 있습니다.",
+            )
+        self.client.assert_authority(
+            preflight.authority_scope_id,
+            ledger_plane=preflight.ledger_plane,
+            plane_epoch=preflight.plane_epoch,
+        )
+        authority_epoch = int(self.client.authority_epoch or 0)
+        if authority_epoch < 1:
+            authority = self.client.get_authority(
+                preflight.authority_scope_id
+            )
+            authority_epoch_value = authority.get("authority_epoch")
+            if (
+                isinstance(authority_epoch_value, bool)
+                or not isinstance(authority_epoch_value, int)
+                or authority_epoch_value < 1
+            ):
+                raise TransferSealError(
+                    "AUTHORITY_INVALID",
+                    "서버 authority epoch를 확인할 수 없습니다.",
+                )
+            authority_epoch = authority_epoch_value
+        payload = {
+            "source_resolution_basis": (
+                "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+            ),
+            "phs_work_group": dict(preflight.phs_work_group),
+            "source_bundles": [
+                dict(value) for value in preflight.source_bundles
+            ],
+            "remainder_cover_groups": [
+                dict(value) for value in preflight.remainder_cover_groups
+            ],
+            "topology_hash": preflight.topology_hash,
+            "transfer_bundle_id": preflight.transfer_bundle_id,
+            "external_label": preflight.transfer_external_label,
+            "item_id": preflight.item_id,
+            "uom": preflight.uom,
+            "member_ids": list(preflight.member_ids),
+            "membership_hash": preflight.membership_hash,
+            "scanned_barcodes": scans,
+        }
+        return {
+            "contract_version": CONTRACT_VERSION,
+            "command_type": COMMAND_TYPE,
+            "authority_scope_id": preflight.authority_scope_id,
+            "authority_epoch": authority_epoch,
+            "ledger_plane": preflight.ledger_plane,
+            "plane_epoch": preflight.plane_epoch,
+            "idempotency_key": f"container-seal:{row['intent_hash']}",
+            "expected_versions": dict(preflight.entity_versions),
+            "payload": payload,
+            "client_exact_evidence": {
+                "source_resolution_basis": (
+                    "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+                ),
+                "phs_work_group": dict(preflight.phs_work_group),
+                "source_bundles": [
+                    dict(value) for value in preflight.source_bundles
+                ],
+                "remainder_cover_groups": [
+                    dict(value)
+                    for value in preflight.remainder_cover_groups
+                ],
+                "source_bundle_ids": list(preflight.source_bundle_ids),
+                "source_session_ids": list(
+                    preflight.source_session_ids
+                ),
+                "topology_hash": preflight.topology_hash,
+                "source_member_ids": list(preflight.member_ids),
+                "member_barcode_pairs": sorted(
+                    [
+                        {
+                            "unit_id": str(member["unit_id"]),
+                            "normalized_barcode": normalize_barcode(
+                                member["normalized_barcode"]
+                            ),
+                        }
+                        for member in work_source.get("members") or []
+                        if isinstance(member, Mapping)
+                    ],
+                    key=lambda member: member["unit_id"],
+                ),
+            },
+            "reason": "container_audit_phs_work_group_exact_scan_seal",
+            "evidence_refs": [row["intent_id"], row["intent_hash"]],
+        }
+
     def _build_command(self, row: sqlite3.Row) -> Mapping[str, Any]:
         if self.client is None:
             raise TransferSealError(
@@ -1677,6 +2711,19 @@ class TransferSealCoordinator:
                     details=exc.details,
                 ) from exc
             raise
+        if (
+            isinstance(resolved, Mapping)
+            and str(
+                resolved.get("source_resolution_basis") or ""
+            ).strip().upper()
+            == "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+            and "work_group_source" in resolved
+        ):
+            return self._build_work_group_command(
+                row,
+                identity,
+                resolved,
+            )
         bundle_value = resolved.get("bundle") if isinstance(resolved, Mapping) else None
         if not isinstance(bundle_value, Mapping):
             raise TransferSealError(
@@ -1703,6 +2750,28 @@ class TransferSealCoordinator:
             raise TransferSealError(
                 "SOURCE_IDENTITY_MISMATCH", "서버 응답 bundle이 이적 가능한 원본 PHS/잔량이 아닙니다."
             )
+        if str(identity.get("input_tag_hash_prefix") or "").strip():
+            preflight = validate_compact_phs2_preflight(
+                {
+                    "PHS": "2",
+                    "SRC": "KMTECH_INPUT_TAG",
+                    "ITG": str(identity.get("input_tag_id") or "").strip(),
+                    "CLC": str(identity.get("item_id") or row["item_id"]).strip(),
+                    "LBL": str(identity.get("input_tag_label_id") or "").strip(),
+                    "HSH": str(
+                        identity.get("input_tag_hash_prefix") or ""
+                    ).strip(),
+                },
+                resolved,
+            )
+            if (
+                preflight.source_bundle_id != source_bundle_id
+                or preflight.item_id != str(row["item_id"])
+            ):
+                raise TransferSealError(
+                    "SOURCE_IDENTITY_MISMATCH",
+                    "재조회한 중앙 PHS=2 원본이 저장된 이적 작업과 일치하지 않습니다.",
+                )
         if str(bundle.get("item_id") or "") != str(row["item_id"]):
             raise TransferSealError(
                 "SOURCE_IDENTITY_MISMATCH", "서버 원본 bundle의 품목이 현품표와 일치하지 않습니다."
@@ -1831,7 +2900,493 @@ class TransferSealCoordinator:
         return qr_payload
 
     @staticmethod
+    def _validate_work_group_receipt(
+        context: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        def mismatch(message: str) -> None:
+            raise TransferSealError(
+                "RECEIPT_MEMBERSHIP_MISMATCH",
+                message,
+            )
+
+        try:
+            payload_value = context.get("payload")
+            if not isinstance(payload_value, Mapping):
+                mismatch("저장된 이적 명령 payload가 올바르지 않습니다.")
+            payload = dict(payload_value)
+            data = TransferSealCoordinator._result_data(receipt)
+            receipt_id = str(receipt.get("receipt_id") or "").strip()
+            event_ids = receipt.get("event_ids")
+            outbox_ids = receipt.get("outbox_ids")
+            if (
+                not receipt_id
+                or receipt.get("contract_version") != CONTRACT_VERSION
+                or receipt.get("command_type") != COMMAND_TYPE
+                or str(receipt.get("status") or "").upper() != "COMMITTED"
+                or receipt.get("authority_scope_id")
+                != context["authority_scope_id"]
+                or receipt.get("authority_epoch")
+                != context["authority_epoch"]
+                or str(receipt.get("resolved_ledger_plane") or "").upper()
+                != str(context["ledger_plane"]).upper()
+                or receipt.get("resolved_plane_epoch")
+                != context["plane_epoch"]
+                or not str(receipt.get("committed_at") or "").strip()
+                or not isinstance(event_ids, (list, tuple))
+                or len(event_ids) != 1
+                or not str(event_ids[0] or "").strip()
+                or not isinstance(outbox_ids, (list, tuple))
+                or len(outbox_ids) != 1
+                or not str(outbox_ids[0] or "").strip()
+            ):
+                mismatch("서버 receipt의 COMMITTED 원자 처리 증거가 불완전합니다.")
+
+            group = payload.get("phs_work_group")
+            source_specs = payload.get("source_bundles")
+            cover_groups = payload.get("remainder_cover_groups")
+            if (
+                not isinstance(group, Mapping)
+                or not isinstance(source_specs, list)
+                or not source_specs
+                or not all(
+                    isinstance(value, Mapping) for value in source_specs
+                )
+                or not isinstance(cover_groups, list)
+                or not all(
+                    isinstance(value, Mapping) for value in cover_groups
+                )
+            ):
+                mismatch("저장된 현품표 topology 명령 증거가 불완전합니다.")
+            group = dict(group)
+            source_specs = [dict(value) for value in source_specs]
+            cover_groups = [dict(value) for value in cover_groups]
+            source_ids = [str(value["bundle_id"]) for value in source_specs]
+            source_sessions = sorted(
+                {str(value["source_session_id"]) for value in source_specs}
+            )
+            transfer_id = str(payload["transfer_bundle_id"])
+            expected_member_ids = sorted(
+                str(value) for value in payload["member_ids"]
+            )
+            expected_barcodes = sorted(
+                normalize_barcode(value)
+                for value in payload["scanned_barcodes"]
+            )
+            if (
+                not expected_member_ids
+                or len(expected_member_ids) != len(set(expected_member_ids))
+                or len(expected_barcodes) != len(set(expected_barcodes))
+                or membership_hash(expected_member_ids)
+                != payload["membership_hash"]
+            ):
+                mismatch("저장된 현품표 exact scan 명령 증거가 올바르지 않습니다.")
+
+            evidence_value = context.get("client_exact_evidence")
+            evidence = (
+                dict(evidence_value)
+                if isinstance(evidence_value, Mapping)
+                else {}
+            )
+            expected_pair_rows = evidence.get("member_barcode_pairs")
+            if not isinstance(expected_pair_rows, list):
+                mismatch("저장된 제품-barcode exact mapping 증거가 없습니다.")
+            expected_pairs = sorted(
+                (
+                    _normalize_identifier(row.get("unit_id"), "unit_id"),
+                    normalize_barcode(row.get("normalized_barcode")),
+                )
+                for row in expected_pair_rows
+                if isinstance(row, Mapping)
+            )
+            if (
+                len(expected_pairs) != len(expected_member_ids)
+                or [unit_id for unit_id, _barcode in expected_pairs]
+                != expected_member_ids
+                or sorted(barcode for _unit_id, barcode in expected_pairs)
+                != expected_barcodes
+            ):
+                mismatch("저장된 제품-barcode exact mapping이 명령과 일치하지 않습니다.")
+
+            expected_remainders: list[dict[str, Any]] = []
+            remainder_by_source: dict[str, str] = {}
+            for source in source_specs:
+                remainder_ids = sorted(
+                    str(value)
+                    for value in source.get("remainder_member_ids") or []
+                )
+                remainder_id = str(
+                    source.get("remainder_bundle_id") or ""
+                )
+                if remainder_ids:
+                    if not remainder_id:
+                        mismatch("SPLIT source의 deterministic remainder ID가 없습니다.")
+                    remainder_by_source[str(source["bundle_id"])] = (
+                        remainder_id
+                    )
+                    expected_remainders.append(
+                        {
+                            "source_bundle_id": str(source["bundle_id"]),
+                            "remainder_bundle_id": remainder_id,
+                            "remainder_external_label": (
+                                f"WORK-REMAINDER::{remainder_id}"
+                            ),
+                            "remainder_external_label_kind": (
+                                "INTERNAL_LOGISTICS_ALIAS_NOT_PHYSICAL"
+                            ),
+                            "member_ids": remainder_ids,
+                            "member_count": len(remainder_ids),
+                            "membership_hash": membership_hash(
+                                remainder_ids
+                            ),
+                        }
+                    )
+                elif remainder_id:
+                    mismatch("빈 remainder source에 bundle ID가 남아 있습니다.")
+            remainder_ids = [
+                value["remainder_bundle_id"]
+                for value in expected_remainders
+            ]
+
+            raw_versions = receipt.get("entity_versions")
+            if not isinstance(raw_versions, Mapping):
+                raw_versions = data.get("entity_versions")
+            if not isinstance(raw_versions, Mapping):
+                mismatch("서버 receipt의 topology CAS version 증거가 없습니다.")
+            actual_versions = dict(raw_versions)
+            command_versions = context.get("expected_versions")
+            if not isinstance(command_versions, Mapping):
+                mismatch("저장된 명령의 topology CAS version 증거가 없습니다.")
+            expected_versions = {
+                str(key): int(value)
+                for key, value in command_versions.items()
+                if isinstance(value, int) and not isinstance(value, bool)
+            }
+            if len(expected_versions) != len(command_versions):
+                mismatch("저장된 명령의 topology CAS version이 올바르지 않습니다.")
+            source_version_keys = {
+                f"bundle:{source_id}" for source_id in source_ids
+            }
+            transfer_version_key = f"bundle:{transfer_id}"
+            expected_after: dict[str, int] = {}
+            for entity_key, version in expected_versions.items():
+                if entity_key in source_version_keys:
+                    expected_after[entity_key] = version + 1
+                elif entity_key == transfer_version_key:
+                    if version != 0:
+                        mismatch("deterministic transfer version이 0이 아닙니다.")
+                    expected_after[entity_key] = 1
+                elif entity_key.startswith("phs_work_group:"):
+                    expected_after[entity_key] = version + 1
+                else:
+                    expected_after[entity_key] = version
+            for remainder_id in remainder_ids:
+                expected_after[f"bundle:{remainder_id}"] = 1
+            if actual_versions != expected_after:
+                mismatch("서버 receipt의 topology CAS version 결과가 명령과 일치하지 않습니다.")
+
+            transitions_value = data.get("source_transitions")
+            if not isinstance(transitions_value, list):
+                mismatch("서버 receipt의 source transition 증거가 없습니다.")
+            transitions = {
+                str(value.get("source_bundle_id") or ""): dict(value)
+                for value in transitions_value
+                if isinstance(value, Mapping)
+            }
+            if (
+                len(transitions) != len(source_specs)
+                or set(transitions) != set(source_ids)
+            ):
+                mismatch("서버 receipt의 source transition 수량이 일치하지 않습니다.")
+            for source in source_specs:
+                source_id = str(source["bundle_id"])
+                transition = transitions[source_id]
+                full = sorted(
+                    str(value)
+                    for value in source["source_member_ids"]
+                )
+                selected = sorted(
+                    str(value)
+                    for value in source["selected_member_ids"]
+                )
+                before_version = expected_versions[
+                    f"bundle:{source_id}"
+                ]
+                if (
+                    transition.get("entity_version_before")
+                    != before_version
+                    or transition.get("entity_version_after")
+                    != before_version + 1
+                    or transition.get("state_before") != "AVAILABLE"
+                    or transition.get("state_after") != "CONSUMED"
+                    or sorted(
+                        str(value)
+                        for value in transition.get(
+                            "source_member_ids"
+                        )
+                        or []
+                    )
+                    != full
+                    or transition.get("source_member_count")
+                    != len(full)
+                    or transition.get("source_membership_hash")
+                    != membership_hash(full)
+                    or sorted(
+                        str(value)
+                        for value in transition.get(
+                            "selected_member_ids"
+                        )
+                        or []
+                    )
+                    != selected
+                    or transition.get("selected_member_count")
+                    != len(selected)
+                    or transition.get("selected_membership_hash")
+                    != membership_hash(selected)
+                    or str(
+                        transition.get("remainder_bundle_id") or ""
+                    )
+                    != remainder_by_source.get(source_id, "")
+                ):
+                    mismatch("서버 receipt의 source partition transition이 명령과 일치하지 않습니다.")
+
+            actual_remainders = data.get("remainder_bundles")
+            if not isinstance(actual_remainders, list):
+                mismatch("서버 receipt의 remainder bundle 증거가 없습니다.")
+            if _canonical_json(actual_remainders) != _canonical_json(
+                expected_remainders
+            ):
+                mismatch("서버 receipt의 deterministic remainder bundle이 명령과 일치하지 않습니다.")
+
+            root_specs: set[tuple[str, str, str]] = {
+                (
+                    str(group["group_id"]),
+                    "TRANSFER_BUNDLE",
+                    transfer_id,
+                )
+            }
+            for source in source_specs:
+                source_id = str(source["bundle_id"])
+                remainder_id = remainder_by_source.get(source_id)
+                if not remainder_id:
+                    continue
+                for cover_group_id in source.get(
+                    "remainder_cover_group_ids"
+                ) or []:
+                    root_specs.add(
+                        (
+                            str(cover_group_id),
+                            "PHS_BUNDLE",
+                            remainder_id,
+                        )
+                    )
+            expected_root_proof = [
+                {
+                    "group_id": group_id,
+                    "root_type": root_type,
+                    "root_id": root_id,
+                    "root_role": "SOURCE",
+                    "added_receipt_id": receipt_id,
+                }
+                for group_id, root_type, root_id in sorted(root_specs)
+            ]
+            root_proof = data.get("root_proof")
+            if _canonical_json(root_proof) != _canonical_json(
+                expected_root_proof
+            ):
+                mismatch("서버 receipt의 work-group root proof가 명령과 일치하지 않습니다.")
+
+            expected_group_versions = {
+                str(group["group_id"]): expected_versions[
+                    f"phs_work_group:{group['group_id']}"
+                ]
+                + 1,
+                **{
+                    str(cover["group_id"]): expected_versions[
+                        f"phs_work_group:{cover['group_id']}"
+                    ]
+                    + 1
+                    for cover in cover_groups
+                },
+            }
+            if data.get("group_entity_versions_after") != (
+                expected_group_versions
+            ):
+                mismatch("서버 receipt의 work-group CAS 결과가 명령과 일치하지 않습니다.")
+            topology_hash_before = str(
+                payload.get("topology_hash") or ""
+            )
+            topology_hash_after = _sha256(
+                {
+                    "topology_hash_before": topology_hash_before,
+                    "transfer_bundle_id": transfer_id,
+                    "remainder_bundle_ids": remainder_ids,
+                    "root_proof": expected_root_proof,
+                    "group_entity_versions": expected_group_versions,
+                }
+            )
+            if (
+                data.get("atomic") is not True
+                or data.get("receipt_contract_version")
+                != "PHS_WORK_GROUP_TRANSFER_V1"
+                or data.get("source_resolution_basis")
+                != "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+                or _canonical_json(data.get("phs_work_group"))
+                != _canonical_json(group)
+                or _canonical_json(data.get("source_bundles"))
+                != _canonical_json(source_specs)
+                or _canonical_json(data.get("remainder_cover_groups"))
+                != _canonical_json(cover_groups)
+                or data.get("topology_hash_before")
+                != topology_hash_before
+                or data.get("topology_hash_after")
+                != topology_hash_after
+                or topology_hash_after == topology_hash_before
+            ):
+                mismatch("서버 receipt의 atomic topology 증거가 명령과 일치하지 않습니다.")
+
+            def receipt_pairs(value: Any) -> list[tuple[str, str]]:
+                if not isinstance(value, list):
+                    mismatch("서버 receipt의 제품-barcode mapping 형식이 올바르지 않습니다.")
+                pairs = sorted(
+                    (
+                        _normalize_identifier(row.get("unit_id"), "unit_id"),
+                        normalize_barcode(row.get("normalized_barcode")),
+                    )
+                    for row in value
+                    if isinstance(row, Mapping)
+                )
+                if len(pairs) != len(value):
+                    mismatch("서버 receipt의 제품-barcode mapping 일부가 손상됐습니다.")
+                return pairs
+
+            actual_member_ids = sorted(
+                str(value) for value in data.get("member_ids") or []
+            )
+            actual_barcodes = sorted(
+                normalize_barcode(value)
+                for value in data.get("scanned_barcodes") or []
+            )
+            actual_pairs = receipt_pairs(data.get("members"))
+            sealed_pairs = receipt_pairs(data.get("sealed_members"))
+            if (
+                data.get("source_bundle_ids") != source_ids
+                or data.get("source_bundle_count") != len(source_ids)
+                or data.get("source_session_ids") != source_sessions
+                or str(data.get("source_bundle_id") or "")
+                != (source_ids[0] if len(source_ids) == 1 else "")
+                or data.get("scan_anchor_input_tag_id")
+                != group["scan_anchor_input_tag_id"]
+                or data.get("transfer_bundle_id") != transfer_id
+                or data.get("transfer_external_label")
+                != payload["external_label"]
+                or data.get("item_id") != payload["item_id"]
+                or data.get("uom") != payload["uom"]
+                or not str(data.get("inbound_iin") or "").strip()
+                or {
+                    str(value["accounting_inbound_iin"])
+                    for value in source_specs
+                }
+                != {str(data.get("inbound_iin") or "")}
+                or actual_member_ids != expected_member_ids
+                or data.get("member_count") != len(expected_member_ids)
+                or data.get("membership_hash")
+                != payload["membership_hash"]
+                or actual_barcodes != expected_barcodes
+                or data.get("scanned_barcode_count")
+                != len(expected_barcodes)
+                or data.get("scanned_barcode_hash")
+                != membership_hash(expected_barcodes)
+                or actual_pairs != expected_pairs
+                or data.get("remainder_bundle_ids")
+                != remainder_ids
+                or data.get("post_seal_exchange_policy")
+                != "BLOCKED_REQUIRES_TWO_BUNDLE_CAS"
+            ):
+                mismatch("서버 receipt의 transfer exact membership이 명령과 일치하지 않습니다.")
+
+            seal_qr_payload = str(
+                data.get("seal_qr_payload") or ""
+            ).strip()
+            seal_fields = {
+                key.strip().upper(): unquote(value.strip())
+                for key, value in (
+                    part.split("=", 1)
+                    for part in seal_qr_payload.split("|")
+                    if "=" in part
+                )
+            }
+            if (
+                data.get("seal_contract_version")
+                != "transfer-seal-qr-v1"
+                or data.get("seal_state") != "ACTIVE"
+                or not str(data.get("seal_id") or "").strip()
+                or data.get("seal_revision") != 1
+                or not str(data.get("seal_token") or "").strip()
+                or data.get("sealed_bundle_id") != transfer_id
+                or data.get("sealed_bundle_version") != 1
+                or sorted(
+                    str(value)
+                    for value in data.get("sealed_member_ids") or []
+                )
+                != expected_member_ids
+                or sealed_pairs != expected_pairs
+                or data.get("sealed_member_count")
+                != len(expected_member_ids)
+                or data.get("sealed_membership_hash")
+                != payload["membership_hash"]
+                or sorted(
+                    normalize_barcode(value)
+                    for value in data.get(
+                        "sealed_normalized_barcodes"
+                    )
+                    or []
+                )
+                != expected_barcodes
+                or data.get("sealed_barcode_membership_hash")
+                != membership_hash(expected_barcodes)
+                or seal_fields.get("TRF") != "1"
+                or seal_fields.get("BND") != transfer_id
+                or seal_fields.get("AUTH_SCOPE")
+                != context["authority_scope_id"]
+                or seal_fields.get("CLC") != payload["item_id"]
+                or seal_fields.get("QT")
+                != str(len(expected_member_ids))
+                or seal_fields.get("HSH")
+                != payload["membership_hash"]
+                or seal_fields.get("EPOCH")
+                != str(context["authority_epoch"])
+                or seal_fields.get("PLANE")
+                != context["ledger_plane"]
+                or seal_fields.get("PE")
+                != str(context["plane_epoch"])
+                or seal_fields.get("SID") != data.get("seal_id")
+                or seal_fields.get("SREV")
+                != str(data.get("seal_revision"))
+                or seal_fields.get("STK") != data.get("seal_token")
+            ):
+                mismatch("서버 receipt의 opaque transfer seal 증거가 명령과 일치하지 않습니다.")
+            return data
+        except TransferSealError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise TransferSealError(
+                "RECEIPT_MEMBERSHIP_MISMATCH",
+                "서버 receipt의 현품표 원자 이적 증거를 해석할 수 없습니다.",
+            ) from exc
+
+    @staticmethod
     def _validate_receipt(context: Mapping[str, Any], receipt: Mapping[str, Any]) -> dict[str, Any]:
+        payload_value = context.get("payload")
+        if (
+            isinstance(payload_value, Mapping)
+            and payload_value.get("source_resolution_basis")
+            == "PHS_WORK_GROUP_EXACT_MEMBERSHIP"
+        ):
+            return TransferSealCoordinator._validate_work_group_receipt(
+                context,
+                receipt,
+            )
         data = TransferSealCoordinator._result_data(receipt)
         payload = context["payload"]
         actual_ids = sorted(str(value) for value in data.get("member_ids") or [])
@@ -2016,6 +3571,29 @@ class TransferSealCoordinator:
             for key, value in raw_versions.items()
             if isinstance(value, int) and not isinstance(value, bool)
         } if isinstance(raw_versions, Mapping) else {}
+        source_bundle_id = str(payload.get("source_bundle_id") or "")
+        if not source_bundle_id:
+            source_bundles = payload.get("source_bundles")
+            if (
+                isinstance(source_bundles, list)
+                and len(source_bundles) == 1
+                and isinstance(source_bundles[0], Mapping)
+            ):
+                source_bundle_id = str(
+                    source_bundles[0].get("bundle_id") or ""
+                )
+        remainder_bundle_id = str(
+            payload.get("remainder_bundle_id") or ""
+        )
+        if not remainder_bundle_id:
+            receipt_remainders = receipt_data.get("remainder_bundle_ids")
+            if (
+                isinstance(receipt_remainders, list)
+                and len(receipt_remainders) == 1
+            ):
+                remainder_bundle_id = str(
+                    receipt_remainders[0] or ""
+                )
         return SealAttempt(
             intent_id=str(row["intent_id"]),
             status=str(row["status"]),
@@ -2025,8 +3603,8 @@ class TransferSealCoordinator:
             member_count=len(payload.get("member_ids") or []),
             membership_hash=str(payload.get("membership_hash") or ""),
             receipt_id=str(receipt.get("receipt_id") or ""),
-            source_bundle_id=str(payload.get("source_bundle_id") or ""),
-            remainder_bundle_id=str(payload.get("remainder_bundle_id") or ""),
+            source_bundle_id=source_bundle_id,
+            remainder_bundle_id=remainder_bundle_id,
             authority_scope_id=str(context.get("authority_scope_id") or ""),
             authority_epoch=int(context.get("authority_epoch") or 0),
             ledger_plane=str(context.get("ledger_plane") or ""),
