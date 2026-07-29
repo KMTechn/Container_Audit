@@ -238,7 +238,10 @@ def apply_startup_geometry(
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.49"
+CURRENT_VERSION = "v2.0.50"
+SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
+    {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
+)
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -2847,6 +2850,7 @@ class ContainerAudit:
         *,
         compact: bool,
         operator_review: bool,
+        precommand_retry: bool = False,
         replacement_active: bool,
         exchange_dialog_open: bool,
         exact_exchange_blocked: bool,
@@ -2857,7 +2861,13 @@ class ContainerAudit:
                 "reset": "리셋",
                 "undo": "스캔 취소",
                 "park": "보류",
-                "submit": "확인" if operator_review else "제출",
+                "submit": (
+                    "재시도"
+                    if precommand_retry
+                    else "확인"
+                    if operator_review
+                    else "제출"
+                ),
                 "operations": "운영 작업",
                 "replace": (
                     "교체 취소"
@@ -2876,7 +2886,13 @@ class ContainerAudit:
             "reset": "현재 작업 리셋",
             "undo": "스캔 취소",
             "park": "트레이 보류",
-            "submit": "담당 확인" if operator_review else "트레이 제출",
+            "submit": (
+                "사전검증 재시도"
+                if precommand_retry
+                else "담당 확인"
+                if operator_review
+                else "트레이 제출"
+            ),
             "operations": "운영 작업 ▾",
             "replace": (
                 "교체 취소"
@@ -2910,9 +2926,13 @@ class ContainerAudit:
             and getattr(tray, "master_label_code", "")
             and (getattr(tray, "scanned_barcodes", None) or [])
         )
+        precommand_retry = (
+            self._precommand_operator_review_retry_context() is not None
+        )
         labels = self._action_button_labels(
             compact=1 < int(center_width or 0) < 960,
             operator_review=operator_review,
+            precommand_retry=precommand_retry,
             replacement_active=replacement_active,
             exchange_dialog_open=exchange_dialog_open,
             exact_exchange_blocked=exact_exchange_blocked,
@@ -2938,6 +2958,9 @@ class ContainerAudit:
             blocking_completion is not None
             and blocking_completion.outcome is CompletionOutcome.RETRY_WAIT
         )
+        precommand_retry = (
+            self._precommand_operator_review_retry_context() is not None
+        )
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
@@ -2949,6 +2972,7 @@ class ContainerAudit:
         labels = self._action_button_labels(
             compact=compact_labels,
             operator_review=operator_review,
+            precommand_retry=precommand_retry,
             replacement_active=replacement_active,
             exchange_dialog_open=exchange_dialog_open,
             exact_exchange_blocked=exact_exchange_blocked,
@@ -2984,12 +3008,16 @@ class ContainerAudit:
                 if active_tray
                 and scanned_count
                 and not phs_transition_blocked
-                and (not operator_review or retry_wait)
+                and (not operator_review or retry_wait or precommand_retry)
                 else tk.DISABLED
             ),
             text=labels["submit"],
             style='Review.TButton' if operator_review else 'Success.TButton',
-            command=self.submit_current_tray,
+            command=(
+                self._retry_precommand_operator_review_completion
+                if precommand_retry
+                else self.submit_current_tray
+            ),
         )
         self._configure_widget_options(
             getattr(self, "operations_button", None),
@@ -7070,8 +7098,21 @@ class ContainerAudit:
             if phs_label_info is not None:
                 phs_label_info.configure(bg=background, fg=message_color)
             active_notice = state.active_notice
+            precommand_retry = (
+                self._precommand_operator_review_retry_context() is not None
+            )
             if acknowledge_button is not None:
-                if active_notice is not None and active_notice.blocking:
+                if precommand_retry:
+                    acknowledge_button.grid()
+                    acknowledge_button.configure(
+                        text="사전검증 재시도",
+                        state=tk.NORMAL,
+                        bg=title_color,
+                        fg="white",
+                        activebackground=title_color,
+                        activeforeground="white",
+                    )
+                elif active_notice is not None and active_notice.blocking:
                     acknowledge_button.grid()
                     acknowledge_button.configure(
                         text="확인",
@@ -7186,6 +7227,9 @@ class ContainerAudit:
         )
 
     def _acknowledge_active_notice(self) -> None:
+        if self._precommand_operator_review_retry_context() is not None:
+            self._retry_precommand_operator_review_completion()
+            return
         presenter = self._warning_state_presenter()
         presenter.acknowledge()
         self._stop_warning_beep()
@@ -7589,6 +7633,149 @@ class ContainerAudit:
             )
             return False
         return True
+
+    def _precommand_operator_review_retry_context(
+        self,
+    ) -> Optional[Dict[str, str]]:
+        """Prove that the saved review can only retry a never-posted preflight."""
+
+        snapshot = self._active_operator_review_snapshot()
+        if (
+            snapshot is None
+            or str(snapshot.error_code or "").strip().upper()
+            not in SAFE_TRANSFER_PREFLIGHT_RETRY_CODES
+        ):
+            return None
+        tray = getattr(self, "current_tray", None)
+        canonical_label = str(
+            getattr(tray, "master_label_code", "") or ""
+        ).strip()
+        active_label = str(
+            getattr(tray, "active_label_qr_payload", "") or ""
+        ).strip()
+        scanned_barcodes = list(
+            getattr(tray, "scanned_barcodes", None) or []
+        )
+        if (
+            not canonical_label
+            or not active_label
+            or active_label == canonical_label
+            or str(snapshot.master_label or "").strip() != canonical_label
+            or int(snapshot.scan_count or 0) != len(scanned_barcodes)
+            or len(scanned_barcodes) != int(getattr(tray, "tray_size", 0) or 0)
+        ):
+            return None
+        try:
+            canonical_fields = validate_compact_phs2_fields(
+                self._parse_new_format_qr(canonical_label) or {}
+            )
+            active_fields = validate_compact_phs2_fields(
+                self._parse_new_format_qr(active_label) or {}
+            )
+        except (TransferSealError, TypeError, ValueError):
+            return None
+        if (
+            canonical_fields.get("ITG") != active_fields.get("ITG")
+            or not canonical_fields.get("CLC")
+            or canonical_fields.get("CLC") != active_fields.get("CLC")
+            or canonical_fields.get("LBL") == active_fields.get("LBL")
+        ):
+            return None
+        active_label_id = str(
+            getattr(tray, "active_label_id", "") or ""
+        ).strip()
+        if not active_label_id or active_label_id != active_fields.get("LBL"):
+            return None
+        coordinator = getattr(self, "transfer_seal_coordinator", None)
+        store = getattr(coordinator, "store", None)
+        if store is None:
+            return None
+        try:
+            row = store.precommand_operator_review(
+                master_label=canonical_label,
+                scanned_barcodes=scanned_barcodes,
+                error_code=str(snapshot.error_code or "").strip(),
+            )
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return None
+        if row is None:
+            return None
+        return {
+            "intent_id": str(row["intent_id"]),
+            "error_code": str(row["last_error_code"]),
+            "canonical_label_id": str(canonical_fields.get("LBL") or ""),
+            "active_label_id": str(active_fields.get("LBL") or ""),
+        }
+
+    def _retry_precommand_operator_review_completion(self) -> bool:
+        """Retry only a commandless review against a saved active successor."""
+
+        retry_context = self._precommand_operator_review_retry_context()
+        snapshot = self._active_operator_review_snapshot()
+        if retry_context is None or snapshot is None:
+            self._render_warning_state()
+            return False
+        if not self._log_event(
+            "TRANSFER_SEAL_PREFLIGHT_RETRY_REQUESTED",
+            detail={
+                **retry_context,
+                "scan_count": len(self.current_tray.scanned_barcodes),
+                "retry_policy": "COMMANDLESS_ACTIVE_SUCCESSOR_ONLY",
+            },
+            synchronous=True,
+        ):
+            messagebox.showerror(
+                "사전검증 재시도 실패",
+                "재시도 요청 기록을 저장하지 못해 현재 잠금을 유지합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+
+        presenter = self._warning_state_presenter()
+        previous_pending = getattr(
+            self,
+            "_pending_operator_review_snapshot",
+            None,
+        )
+        if not presenter.resolve_blocking_completion(snapshot):
+            self._render_warning_state()
+            return False
+        self._pending_operator_review_snapshot = None
+        presenter.acknowledge()
+        self._stop_warning_beep()
+        self._render_warning_state()
+        self._update_action_button_states()
+        self.show_status_message(
+            "저장된 활성 현품표로 이적 사전검증을 다시 확인합니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+
+        try:
+            completed = bool(self.complete_tray())
+        except Exception as exc:
+            print(f"이적 사전검증 재시도 실패: {exc.__class__.__name__}")
+            completed = False
+        if completed:
+            return True
+        if self._active_blocking_completion_snapshot() is not None:
+            return False
+
+        self._pending_operator_review_snapshot = previous_pending or snapshot
+        presenter.present_completion(snapshot)
+        state_restored = self._save_current_tray_state()
+        self._start_warning_beep()
+        self._render_warning_state()
+        self._update_action_button_states()
+        message = "이적 사전검증을 완료하지 못해 기존 담당자 확인 잠금을 복원했습니다."
+        if not state_restored:
+            message += "\n잠금 상태 재저장에도 실패했으므로 프로그램을 종료하지 마세요."
+        messagebox.showerror(
+            "사전검증 재시도 실패",
+            message,
+            parent=getattr(self, "root", None),
+        )
+        return False
 
     def _prepare_and_attempt_transfer_seal(
         self,

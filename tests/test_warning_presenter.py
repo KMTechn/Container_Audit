@@ -211,6 +211,31 @@ def test_operator_review_remains_blocking_after_notice_acknowledgement():
     assert presenter.state.active_notice is None
 
 
+def test_business_layer_resolves_only_the_exact_blocking_snapshot():
+    presenter = WarningPresenter()
+    snapshot = _completion(
+        CompletionOutcome.OPERATOR_REVIEW,
+        error_code="PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+    )
+    presenter.record_normal_scan("AAA2270730100-003")
+    presenter.present_completion(snapshot)
+
+    assert (
+        presenter.resolve_blocking_completion(
+            _completion(
+                CompletionOutcome.OPERATOR_REVIEW,
+                error_code="MEMBERSHIP_CONFLICT",
+            )
+        )
+        is False
+    )
+    assert presenter.state.completion == snapshot
+    assert presenter.resolve_blocking_completion(snapshot) is True
+    assert presenter.state.completion is None
+    assert presenter.state.active_notice is None
+    assert presenter.state.last_normal_scan == "AAA2270730100-003"
+
+
 def test_new_business_completion_result_can_resolve_operator_review_block():
     presenter = WarningPresenter()
     presenter.record_normal_scan("AAA2270730100-003")

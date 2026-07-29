@@ -7,7 +7,12 @@ import pytest
 import Container_Audit as container_audit_module
 from Container_Audit import ContainerAudit, TraySession
 from parked_tray_store import ParkedTrayStore
-from transfer_seal import SealAttempt
+from transfer_seal import (
+    SealAttempt,
+    TransferSealCoordinator,
+    TransferSealError,
+    TransferSealStore,
+)
 from tray_state import tray_session_to_state
 from warning_presenter import (
     CompletionOutcome,
@@ -255,6 +260,165 @@ def test_operator_review_does_not_expose_submit_retry_command_or_label():
     assert app.submit_tray_button["state"] == container_audit_module.tk.DISABLED
     assert "다시" not in str(app.submit_tray_button.options.get("text", ""))
     assert getattr(command, "__name__", "") != "_retry_operator_review_completion"
+
+
+def _commandless_successor_review_app(tmp_path):
+    canonical_label = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-RETRY|"
+        f"CLC={ITEM_CODE}|LBL=LBL-OLD|HSH=0123456789abcdef"
+    )
+    active_label = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-RETRY|"
+        f"CLC={ITEM_CODE}|LBL=LBL-ACTIVE|HSH=fedcba9876543210"
+    )
+    barcodes = [f"{ITEM_CODE}-001", f"{ITEM_CODE}-002"]
+    app = _operator_review_app()
+    app.current_tray = TraySession(
+        master_label_code=canonical_label,
+        canonical_input_tag_qr=canonical_label,
+        active_label_qr_payload=active_label,
+        active_label_id="LBL-ACTIVE",
+        item_code=ITEM_CODE,
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=barcodes,
+        scan_times=[
+            datetime.datetime(2026, 7, 29, 9, 0, 0),
+            datetime.datetime(2026, 7, 29, 9, 0, 1),
+        ],
+        tray_size=2,
+    )
+    snapshot = CompletionOutcomeSnapshot(
+        outcome=CompletionOutcome.OPERATOR_REVIEW,
+        item_name="fixture item",
+        master_label=canonical_label,
+        scan_count=2,
+        target_count=2,
+        message="scan one active replacement",
+        error_code="PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+    )
+    app._pending_operator_review_snapshot = snapshot
+    app.warning_presenter = WarningPresenter()
+    app.warning_presenter.present_completion(snapshot)
+    store = TransferSealStore(tmp_path / "precommand-review.db")
+    prepared = store.prepare(
+        master_label=canonical_label,
+        source_identity={
+            "input_tag_id": "ITAG-RETRY",
+            "input_tag_label_id": "LBL-OLD",
+            "item_id": ITEM_CODE,
+        },
+        item_id=ITEM_CODE,
+        operator=app.worker_name,
+        scanned_barcodes=barcodes,
+    )
+    store.record_error(
+        prepared["intent_id"],
+        TransferSealError(
+            "PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+            "scan one active replacement",
+            status_code=400,
+        ),
+    )
+    app.transfer_seal_coordinator = TransferSealCoordinator(store, None)
+    return app, prepared["intent_id"]
+
+
+def test_commandless_successor_review_exposes_only_safe_retry(tmp_path):
+    app, _intent_id = _commandless_successor_review_app(tmp_path)
+    app.reset_button = DummyWidget()
+    app.park_button = DummyWidget()
+    app.undo_button = DummyWidget()
+    app.submit_tray_button = DummyWidget()
+    app.operations_button = DummyWidget()
+    app.change_worker_button = DummyWidget()
+    app.replace_master_label_button = DummyWidget()
+    app.exchange_button = DummyWidget()
+    app.phs_label_exchange_button = DummyWidget()
+    app.phs_label_legacy_fallback_button = DummyWidget()
+    app.phs_label_candidate_load_button = DummyWidget()
+    app.phs_label_exchange_execute_button = DummyWidget()
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._use_compact_action_labels = lambda: False
+    app._refresh_phs_active_label_info = lambda: None
+
+    app._update_action_button_states()
+
+    assert app.submit_tray_button["state"] == container_audit_module.tk.NORMAL
+    assert app.submit_tray_button["text"] == "사전검증 재시도"
+    assert (
+        app.submit_tray_button.options["command"].__name__
+        == "_retry_precommand_operator_review_completion"
+    )
+    assert app.reset_button["state"] == container_audit_module.tk.DISABLED
+    assert app.undo_button["state"] == container_audit_module.tk.DISABLED
+
+
+def test_commandless_successor_retry_keeps_old_intent_and_retries_new_label(tmp_path):
+    app, intent_id = _commandless_successor_review_app(tmp_path)
+    calls = []
+    app._log_event = (
+        lambda event, **kwargs: calls.append((event, kwargs)) or True
+    )
+    app._save_current_tray_state = (
+        lambda: calls.append(
+            ("save", app._pending_operator_review_snapshot)
+        )
+        or True
+    )
+    app._render_warning_state = lambda: calls.append(("render", None))
+    app._update_action_button_states = lambda: calls.append(("buttons", None))
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.complete_tray = lambda: calls.append(("complete", None)) or True
+
+    assert app._retry_precommand_operator_review_completion() is True
+
+    assert app._pending_operator_review_snapshot is None
+    assert app.warning_presenter.state.completion is None
+    assert ("complete", None) in calls
+    durable = app.transfer_seal_coordinator.store.load(intent_id)
+    assert durable["status"] == "OPERATOR_REVIEW"
+    assert durable["command_json"] is None
+    assert durable["receipt_json"] is None
+
+
+@pytest.mark.parametrize("retry_result", ["false", "exception"])
+def test_commandless_successor_retry_restores_lock_after_early_failure(
+    tmp_path,
+    monkeypatch,
+    retry_result,
+):
+    app, _intent_id = _commandless_successor_review_app(tmp_path)
+    original_snapshot = app._pending_operator_review_snapshot
+    saves = []
+    errors = []
+    app._log_event = lambda *_args, **_kwargs: True
+    app._save_current_tray_state = (
+        lambda: saves.append(app._pending_operator_review_snapshot) or True
+    )
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+
+    def retry():
+        assert saves == []
+        if retry_result == "exception":
+            raise RuntimeError("simulated preflight crash")
+        return False
+
+    app.complete_tray = retry
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append((args, kwargs)),
+    )
+
+    assert app._retry_precommand_operator_review_completion() is False
+
+    assert app._pending_operator_review_snapshot == original_snapshot
+    assert app.warning_presenter.state.completion == original_snapshot
+    assert saves == [original_snapshot]
+    assert errors
 
 
 def test_stale_operator_review_disables_replacement_and_exchange_buttons():

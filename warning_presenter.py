@@ -286,3 +286,26 @@ class WarningPresenter:
             active_notice = None
         self._state = replace(self._state, completion=None, active_notice=active_notice)
         return True
+
+    def resolve_blocking_completion(
+        self,
+        expected: CompletionOutcomeSnapshot,
+    ) -> bool:
+        """Clear one exact block after the business layer proves it resolved."""
+
+        if (
+            not isinstance(expected, CompletionOutcomeSnapshot)
+            or not expected.blocks_completion
+            or self._state.completion != expected
+        ):
+            return False
+        completion_notice = notice_for_completion(expected)
+        active_notice = self._state.active_notice
+        if active_notice == completion_notice:
+            active_notice = None
+        self._state = replace(
+            self._state,
+            completion=None,
+            active_notice=active_notice,
+        )
+        return True

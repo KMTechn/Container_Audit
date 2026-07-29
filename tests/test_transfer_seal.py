@@ -574,6 +574,82 @@ def test_partial_phs_seal_is_blocked_before_post(tmp_path):
     assert posted == []
 
 
+def test_precommand_review_lookup_requires_exact_commandless_row(tmp_path):
+    store = TransferSealStore(tmp_path / "precommand-review.db")
+    prepared = store.prepare(
+        master_label="PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-RETRY|"
+        f"CLC={ITEM}|LBL=LBL-OLD|HSH=oldhash",
+        source_identity={
+            "input_tag_id": "ITAG-RETRY",
+            "input_tag_label_id": "LBL-OLD",
+            "item_id": ITEM,
+        },
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1", "BC-2"],
+    )
+    store.record_error(
+        prepared["intent_id"],
+        TransferSealError(
+            "PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+            "scan one active replacement",
+            status_code=400,
+        ),
+    )
+
+    matched = store.precommand_operator_review(
+        master_label=prepared["master_label"],
+        scanned_barcodes=["BC-1", "BC-2"],
+        error_code="PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+    )
+
+    assert matched is not None
+    assert matched["intent_id"] == prepared["intent_id"]
+    assert matched["command_json"] is None
+    assert matched["receipt_json"] is None
+    assert (
+        store.precommand_operator_review(
+            master_label=prepared["master_label"],
+            scanned_barcodes=["BC-2", "BC-1"],
+            error_code="PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+        )
+        is None
+    )
+
+    command_bound = store.prepare(
+        master_label="PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-BOUND|"
+        f"CLC={ITEM}|LBL=LBL-BOUND|HSH=boundhash",
+        source_identity={
+            "input_tag_id": "ITAG-BOUND",
+            "input_tag_label_id": "LBL-BOUND",
+            "item_id": ITEM,
+        },
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-3"],
+    )
+    store.bind_command(
+        command_bound["intent_id"],
+        {"idempotency_key": "container-seal:already-durable"},
+    )
+    store.record_error(
+        command_bound["intent_id"],
+        TransferSealError(
+            "PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+            "review after durable command",
+            status_code=400,
+        ),
+    )
+    assert (
+        store.precommand_operator_review(
+            master_label=command_bound["master_label"],
+            scanned_barcodes=["BC-3"],
+            error_code="PHS_LABEL_REPLACEMENT_AMBIGUOUS",
+        )
+        is None
+    )
+
+
 def test_restart_reuses_immutable_command_and_recovers_lost_ack(tmp_path):
     db_path = tmp_path / "seal.db"
     first_post = []

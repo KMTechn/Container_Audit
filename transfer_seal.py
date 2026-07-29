@@ -1420,6 +1420,42 @@ class TransferSealStore:
             raise KeyError(intent_id)
         return row
 
+    def precommand_operator_review(
+        self,
+        *,
+        master_label: str,
+        scanned_barcodes: Iterable[str],
+        error_code: str,
+    ) -> sqlite3.Row | None:
+        """Return one exact review row only when no central command was durable."""
+
+        raw_barcodes = [
+            _normalize_identifier(value, "scanned_barcode")
+            for value in scanned_barcodes
+        ]
+        if not raw_barcodes:
+            return None
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT *
+                     FROM transfer_seal_intents
+                    WHERE status='OPERATOR_REVIEW'
+                      AND master_label=?
+                      AND scanned_barcodes_json=?
+                      AND last_error_code=?
+                      AND command_id IS NULL
+                      AND command_json IS NULL
+                      AND receipt_json IS NULL
+                    ORDER BY updated_at DESC
+                    LIMIT 2""",
+                (
+                    _normalize_identifier(master_label, "master_label"),
+                    _canonical_json(raw_barcodes),
+                    _normalize_identifier(error_code, "error_code"),
+                ),
+            ).fetchall()
+        return rows[0] if len(rows) == 1 else None
+
     def bind_command(self, intent_id: str, context: Mapping[str, Any]) -> sqlite3.Row:
         command_id = _normalize_identifier(context.get("idempotency_key"), "idempotency_key")
         command_json = _canonical_json(dict(context))
