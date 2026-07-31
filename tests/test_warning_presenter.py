@@ -139,7 +139,8 @@ def test_completion_outcomes_have_distinct_non_misleading_presentation(outcome, 
     if outcome is CompletionOutcome.RETRY_WAIT:
         assert "아직 완료되지 않았습니다" in notice.message
     if outcome is CompletionOutcome.LINKED:
-        assert "로컬 이적 원장" in notice.message
+        assert "이 PC에 이적 정보를 안전하게 저장했습니다." in notice.message
+        assert "원장" not in notice.message
     if outcome is CompletionOutcome.OPERATOR_REVIEW:
         assert notice.message == OPERATOR_REVIEW_CORE
         assert "\n" not in notice.message

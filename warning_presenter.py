@@ -132,7 +132,7 @@ _COMPLETION_NOTICE_DEFAULTS = {
     CompletionOutcome.LINKED: (
         "completion.linked",
         "이적 연계 완료",
-        "로컬 이적 원장에 안전하게 저장했습니다.",
+        "이 PC에 이적 정보를 안전하게 저장했습니다.",
         NoticeSeverity.SUCCESS,
         False,
     ),

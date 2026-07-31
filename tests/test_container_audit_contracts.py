@@ -1362,7 +1362,7 @@ def test_download_and_apply_update_cleans_temp_root_when_extract_fails(tmp_path,
     assert not update_root.exists()
 
 
-def test_download_and_apply_update_rejects_source_mode_before_network(monkeypatch):
+def test_download_and_apply_update_rejects_source_mode_before_network(monkeypatch, capsys):
     monkeypatch.setattr(container_audit_module.sys, "frozen", False, raising=False)
     monkeypatch.setattr(
         container_audit_module.requests,
@@ -1399,10 +1399,12 @@ def test_download_and_apply_update_rejects_source_mode_before_network(monkeypatc
     )
 
     assert errors
-    assert "소스 실행 모드" in errors[0][1]
+    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
+    assert "소스 실행 모드" not in errors[0][1]
+    assert "소스 실행 모드" in capsys.readouterr().out
 
 
-def test_download_and_apply_update_requires_checksum_before_network_or_extract(monkeypatch):
+def test_download_and_apply_update_requires_checksum_before_network_or_extract(monkeypatch, capsys):
     monkeypatch.setattr(
         container_audit_module.requests,
         "get",
@@ -1436,10 +1438,12 @@ def test_download_and_apply_update_requires_checksum_before_network_or_extract(m
     )
 
     assert errors
-    assert "SHA256" in errors[0][1]
+    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
+    assert "SHA256" not in errors[0][1]
+    assert "SHA256" in capsys.readouterr().out
 
 
-def test_download_and_apply_update_rejects_install_policy_before_network(monkeypatch):
+def test_download_and_apply_update_rejects_install_policy_before_network(monkeypatch, capsys):
     monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
     monkeypatch.setattr(
         container_audit_module.requests,
@@ -1476,7 +1480,9 @@ def test_download_and_apply_update_rejects_install_policy_before_network(monkeyp
     )
 
     assert errors
-    assert "preserve_paths" in errors[0][1]
+    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
+    assert "preserve_paths" not in errors[0][1]
+    assert "preserve_paths" in capsys.readouterr().out
 
 
 def test_check_for_updates_defaults_off_before_network(monkeypatch):
@@ -7079,7 +7085,7 @@ def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
     assert 595.0 <= parked_state["total_idle_seconds"] <= 615.0
 
 
-def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, monkeypatch):
+def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, monkeypatch, capsys):
     label = "PHS=1|CLC=AAA2270730100|QT=60"
     app = _headless_app()
     app.worker_name = "홍길동"
@@ -7127,7 +7133,9 @@ def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, 
     assert app.current_tray.master_label_code == label
     assert app.current_tray.scanned_barcodes == ["NEW-BC"]
     assert errors
-    assert "작업 보류 중 오류" in errors[0][1]
+    assert errors[0][1] == "작업을 보류하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요."
+    assert "작업 보류 중 오류" not in errors[0][1]
+    assert "parked tray already exists for master label" in capsys.readouterr().out
 
 
 def test_park_current_tray_rolls_back_when_current_state_delete_fails(tmp_path, monkeypatch):
@@ -7312,7 +7320,7 @@ def test_restore_parked_tray_rolls_back_when_restore_audit_log_fails(tmp_path, m
     assert errors[0][0] == "작업 기록 실패"
 
 
-def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(tmp_path, monkeypatch):
+def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(tmp_path, monkeypatch, capsys):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -7368,10 +7376,12 @@ def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(t
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
     assert errors
-    assert "보류 작업 파일 삭제에 실패" in errors[0][1]
+    assert errors[0][1] == "보류 작업을 복원하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요."
+    assert "보류 작업 파일 삭제에 실패" not in errors[0][1]
+    assert "보류 작업 파일 삭제에 실패" in capsys.readouterr().out
 
 
-def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path):
+def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path, capsys):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -7388,7 +7398,9 @@ def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path):
     assert list(tmp_path.glob("parked_qr_홍길동_corrupt.json.bad-*"))
     assert app.parked_tree.rows == {}
     assert messages
-    assert "손상된 보류 작업 파일을 격리했습니다" in messages[0][0]
+    assert messages[0][0] == "손상된 보류 작업을 안전하게 분리했습니다. 관리자에게 문의하세요."
+    assert ".bad-" not in messages[0][0]
+    assert ".bad-" in capsys.readouterr().out
 
 
 def test_update_parked_trays_list_quarantines_invalid_utf8_file_and_keeps_valid_rows(tmp_path):

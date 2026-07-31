@@ -257,6 +257,10 @@ def test_operator_review_preserves_active_tray_and_center_rows_without_completio
     assert app.scanned_listbox.rows == original_rows
     assert app.warning_presenter.state.completion.outcome is CompletionOutcome.OPERATOR_REVIEW
     assert app.warning_presenter.state.is_blocking is True
+    worker_copy = app.warning_presenter.state.active_notice.message
+    assert "관리자" in worker_copy
+    assert "membership conflict" not in worker_copy
+    assert "MEMBERSHIP_CONFLICT" not in worker_copy
     assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)
     assert not any(event[0] == "reset_ui" for event in events)
     assert not any(event[0] == "delete_state" for event in events)

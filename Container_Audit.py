@@ -845,6 +845,7 @@ def download_and_apply_update(
         updater_launched = True
         sys.exit(0)
     except Exception as e:
+        print(f"업데이트 적용 실패: {e.__class__.__name__}: {e}")
         if update_temp_root and not updater_launched:
             shutil.rmtree(update_temp_root, ignore_errors=True)
         if evidence_path:
@@ -856,7 +857,12 @@ def download_and_apply_update(
                 pass
         root_alert = tk.Tk()
         root_alert.withdraw()
-        messagebox.showerror("업데이트 실패", f"업데이트 적용 중 오류가 발생했습니다.\n\n{e}\n\n프로그램을 다시 시작해주세요.", parent=root_alert)
+        messagebox.showerror(
+            "업데이트 실패",
+            "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 "
+            "계속되면 관리자에게 문의하세요.",
+            parent=root_alert,
+        )
         root_alert.destroy()
 
 
@@ -1402,11 +1408,21 @@ class ContainerAudit:
             except UnicodeDecodeError:
                 continue
             except FileNotFoundError:
-                messagebox.showerror("오류", f"필수 파일 없음: {item_path}\n'assets' 폴더에 Item.csv가 있는지 확인하세요.")
+                print(f"필수 품목 파일 없음: {item_path}")
+                messagebox.showerror(
+                    "필수 파일 없음",
+                    "품목 정보를 불러오는 데 필요한 파일을 찾을 수 없습니다. "
+                    "관리자에게 문의하세요.",
+                )
                 self.root.destroy()
                 return []
             except Exception as e:
-                messagebox.showerror("파일 읽기 오류", f"'{item_path}' 파일을 읽는 중 예상치 못한 오류가 발생했습니다:\n{e}")
+                print(f"품목 파일 읽기 실패: {item_path}: {e.__class__.__name__}: {e}")
+                messagebox.showerror(
+                    "파일 읽기 오류",
+                    "품목 정보를 읽지 못했습니다. 프로그램을 다시 시작한 뒤 "
+                    "계속되면 관리자에게 문의하세요.",
+                )
                 self.root.destroy()
                 return []
         messagebox.showerror("인코딩 감지 실패", f"'{os.path.basename(item_path)}' 파일의 인코딩 형식을 알 수 없습니다.")
@@ -2099,8 +2115,13 @@ class ContainerAudit:
             print(f"현재 트레이 상태 로드 실패: {e}")
             quarantined_path = self._quarantine_current_tray_state(str(e))
             self.current_tray = TraySession()
-            path_notice = f"\n격리 파일: {quarantined_path}" if quarantined_path else ""
-            messagebox.showwarning("오류", f"이전 작업 상태 파일을 로드하는데 실패했습니다. 원본 파일은 격리했습니다. ({e}){path_notice}")
+            if quarantined_path:
+                print(f"현재 트레이 상태 격리 위치: {quarantined_path}")
+            messagebox.showwarning(
+                "이전 작업 확인 필요",
+                "이전 작업 상태를 불러오지 못해 안전하게 분리했습니다. "
+                "관리자에게 문의하세요.",
+            )
             return
 
         try:
@@ -2245,7 +2266,10 @@ class ContainerAudit:
                     self.show_worker_input_screen()
         except Exception as e:
             print(f"현재 트레이 상태 로드 실패: {e}")
-            messagebox.showwarning("오류", f"이전 작업 상태 파일을 로드하는데 실패했습니다. ({e})")
+            messagebox.showwarning(
+                "이전 작업 확인 필요",
+                "이전 작업 상태를 불러오지 못했습니다. 관리자에게 문의하세요.",
+            )
 
     def _restore_tray_from_state(self, state: Dict[str, Any]):
         self.current_tray = tray_session_from_state(
@@ -3914,8 +3938,10 @@ class ContainerAudit:
                 self._set_phs_label_candidates(candidates)
                 if error is not None:
                     code = getattr(error, "code", "PHS_TARGET_LOOKUP_FAILED")
+                    print(f"현품표 교환 대상 조회 실패: {code}: {error}")
                     self.show_status_message(
-                        f"{code}: {error}",
+                        "교환 가능한 작업지시를 확인하지 못했습니다. "
+                        "네트워크를 확인한 뒤 다시 시도하세요.",
                         self.COLOR_DANGER,
                         duration=8000,
                     )
@@ -4354,8 +4380,13 @@ class ContainerAudit:
         try:
             recovery = load_recovery()
         except Exception as exc:
+            print(
+                "현품표 교체 복구 정보 읽기 실패: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
             self.show_status_message(
-                f"현품표 교체 복구 journal 오류: {exc}",
+                "현품표 교체 복구 정보를 읽지 못했습니다. "
+                "F8로 다시 시도하거나 관리자에게 문의하세요.",
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -4383,8 +4414,13 @@ class ContainerAudit:
                 )
             )
         except (tk.TclError, AttributeError) as exc:
+            print(
+                "현품표 재출력 확인 창 표시 실패: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
             self.show_status_message(
-                f"현품표 재출력 확인창 오류: {exc}",
+                "현품표 재출력 확인 창을 열지 못했습니다. 다시 시도하거나 "
+                "관리자에게 문의하세요.",
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -4566,8 +4602,13 @@ class ContainerAudit:
         try:
             recovery = coordinator.journal.load()
         except Exception as exc:
+            print(
+                "현품표 교환 복구 정보 읽기 실패: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
             self.show_status_message(
-                f"현품표 교환 복구 journal 오류: {exc}",
+                "현품표 교환 복구 정보를 읽지 못했습니다. "
+                "F8로 다시 시도하거나 관리자에게 문의하세요.",
                 self.COLOR_DANGER,
                 duration=10000,
             )
@@ -6721,7 +6762,16 @@ class ContainerAudit:
                     )
                     return
                 except Exception as e:
-                    self.show_fullscreen_warning("QR코드 분석 오류", f"새로운 현품표 QR코드를 해석하는 중 오류가 발생했습니다.\n{e}", self.COLOR_DANGER)
+                    print(
+                        "현품표 QR 해석 실패: "
+                        f"{e.__class__.__name__}: {e}"
+                    )
+                    self.show_fullscreen_warning(
+                        "QR코드 분석 오류",
+                        "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 "
+                        "다시 스캔하세요.",
+                        self.COLOR_DANGER,
+                    )
                     return
             else:
                 if len(barcode) != self.ITEM_CODE_LENGTH:
@@ -6919,7 +6969,7 @@ class ContainerAudit:
             and len(self.current_tray.scanned_barcodes) != int(self.current_tray.tray_size or 0)
         ):
             self.show_status_message(
-                "PHS=2 현품표는 중앙 membership 전량을 스캔해야 이적할 수 있습니다. "
+                "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다. "
                 "잔량은 검사 공정에서 RSL1로 별도 발행하세요.",
                 self.COLOR_DANGER,
                 duration=0,
@@ -6954,7 +7004,10 @@ class ContainerAudit:
                 )
             except Exception as e:
                 print(f"이적 seal 로컬 보존 실패: {e}")
-                self.show_status_message("이적 membership을 로컬에 보존하지 못해 작업 상태를 유지합니다.", self.COLOR_DANGER)
+                self.show_status_message(
+                    "이적 정보를 이 PC에 안전하게 저장하지 못해 작업 상태를 유지합니다.",
+                    self.COLOR_DANGER,
+                )
                 return False
         locally_linked = bool(transfer_attempt.local_completion_id)
         post_review_required = bool(
@@ -6963,10 +7016,9 @@ class ContainerAudit:
         post_review_case: Optional[Dict[str, Any]] = None
         if transfer_attempt.status == "OPERATOR_REVIEW" and not locally_linked:
             safe_message = (
-                "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
+                "서버 확인 미완료 · 현재 트레이와 스캔 목록을 유지합니다.\n"
+                "작업을 계속하지 말고 관리자에게 알려 주세요."
             )
-            if str(transfer_attempt.error_message or "").strip():
-                safe_message += f"\n상세: {str(transfer_attempt.error_message).strip()}"
             self._present_completion_outcome(
                 CompletionOutcome.OPERATOR_REVIEW,
                 item_name=self.current_tray.item_name,
@@ -7218,7 +7270,7 @@ class ContainerAudit:
             and len(self.current_tray.scanned_barcodes) != int(self.current_tray.tray_size or 0)
         ):
             self.show_status_message(
-                "PHS=2 현품표는 일부 제출할 수 없습니다. 중앙 membership 전량을 스캔하세요. "
+                "PHS=2 현품표는 일부 제출할 수 없습니다. 등록된 제품을 모두 스캔하세요. "
                 "잔량은 RSL1 절차를 사용해야 합니다.",
                 self.COLOR_DANGER,
                 duration=0,
@@ -8019,20 +8071,20 @@ class ContainerAudit:
         ):
             title = "중앙 제품 교체 확인 필요"
             message = (
-                "중앙 제품 교체 결과가 운영자 확인 잠금 상태입니다.\n"
-                f"{action} 작업을 진행하지 말고 idempotency receipt와 현재 트레이를 확인하세요."
+                "중앙 제품 교체 결과를 자동으로 확인할 수 없습니다.\n"
+                f"{action} 작업을 진행하지 말고 현재 트레이를 유지한 채 관리자에게 알려 주세요."
             )
         elif attempt.status == "ACKED":
             title = "중앙 제품 교체 복구 필요"
             message = (
-                "중앙 제품 교체는 완료됐지만 현재 트레이에 원자적으로 반영되지 않았습니다.\n"
+                "중앙 제품 교체는 완료됐지만 현재 트레이에 반영되지 않았습니다.\n"
                 f"로컬 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
             )
         else:
             title = "중앙 제품 교체 응답 대기"
             message = (
-                "중앙 제품 교체의 commit 여부를 확인 중입니다.\n"
-                f"receipt 복구가 끝날 때까지 {action} 작업을 진행할 수 없습니다."
+                "중앙 제품 교체 결과를 확인 중입니다.\n"
+                f"확인이 끝날 때까지 {action} 작업을 진행할 수 없습니다."
             )
         messagebox.showerror(title, message, parent=getattr(self, "root", None))
         return True
@@ -8517,11 +8569,10 @@ class ContainerAudit:
                 synchronous=True,
             )
         messagebox.showwarning(
-            "중앙 교환 워크플로 필요",
-            "정확 membership 이력이 있어 기존 개별 교환은 사용할 수 없습니다.\n"
-            "교체 대상 PHS와 새 양품의 소유 PHS를 각각 exact resolve하고 모든 bundle version을 "
-            "한 명령에서 CAS하는 중앙 교환 절차가 필요합니다.\n"
-            "이미 봉인된 TRANSFER/PACKAGE는 서버 정책상 교체할 수 없습니다.",
+            "관리자 교체 절차 필요",
+            "현재 작업은 기존 개별 교환 방식으로 처리할 수 없습니다.\n"
+            "교체 대상과 새 양품의 소속을 함께 확인하는 관리자 교체 절차를 이용하세요.\n"
+            "이미 봉인된 이적·포장 작업은 교체할 수 없습니다.",
         )
         return True
 
@@ -8550,10 +8601,10 @@ class ContainerAudit:
                 synchronous=True,
             )
         messagebox.showwarning(
-            "중앙 교체 워크플로 필요",
-            "정확 membership 이력이 있어 기존 완료 현품표 교체는 사용할 수 없습니다.\n"
-            "대상 sealed transfer QR, 교체 제품의 원본 bundle, 개봉·재봉인 확인을 함께 "
-            "검증하는 중앙 교체 절차가 필요합니다.",
+            "관리자 교체 절차 필요",
+            "현재 완료 현품표는 기존 교체 방식으로 처리할 수 없습니다.\n"
+            "이적 완료 현품표, 교체 제품의 원래 소속, 개봉·재봉인 여부를 함께 "
+            "확인하는 관리자 교체 절차를 이용하세요.",
         )
         return True
 
@@ -8743,7 +8794,11 @@ class ContainerAudit:
             return True
 
         except Exception as e:
-            messagebox.showerror("오류", f"작업 보류 중 오류가 발생했습니다: {e}")
+            print(f"작업 보류 실패: {e.__class__.__name__}: {e}")
+            messagebox.showerror(
+                "작업 보류 실패",
+                "작업을 보류하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요.",
+            )
             return False
 
     def _update_parked_trays_list(self):
@@ -8782,7 +8837,11 @@ class ContainerAudit:
                     print(f"손상된 보류 작업 파일 격리 실패: {quarantine_error}")
                     continue
                 if hasattr(self, "show_status_message"):
-                    self.show_status_message(f"손상된 보류 작업 파일을 격리했습니다: {quarantined_path}", getattr(self, "COLOR_DANGER", "red"))
+                    print(f"손상된 보류 작업 파일 격리 위치: {quarantined_path}")
+                    self.show_status_message(
+                        "손상된 보류 작업을 안전하게 분리했습니다. 관리자에게 문의하세요.",
+                        getattr(self, "COLOR_DANGER", "red"),
+                    )
 
     def on_parked_tray_select(self, event):
         """보류 목록에서 트레이를 더블 클릭했을 때 실행됩니다."""
@@ -8821,9 +8880,25 @@ class ContainerAudit:
         except (UnicodeDecodeError, json.JSONDecodeError, TrayStateValidationError) as e:
             try:
                 quarantined_path = quarantine_tray_state_file(filepath)
-                messagebox.showerror("오류", f"보류 작업 파일이 손상되어 격리했습니다.\n\n{e}\n\n격리 파일: {quarantined_path}")
+                print(
+                    "손상된 보류 작업 분리: "
+                    f"{e.__class__.__name__}: {e}; path={quarantined_path}"
+                )
+                messagebox.showerror(
+                    "보류 작업 확인 필요",
+                    "보류 작업 정보가 손상되어 안전하게 분리했습니다. "
+                    "관리자에게 문의하세요.",
+                )
             except Exception as quarantine_error:
-                messagebox.showerror("오류", f"작업 복원 중 오류가 발생했고 격리에도 실패했습니다: {quarantine_error}")
+                print(
+                    "손상된 보류 작업 분리 실패: "
+                    f"{quarantine_error.__class__.__name__}: {quarantine_error}"
+                )
+                messagebox.showerror(
+                    "보류 작업 복원 실패",
+                    "보류 작업을 복원하거나 안전하게 분리하지 못했습니다. "
+                    "프로그램을 종료하지 말고 관리자에게 문의하세요.",
+                )
             self._update_parked_trays_list()
             return
         parked_worker = str(saved_state.get("worker_name") or "")
@@ -8837,7 +8912,11 @@ class ContainerAudit:
                 ParkedTrayStore.delete(filepath)
             except Exception:
                 quarantined_path = quarantine_tray_state_file(filepath)
-                messagebox.showwarning("복원 실패", f"이미 완료된 보류 작업이라 복원하지 않고 격리했습니다.\n\n격리 파일: {quarantined_path}")
+                print(f"완료된 보류 작업 격리 위치: {quarantined_path}")
+                messagebox.showwarning(
+                    "복원 실패",
+                    "이미 완료된 보류 작업이라 복원하지 않고 안전하게 분리했습니다.",
+                )
             else:
                 messagebox.showwarning("복원 실패", "이미 완료된 보류 작업이라 복원하지 않고 삭제했습니다.")
             self._update_parked_trays_list()
@@ -8936,8 +9015,19 @@ class ContainerAudit:
                     atomic_write_json(filepath, saved_state, indent=4, ensure_ascii=False)
                 except Exception as restore_error:
                     rollback_errors.append(f"보류 파일 복구 실패: {restore_error.__class__.__name__}")
-                rollback_notice = f"\n\n{'; '.join(rollback_errors)}" if rollback_errors else ""
-                messagebox.showerror("작업 기록 실패", f"보류 작업 복원 기록을 남기지 못해 복원을 취소했습니다.{rollback_notice}")
+                if rollback_errors:
+                    print("; ".join(rollback_errors))
+                rollback_notice = (
+                    "\n\n기존 상태 복구도 완료하지 못했습니다. 프로그램을 종료하지 말고 "
+                    "관리자에게 문의하세요."
+                    if rollback_errors
+                    else ""
+                )
+                messagebox.showerror(
+                    "작업 기록 실패",
+                    "보류 작업 복원 기록을 남기지 못해 복원을 취소했습니다."
+                    f"{rollback_notice}",
+                )
                 self._update_parked_trays_list()
                 return
             self.current_tray = restored_tray
@@ -8955,7 +9045,11 @@ class ContainerAudit:
             self.show_status_message(f"'{self.current_tray.item_name}' 작업을 다시 시작합니다.", self.COLOR_SUCCESS)
 
         except Exception as e:
-            messagebox.showerror("오류", f"작업 복원 중 오류가 발생했습니다: {e}")
+            print(f"작업 복원 실패: {e.__class__.__name__}: {e}")
+            messagebox.showerror(
+                "작업 복원 실패",
+                "보류 작업을 복원하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요.",
+            )
             
     # ####################################################################
     # # [추가된 부분] 테스트 및 자동화 기능
@@ -9173,7 +9267,10 @@ class ContainerAudit:
 
         except Exception as e:
             print(f"자동 테스트 오류: {e}")
-            messagebox.showerror("자동 테스트 실패", f"자동 테스트 중 오류가 발생했습니다:\n{e}")
+            messagebox.showerror(
+                "자동 테스트 실패",
+                "자동 테스트를 완료하지 못했습니다. 관리자용 진단 기록을 확인하세요.",
+            )
 
     def run(self):
         self.root.mainloop()
@@ -9464,7 +9561,12 @@ class ContainerAudit:
             self._update_current_item_label()
 
         except Exception as e:
-            messagebox.showerror("파일 쓰기 오류", f"수정된 로그 저장 중 오류: {e}")
+            print(f"현품표 교체 기록 저장 실패: {e.__class__.__name__}: {e}")
+            messagebox.showerror(
+                "교체 기록 실패",
+                "현품표 교체 기록을 저장하지 못했습니다. 현재 상태를 유지하고 "
+                "관리자에게 문의하세요.",
+            )
 
     # ==================== 개별 제품 교환 관련 함수들 ====================
 
@@ -9494,7 +9596,8 @@ class ContainerAudit:
         if active_tray and not active_transfer_exchange:
             messagebox.showwarning(
                 "작업 중",
-                "진행 중인 트레이 작업이 있습니다.\n정확 중앙 원장이 활성화된 작업에서만 현재 제품을 교체할 수 있습니다.",
+                "진행 중인 트레이 작업이 있습니다.\n"
+                "현재 작업 방식에서는 제품 교체를 진행할 수 없습니다. 관리자에게 문의하세요.",
             )
             return
         self._invalidate_pending_scan_callbacks()
@@ -9958,7 +10061,8 @@ class ContainerAudit:
             )
             messagebox.showerror(
                 "중앙 교체 상태 충돌",
-                "서버 교체 receipt와 현재 트레이 제품 목록이 부분적으로만 일치합니다. 작업을 중단하고 담당자에게 확인하세요.",
+                "중앙 교체 결과와 현재 트레이 제품 목록이 부분적으로만 일치합니다. "
+                "작업을 중단하고 관리자에게 확인하세요.",
             )
             return
 
@@ -9997,7 +10101,8 @@ class ContainerAudit:
                 else:
                     messagebox.showerror(
                         "교체 취소 불가",
-                        "중앙 제품 교체의 commit 여부가 아직 확정되지 않았습니다. 네트워크를 확인한 뒤 다시 시도하세요.",
+                        "중앙 제품 교체 완료 여부가 아직 확정되지 않았습니다. "
+                        "네트워크를 확인한 뒤 다시 시도하세요.",
                     )
                     return False
         if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
@@ -10067,7 +10172,8 @@ class ContainerAudit:
                 self.exchange_complete_button.config(state=tk.NORMAL)
                 messagebox.showerror(
                     "중앙 교체 차단",
-                    "현재 현품표에 중앙 PHS를 식별할 BND/ITG 구조 정보가 없습니다.",
+                    "현재 현품표에서 중앙 등록 정보를 확인할 수 없습니다. "
+                    "현품표를 다시 확인하고 관리자에게 문의하세요.",
                 )
                 return
             coordinator = self._transfer_member_exchange_runtime()
@@ -10083,8 +10189,16 @@ class ContainerAudit:
                 self._active_transfer_exchange_intent_id = prepared.intent_id
                 attempt = coordinator.attempt(prepared.intent_id)
             except (TypeError, ValueError) as exc:
+                print(
+                    "중앙 제품 교체 준비 실패: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
                 self.exchange_complete_button.config(state=tk.NORMAL)
-                messagebox.showerror("중앙 교체 차단", str(exc))
+                messagebox.showerror(
+                    "중앙 교체 차단",
+                    "중앙 교체 준비 정보를 확인하지 못했습니다. "
+                    "현재 트레이를 유지하고 관리자에게 문의하세요.",
+                )
                 return
             if attempt.status != "ACKED":
                 self.exchange_complete_button.config(state=tk.NORMAL)
@@ -10095,8 +10209,13 @@ class ContainerAudit:
                 )
                 messagebox.showerror(
                     title,
-                    f"{attempt.error_code or attempt.status}: "
-                    f"{attempt.error_message or '중앙 receipt가 확정되지 않았습니다.'}",
+                    (
+                        "중앙 교체 결과를 자동으로 확인할 수 없습니다. "
+                        "현재 트레이를 유지하고 관리자에게 확인하세요."
+                        if attempt.status == "OPERATOR_REVIEW"
+                        else "중앙 교체 결과를 확인 중입니다. "
+                        "현재 트레이를 유지하고 잠시 후 다시 시도하세요."
+                    ),
                 )
                 return
             if not self._apply_acked_member_exchange(attempt):

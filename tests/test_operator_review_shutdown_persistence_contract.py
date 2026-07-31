@@ -204,7 +204,7 @@ def test_malformed_optional_operator_review_metadata_is_rejected(
         validate_tray_state(state, default_tray_size=60)
 
 
-def test_repository_quarantines_malformed_operator_review_metadata(monkeypatch, tmp_path):
+def test_repository_quarantines_malformed_operator_review_metadata(monkeypatch, tmp_path, capsys):
     _save_review_state(tmp_path)
     state = _load_saved_json(tmp_path)
     state[OPERATOR_REVIEW_STATE_KEY]["scan_count"] = 0
@@ -229,7 +229,12 @@ def test_repository_quarantines_malformed_operator_review_metadata(monkeypatch, 
     assert app.current_tray.master_label_code == ""
     assert not state_path.exists()
     assert list(tmp_path.glob("current.json.bad-*"))
-    assert warnings and warnings[-1][0] == "오류"
+    assert warnings and warnings[-1] == (
+        "이전 작업 확인 필요",
+        "이전 작업 상태를 불러오지 못해 안전하게 분리했습니다. 관리자에게 문의하세요.",
+    )
+    assert "pending_operator_review" not in warnings[-1][1]
+    assert "pending_operator_review" in capsys.readouterr().out
 
 
 def test_other_worker_takeover_preserves_operator_review_lock(monkeypatch, tmp_path):

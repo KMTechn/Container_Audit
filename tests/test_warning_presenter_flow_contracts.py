@@ -126,7 +126,7 @@ def test_operator_review_default_equivalent_detail_uses_one_notice_and_keeps_las
         (
             CompletionOutcome.LINKED,
             "이적 연계 완료",
-            "로컬 이적 원장에 안전하게 저장했습니다.",
+            "이 PC에 이적 정보를 안전하게 저장했습니다.",
             "서버 이적 확인이 완료되었습니다",
             False,
         ),

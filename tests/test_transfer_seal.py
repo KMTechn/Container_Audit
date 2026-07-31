@@ -2390,7 +2390,11 @@ def test_exact_history_blocks_unsafe_exchange_and_writes_restriction_receipt(tmp
 
     app.show_exchange_dialog()
 
-    assert warnings and "중앙 교환" in warnings[0][0]
+    assert warnings and warnings[0][0] == "관리자 교체 절차 필요"
+    worker_copy = " ".join(warnings[0]).lower()
+    assert "중앙 교환" not in worker_copy
+    assert "bundle" not in worker_copy
+    assert "cas" not in worker_copy
     with store._connect() as conn:
         receipt = conn.execute(
             "SELECT reason_code,details_json FROM transfer_exchange_block_receipts"
@@ -2425,7 +2429,11 @@ def test_exact_history_blocks_local_master_label_replacement(tmp_path, monkeypat
     app.initiate_master_label_replacement()
 
     assert app.master_label_replace_state is None
-    assert warnings and "중앙 교체" in warnings[0][0]
+    assert warnings and warnings[0][0] == "관리자 교체 절차 필요"
+    worker_copy = " ".join(warnings[0]).lower()
+    assert "중앙 교체" not in worker_copy
+    assert "bundle" not in worker_copy
+    assert "cas" not in worker_copy
     with store._connect() as conn:
         receipt = conn.execute(
             """SELECT reason_code,details_json
