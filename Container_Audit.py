@@ -3302,7 +3302,23 @@ class ContainerAudit:
                 getattr(tray, "master_label_code", "") or ""
             ),
         )
-        return dict(row)
+        result = dict(row)
+        try:
+            event_detail = json.loads(str(result.get("evidence_json") or ""))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "durable replacement waiting evidence is invalid"
+            ) from exc
+        logger = getattr(self, "_log_event", None)
+        if not callable(logger) or not logger(
+            "PHS_REPLACEMENT_WAITING_MARKED",
+            detail=event_detail,
+            synchronous=True,
+        ):
+            raise OSError(
+                "replacement waiting direct-sync event was not persisted"
+            )
+        return result
 
     def _log_phs_replacement_waiting_failure(
         self,
@@ -7736,7 +7752,11 @@ class ContainerAudit:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
                     self.log_queue.join()
                 append_event_log_entry(self.log_file_path, log_entry, durable=True)
-                if event_type in {"TRAY_COMPLETE", "PRODUCT_EXCHANGE_COMPLETED"}:
+                if event_type in {
+                    "TRAY_COMPLETE",
+                    "PRODUCT_EXCHANGE_COMPLETED",
+                    "PHS_REPLACEMENT_WAITING_MARKED",
+                }:
                     self._trigger_session_direct_sync(event_type)
                 return True
             except Exception as e:

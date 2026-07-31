@@ -1206,6 +1206,9 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
         {"store": RecordingStore()},
     )()
     app._phs_replacement_notice_pairs = set()
+    app._log_event = lambda event, detail=None, synchronous=False: events.append(
+        ("event", event, detail, synchronous)
+    ) or True
     app.show_status_message = lambda message, color, **kwargs: events.append(
         ("status", message, color, kwargs)
     )
@@ -1228,14 +1231,47 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
     assert app._show_phs_replacement_required_notice_once(context) is True
     assert app._show_phs_replacement_required_notice_once(context) is False
 
-    assert [event[0] for event in events] == ["mark", "status"]
+    assert [event[0] for event in events] == ["mark", "event", "status"]
     marked = events[0][1]
     assert marked["session_id"] == "ITAG-WAIT-UI"
     assert marked["process_context"] == "transfer"
     assert marked["location_codes"] == ["PHS_GOOD"]
+    assert events[1][1] == "PHS_REPLACEMENT_WAITING_MARKED"
+    assert events[1][2]["idempotency_key"].startswith(
+        "replacement-wait:ITAG-WAIT-UI:"
+    )
+    assert events[1][3] is True
     assert durable_store.replacement_waiting_outbox()[0]["event_type"] == (
         "PHS_REPLACEMENT_WAITING_MARKED"
     )
+
+
+def test_replacement_waiting_event_triggers_direct_sync_after_durable_log(
+    monkeypatch,
+    tmp_path,
+):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.log_queue = type("Queue", (), {"join": lambda self: None})()
+    app._plan_b_event_detail = lambda event, detail, **_kwargs: {
+        **dict(detail or {}),
+        "canonical_event_name": event,
+    }
+    sync_reasons = []
+    app._trigger_session_direct_sync = sync_reasons.append
+    monkeypatch.setattr(
+        container_module,
+        "append_event_log_entry",
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert app._log_event(
+        "PHS_REPLACEMENT_WAITING_MARKED",
+        detail={"intent_id": "phs-replacement-wait-test"},
+        synchronous=True,
+    ) is True
+    assert sync_reasons == ["PHS_REPLACEMENT_WAITING_MARKED"]
 
 
 def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
