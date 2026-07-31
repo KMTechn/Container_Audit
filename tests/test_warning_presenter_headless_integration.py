@@ -194,6 +194,10 @@ def _completion_app(*, seal_status, ledger_succeeds, events):
     app._update_action_button_states = lambda: events.append(("update_actions", None))
     app._start_warning_beep = lambda: events.append(("start_beep", None))
     app._stop_warning_beep = lambda: events.append(("stop_beep", None))
+    app._project_transfer_post_review_for_intent = (
+        lambda intent_id: events.append(("project_post_review", intent_id))
+        or {"review_case_id": "review-case-1"}
+    )
     return app
 
 
@@ -357,9 +361,87 @@ def test_server_conflict_after_local_link_does_not_roll_back_completion():
     assert app.complete_tray() is True
 
     assert ("present_completion", CompletionOutcome.LINKED) in events
+    assert ("project_post_review", "intent-review-linked") in events
     assert any(event[0] == "reset_ui" for event in events)
     assert app.current_tray.master_label_code == ""
-    assert app.warning_presenter.state.is_blocking is False
+    assert app.warning_presenter.state.completion.outcome is CompletionOutcome.LINKED
+    assert app.warning_presenter.state.active_notice.code == (
+        "transfer.post_review_required"
+    )
+    assert app.warning_presenter.state.is_blocking is True
+    worker_copy = app.warning_presenter.state.active_notice.message
+    assert "관리자" in worker_copy
+    assert "OPERATOR_REVIEW" not in worker_copy
+    assert "MEMBERSHIP_CONFLICT" not in worker_copy
+    assert "intent-review-linked" not in worker_copy
+    assert "container-seal" not in worker_copy
+
+
+def test_restart_terminal_conflict_sets_safe_review_refresh_without_raw_console(
+    capsys,
+):
+    class Coordinator:
+        def __init__(self, results):
+            self.results = results
+
+        def drain_pending(self):
+            return list(self.results)
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app._transfer_seal_runtime = lambda: Coordinator(
+        [
+            SealAttempt(
+                intent_id="intent-raw-123",
+                status="OPERATOR_REVIEW",
+                error_code="MEMBERSHIP_CONFLICT",
+            )
+        ]
+    )
+    app._transfer_member_exchange_runtime = lambda: Coordinator([])
+
+    app._retry_pending_transfer_seals()
+
+    captured = capsys.readouterr()
+    assert "intent-raw-123" not in captured.out
+    assert "MEMBERSHIP_CONFLICT" not in captured.out
+    assert app._post_review_refresh_required is True
+
+
+def test_restart_review_refresh_surfaces_only_worker_safe_blocking_guidance():
+    class Store:
+        @staticmethod
+        def post_review_cases():
+            return [
+                {
+                    "review_case_id": "review-raw-123",
+                    "intent_id": "intent-raw-123",
+                    "error_code": "MEMBERSHIP_CONFLICT",
+                }
+            ]
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.warning_presenter = WarningPresenter()
+    app._post_review_refresh_required = True
+    app._presented_post_review_case_ids = set()
+    app._drain_transfer_post_review_projections = lambda: 1
+    app._transfer_seal_runtime = lambda: type(
+        "Coordinator",
+        (),
+        {"store": Store()},
+    )()
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app._start_warning_beep = lambda: None
+
+    assert app._refresh_transfer_post_review_state() is True
+
+    notice = app.warning_presenter.state.active_notice
+    assert notice.code == "transfer.post_review_required"
+    assert notice.blocking is True
+    assert "관리자" in notice.message
+    assert "MEMBERSHIP_CONFLICT" not in notice.message
+    assert "intent-raw-123" not in notice.message
+    assert "review-raw-123" not in notice.message
 
 
 def test_permanent_local_outbox_failure_never_shows_completion_success():

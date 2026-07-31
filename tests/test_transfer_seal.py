@@ -1,3 +1,4 @@
+import csv
 import hashlib
 import json
 import sqlite3
@@ -2464,6 +2465,203 @@ def test_server_cas_conflict_is_terminal_even_when_marked_retryable(tmp_path, st
         ).fetchone()
     assert linked["event_type"] == "LINKED"
     assert linked["idempotency_key"] == prepared["idempotency_key"]
+
+
+def test_post_local_operator_review_case_and_outbox_are_atomic_and_exact_once(
+    tmp_path,
+):
+    event_log_path = tmp_path / "events.csv"
+    store = TransferSealStore(tmp_path / "post-review.db")
+    prepared = store.prepare(
+        master_label="MASTER-POST-REVIEW",
+        source_identity={"source_bundle_id": SOURCE},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+        relay_log_file_path=str(event_log_path),
+    )
+    error = TransferSealError(
+        "VERSION_CONFLICT",
+        "source changed concurrently",
+        status_code=409,
+    )
+
+    first = store.record_error(prepared["intent_id"], error)
+    replay = store.record_error(prepared["intent_id"], error)
+    case = store.post_review_case_for_intent(prepared["intent_id"])
+    pending = store.pending_post_review_projections()
+
+    assert first["status"] == replay["status"] == "OPERATOR_REVIEW"
+    assert first["local_completion_id"] == prepared["local_completion_id"]
+    assert case["event_type"] == "POST_REVIEW_REQUIRED"
+    assert case["local_completion_id"] == prepared["local_completion_id"]
+    assert case["projection_log_file_path"] == str(event_log_path)
+    assert [row["review_case_id"] for row in pending] == [
+        case["review_case_id"]
+    ]
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_post_review_cases"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_post_review_outbox"
+        ).fetchone()[0] == 1
+        linked = conn.execute(
+            "SELECT event_type FROM transfer_completion_ledger"
+        ).fetchone()
+    assert linked["event_type"] == "LINKED"
+
+
+def test_post_review_outbox_failure_rolls_back_terminal_status_in_same_tx(
+    tmp_path,
+):
+    store = TransferSealStore(tmp_path / "post-review-rollback.db")
+    prepared = store.prepare(
+        master_label="MASTER-POST-REVIEW-ROLLBACK",
+        source_identity={"source_bundle_id": SOURCE},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+        relay_log_file_path=str(tmp_path / "events.csv"),
+    )
+    with store._connect() as conn:
+        conn.executescript(
+            """
+            CREATE TRIGGER fail_post_review_outbox
+            BEFORE INSERT ON transfer_post_review_outbox
+            BEGIN SELECT RAISE(ABORT, 'forced post review outbox failure'); END;
+            """
+        )
+
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="forced post review outbox failure",
+    ):
+        store.record_error(
+            prepared["intent_id"],
+            TransferSealError(
+                "VERSION_CONFLICT",
+                "source changed concurrently",
+                status_code=409,
+            ),
+        )
+
+    assert store.load(prepared["intent_id"])["status"] == "PREPARED"
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_post_review_cases"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_post_review_outbox"
+        ).fetchone()[0] == 0
+
+
+def test_post_review_projection_receipt_is_append_only_and_restart_safe(
+    tmp_path,
+):
+    event_log_path = tmp_path / "events.csv"
+    db_path = tmp_path / "post-review-projection.db"
+    store = TransferSealStore(db_path)
+    prepared = store.prepare(
+        master_label="MASTER-POST-REVIEW-PROJECTION",
+        source_identity={"source_bundle_id": SOURCE},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+        relay_log_file_path=str(event_log_path),
+    )
+    store.record_error(
+        prepared["intent_id"],
+        TransferSealError(
+            "VERSION_CONFLICT",
+            "source changed concurrently",
+            status_code=409,
+        ),
+    )
+    case = store.post_review_case_for_intent(prepared["intent_id"])
+
+    receipt = store.record_post_review_projection(
+        case["review_case_id"],
+        projection_log_file_path=str(event_log_path),
+    )
+    replay = store.record_post_review_projection(
+        case["review_case_id"],
+        projection_log_file_path=str(event_log_path),
+    )
+
+    assert receipt["projection_id"] == replay["projection_id"]
+    assert TransferSealStore(db_path).pending_post_review_projections() == []
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_post_review_projection_receipts"
+        ).fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "UPDATE transfer_post_review_projection_receipts "
+                "SET event_type=event_type"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM transfer_post_review_projection_receipts")
+
+
+def test_post_review_projection_recovers_csv_append_crash_without_duplicate(
+    tmp_path,
+):
+    event_log_path = tmp_path / "events.csv"
+    store = TransferSealStore(tmp_path / "post-review-crash.db")
+    prepared = store.prepare(
+        master_label="MASTER-POST-REVIEW-CRASH",
+        source_identity={"source_bundle_id": SOURCE},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+        relay_log_file_path=str(event_log_path),
+    )
+    store.record_error(
+        prepared["intent_id"],
+        TransferSealError(
+            "VERSION_CONFLICT",
+            "source changed concurrently",
+            status_code=409,
+        ),
+    )
+    original_record = store.record_post_review_projection
+    record_calls = 0
+
+    def crash_once(*args, **kwargs):
+        nonlocal record_calls
+        record_calls += 1
+        if record_calls == 1:
+            raise OSError("crash after CSV append")
+        return original_record(*args, **kwargs)
+
+    store.record_post_review_projection = crash_once
+    sync_reasons = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "tester"
+    app.transfer_seal_coordinator = type(
+        "Coordinator",
+        (),
+        {"store": store},
+    )()
+    app._trigger_session_direct_sync = sync_reasons.append
+
+    with pytest.raises(OSError, match="crash after CSV append"):
+        app._project_transfer_post_review_for_intent(prepared["intent_id"])
+
+    restarted = ContainerAudit.__new__(ContainerAudit)
+    restarted.worker_name = "tester"
+    restarted.transfer_seal_coordinator = app.transfer_seal_coordinator
+    restarted._trigger_session_direct_sync = sync_reasons.append
+    assert restarted._drain_transfer_post_review_projections() == 1
+
+    with open(event_log_path, newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["event"] for row in rows] == ["POST_REVIEW_REQUIRED"]
+    detail = json.loads(rows[0]["details"])
+    assert detail["idempotency_key"].startswith("post-review:")
+    assert store.pending_post_review_projections() == []
+    assert sync_reasons == ["POST_REVIEW_REQUIRED"]
 
 
 def test_legacy_without_exact_configuration_keeps_exchange_available(tmp_path):

@@ -27,6 +27,8 @@ REPLACEMENT_WAITING_SCHEMA_VERSION = (
     "container-audit-phs-replacement-waiting-v1"
 )
 REPLACEMENT_WAITING_EVENT = "PHS_REPLACEMENT_WAITING_MARKED"
+POST_REVIEW_SCHEMA_VERSION = "container-audit-post-review-required-v1"
+POST_REVIEW_REQUIRED_EVENT = "POST_REVIEW_REQUIRED"
 CONTRACT_VERSION = "logistics-v1"
 COMMAND_TYPE = "SEAL_TRANSFER_BUNDLE"
 PENDING_STATUSES = ("PREPARED", "COMMAND_READY", "RETRY_WAIT")
@@ -2295,6 +2297,7 @@ class TransferSealStore:
                     last_error_code TEXT,
                     last_error_message TEXT,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
+                    relay_log_file_path TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     CHECK((command_json IS NULL) = (command_id IS NULL)),
@@ -2325,6 +2328,11 @@ class TransferSealStore:
                 conn.execute(
                     "ALTER TABLE transfer_seal_intents ADD COLUMN idempotency_key TEXT"
                 )
+            if "relay_log_file_path" not in columns:
+                conn.execute(
+                    "ALTER TABLE transfer_seal_intents "
+                    "ADD COLUMN relay_log_file_path TEXT NOT NULL DEFAULT ''"
+                )
             conn.execute(
                 """UPDATE transfer_seal_intents
                       SET idempotency_key='container-seal:' || intent_hash
@@ -2353,6 +2361,12 @@ class TransferSealStore:
                 ON transfer_seal_intents
                 WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
                 BEGIN SELECT RAISE(ABORT, 'transfer seal idempotency key is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_relay_log_path_immutable
+                BEFORE UPDATE OF relay_log_file_path
+                ON transfer_seal_intents
+                WHEN OLD.relay_log_file_path <> ''
+                 AND NEW.relay_log_file_path IS NOT OLD.relay_log_file_path
+                BEGIN SELECT RAISE(ABORT, 'transfer relay log path is immutable'); END;
                 CREATE TABLE IF NOT EXISTS transfer_completion_ledger (
                     ledger_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     completion_id TEXT NOT NULL UNIQUE,
@@ -2370,6 +2384,64 @@ class TransferSealStore:
                 CREATE TRIGGER IF NOT EXISTS trg_transfer_completion_immutable_delete
                 BEFORE DELETE ON transfer_completion_ledger
                 BEGIN SELECT RAISE(ABORT, 'transfer completion ledger is append-only'); END;
+                CREATE TABLE IF NOT EXISTS transfer_post_review_cases (
+                    case_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    review_case_id TEXT NOT NULL UNIQUE,
+                    intent_id TEXT NOT NULL UNIQUE
+                        REFERENCES transfer_seal_intents(intent_id),
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='POST_REVIEW_REQUIRED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    local_completion_id TEXT NOT NULL UNIQUE
+                        REFERENCES transfer_completion_ledger(completion_id),
+                    error_code TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    evidence_hash TEXT NOT NULL,
+                    projection_log_file_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_case_update
+                BEFORE UPDATE ON transfer_post_review_cases
+                BEGIN SELECT RAISE(ABORT, 'post review case is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_case_delete
+                BEFORE DELETE ON transfer_post_review_cases
+                BEGIN SELECT RAISE(ABORT, 'post review case is append-only'); END;
+                CREATE TABLE IF NOT EXISTS transfer_post_review_outbox (
+                    outbox_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    review_case_id TEXT NOT NULL UNIQUE
+                        REFERENCES transfer_post_review_cases(review_case_id),
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='POST_REVIEW_REQUIRED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    projection_log_file_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_outbox_update
+                BEFORE UPDATE ON transfer_post_review_outbox
+                BEGIN SELECT RAISE(ABORT, 'post review outbox is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_outbox_delete
+                BEFORE DELETE ON transfer_post_review_outbox
+                BEGIN SELECT RAISE(ABORT, 'post review outbox is append-only'); END;
+                CREATE TABLE IF NOT EXISTS transfer_post_review_projection_receipts (
+                    projection_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    projection_id TEXT NOT NULL UNIQUE,
+                    review_case_id TEXT NOT NULL UNIQUE
+                        REFERENCES transfer_post_review_outbox(review_case_id),
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='POST_REVIEW_REQUIRED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_hash TEXT NOT NULL,
+                    projection_log_file_path TEXT NOT NULL,
+                    projected_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_projection_update
+                BEFORE UPDATE ON transfer_post_review_projection_receipts
+                BEGIN SELECT RAISE(ABORT, 'post review projection receipt is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_post_review_projection_delete
+                BEFORE DELETE ON transfer_post_review_projection_receipts
+                BEGIN SELECT RAISE(ABORT, 'post review projection receipt is append-only'); END;
                 CREATE TABLE IF NOT EXISTS phs_replacement_waiting_ledger (
                     ledger_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     intent_id TEXT NOT NULL UNIQUE,
@@ -2460,6 +2532,7 @@ class TransferSealStore:
         item_id: str,
         operator: str,
         scanned_barcodes: Iterable[str],
+        relay_log_file_path: str = "",
     ) -> sqlite3.Row:
         raw_barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
         normalized = [normalize_barcode(value) for value in raw_barcodes]
@@ -2474,6 +2547,11 @@ class TransferSealStore:
         digest = _sha256(intent_material)
         intent_id = f"transfer-intent-{digest[:32]}"
         idempotency_key = f"container-seal:{digest}"
+        normalized_relay_log_path = (
+            os.path.abspath(str(relay_log_file_path).strip())
+            if str(relay_log_file_path or "").strip()
+            else ""
+        )
         now = _utc_now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -2481,8 +2559,8 @@ class TransferSealStore:
                 """INSERT OR IGNORE INTO transfer_seal_intents (
                        intent_id,schema_version,status,master_label,source_identity_json,
                        item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
-                       idempotency_key,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       idempotency_key,relay_log_file_path,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     SCHEMA_VERSION,
@@ -2495,6 +2573,7 @@ class TransferSealStore:
                     len(raw_barcodes),
                     digest,
                     idempotency_key,
+                    normalized_relay_log_path,
                     now,
                     now,
                 ),
@@ -2507,6 +2586,17 @@ class TransferSealStore:
                 or row["idempotency_key"] != idempotency_key
             ):
                 raise ValueError("durable transfer intent identity collision")
+            if not str(row["relay_log_file_path"] or "") and normalized_relay_log_path:
+                conn.execute(
+                    "UPDATE transfer_seal_intents SET relay_log_file_path=? "
+                    "WHERE intent_id=? AND relay_log_file_path=''",
+                    (normalized_relay_log_path, intent_id),
+                )
+                row = conn.execute(
+                    "SELECT * FROM transfer_seal_intents WHERE intent_id=?",
+                    (intent_id,),
+                ).fetchone()
+                assert row is not None
             self._ensure_linked_event(conn, row)
             row = self._load_in_connection(conn, intent_id)
             conn.commit()
@@ -2591,6 +2681,110 @@ class TransferSealStore:
         assert row is not None
         return row
 
+    @staticmethod
+    def _ensure_post_review_case(
+        conn: sqlite3.Connection,
+        row: Mapping[str, Any],
+        error: TransferSealError,
+    ) -> sqlite3.Row:
+        intent_id = str(row["intent_id"])
+        existing = conn.execute(
+            "SELECT * FROM transfer_post_review_cases WHERE intent_id=?",
+            (intent_id,),
+        ).fetchone()
+        if existing is not None:
+            outbox = conn.execute(
+                "SELECT * FROM transfer_post_review_outbox WHERE review_case_id=?",
+                (str(existing["review_case_id"]),),
+            ).fetchone()
+            if outbox is None or (
+                outbox["event_type"] != POST_REVIEW_REQUIRED_EVENT
+                or outbox["idempotency_key"] != existing["idempotency_key"]
+                or outbox["payload_json"] != existing["evidence_json"]
+                or outbox["payload_hash"] != existing["evidence_hash"]
+            ):
+                raise ValueError("durable post review outbox differs from case")
+            return existing
+
+        local_completion_id = str(row["local_completion_id"] or "").strip()
+        if not local_completion_id:
+            raise ValueError("post review case requires durable local completion")
+        transfer_idempotency_key = str(row["idempotency_key"])
+        idempotency_key = "post-review:" + hashlib.sha256(
+            transfer_idempotency_key.encode("utf-8")
+        ).hexdigest()
+        review_case_id = _deterministic_id(
+            "POST-REVIEW",
+            {
+                "intent_id": intent_id,
+                "local_completion_id": local_completion_id,
+                "idempotency_key": idempotency_key,
+            },
+        )
+        now = _utc_now()
+        evidence = {
+            "schema_version": POST_REVIEW_SCHEMA_VERSION,
+            "event_type": POST_REVIEW_REQUIRED_EVENT,
+            "review_case_id": review_case_id,
+            "idempotency_key": idempotency_key,
+            "transfer_intent_id": intent_id,
+            "transfer_idempotency_key": transfer_idempotency_key,
+            "local_completion_id": local_completion_id,
+            "transfer_status": "OPERATOR_REVIEW",
+            "error_code": str(error.code or "").strip(),
+            "error_message": str(error),
+            "status_code": int(error.status_code or 0),
+            "operator": str(row["operator"] or ""),
+            "master_label": str(row["master_label"] or ""),
+            "created_at": now,
+        }
+        evidence_json = _canonical_json(evidence)
+        evidence_hash = hashlib.sha256(
+            evidence_json.encode("utf-8")
+        ).hexdigest()
+        projection_log_file_path = str(row["relay_log_file_path"] or "")
+        conn.execute(
+            """INSERT INTO transfer_post_review_cases (
+                   review_case_id,intent_id,event_type,idempotency_key,
+                   local_completion_id,error_code,evidence_json,evidence_hash,
+                   projection_log_file_path,created_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                review_case_id,
+                intent_id,
+                POST_REVIEW_REQUIRED_EVENT,
+                idempotency_key,
+                local_completion_id,
+                str(error.code or "").strip(),
+                evidence_json,
+                evidence_hash,
+                projection_log_file_path,
+                now,
+            ),
+        )
+        conn.execute(
+            """INSERT INTO transfer_post_review_outbox (
+                   review_case_id,event_type,idempotency_key,payload_json,
+                   payload_hash,projection_log_file_path,created_at
+               ) VALUES (?,?,?,?,?,?,?)""",
+            (
+                review_case_id,
+                POST_REVIEW_REQUIRED_EVENT,
+                idempotency_key,
+                evidence_json,
+                evidence_hash,
+                projection_log_file_path,
+                now,
+            ),
+        )
+        created = conn.execute(
+            "SELECT * FROM transfer_post_review_cases WHERE review_case_id=?",
+            (review_case_id,),
+        ).fetchone()
+        if created is None:
+            raise ValueError("durable post review case was not created")
+        return created
+
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
         operator_review_codes = {
             "AMBIGUOUS_BUNDLE",
@@ -2636,8 +2830,11 @@ class TransferSealStore:
                 (status, error.code, str(error), _utc_now(), intent_id),
             )
             row = self._load_in_connection(conn, intent_id)
+            if row is None:
+                raise KeyError(intent_id)
+            if status == "OPERATOR_REVIEW":
+                self._ensure_post_review_case(conn, row, error)
             conn.commit()
-        assert row is not None
         return row
 
     def record_receipt(self, intent_id: str, receipt: Mapping[str, Any], seal_qr_payload: str) -> sqlite3.Row:
@@ -2663,6 +2860,130 @@ class TransferSealStore:
                 PENDING_STATUSES,
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
+
+    def post_review_case_for_intent(self, intent_id: str) -> sqlite3.Row:
+        normalized_intent = _normalize_identifier(intent_id, "intent_id")
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT review.*, outbox.outbox_sequence,
+                          outbox.payload_json AS outbox_payload_json,
+                          outbox.payload_hash AS outbox_payload_hash
+                     FROM transfer_post_review_cases AS review
+                     JOIN transfer_post_review_outbox AS outbox
+                       ON outbox.review_case_id=review.review_case_id
+                    WHERE review.intent_id=?""",
+                (normalized_intent,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(normalized_intent)
+        return row
+
+    def post_review_cases(self) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT review.*, outbox.outbox_sequence,
+                          outbox.payload_json AS outbox_payload_json,
+                          outbox.payload_hash AS outbox_payload_hash
+                     FROM transfer_post_review_cases AS review
+                     JOIN transfer_post_review_outbox AS outbox
+                       ON outbox.review_case_id=review.review_case_id
+                    ORDER BY outbox.outbox_sequence"""
+            ).fetchall()
+        return list(rows)
+
+    def pending_post_review_projections(self) -> list[sqlite3.Row]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT review.*, outbox.outbox_sequence,
+                          outbox.payload_json AS outbox_payload_json,
+                          outbox.payload_hash AS outbox_payload_hash
+                     FROM transfer_post_review_cases AS review
+                     JOIN transfer_post_review_outbox AS outbox
+                       ON outbox.review_case_id=review.review_case_id
+                     LEFT JOIN transfer_post_review_projection_receipts AS receipt
+                       ON receipt.review_case_id=review.review_case_id
+                    WHERE receipt.review_case_id IS NULL
+                      AND outbox.projection_log_file_path <> ''
+                    ORDER BY outbox.outbox_sequence"""
+            ).fetchall()
+        return list(rows)
+
+    def record_post_review_projection(
+        self,
+        review_case_id: str,
+        *,
+        projection_log_file_path: str,
+    ) -> sqlite3.Row:
+        normalized_case_id = _normalize_identifier(
+            review_case_id,
+            "review_case_id",
+        )
+        normalized_projection_path = os.path.abspath(
+            _normalize_identifier(
+                projection_log_file_path,
+                "projection_log_file_path",
+            )
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute(
+                """SELECT review.*, outbox.payload_hash AS outbox_payload_hash,
+                          outbox.projection_log_file_path AS outbox_projection_path
+                     FROM transfer_post_review_cases AS review
+                     JOIN transfer_post_review_outbox AS outbox
+                       ON outbox.review_case_id=review.review_case_id
+                    WHERE review.review_case_id=?""",
+                (normalized_case_id,),
+            ).fetchone()
+            if source is None:
+                raise KeyError(normalized_case_id)
+            if (
+                str(source["outbox_projection_path"] or "")
+                != normalized_projection_path
+                or source["outbox_payload_hash"] != source["evidence_hash"]
+            ):
+                raise ValueError(
+                    "post review projection differs from durable outbox"
+                )
+            projection_id = _deterministic_id(
+                "POST-REVIEW-PROJECTION",
+                {
+                    "review_case_id": normalized_case_id,
+                    "idempotency_key": str(source["idempotency_key"]),
+                    "payload_hash": str(source["evidence_hash"]),
+                },
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO transfer_post_review_projection_receipts (
+                       projection_id,review_case_id,event_type,idempotency_key,
+                       payload_hash,projection_log_file_path,projected_at
+                   ) VALUES (?,?,?,?,?,?,?)""",
+                (
+                    projection_id,
+                    normalized_case_id,
+                    POST_REVIEW_REQUIRED_EVENT,
+                    str(source["idempotency_key"]),
+                    str(source["evidence_hash"]),
+                    normalized_projection_path,
+                    _utc_now(),
+                ),
+            )
+            receipt = conn.execute(
+                """SELECT * FROM transfer_post_review_projection_receipts
+                    WHERE review_case_id=?""",
+                (normalized_case_id,),
+            ).fetchone()
+            if receipt is None or (
+                receipt["projection_id"] != projection_id
+                or receipt["event_type"] != POST_REVIEW_REQUIRED_EVENT
+                or receipt["idempotency_key"] != source["idempotency_key"]
+                or receipt["payload_hash"] != source["evidence_hash"]
+                or receipt["projection_log_file_path"]
+                != normalized_projection_path
+            ):
+                raise ValueError("post review projection receipt identity collision")
+            conn.commit()
+        return receipt
 
     def has_exact_history(self) -> bool:
         with self._connect() as conn:
@@ -2972,6 +3293,7 @@ class TransferSealCoordinator:
         item_id: str,
         operator: str,
         scanned_barcodes: Iterable[str],
+        relay_log_file_path: str = "",
     ) -> SealAttempt:
         identity = source_identity_from_label(master_label_fields)
         if not identity["item_id"]:
@@ -2982,6 +3304,7 @@ class TransferSealCoordinator:
             item_id=item_id,
             operator=operator,
             scanned_barcodes=scanned_barcodes,
+            relay_log_file_path=relay_log_file_path,
         )
         return self._attempt_from_row(row)
 

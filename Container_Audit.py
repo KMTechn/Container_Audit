@@ -1161,6 +1161,8 @@ class ContainerAudit:
         else: self.application_path = os.path.dirname(os.path.abspath(__file__))
         
         self._setup_paths_and_dirs()
+        self._post_review_refresh_required = False
+        self._presented_post_review_case_ids: set[str] = set()
         self.transfer_seal_coordinator = TransferSealCoordinator(
             TransferSealStore(
                 Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
@@ -1918,6 +1920,7 @@ class ContainerAudit:
         if not self.root.winfo_exists(): return
         if not self.paned_window.winfo_ismapped():
             self.show_validation_screen()
+        self._refresh_transfer_post_review_state()
 
     def change_worker(self):
         if self._operator_review_blocks_mutation():
@@ -6954,6 +6957,10 @@ class ContainerAudit:
                 self.show_status_message("이적 membership을 로컬에 보존하지 못해 작업 상태를 유지합니다.", self.COLOR_DANGER)
                 return False
         locally_linked = bool(transfer_attempt.local_completion_id)
+        post_review_required = bool(
+            transfer_attempt.status == "OPERATOR_REVIEW" and locally_linked
+        )
+        post_review_case: Optional[Dict[str, Any]] = None
         if transfer_attempt.status == "OPERATOR_REVIEW" and not locally_linked:
             safe_message = (
                 "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
@@ -6994,6 +7001,17 @@ class ContainerAudit:
         if not self._log_event('TRAY_COMPLETE', detail=log_detail, synchronous=True):
             self.show_status_message("트레이 완료 기록 저장에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
             return False
+        if post_review_required:
+            try:
+                post_review_case = self._project_transfer_post_review_for_intent(
+                    transfer_attempt.intent_id
+                )
+            except Exception:
+                # The review case and its projection outbox were committed in
+                # the same SQLite transaction as the terminal transfer state.
+                # A CSV or receipt failure therefore must not roll back the
+                # already durable local completion.
+                self._post_review_refresh_required = True
 
         completion_snapshot: Optional[CompletionOutcomeSnapshot] = None
         if not is_test and (
@@ -7070,6 +7088,10 @@ class ContainerAudit:
             self.show_status_message("트레이는 완료되었지만 임시 상태 파일 삭제에 실패했습니다.", self.COLOR_DANGER)
         elif completion_snapshot is not None:
             self._publish_completion_snapshot(completion_snapshot)
+        if post_review_required:
+            self._present_transfer_post_review_required_notice(
+                str((post_review_case or {}).get("review_case_id") or "")
+            )
         self.tray_last_end_time = datetime.datetime.now()
         return True
 
@@ -8219,6 +8241,9 @@ class ContainerAudit:
             item_id=self.current_tray.item_code,
             operator=self.worker_name,
             scanned_barcodes=log_detail.get("product_barcodes") or (),
+            relay_log_file_path=str(
+                getattr(self, "log_file_path", "") or ""
+            ),
         )
         drain_through = getattr(coordinator, "drain_pending_through", None)
         if callable(drain_through):
@@ -8258,15 +8283,188 @@ class ContainerAudit:
             }
         )
 
+    def _project_transfer_post_review_row(
+        self,
+        row: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Idempotently project one durable post-local review case to CSV."""
+
+        result = dict(row)
+        try:
+            event_detail = json.loads(
+                str(
+                    result.get("outbox_payload_json")
+                    or result.get("evidence_json")
+                    or ""
+                )
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ValueError("durable post review evidence is invalid") from exc
+        if not isinstance(event_detail, dict):
+            raise ValueError("durable post review evidence is invalid")
+
+        event_type = str(event_detail.get("event_type") or "").strip()
+        idempotency_key = str(
+            event_detail.get("idempotency_key") or ""
+        ).strip()
+        review_case_id = str(result.get("review_case_id") or "").strip()
+        projection_log_file_path = str(
+            result.get("projection_log_file_path") or ""
+        ).strip()
+        if (
+            event_type != "POST_REVIEW_REQUIRED"
+            or not idempotency_key
+            or not review_case_id
+            or str(event_detail.get("review_case_id") or "").strip()
+            != review_case_id
+            or not projection_log_file_path
+        ):
+            raise ValueError("durable post review projection is incomplete")
+        if (
+            str(result.get("outbox_payload_hash") or "").strip()
+            and str(result.get("outbox_payload_hash") or "").strip()
+            != str(result.get("evidence_hash") or "").strip()
+        ):
+            raise ValueError("durable post review outbox differs from case")
+
+        enriched_detail = self._plan_b_event_detail(event_type, event_detail)
+        log_entry = {
+            "timestamp": str(
+                event_detail.get("created_at")
+                or result.get("created_at")
+                or datetime.datetime.now().isoformat()
+            ),
+            "worker_name": str(
+                event_detail.get("operator")
+                or getattr(self, "worker_name", "")
+                or ""
+            ),
+            "event": event_type,
+            "details": json.dumps(
+                enriched_detail,
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+        }
+        append_event_log_entry_idempotent(
+            projection_log_file_path,
+            log_entry,
+            event_type=event_type,
+            idempotency_key=idempotency_key,
+            durable=True,
+        )
+        store = self._transfer_seal_runtime().store
+        receipt = store.record_post_review_projection(
+            review_case_id,
+            projection_log_file_path=projection_log_file_path,
+        )
+        self._trigger_session_direct_sync(event_type)
+        result["projection_id"] = str(receipt["projection_id"])
+        return result
+
+    def _project_transfer_post_review_for_intent(
+        self,
+        intent_id: str,
+    ) -> Dict[str, Any]:
+        store = self._transfer_seal_runtime().store
+        row = store.post_review_case_for_intent(intent_id)
+        return self._project_transfer_post_review_row(dict(row))
+
+    def _drain_transfer_post_review_projections(self) -> int:
+        store = self._transfer_seal_runtime().store
+        pending = store.pending_post_review_projections()
+        for row in pending:
+            self._project_transfer_post_review_row(dict(row))
+        return len(pending)
+
+    def _present_transfer_post_review_required_notice(
+        self,
+        review_case_id: str = "",
+    ) -> bool:
+        """Present worker-safe guidance while technical evidence stays local."""
+
+        notice = Notice(
+            code="transfer.post_review_required",
+            title="완료 후 관리자 확인 필요",
+            message=(
+                "트레이 완료는 이 PC에 안전하게 저장되었습니다. "
+                "중앙 반영 상태는 관리자 확인이 필요합니다. "
+                "관리자에게 알린 뒤 확인 버튼을 눌러 주세요."
+            ),
+            severity=NoticeSeverity.WARNING,
+            blocking=True,
+        )
+        presented = self._warning_state_presenter().present(notice)
+        if presented:
+            normalized_case_id = str(review_case_id or "").strip()
+            if normalized_case_id:
+                case_ids = getattr(
+                    self,
+                    "_presented_post_review_case_ids",
+                    None,
+                )
+                if not isinstance(case_ids, set):
+                    case_ids = set()
+                    self._presented_post_review_case_ids = case_ids
+                case_ids.add(normalized_case_id)
+            self._start_warning_beep()
+        self._render_warning_state()
+        self._update_action_button_states()
+        return presented
+
+    def _refresh_transfer_post_review_state(self) -> bool:
+        """Replay review projections and surface one safe queued notice."""
+
+        refresh_requested = bool(
+            getattr(self, "_post_review_refresh_required", False)
+        )
+        replay_failed = False
+        try:
+            self._drain_transfer_post_review_projections()
+        except Exception:
+            replay_failed = True
+
+        try:
+            cases = list(self._transfer_seal_runtime().store.post_review_cases())
+        except Exception:
+            cases = []
+            replay_failed = True
+
+        presented_ids = getattr(
+            self,
+            "_presented_post_review_case_ids",
+            None,
+        )
+        if not isinstance(presented_ids, set):
+            presented_ids = set()
+            self._presented_post_review_case_ids = presented_ids
+        for row in reversed(cases):
+            review_case_id = str(row["review_case_id"] or "").strip()
+            if review_case_id and review_case_id not in presented_ids:
+                presented = self._present_transfer_post_review_required_notice(
+                    review_case_id
+                )
+                self._post_review_refresh_required = bool(
+                    replay_failed or not presented
+                )
+                return presented
+
+        if refresh_requested or replay_failed:
+            presented = self._present_transfer_post_review_required_notice()
+            self._post_review_refresh_required = bool(
+                replay_failed or not presented
+            )
+            return presented
+
+        self._post_review_refresh_required = False
+        return False
+
     def _retry_pending_transfer_seals(self) -> None:
         try:
             coordinator = self._transfer_seal_runtime()
             for result in coordinator.drain_pending():
                 if result.status == "OPERATOR_REVIEW":
-                    print(
-                        "이적 seal 복구에 작업자 확인이 필요합니다: "
-                        f"{result.intent_id} {result.error_code}"
-                    )
+                    self._post_review_refresh_required = True
         except Exception as exc:
             print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")
         try:

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
-from transfer_seal import membership_hash
+from transfer_seal import TransferSealStore, membership_hash
 
 
 ITEM = "AAA2270730100"
@@ -138,9 +138,13 @@ def _app(tmp_path, client):
     ]
     app.item_catalog = ItemCatalog(app.items_data)
     app.parked_trays_dir = str(tmp_path / "parked")
+    app.log_file_path = str(tmp_path / "events.csv")
     app.root = ScheduledRoot()
     app.show_tray_image_var = Toggle()
-    app.transfer_seal_coordinator = SimpleNamespace(client=client)
+    app.transfer_seal_coordinator = SimpleNamespace(
+        client=client,
+        store=TransferSealStore(tmp_path / "transfer-seal.db"),
+    )
     app._master_preflight_epoch = 0
     app._master_preflight_pending = False
     app._master_preflight_poll_job = None
