@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from tkinter import font as tkfont
 import csv
 import datetime
+import hashlib
 import os
 import sys
 import threading
@@ -1214,7 +1215,9 @@ class ContainerAudit:
         self._phs_reconciliation_scan_armed = False
         self._phs_reconciliation_context: Optional[Dict[str, Any]] = None
         self._phs_reconciliation_execution_guard: Optional[Dict[str, Any]] = None
-        self._phs_replacement_notice_pairs: set[tuple[str, str]] = set()
+        self._phs_replacement_notice_pairs: set[
+            tuple[str, str, str]
+        ] = set()
         self._tray_state_persist_lock = threading.RLock()
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
@@ -3210,6 +3213,146 @@ class ContainerAudit:
             return None
         return old_label_id, new_label_id
 
+    def _phs_replacement_waiting_session_id(
+        self,
+        context: Optional[Mapping[str, Any]],
+    ) -> str:
+        scan = (
+            context.get("scan")
+            if isinstance(context, Mapping)
+            and isinstance(context.get("scan"), Mapping)
+            else {}
+        )
+        tray = getattr(self, "current_tray", None)
+        payloads = (
+            scan.get("active_qr_payload"),
+            context.get("_scanned_payload")
+            if isinstance(context, Mapping)
+            else None,
+            getattr(tray, "active_label_qr_payload", ""),
+            getattr(tray, "canonical_input_tag_qr", ""),
+            getattr(tray, "master_label_code", ""),
+        )
+        for payload in payloads:
+            parsed = self._parse_new_format_qr(str(payload or "")) or {}
+            try:
+                fields = validate_compact_phs2_fields(parsed)
+            except TransferSealError:
+                continue
+            session_id = str(fields["ITG"]).strip()
+            if session_id:
+                return session_id
+        return ""
+
+    @staticmethod
+    def _phs_replacement_waiting_locations(
+        context: Optional[Mapping[str, Any]],
+    ) -> list[str]:
+        locations: set[str] = set()
+        if isinstance(context, Mapping):
+            scan = (
+                context.get("scan")
+                if isinstance(context.get("scan"), Mapping)
+                else {}
+            )
+            for value in (
+                context.get("location_code"),
+                context.get("current_location"),
+                scan.get("location_code"),
+                scan.get("current_location"),
+            ):
+                normalized = str(value or "").strip()
+                if normalized:
+                    locations.add(normalized)
+            for action in list(context.get("actions") or []):
+                if not isinstance(action, Mapping):
+                    continue
+                for member in list(action.get("process_membership") or []):
+                    if not isinstance(member, Mapping):
+                        continue
+                    normalized = str(
+                        member.get("location_code") or ""
+                    ).strip()
+                    if normalized:
+                        locations.add(normalized)
+        return sorted(locations or {"PHS_GOOD"})
+
+    def _mark_phs_replacement_waiting(
+        self,
+        context: Optional[Mapping[str, Any]],
+        pair: tuple[str, str],
+    ) -> Dict[str, Any]:
+        session_id = self._phs_replacement_waiting_session_id(context)
+        if not session_id:
+            raise ValueError("PHS replacement waiting session is unavailable")
+        process_context = (
+            str(context.get("process_context") or "transfer").strip()
+            if isinstance(context, Mapping)
+            else "transfer"
+        )
+        tray = getattr(self, "current_tray", None)
+        row = self._transfer_seal_runtime().store.mark_phs_replacement_waiting(
+            session_id=session_id,
+            old_label_id=pair[0],
+            new_label_id=pair[1],
+            process_context=process_context,
+            location_codes=self._phs_replacement_waiting_locations(context),
+            operator=str(getattr(self, "worker_name", "") or ""),
+            master_label=str(
+                getattr(tray, "master_label_code", "") or ""
+            ),
+        )
+        return dict(row)
+
+    def _log_phs_replacement_waiting_failure(
+        self,
+        *,
+        context: Optional[Mapping[str, Any]],
+        pair: tuple[str, str],
+        error: Exception,
+    ) -> None:
+        session_id = self._phs_replacement_waiting_session_id(context)
+        detail = {
+            "contract_version": (
+                "container-audit-phs-replacement-waiting-v1"
+            ),
+            "event_type": "PHS_REPLACEMENT_WAITING_MARK_FAILED",
+            "session_id": session_id or None,
+            "old_label_hash": hashlib.sha256(
+                pair[0].encode("utf-8")
+            ).hexdigest(),
+            "new_label_hash": hashlib.sha256(
+                pair[1].encode("utf-8")
+            ).hexdigest(),
+            "process_context": (
+                str(context.get("process_context") or "transfer").strip()
+                if isinstance(context, Mapping)
+                else "transfer"
+            ),
+            "location_codes": self._phs_replacement_waiting_locations(
+                context
+            ),
+            "exception_type": error.__class__.__name__,
+        }
+        logger = getattr(self, "_log_event", None)
+        logged = False
+        if callable(logger):
+            try:
+                logged = bool(
+                    logger(
+                        "PHS_REPLACEMENT_WAITING_MARK_FAILED",
+                        detail=detail,
+                        synchronous=True,
+                    )
+                )
+            except Exception:
+                logged = False
+        if not logged:
+            print(
+                "PHS replacement waiting evidence write failed: "
+                f"{error.__class__.__name__}"
+            )
+
     def _show_phs_replacement_required_notice_once(
         self,
         context: Optional[Mapping[str, Any]],
@@ -3221,9 +3364,19 @@ class ContainerAudit:
         if not isinstance(seen, set):
             seen = set()
             self._phs_replacement_notice_pairs = seen
-        if pair in seen:
+        session_id = self._phs_replacement_waiting_session_id(context)
+        notice_key = (session_id, pair[0], pair[1])
+        if notice_key in seen:
             return False
-        seen.add(pair)
+        try:
+            self._mark_phs_replacement_waiting(context, pair)
+        except Exception as exc:
+            self._log_phs_replacement_waiting_failure(
+                context=context,
+                pair=pair,
+                error=exc,
+            )
+        seen.add(notice_key)
         self.show_status_message(
             PHS_REPLACEMENT_REQUIRED_NOTICE,
             self.COLOR_IDLE,

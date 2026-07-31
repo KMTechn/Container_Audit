@@ -23,6 +23,10 @@ from logistics_runtime_profile import (
 
 SCHEMA_VERSION = "container-audit-transfer-seal-v1"
 LOCAL_COMPLETION_SCHEMA_VERSION = "container-audit-transfer-completion-v1"
+REPLACEMENT_WAITING_SCHEMA_VERSION = (
+    "container-audit-phs-replacement-waiting-v1"
+)
+REPLACEMENT_WAITING_EVENT = "PHS_REPLACEMENT_WAITING_MARKED"
 CONTRACT_VERSION = "logistics-v1"
 COMMAND_TYPE = "SEAL_TRANSFER_BUNDLE"
 PENDING_STATUSES = ("PREPARED", "COMMAND_READY", "RETRY_WAIT")
@@ -2366,6 +2370,49 @@ class TransferSealStore:
                 CREATE TRIGGER IF NOT EXISTS trg_transfer_completion_immutable_delete
                 BEFORE DELETE ON transfer_completion_ledger
                 BEGIN SELECT RAISE(ABORT, 'transfer completion ledger is append-only'); END;
+                CREATE TABLE IF NOT EXISTS phs_replacement_waiting_ledger (
+                    ledger_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    intent_id TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='PHS_REPLACEMENT_WAITING_MARKED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    session_id TEXT NOT NULL,
+                    old_label_id TEXT NOT NULL,
+                    old_label_hash TEXT NOT NULL,
+                    new_label_id TEXT NOT NULL,
+                    new_label_hash TEXT NOT NULL,
+                    process_context TEXT NOT NULL,
+                    location_codes_json TEXT NOT NULL,
+                    operator TEXT NOT NULL,
+                    master_label TEXT NOT NULL,
+                    evidence_json TEXT NOT NULL,
+                    evidence_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(session_id,old_label_hash,new_label_hash)
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_ledger_update
+                BEFORE UPDATE ON phs_replacement_waiting_ledger
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting ledger is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_ledger_delete
+                BEFORE DELETE ON phs_replacement_waiting_ledger
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting ledger is append-only'); END;
+                CREATE TABLE IF NOT EXISTS phs_replacement_waiting_outbox (
+                    outbox_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    intent_id TEXT NOT NULL UNIQUE
+                        REFERENCES phs_replacement_waiting_ledger(intent_id),
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='PHS_REPLACEMENT_WAITING_MARKED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_outbox_update
+                BEFORE UPDATE ON phs_replacement_waiting_outbox
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting outbox is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_outbox_delete
+                BEFORE DELETE ON phs_replacement_waiting_outbox
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting outbox is append-only'); END;
                 """
             )
             conn.execute("BEGIN IMMEDIATE")
@@ -2591,6 +2638,165 @@ class TransferSealStore:
         with self._connect() as conn:
             row = conn.execute("SELECT 1 FROM transfer_seal_intents LIMIT 1").fetchone()
         return row is not None
+
+    def mark_phs_replacement_waiting(
+        self,
+        *,
+        session_id: str,
+        old_label_id: str,
+        new_label_id: str,
+        process_context: str,
+        location_codes: Iterable[str],
+        operator: str,
+        master_label: str,
+    ) -> sqlite3.Row:
+        """Atomically append one replacement-waiting fact and replay record."""
+
+        normalized_session = _normalize_identifier(session_id, "session_id")
+        normalized_old = _normalize_identifier(old_label_id, "old_label_id")
+        normalized_new = _normalize_identifier(new_label_id, "new_label_id")
+        if normalized_old == normalized_new:
+            raise ValueError("replacement labels must differ")
+        normalized_process = _normalize_identifier(
+            process_context,
+            "process_context",
+        ).lower()
+        if isinstance(location_codes, (str, bytes)):
+            raise ValueError("location_codes must be an iterable of identifiers")
+        normalized_locations = sorted(
+            {
+                _normalize_identifier(value, "location_code")
+                for value in location_codes
+            }
+        )
+        if not normalized_locations:
+            raise ValueError("location_codes must be non-empty")
+        old_hash = hashlib.sha256(normalized_old.encode("utf-8")).hexdigest()
+        new_hash = hashlib.sha256(normalized_new.encode("utf-8")).hexdigest()
+        idempotency_key = (
+            f"replacement-wait:{normalized_session}:{old_hash}:{new_hash}"
+        )
+        intent_id = (
+            "phs-replacement-wait-"
+            + hashlib.sha256(idempotency_key.encode("utf-8")).hexdigest()[:32]
+        )
+        now = _utc_now()
+        evidence = {
+            "schema_version": REPLACEMENT_WAITING_SCHEMA_VERSION,
+            "event_type": REPLACEMENT_WAITING_EVENT,
+            "intent_id": intent_id,
+            "idempotency_key": idempotency_key,
+            "session_id": normalized_session,
+            "old_label_id": normalized_old,
+            "old_label_hash": old_hash,
+            "new_label_id": normalized_new,
+            "new_label_hash": new_hash,
+            "process_context": normalized_process,
+            "location_codes": normalized_locations,
+            "operator": str(operator or "").strip(),
+            "master_label": str(master_label or "").strip(),
+            "observed_at": now,
+        }
+        evidence_json = _canonical_json(evidence)
+        evidence_hash = hashlib.sha256(
+            evidence_json.encode("utf-8")
+        ).hexdigest()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """INSERT OR IGNORE INTO phs_replacement_waiting_ledger (
+                       intent_id,event_type,idempotency_key,session_id,
+                       old_label_id,old_label_hash,new_label_id,new_label_hash,
+                       process_context,location_codes_json,operator,master_label,
+                       evidence_json,evidence_hash,created_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    intent_id,
+                    REPLACEMENT_WAITING_EVENT,
+                    idempotency_key,
+                    normalized_session,
+                    normalized_old,
+                    old_hash,
+                    normalized_new,
+                    new_hash,
+                    normalized_process,
+                    _canonical_json(normalized_locations),
+                    str(operator or "").strip(),
+                    str(master_label or "").strip(),
+                    evidence_json,
+                    evidence_hash,
+                    now,
+                ),
+            )
+            ledger = conn.execute(
+                """SELECT * FROM phs_replacement_waiting_ledger
+                    WHERE idempotency_key=?""",
+                (idempotency_key,),
+            ).fetchone()
+            if ledger is None or (
+                ledger["intent_id"] != intent_id
+                or ledger["event_type"] != REPLACEMENT_WAITING_EVENT
+                or ledger["session_id"] != normalized_session
+                or ledger["old_label_hash"] != old_hash
+                or ledger["new_label_hash"] != new_hash
+            ):
+                raise ValueError(
+                    "durable replacement waiting identity collision"
+                )
+            conn.execute(
+                """INSERT OR IGNORE INTO phs_replacement_waiting_outbox (
+                       intent_id,event_type,idempotency_key,payload_json,
+                       payload_hash,created_at
+                   ) VALUES (?,?,?,?,?,?)""",
+                (
+                    ledger["intent_id"],
+                    ledger["event_type"],
+                    ledger["idempotency_key"],
+                    ledger["evidence_json"],
+                    ledger["evidence_hash"],
+                    ledger["created_at"],
+                ),
+            )
+            outbox = conn.execute(
+                """SELECT * FROM phs_replacement_waiting_outbox
+                    WHERE intent_id=?""",
+                (intent_id,),
+            ).fetchone()
+            if outbox is None or (
+                outbox["event_type"] != REPLACEMENT_WAITING_EVENT
+                or outbox["idempotency_key"] != idempotency_key
+                or outbox["payload_json"] != ledger["evidence_json"]
+                or outbox["payload_hash"] != ledger["evidence_hash"]
+            ):
+                raise ValueError(
+                    "durable replacement waiting outbox differs from ledger"
+                )
+            row = conn.execute(
+                """SELECT ledger.*, outbox.outbox_sequence
+                     FROM phs_replacement_waiting_ledger AS ledger
+                     JOIN phs_replacement_waiting_outbox AS outbox
+                       ON outbox.intent_id=ledger.intent_id
+                    WHERE ledger.intent_id=?""",
+                (intent_id,),
+            ).fetchone()
+            conn.commit()
+        assert row is not None
+        return row
+
+    def replacement_waiting_outbox(self) -> list[sqlite3.Row]:
+        """Return immutable replacement-waiting replay evidence in FIFO order."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT ledger.*, outbox.outbox_sequence,
+                          outbox.payload_json AS outbox_payload_json,
+                          outbox.payload_hash AS outbox_payload_hash
+                     FROM phs_replacement_waiting_outbox AS outbox
+                     JOIN phs_replacement_waiting_ledger AS ledger
+                       ON ledger.intent_id=outbox.intent_id
+                    ORDER BY outbox.outbox_sequence"""
+            ).fetchall()
+        return list(rows)
 
     def record_exchange_block(self, *, reason_code: str, details: Mapping[str, Any]) -> str:
         created_at = _utc_now()

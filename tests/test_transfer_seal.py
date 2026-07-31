@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from urllib.parse import parse_qs, urlsplit
@@ -1472,6 +1473,126 @@ def test_existing_outbox_is_migrated_to_stable_key_and_linked_ledger(tmp_path):
     assert migrated["idempotency_key"] == f"container-seal:{'f' * 64}"
     assert migrated["local_completion_id"].startswith("TRANSFER-LINKED-")
     assert store.pending_ids() == ["legacy-intent-1"]
+
+
+def test_replacement_waiting_mark_is_atomic_append_only_and_deduped(tmp_path):
+    store = TransferSealStore(tmp_path / "replacement-wait.db")
+    values = {
+        "session_id": "ITAG-WAIT-001",
+        "old_label_id": "LBL-OLD-001",
+        "new_label_id": "LBL-NEW-001",
+        "process_context": "transfer",
+        "location_codes": ["PHS_GOOD"],
+        "operator": "tester",
+        "master_label": "PHS=2|ITG=ITAG-WAIT-001",
+    }
+
+    first = store.mark_phs_replacement_waiting(**values)
+    replay = store.mark_phs_replacement_waiting(**values)
+    old_hash = hashlib.sha256(b"LBL-OLD-001").hexdigest()
+    new_hash = hashlib.sha256(b"LBL-NEW-001").hexdigest()
+    expected_key = (
+        f"replacement-wait:ITAG-WAIT-001:{old_hash}:{new_hash}"
+    )
+
+    assert first["intent_id"] == replay["intent_id"]
+    assert first["idempotency_key"] == expected_key
+    assert json.loads(first["location_codes_json"]) == ["PHS_GOOD"]
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM phs_replacement_waiting_ledger"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM phs_replacement_waiting_outbox"
+        ).fetchone()[0] == 1
+        for table in (
+            "phs_replacement_waiting_ledger",
+            "phs_replacement_waiting_outbox",
+        ):
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                conn.execute(f"UPDATE {table} SET event_type=event_type")
+            with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+                conn.execute(f"DELETE FROM {table}")
+
+
+def test_replacement_waiting_outbox_restarts_in_fifo_with_session_pair_dedupe(
+    tmp_path,
+):
+    db_path = tmp_path / "replacement-restart.db"
+    store = TransferSealStore(db_path)
+    first = store.mark_phs_replacement_waiting(
+        session_id="ITAG-WAIT-001",
+        old_label_id="LBL-OLD",
+        new_label_id="LBL-NEW",
+        process_context="transfer",
+        location_codes=["PHS_GOOD"],
+        operator="tester",
+        master_label="MASTER-1",
+    )
+    store.mark_phs_replacement_waiting(
+        session_id="ITAG-WAIT-001",
+        old_label_id="LBL-OLD",
+        new_label_id="LBL-NEW",
+        process_context="transfer",
+        location_codes=["PHS_GOOD"],
+        operator="other-observer",
+        master_label="MASTER-1",
+    )
+    second = store.mark_phs_replacement_waiting(
+        session_id="ITAG-WAIT-002",
+        old_label_id="LBL-OLD",
+        new_label_id="LBL-NEW",
+        process_context="transfer",
+        location_codes=["PHS_GOOD"],
+        operator="tester",
+        master_label="MASTER-2",
+    )
+
+    restarted = TransferSealStore(db_path)
+    pending = restarted.replacement_waiting_outbox()
+
+    assert [row["intent_id"] for row in pending] == [
+        first["intent_id"],
+        second["intent_id"],
+    ]
+    assert [row["idempotency_key"] for row in pending] == [
+        first["idempotency_key"],
+        second["idempotency_key"],
+    ]
+
+
+def test_replacement_waiting_ledger_and_outbox_roll_back_together(tmp_path):
+    store = TransferSealStore(tmp_path / "replacement-atomic-failure.db")
+    with store._connect() as conn:
+        conn.executescript(
+            """
+            CREATE TRIGGER fail_replacement_waiting_outbox
+            BEFORE INSERT ON phs_replacement_waiting_outbox
+            BEGIN SELECT RAISE(ABORT, 'forced replacement outbox failure'); END;
+            """
+        )
+
+    with pytest.raises(
+        sqlite3.IntegrityError,
+        match="forced replacement outbox failure",
+    ):
+        store.mark_phs_replacement_waiting(
+            session_id="ITAG-WAIT-FAIL",
+            old_label_id="LBL-OLD",
+            new_label_id="LBL-NEW",
+            process_context="transfer",
+            location_codes=["PHS_GOOD"],
+            operator="tester",
+            master_label="MASTER-FAIL",
+        )
+
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM phs_replacement_waiting_ledger"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM phs_replacement_waiting_outbox"
+        ).fetchone()[0] == 0
 
 
 def test_store_methods_release_windows_db_and_wal_handles_without_gc(tmp_path):

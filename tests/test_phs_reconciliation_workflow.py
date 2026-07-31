@@ -19,7 +19,7 @@ from phs_label_workflow import (
     RenderedPHSLabel,
 )
 from phs_reconciliation_workflow import PHSReconciliationExchangeCoordinator
-from transfer_seal import LogisticsTransferClient
+from transfer_seal import LogisticsTransferClient, TransferSealStore
 
 
 SCOPE = "scope-transfer-reconciliation"
@@ -1178,6 +1178,116 @@ def test_replacement_required_notice_is_yellow_non_modal_once_per_pair():
             "hash",
         )
     )
+
+
+def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path):
+    events = []
+    durable_store = TransferSealStore(tmp_path / "replacement-notice.db")
+
+    class RecordingStore:
+        def mark_phs_replacement_waiting(self, **kwargs):
+            events.append(("mark", kwargs))
+            return durable_store.mark_phs_replacement_waiting(**kwargs)
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(
+        master_label_code=(
+            "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-WAIT-UI|"
+            f"CLC={ITEM}|LBL=LBL-NEW-UI|HSH={'a' * 16}"
+        ),
+        item_code=ITEM,
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app.worker_name = "tester"
+    app.transfer_seal_coordinator = type(
+        "Coordinator",
+        (),
+        {"store": RecordingStore()},
+    )()
+    app._phs_replacement_notice_pairs = set()
+    app.show_status_message = lambda message, color, **kwargs: events.append(
+        ("status", message, color, kwargs)
+    )
+    context = {
+        "process_context": "transfer",
+        "scan": {
+            "replacement_required": True,
+            "scanned_label_id": "LBL-OLD-UI",
+            "active_label_id": "LBL-NEW-UI",
+        },
+        "actions": [
+            {
+                "process_membership": [
+                    {"unit_id": "UNIT-1", "location_code": "PHS_GOOD"},
+                ]
+            }
+        ],
+    }
+
+    assert app._show_phs_replacement_required_notice_once(context) is True
+    assert app._show_phs_replacement_required_notice_once(context) is False
+
+    assert [event[0] for event in events] == ["mark", "status"]
+    marked = events[0][1]
+    assert marked["session_id"] == "ITAG-WAIT-UI"
+    assert marked["process_context"] == "transfer"
+    assert marked["location_codes"] == ["PHS_GOOD"]
+    assert durable_store.replacement_waiting_outbox()[0]["event_type"] == (
+        "PHS_REPLACEMENT_WAITING_MARKED"
+    )
+
+
+def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
+    events = []
+
+    class FailingStore:
+        @staticmethod
+        def mark_phs_replacement_waiting(**_kwargs):
+            raise OSError("disk unavailable")
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(
+        master_label_code=(
+            "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-WAIT-FAIL|"
+            f"CLC={ITEM}|LBL=LBL-NEW-FAIL|HSH={'b' * 16}"
+        ),
+        item_code=ITEM,
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    before = copy.deepcopy(app.current_tray)
+    app.worker_name = "tester"
+    app.transfer_seal_coordinator = type(
+        "Coordinator",
+        (),
+        {"store": FailingStore()},
+    )()
+    app._phs_replacement_notice_pairs = set()
+    app._log_event = lambda event, detail=None, synchronous=False: events.append(
+        ("evidence", event, detail, synchronous)
+    ) or True
+    app.show_status_message = lambda message, color, **kwargs: events.append(
+        ("status", message, color, kwargs)
+    )
+    context = {
+        "process_context": "transfer",
+        "scan": {
+            "replacement_required": True,
+            "scanned_label_id": "LBL-OLD-FAIL",
+            "active_label_id": "LBL-NEW-FAIL",
+        },
+    }
+
+    assert app._show_phs_replacement_required_notice_once(context) is True
+    assert app._show_phs_replacement_required_notice_once(context) is False
+
+    assert [event[0] for event in events] == ["evidence", "status"]
+    assert events[0][1] == "PHS_REPLACEMENT_WAITING_MARK_FAILED"
+    assert events[0][2]["exception_type"] == "OSError"
+    assert events[0][3] is True
+    assert events[1][1] == container_module.PHS_REPLACEMENT_REQUIRED_NOTICE
+    assert app.current_tray == before
 
 
 def test_reconciliation_execute_rechecks_lookup_snapshot_before_worker_start():
