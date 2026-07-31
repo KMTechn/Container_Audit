@@ -2405,6 +2405,7 @@ class TransferSealStore:
                     idempotency_key TEXT NOT NULL UNIQUE,
                     payload_json TEXT NOT NULL,
                     payload_hash TEXT NOT NULL,
+                    projection_log_file_path TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
                 CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_outbox_update
@@ -2413,8 +2414,37 @@ class TransferSealStore:
                 CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_waiting_outbox_delete
                 BEFORE DELETE ON phs_replacement_waiting_outbox
                 BEGIN SELECT RAISE(ABORT, 'replacement waiting outbox is append-only'); END;
+                CREATE TABLE IF NOT EXISTS phs_replacement_waiting_projection_receipts (
+                    projection_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    projection_id TEXT NOT NULL UNIQUE,
+                    intent_id TEXT NOT NULL UNIQUE
+                        REFERENCES phs_replacement_waiting_outbox(intent_id),
+                    event_type TEXT NOT NULL
+                        CHECK(event_type='PHS_REPLACEMENT_WAITING_MARKED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_hash TEXT NOT NULL,
+                    projection_log_file_path TEXT NOT NULL,
+                    projected_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_projection_update
+                BEFORE UPDATE ON phs_replacement_waiting_projection_receipts
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting projection receipt is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_phs_replacement_projection_delete
+                BEFORE DELETE ON phs_replacement_waiting_projection_receipts
+                BEGIN SELECT RAISE(ABORT, 'replacement waiting projection receipt is append-only'); END;
                 """
             )
+            replacement_outbox_columns = {
+                str(row["name"])
+                for row in conn.execute(
+                    "PRAGMA table_info(phs_replacement_waiting_outbox)"
+                )
+            }
+            if "projection_log_file_path" not in replacement_outbox_columns:
+                conn.execute(
+                    "ALTER TABLE phs_replacement_waiting_outbox "
+                    "ADD COLUMN projection_log_file_path TEXT"
+                )
             conn.execute("BEGIN IMMEDIATE")
             for row in conn.execute(
                 "SELECT * FROM transfer_seal_intents ORDER BY created_at, rowid"
@@ -2649,6 +2679,7 @@ class TransferSealStore:
         location_codes: Iterable[str],
         operator: str,
         master_label: str,
+        projection_log_file_path: str,
     ) -> sqlite3.Row:
         """Atomically append one replacement-waiting fact and replay record."""
 
@@ -2671,6 +2702,12 @@ class TransferSealStore:
         )
         if not normalized_locations:
             raise ValueError("location_codes must be non-empty")
+        normalized_projection_path = os.path.abspath(
+            _normalize_identifier(
+                projection_log_file_path,
+                "projection_log_file_path",
+            )
+        )
         old_hash = hashlib.sha256(normalized_old.encode("utf-8")).hexdigest()
         new_hash = hashlib.sha256(normalized_new.encode("utf-8")).hexdigest()
         idempotency_key = (
@@ -2746,14 +2783,15 @@ class TransferSealStore:
             conn.execute(
                 """INSERT OR IGNORE INTO phs_replacement_waiting_outbox (
                        intent_id,event_type,idempotency_key,payload_json,
-                       payload_hash,created_at
-                   ) VALUES (?,?,?,?,?,?)""",
+                       payload_hash,projection_log_file_path,created_at
+                   ) VALUES (?,?,?,?,?,?,?)""",
                 (
                     ledger["intent_id"],
                     ledger["event_type"],
                     ledger["idempotency_key"],
                     ledger["evidence_json"],
                     ledger["evidence_hash"],
+                    normalized_projection_path,
                     ledger["created_at"],
                 ),
             )
@@ -2767,12 +2805,14 @@ class TransferSealStore:
                 or outbox["idempotency_key"] != idempotency_key
                 or outbox["payload_json"] != ledger["evidence_json"]
                 or outbox["payload_hash"] != ledger["evidence_hash"]
+                or not str(outbox["projection_log_file_path"] or "").strip()
             ):
                 raise ValueError(
                     "durable replacement waiting outbox differs from ledger"
                 )
             row = conn.execute(
-                """SELECT ledger.*, outbox.outbox_sequence
+                """SELECT ledger.*, outbox.outbox_sequence,
+                          outbox.projection_log_file_path
                      FROM phs_replacement_waiting_ledger AS ledger
                      JOIN phs_replacement_waiting_outbox AS outbox
                        ON outbox.intent_id=ledger.intent_id
@@ -2790,13 +2830,114 @@ class TransferSealStore:
             rows = conn.execute(
                 """SELECT ledger.*, outbox.outbox_sequence,
                           outbox.payload_json AS outbox_payload_json,
-                          outbox.payload_hash AS outbox_payload_hash
+                          outbox.payload_hash AS outbox_payload_hash,
+                          outbox.projection_log_file_path
                      FROM phs_replacement_waiting_outbox AS outbox
                      JOIN phs_replacement_waiting_ledger AS ledger
                        ON ledger.intent_id=outbox.intent_id
                     ORDER BY outbox.outbox_sequence"""
             ).fetchall()
         return list(rows)
+
+    def pending_replacement_waiting_projections(self) -> list[sqlite3.Row]:
+        """Return FIFO marker rows that still need their append-only CSV receipt."""
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT ledger.*, outbox.outbox_sequence,
+                          outbox.payload_json AS outbox_payload_json,
+                          outbox.payload_hash AS outbox_payload_hash,
+                          outbox.projection_log_file_path
+                     FROM phs_replacement_waiting_outbox AS outbox
+                     JOIN phs_replacement_waiting_ledger AS ledger
+                       ON ledger.intent_id=outbox.intent_id
+                     LEFT JOIN phs_replacement_waiting_projection_receipts AS receipt
+                       ON receipt.intent_id=outbox.intent_id
+                    WHERE receipt.intent_id IS NULL
+                      AND outbox.projection_log_file_path IS NOT NULL
+                      AND outbox.projection_log_file_path <> ''
+                    ORDER BY outbox.outbox_sequence"""
+            ).fetchall()
+        return list(rows)
+
+    def record_replacement_waiting_projection(
+        self,
+        intent_id: str,
+        *,
+        projection_log_file_path: str,
+    ) -> sqlite3.Row:
+        """Append one immutable receipt after the idempotent CSV projection."""
+
+        normalized_intent = _normalize_identifier(intent_id, "intent_id")
+        normalized_projection_path = os.path.abspath(
+            _normalize_identifier(
+                projection_log_file_path,
+                "projection_log_file_path",
+            )
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source = conn.execute(
+                """SELECT ledger.*, outbox.payload_hash AS outbox_payload_hash,
+                          outbox.projection_log_file_path
+                     FROM phs_replacement_waiting_ledger AS ledger
+                     JOIN phs_replacement_waiting_outbox AS outbox
+                       ON outbox.intent_id=ledger.intent_id
+                    WHERE ledger.intent_id=?""",
+                (normalized_intent,),
+            ).fetchone()
+            if source is None:
+                raise KeyError(normalized_intent)
+            if (
+                str(source["projection_log_file_path"] or "")
+                != normalized_projection_path
+                or source["outbox_payload_hash"] != source["evidence_hash"]
+            ):
+                raise ValueError(
+                    "replacement waiting projection differs from durable outbox"
+                )
+            projection_id = _deterministic_id(
+                "PHS-WAIT-PROJECTION",
+                {
+                    "intent_id": normalized_intent,
+                    "idempotency_key": str(source["idempotency_key"]),
+                    "payload_hash": str(source["evidence_hash"]),
+                },
+            )
+            conn.execute(
+                """INSERT OR IGNORE INTO phs_replacement_waiting_projection_receipts (
+                       projection_id,intent_id,event_type,idempotency_key,
+                       payload_hash,projection_log_file_path,projected_at
+                   ) VALUES (?,?,?,?,?,?,?)""",
+                (
+                    projection_id,
+                    normalized_intent,
+                    REPLACEMENT_WAITING_EVENT,
+                    str(source["idempotency_key"]),
+                    str(source["evidence_hash"]),
+                    normalized_projection_path,
+                    _utc_now(),
+                ),
+            )
+            receipt = conn.execute(
+                """SELECT *
+                     FROM phs_replacement_waiting_projection_receipts
+                    WHERE intent_id=?""",
+                (normalized_intent,),
+            ).fetchone()
+            if receipt is None or (
+                receipt["projection_id"] != projection_id
+                or receipt["event_type"] != REPLACEMENT_WAITING_EVENT
+                or receipt["idempotency_key"] != source["idempotency_key"]
+                or receipt["payload_hash"] != source["evidence_hash"]
+                or receipt["projection_log_file_path"]
+                != normalized_projection_path
+            ):
+                raise ValueError(
+                    "replacement waiting projection receipt identity collision"
+                )
+            conn.commit()
+        return receipt
 
     def record_exchange_block(self, *, reason_code: str, details: Mapping[str, Any]) -> str:
         created_at = _utc_now()

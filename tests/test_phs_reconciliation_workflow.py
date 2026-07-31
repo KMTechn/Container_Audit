@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import copy
+import csv
 import hashlib
 import json
+import queue
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -1111,6 +1114,9 @@ def test_current_and_completed_transfer_label_scan_resolves_without_mutating_wor
     app._set_phs_reconciliation_context = lambda context: setattr(
         app, "_phs_reconciliation_context", context
     )
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: (True, False)
+    )
     app._update_action_button_states = lambda: calls.append(("buttons",))
     app.show_status_message = lambda message, *_args, **_kwargs: calls.append(
         ("status", message)
@@ -1149,6 +1155,7 @@ def test_replacement_required_notice_is_yellow_non_modal_once_per_pair():
         scanned_barcodes=["UNIT-1"],
     )
     app._phs_replacement_notice_pairs = set()
+    app._mark_phs_replacement_waiting = lambda *_args, **_kwargs: {}
     app.show_status_message = lambda message, color, **kwargs: messages.append(
         (message, color, kwargs)
     )
@@ -1189,6 +1196,13 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
             events.append(("mark", kwargs))
             return durable_store.mark_phs_replacement_waiting(**kwargs)
 
+        def record_replacement_waiting_projection(self, *args, **kwargs):
+            events.append(("receipt", args, kwargs))
+            return durable_store.record_replacement_waiting_projection(
+                *args,
+                **kwargs,
+            )
+
     app = ContainerAudit.__new__(ContainerAudit)
     app.current_tray = TraySession(
         master_label_code=(
@@ -1200,15 +1214,16 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
         scanned_barcodes=["UNIT-1"],
     )
     app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
     app.transfer_seal_coordinator = type(
         "Coordinator",
         (),
         {"store": RecordingStore()},
     )()
     app._phs_replacement_notice_pairs = set()
-    app._log_event = lambda event, detail=None, synchronous=False: events.append(
-        ("event", event, detail, synchronous)
-    ) or True
+    app._trigger_session_direct_sync = lambda reason: events.append(
+        ("sync", reason)
+    )
     app.show_status_message = lambda message, color, **kwargs: events.append(
         ("status", message, color, kwargs)
     )
@@ -1231,16 +1246,24 @@ def test_replacement_notice_marks_durable_waiting_before_yellow_display(tmp_path
     assert app._show_phs_replacement_required_notice_once(context) is True
     assert app._show_phs_replacement_required_notice_once(context) is False
 
-    assert [event[0] for event in events] == ["mark", "event", "status"]
+    assert [event[0] for event in events] == [
+        "mark",
+        "receipt",
+        "sync",
+        "status",
+    ]
     marked = events[0][1]
     assert marked["session_id"] == "ITAG-WAIT-UI"
     assert marked["process_context"] == "transfer"
     assert marked["location_codes"] == ["PHS_GOOD"]
-    assert events[1][1] == "PHS_REPLACEMENT_WAITING_MARKED"
-    assert events[1][2]["idempotency_key"].startswith(
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as handle:
+        projected = list(csv.DictReader(handle))
+    assert len(projected) == 1
+    assert projected[0]["event"] == "PHS_REPLACEMENT_WAITING_MARKED"
+    projected_detail = json.loads(projected[0]["details"])
+    assert projected_detail["idempotency_key"].startswith(
         "replacement-wait:ITAG-WAIT-UI:"
     )
-    assert events[1][3] is True
     assert durable_store.replacement_waiting_outbox()[0]["event_type"] == (
         "PHS_REPLACEMENT_WAITING_MARKED"
     )
@@ -1274,12 +1297,83 @@ def test_replacement_waiting_event_triggers_direct_sync_after_durable_log(
     assert sync_reasons == ["PHS_REPLACEMENT_WAITING_MARKED"]
 
 
-def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
+def test_replacement_projection_recovers_crash_after_csv_append_without_duplicate(
+    tmp_path,
+):
     events = []
+    store = TransferSealStore(tmp_path / "replacement-crash.db")
+    original_record = store.record_replacement_waiting_projection
+    record_calls = 0
+
+    def crash_once(*args, **kwargs):
+        nonlocal record_calls
+        record_calls += 1
+        if record_calls == 1:
+            raise OSError("crash after append")
+        return original_record(*args, **kwargs)
+
+    store.record_replacement_waiting_projection = crash_once
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(
+        master_label_code=(
+            "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-WAIT-CRASH|"
+            f"CLC={ITEM}|LBL=LBL-NEW-CRASH|HSH={'c' * 16}"
+        )
+    )
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.transfer_seal_coordinator = type(
+        "Coordinator",
+        (),
+        {"store": store},
+    )()
+    app._phs_replacement_notice_pairs = set()
+    app._trigger_session_direct_sync = lambda reason: events.append(("sync", reason))
+    app._log_phs_replacement_waiting_failure = lambda **kwargs: events.append(
+        ("failed", kwargs["error"].__class__.__name__)
+    )
+    app.show_fullscreen_warning = lambda *_args: events.append(("blocking",))
+    app.show_status_message = lambda *_args, **_kwargs: events.append(("yellow",))
+    context = {
+        "process_context": "transfer",
+        "scan": {
+            "replacement_required": True,
+            "scanned_label_id": "LBL-OLD-CRASH",
+            "active_label_id": "LBL-NEW-CRASH",
+        },
+    }
+
+    assert app._show_phs_replacement_required_notice_once(context) is False
+    restarted = ContainerAudit.__new__(ContainerAudit)
+    restarted.worker_name = "tester"
+    restarted.transfer_seal_coordinator = app.transfer_seal_coordinator
+    restarted._trigger_session_direct_sync = app._trigger_session_direct_sync
+    assert restarted._drain_phs_replacement_waiting_projections() == 1
+    assert app._show_phs_replacement_required_notice_once(context) is True
+
+    with open(app.log_file_path, newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["event"] for row in rows] == ["PHS_REPLACEMENT_WAITING_MARKED"]
+    assert [event[0] for event in events] == [
+        "failed",
+        "blocking",
+        "sync",
+        "sync",
+        "yellow",
+    ]
+    assert store.pending_replacement_waiting_projections() == []
+
+
+def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence(
+    tmp_path,
+):
+    events = []
+    attempts = []
 
     class FailingStore:
         @staticmethod
         def mark_phs_replacement_waiting(**_kwargs):
+            attempts.append(dict(_kwargs))
             raise OSError("disk unavailable")
 
     app = ContainerAudit.__new__(ContainerAudit)
@@ -1294,6 +1388,7 @@ def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
     )
     before = copy.deepcopy(app.current_tray)
     app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
     app.transfer_seal_coordinator = type(
         "Coordinator",
         (),
@@ -1303,8 +1398,8 @@ def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
     app._log_event = lambda event, detail=None, synchronous=False: events.append(
         ("evidence", event, detail, synchronous)
     ) or True
-    app.show_status_message = lambda message, color, **kwargs: events.append(
-        ("status", message, color, kwargs)
+    app.show_fullscreen_warning = lambda title, message, color: events.append(
+        ("blocking", title, message, color)
     )
     context = {
         "process_context": "transfer",
@@ -1315,15 +1410,162 @@ def test_replacement_waiting_write_failure_keeps_warning_and_logs_evidence():
         },
     }
 
-    assert app._show_phs_replacement_required_notice_once(context) is True
+    assert app._show_phs_replacement_required_notice_once(context) is False
     assert app._show_phs_replacement_required_notice_once(context) is False
 
-    assert [event[0] for event in events] == ["evidence", "status"]
+    assert len(attempts) == 2
+    assert [event[0] for event in events] == [
+        "evidence",
+        "blocking",
+        "evidence",
+        "blocking",
+    ]
     assert events[0][1] == "PHS_REPLACEMENT_WAITING_MARK_FAILED"
     assert events[0][2]["exception_type"] == "OSError"
     assert events[0][3] is True
-    assert events[1][1] == container_module.PHS_REPLACEMENT_REQUIRED_NOTICE
+    assert "저장" in events[1][2]
+    assert "계속하지 말고" in events[1][2]
     assert app.current_tray == before
+
+
+def test_master_activation_does_not_start_after_marker_gate_failure():
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession()
+    app._master_preflight_epoch = 7
+    app._master_preflight_pending = True
+    app._master_preflight_poll_job = "poll"
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: (False, False)
+    )
+    app._activate_master_label_tray = lambda **_kwargs: (_ for _ in ()).throw(
+        AssertionError("activation must remain untouched")
+    )
+    app._update_current_item_label = lambda *_args: None
+    app._update_action_button_states = lambda: None
+    app._schedule_focus_return = lambda: None
+    preflight = SimpleNamespace(
+        canonical_input_tag_qr=_qr("LBL-CANONICAL", "MASTER-GATE"),
+        active_label_qr_payload=_qr("LBL-ACTIVE", "MASTER-GATE"),
+        active_label_id="LBL-ACTIVE",
+        active_label_business_date=DAY,
+        active_label_worker_code="WORKER-1",
+        scanned_label_id="LBL-OLD",
+        item_id=ITEM,
+        member_count=2,
+        replaced_scan=True,
+        audit_detail=lambda: {},
+    )
+    result_queue = queue.Queue()
+    result_queue.put((True, preflight, None))
+
+    app._poll_compact_phs2_preflight(
+        7,
+        preflight.active_label_qr_payload,
+        {"PHS": "2", "ITG": "ITAG-MASTER-GATE", "CLC": ITEM},
+        {"name": "item"},
+        result_queue,
+    )
+
+    assert app.current_tray.master_label_code == ""
+
+
+def test_active_refresh_does_not_mutate_tray_after_marker_gate_failure(
+    monkeypatch,
+):
+    canonical_qr = _qr("LBL-CANONICAL", "ACTIVE-REFRESH")
+    active_qr = _qr("LBL-ACTIVE", "ACTIVE-REFRESH")
+    tray = TraySession(
+        master_label_code=canonical_qr,
+        item_code=ITEM,
+        tray_size=2,
+        active_label_qr_payload="OLD-ACTIVE",
+        active_label_id="LBL-BEFORE",
+    )
+    before = copy.deepcopy(tray)
+    preflight = SimpleNamespace(
+        canonical_input_tag_qr=canonical_qr,
+        active_label_qr_payload=active_qr,
+        active_label_id="LBL-ACTIVE",
+        active_label_business_date=TARGET_DAY,
+        active_label_worker_code="WORKER-2",
+        scanned_label_id="LBL-OLD",
+        active_label_resolution="OVERLAY_REPLACED",
+        item_id=ITEM,
+        member_count=2,
+        replaced_scan=True,
+    )
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = tray
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app.phs_label_exchange_coordinator = SimpleNamespace(
+        client=SimpleNamespace(resolve_source=lambda _identity: {})
+    )
+    app._parse_new_format_qr = container_module.parse_new_format_qr
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: (False, False)
+    )
+    app._save_current_tray_state = lambda: (_ for _ in ()).throw(
+        AssertionError("state save must not run")
+    )
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app._schedule_focus_return = lambda: None
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_preflight",
+        lambda *_args, **_kwargs: preflight,
+    )
+    monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)
+
+    app._begin_active_phs_label_refresh(active_qr)
+
+    assert app.current_tray == before
+
+
+def test_reconciliation_context_is_not_published_after_marker_gate_failure(
+    monkeypatch,
+):
+    resolution = _resolution("SPLIT")
+    payload = resolution["scan"]["active_qr_payload"]
+    resolved = {
+        **resolution,
+        "expected_exchange_kind": "SPLIT",
+        "topology_hash": "d" * 64,
+        "_scanned_payload": payload,
+    }
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(master_label_code="CURRENT-TRAY")
+    app.completed_master_labels = set()
+    app._phs_reconciliation_scan_armed = True
+    app._phs_label_candidate_pending = False
+    app._phs_label_exchange_pending = False
+    app._phs_reconciliation_context = None
+    app.phs_label_exchange_coordinator = SimpleNamespace(
+        reconciliation=SimpleNamespace(
+            available=True,
+            resolve=lambda _payload: resolved,
+            target_summaries=lambda _context: ["target"],
+        )
+    )
+    app._parse_new_format_qr = container_module.parse_new_format_qr
+    app._set_phs_reconciliation_context = lambda context: setattr(
+        app, "_phs_reconciliation_context", context
+    )
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: (False, False)
+    )
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app._schedule_focus_return = lambda: None
+    app._log_event = lambda *_args, **_kwargs: True
+    monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)
+
+    assert app._intercept_phs_reconciliation_scan(payload) is True
+    assert app._phs_reconciliation_context is None
 
 
 def test_reconciliation_execute_rechecks_lookup_snapshot_before_worker_start():

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import os
 import threading
 import time
@@ -78,12 +79,99 @@ def append_event_log_entry(
 ) -> None:
     with _lock_for_path(log_file_path):
         with _interprocess_file_lock(log_file_path):
-            needs_header = not os.path.exists(log_file_path) or os.stat(log_file_path).st_size == 0
-            with open(log_file_path, "a", newline="", encoding="utf-8-sig") as f_handle:
-                writer = csv.DictWriter(f_handle, fieldnames=EVENT_LOG_HEADERS)
-                if needs_header:
-                    writer.writeheader()
-                writer.writerow(log_entry)
-                if durable:
-                    f_handle.flush()
-                    os.fsync(f_handle.fileno())
+            _append_event_log_entry_unlocked(
+                log_file_path,
+                log_entry,
+                durable=durable,
+            )
+
+
+def _append_event_log_entry_unlocked(
+    log_file_path: str,
+    log_entry: Dict[str, Any],
+    *,
+    durable: bool,
+) -> None:
+    needs_header = not os.path.exists(log_file_path) or os.stat(log_file_path).st_size == 0
+    with open(log_file_path, "a", newline="", encoding="utf-8-sig") as f_handle:
+        writer = csv.DictWriter(f_handle, fieldnames=EVENT_LOG_HEADERS)
+        if needs_header:
+            writer.writeheader()
+        writer.writerow(log_entry)
+        if durable:
+            f_handle.flush()
+            os.fsync(f_handle.fileno())
+
+
+def append_event_log_entry_idempotent(
+    log_file_path: str,
+    log_entry: Dict[str, Any],
+    *,
+    event_type: str,
+    idempotency_key: str,
+    durable: bool = True,
+) -> bool:
+    """Append once by event plus details idempotency key.
+
+    The existing-row check and append share the same process and interprocess
+    locks.  Returning ``False`` proves that an identical durable projection is
+    already present, which lets a SQLite projection receipt recover a crash
+    after the CSV append without creating a second relay event.
+    """
+
+    normalized_event = str(event_type or "").strip()
+    normalized_key = str(idempotency_key or "").strip()
+    if not normalized_event or not normalized_key:
+        raise ValueError("event_type and idempotency_key are required")
+    if str(log_entry.get("event") or "").strip() != normalized_event:
+        raise ValueError("log entry event differs from idempotent event type")
+    try:
+        expected_details = json.loads(str(log_entry.get("details") or ""))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("idempotent event details must be JSON") from exc
+    if (
+        not isinstance(expected_details, dict)
+        or str(expected_details.get("idempotency_key") or "").strip()
+        != normalized_key
+    ):
+        raise ValueError("idempotent event details key is missing or mismatched")
+
+    with _lock_for_path(log_file_path):
+        with _interprocess_file_lock(log_file_path):
+            if os.path.exists(log_file_path) and os.stat(log_file_path).st_size:
+                with open(
+                    log_file_path,
+                    newline="",
+                    encoding="utf-8-sig",
+                ) as f_handle:
+                    reader = csv.DictReader(f_handle)
+                    if reader.fieldnames != EVENT_LOG_HEADERS:
+                        raise ValueError("event log header is invalid")
+                    for row in reader:
+                        if str(row.get("event") or "").strip() != normalized_event:
+                            continue
+                        try:
+                            existing_details = json.loads(
+                                str(row.get("details") or "")
+                            )
+                        except (TypeError, ValueError, json.JSONDecodeError):
+                            continue
+                        if (
+                            not isinstance(existing_details, dict)
+                            or str(
+                                existing_details.get("idempotency_key") or ""
+                            ).strip()
+                            != normalized_key
+                        ):
+                            continue
+                        if existing_details != expected_details:
+                            raise ValueError(
+                                "event log idempotency key has different details"
+                            )
+                        return False
+            _append_event_log_entry_unlocked(
+                log_file_path,
+                log_entry,
+                durable=durable,
+            )
+            return True

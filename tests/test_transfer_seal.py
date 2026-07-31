@@ -1477,6 +1477,7 @@ def test_existing_outbox_is_migrated_to_stable_key_and_linked_ledger(tmp_path):
 
 def test_replacement_waiting_mark_is_atomic_append_only_and_deduped(tmp_path):
     store = TransferSealStore(tmp_path / "replacement-wait.db")
+    event_log_path = tmp_path / "events.csv"
     values = {
         "session_id": "ITAG-WAIT-001",
         "old_label_id": "LBL-OLD-001",
@@ -1485,6 +1486,7 @@ def test_replacement_waiting_mark_is_atomic_append_only_and_deduped(tmp_path):
         "location_codes": ["PHS_GOOD"],
         "operator": "tester",
         "master_label": "PHS=2|ITG=ITAG-WAIT-001",
+        "projection_log_file_path": str(event_log_path),
     }
 
     first = store.mark_phs_replacement_waiting(**values)
@@ -1498,6 +1500,7 @@ def test_replacement_waiting_mark_is_atomic_append_only_and_deduped(tmp_path):
     assert first["intent_id"] == replay["intent_id"]
     assert first["idempotency_key"] == expected_key
     assert json.loads(first["location_codes_json"]) == ["PHS_GOOD"]
+    assert first["projection_log_file_path"] == str(event_log_path)
     with store._connect() as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM phs_replacement_waiting_ledger"
@@ -1528,6 +1531,7 @@ def test_replacement_waiting_outbox_restarts_in_fifo_with_session_pair_dedupe(
         location_codes=["PHS_GOOD"],
         operator="tester",
         master_label="MASTER-1",
+        projection_log_file_path=str(tmp_path / "worker-1.csv"),
     )
     store.mark_phs_replacement_waiting(
         session_id="ITAG-WAIT-001",
@@ -1537,6 +1541,7 @@ def test_replacement_waiting_outbox_restarts_in_fifo_with_session_pair_dedupe(
         location_codes=["PHS_GOOD"],
         operator="other-observer",
         master_label="MASTER-1",
+        projection_log_file_path=str(tmp_path / "ignored-replay.csv"),
     )
     second = store.mark_phs_replacement_waiting(
         session_id="ITAG-WAIT-002",
@@ -1546,6 +1551,7 @@ def test_replacement_waiting_outbox_restarts_in_fifo_with_session_pair_dedupe(
         location_codes=["PHS_GOOD"],
         operator="tester",
         master_label="MASTER-2",
+        projection_log_file_path=str(tmp_path / "worker-2.csv"),
     )
 
     restarted = TransferSealStore(db_path)
@@ -1584,6 +1590,7 @@ def test_replacement_waiting_ledger_and_outbox_roll_back_together(tmp_path):
             location_codes=["PHS_GOOD"],
             operator="tester",
             master_label="MASTER-FAIL",
+            projection_log_file_path=str(tmp_path / "failure.csv"),
         )
 
     with store._connect() as conn:
@@ -1593,6 +1600,49 @@ def test_replacement_waiting_ledger_and_outbox_roll_back_together(tmp_path):
         assert conn.execute(
             "SELECT COUNT(*) FROM phs_replacement_waiting_outbox"
         ).fetchone()[0] == 0
+
+
+def test_replacement_waiting_projection_receipt_is_append_only_and_restart_safe(
+    tmp_path,
+):
+    db_path = tmp_path / "replacement-projection.db"
+    event_log_path = tmp_path / "events.csv"
+    store = TransferSealStore(db_path)
+    marked = store.mark_phs_replacement_waiting(
+        session_id="ITAG-PROJECTION-001",
+        old_label_id="LBL-OLD",
+        new_label_id="LBL-NEW",
+        process_context="transfer",
+        location_codes=["PHS_GOOD"],
+        operator="tester",
+        master_label="MASTER-PROJECTION",
+        projection_log_file_path=str(event_log_path),
+    )
+
+    pending = TransferSealStore(db_path).pending_replacement_waiting_projections()
+    assert [row["intent_id"] for row in pending] == [marked["intent_id"]]
+    receipt = store.record_replacement_waiting_projection(
+        marked["intent_id"],
+        projection_log_file_path=str(event_log_path),
+    )
+    replay = store.record_replacement_waiting_projection(
+        marked["intent_id"],
+        projection_log_file_path=str(event_log_path),
+    )
+
+    assert receipt["projection_id"] == replay["projection_id"]
+    assert TransferSealStore(db_path).pending_replacement_waiting_projections() == []
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM phs_replacement_waiting_projection_receipts"
+        ).fetchone()[0] == 1
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "UPDATE phs_replacement_waiting_projection_receipts "
+                "SET event_type=event_type"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM phs_replacement_waiting_projection_receipts")
 
 
 def test_store_methods_release_windows_db_and_wal_handles_without_gc(tmp_path):

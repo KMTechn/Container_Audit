@@ -28,7 +28,10 @@ from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
 from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap, start_session_direct_sync
 from event_contracts import plan_b_event_detail, stable_hash
-from event_log_store import append_event_log_entry
+from event_log_store import (
+    append_event_log_entry,
+    append_event_log_entry_idempotent,
+)
 from event_payloads import (
     build_master_label_replacement_detail,
     build_scan_ok_detail,
@@ -1903,6 +1906,11 @@ class ContainerAudit:
             self._refresh_worker_entry_options()
         self.worker_name = worker_name
         self._load_session_state()
+        try:
+            self._drain_phs_replacement_waiting_projections()
+        except Exception:
+            self._show_phs_replacement_waiting_storage_block()
+            return
         self._load_current_tray_state()
         if not self.worker_name:
             return
@@ -3281,6 +3289,8 @@ class ContainerAudit:
         self,
         context: Optional[Mapping[str, Any]],
         pair: tuple[str, str],
+        *,
+        master_label: str = "",
     ) -> Dict[str, Any]:
         session_id = self._phs_replacement_waiting_session_id(context)
         if not session_id:
@@ -3291,6 +3301,11 @@ class ContainerAudit:
             else "transfer"
         )
         tray = getattr(self, "current_tray", None)
+        projection_log_file_path = str(
+            getattr(self, "log_file_path", "") or ""
+        ).strip()
+        if not projection_log_file_path:
+            raise OSError("replacement waiting event log is unavailable")
         row = self._transfer_seal_runtime().store.mark_phs_replacement_waiting(
             session_id=session_id,
             old_label_id=pair[0],
@@ -3299,26 +3314,142 @@ class ContainerAudit:
             location_codes=self._phs_replacement_waiting_locations(context),
             operator=str(getattr(self, "worker_name", "") or ""),
             master_label=str(
-                getattr(tray, "master_label_code", "") or ""
+                master_label
+                or getattr(tray, "master_label_code", "")
+                or ""
             ),
+            projection_log_file_path=projection_log_file_path,
         )
         result = dict(row)
+        self._project_phs_replacement_waiting_row(result)
+        return result
+
+    def _project_phs_replacement_waiting_row(
+        self,
+        row: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Idempotently project one SQLite marker to its append-only CSV log."""
+
+        result = dict(row)
         try:
-            event_detail = json.loads(str(result.get("evidence_json") or ""))
+            event_detail = json.loads(
+                str(
+                    result.get("outbox_payload_json")
+                    or result.get("evidence_json")
+                    or ""
+                )
+            )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ValueError(
                 "durable replacement waiting evidence is invalid"
             ) from exc
-        logger = getattr(self, "_log_event", None)
-        if not callable(logger) or not logger(
-            "PHS_REPLACEMENT_WAITING_MARKED",
-            detail=event_detail,
-            synchronous=True,
+        if not isinstance(event_detail, dict):
+            raise ValueError("durable replacement waiting evidence is invalid")
+        event_type = str(event_detail.get("event_type") or "").strip()
+        idempotency_key = str(
+            event_detail.get("idempotency_key") or ""
+        ).strip()
+        projection_log_file_path = str(
+            result.get("projection_log_file_path") or ""
+        ).strip()
+        if (
+            event_type != "PHS_REPLACEMENT_WAITING_MARKED"
+            or not idempotency_key
+            or not projection_log_file_path
         ):
-            raise OSError(
-                "replacement waiting direct-sync event was not persisted"
-            )
+            raise ValueError("durable replacement waiting projection is incomplete")
+        enriched_detail = self._plan_b_event_detail(event_type, event_detail)
+        log_entry = {
+            "timestamp": str(
+                event_detail.get("observed_at")
+                or datetime.datetime.now().isoformat()
+            ),
+            "worker_name": str(
+                event_detail.get("operator")
+                or getattr(self, "worker_name", "")
+                or ""
+            ),
+            "event": event_type,
+            "details": json.dumps(
+                enriched_detail,
+                ensure_ascii=False,
+                allow_nan=False,
+            ),
+        }
+        append_event_log_entry_idempotent(
+            projection_log_file_path,
+            log_entry,
+            event_type=event_type,
+            idempotency_key=idempotency_key,
+            durable=True,
+        )
+        store = self._transfer_seal_runtime().store
+        receipt = store.record_replacement_waiting_projection(
+            str(result.get("intent_id") or ""),
+            projection_log_file_path=projection_log_file_path,
+        )
+        self._trigger_session_direct_sync(event_type)
+        result["projection_id"] = str(receipt["projection_id"])
         return result
+
+    def _drain_phs_replacement_waiting_projections(self) -> int:
+        store = self._transfer_seal_runtime().store
+        pending = store.pending_replacement_waiting_projections()
+        for row in pending:
+            self._project_phs_replacement_waiting_row(dict(row))
+        return len(pending)
+
+    def _show_phs_replacement_waiting_storage_block(self) -> None:
+        self.show_fullscreen_warning(
+            "현품표 교체 대기 저장 실패",
+            "현품표 교체 대기 기록을 안전하게 저장하지 못했습니다. "
+            "현재 현품표 상태를 변경하지 않았습니다. 작업을 계속하지 말고 "
+            "저장 장치 상태를 확인한 뒤 다시 시도하세요.",
+            self.COLOR_DANGER,
+        )
+
+    def _ensure_phs_replacement_waiting_marked(
+        self,
+        context: Optional[Mapping[str, Any]],
+        *,
+        master_label: str = "",
+    ) -> tuple[bool, bool]:
+        """Return ``(ready, newly_marked)`` without mutating workflow state."""
+
+        pair = self._phs_replacement_notice_pair(context)
+        if pair is None:
+            return True, False
+        seen = getattr(self, "_phs_replacement_notice_pairs", None)
+        if not isinstance(seen, set):
+            seen = set()
+            self._phs_replacement_notice_pairs = seen
+        session_id = self._phs_replacement_waiting_session_id(context)
+        notice_key = (session_id, pair[0], pair[1])
+        if notice_key in seen:
+            return True, False
+        try:
+            self._mark_phs_replacement_waiting(
+                context,
+                pair,
+                master_label=master_label,
+            )
+        except Exception as exc:
+            self._log_phs_replacement_waiting_failure(
+                context=context,
+                pair=pair,
+                error=exc,
+            )
+            self._show_phs_replacement_waiting_storage_block()
+            return False, False
+        seen.add(notice_key)
+        return True, True
+
+    def _show_phs_replacement_required_notice(self) -> None:
+        self.show_status_message(
+            PHS_REPLACEMENT_REQUIRED_NOTICE,
+            self.COLOR_IDLE,
+            duration=10000,
+        )
 
     def _log_phs_replacement_waiting_failure(
         self,
@@ -3373,31 +3504,12 @@ class ContainerAudit:
         self,
         context: Optional[Mapping[str, Any]],
     ) -> bool:
-        pair = self._phs_replacement_notice_pair(context)
-        if pair is None:
-            return False
-        seen = getattr(self, "_phs_replacement_notice_pairs", None)
-        if not isinstance(seen, set):
-            seen = set()
-            self._phs_replacement_notice_pairs = seen
-        session_id = self._phs_replacement_waiting_session_id(context)
-        notice_key = (session_id, pair[0], pair[1])
-        if notice_key in seen:
-            return False
-        try:
-            self._mark_phs_replacement_waiting(context, pair)
-        except Exception as exc:
-            self._log_phs_replacement_waiting_failure(
-                context=context,
-                pair=pair,
-                error=exc,
-            )
-        seen.add(notice_key)
-        self.show_status_message(
-            PHS_REPLACEMENT_REQUIRED_NOTICE,
-            self.COLOR_IDLE,
-            duration=10000,
+        ready, newly_marked = self._ensure_phs_replacement_waiting_marked(
+            context
         )
+        if not ready or not newly_marked:
+            return False
+        self._show_phs_replacement_required_notice()
         return True
 
     def _capture_phs_reconciliation_progress(self) -> Dict[str, Any]:
@@ -3553,7 +3665,9 @@ class ContainerAudit:
             pass
 
     def _on_phs_label_exchange_shortcut(self, _event=None):
-        if getattr(self, "_phs_label_exchange_pending", False):
+        if self._warning_state_presenter().state.is_blocking:
+            self._render_warning_state()
+        elif getattr(self, "_phs_label_exchange_pending", False):
             self._schedule_focus_return()
         elif getattr(self, "_phs_reconciliation_context", None):
             self._execute_selected_phs_label_exchange()
@@ -3982,12 +4096,31 @@ class ContainerAudit:
                         duration=8000,
                     )
                 else:
+                    marker_ready, marker_new = (
+                        self._ensure_phs_replacement_waiting_marked(
+                            context,
+                            master_label=str(
+                                getattr(
+                                    self.current_tray,
+                                    "master_label_code",
+                                    "",
+                                )
+                                or ""
+                            ),
+                        )
+                    )
+                    if not marker_ready:
+                        self._set_phs_reconciliation_context(None)
+                        self._phs_reconciliation_execution_guard = None
+                        self._update_action_button_states()
+                        self._schedule_focus_return()
+                        return
                     self._set_phs_reconciliation_context(context)
                     self._phs_reconciliation_execution_guard = progress_before
                     summaries = reconciliation.target_summaries(context)
-                    if not self._show_phs_replacement_required_notice_once(
-                        context
-                    ):
+                    if marker_new:
+                        self._show_phs_replacement_required_notice()
+                    else:
                         self.show_status_message(
                             f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
                             "F8로 출력·교체를 계속하세요.",
@@ -4514,7 +4647,7 @@ class ContainerAudit:
     def _show_operations_menu(self) -> None:
         """Show secondary and destructive actions without growing the center pane."""
 
-        if self._operator_review_blocks_mutation():
+        if self._warning_state_presenter().state.is_blocking:
             self._render_warning_state()
             return
         active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
@@ -6170,6 +6303,28 @@ class ContainerAudit:
         detail["central_source_preflight"] = preflight.audit_detail()
         detail["resolved_tray_quantity"] = preflight.member_count
         detail["scanned_physical_label_qr"] = barcode
+        replacement_context = {
+            "process_context": "transfer",
+            "scan": {
+                "replacement_required": bool(preflight.replaced_scan),
+                "scanned_label_id": preflight.scanned_label_id,
+                "active_label_id": preflight.active_label_id,
+                "active_qr_payload": preflight.active_label_qr_payload,
+            },
+        }
+        marker_new = False
+        if preflight.replaced_scan:
+            marker_ready, marker_new = (
+                self._ensure_phs_replacement_waiting_marked(
+                    replacement_context,
+                    master_label=preflight.canonical_input_tag_qr,
+                )
+            )
+            if not marker_ready:
+                self._update_current_item_label()
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                return
         activated = self._activate_master_label_tray(
             barcode=preflight.canonical_input_tag_qr,
             item_code=preflight.item_id,
@@ -6183,16 +6338,8 @@ class ContainerAudit:
             active_label_business_date=preflight.active_label_business_date,
             active_label_worker_code=preflight.active_label_worker_code,
         )
-        if activated and preflight.replaced_scan:
-            self._show_phs_replacement_required_notice_once(
-                {
-                    "scan": {
-                        "replacement_required": True,
-                        "scanned_label_id": preflight.scanned_label_id,
-                        "active_label_id": preflight.active_label_id,
-                    }
-                }
-            )
+        if activated and marker_new:
+            self._show_phs_replacement_required_notice()
         self._update_action_button_states()
 
     def _begin_active_phs_label_refresh(self, raw_barcode: str) -> None:
@@ -6304,6 +6451,30 @@ class ContainerAudit:
                     )
                     self._schedule_focus_return()
                     return
+                replacement_context = {
+                    "process_context": "transfer",
+                    "scan": {
+                        "replacement_required": bool(
+                            preflight.replaced_scan
+                        ),
+                        "scanned_label_id": preflight.scanned_label_id,
+                        "active_label_id": preflight.active_label_id,
+                        "active_qr_payload": (
+                            preflight.active_label_qr_payload
+                        ),
+                    },
+                }
+                marker_new = False
+                if preflight.replaced_scan:
+                    marker_ready, marker_new = (
+                        self._ensure_phs_replacement_waiting_marked(
+                            replacement_context,
+                            master_label=tray.master_label_code,
+                        )
+                    )
+                    if not marker_ready:
+                        self._schedule_focus_return()
+                        return
                 before = {
                     "canonical_input_tag_qr": tray.canonical_input_tag_qr,
                     "active_label_qr_payload": tray.active_label_qr_payload,
@@ -6348,18 +6519,9 @@ class ContainerAudit:
                 except Exception:
                     pass
                 if preflight.replaced_scan:
-                    replacement_notice_shown = (
-                        self._show_phs_replacement_required_notice_once(
-                            {
-                                "scan": {
-                                    "replacement_required": True,
-                                    "scanned_label_id": preflight.scanned_label_id,
-                                    "active_label_id": preflight.active_label_id,
-                                }
-                            }
-                        )
-                    )
-                    message = None if replacement_notice_shown else (
+                    if marker_new:
+                        self._show_phs_replacement_required_notice()
+                    message = None if marker_new else (
                         "현재 사용 중인 현품표를 다시 확인했습니다."
                     )
                 else:
@@ -6460,7 +6622,7 @@ class ContainerAudit:
                 duration=0,
             )
             return
-        if self._operator_review_blocks_mutation():
+        if self._warning_state_presenter().state.is_blocking:
             self._render_warning_state()
             return
 
