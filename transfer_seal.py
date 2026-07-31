@@ -1618,7 +1618,6 @@ class LogisticsTransferClient:
 
             session = requests.Session()
         self.session = session
-        self._test1_phs_reconciliation_prepare_ack_dropped = False
 
     def assert_authority(
         self,
@@ -1899,35 +1898,6 @@ class LogisticsTransferClient:
                 idempotency_key, "idempotency_key"
             ),
         )
-        exchange = (
-            dict(result.get("exchange"))
-            if isinstance(result, Mapping)
-            and isinstance(result.get("exchange"), Mapping)
-            else {}
-        )
-        exchange_id = str(exchange.get("exchange_id") or "").strip()
-        drop_ack_reconciliation_id = os.environ.get(
-            "KMTECH_TEST1_DROP_PHS_RECONCILIATION_PREPARE_ACK_ONCE",
-            "",
-        )
-        if (
-            not self._test1_phs_reconciliation_prepare_ack_dropped
-            and scope == "TEST1-GOAL-20260722-EXACT-SIX"
-            and self.device_id == "test1-common-host"
-            and drop_ack_reconciliation_id == normalized_reconciliation_id
-            and exchange_id
-        ):
-            self._test1_phs_reconciliation_prepare_ack_dropped = True
-            raise TransferSealError(
-                "PHS_RECONCILIATION_PREPARE_ACK_UNKNOWN",
-                "중앙 prepare 성공 후 응답 ACK를 확인하지 못했습니다.",
-                retryable=True,
-                committed=None,
-                details={
-                    "reconciliation_id": normalized_reconciliation_id,
-                    "exchange_id": exchange_id,
-                },
-            )
         return dict(result or {})
 
     def get_phs_label_exchange(
