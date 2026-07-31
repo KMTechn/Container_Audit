@@ -6,6 +6,7 @@ import stat
 from types import SimpleNamespace
 
 import pytest
+import Container_Audit as container_module
 import logistics_runtime_profile as runtime_module
 
 from logistics_runtime_profile import (
@@ -21,6 +22,24 @@ from tools.install_logistics_runtime_profile import (
     main as install_main,
 )
 from tools.check_logistics_runtime_profile import main as readiness_main
+
+
+def test_gui_startup_builds_client_without_network_readiness_probe(monkeypatch):
+    calls = []
+    sentinel = object()
+
+    def fake_factory(*, probe_required=True):
+        calls.append(probe_required)
+        return sentinel
+
+    monkeypatch.setattr(
+        container_module,
+        "logistics_transfer_client_from_env",
+        fake_factory,
+    )
+
+    assert container_module.container_startup_logistics_client() is sentinel
+    assert calls == [False]
 
 
 def _profile(tmp_path, **changes):

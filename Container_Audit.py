@@ -233,6 +233,11 @@ def apply_startup_geometry(
     root.update_idletasks()
     return parsed
 
+
+def container_startup_logistics_client():
+    """Load local credentials without making GUI startup depend on the server."""
+    return logistics_transfer_client_from_env(probe_required=False)
+
 # ####################################################################
 # # 자동 업데이트 기능
 # ####################################################################
@@ -1112,10 +1117,10 @@ class ContainerAudit:
     MIN_WINDOW_HEIGHT = 720
 
     def __init__(self):
-        # Required authoritative mode is checked before Tcl or background
-        # workers start. A missing/invalid profile or failed authenticated
-        # capability probe therefore cannot degrade into silent retry.
-        startup_logistics_client = logistics_transfer_client_from_env()
+        # Validate the protected local profile before Tcl, but defer network
+        # readiness to the durable operation/replay path so recovery can open
+        # during a server outage.
+        startup_logistics_client = container_startup_logistics_client()
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
         self.root = tk.Tk()
         if startup_geometry:
