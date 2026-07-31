@@ -124,6 +124,13 @@ def test_operator_review_default_equivalent_detail_uses_one_notice_and_keeps_las
             True,
         ),
         (
+            CompletionOutcome.LINKED,
+            "이적 연계 완료",
+            "로컬 이적 원장에 안전하게 저장했습니다.",
+            "서버 이적 확인이 완료되었습니다",
+            False,
+        ),
+        (
             CompletionOutcome.RETRY_WAIT,
             "서버 이적 확인 대기",
             "서버 이적 확인이 아직 완료되지 않았습니다.",

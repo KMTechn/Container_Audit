@@ -1,4 +1,5 @@
 import datetime
+import sqlite3
 
 import pytest
 
@@ -305,6 +306,80 @@ def test_retry_wait_locks_and_preserves_tray_before_local_completion():
     assert app.current_tray is original_tray
     assert app.scanned_listbox.rows == original_rows
     assert app.warning_presenter.state.is_blocking is True
+
+
+def test_durable_local_link_allows_completion_while_server_retry_waits():
+    events = []
+    app = _completion_app(
+        seal_status="RETRY_WAIT",
+        ledger_succeeds=True,
+        events=events,
+    )
+    app.current_tray.master_label_code = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-LINKED|CLC={ITEM_CODE}|"
+        "LBL=LBL-LINKED|HSH=0123456789abcdef"
+    )
+    app._prepare_and_attempt_transfer_seal = lambda **_kwargs: SealAttempt(
+        intent_id="intent-linked",
+        status="RETRY_WAIT",
+        command_id="container-seal:linked",
+        local_completion_id="transfer-linked-1",
+        retryable=True,
+    )
+
+    assert app.complete_tray() is True
+
+    assert ("log_event", "TRAY_COMPLETE", True) in events
+    assert ("present_completion", CompletionOutcome.LINKED) in events
+    assert any(event[0] == "delete_state" for event in events)
+    assert any(event[0] == "reset_ui" for event in events)
+    assert app.current_tray.master_label_code == ""
+    assert app.warning_presenter.state.is_blocking is False
+    assert app.warning_presenter.state.completion.server_confirmed is False
+
+
+def test_server_conflict_after_local_link_does_not_roll_back_completion():
+    events = []
+    app = _completion_app(
+        seal_status="OPERATOR_REVIEW",
+        ledger_succeeds=True,
+        events=events,
+    )
+    app._prepare_and_attempt_transfer_seal = lambda **_kwargs: SealAttempt(
+        intent_id="intent-review-linked",
+        status="OPERATOR_REVIEW",
+        command_id="container-seal:review-linked",
+        local_completion_id="transfer-linked-review",
+        error_code="MEMBERSHIP_CONFLICT",
+        error_message="membership conflict",
+    )
+
+    assert app.complete_tray() is True
+
+    assert ("present_completion", CompletionOutcome.LINKED) in events
+    assert any(event[0] == "reset_ui" for event in events)
+    assert app.current_tray.master_label_code == ""
+    assert app.warning_presenter.state.is_blocking is False
+
+
+def test_permanent_local_outbox_failure_never_shows_completion_success():
+    events = []
+    app = _completion_app(
+        seal_status="ACKED",
+        ledger_succeeds=True,
+        events=events,
+    )
+    original_tray = app.current_tray
+    app._prepare_and_attempt_transfer_seal = lambda **_kwargs: (
+        _ for _ in ()
+    ).throw(sqlite3.IntegrityError("local ledger unavailable"))
+
+    assert app.complete_tray() is False
+
+    assert app.current_tray is original_tray
+    assert not any(event[0] == "present_completion" for event in events)
+    assert not any(event[0] == "reset_ui" for event in events)
+    assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)
 
 
 def test_completion_log_failure_does_not_publish_snapshot_or_reset_active_tray():

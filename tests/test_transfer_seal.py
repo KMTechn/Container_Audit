@@ -1,4 +1,5 @@
 import json
+import sqlite3
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -1249,6 +1250,17 @@ def test_store_prepare_is_idempotent_and_rejects_normalized_duplicate(tmp_path):
     )
 
     assert first["intent_id"] == replay["intent_id"]
+    assert first["idempotency_key"] == replay["idempotency_key"]
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_seal_intents"
+        ).fetchone()[0] == 1
+        linked = conn.execute(
+            "SELECT event_type,idempotency_key FROM transfer_completion_ledger"
+        ).fetchall()
+    assert len(linked) == 1
+    assert linked[0]["event_type"] == "LINKED"
+    assert linked[0]["idempotency_key"] == first["idempotency_key"]
     with pytest.raises(ValueError, match="unique"):
         store.prepare(
             master_label="MASTER-2",
@@ -1257,6 +1269,209 @@ def test_store_prepare_is_idempotent_and_rejects_normalized_duplicate(tmp_path):
             operator="tester",
             scanned_barcodes=["bc-1", "BC-1"],
         )
+
+
+def test_offline_multi_event_keeps_linked_ledger_and_fifo_outbox(tmp_path):
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "offline.db"),
+        None,
+    )
+    first = coordinator.prepare(
+        master_label="MASTER-OFFLINE-1",
+        master_label_fields={"BND": SOURCE, "CLC": ITEM},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+    )
+    second = coordinator.prepare(
+        master_label="MASTER-OFFLINE-2",
+        master_label_fields={"BND": SOURCE, "CLC": ITEM},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-2"],
+    )
+
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id]
+    attempts = coordinator.drain_pending()
+
+    assert [attempt.intent_id for attempt in attempts] == [
+        first.intent_id,
+        second.intent_id,
+    ]
+    assert [attempt.status for attempt in attempts] == [
+        "RETRY_WAIT",
+        "RETRY_WAIT",
+    ]
+    assert [attempt.command_id for attempt in attempts] == [
+        first.command_id,
+        second.command_id,
+    ]
+    with coordinator.store._connect() as conn:
+        linked = conn.execute(
+            """SELECT intent_id,event_type,idempotency_key
+                 FROM transfer_completion_ledger
+                 ORDER BY ledger_sequence"""
+        ).fetchall()
+    assert [row["intent_id"] for row in linked] == [
+        first.intent_id,
+        second.intent_id,
+    ]
+    assert all(row["event_type"] == "LINKED" for row in linked)
+
+
+def test_restart_replays_fifo_with_original_idempotency_keys(tmp_path):
+    db_path = tmp_path / "restart-fifo.db"
+    offline = TransferSealCoordinator(TransferSealStore(db_path), None)
+    first = _prepare(offline)
+    second = offline.prepare(
+        master_label=(
+            "PHS=1|BND=PHS-SERVER-001|ITG=ITAG-001|"
+            "CLC=AAA2270730100|QT=3|LOCAL=SECOND"
+        ),
+        master_label_fields={
+            "BND": SOURCE,
+            "ITG": "ITAG-001",
+            "LBL": "INPUT-LABEL-001",
+            "CLC": ITEM,
+        },
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1", "BC-2", "BC-3"],
+    )
+    expected_keys = [first.command_id, second.command_id]
+    posted_keys = []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        if call["method"] == "POST":
+            posted_keys.append(call["headers"]["Idempotency-Key"])
+            return FakeResponse(200, {"ok": True, "data": _receipt(call["json"])})
+        raise AssertionError(call)
+
+    client, _session = _client(handler)
+    restarted = TransferSealCoordinator(TransferSealStore(db_path), client)
+
+    assert [result.status for result in restarted.drain_pending()] == [
+        "ACKED",
+        "ACKED",
+    ]
+    assert posted_keys == expected_keys
+
+
+def test_linked_ledger_and_outbox_roll_back_together_on_durable_write_failure(
+    tmp_path,
+):
+    store = TransferSealStore(tmp_path / "atomic-failure.db")
+    with store._connect() as conn:
+        conn.executescript(
+            """
+            CREATE TRIGGER fail_local_completion_ledger
+            BEFORE INSERT ON transfer_completion_ledger
+            BEGIN SELECT RAISE(ABORT, 'forced local ledger failure'); END;
+            """
+        )
+
+    with pytest.raises(sqlite3.IntegrityError, match="forced local ledger failure"):
+        store.prepare(
+            master_label="MASTER-ATOMIC-FAIL",
+            source_identity={"source_bundle_id": SOURCE},
+            item_id=ITEM,
+            operator="tester",
+            scanned_barcodes=["BC-1"],
+        )
+
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_seal_intents"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_completion_ledger"
+        ).fetchone()[0] == 0
+
+
+def test_linked_completion_ledger_is_append_only(tmp_path):
+    store = TransferSealStore(tmp_path / "append-only.db")
+    prepared = store.prepare(
+        master_label="MASTER-APPEND-ONLY",
+        source_identity={"source_bundle_id": SOURCE},
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=["BC-1"],
+    )
+
+    with store._connect() as conn:
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute(
+                "UPDATE transfer_completion_ledger SET event_type='LINKED'"
+            )
+        with pytest.raises(sqlite3.IntegrityError, match="append-only"):
+            conn.execute("DELETE FROM transfer_completion_ledger")
+        linked = conn.execute(
+            "SELECT intent_id,idempotency_key FROM transfer_completion_ledger"
+        ).fetchone()
+
+    assert linked["intent_id"] == prepared["intent_id"]
+    assert linked["idempotency_key"] == prepared["idempotency_key"]
+
+
+def test_existing_outbox_is_migrated_to_stable_key_and_linked_ledger(tmp_path):
+    db_path = tmp_path / "legacy-outbox.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE transfer_seal_intents (
+                intent_id TEXT PRIMARY KEY,
+                schema_version TEXT NOT NULL,
+                status TEXT NOT NULL,
+                master_label TEXT NOT NULL,
+                source_identity_json TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                operator TEXT NOT NULL,
+                scanned_barcodes_json TEXT NOT NULL,
+                scan_count INTEGER NOT NULL,
+                intent_hash TEXT NOT NULL UNIQUE,
+                command_id TEXT UNIQUE,
+                command_json TEXT,
+                command_hash TEXT,
+                receipt_json TEXT,
+                seal_qr_payload TEXT,
+                last_error_code TEXT,
+                last_error_message TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            """INSERT INTO transfer_seal_intents (
+                   intent_id,schema_version,status,master_label,source_identity_json,
+                   item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
+                   created_at,updated_at
+               ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                "legacy-intent-1",
+                "container-audit-transfer-seal-v1",
+                "RETRY_WAIT",
+                "MASTER-LEGACY",
+                json.dumps({"source_bundle_id": SOURCE}),
+                ITEM,
+                "tester",
+                json.dumps(["BC-1"]),
+                1,
+                "f" * 64,
+                "2026-07-01T00:00:00Z",
+                "2026-07-01T00:00:00Z",
+            ),
+        )
+
+    store = TransferSealStore(db_path)
+    migrated = store.load("legacy-intent-1")
+
+    assert migrated["idempotency_key"] == f"container-seal:{'f' * 64}"
+    assert migrated["local_completion_id"].startswith("TRANSFER-LINKED-")
+    assert store.pending_ids() == ["legacy-intent-1"]
 
 
 def test_store_methods_release_windows_db_and_wal_handles_without_gc(tmp_path):
@@ -1276,7 +1491,7 @@ def test_store_methods_release_windows_db_and_wal_handles_without_gc(tmp_path):
         "authority_epoch": 1,
         "ledger_plane": "AUTHORITATIVE",
         "plane_epoch": 1,
-        "idempotency_key": f"close-test:{row['intent_id']}",
+        "idempotency_key": row["idempotency_key"],
         "expected_versions": {f"bundle:{SOURCE}": 1},
         "payload": {
             "source_bundle_id": SOURCE,
@@ -1716,7 +1931,7 @@ def test_precommand_review_lookup_requires_exact_commandless_row(tmp_path):
     )
     store.bind_command(
         command_bound["intent_id"],
-        {"idempotency_key": "container-seal:already-durable"},
+        {"idempotency_key": command_bound["idempotency_key"]},
     )
     store.record_error(
         command_bound["intent_id"],
@@ -1758,6 +1973,14 @@ def test_restart_reuses_immutable_command_and_recovers_lost_ack(tmp_path):
 
     assert waiting.status == "RETRY_WAIT"
     assert durable_before["command_json"]
+    assert waiting.command_id == prepared.command_id
+    assert durable_before["idempotency_key"] == prepared.command_id
+    with coordinator1.store._connect() as conn:
+        linked_before = conn.execute(
+            "SELECT event_type,idempotency_key FROM transfer_completion_ledger"
+        ).fetchone()
+    assert linked_before["event_type"] == "LINKED"
+    assert linked_before["idempotency_key"] == prepared.command_id
 
     second_post = []
 
@@ -2064,6 +2287,12 @@ def test_server_cas_conflict_is_terminal_even_when_marked_retryable(tmp_path, st
     )
 
     assert row["status"] == "OPERATOR_REVIEW"
+    with store._connect() as conn:
+        linked = conn.execute(
+            "SELECT event_type,idempotency_key FROM transfer_completion_ledger"
+        ).fetchone()
+    assert linked["event_type"] == "LINKED"
+    assert linked["idempotency_key"] == prepared["idempotency_key"]
 
 
 def test_legacy_without_exact_configuration_keeps_exchange_available(tmp_path):

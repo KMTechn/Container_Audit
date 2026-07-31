@@ -6622,7 +6622,8 @@ class ContainerAudit:
                 print(f"이적 seal 로컬 보존 실패: {e}")
                 self.show_status_message("이적 membership을 로컬에 보존하지 못해 작업 상태를 유지합니다.", self.COLOR_DANGER)
                 return False
-        if transfer_attempt.status == "OPERATOR_REVIEW":
+        locally_linked = bool(transfer_attempt.local_completion_id)
+        if transfer_attempt.status == "OPERATOR_REVIEW" and not locally_linked:
             safe_message = (
                 "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
             )
@@ -6639,7 +6640,11 @@ class ContainerAudit:
                 error_code=transfer_attempt.error_code,
             )
             return False
-        if requires_central_ack and transfer_attempt.status != "ACKED":
+        if (
+            requires_central_ack
+            and transfer_attempt.status != "ACKED"
+            and not locally_linked
+        ):
             self._present_completion_outcome(
                 CompletionOutcome.RETRY_WAIT,
                 item_name=self.current_tray.item_name,
@@ -6660,11 +6665,23 @@ class ContainerAudit:
             return False
 
         completion_snapshot: Optional[CompletionOutcomeSnapshot] = None
-        if not is_test and transfer_attempt.status == "ACKED":
-            completion_outcome = CompletionOutcome.ACKED
-            completion_message = (
-                f"'{self.current_tray.item_name}' 완료 · 서버 이적 확인이 완료되었습니다."
-            )
+        if not is_test and (
+            transfer_attempt.status == "ACKED" or locally_linked
+        ):
+            if transfer_attempt.status == "ACKED":
+                completion_outcome = CompletionOutcome.ACKED
+                completion_message = (
+                    f"'{self.current_tray.item_name}' 완료 · 서버 이적 확인이 완료되었습니다."
+                )
+            else:
+                completion_outcome = CompletionOutcome.LINKED
+                if transfer_attempt.status == "OPERATOR_REVIEW":
+                    follow_up = "중앙 반영은 담당자 확인이 필요합니다."
+                else:
+                    follow_up = "중앙 반영은 저장된 동일 요청으로 자동 재시도합니다."
+                completion_message = (
+                    f"'{self.current_tray.item_name}' 완료 · {follow_up}"
+                )
             completion_snapshot = CompletionOutcomeSnapshot(
                 outcome=completion_outcome,
                 item_name=self.current_tray.item_name,
@@ -7225,7 +7242,11 @@ class ContainerAudit:
                         text="중복 확인" if duplicate_notice else "오류 확인",
                         foreground=self.COLOR_DANGER,
                     )
-                elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
+                elif (
+                    state.completion is not None
+                    and state.completion.outcome
+                    in {CompletionOutcome.ACKED, CompletionOutcome.LINKED}
+                ):
                     status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
@@ -7274,7 +7295,11 @@ class ContainerAudit:
                     follow_up = "다음 제품 스캔"
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     follow_up = "새 현품표 스캔 가능 · 서버 자동 재시도"
-                elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
+                elif (
+                    state.completion is not None
+                    and state.completion.outcome
+                    in {CompletionOutcome.ACKED, CompletionOutcome.LINKED}
+                ):
                     follow_up = "새 현품표 스캔"
                 else:
                     follow_up = "현품표 라벨 스캔"
@@ -7860,6 +7885,12 @@ class ContainerAudit:
             operator=self.worker_name,
             scanned_barcodes=log_detail.get("product_barcodes") or (),
         )
+        drain_through = getattr(coordinator, "drain_pending_through", None)
+        if callable(drain_through):
+            results = drain_through(prepared.intent_id)
+            for result in reversed(results):
+                if result.intent_id == prepared.intent_id:
+                    return result
         return coordinator.attempt(prepared.intent_id)
 
     @staticmethod
@@ -7868,6 +7899,7 @@ class ContainerAudit:
             {
                 "transfer_seal_schema_version": "container-audit-transfer-seal-v1",
                 "transfer_seal_intent_id": attempt.intent_id,
+                "transfer_local_completion_id": attempt.local_completion_id or None,
                 "transfer_seal_status": attempt.status,
                 "transfer_seal_idempotency_key": attempt.command_id or None,
                 "transfer_bundle_id": attempt.transfer_bundle_id or None,

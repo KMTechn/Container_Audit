@@ -14,9 +14,10 @@ class NoticeSeverity(str, Enum):
 
 
 class CompletionOutcome(str, Enum):
-    """Server-facing result that the business layer has already decided."""
+    """Completion result that the business layer has already decided."""
 
     ACKED = "ACKED"
+    LINKED = "LINKED"
     RETRY_WAIT = "RETRY_WAIT"
     OPERATOR_REVIEW = "OPERATOR_REVIEW"
 
@@ -81,11 +82,10 @@ class CompletionOutcomeSnapshot:
 
     @property
     def blocks_completion(self) -> bool:
-        # A transfer is not locally complete until the central ledger ACKs it.
-        # RETRY_WAIT therefore owns the active tray just like a terminal review:
-        # scans and destructive tray actions stay locked while the same durable
-        # intent is retried.  ACKED is the only settled/non-blocking outcome.
-        return self.outcome is not CompletionOutcome.ACKED
+        return self.outcome in {
+            CompletionOutcome.RETRY_WAIT,
+            CompletionOutcome.OPERATOR_REVIEW,
+        }
 
     @property
     def server_confirmed(self) -> bool:
@@ -126,6 +126,13 @@ _COMPLETION_NOTICE_DEFAULTS = {
         "completion.acked",
         "서버 이적 확인 완료",
         "서버 이적 확인이 완료되었습니다.",
+        NoticeSeverity.SUCCESS,
+        False,
+    ),
+    CompletionOutcome.LINKED: (
+        "completion.linked",
+        "이적 연계 완료",
+        "로컬 이적 원장에 안전하게 저장했습니다.",
         NoticeSeverity.SUCCESS,
         False,
     ),

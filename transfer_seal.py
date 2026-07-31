@@ -22,6 +22,7 @@ from logistics_runtime_profile import (
 
 
 SCHEMA_VERSION = "container-audit-transfer-seal-v1"
+LOCAL_COMPLETION_SCHEMA_VERSION = "container-audit-transfer-completion-v1"
 CONTRACT_VERSION = "logistics-v1"
 COMMAND_TYPE = "SEAL_TRANSFER_BUNDLE"
 PENDING_STATUSES = ("PREPARED", "COMMAND_READY", "RETRY_WAIT")
@@ -2142,6 +2143,7 @@ class LogisticsTransferClient:
 class SealAttempt:
     intent_id: str
     status: str
+    local_completion_id: str = ""
     command_id: str = ""
     transfer_bundle_id: str = ""
     seal_qr_payload: str = ""
@@ -2164,7 +2166,7 @@ class SealAttempt:
 
 
 class TransferSealStore:
-    """SQLite outbox that makes prepared scans and command payloads durable."""
+    """Atomic local completion ledger and replayable SQLite transfer outbox."""
 
     def __init__(self, db_path: str | os.PathLike[str]) -> None:
         self.db_path = str(db_path)
@@ -2181,6 +2183,85 @@ class TransferSealStore:
             yield conn
         finally:
             conn.close()
+
+    @staticmethod
+    def _linked_event_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+        return {
+            "schema_version": LOCAL_COMPLETION_SCHEMA_VERSION,
+            "event_type": "LINKED",
+            "intent_id": str(row["intent_id"]),
+            "idempotency_key": str(row["idempotency_key"]),
+            "intent": {
+                "schema_version": str(row["schema_version"]),
+                "master_label": str(row["master_label"]),
+                "source_identity": json.loads(str(row["source_identity_json"])),
+                "item_id": str(row["item_id"]),
+                "operator": str(row["operator"]),
+                "scanned_barcodes": json.loads(str(row["scanned_barcodes_json"])),
+                "scan_count": int(row["scan_count"]),
+                "intent_hash": str(row["intent_hash"]),
+            },
+        }
+
+    @classmethod
+    def _ensure_linked_event(
+        cls,
+        conn: sqlite3.Connection,
+        row: Mapping[str, Any],
+    ) -> str:
+        payload = cls._linked_event_payload(row)
+        payload_json = _canonical_json(payload)
+        payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+        completion_id = _deterministic_id(
+            "TRANSFER-LINKED",
+            {
+                "intent_id": str(row["intent_id"]),
+                "idempotency_key": str(row["idempotency_key"]),
+                "intent_hash": str(row["intent_hash"]),
+            },
+        )
+        conn.execute(
+            """INSERT OR IGNORE INTO transfer_completion_ledger (
+                   completion_id,intent_id,event_type,idempotency_key,
+                   payload_json,payload_hash,created_at
+               ) VALUES (?,?,?,?,?,?,?)""",
+            (
+                completion_id,
+                str(row["intent_id"]),
+                "LINKED",
+                str(row["idempotency_key"]),
+                payload_json,
+                payload_hash,
+                str(row["created_at"]),
+            ),
+        )
+        linked = conn.execute(
+            "SELECT * FROM transfer_completion_ledger WHERE intent_id=?",
+            (str(row["intent_id"]),),
+        ).fetchone()
+        if linked is None or (
+            linked["completion_id"] != completion_id
+            or linked["event_type"] != "LINKED"
+            or linked["idempotency_key"] != str(row["idempotency_key"])
+            or linked["payload_json"] != payload_json
+            or linked["payload_hash"] != payload_hash
+        ):
+            raise ValueError("durable local completion differs from transfer intent")
+        return completion_id
+
+    @staticmethod
+    def _load_in_connection(
+        conn: sqlite3.Connection,
+        intent_id: str,
+    ) -> sqlite3.Row | None:
+        return conn.execute(
+            """SELECT intent.*, linked.completion_id AS local_completion_id
+                 FROM transfer_seal_intents AS intent
+                 LEFT JOIN transfer_completion_ledger AS linked
+                   ON linked.intent_id=intent.intent_id
+                WHERE intent.intent_id=?""",
+            (intent_id,),
+        ).fetchone()
 
     def _initialize(self) -> None:
         with self._connect() as conn:
@@ -2201,6 +2282,7 @@ class TransferSealStore:
                     scanned_barcodes_json TEXT NOT NULL,
                     scan_count INTEGER NOT NULL CHECK(scan_count > 0),
                     intent_hash TEXT NOT NULL UNIQUE,
+                    idempotency_key TEXT NOT NULL UNIQUE,
                     command_id TEXT UNIQUE,
                     command_json TEXT,
                     command_hash TEXT,
@@ -2231,6 +2313,67 @@ class TransferSealStore:
                 );
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute("PRAGMA table_info(transfer_seal_intents)")
+            }
+            if "idempotency_key" not in columns:
+                conn.execute(
+                    "ALTER TABLE transfer_seal_intents ADD COLUMN idempotency_key TEXT"
+                )
+            conn.execute(
+                """UPDATE transfer_seal_intents
+                      SET idempotency_key='container-seal:' || intent_hash
+                    WHERE idempotency_key IS NULL OR idempotency_key=''"""
+            )
+            mismatched = conn.execute(
+                """SELECT intent_id FROM transfer_seal_intents
+                    WHERE command_id IS NOT NULL
+                      AND command_id <> idempotency_key
+                    LIMIT 1"""
+            ).fetchone()
+            if mismatched is not None:
+                raise sqlite3.IntegrityError(
+                    "stored transfer command id differs from durable idempotency key"
+                )
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS
+                       ux_transfer_seal_intents_idempotency_key
+                       ON transfer_seal_intents(idempotency_key)"""
+            )
+            conn.commit()
+            conn.executescript(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_idempotency_immutable
+                BEFORE UPDATE OF idempotency_key
+                ON transfer_seal_intents
+                WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
+                BEGIN SELECT RAISE(ABORT, 'transfer seal idempotency key is immutable'); END;
+                CREATE TABLE IF NOT EXISTS transfer_completion_ledger (
+                    ledger_sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                    completion_id TEXT NOT NULL UNIQUE,
+                    intent_id TEXT NOT NULL UNIQUE
+                        REFERENCES transfer_seal_intents(intent_id),
+                    event_type TEXT NOT NULL CHECK(event_type='LINKED'),
+                    idempotency_key TEXT NOT NULL UNIQUE,
+                    payload_json TEXT NOT NULL,
+                    payload_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_completion_immutable_update
+                BEFORE UPDATE ON transfer_completion_ledger
+                BEGIN SELECT RAISE(ABORT, 'transfer completion ledger is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_completion_immutable_delete
+                BEFORE DELETE ON transfer_completion_ledger
+                BEGIN SELECT RAISE(ABORT, 'transfer completion ledger is append-only'); END;
+                """
+            )
+            conn.execute("BEGIN IMMEDIATE")
+            for row in conn.execute(
+                "SELECT * FROM transfer_seal_intents ORDER BY created_at, rowid"
+            ).fetchall():
+                self._ensure_linked_event(conn, row)
+            conn.commit()
 
     def prepare(
         self,
@@ -2253,14 +2396,16 @@ class TransferSealStore:
         }
         digest = _sha256(intent_material)
         intent_id = f"transfer-intent-{digest[:32]}"
+        idempotency_key = f"container-seal:{digest}"
         now = _utc_now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
                 """INSERT OR IGNORE INTO transfer_seal_intents (
                        intent_id,schema_version,status,master_label,source_identity_json,
-                       item_id,operator,scanned_barcodes_json,scan_count,intent_hash,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
+                       idempotency_key,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     SCHEMA_VERSION,
@@ -2272,6 +2417,7 @@ class TransferSealStore:
                     _canonical_json(raw_barcodes),
                     len(raw_barcodes),
                     digest,
+                    idempotency_key,
                     now,
                     now,
                 ),
@@ -2279,15 +2425,20 @@ class TransferSealStore:
             row = conn.execute(
                 "SELECT * FROM transfer_seal_intents WHERE intent_id=?", (intent_id,)
             ).fetchone()
+            if row is None or (
+                row["intent_hash"] != digest
+                or row["idempotency_key"] != idempotency_key
+            ):
+                raise ValueError("durable transfer intent identity collision")
+            self._ensure_linked_event(conn, row)
+            row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
         return row
 
     def load(self, intent_id: str) -> sqlite3.Row:
         with self._connect() as conn:
-            row = conn.execute(
-                "SELECT * FROM transfer_seal_intents WHERE intent_id=?", (intent_id,)
-            ).fetchone()
+            row = self._load_in_connection(conn, intent_id)
         if row is None:
             raise KeyError(intent_id)
         return row
@@ -2339,6 +2490,10 @@ class TransferSealStore:
             ).fetchone()
             if row is None:
                 raise KeyError(intent_id)
+            if row["idempotency_key"] != command_id:
+                raise ValueError(
+                    "server command id differs from durable transfer idempotency key"
+                )
             if row["command_json"] is not None:
                 if (
                     row["command_id"] != command_id
@@ -2354,9 +2509,7 @@ class TransferSealStore:
                         WHERE intent_id=?""",
                     (command_id, command_json, command_hash, _utc_now(), intent_id),
                 )
-            row = conn.execute(
-                "SELECT * FROM transfer_seal_intents WHERE intent_id=?", (intent_id,)
-            ).fetchone()
+            row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
         return row
@@ -2405,9 +2558,7 @@ class TransferSealStore:
                           updated_at=? WHERE intent_id=?""",
                 (status, error.code, str(error), _utc_now(), intent_id),
             )
-            row = conn.execute(
-                "SELECT * FROM transfer_seal_intents WHERE intent_id=?", (intent_id,)
-            ).fetchone()
+            row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
         return row
@@ -2422,9 +2573,7 @@ class TransferSealStore:
                     WHERE intent_id=?""",
                 (_canonical_json(dict(receipt)), seal_qr_payload, _utc_now(), intent_id),
             )
-            row = conn.execute(
-                "SELECT * FROM transfer_seal_intents WHERE intent_id=?", (intent_id,)
-            ).fetchone()
+            row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
         return row
@@ -2432,7 +2581,8 @@ class TransferSealStore:
     def pending_ids(self) -> list[str]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT intent_id FROM transfer_seal_intents WHERE status IN (?,?,?) ORDER BY created_at",
+                """SELECT intent_id FROM transfer_seal_intents
+                    WHERE status IN (?,?,?) ORDER BY created_at, rowid""",
                 PENDING_STATUSES,
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
@@ -2614,7 +2764,7 @@ class TransferSealCoordinator:
             "authority_epoch": authority_epoch,
             "ledger_plane": preflight.ledger_plane,
             "plane_epoch": preflight.plane_epoch,
-            "idempotency_key": f"container-seal:{row['intent_hash']}",
+            "idempotency_key": str(row["idempotency_key"]),
             "expected_versions": dict(preflight.entity_versions),
             "payload": payload,
             "client_exact_evidence": {
@@ -2837,7 +2987,7 @@ class TransferSealCoordinator:
             raise TransferSealError("AUTHORITY_INVALID", "서버 ledger plane이 이적 가능한 상태가 아닙니다.")
         if not isinstance(entity_version, int) or isinstance(entity_version, bool) or entity_version < 1:
             raise TransferSealError("MEMBERSHIP_CONFLICT", "원본 PHS version이 잘못됐습니다.")
-        idempotency_key = f"container-seal:{row['intent_hash']}"
+        idempotency_key = str(row["idempotency_key"])
         return {
             "contract_version": CONTRACT_VERSION,
             "command_type": COMMAND_TYPE,
@@ -3529,6 +3679,20 @@ class TransferSealCoordinator:
     def drain_pending(self) -> list[SealAttempt]:
         return [self.attempt(intent_id) for intent_id in self.store.pending_ids()]
 
+    def drain_pending_through(self, intent_id: str) -> list[SealAttempt]:
+        """Retry pending intents in FIFO order through one newly linked intent."""
+
+        target = self.store.load(intent_id)
+        if target["status"] not in PENDING_STATUSES:
+            return [self._attempt_from_row(target)]
+        results: list[SealAttempt] = []
+        for pending_id in self.store.pending_ids():
+            result = self.attempt(pending_id)
+            results.append(result)
+            if pending_id == intent_id:
+                break
+        return results
+
     @staticmethod
     def _attempt_from_row(row: sqlite3.Row) -> SealAttempt:
         context = json.loads(row["command_json"]) if row["command_json"] else {}
@@ -3567,7 +3731,13 @@ class TransferSealCoordinator:
         return SealAttempt(
             intent_id=str(row["intent_id"]),
             status=str(row["status"]),
-            command_id=str(row["command_id"] or ""),
+            local_completion_id=str(
+                row["local_completion_id"]
+                if "local_completion_id" in row.keys()
+                and row["local_completion_id"] is not None
+                else ""
+            ),
+            command_id=str(row["command_id"] or row["idempotency_key"] or ""),
             transfer_bundle_id=str(payload.get("transfer_bundle_id") or ""),
             seal_qr_payload=str(row["seal_qr_payload"] or ""),
             member_count=len(payload.get("member_ids") or []),
