@@ -247,6 +247,10 @@ CURRENT_VERSION = "v2.0.51"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
+PHS_REPLACEMENT_REQUIRED_NOTICE = (
+    "현품표 교체 필요. 작업은 계속할 수 있습니다. "
+    "현재 현품표를 교체 대기로 분리해 주세요."
+)
 # Two large-text trees need enough vertical space for both headings and at
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
@@ -1209,6 +1213,8 @@ class ContainerAudit:
         self._phs_label_candidates: List[Dict[str, Any]] = []
         self._phs_reconciliation_scan_armed = False
         self._phs_reconciliation_context: Optional[Dict[str, Any]] = None
+        self._phs_reconciliation_execution_guard: Optional[Dict[str, Any]] = None
+        self._phs_replacement_notice_pairs: set[tuple[str, str]] = set()
         self._tray_state_persist_lock = threading.RLock()
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
@@ -3186,6 +3192,85 @@ class ContainerAudit:
             reconciliation is not None and reconciliation.available
         )
 
+    @staticmethod
+    def _phs_replacement_notice_pair(
+        context: Optional[Mapping[str, Any]],
+    ) -> Optional[tuple[str, str]]:
+        scan = (
+            context.get("scan")
+            if isinstance(context, Mapping)
+            and isinstance(context.get("scan"), Mapping)
+            else {}
+        )
+        if scan.get("replacement_required") is not True:
+            return None
+        old_label_id = str(scan.get("scanned_label_id") or "").strip()
+        new_label_id = str(scan.get("active_label_id") or "").strip()
+        if not old_label_id or not new_label_id or old_label_id == new_label_id:
+            return None
+        return old_label_id, new_label_id
+
+    def _show_phs_replacement_required_notice_once(
+        self,
+        context: Optional[Mapping[str, Any]],
+    ) -> bool:
+        pair = self._phs_replacement_notice_pair(context)
+        if pair is None:
+            return False
+        seen = getattr(self, "_phs_replacement_notice_pairs", None)
+        if not isinstance(seen, set):
+            seen = set()
+            self._phs_replacement_notice_pairs = seen
+        if pair in seen:
+            return False
+        seen.add(pair)
+        self.show_status_message(
+            PHS_REPLACEMENT_REQUIRED_NOTICE,
+            self.COLOR_IDLE,
+            duration=10000,
+        )
+        return True
+
+    def _capture_phs_reconciliation_progress(self) -> Dict[str, Any]:
+        tray = self.current_tray
+        scans_object = getattr(tray, "scanned_barcodes", None)
+        return {
+            "tray": tray,
+            "master_label_code": str(
+                getattr(tray, "master_label_code", "") or ""
+            ),
+            "scans_object": scans_object,
+            "scans": (
+                tuple(scans_object)
+                if isinstance(scans_object, list)
+                else None
+            ),
+            "tray_size": int(getattr(tray, "tray_size", 0) or 0),
+        }
+
+    def _phs_reconciliation_progress_unchanged(
+        self,
+        captured: Optional[Mapping[str, Any]],
+    ) -> bool:
+        if not isinstance(captured, Mapping):
+            return False
+        current = self.current_tray
+        scans_before = captured.get("scans")
+        return bool(
+            current is captured.get("tray")
+            and str(getattr(current, "master_label_code", "") or "")
+            == str(captured.get("master_label_code") or "")
+            and getattr(current, "scanned_barcodes", None)
+            is captured.get("scans_object")
+            and int(getattr(current, "tray_size", 0) or 0)
+            == int(captured.get("tray_size") or 0)
+            and (
+                scans_before is None
+                or tuple(getattr(current, "scanned_barcodes", []))
+                == tuple(scans_before)
+            )
+        )
+
     def _phs_label_exchange_available_for_tray(self) -> bool:
         tray = getattr(self, "current_tray", None)
         if tray is None or not getattr(tray, "master_label_code", ""):
@@ -3261,11 +3346,8 @@ class ContainerAudit:
                 self.phs_label_exchange_coordinator.reconciliation
                 .target_summaries(reconciliation)
             )
-            exchange_kind = str(
-                reconciliation.get("expected_exchange_kind") or ""
-            )
             text = (
-                f"서버 지시 {exchange_kind} · {len(summaries)}장 · "
+                f"서버 교체 지시 · {len(summaries)}장 · "
                 + " / ".join(summaries[:3])
                 + " · F8 실행"
             )
@@ -3294,7 +3376,7 @@ class ContainerAudit:
                 )
                 if value
             )
-            text = f"현재 ACTIVE · {details}" if details else "현재 ACTIVE PHS2"
+            text = f"현재 사용 중 · {details}" if details else "현재 PHS2"
             text += " · 단축키 F8"
         try:
             label.configure(text=text)
@@ -3380,7 +3462,7 @@ class ContainerAudit:
             return "break"
         if not self._phs_label_exchange_available_for_tray():
             self.show_status_message(
-                "현재 ACTIVE 현품표에는 보조 날짜 교환을 사용할 수 없습니다.",
+                "현재 사용 중인 현품표에는 보조 날짜 교환을 사용할 수 없습니다.",
                 self.COLOR_DANGER,
                 duration=6000,
             )
@@ -3400,6 +3482,7 @@ class ContainerAudit:
             return "break"
         self._phs_reconciliation_scan_armed = False
         self._phs_reconciliation_context = None
+        self._phs_reconciliation_execution_guard = None
         self._set_phs_label_candidates([])
         self._configure_widget_options(
             getattr(self, "phs_label_exchange_execute_button", None),
@@ -3409,7 +3492,7 @@ class ContainerAudit:
         self._refresh_phs_active_label_info()
         self._update_action_button_states()
         self.show_status_message(
-            "보조 기능입니다. 현재 ACTIVE 현품표의 교환 작업일과 "
+            "보조 기능입니다. 현재 사용 중인 현품표의 교환 작업일과 "
             "후보를 선택하세요.",
             self.COLOR_PRIMARY,
             duration=8000,
@@ -3466,7 +3549,7 @@ class ContainerAudit:
                     )
                 else:
                     self.show_status_message(
-                        "현재 ACTIVE 현품표의 교환 작업일과 후보를 선택하세요.",
+                        "현재 사용 중인 현품표의 교환 작업일과 후보를 선택하세요.",
                         self.COLOR_PRIMARY,
                         duration=8000,
                     )
@@ -3609,6 +3692,7 @@ class ContainerAudit:
             dict(context) if isinstance(context, Mapping) else None
         )
         if context is None:
+            self._phs_reconciliation_execution_guard = None
             self._set_phs_label_candidates([])
             self._configure_widget_options(
                 getattr(self, "phs_label_exchange_execute_button", None),
@@ -3654,9 +3738,9 @@ class ContainerAudit:
             return False
         try:
             validate_compact_phs2_fields(fields)
-        except TransferSealError as exc:
+        except TransferSealError:
             self.show_status_message(
-                f"{exc.code}: {exc}",
+                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -3684,29 +3768,18 @@ class ContainerAudit:
         )
         if reconciliation is None or not reconciliation.available:
             self.show_status_message(
-                "중앙 reconciliation 교체 API 설정이 없습니다.",
+                "중앙 현품표 교체 기능을 사용할 수 없습니다.",
                 self.COLOR_DANGER,
                 duration=8000,
             )
             self._schedule_focus_return()
             return True
 
-        tray = self.current_tray
-        scans_object = getattr(tray, "scanned_barcodes", None)
-        scans_before = (
-            tuple(scans_object) if isinstance(scans_object, list) else None
-        )
-        progress_before = (
-            tray,
-            str(getattr(tray, "master_label_code", "") or ""),
-            scans_object,
-            scans_before,
-        )
+        progress_before = self._capture_phs_reconciliation_progress()
         self._phs_label_candidate_pending = True
         self._set_phs_reconciliation_context(None)
         self.show_status_message(
-            "스캔 현품표의 이적 공정 reconciliation action을 중앙에서 "
-            "조회합니다.",
+            "스캔 현품표의 이적 교체 작업을 중앙에서 조회합니다.",
             self.COLOR_PRIMARY,
             duration=0,
         )
@@ -3722,22 +3795,8 @@ class ContainerAudit:
 
             def finish() -> None:
                 self._phs_label_candidate_pending = False
-                current = self.current_tray
-                preserved = bool(
-                    current is progress_before[0]
-                    and str(
-                        getattr(current, "master_label_code", "") or ""
-                    )
-                    == progress_before[1]
-                    and getattr(current, "scanned_barcodes", None)
-                    is progress_before[2]
-                    and (
-                        progress_before[3] is None
-                        or tuple(
-                            getattr(current, "scanned_barcodes", [])
-                        )
-                        == progress_before[3]
-                    )
+                preserved = self._phs_reconciliation_progress_unchanged(
+                    progress_before
                 )
                 if not preserved:
                     self.show_status_message(
@@ -3747,25 +3806,25 @@ class ContainerAudit:
                         duration=8000,
                     )
                 elif error is not None:
-                    code = getattr(
-                        error,
-                        "code",
-                        "PHS_RECONCILIATION_LOOKUP_FAILED",
-                    )
                     self.show_status_message(
-                        f"{code}: {error}",
+                        "현품표 교체 작업을 확인하지 못했습니다. "
+                        "F8로 다시 시도하세요.",
                         self.COLOR_DANGER,
                         duration=8000,
                     )
                 else:
                     self._set_phs_reconciliation_context(context)
+                    self._phs_reconciliation_execution_guard = progress_before
                     summaries = reconciliation.target_summaries(context)
-                    self.show_status_message(
-                        f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
-                        "F8로 출력·활성화를 계속하세요.",
-                        self.COLOR_PRIMARY,
-                        duration=8000,
-                    )
+                    if not self._show_phs_replacement_required_notice_once(
+                        context
+                    ):
+                        self.show_status_message(
+                            f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
+                            "F8로 출력·교체를 계속하세요.",
+                            self.COLOR_PRIMARY,
+                            duration=8000,
+                        )
                     try:
                         self._log_event(
                             "PHS_RECONCILIATION_ACTION_RESOLVED",
@@ -3800,12 +3859,12 @@ class ContainerAudit:
         ).start()
         return True
 
-    def _phs_exchange_status_from_worker(self, message: str) -> None:
+    def _phs_exchange_status_from_worker(self, _message: str) -> None:
         try:
             self.root.after(
                 0,
                 lambda: self.show_status_message(
-                    message,
+                    "현품표 출력·교체를 진행하고 있습니다.",
                     self.COLOR_PRIMARY,
                     duration=0,
                 ),
@@ -3821,9 +3880,9 @@ class ContainerAudit:
                 if coordinator is not None
                 else {}
             )
-        except Exception as exc:
+        except Exception:
             self.show_status_message(
-                f"현품표 교환 journal 오류: {exc}",
+                "이전 현품표 교체 상태를 확인하지 못했습니다. 관리자에게 문의하세요.",
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -3859,9 +3918,9 @@ class ContainerAudit:
         if candidate is None:
             try:
                 recovery = coordinator.journal.load()
-            except Exception as exc:
+            except Exception:
                 self.show_status_message(
-                    f"현품표 교환 journal 오류: {exc}",
+                    "이전 현품표 교체 상태를 확인하지 못했습니다. 관리자에게 문의하세요.",
                     self.COLOR_DANGER,
                     duration=8000,
                 )
@@ -3943,9 +4002,9 @@ class ContainerAudit:
                     color = self.COLOR_DANGER
                 self.show_status_message(
                     (
-                        result.message
-                        if not result.error_code
-                        else f"{result.error_code}: {result.message}"
+                        "현품표 날짜 교환을 완료했습니다. 현재 트레이 진행은 유지됩니다."
+                        if result.success
+                        else "현품표 날짜 교환을 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요."
                     ),
                     color,
                     duration=10000,
@@ -4072,18 +4131,6 @@ class ContainerAudit:
             )
             self._schedule_focus_return()
             return
-        tray = self.current_tray
-        scans_object = getattr(tray, "scanned_barcodes", None)
-        scans_before = (
-            tuple(scans_object) if isinstance(scans_object, list) else None
-        )
-        snapshot = (
-            tray,
-            str(getattr(tray, "master_label_code", "") or ""),
-            scans_object,
-            scans_before,
-            int(getattr(tray, "tray_size", 0) or 0),
-        )
         confirm_reprint = bool(
             getattr(
                 getattr(self, "phs_label_reprint_confirm_var", None),
@@ -4099,11 +4146,33 @@ class ContainerAudit:
         if confirm_reprint_result is None:
             return
         confirm_reprint = confirm_reprint_result
+        execution_guard = getattr(
+            self,
+            "_phs_reconciliation_execution_guard",
+            None,
+        )
+        if (
+            context is not None
+            and execution_guard is not None
+            and not self._phs_reconciliation_progress_unchanged(
+                execution_guard
+            )
+        ):
+            self._set_phs_reconciliation_context(None)
+            self.show_status_message(
+                "조회 후 현재 이적 작업이 바뀌어 교체 실행을 취소했습니다. "
+                "F8로 현품표를 다시 스캔하세요.",
+                self.COLOR_IDLE,
+                duration=8000,
+            )
+            self._schedule_focus_return()
+            return
+        snapshot = self._capture_phs_reconciliation_progress()
         self._phs_label_exchange_pending = True
         self._update_action_button_states()
         self.show_status_message(
-            "서버 지시 topology를 유지한 채 target 현품표 출력·활성화를 "
-            "진행합니다. 현재 이적 작업은 그대로 유지됩니다.",
+            "서버 지시에 따라 새 현품표 출력·교체를 진행합니다. "
+            "현재 이적 작업은 그대로 유지됩니다.",
             self.COLOR_PRIMARY,
             duration=0,
         )
@@ -4118,29 +4187,13 @@ class ContainerAudit:
 
             def finish() -> None:
                 self._phs_label_exchange_pending = False
-                current = self.current_tray
-                preserved = bool(
-                    current is snapshot[0]
-                    and str(
-                        getattr(current, "master_label_code", "") or ""
-                    )
-                    == snapshot[1]
-                    and getattr(current, "scanned_barcodes", None)
-                    is snapshot[2]
-                    and int(getattr(current, "tray_size", 0) or 0)
-                    == snapshot[4]
-                    and (
-                        snapshot[3] is None
-                        or tuple(
-                            getattr(current, "scanned_barcodes", [])
-                        )
-                        == snapshot[3]
-                    )
+                preserved = self._phs_reconciliation_progress_unchanged(
+                    snapshot
                 )
                 if not preserved:
                     self.show_status_message(
                         "현품표 교체 중 현재 이적 작업 상태가 변경됐습니다. "
-                        "추가 작업을 중지하고 journal을 확인하세요.",
+                        "추가 교체를 중지하고 관리자에게 문의하세요.",
                         self.COLOR_DANGER,
                         duration=10000,
                     )
@@ -4162,7 +4215,7 @@ class ContainerAudit:
                     except Exception:
                         pass
                     self.show_status_message(
-                        result.message,
+                        "현품표 교체를 완료했습니다. 현재 이적 작업은 유지됩니다.",
                         self.COLOR_SUCCESS,
                         duration=10000,
                     )
@@ -4179,11 +4232,7 @@ class ContainerAudit:
                             journal_context
                         )
                     self.show_status_message(
-                        (
-                            result.message
-                            if not result.error_code
-                            else f"{result.error_code}: {result.message}"
-                        ),
+                        "현품표 교체를 완료하지 못했습니다. F8로 복구하거나 관리자에게 문의하세요.",
                         self.COLOR_DANGER,
                         duration=10000,
                     )
@@ -4263,9 +4312,9 @@ class ContainerAudit:
                 if result is not None:
                     self.show_status_message(
                         (
-                            result.message
-                            if not result.error_code
-                            else f"{result.error_code}: {result.message}"
+                            "이전 현품표 교체를 복구했습니다. 현재 트레이 진행은 유지됩니다."
+                            if result.success
+                            else "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요."
                         ),
                         self.COLOR_SUCCESS if result.success else self.COLOR_DANGER,
                         duration=10000,
@@ -5817,10 +5866,10 @@ class ContainerAudit:
     ) -> bool:
         try:
             canonical_fields = validate_compact_phs2_fields(qr_data)
-        except TransferSealError as exc:
+        except TransferSealError:
             self.show_fullscreen_warning(
                 "중앙 PHS=2 확인 실패",
-                f"{exc.code}\n{exc}",
+                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
                 self.COLOR_DANGER,
             )
             return False
@@ -5942,7 +5991,7 @@ class ContainerAudit:
                 pass
             self.show_fullscreen_warning(
                 "중앙 PHS=2 확인 실패",
-                f"{failure.code}\n{failure}\n\n검사 완료 상태와 네트워크를 확인한 뒤 다시 스캔하세요.",
+                "검사 완료 상태와 네트워크를 확인한 뒤 다시 스캔하세요.",
                 self.COLOR_DANGER,
             )
             self._schedule_focus_return()
@@ -5966,13 +6015,14 @@ class ContainerAudit:
             active_label_worker_code=preflight.active_label_worker_code,
         )
         if activated and preflight.replaced_scan:
-            self.show_status_message(
-                "기존 현품표는 교체됐습니다. 현재 ACTIVE "
-                f"{preflight.active_label_business_date or '날짜 미표기'} · "
-                f"{preflight.active_label_worker_code or '작업코드 미배정'}로 "
-                "자동 전환해 이적을 시작합니다.",
-                self.COLOR_PRIMARY,
-                duration=8000,
+            self._show_phs_replacement_required_notice_once(
+                {
+                    "scan": {
+                        "replacement_required": True,
+                        "scanned_label_id": preflight.scanned_label_id,
+                        "active_label_id": preflight.active_label_id,
+                    }
+                }
             )
         self._update_action_button_states()
 
@@ -5993,7 +6043,7 @@ class ContainerAudit:
             return
         if getattr(self, "_phs_label_refresh_pending", False):
             self.show_status_message(
-                "현품표 ACTIVE 상태를 이미 중앙에서 확인하고 있습니다.",
+                "현재 사용 중인 현품표를 이미 중앙에서 확인하고 있습니다.",
                 self.COLOR_PRIMARY,
             )
             self._schedule_focus_return()
@@ -6002,9 +6052,9 @@ class ContainerAudit:
         scanned_fields = self._parse_new_format_qr(scanned_payload) or {}
         try:
             canonical_fields = validate_compact_phs2_fields(scanned_fields)
-        except TransferSealError as exc:
+        except TransferSealError:
             self.show_status_message(
-                f"{exc.code}: {exc}",
+                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -6031,7 +6081,7 @@ class ContainerAudit:
         client = getattr(coordinator, "client", None)
         if client is None:
             self.show_status_message(
-                "중앙 현품표 ACTIVE 조회 설정이 없습니다.",
+                "현재 사용 현품표를 확인하는 중앙 연결 설정이 없습니다.",
                 self.COLOR_DANGER,
                 duration=8000,
             )
@@ -6040,7 +6090,7 @@ class ContainerAudit:
         self._phs_label_refresh_pending = True
         self._update_action_button_states()
         self.show_status_message(
-            "스캔한 현품표의 현재 ACTIVE successor를 확인하고 있습니다.",
+            "스캔한 현품표의 현재 사용 표를 확인하고 있습니다.",
             self.COLOR_PRIMARY,
             duration=0,
         )
@@ -6065,13 +6115,8 @@ class ContainerAudit:
                     self._schedule_focus_return()
                     return
                 if preflight is None:
-                    code = (
-                        error.code
-                        if isinstance(error, (TransferSealError, PHSLabelWorkflowError))
-                        else "PHS2_ACTIVE_REFRESH_FAILED"
-                    )
                     self.show_status_message(
-                        f"{code}: {error}",
+                        "현재 사용 현품표를 확인하지 못했습니다. 잠시 후 다시 스캔하세요.",
                         self.COLOR_DANGER,
                         duration=8000,
                     )
@@ -6083,7 +6128,7 @@ class ContainerAudit:
                     or preflight.member_count != tray.tray_size
                 ):
                     self.show_status_message(
-                        "중앙 ACTIVE 라벨의 canonical/item/member-count가 현재 "
+                        "중앙에서 확인한 현품표의 품목 또는 수량이 현재 "
                         "트레이와 다릅니다.",
                         self.COLOR_DANGER,
                         duration=8000,
@@ -6108,7 +6153,7 @@ class ContainerAudit:
                     for field_name, value in before.items():
                         setattr(tray, field_name, value)
                     self.show_status_message(
-                        "ACTIVE 현품표 상태를 저장하지 못해 기존 표시를 유지합니다.",
+                        "현재 사용 현품표 상태를 저장하지 못해 기존 표시를 유지합니다.",
                         self.COLOR_DANGER,
                         duration=8000,
                     )
@@ -6134,24 +6179,33 @@ class ContainerAudit:
                 except Exception:
                     pass
                 if preflight.replaced_scan:
-                    message = (
-                        "기존 현품표는 교체됐습니다. 현재 ACTIVE "
-                        f"{preflight.active_label_business_date or '날짜 미표기'} · "
-                        f"{preflight.active_label_worker_code or '작업코드 미배정'}로 "
-                        "전환했습니다."
+                    replacement_notice_shown = (
+                        self._show_phs_replacement_required_notice_once(
+                            {
+                                "scan": {
+                                    "replacement_required": True,
+                                    "scanned_label_id": preflight.scanned_label_id,
+                                    "active_label_id": preflight.active_label_id,
+                                }
+                            }
+                        )
+                    )
+                    message = None if replacement_notice_shown else (
+                        "현재 사용 중인 현품표를 다시 확인했습니다."
                     )
                 else:
                     message = (
-                        "현재 ACTIVE "
+                        "현재 사용 현품표 "
                         f"{preflight.active_label_business_date or '날짜 미표기'} · "
                         f"{preflight.active_label_worker_code or '작업코드 미배정'}를 "
                         "확인했습니다."
                     )
-                self.show_status_message(
-                    message,
-                    self.COLOR_PRIMARY,
-                    duration=8000,
-                )
+                if message is not None:
+                    self.show_status_message(
+                        message,
+                        self.COLOR_PRIMARY,
+                        duration=8000,
+                    )
                 self._update_current_item_label()
                 self._update_action_button_states()
                 self._schedule_focus_return()
@@ -7797,7 +7851,7 @@ class ContainerAudit:
         if not source_label_fields:
             raise TransferSealError(
                 "PHS2_ACTIVE_LABEL_INVALID",
-                "현재 ACTIVE 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
+                "현재 사용 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
             )
         prepared = coordinator.prepare(
             master_label=source_label_payload,

@@ -1,3 +1,4 @@
+import queue
 import threading
 import time
 from types import SimpleNamespace
@@ -146,6 +147,8 @@ def _app(tmp_path, client):
     app._scan_callback_epoch = 0
     app.COLOR_DANGER = "danger"
     app.COLOR_PRIMARY = "primary"
+    app.COLOR_IDLE = "yellow"
+    app._phs_replacement_notice_pairs = set()
     app.warnings = []
     app.statuses = []
     app.events = []
@@ -265,8 +268,9 @@ def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path
     assert app.current_tray.master_label_code == ""
     assert app.current_tray.tray_size == app.TRAY_SIZE
     assert app.warnings
-    assert "PHS2_PREFLIGHT_UNAVAILABLE" in app.warnings[-1][1]
+    assert "PHS2_PREFLIGHT_UNAVAILABLE" not in app.warnings[-1][1]
     assert app.events[-1][0] == "MASTER_LABEL_PREFLIGHT_FAILED"
+    assert app.events[-1][1]["error_code"] == "PHS2_PREFLIGHT_UNAVAILABLE"
 
 
 def test_compact_phs2_incomplete_registry_lifecycle_fails_closed(tmp_path):
@@ -280,7 +284,8 @@ def test_compact_phs2_incomplete_registry_lifecycle_fails_closed(tmp_path):
 
     assert app.current_tray.master_label_code == ""
     assert app.warnings
-    assert "PHS2_REGISTRY_IDENTITY_MISMATCH" in app.warnings[-1][1]
+    assert "PHS2_REGISTRY_IDENTITY_MISMATCH" not in app.warnings[-1][1]
+    assert app.events[-1][1]["error_code"] == "PHS2_REGISTRY_IDENTITY_MISMATCH"
 
 
 @pytest.mark.parametrize(
@@ -305,7 +310,10 @@ def test_legacy_or_noncompact_phs2_is_rejected_before_network_or_qt_fallback(
     assert app._master_preflight_pending is False
     assert app.root.jobs == []
     assert app.warnings
-    assert expected_code in app.warnings[-1][1]
+    assert expected_code not in app.warnings[-1][1]
+    assert app.warnings[-1][1] == (
+        "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요."
+    )
 
 
 def test_compact_phs2_missing_central_client_fails_closed(tmp_path):
@@ -317,7 +325,55 @@ def test_compact_phs2_missing_central_client_fails_closed(tmp_path):
 
     assert app.current_tray.master_label_code == ""
     assert app.warnings
-    assert "PHS2_CENTRAL_PREFLIGHT_REQUIRED" in app.warnings[-1][1]
+    assert "PHS2_CENTRAL_PREFLIGHT_REQUIRED" not in app.warnings[-1][1]
+    assert app.events[-1][1]["error_code"] == "PHS2_CENTRAL_PREFLIGHT_REQUIRED"
+
+
+def test_replaced_master_label_preflight_shows_exact_yellow_notice(tmp_path):
+    app = _app(tmp_path, BlockingClient(_resolved(count=2)))
+    app._update_action_button_states = lambda: None
+    active_label_id = "LBL-COMPACT-NEW"
+    active_qr = (
+        f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={INPUT_TAG}|CLC={ITEM}|"
+        f"LBL={active_label_id}|HSH={'c' * 16}"
+    )
+    preflight = SimpleNamespace(
+        canonical_input_tag_qr=COMPACT_QR,
+        item_id=ITEM,
+        member_count=2,
+        active_label_qr_payload=active_qr,
+        active_label_id=active_label_id,
+        active_label_business_date="2026-08-01",
+        active_label_worker_code="8월1일-1",
+        scanned_label_id=LABEL_ID,
+        replaced_scan=True,
+        audit_detail=lambda: {"replaced_scan": True},
+    )
+    result_queue = queue.Queue(maxsize=1)
+    result_queue.put((True, preflight, None))
+
+    app._poll_compact_phs2_preflight(
+        0,
+        COMPACT_QR,
+        {
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": INPUT_TAG,
+            "CLC": ITEM,
+            "LBL": LABEL_ID,
+            "HSH": HASH_PREFIX,
+        },
+        app.items_data[0],
+        result_queue,
+    )
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.active_label_id == active_label_id
+    assert app.statuses[-1] == (
+        "현품표 교체 필요. 작업은 계속할 수 있습니다. "
+        "현재 현품표를 교체 대기로 분리해 주세요.",
+        "yellow",
+    )
 
 
 def test_compact_phs2_partial_submit_is_blocked_before_confirmation(tmp_path, monkeypatch):

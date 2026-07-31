@@ -1136,6 +1136,100 @@ def test_current_and_completed_transfer_label_scan_resolves_without_mutating_wor
     assert ("focus",) in calls
 
 
+def test_replacement_required_notice_is_yellow_non_modal_once_per_pair():
+    notice = (
+        "현품표 교체 필요. 작업은 계속할 수 있습니다. "
+        "현재 현품표를 교체 대기로 분리해 주세요."
+    )
+    messages = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(
+        master_label_code="CURRENT",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app._phs_replacement_notice_pairs = set()
+    app.show_status_message = lambda message, color, **kwargs: messages.append(
+        (message, color, kwargs)
+    )
+    before = copy.deepcopy(app.current_tray)
+    context = {
+        "scan": {
+            "replacement_required": True,
+            "scanned_label_id": "LBL-OLD-INTERNAL",
+            "active_label_id": "LBL-NEW-INTERNAL",
+        }
+    }
+
+    assert app._show_phs_replacement_required_notice_once(context) is True
+    assert app._show_phs_replacement_required_notice_once(context) is False
+
+    assert len(messages) == 1
+    assert messages[0][0] == notice
+    assert messages[0][1] == app.COLOR_IDLE
+    assert app.current_tray == before
+    assert not any(
+        marker in messages[0][0]
+        for marker in (
+            "ACTIVE successor",
+            "OVERLAY_REPLACED",
+            "LBL-",
+            "UUID",
+            "hash",
+        )
+    )
+
+
+def test_reconciliation_execute_rechecks_lookup_snapshot_before_worker_start():
+    calls = []
+
+    class Reconciliation:
+        available = True
+
+        @staticmethod
+        def execute(*_args, **_kwargs):
+            calls.append(("execute",))
+            raise AssertionError("stale reconciliation must not execute")
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(
+        master_label_code="CURRENT",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app.phs_label_exchange_coordinator = type(
+        "Coordinator",
+        (),
+        {"reconciliation": Reconciliation()},
+    )()
+    app._phs_reconciliation_context = {"selection": {"action_ids": ["A-1"]}}
+    app._phs_reconciliation_execution_guard = (
+        app._capture_phs_reconciliation_progress()
+    )
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app.show_status_message = lambda message, *_args, **_kwargs: calls.append(
+        ("status", message)
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+    app._set_phs_reconciliation_context = lambda value: (
+        setattr(app, "_phs_reconciliation_context", value),
+        setattr(app, "_phs_reconciliation_execution_guard", None),
+    )
+    app.current_tray.scanned_barcodes.append("UNIT-2")
+
+    app._execute_phs_reconciliation_exchange()
+
+    assert ("execute",) not in calls
+    assert app.current_tray.scanned_barcodes == ["UNIT-1", "UNIT-2"]
+    assert app._phs_reconciliation_context is None
+    assert any(
+        call[0] == "status" and "현재 이적 작업이 바뀌어" in call[1]
+        for call in calls
+    )
+    assert ("focus",) in calls
+
+
 def test_f8_executes_resolved_reconciliation_without_mouse():
     calls = []
     app = ContainerAudit.__new__(ContainerAudit)
