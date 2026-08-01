@@ -1456,7 +1456,7 @@ def test_master_activation_does_not_start_after_marker_gate_failure():
         audit_detail=lambda: {},
     )
     result_queue = queue.Queue()
-    result_queue.put((True, preflight, None))
+    result_queue.put((True, preflight, "operation-lease-reconcile-fixture", None))
 
     app._poll_compact_phs2_preflight(
         7,

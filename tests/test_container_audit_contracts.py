@@ -4452,6 +4452,48 @@ def test_validate_tray_state_keeps_legacy_label_compatibility():
     assert tray_state.validate_tray_state(state, default_tray_size=60) is state
 
 
+def test_phs2_tray_state_round_trips_operation_lease_identity():
+    qr_payload = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-LEASE-01|"
+        "CLC=AAA2270730100|LBL=PHSL-LEASE-01|HSH=1111111111111111"
+    )
+    state = _valid_tray_state_payload(
+        master_label_code=qr_payload,
+        canonical_input_tag_qr=qr_payload,
+        active_label_qr_payload=qr_payload,
+        active_label_id="PHSL-LEASE-01",
+        active_label_business_date="2026-08-01",
+        active_label_worker_code="fixture-worker",
+        operation_lease_id="operation-lease-restore-01",
+    )
+
+    assert tray_state.validate_tray_state(state, default_tray_size=60) is state
+    restored = tray_state.tray_session_from_state(
+        state,
+        session_factory=TraySession,
+        default_tray_size=60,
+    )
+    serialized = tray_state.tray_session_to_state(
+        restored,
+        worker_name="홍길동",
+    )
+
+    assert restored.operation_lease_id == "operation-lease-restore-01"
+    assert serialized["operation_lease_id"] == "operation-lease-restore-01"
+
+
+def test_non_phs2_tray_state_rejects_operation_lease_identity():
+    state = _valid_tray_state_payload(
+        operation_lease_id="operation-lease-wrong-workflow"
+    )
+
+    with pytest.raises(
+        tray_state.TrayStateValidationError,
+        match="only valid for a PHS2 tray",
+    ):
+        tray_state.validate_tray_state(state, default_tray_size=60)
+
+
 def test_load_current_tray_state_quarantines_invalid_state_without_deleting_evidence(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
@@ -6663,6 +6705,7 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
         master_label_code=original,
         active_label_qr_payload=active_label,
         item_code="AAA2270730100",
+        operation_lease_id="operation-lease-physical-label",
     )
     app.worker_name = "홍길동"
     captured = {}
@@ -6696,6 +6739,7 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
     assert captured["master_label_fields"]["HSH"] == (
         "2222222222222222" if active_label else "1111111111111111"
     )
+    assert captured["operation_lease_id"] == "operation-lease-physical-label"
 
 
 @pytest.mark.parametrize(

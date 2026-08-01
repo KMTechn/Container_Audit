@@ -19,6 +19,19 @@ from logistics_runtime_profile import (
     load_logistics_runtime_profile,
     logistics_runtime_required,
 )
+from terminal_operation_lease import (
+    CONTAINER_PROGRAM,
+    LEASE_BINDING_KEYS,
+    TRANSFER_OPERATION,
+    OperationLeaseError,
+    OperationLeaseManager,
+    OperationLeaseStore,
+    PinnedOperationLeaseKeyring,
+    canonical_hash as operation_lease_canonical_hash,
+    parse_utc_text as operation_lease_parse_utc_text,
+    physical_qr_sha256,
+    utc_text as operation_lease_utc_text,
+)
 
 
 SCHEMA_VERSION = "container-audit-transfer-seal-v1"
@@ -204,6 +217,87 @@ class TransferSourcePreflight:
             "scanned_label_id": self.scanned_label_id,
             "replaced_scan": self.replaced_scan,
         }
+
+
+def transfer_operation_lease_binding(
+    *,
+    client: "LogisticsTransferClient",
+    scan_payload: str,
+    preflight: TransferSourcePreflight,
+    operation_snapshot: Mapping[str, Any],
+    site_id: str,
+) -> dict[str, Any]:
+    """Build every independently derived binding for a signed transfer lease."""
+
+    device_id = str(getattr(client, "device_id", "") or "").strip()
+    source_host_id = str(
+        getattr(client, "source_host_id", "") or ""
+    ).strip()
+    if not device_id or not source_host_id:
+        raise OperationLeaseError(
+            "OPERATION_LEASE_BINDING_INVALID",
+            "transfer lease requires the configured logistics client identity",
+        )
+    snapshot = dict(operation_snapshot or {})
+    group = snapshot.get("phs_work_group")
+    resolution = snapshot.get("phs_label_resolution")
+    scanned = (
+        resolution.get("scanned_label")
+        if isinstance(resolution, Mapping)
+        else None
+    )
+    source = snapshot.get("work_group_source")
+    if (
+        not isinstance(group, Mapping)
+        or not isinstance(scanned, Mapping)
+        or not isinstance(source, Mapping)
+    ):
+        raise OperationLeaseError(
+            "OPERATION_LEASE_SNAPSHOT_INVALID",
+            "operation snapshot lacks exact physical work-group evidence",
+        )
+    group_id = str(group.get("group_id") or "").strip()
+    physical_label_id = str(scanned.get("label_id") or "").strip()
+    normalized_site_id = str(site_id or "").strip()
+    if (
+        not group_id
+        or not physical_label_id
+        or not normalized_site_id
+        or str(scanned.get("qr_payload") or "") != scan_payload
+        or physical_label_id != preflight.scanned_label_id
+        or str(source.get("membership_hash") or "") != preflight.membership_hash
+        or dict(snapshot.get("entity_versions") or {})
+        != dict(preflight.entity_versions)
+    ):
+        raise OperationLeaseError(
+            "OPERATION_LEASE_SNAPSHOT_MISMATCH",
+            "operation snapshot differs from validated physical membership",
+        )
+    binding = {
+        "site_id": normalized_site_id,
+        "program": CONTAINER_PROGRAM,
+        "device_id": device_id,
+        "source_host_id": source_host_id,
+        "authority_scope_id": preflight.authority_scope_id,
+        "ledger_plane": preflight.ledger_plane,
+        "plane_epoch": preflight.plane_epoch,
+        "operation": TRANSFER_OPERATION,
+        "resource_id": f"phs-work-group:{group_id}",
+        "physical_label_id": physical_label_id,
+        "physical_qr_sha256": physical_qr_sha256(scan_payload),
+        "item_id": preflight.item_id,
+        "quantity": preflight.member_count,
+        "member_count": preflight.member_count,
+        "membership_hash": preflight.membership_hash,
+        "expected_versions": dict(preflight.entity_versions),
+        "snapshot_hash": operation_lease_canonical_hash(snapshot),
+    }
+    if set(binding) != LEASE_BINDING_KEYS:
+        raise OperationLeaseError(
+            "OPERATION_LEASE_BINDING_INVALID",
+            "transfer lease binding fields differ from the v1 contract",
+        )
+    return binding
 
 
 def _phs2_contract_error(code: str, message: str, **details: Any) -> TransferSealError:
@@ -1650,6 +1744,7 @@ class LogisticsTransferClient:
     def _headers(self, idempotency_key: str = "") -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.token}",
+            "X-Logistics-API-Token": self.token,
             "X-Logistics-Source-Host-Id": self.source_host_id,
             "X-Logistics-Device-Id": self.device_id,
             "X-Logistics-Program": "Container_Audit",
@@ -1702,6 +1797,35 @@ class LogisticsTransferClient:
             )
         data = body.get("data")
         return dict(data) if isinstance(data, dict) else {}
+
+    def issue_operation_lease(
+        self,
+        *,
+        authority_scope_id: str,
+        operation: str,
+        scan_payload: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Issue/replay one signed terminal-exclusive physical operation lease."""
+
+        scope = str(authority_scope_id or "").strip()
+        operation_name = str(operation or "").strip()
+        physical_scan = str(scan_payload or "")
+        key = str(idempotency_key or "").strip()
+        if not scope or operation_name != TRANSFER_OPERATION or not physical_scan or not key:
+            raise ValueError("operation lease issue requires exact transfer context")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/operation-leases/issue",
+            payload={
+                "authority_scope_id": scope,
+                "operation": operation_name,
+                "scan_payload": physical_scan,
+            },
+            idempotency_key=key,
+        )
+        return dict(result or {})
 
     def resolve_source(self, identity: Mapping[str, Any]) -> dict[str, Any]:
         params = {
@@ -2166,6 +2290,8 @@ class SealAttempt:
     inbound_iin: str = ""
     uom: str = ""
     entity_versions: dict[str, int] = field(default_factory=dict)
+    operation_lease_id: str = ""
+    operation_lease_state: str = ""
     retryable: bool = False
     error_code: str = ""
     error_message: str = ""
@@ -2192,7 +2318,7 @@ class TransferSealStore:
 
     @staticmethod
     def _linked_event_payload(row: Mapping[str, Any]) -> dict[str, Any]:
-        return {
+        payload = {
             "schema_version": LOCAL_COMPLETION_SCHEMA_VERSION,
             "event_type": "LINKED",
             "intent_id": str(row["intent_id"]),
@@ -2208,6 +2334,14 @@ class TransferSealStore:
                 "intent_hash": str(row["intent_hash"]),
             },
         }
+        operation_lease_id = str(
+            row["operation_lease_id"]
+            if "operation_lease_id" in row.keys()
+            else ""
+        ).strip()
+        if operation_lease_id:
+            payload["intent"]["operation_lease_id"] = operation_lease_id
+        return payload
 
     @classmethod
     def _ensure_linked_event(
@@ -2289,6 +2423,7 @@ class TransferSealStore:
                     scan_count INTEGER NOT NULL CHECK(scan_count > 0),
                     intent_hash TEXT NOT NULL UNIQUE,
                     idempotency_key TEXT NOT NULL UNIQUE,
+                    operation_lease_id TEXT NOT NULL DEFAULT '',
                     command_id TEXT UNIQUE,
                     command_json TEXT,
                     command_hash TEXT,
@@ -2333,6 +2468,11 @@ class TransferSealStore:
                     "ALTER TABLE transfer_seal_intents "
                     "ADD COLUMN relay_log_file_path TEXT NOT NULL DEFAULT ''"
                 )
+            if "operation_lease_id" not in columns:
+                conn.execute(
+                    "ALTER TABLE transfer_seal_intents "
+                    "ADD COLUMN operation_lease_id TEXT NOT NULL DEFAULT ''"
+                )
             conn.execute(
                 """UPDATE transfer_seal_intents
                       SET idempotency_key='container-seal:' || intent_hash
@@ -2361,6 +2501,11 @@ class TransferSealStore:
                 ON transfer_seal_intents
                 WHEN NEW.idempotency_key IS NOT OLD.idempotency_key
                 BEGIN SELECT RAISE(ABORT, 'transfer seal idempotency key is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_operation_lease_immutable
+                BEFORE UPDATE OF operation_lease_id
+                ON transfer_seal_intents
+                WHEN NEW.operation_lease_id IS NOT OLD.operation_lease_id
+                BEGIN SELECT RAISE(ABORT, 'transfer operation lease binding is immutable'); END;
                 CREATE TRIGGER IF NOT EXISTS trg_transfer_relay_log_path_immutable
                 BEFORE UPDATE OF relay_log_file_path
                 ON transfer_seal_intents
@@ -2533,6 +2678,7 @@ class TransferSealStore:
         operator: str,
         scanned_barcodes: Iterable[str],
         relay_log_file_path: str = "",
+        operation_lease_id: str = "",
     ) -> sqlite3.Row:
         raw_barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
         normalized = [normalize_barcode(value) for value in raw_barcodes]
@@ -2544,6 +2690,12 @@ class TransferSealStore:
             "item_id": _normalize_identifier(item_id, "item_id"),
             "scanned_barcodes": raw_barcodes,
         }
+        normalized_operation_lease_id = str(operation_lease_id or "").strip()
+        if normalized_operation_lease_id:
+            intent_material["operation_lease_id"] = _normalize_identifier(
+                normalized_operation_lease_id,
+                "operation_lease_id",
+            )
         digest = _sha256(intent_material)
         intent_id = f"transfer-intent-{digest[:32]}"
         idempotency_key = f"container-seal:{digest}"
@@ -2559,8 +2711,9 @@ class TransferSealStore:
                 """INSERT OR IGNORE INTO transfer_seal_intents (
                        intent_id,schema_version,status,master_label,source_identity_json,
                        item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
-                       idempotency_key,relay_log_file_path,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       idempotency_key,operation_lease_id,relay_log_file_path,
+                       created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     SCHEMA_VERSION,
@@ -2573,6 +2726,7 @@ class TransferSealStore:
                     len(raw_barcodes),
                     digest,
                     idempotency_key,
+                    normalized_operation_lease_id,
                     normalized_relay_log_path,
                     now,
                     now,
@@ -2584,6 +2738,8 @@ class TransferSealStore:
             if row is None or (
                 row["intent_hash"] != digest
                 or row["idempotency_key"] != idempotency_key
+                or str(row["operation_lease_id"] or "")
+                != normalized_operation_lease_id
             ):
                 raise ValueError("durable transfer intent identity collision")
             if not str(row["relay_log_file_path"] or "") and normalized_relay_log_path:
@@ -2800,6 +2956,7 @@ class TransferSealStore:
             "AUTHORITY_INVALID",
             "AUTHORITY_PROFILE_MISMATCH",
             "RESOLVER_CONTRACT_INVALID",
+            "TRANSFER_COMMAND_INTEGRITY_MISMATCH",
         }
         terminal_cas_conflict = error.status_code in {409, 412}
         terminal_client_error = (
@@ -2811,6 +2968,10 @@ class TransferSealStore:
             error.code.upper().startswith("PHS2_")
             and not error.retryable
         )
+        operation_lease_contract_error = (
+            error.code.upper().startswith("OPERATION_LEASE_")
+            and not error.retryable
+        )
         status = (
             "OPERATOR_REVIEW"
             if (
@@ -2818,6 +2979,7 @@ class TransferSealStore:
                 or terminal_cas_conflict
                 or terminal_client_error
                 or local_contract_error
+                or operation_lease_contract_error
             )
             else "RETRY_WAIT"
         )
@@ -3281,9 +3443,84 @@ class TransferSealStore:
 
 
 class TransferSealCoordinator:
-    def __init__(self, store: TransferSealStore, client: LogisticsTransferClient | None) -> None:
+    def __init__(
+        self,
+        store: TransferSealStore,
+        client: LogisticsTransferClient | None,
+        operation_lease_manager: OperationLeaseManager | None = None,
+    ) -> None:
         self.store = store
         self.client = client
+        self.operation_lease_manager = operation_lease_manager
+
+    def _verified_operation_lease(
+        self,
+        *,
+        lease_id: str,
+        master_label: str,
+        master_label_fields: Mapping[str, Any],
+        item_id: str,
+        scanned_barcodes: list[str],
+    ) -> tuple[dict[str, Any], TransferSourcePreflight]:
+        manager = self.operation_lease_manager
+        if manager is None or self.client is None:
+            raise TransferSealError(
+                "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                "오프라인 이적 확인 정보를 검증할 수 없습니다.",
+            )
+        artifact = manager.store.artifact(lease_id)
+        snapshot = artifact.get("operation_snapshot")
+        if not isinstance(snapshot, Mapping):
+            raise TransferSealError(
+                "OPERATION_LEASE_SNAPSHOT_INVALID",
+                "저장된 오프라인 이적 확인 정보가 올바르지 않습니다.",
+            )
+        try:
+            preflight = validate_compact_phs2_preflight(
+                master_label_fields,
+                snapshot,
+            )
+            if preflight.item_id != str(item_id or "").strip():
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_ITEM_MISMATCH",
+                    "lease item differs from the active tray",
+                )
+            binding = transfer_operation_lease_binding(
+                client=self.client,
+                scan_payload=master_label,
+                preflight=preflight,
+                operation_snapshot=snapshot,
+                site_id=str((artifact.get("keyring") or {}).get("site_id") or ""),
+            )
+            prior_completion = manager.store.completion(lease_id)
+            verification_time = None
+            if prior_completion is not None:
+                verification_time = operation_lease_parse_utc_text(
+                    prior_completion["operation_completed_at"],
+                    field="operation_completed_at",
+                )
+            manager.verify_stored(
+                lease_id,
+                expected=binding,
+                now=verification_time,
+            )
+            source = snapshot.get("work_group_source")
+            if not isinstance(source, Mapping):
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_SNAPSHOT_INVALID",
+                    "lease source membership is missing",
+                )
+            selected = self._map_scans(dict(source), scanned_barcodes)
+            if selected != list(preflight.member_ids):
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_MEMBERSHIP_MISMATCH",
+                    "scanned membership differs from the signed lease",
+                )
+        except TransferSealError:
+            raise
+        except OperationLeaseError as exc:
+            raise TransferSealError(exc.code, exc.message) from exc
+        return dict(snapshot), preflight
 
     def prepare(
         self,
@@ -3294,18 +3531,59 @@ class TransferSealCoordinator:
         operator: str,
         scanned_barcodes: Iterable[str],
         relay_log_file_path: str = "",
+        operation_lease_id: str = "",
     ) -> SealAttempt:
+        scans = list(scanned_barcodes)
         identity = source_identity_from_label(master_label_fields)
         if not identity["item_id"]:
             identity["item_id"] = str(item_id or "").strip()
+        normalized_lease_id = str(operation_lease_id or "").strip()
+        if normalized_lease_id:
+            self._verified_operation_lease(
+                lease_id=normalized_lease_id,
+                master_label=master_label,
+                master_label_fields=master_label_fields,
+                item_id=item_id,
+                scanned_barcodes=scans,
+            )
         row = self.store.prepare(
             master_label=master_label,
             source_identity=identity,
             item_id=item_id,
             operator=operator,
-            scanned_barcodes=scanned_barcodes,
+            scanned_barcodes=scans,
             relay_log_file_path=relay_log_file_path,
+            operation_lease_id=normalized_lease_id,
         )
+        if normalized_lease_id:
+            assert self.operation_lease_manager is not None
+            existing = self.operation_lease_manager.store.completion(
+                normalized_lease_id
+            )
+            completed_at = (
+                str(existing["operation_completed_at"])
+                if existing is not None
+                else operation_lease_utc_text()
+            )
+            try:
+                self._verified_operation_lease(
+                    lease_id=normalized_lease_id,
+                    master_label=master_label,
+                    master_label_fields=master_label_fields,
+                    item_id=item_id,
+                    scanned_barcodes=scans,
+                )
+                self.operation_lease_manager.store.record_local_completion(
+                    lease_id=normalized_lease_id,
+                    transfer_intent_id=str(row["intent_id"]),
+                    transfer_idempotency_key=str(row["idempotency_key"]),
+                    operation_completed_at=completed_at,
+                )
+            except (OperationLeaseError, sqlite3.Error) as exc:
+                raise TransferSealError(
+                    "OPERATION_LEASE_LOCAL_DURABILITY_FAILED",
+                    "오프라인 이적 완료 정보를 안전하게 저장하지 못했습니다.",
+                ) from exc
         return self._attempt_from_row(row)
 
     @staticmethod
@@ -3393,6 +3671,23 @@ class TransferSealCoordinator:
         )
         authority_epoch = int(self.client.authority_epoch or 0)
         if authority_epoch < 1:
+            raw_snapshot_epoch = (
+                resolved.get("authority_epoch")
+                or work_source.get("authority_epoch")
+                or 0
+            )
+            if (
+                isinstance(raw_snapshot_epoch, int)
+                and not isinstance(raw_snapshot_epoch, bool)
+                and raw_snapshot_epoch >= 1
+            ):
+                authority_epoch = raw_snapshot_epoch
+        if authority_epoch < 1:
+            if str(row["operation_lease_id"] or "").strip():
+                raise TransferSealError(
+                    "OPERATION_LEASE_AUTHORITY_MISMATCH",
+                    "서명된 이적 확인 정보에서 중앙 권한 버전을 확인할 수 없습니다.",
+                )
             authority = self.client.get_authority(
                 preflight.authority_scope_id
             )
@@ -3481,6 +3776,37 @@ class TransferSealCoordinator:
                 retryable=True,
             )
         identity = json.loads(row["source_identity_json"])
+        operation_lease_id = str(row["operation_lease_id"] or "").strip()
+        if operation_lease_id:
+            manager = self.operation_lease_manager
+            if manager is None:
+                raise TransferSealError(
+                    "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                    "저장된 오프라인 이적 확인 정보를 사용할 수 없습니다.",
+                )
+            artifact = manager.store.artifact(operation_lease_id)
+            resolved = artifact.get("operation_snapshot")
+            completion = manager.store.completion(operation_lease_id)
+            if not isinstance(resolved, Mapping) or completion is None:
+                raise TransferSealError(
+                    "OPERATION_LEASE_LOCAL_COMPLETION_MISSING",
+                    "오프라인 이적 완료 정보가 안전하게 준비되지 않았습니다.",
+                )
+            context = dict(
+                self._build_work_group_command(row, identity, resolved)
+            )
+            payload = dict(context.get("payload") or {})
+            payload["operation_lease"] = {
+                "token": str(artifact["token"]),
+                "lease_id": operation_lease_id,
+                "fence": int(artifact["fence"]),
+                "snapshot_hash": str(artifact["snapshot_hash"]),
+                "operation_completed_at": str(
+                    completion["operation_completed_at"]
+                ),
+            }
+            context["payload"] = payload
+            return context
         resolve_identity = {
             "bundle_id": identity.get("source_bundle_id"),
             "input_tag_id": identity.get("input_tag_id"),
@@ -3675,6 +4001,66 @@ class TransferSealCoordinator:
             "reason": "container_audit_exact_scan_seal",
             "evidence_refs": [row["intent_id"], row["intent_hash"]],
         }
+
+    def _validate_bound_command(
+        self,
+        row: sqlite3.Row,
+        context: Mapping[str, Any],
+    ) -> None:
+        command_json = _canonical_json(dict(context))
+        if (
+            command_json != str(row["command_json"] or "")
+            or hashlib.sha256(command_json.encode("utf-8")).hexdigest()
+            != str(row["command_hash"] or "")
+            or str(context.get("idempotency_key") or "")
+            != str(row["idempotency_key"])
+        ):
+            raise TransferSealError(
+                "TRANSFER_COMMAND_INTEGRITY_MISMATCH",
+                "저장된 이적 요청의 무결성을 확인할 수 없습니다.",
+            )
+        lease_id = str(row["operation_lease_id"] or "").strip()
+        if not lease_id:
+            return
+        identity = json.loads(row["source_identity_json"])
+        fields = {
+            "PHS": "2",
+            "SRC": "KMTECH_INPUT_TAG",
+            "ITG": str(identity.get("input_tag_id") or "").strip(),
+            "CLC": str(identity.get("item_id") or row["item_id"]).strip(),
+            "LBL": str(identity.get("input_tag_label_id") or "").strip(),
+            "HSH": str(identity.get("input_tag_hash_prefix") or "").strip(),
+        }
+        self._verified_operation_lease(
+            lease_id=lease_id,
+            master_label=str(row["master_label"]),
+            master_label_fields=fields,
+            item_id=str(row["item_id"]),
+            scanned_barcodes=list(json.loads(row["scanned_barcodes_json"])),
+        )
+        assert self.operation_lease_manager is not None
+        artifact = self.operation_lease_manager.store.artifact(lease_id)
+        completion = self.operation_lease_manager.store.completion(lease_id)
+        payload = context.get("payload")
+        evidence = (
+            payload.get("operation_lease")
+            if isinstance(payload, Mapping)
+            else None
+        )
+        expected_evidence = {
+            "token": str(artifact["token"]),
+            "lease_id": lease_id,
+            "fence": int(artifact["fence"]),
+            "snapshot_hash": str(artifact["snapshot_hash"]),
+            "operation_completed_at": str(
+                completion["operation_completed_at"] if completion else ""
+            ),
+        }
+        if not isinstance(evidence, Mapping) or dict(evidence) != expected_evidence:
+            raise TransferSealError(
+                "OPERATION_LEASE_COMMAND_MISMATCH",
+                "저장된 이적 요청이 서명된 오프라인 확인 정보와 다릅니다.",
+            )
 
     @staticmethod
     def _seal_qr(context: Mapping[str, Any], data: Mapping[str, Any]) -> str:
@@ -4323,6 +4709,7 @@ class TransferSealCoordinator:
                 context = self._build_command(row)
                 row = self.store.bind_command(intent_id, context)
             context = json.loads(row["command_json"])
+            self._validate_bound_command(row, context)
             if self.client is None:
                 raise TransferSealError(
                     "LOGISTICS_CLIENT_NOT_CONFIGURED",
@@ -4332,9 +4719,46 @@ class TransferSealCoordinator:
             receipt = self.client.seal_transfer(context)
             data = self._validate_receipt(context, receipt)
             qr_payload = self._seal_qr(context, data)
+            operation_lease_id = str(row["operation_lease_id"] or "").strip()
+            if operation_lease_id:
+                if self.operation_lease_manager is None:
+                    raise TransferSealError(
+                        "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                        "오프라인 이적 확인 결과를 기록할 수 없습니다.",
+                    )
+                try:
+                    self.operation_lease_manager.store.record_receipt(
+                        lease_id=operation_lease_id,
+                        transfer_intent_id=intent_id,
+                        receipt=receipt,
+                    )
+                except (OperationLeaseError, sqlite3.Error) as exc:
+                    code = getattr(
+                        exc,
+                        "code",
+                        "OPERATION_LEASE_RECEIPT_DURABILITY_FAILED",
+                    )
+                    raise TransferSealError(
+                        code,
+                        "서버 이적 확인 결과를 안전하게 기록하지 못했습니다.",
+                    ) from exc
             row = self.store.record_receipt(intent_id, receipt, qr_payload)
         except TransferSealError as exc:
             row = self.store.record_error(intent_id, exc)
+            operation_lease_id = str(row["operation_lease_id"] or "").strip()
+            if (
+                operation_lease_id
+                and row["status"] == "OPERATOR_REVIEW"
+                and self.operation_lease_manager is not None
+            ):
+                try:
+                    self.operation_lease_manager.store.record_review(
+                        lease_id=operation_lease_id,
+                        transfer_intent_id=intent_id,
+                        error_code=exc.code,
+                    )
+                except (OperationLeaseError, sqlite3.Error):
+                    pass
         except Exception as exc:
             row = self.store.record_error(
                 intent_id,
@@ -4398,6 +4822,21 @@ class TransferSealCoordinator:
                 remainder_bundle_id = str(
                     receipt_remainders[0] or ""
                 )
+        operation_lease_id = str(
+            row["operation_lease_id"]
+            if "operation_lease_id" in row.keys()
+            else ""
+        ).strip()
+        operation_lease_state = ""
+        if operation_lease_id:
+            if str(row["status"]) == "ACKED":
+                operation_lease_state = "ACKED"
+            elif str(row["status"]) == "OPERATOR_REVIEW":
+                operation_lease_state = "OPERATOR_REVIEW"
+            elif str(row["local_completion_id"] or "").strip():
+                operation_lease_state = "LOCAL_COMPLETED"
+            else:
+                operation_lease_state = "PREFETCHED"
         return SealAttempt(
             intent_id=str(row["intent_id"]),
             status=str(row["status"]),
@@ -4423,6 +4862,8 @@ class TransferSealCoordinator:
             inbound_iin=str(receipt_data.get("inbound_iin") or ""),
             uom=str(receipt_data.get("uom") or ""),
             entity_versions=entity_versions,
+            operation_lease_id=operation_lease_id,
+            operation_lease_state=operation_lease_state,
             retryable=row["status"] == "RETRY_WAIT",
             error_code=str(row["last_error_code"] or ""),
             error_message=str(row["last_error_message"] or ""),
@@ -4557,7 +4998,13 @@ def transfer_seal_coordinator_from_env(
         probe_required=probe_required,
         profile_decryptor=profile_decryptor,
     )
-    return TransferSealCoordinator(store, client)
+    operation_lease_manager = OperationLeaseManager(
+        OperationLeaseStore(db_path),
+        PinnedOperationLeaseKeyring(
+            Path(db_path).parent / "operation_lease_keyring.json"
+        ),
+    )
+    return TransferSealCoordinator(store, client, operation_lease_manager)
 
 
 __all__ = [
@@ -4571,6 +5018,7 @@ __all__ = [
     "logistics_transfer_client_from_env",
     "normalize_barcode",
     "source_identity_from_label",
+    "transfer_operation_lease_binding",
     "transfer_seal_coordinator_from_env",
     "validate_compact_phs2_fields",
     "validate_compact_phs2_preflight",

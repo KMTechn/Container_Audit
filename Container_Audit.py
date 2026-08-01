@@ -104,6 +104,14 @@ from tray_state import (
     tray_session_to_state,
     validate_tray_state,
 )
+from terminal_operation_lease import (
+    TRANSFER_OPERATION,
+    OperationLeaseError,
+    OperationLeaseManager,
+    OperationLeaseStore,
+    PinnedOperationLeaseKeyring,
+    normalize_keyring,
+)
 from transfer_seal import (
     SealAttempt,
     TransferSealCoordinator,
@@ -113,6 +121,7 @@ from transfer_seal import (
     normalize_barcode,
     source_identity_from_label,
     transfer_seal_coordinator_from_env,
+    transfer_operation_lease_binding,
     validate_compact_phs2_fields,
     validate_compact_phs2_preflight,
 )
@@ -257,7 +266,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.51"
+CURRENT_VERSION = "v2.0.52"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
@@ -1075,6 +1084,7 @@ class TraySession:
     active_label_id: str = ""
     active_label_business_date: str = ""
     active_label_worker_code: str = ""
+    operation_lease_id: str = ""
 
 
 class _LocalValueVar:
@@ -1179,11 +1189,19 @@ class ContainerAudit:
         self._setup_paths_and_dirs()
         self._post_review_refresh_required = False
         self._presented_post_review_case_ids: set[str] = set()
-        self.transfer_seal_coordinator = TransferSealCoordinator(
-            TransferSealStore(
-                Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
+        transfer_seal_db_path = (
+            Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
+        )
+        operation_lease_manager = OperationLeaseManager(
+            OperationLeaseStore(transfer_seal_db_path),
+            PinnedOperationLeaseKeyring(
+                transfer_seal_db_path.parent / "operation_lease_keyring.json"
             ),
+        )
+        self.transfer_seal_coordinator = TransferSealCoordinator(
+            TransferSealStore(transfer_seal_db_path),
             startup_logistics_client,
+            operation_lease_manager,
         )
         self.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
             TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
@@ -6293,6 +6311,7 @@ class ContainerAudit:
         active_label_id: str = "",
         active_label_business_date: str = "",
         active_label_worker_code: str = "",
+        operation_lease_id: str = "",
     ) -> bool:
         self.current_tray = TraySession(
             master_label_code=barcode,
@@ -6301,6 +6320,7 @@ class ContainerAudit:
             active_label_id=active_label_id,
             active_label_business_date=active_label_business_date,
             active_label_worker_code=active_label_worker_code,
+            operation_lease_id=operation_lease_id,
             item_code=item_code,
             tray_size=tray_quantity,
             item_name=matched_item.get('Item Name', ''),
@@ -6374,15 +6394,105 @@ class ContainerAudit:
                         "중앙 물류 연결 설정이 없어 PHS=2 현품표를 확인할 수 없습니다.",
                         retryable=True,
                     )
-                resolved = client.resolve_source(source_identity_from_label(canonical_fields))
-                preflight = validate_compact_phs2_preflight(canonical_fields, resolved)
-                result = (True, preflight, None)
+                manager = getattr(coordinator, "operation_lease_manager", None)
+                authority_scope_id = str(
+                    getattr(client, "authority_scope_id", "") or ""
+                ).strip()
+                if manager is None or not authority_scope_id:
+                    raise TransferSealError(
+                        "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                        "이 PC에서 오프라인 이적 확인 정보를 준비할 수 없습니다.",
+                    )
+                issue_request = {
+                    "authority_scope_id": authority_scope_id,
+                    "operation": TRANSFER_OPERATION,
+                    "scan_payload": barcode,
+                }
+                normalized_artifact = None
+                preflight = None
+                for issue_round in range(2):
+                    issue_key = manager.issue_idempotency_key(
+                        device_id=client.device_id,
+                        source_host_id=client.source_host_id,
+                        authority_scope_id=authority_scope_id,
+                        scan_payload=barcode,
+                        explicit_new=True,
+                    )
+                    artifact = client.issue_operation_lease(
+                        **issue_request,
+                        idempotency_key=issue_key,
+                    )
+                    operation_snapshot = artifact.get("operation_snapshot")
+                    if not isinstance(operation_snapshot, Mapping):
+                        raise OperationLeaseError(
+                            "OPERATION_LEASE_SNAPSHOT_INVALID",
+                            "server artifact has no operation snapshot",
+                        )
+                    preflight = validate_compact_phs2_preflight(
+                        canonical_fields,
+                        operation_snapshot,
+                    )
+                    keyring = normalize_keyring(artifact.get("keyring"))
+                    binding = transfer_operation_lease_binding(
+                        client=client,
+                        scan_payload=barcode,
+                        preflight=preflight,
+                        operation_snapshot=operation_snapshot,
+                        site_id=keyring["site_id"],
+                    )
+                    status = str(artifact.get("status") or "")
+                    if status == "ACTIVE":
+                        normalized_artifact, _claims = (
+                            manager.accept_authenticated(
+                                artifact=artifact,
+                                expected=binding,
+                                issue_request=issue_request,
+                                issue_idempotency_key=issue_key,
+                            )
+                        )
+                        break
+                    normalized_status, _claims = (
+                        manager.accept_authenticated_nonactive(
+                            artifact=artifact,
+                            expected=binding,
+                            issue_request=issue_request,
+                            issue_idempotency_key=issue_key,
+                        )
+                    )
+                    if (
+                        normalized_status["status"] == "RELEASED"
+                        and issue_round == 0
+                    ):
+                        continue
+                    raise OperationLeaseError(
+                        "OPERATION_LEASE_NOT_ACTIVE",
+                        "server lease remains unresolved and cannot be replaced",
+                    )
+                if normalized_artifact is None or preflight is None:
+                    raise OperationLeaseError(
+                        "OPERATION_LEASE_NOT_ACTIVE",
+                        "no ACTIVE operation lease was durably prefetched",
+                    )
+                result = (
+                    True,
+                    preflight,
+                    normalized_artifact["lease_id"],
+                    None,
+                )
             except TransferSealError as exc:
-                result = (False, None, exc)
+                result = (False, None, "", exc)
+            except OperationLeaseError as exc:
+                result = (
+                    False,
+                    None,
+                    "",
+                    TransferSealError(exc.code, exc.message),
+                )
             except Exception as exc:
                 result = (
                     False,
                     None,
+                    "",
                     TransferSealError(
                         "PHS2_PREFLIGHT_UNAVAILABLE",
                         f"중앙 PHS=2 확인 중 통신 오류가 발생했습니다: {exc.__class__.__name__}",
@@ -6427,7 +6537,7 @@ class ContainerAudit:
         if token != getattr(self, "_master_preflight_epoch", 0):
             return
         try:
-            success, preflight, error = result_queue.get_nowait()
+            success, preflight, operation_lease_id, error = result_queue.get_nowait()
         except queue.Empty:
             try:
                 self._master_preflight_poll_job = self.root.after(
@@ -6479,6 +6589,11 @@ class ContainerAudit:
         detail["central_source_preflight"] = preflight.audit_detail()
         detail["resolved_tray_quantity"] = preflight.member_count
         detail["scanned_physical_label_qr"] = barcode
+        detail["terminal_operation_lease"] = {
+            "contract_version": "terminal-operation-lease-artifact-v1",
+            "lease_id": operation_lease_id,
+            "state": "PREFETCHED",
+        }
         replacement_context = {
             "process_context": "transfer",
             "scan": {
@@ -6513,6 +6628,7 @@ class ContainerAudit:
             active_label_id=preflight.active_label_id,
             active_label_business_date=preflight.active_label_business_date,
             active_label_worker_code=preflight.active_label_worker_code,
+            operation_lease_id=operation_lease_id,
         )
         if activated and marker_new:
             self._show_phs_replacement_required_notice()
@@ -8441,6 +8557,17 @@ class ContainerAudit:
                 "PHS2_ACTIVE_LABEL_INVALID",
                 "현재 사용 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
             )
+        operation_lease_id = str(
+            getattr(self.current_tray, "operation_lease_id", "") or ""
+        ).strip()
+        if (
+            str(source_label_fields.get("PHS") or "").strip() == "2"
+            and not operation_lease_id
+        ):
+            raise TransferSealError(
+                "OPERATION_LEASE_REQUIRED",
+                "이 트레이의 오프라인 이적 확인 정보가 없어 완료할 수 없습니다.",
+            )
         prepared = coordinator.prepare(
             master_label=source_label_payload,
             master_label_fields=source_label_fields,
@@ -8450,6 +8577,7 @@ class ContainerAudit:
             relay_log_file_path=str(
                 getattr(self, "log_file_path", "") or ""
             ),
+            operation_lease_id=operation_lease_id,
         )
         drain_through = getattr(coordinator, "drain_pending_through", None)
         if callable(drain_through):
@@ -8483,6 +8611,8 @@ class ContainerAudit:
                 "transfer_item_id": attempt.item_id or None,
                 "transfer_uom": attempt.uom or None,
                 "transfer_entity_versions": dict(attempt.entity_versions),
+                "terminal_operation_lease_id": attempt.operation_lease_id or None,
+                "terminal_operation_lease_state": attempt.operation_lease_state or None,
                 "transfer_route_provenance": "CONTAINER_AUDIT_EXACT_PRODUCT_SCAN",
                 "transfer_seal_retryable": attempt.retryable,
                 "transfer_seal_error_code": attempt.error_code or None,

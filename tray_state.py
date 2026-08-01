@@ -35,6 +35,9 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "active_label_worker_code": str(
             getattr(tray, "active_label_worker_code", "") or ""
         ),
+        "operation_lease_id": str(
+            getattr(tray, "operation_lease_id", "") or ""
+        ),
         "item_code": tray.item_code,
         "item_name": tray.item_name,
         "item_spec": tray.item_spec,
@@ -101,18 +104,24 @@ def _validate_phs_label_state(state: Mapping[str, Any]) -> None:
     active_label_id = state.get("active_label_id", "")
     active_business_date = state.get("active_label_business_date", "")
     active_worker_code = state.get("active_label_worker_code", "")
+    operation_lease_id = state.get("operation_lease_id", "")
     for key, value in (
         ("canonical_input_tag_qr", canonical),
         ("active_label_qr_payload", active),
         ("active_label_id", active_label_id),
         ("active_label_business_date", active_business_date),
         ("active_label_worker_code", active_worker_code),
+        ("operation_lease_id", operation_lease_id),
     ):
         if not isinstance(value, str):
             raise TrayStateValidationError(f"{key} must be a string")
 
     master_fields = parse_new_format_qr(master_label)
     if str((master_fields or {}).get("PHS") or "").strip() != "2":
+        if operation_lease_id:
+            raise TrayStateValidationError(
+                "operation_lease_id is only valid for a PHS2 tray"
+            )
         return
     canonical_fields = parse_new_format_qr(canonical)
     active_fields = parse_new_format_qr(active)
@@ -381,6 +390,7 @@ def tray_session_from_state(
             "active_label_business_date", ""
         ),
         active_label_worker_code=state.get("active_label_worker_code", ""),
+        operation_lease_id=state.get("operation_lease_id", ""),
         item_code=state["item_code"],
         item_name=state["item_name"],
         item_spec=state["item_spec"],

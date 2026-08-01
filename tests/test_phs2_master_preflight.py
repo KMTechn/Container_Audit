@@ -6,7 +6,18 @@ from types import SimpleNamespace
 import pytest
 from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
-from transfer_seal import TransferSealStore, membership_hash
+from terminal_operation_lease import (
+    OperationLeaseManager,
+    OperationLeaseStore,
+    PinnedOperationLeaseKeyring,
+)
+from transfer_seal import (
+    TransferSealStore,
+    _deterministic_id,
+    _sha256,
+    membership_hash,
+)
+from operation_lease_fixtures import signed_transfer_artifact
 
 
 ITEM = "AAA2270730100"
@@ -62,6 +73,42 @@ class BlockingClient:
         self.error = error
         self.started = threading.Event()
         self.identities = []
+        self.authority_scope_id = "PLANT-01"
+        self.device_id = "DEVICE-01"
+        self.source_host_id = "HOST-01"
+
+    def assert_authority(self, scope_id, **_kwargs):
+        assert scope_id == self.authority_scope_id
+
+    def issue_operation_lease(
+        self,
+        *,
+        authority_scope_id,
+        operation,
+        scan_payload,
+        idempotency_key,
+    ):
+        self.identities.append(
+            {
+                "authority_scope_id": authority_scope_id,
+                "operation": operation,
+                "scan_payload": scan_payload,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        self.started.set()
+        if self.gate is not None:
+            assert self.gate.wait(timeout=2.0)
+        if self.error is not None:
+            raise self.error
+        artifact, _claims = signed_transfer_artifact(
+            self.response,
+            scan_payload=scan_payload,
+            device_id=self.device_id,
+            source_host_id=self.source_host_id,
+            authority_scope_id=authority_scope_id,
+        )
+        return artifact
 
     def resolve_source(self, identity):
         self.identities.append(dict(identity))
@@ -89,40 +136,143 @@ def _resolved(count=15, *, lifecycle="INSPECTION_COMPLETED"):
     ]
     member_ids = [member["unit_id"] for member in members]
     barcodes = [member["normalized_barcode"] for member in members]
+    source_bundle_id = "PHS-COMPACT-001"
+    source = {
+        "authority_scope_id": "PLANT-01",
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 1,
+        "item_id": ITEM,
+        "uom": "EA",
+        "source_iin": "IIN-TARGET",
+        "member_ids": member_ids,
+        "member_count": count,
+        "membership_hash": membership_hash(member_ids),
+        "barcode_member_count": count,
+        "barcode_membership_hash": membership_hash(barcodes),
+        "members": members,
+    }
+    group = {
+        "group_id": "PHSG-COMPACT-001",
+        "label_id": LABEL_ID,
+        "state": "ACTIVE",
+        "scan_payload": COMPACT_QR,
+        "scan_anchor_input_tag_id": INPUT_TAG,
+        "item_id": ITEM,
+        "uom": "EA",
+        "member_ids": member_ids,
+        "member_count": count,
+        "membership_hash": source["membership_hash"],
+        "membership_version": 1,
+        "label_version": 1,
+        "group_entity_version": 1,
+        "label_entity_version": 1,
+    }
+    label = {
+        **group,
+        "qr_payload": COMPACT_QR,
+        "hash_prefix": HASH_PREFIX,
+        "entity_version": group["label_entity_version"],
+        "business_date": "2026-08-01",
+        "worker_code": "fixture-worker",
+    }
+    input_tag = {
+        "input_tag_id": INPUT_TAG,
+        "label_id": LABEL_ID,
+        "item_id": ITEM,
+        "uom": "EA",
+        "tag_core_hash": CORE_HASH,
+        "label_instance_hash": LABEL_HASH,
+        "hash_prefix": HASH_PREFIX,
+        "lifecycle": lifecycle,
+        "qr_payload": COMPACT_QR,
+        "session_id": INPUT_TAG,
+        "session_state": "COMPLETED",
+        "entity_version": 2,
+        "member_count": count,
+        "membership_hash": source["membership_hash"],
+    }
+    source_bundle = {
+        "bundle_id": source_bundle_id,
+        "bundle_type": "PHS",
+        "bundle_state": "AVAILABLE",
+        "entity_version": 4,
+        "source_session_id": INPUT_TAG,
+        "external_label": COMPACT_QR,
+        "accounting_inbound_iin": "IIN-TARGET",
+        "source_member_ids": member_ids,
+        "source_member_count": count,
+        "source_membership_hash": source["membership_hash"],
+        "selected_member_ids": member_ids,
+        "selected_member_count": count,
+        "selected_membership_hash": source["membership_hash"],
+        "remainder_member_ids": [],
+        "remainder_member_count": 0,
+        "remainder_membership_hash": None,
+        "remainder_bundle_id": None,
+        "remainder_external_label": None,
+        "remainder_cover_group_ids": [],
+    }
+    transfer_bundle_id = _deterministic_id(
+        "TRANSFER",
+        {
+            "group_id": group["group_id"],
+            "label_id": group["label_id"],
+            "member_ids": member_ids,
+        },
+    )
+    versions = {
+        f"phs_work_group:{group['group_id']}": group["group_entity_version"],
+        f"phs_work_membership:{group['group_id']}": group["membership_version"],
+        f"phs_work_label_version:{group['group_id']}": group["label_version"],
+        f"phs_label:{group['label_id']}": group["label_entity_version"],
+        f"bundle:{source_bundle_id}": source_bundle["entity_version"],
+        f"bundle:{transfer_bundle_id}": 0,
+    }
+    source.update(
+        {
+            "source_bundles": [source_bundle],
+            "source_bundle_count": 1,
+            "source_bundle_ids": [source_bundle_id],
+            "source_session_ids": [INPUT_TAG],
+            "transfer_bundle_id": transfer_bundle_id,
+            "transfer_external_label": transfer_bundle_id,
+            "remainder_cover_groups": [],
+            "entity_versions": versions,
+        }
+    )
+    topology_hash = _sha256(
+        {
+            "phs_work_group": group,
+            "source_bundles": [source_bundle],
+            "remainder_cover_groups": [],
+            "source_iin": source["source_iin"],
+            "barcode_membership_hash": source["barcode_membership_hash"],
+            "transfer_bundle_id": transfer_bundle_id,
+        }
+    )
+    source["topology_hash"] = topology_hash
     return {
         "candidate_count": 1,
-        "bundle": {
+        "authority_scope_id": "PLANT-01",
+        "authority_epoch": 1,
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 1,
+        "entity_versions": versions,
+        "source_resolution_basis": "PHS_WORK_GROUP_EXACT_MEMBERSHIP",
+        "work_group_source": source,
+        "source_input_tags": [input_tag],
+        "phs_work_group": group,
+        "phs_label_resolution": {
+            "status": "ACTIVE",
+            "resolution": "OVERLAY_ACTIVE",
             "authority_scope_id": "PLANT-01",
             "ledger_plane": "AUTHORITATIVE",
             "plane_epoch": 1,
-            "bundle_id": "PHS-COMPACT-001",
-            "bundle_role": "TRANSFER_SOURCE",
-            "bundle_type": "PHS",
-            "bundle_state": "AVAILABLE",
-            "external_label": COMPACT_QR,
-            "source_session_id": INPUT_TAG,
-            "item_id": ITEM,
-            "uom": "EA",
-            "source_iin": "IIN-TARGET",
-            "current_location": "PHS_GOOD",
-            "current_locations": ["PHS_GOOD"],
-            "member_ids": member_ids,
-            "member_count": count,
-            "membership_hash": membership_hash(member_ids),
-            "barcode_member_count": count,
-            "barcode_membership_hash": membership_hash(barcodes),
-            "members": members,
+            "scanned_label": label,
+            "effective_labels": [label],
         },
-        "input_tag": {
-            "input_tag_id": INPUT_TAG,
-            "label_id": LABEL_ID,
-            "item_id": ITEM,
-            "tag_core_hash": CORE_HASH,
-            "label_instance_hash": LABEL_HASH,
-            "hash_prefix": HASH_PREFIX,
-            "lifecycle": lifecycle,
-            "qr_payload": COMPACT_QR,
-        },
+        "input_tag": input_tag,
+        "topology_hash": topology_hash,
     }
 
 
@@ -141,9 +291,14 @@ def _app(tmp_path, client):
     app.log_file_path = str(tmp_path / "events.csv")
     app.root = ScheduledRoot()
     app.show_tray_image_var = Toggle()
+    lease_manager = OperationLeaseManager(
+        OperationLeaseStore(tmp_path / "transfer-seal.db"),
+        PinnedOperationLeaseKeyring(tmp_path / "operation-lease-keyring.json"),
+    )
     app.transfer_seal_coordinator = SimpleNamespace(
         client=client,
         store=TransferSealStore(tmp_path / "transfer-seal.db"),
+        operation_lease_manager=lease_manager,
     )
     app._master_preflight_epoch = 0
     app._master_preflight_pending = False
@@ -200,25 +355,149 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.tray_size == 15
     assert app.current_tray.item_code == ITEM
-    assert client.identities == [
-        {
-            "source_bundle_id": "",
-            "input_tag_id": INPUT_TAG,
-            "input_tag_label_id": LABEL_ID,
-            "input_tag_hash_prefix": HASH_PREFIX,
-            "compat_work_order_id": "",
-            "source_kind": "KMTECH_INPUT_TAG",
-            "external_label": "",
-            "authority_scope_id": "",
-            "item_id": ITEM,
-        }
-    ]
+    assert len(client.identities) == 1
+    assert client.identities[0]["authority_scope_id"] == "PLANT-01"
+    assert client.identities[0]["operation"] == "SEAL_TRANSFER_BUNDLE"
+    assert client.identities[0]["scan_payload"] == COMPACT_QR
+    assert client.identities[0]["idempotency_key"].startswith(
+        "container-operation-lease-issue:"
+    )
+    assert app.current_tray.operation_lease_id == "operation-lease-fixture-01"
     event_name, detail, kwargs = app.events[-1]
     assert event_name == "MASTER_LABEL_SCANNED_NEW"
     assert kwargs["synchronous"] is True
     assert detail["resolved_tray_quantity"] == 15
     assert detail["central_source_preflight"]["quantity_basis"] == "CENTRAL_EXACT_MEMBERSHIP"
     assert "QT" not in detail
+
+
+def test_admin_released_prefetch_uses_fresh_durable_key_for_same_physical_qr(
+    tmp_path,
+):
+    class ReleasedThenActiveClient(BlockingClient):
+        def issue_operation_lease(
+            self,
+            *,
+            authority_scope_id,
+            operation,
+            scan_payload,
+            idempotency_key,
+        ):
+            self.identities.append(
+                {
+                    "authority_scope_id": authority_scope_id,
+                    "operation": operation,
+                    "scan_payload": scan_payload,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            self.started.set()
+            sequence = len(self.identities)
+            artifact, _claims = signed_transfer_artifact(
+                self.response,
+                scan_payload=scan_payload,
+                device_id=self.device_id,
+                source_host_id=self.source_host_id,
+                authority_scope_id=authority_scope_id,
+                lease_id=f"operation-lease-release-sequence-{sequence}",
+            )
+            if sequence == 1:
+                artifact["status"] = "RELEASED"
+                artifact["replayed"] = True
+            return artifact
+
+    client = ReleasedThenActiveClient(_resolved(count=3))
+    app = _app(tmp_path, client)
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    app._master_preflight_thread.join(timeout=2.0)
+    app.root.run_next()
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.operation_lease_id == (
+        "operation-lease-release-sequence-2"
+    )
+    assert len(client.identities) == 2
+    assert (
+        client.identities[0]["idempotency_key"]
+        != client.identities[1]["idempotency_key"]
+    )
+    manager = app.transfer_seal_coordinator.operation_lease_manager
+    with manager.store._connect() as connection:
+        attempts = connection.execute(
+            """SELECT status FROM terminal_operation_lease_issue_attempts
+                 ORDER BY rowid"""
+        ).fetchall()
+    assert [row["status"] for row in attempts] == ["RELEASED", "PREFETCHED"]
+
+
+def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
+    tmp_path,
+):
+    class LostAckThenReplayClient(BlockingClient):
+        def __init__(self, response):
+            super().__init__(response)
+            self.server_artifact = None
+
+        def issue_operation_lease(
+            self,
+            *,
+            authority_scope_id,
+            operation,
+            scan_payload,
+            idempotency_key,
+        ):
+            self.identities.append(
+                {
+                    "authority_scope_id": authority_scope_id,
+                    "operation": operation,
+                    "scan_payload": scan_payload,
+                    "idempotency_key": idempotency_key,
+                }
+            )
+            self.started.set()
+            if self.server_artifact is None:
+                self.server_artifact, _claims = signed_transfer_artifact(
+                    self.response,
+                    scan_payload=scan_payload,
+                    device_id=self.device_id,
+                    source_host_id=self.source_host_id,
+                    authority_scope_id=authority_scope_id,
+                    lease_id="operation-lease-prefetch-lost-ack",
+                )
+                raise ConnectionError("lost issue response")
+            replay = dict(self.server_artifact)
+            replay["replayed"] = True
+            return replay
+
+    client = LostAckThenReplayClient(_resolved(count=3))
+    app = _app(tmp_path, client)
+
+    app._process_barcode_logic(COMPACT_QR)
+    app._master_preflight_thread.join(timeout=2.0)
+    app.root.run_next()
+    assert app.current_tray.master_label_code == ""
+
+    app._process_barcode_logic(COMPACT_QR)
+    app._master_preflight_thread.join(timeout=2.0)
+    app.root.run_next()
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.operation_lease_id == (
+        "operation-lease-prefetch-lost-ack"
+    )
+    assert len(client.identities) == 2
+    assert (
+        client.identities[0]["idempotency_key"]
+        == client.identities[1]["idempotency_key"]
+    )
+    manager = app.transfer_seal_coordinator.operation_lease_manager
+    with manager.store._connect() as connection:
+        attempts = connection.execute(
+            "SELECT status FROM terminal_operation_lease_issue_attempts"
+        ).fetchall()
+    assert [row["status"] for row in attempts] == ["PREFETCHED"]
 
 
 def test_active_tray_exact_phs2_is_never_routed_as_product(tmp_path, monkeypatch):
@@ -289,7 +568,10 @@ def test_compact_phs2_incomplete_registry_lifecycle_fails_closed(tmp_path):
     assert app.current_tray.master_label_code == ""
     assert app.warnings
     assert "PHS2_REGISTRY_IDENTITY_MISMATCH" not in app.warnings[-1][1]
-    assert app.events[-1][1]["error_code"] == "PHS2_REGISTRY_IDENTITY_MISMATCH"
+    assert (
+        app.events[-1][1]["error_code"]
+        == "PHS2_SOURCE_REGISTRY_IDENTITY_MISMATCH"
+    )
 
 
 @pytest.mark.parametrize(
@@ -354,7 +636,7 @@ def test_replaced_master_label_preflight_shows_exact_yellow_notice(tmp_path):
         audit_detail=lambda: {"replaced_scan": True},
     )
     result_queue = queue.Queue(maxsize=1)
-    result_queue.put((True, preflight, None))
+    result_queue.put((True, preflight, "operation-lease-fixture-01", None))
 
     app._poll_compact_phs2_preflight(
         0,
