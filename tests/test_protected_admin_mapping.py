@@ -709,7 +709,7 @@ def test_cli_rejects_credential_arguments_without_reflecting_them(
     assert TEST_ADMIN_CODE not in output.out + output.err
 
 
-def test_cli_does_not_accept_credential_from_environment(
+def test_cli_dry_run_ignores_credential_environment_and_does_not_prompt(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -717,9 +717,9 @@ def test_cli_does_not_accept_credential_from_environment(
     monkeypatch.setattr(
         installer.getpass,
         "getpass",
-        lambda _prompt: (_ for _ in ()).throw(EOFError()),
+        lambda _prompt: pytest.fail("dry-run must not request a protected code"),
     )
-    assert installer.main(["--dry-run"]) == 2
+    assert installer.main(["--dry-run"]) == 0
     output = capsys.readouterr()
     assert TEST_ADMIN_CODE not in output.out + output.err
 

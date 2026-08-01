@@ -71,6 +71,21 @@ jobs:
       - name: Build bundled worker-PC registration executable
         run: python -m PyInstaller --name "Container_Audit_Worker_PC_Register" --onefile --console --distpath dist/Container_Audit --workpath build/worker_pc_register_pyinstaller --specpath build/worker_pc_register_pyinstaller tools/register_container_audit_worker_pc.py
 
+      - name: Build bundled protected administrator installer
+        run: python -m PyInstaller --paths . --name "Container_Audit_Protected_Admin_Install" --onefile --console --distpath dist/Container_Audit --workpath build/protected_admin_install_pyinstaller --specpath build/protected_admin_install_pyinstaller tools/install_protected_admin.py
+
+      - name: Include and verify protected administrator provisioning assets
+        shell: pwsh
+        run: |
+          Copy-Item -LiteralPath tools/provision_protected_admin_acl.ps1 -Destination dist/Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1
+          Copy-Item -LiteralPath docs/PROTECTED_ADMIN_PROVISIONING.md -Destination dist/Container_Audit/PROTECTED_ADMIN_PROVISIONING.md
+          & dist/Container_Audit/Container_Audit_Protected_Admin_Install.exe --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Protected administrator installer help probe failed." }
+          & dist/Container_Audit/Container_Audit_Protected_Admin_Install.exe --dry-run | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Protected administrator installer dry-run failed." }
+          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File dist/Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1 -DryRun | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Protected administrator ACL wrapper dry-run failed." }
+
       - name: Build bundled logistics profile tools
         run: |
           python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Install" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_install_pyinstaller --specpath build/logistics_profile_install_pyinstaller tools/install_logistics_runtime_profile.py

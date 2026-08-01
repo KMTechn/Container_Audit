@@ -34,6 +34,9 @@ def test_ci_and_release_workflows_package_clean_release_config():
         assert "Container_Audit_DirectSync_Install" in text
         assert "Container_Audit_DirectSync_Relay" in text
         assert "Container_Audit_Worker_PC_Register" in text
+        assert "Container_Audit_Protected_Admin_Install" in text
+        assert "PROVISION_PROTECTED_ADMIN_ACL.ps1" in text
+        assert "PROTECTED_ADMIN_PROVISIONING.md" in text
         assert "KMTech_Logistics_Profile_Install" in text
         assert "KMTech_Logistics_Profile_Check" in text
         assert "CENTRAL_LOGISTICS_PC_ROLLOUT.md" in text
