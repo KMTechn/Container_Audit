@@ -5,6 +5,11 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from protected_admin import (
+    PROTECTED_ADMIN_DISPLAY_NAME,
+    PROTECTED_ADMIN_OPERATOR_ID,
+    is_protected_admin_candidate,
+)
 from storage_utils import atomic_write_json
 
 FORMULA_PREFIX_CHARS = ("=", "+", "-", "@")
@@ -29,6 +34,10 @@ class WorkerRegistry:
             raise ValueError("작업자 이름은 = + - @ 문자로 시작할 수 없습니다.")
         if re.search(r'[\\/:*?"<>|]', name):
             raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
+        if name in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}:
+            raise ValueError("보호된 관리자 식별자는 일반 작업자로 등록할 수 없습니다.")
+        if is_protected_admin_candidate(name):
+            raise ValueError("6자리 숫자 입력은 관리자 인증에만 사용할 수 있습니다.")
 
     @staticmethod
     def _timestamp_sort_value(value: Any) -> Optional[float]:
@@ -68,7 +77,13 @@ class WorkerRegistry:
         if not isinstance(payload, dict) or not isinstance(payload.get("workers"), list):
             self._quarantine_registry_file()
             return {"workers": []}
-        return {"workers": self._sanitize_worker_entries(payload.get("workers", []))}
+        raw_workers = payload.get("workers", [])
+        sanitized_workers = self._sanitize_worker_entries(raw_workers)
+        if sanitized_workers != raw_workers:
+            sanitized_payload = dict(payload)
+            sanitized_payload["workers"] = sanitized_workers
+            self._write_payload(sanitized_payload)
+        return {"workers": sanitized_workers}
 
     def _quarantine_registry_file(self) -> str:
         source = Path(self.registry_path)
@@ -88,6 +103,11 @@ class WorkerRegistry:
             if not isinstance(entry, dict):
                 continue
             name = self.normalize_name(entry.get("name", ""))
+            if (
+                is_protected_admin_candidate(name)
+                or name in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}
+            ):
+                continue
             try:
                 self._validate_name(name)
             except ValueError:
@@ -131,7 +151,13 @@ class WorkerRegistry:
         return [self.normalize_name(entry.get("name", "")) for entry in workers]
 
     def has_worker(self, name: str) -> bool:
-        return self.normalize_name(name) in set(self.list_workers())
+        normalized = self.normalize_name(name)
+        if (
+            is_protected_admin_candidate(normalized)
+            or normalized in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}
+        ):
+            return False
+        return normalized in set(self.list_workers())
 
     def register(self, name: str) -> str:
         name = self.normalize_name(name)

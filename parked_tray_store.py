@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Mapping
 
 from label_qr import canonical_master_label_key, parse_new_format_qr
+from protected_admin import persistent_operator_name
 from storage_utils import atomic_write_json
 
 
@@ -18,7 +19,7 @@ def sanitize_filename(filename: str) -> str:
 
 
 def _safe_worker_filename(worker_name: str) -> str:
-    return sanitize_filename(str(worker_name).strip()) or "worker"
+    return sanitize_filename(persistent_operator_name(worker_name)) or "worker"
 
 
 @dataclass(frozen=True)
@@ -86,7 +87,11 @@ class ParkedTrayStore:
         else:
             safe_worker = _safe_worker_filename(worker_name)
             path = self.directory / f"parked_legacy_{safe_worker}_{sanitize_filename(master_label)}_{uuid.uuid4().hex[:8]}.json"
-        atomic_write_json(path, dict(state), indent=4, ensure_ascii=False)
+        payload = dict(state)
+        payload["worker_name"] = persistent_operator_name(
+            payload.get("worker_name") or worker_name
+        )
+        atomic_write_json(path, payload, indent=4, ensure_ascii=False)
         return path
 
     def list_for_worker(self, worker_name: str) -> List[ParkedTraySummary]:
@@ -98,11 +103,12 @@ class ParkedTrayStore:
                 data = self.load(path)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
-            stored_worker = str(data.get("worker_name") or "")
+            stored_worker = persistent_operator_name(data.get("worker_name"))
+            requested_worker = persistent_operator_name(worker_name)
             if stored_worker:
-                if stored_worker != worker_name:
+                if stored_worker != requested_worker:
                     continue
-            elif f"_{_safe_worker_filename(worker_name)}_" not in path.name:
+            elif f"_{_safe_worker_filename(requested_worker)}_" not in path.name:
                 continue
             summaries.append(
                 ParkedTraySummary(
@@ -115,10 +121,16 @@ class ParkedTrayStore:
 
     @staticmethod
     def load(path: str | os.PathLike[str]) -> Dict[str, Any]:
-        with Path(path).open("r", encoding="utf-8") as handle:
+        source = Path(path)
+        with source.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
         if not isinstance(payload, dict):
             raise json.JSONDecodeError("parked tray payload must be an object", "", 0)
+        saved_worker = str(payload.get("worker_name") or "").strip()
+        safe_worker = persistent_operator_name(saved_worker)
+        if safe_worker != saved_worker:
+            payload["worker_name"] = safe_worker
+            atomic_write_json(source, payload, indent=4, ensure_ascii=False)
         return payload
 
     @staticmethod

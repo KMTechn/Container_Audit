@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
 from label_qr import inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
+from protected_admin import persistent_operator_name
 
 
 class TrayStateValidationError(ValueError):
@@ -23,7 +24,7 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         getattr(tray, "active_label_qr_payload", "") or master_label
     )
     return {
-        "worker_name": worker_name,
+        "worker_name": persistent_operator_name(worker_name),
         "master_label_code": master_label,
         "canonical_input_tag_qr": canonical_input_tag_qr,
         "active_label_qr_payload": active_label_qr_payload,

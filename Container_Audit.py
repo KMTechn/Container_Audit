@@ -62,6 +62,16 @@ from product_exchange import (
     build_exchange_pairs,
     validate_exchange_completion,
 )
+from protected_admin import (
+    PROTECTED_ADMIN_DISPLAY_NAME,
+    PROTECTED_ADMIN_OPERATOR_ID,
+    display_operator_name,
+    is_protected_admin_code,
+    is_protected_admin_candidate,
+    persistent_operator_name,
+    redact_protected_admin_identity,
+    sanitize_persistent_value,
+)
 from replacement_log_lookup import collect_replacement_superseded_hashes, find_replacement_source_entry, replacement_log_file_paths
 from replacement_workflow import (
     REPLACEMENT_AWAIT_ADDITIONAL,
@@ -1212,6 +1222,8 @@ class ContainerAudit:
         self._load_best_time_records()
         
         self.worker_name = ""
+        self.worker_role = ""
+        self._authenticated_protected_admin = False
         self.completed_master_labels: set = set()
         self.current_tray = TraySession()
         self._scan_callback_epoch = 0
@@ -1275,7 +1287,9 @@ class ContainerAudit:
             self.computer_id = hex(uuid.getnode())
         except Exception:
             import socket
-            self.computer_id = socket.gethostname()
+            self.computer_id = "host-" + hashlib.sha256(
+                socket.gethostname().encode("utf-8")
+            ).hexdigest()[:16]
         self.CURRENT_TRAY_STATE_FILE = f"_current_tray_state_{self.computer_id}.json"
         
         self._setup_core_ui_structure()
@@ -1800,6 +1814,7 @@ class ContainerAudit:
 
     def show_worker_input_screen(self):
         self._clear_main_frames()
+        self.worker_role = ""
         self.worker_input_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         for widget in self.worker_input_frame.winfo_children(): widget.destroy()
         self.worker_input_frame.grid_rowconfigure(0, weight=1)
@@ -1812,6 +1827,7 @@ class ContainerAudit:
         self._worker_login_logo_source = None
         self._worker_login_logo_label = None
         self._worker_login_logo_size = None
+        self._authenticated_protected_admin = False
         try:
             logo_path = resource_path(os.path.join('assets', 'logo.png'))
             with Image.open(logo_path) as logo_img:
@@ -1842,6 +1858,9 @@ class ContainerAudit:
         )
         self.worker_entry.pack()
         self.worker_entry.bind('<Return>', self.start_work)
+        self.worker_entry.bind('<KeyRelease>', self._update_worker_input_mask)
+        self.worker_entry.bind('<<ComboboxSelected>>', self._update_worker_input_mask)
+        self._update_worker_input_mask()
         self.worker_entry.focus()
         button_container = ttk.Frame(center_frame, style='TFrame')
         self._worker_login_button_container = button_container
@@ -1871,6 +1890,57 @@ class ContainerAudit:
         if hasattr(self, 'worker_entry') and hasattr(self.worker_entry, 'configure'):
             self.worker_entry.configure(values=self.worker_registry.list_workers())
 
+    def _set_worker_entry_value(self, value: str) -> None:
+        if hasattr(self, "worker_entry_var"):
+            self.worker_entry_var.set(value)
+        elif hasattr(self, "worker_entry") and hasattr(self.worker_entry, "set"):
+            self.worker_entry.set(value)
+        self._update_worker_input_mask()
+
+    def _update_worker_input_mask(self, event=None) -> None:
+        entry = getattr(self, "worker_entry", None)
+        if entry is None or not hasattr(entry, "configure"):
+            return
+        try:
+            value = str(entry.get() or "").strip()
+        except (AttributeError, tk.TclError):
+            value = ""
+        if value != PROTECTED_ADMIN_DISPLAY_NAME:
+            self._authenticated_protected_admin = False
+        mask = "●" if value.isascii() and value.isdecimal() else ""
+        try:
+            entry.configure(show=mask)
+        except (TypeError, tk.TclError):
+            pass
+
+    def _resolve_worker_login_candidate(self, worker_name: str) -> Optional[str]:
+        candidate = WorkerRegistry.normalize_name(worker_name)
+        if is_protected_admin_candidate(candidate):
+            if not is_protected_admin_code(candidate):
+                self._authenticated_protected_admin = False
+                messagebox.showerror(
+                    "인증 오류",
+                    "관리자 코드를 확인할 수 없습니다. 보호 프로필과 입력값을 확인하세요.",
+                    parent=self.root,
+                )
+                return None
+            self._authenticated_protected_admin = True
+            self._set_worker_entry_value(PROTECTED_ADMIN_DISPLAY_NAME)
+            return PROTECTED_ADMIN_OPERATOR_ID
+        if (
+            candidate == PROTECTED_ADMIN_DISPLAY_NAME
+            and getattr(self, "_authenticated_protected_admin", False)
+        ):
+            return PROTECTED_ADMIN_OPERATOR_ID
+        if candidate in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}:
+            messagebox.showerror(
+                "인증 오류",
+                "보호된 관리자는 관리자 코드를 다시 입력해야 합니다.",
+                parent=self.root,
+            )
+            return None
+        return candidate
+
     def _register_worker_name(self, worker_name: str, parent=None) -> Optional[str]:
         worker_name = WorkerRegistry.normalize_name(worker_name)
         try:
@@ -1882,7 +1952,21 @@ class ContainerAudit:
     def register_worker_from_login(self):
         worker_name = WorkerRegistry.normalize_name(self.worker_entry_var.get() if hasattr(self, 'worker_entry_var') else "")
         if not worker_name:
-            worker_name = simpledialog.askstring("신규 작업자 등록", "등록할 작업자 이름을 입력하세요.", parent=self.root)
+            worker_name = simpledialog.askstring(
+                "신규 작업자 등록",
+                "등록할 작업자 이름을 입력하세요.",
+                parent=self.root,
+                show="●",
+            )
+        if is_protected_admin_candidate(worker_name):
+            resolved = self._resolve_worker_login_candidate(worker_name)
+            if resolved == PROTECTED_ADMIN_OPERATOR_ID:
+                messagebox.showinfo(
+                    "관리자 인증",
+                    "보호된 관리자 인증을 확인했습니다. 작업 시작을 누르세요.",
+                    parent=self.root,
+                )
+            return
         registered = self._register_worker_name(worker_name, parent=self.root)
         if not registered:
             return
@@ -1891,10 +1975,17 @@ class ContainerAudit:
         messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
 
     def _ensure_worker_login_name(self, worker_name: str) -> Optional[str]:
-        worker_name = WorkerRegistry.normalize_name(worker_name)
+        worker_name = self._resolve_worker_login_candidate(worker_name)
+        if worker_name is None:
+            return None
         if not worker_name:
             messagebox.showerror("오류", "작업자 이름을 입력해주세요.")
             return None
+        if (
+            worker_name == PROTECTED_ADMIN_OPERATOR_ID
+            and getattr(self, "_authenticated_protected_admin", False)
+        ):
+            return worker_name
         if self.worker_registry.has_worker(worker_name):
             return worker_name
         should_register = messagebox.askyesno(
@@ -1914,8 +2005,12 @@ class ContainerAudit:
         worker_name = self._ensure_worker_login_name(self.worker_entry.get())
         if not worker_name:
             return
+        protected_admin_authenticated = bool(
+            worker_name == PROTECTED_ADMIN_OPERATOR_ID
+            and getattr(self, "_authenticated_protected_admin", False)
+        )
         worker_registry = getattr(self, "worker_registry", None)
-        if worker_registry is not None:
+        if worker_registry is not None and not protected_admin_authenticated:
             try:
                 worker_name = worker_registry.mark_recent(worker_name)
             except ValueError as exc:
@@ -1923,6 +2018,7 @@ class ContainerAudit:
                 return
             self._refresh_worker_entry_options()
         self.worker_name = worker_name
+        self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
         self._load_session_state()
         try:
             self._drain_phs_replacement_waiting_projections()
@@ -1932,7 +2028,15 @@ class ContainerAudit:
         self._load_current_tray_state()
         if not self.worker_name:
             return
-        self._log_event('WORK_START', detail={'message': f"작업자 '{self.worker_name}'이(가) 작업을 시작했습니다."})
+        self._log_event(
+            'WORK_START',
+            detail={
+                'message': (
+                    f"작업자 '{persistent_operator_name(self.worker_name)}'이(가) "
+                    "작업을 시작했습니다."
+                )
+            },
+        )
         if not self.root.winfo_exists(): return
         if not self.paned_window.winfo_ismapped():
             self.show_validation_screen()
@@ -1954,7 +2058,15 @@ class ContainerAudit:
                 if not self._save_current_tray_state():
                     messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 작업자를 변경하지 않습니다.")
                     return
-                if not self._log_event('WORK_PAUSE', detail={'message': f"Worker '{self.worker_name}' changed."}, synchronous=True):
+                if not self._log_event(
+                    'WORK_PAUSE',
+                    detail={
+                        'message': (
+                            f"Worker '{persistent_operator_name(self.worker_name)}' changed."
+                        )
+                    },
+                    synchronous=True,
+                ):
                     messagebox.showerror("작업 중지 기록 실패", "진행 중인 트레이의 중지 기록을 남기지 못해 작업자를 변경하지 않습니다.")
                     return
             if self.master_label_replace_state:
@@ -1968,6 +2080,8 @@ class ContainerAudit:
                     return
             self._cancel_all_jobs()
             self.worker_name = ""
+            self.worker_role = ""
+            self._authenticated_protected_admin = False
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self._reset_master_label_replacement_state()
@@ -1976,7 +2090,7 @@ class ContainerAudit:
     def _load_session_state(self):
         history = load_session_history(
             save_folder=self.save_folder,
-            worker_name=self.worker_name,
+            worker_name=persistent_operator_name(self.worker_name),
             today=datetime.date.today(),
             tray_size=self.TRAY_SIZE,
         )
@@ -2111,6 +2225,16 @@ class ContainerAudit:
             with open(state_path, 'r', encoding='utf-8') as f:
                 saved_state = json.load(f)
             validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
+            saved_worker_raw = str(saved_state.get('worker_name') or '').strip()
+            saved_worker_safe = persistent_operator_name(saved_worker_raw)
+            if saved_worker_safe != saved_worker_raw:
+                saved_state['worker_name'] = saved_worker_safe
+                if not self._save_tray_state_snapshot(saved_state):
+                    messagebox.showwarning(
+                        "이전 작업 확인 필요",
+                        "이전 작업자 정보를 안전하게 변환하지 못했습니다. 관리자에게 문의하세요.",
+                    )
+                    return
         except Exception as e:
             print(f"현재 트레이 상태 로드 실패: {e}")
             quarantined_path = self._quarantine_current_tray_state(str(e))
@@ -2125,7 +2249,8 @@ class ContainerAudit:
             return
 
         try:
-            saved_worker = saved_state.get('worker_name')
+            saved_worker = persistent_operator_name(saved_state.get('worker_name'))
+            current_worker_persistent = persistent_operator_name(self.worker_name)
             saved_master_label = saved_state.get('master_label_code')
             saved_operator_review = self._operator_review_snapshot_from_state(saved_state)
             if saved_master_label and self._is_completed_master_label(saved_master_label):
@@ -2154,7 +2279,7 @@ class ContainerAudit:
                         messagebox.showerror("작업 기록 실패", "완료된 이전 작업 상태 정리 기록을 남기지 못했고 상태 파일 복원에도 실패했습니다. 상태 폴더를 확인하세요.")
                     return
                 return
-            if saved_worker == self.worker_name:
+            if saved_worker == current_worker_persistent:
                 msg = f"이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n· 품목: {saved_state.get('item_name', '알 수 없음')}\n· 스캔 수: {len(saved_state.get('scanned_barcodes', []))}개"
                 restore_required = saved_operator_review is not None
                 if restore_required or messagebox.askyesno("이전 작업 복구", msg):
@@ -2185,7 +2310,8 @@ class ContainerAudit:
                         return
                     self.current_tray = TraySession()
             else:
-                msg = f"이전 작업자 '{saved_worker}'님이 마치지 않은 작업이 있습니다.\n\n이 작업을 이어서 진행하시겠습니까?"
+                saved_worker_display = display_operator_name(saved_worker)
+                msg = f"이전 작업자 '{saved_worker_display}'님이 마치지 않은 작업이 있습니다.\n\n이 작업을 이어서 진행하시겠습니까?"
                 response = messagebox.askyesnocancel("작업 인수 확인", msg)
                 if response is True:
                     previous_operator_review = getattr(
@@ -2204,7 +2330,11 @@ class ContainerAudit:
                         self.current_tray = TraySession()
                         messagebox.showwarning("작업 저장 경고", "인수한 작업 상태의 작업자 정보를 저장하지 못해 작업을 복구하지 않습니다.")
                         return
-                    takeover_detail = {'previous_worker': saved_worker, 'new_worker': self.worker_name, 'item_name': saved_state.get('item_name')}
+                    takeover_detail = {
+                        'previous_worker': saved_worker,
+                        'new_worker': current_worker_persistent,
+                        'item_name': saved_state.get('item_name'),
+                    }
                     try:
                         takeover_logged = bool(
                             self._log_event(
@@ -2255,7 +2385,7 @@ class ContainerAudit:
                             messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못했습니다.")
                             return
                         self.current_tray = TraySession()
-                        self.show_status_message(f"'{saved_worker}'님의 이전 작업이 삭제되었습니다.", self.COLOR_DANGER)
+                        self.show_status_message(f"'{saved_worker_display}'님의 이전 작업이 삭제되었습니다.", self.COLOR_DANGER)
                     else:
                         self.worker_name = ""
                         self.current_tray = TraySession()
@@ -3339,7 +3469,9 @@ class ContainerAudit:
             new_label_id=pair[1],
             process_context=process_context,
             location_codes=self._phs_replacement_waiting_locations(context),
-            operator=str(getattr(self, "worker_name", "") or ""),
+            operator=persistent_operator_name(
+                getattr(self, "worker_name", "")
+            ),
             master_label=str(
                 master_label
                 or getattr(tray, "master_label_code", "")
@@ -3391,14 +3523,14 @@ class ContainerAudit:
                 event_detail.get("observed_at")
                 or datetime.datetime.now().isoformat()
             ),
-            "worker_name": str(
+            "worker_name": persistent_operator_name(
                 event_detail.get("operator")
                 or getattr(self, "worker_name", "")
                 or ""
             ),
             "event": event_type,
             "details": json.dumps(
-                enriched_detail,
+                sanitize_persistent_value(enriched_detail),
                 ensure_ascii=False,
                 allow_nan=False,
             ),
@@ -4892,7 +5024,7 @@ class ContainerAudit:
                     worker_info_frame.grid(row=0, column=0, sticky="ew")
                     worker_buttons_frame.grid(row=0, column=1, sticky="e", padx=(8, 0), pady=0)
                     self.worker_info_label.configure(
-                        text=str(self.worker_name),
+                        text=display_operator_name(self.worker_name),
                         font=(self.DEFAULT_FONT, max(12, int(11 * scale)), "bold"),
                     )
                     self.change_worker_button.configure(
@@ -4940,7 +5072,7 @@ class ContainerAudit:
                     worker_info_frame.grid(row=0, column=0, sticky="ew")
                     worker_buttons_frame.grid(row=1, column=0, sticky="ew", padx=0, pady=(6, 0))
                     self.worker_info_label.configure(
-                        text=f"작업자: {self.worker_name}",
+                        text=f"작업자: {display_operator_name(self.worker_name)}",
                         font=(self.DEFAULT_FONT, roomy_sidebar_font),
                     )
                     self.change_worker_button.configure(
@@ -5421,7 +5553,7 @@ class ContainerAudit:
         worker_info_frame.grid_columnconfigure(0, weight=1)
         self.worker_info_label = ttk.Label(
             worker_info_frame,
-            text=f"작업자: {self.worker_name}",
+            text=f"작업자: {display_operator_name(self.worker_name)}",
             style='Sidebar.TLabel',
             justify='left',
         )
@@ -6725,9 +6857,18 @@ class ContainerAudit:
                         parked_state = ParkedTrayStore.load(parked_filepath)
                     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                         parked_state = {}
-                    parked_worker = str(parked_state.get("worker_name") or "")
-                    if parked_worker and parked_worker != self.worker_name:
-                        self.show_fullscreen_warning("보류 작업 중복", f"다른 작업자 '{parked_worker}'님의 보류 작업에 같은 현품표가 있습니다.", self.COLOR_DANGER)
+                    parked_worker = persistent_operator_name(
+                        parked_state.get("worker_name")
+                    )
+                    if (
+                        parked_worker
+                        and parked_worker != persistent_operator_name(self.worker_name)
+                    ):
+                        self.show_fullscreen_warning(
+                            "보류 작업 중복",
+                            f"다른 작업자 '{display_operator_name(parked_worker)}'님의 보류 작업에 같은 현품표가 있습니다.",
+                            self.COLOR_DANGER,
+                        )
                         return
                     if messagebox.askyesno("보류 작업 발견", "이 현품표는 보류 중인 작업입니다.\n이 작업을 복원하시겠습니까?"):
                         self.restore_parked_tray(str(parked_filepath))
@@ -7978,11 +8119,24 @@ class ContainerAudit:
                 detail or {},
                 canonical_event_name=canonical_event_name,
             )
-            details_json = json.dumps(enriched_detail, ensure_ascii=False, allow_nan=False) if enriched_detail else ''
+            enriched_detail = sanitize_persistent_value(enriched_detail)
+            details_json = (
+                redact_protected_admin_identity(
+                    json.dumps(enriched_detail, ensure_ascii=False, allow_nan=False)
+                )
+                if enriched_detail
+                else ''
+            )
         except (TypeError, ValueError) as e:
             print(f"로그 상세 직렬화 오류: {e}")
             return False
-        log_entry = { 'timestamp': datetime.datetime.now().isoformat(), 'worker_name': self.worker_name, 'event': event_type, 'details': details_json }
+        safe_event_type = redact_protected_admin_identity(event_type)
+        log_entry = {
+            'timestamp': datetime.datetime.now().isoformat(),
+            'worker_name': persistent_operator_name(self.worker_name),
+            'event': safe_event_type,
+            'details': details_json,
+        }
         if synchronous:
             try:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
@@ -8291,7 +8445,7 @@ class ContainerAudit:
             master_label=source_label_payload,
             master_label_fields=source_label_fields,
             item_id=self.current_tray.item_code,
-            operator=self.worker_name,
+            operator=persistent_operator_name(self.worker_name),
             scanned_barcodes=log_detail.get("product_barcodes") or (),
             relay_log_file_path=str(
                 getattr(self, "log_file_path", "") or ""
@@ -8386,14 +8540,14 @@ class ContainerAudit:
                 or result.get("created_at")
                 or datetime.datetime.now().isoformat()
             ),
-            "worker_name": str(
+            "worker_name": persistent_operator_name(
                 event_detail.get("operator")
                 or getattr(self, "worker_name", "")
                 or ""
             ),
             "event": event_type,
             "details": json.dumps(
-                enriched_detail,
+                sanitize_persistent_value(enriched_detail),
                 ensure_ascii=False,
                 allow_nan=False,
             ),
@@ -8551,7 +8705,9 @@ class ContainerAudit:
             receipt_id = coordinator.store.record_exchange_block(
                 reason_code="BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
                 details={
-                    "operator": str(getattr(self, "worker_name", "") or ""),
+                    "operator": persistent_operator_name(
+                        getattr(self, "worker_name", "")
+                    ),
                     "policy": "pre_seal_phs_exchange_requires_target_and_source_versions",
                     "server_command": "REPLACE_BUNDLE_MEMBERS",
                     "missing_client_contract": "exact_good_barcode_source_bundle_resolver",
@@ -8585,7 +8741,9 @@ class ContainerAudit:
             receipt_id = coordinator.store.record_exchange_block(
                 reason_code="BLOCKED_REQUIRES_REPLACE_BUNDLE_MEMBERS_CAS",
                 details={
-                    "operator": str(getattr(self, "worker_name", "") or ""),
+                    "operator": persistent_operator_name(
+                        getattr(self, "worker_name", "")
+                    ),
                     "operation": "completed_master_label_replacement",
                     "policy": "physical_open_reseal_and_exact_bundle_cas_required",
                 },
@@ -8742,7 +8900,7 @@ class ContainerAudit:
             state_snapshot = self._current_tray_state_snapshot()
             parked_path = self._parked_store().save_state(
                 state_snapshot,
-                worker_name=self.worker_name,
+                worker_name=persistent_operator_name(self.worker_name),
                 master_label=master_label,
             )
             if not self._delete_current_tray_state():
@@ -8901,8 +9059,8 @@ class ContainerAudit:
                 )
             self._update_parked_trays_list()
             return
-        parked_worker = str(saved_state.get("worker_name") or "")
-        if parked_worker and parked_worker != self.worker_name:
+        parked_worker = persistent_operator_name(saved_state.get("worker_name"))
+        if parked_worker and parked_worker != persistent_operator_name(self.worker_name):
             messagebox.showwarning("복원 실패", "다른 작업자의 보류 작업은 복원할 수 없습니다. 목록을 갱신합니다.")
             self._update_parked_trays_list()
             return
@@ -9130,7 +9288,7 @@ class ContainerAudit:
             master_label = f"CLC={item_code}|QT=60|LOT=TESTLOT{i}|DATE={datetime.date.today().strftime('%Y%m%d')}"
             
             state = {
-                'worker_name': self.worker_name,
+                'worker_name': persistent_operator_name(self.worker_name),
                 'master_label_code': master_label,
                 'item_code': item_code,
                 'item_name': matched_item.get('Item Name', ''),
@@ -9145,7 +9303,7 @@ class ContainerAudit:
             
             self._parked_store().save_state(
                 state,
-                worker_name=self.worker_name,
+                worker_name=persistent_operator_name(self.worker_name),
                 master_label=master_label,
             )
         
@@ -9246,7 +9404,7 @@ class ContainerAudit:
             # 6. 보류된 작업 복원
             self.show_status_message("6. 보류 작업 복원", self.COLOR_PRIMARY)
             parked_filepath = self._parked_store().existing_label_path(
-                worker_name=self.worker_name,
+                worker_name=persistent_operator_name(self.worker_name),
                 master_label=master_label,
             )
             if os.path.exists(parked_filepath):
@@ -9541,7 +9699,7 @@ class ContainerAudit:
                 source_file_id=source_file_id,
                 source_row_number=row_index,
                 source_byte_offset=ctx.get('found_source_byte_offset'),
-                operator=self.worker_name,
+                operator=persistent_operator_name(self.worker_name),
                 stable_hash_func=self._stable_hash,
                 old_row_hash=ctx.get('found_row_hash') or ctx.get('original_row_hash'),
                 old_qty=ctx.get('old_qty'),
@@ -10182,7 +10340,7 @@ class ContainerAudit:
                     master_label=self.current_tray.master_label_code,
                     master_label_fields=master_fields,
                     item_id=self.current_tray.item_code,
-                    operator=self.worker_name,
+                    operator=persistent_operator_name(self.worker_name),
                     old_barcodes=session.defective_barcodes,
                     new_barcodes=session.good_barcodes,
                 )
