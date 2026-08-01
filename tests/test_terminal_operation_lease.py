@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from Container_Audit import TraySession
 from operation_lease_fixtures import signed_transfer_artifact
 from terminal_operation_lease import (
     CONSUME_CONTRACT_VERSION,
@@ -29,6 +30,11 @@ from transfer_seal import (
     TransferSealStore,
     transfer_operation_lease_binding,
     validate_compact_phs2_preflight,
+)
+from tray_state import (
+    tray_session_from_state,
+    tray_session_to_state,
+    validate_tray_state,
 )
 
 
@@ -478,6 +484,86 @@ def test_prefetched_lease_completes_locally_while_transport_is_offline(
             result.operation_lease_id
         )["operation_completed_at"],
     }
+
+
+def test_restart_restored_tray_reuses_prefetched_lease_without_issue_network(
+    tmp_path,
+):
+    def offline_handler(call):
+        if call["method"] == "POST" and call["url"].endswith(
+            "/transfers/seal"
+        ):
+            raise ConnectionError("offline after restart")
+        if call["method"] == "GET" and "/receipts/" in call["url"]:
+            return FakeResponse(404, {"ok": False})
+        raise AssertionError(call)
+
+    _coordinator, _manager, _session, resolved, scan_payload, db_path = (
+        _accepted_coordinator(tmp_path, offline_handler)
+    )
+    preflight = validate_compact_phs2_preflight(
+        _fields_from_compact_qr(scan_payload), resolved
+    )
+    barcodes = [
+        member["normalized_barcode"]
+        for member in resolved["work_group_source"]["members"]
+    ]
+    restored_start = datetime.now()
+    original = TraySession(
+        master_label_code=preflight.canonical_input_tag_qr,
+        canonical_input_tag_qr=preflight.canonical_input_tag_qr,
+        active_label_qr_payload=scan_payload,
+        active_label_id=preflight.active_label_id,
+        active_label_business_date=preflight.active_label_business_date,
+        active_label_worker_code=preflight.active_label_worker_code,
+        operation_lease_id="operation-lease-test-01",
+        item_code=ITEM,
+        item_name="fixture item",
+        item_spec="fixture spec",
+        scanned_barcodes=barcodes,
+        scan_times=[restored_start for _barcode in barcodes],
+        tray_size=len(barcodes),
+        start_time=restored_start,
+    )
+    saved_state = tray_session_to_state(original, worker_name="tester")
+    validate_tray_state(saved_state, default_tray_size=60)
+    restored = tray_session_from_state(
+        saved_state,
+        session_factory=TraySession,
+        default_tray_size=60,
+    )
+
+    restarted_client, restarted_session = _work_group_client(offline_handler)
+    restarted_manager = OperationLeaseManager(
+        OperationLeaseStore(db_path),
+        PinnedOperationLeaseKeyring(tmp_path / "operation-lease-keyring.json"),
+    )
+    restarted = TransferSealCoordinator(
+        TransferSealStore(db_path), restarted_client, restarted_manager
+    )
+    prepared = restarted.prepare(
+        master_label=restored.active_label_qr_payload,
+        master_label_fields=_fields_from_compact_qr(
+            restored.active_label_qr_payload
+        ),
+        item_id=restored.item_code,
+        operator="tester",
+        scanned_barcodes=restored.scanned_barcodes,
+        operation_lease_id=restored.operation_lease_id,
+    )
+    result = restarted.attempt(prepared.intent_id)
+
+    assert result.status == "RETRY_WAIT"
+    assert result.operation_lease_state == "LOCAL_COMPLETED"
+    assert [call["method"] for call in restarted_session.calls] == [
+        "POST",
+        "GET",
+    ]
+    assert all(
+        "/operation-leases/issue" not in call["url"]
+        and "/bundles/resolve" not in call["url"]
+        for call in restarted_session.calls
+    )
 
 
 def test_lost_ack_restart_replays_same_command_and_records_one_receipt(
