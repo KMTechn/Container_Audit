@@ -55,7 +55,9 @@ class CompletionOutcomeSnapshot:
     Creating this value does not prove that a ledger row, state file, receipt, or
     any other business record was written. The business layer should construct
     it only at the integration point appropriate for the result it has already
-    obtained.
+    obtained. ``message``, ``receipt_id``, and ``error_code`` are diagnostic
+    context for persistence, logs, and technical support; presentation code
+    must not render them to an operator.
     """
 
     outcome: CompletionOutcome
@@ -111,16 +113,6 @@ _OPERATOR_REVIEW_DEFAULT_MESSAGE = (
     "서버 판정 미완료 · 완료 처리 중지 · 트레이·목록 유지 · 담당자 확인"
 )
 
-_OPERATOR_REVIEW_EQUIVALENT_DEFAULTS = frozenset(
-    {
-        _OPERATOR_REVIEW_DEFAULT_MESSAGE,
-        "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다.",
-        "서버 판정을 완료할 수 없습니다. 현재 트레이와 중앙 스캔 목록을 유지합니다.",
-        "완료 처리를 진행하지 말고 담당자 확인을 받으세요.",
-    }
-)
-
-
 _COMPLETION_NOTICE_DEFAULTS = {
     CompletionOutcome.ACKED: (
         "completion.acked",
@@ -153,43 +145,16 @@ _COMPLETION_NOTICE_DEFAULTS = {
 }
 
 
-def _normalized_message(value: str) -> str:
-    return " ".join(str(value or "").split())
-
-
-def _operator_review_diagnostic_detail(value: str) -> str:
-    """Remove a repeated operator instruction while retaining diagnostics."""
-
-    detail = str(value or "").strip()
-    if not detail:
-        return ""
-    equivalent_defaults = {
-        _normalized_message(candidate)
-        for candidate in _OPERATOR_REVIEW_EQUIVALENT_DEFAULTS
-    }
-    if _normalized_message(detail) in equivalent_defaults:
-        return ""
-
-    lines = detail.splitlines()
-    while lines and _normalized_message(lines[0]) in equivalent_defaults:
-        lines.pop(0)
-    return "\n".join(lines).strip()
-
-
 def notice_for_completion(snapshot: CompletionOutcomeSnapshot) -> Notice:
-    """Build the one notice that corresponds to a completion presentation."""
+    """Build operator-safe copy without rendering diagnostic snapshot fields."""
 
     if not isinstance(snapshot, CompletionOutcomeSnapshot):
         raise TypeError("snapshot must be a CompletionOutcomeSnapshot")
     code, title, default_message, severity, blocking = _COMPLETION_NOTICE_DEFAULTS[snapshot.outcome]
-    detail = snapshot.message.strip()
-    if snapshot.outcome is CompletionOutcome.OPERATOR_REVIEW:
-        detail = _operator_review_diagnostic_detail(detail)
-    message = f"{default_message}\n{detail}" if detail else default_message
     return Notice(
         code=code,
         title=title,
-        message=message,
+        message=default_message,
         severity=severity,
         blocking=blocking,
     )

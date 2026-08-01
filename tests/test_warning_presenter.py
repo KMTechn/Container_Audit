@@ -165,31 +165,81 @@ def test_operator_review_does_not_repeat_default_equivalent_detail(equivalent_de
     assert notice.message.count("서버 판정 미완료") == 1
 
 
-def test_operator_review_removes_default_prefix_but_preserves_diagnostic_detail():
-    detail = (
-        "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다.\n"
-        "상세: MEMBERSHIP_CONFLICT · authoritative membership hash mismatch"
+@pytest.mark.parametrize(
+    "diagnostic_detail",
+    [
+        (
+            "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다.\n"
+            "상세: MEMBERSHIP_CONFLICT · authoritative membership hash mismatch"
+        ),
+        "MEMBERSHIP_CONFLICT: server bundle version=17",
+        (
+            "writer claim rejected; receipt_id=receipt-raw-17; "
+            "registry hash=deadbeef; CAS authority mismatch"
+        ),
+    ],
+)
+def test_operator_review_hides_diagnostic_detail_from_operator(diagnostic_detail):
+    snapshot = _completion(
+        CompletionOutcome.OPERATOR_REVIEW,
+        message=diagnostic_detail,
+        receipt_id="receipt-raw-17",
+        error_code="MEMBERSHIP_CONFLICT",
     )
 
-    notice = notice_for_completion(
-        _completion(CompletionOutcome.OPERATOR_REVIEW, message=detail)
+    notice = notice_for_completion(snapshot)
+
+    assert notice.message == OPERATOR_REVIEW_CORE
+    assert diagnostic_detail not in notice.message
+    assert snapshot.message == diagnostic_detail
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        CompletionOutcome.ACKED,
+        CompletionOutcome.LINKED,
+        CompletionOutcome.RETRY_WAIT,
+        CompletionOutcome.OPERATOR_REVIEW,
+    ],
+)
+def test_completion_notices_never_render_internal_snapshot_fields(outcome):
+    snapshot = _completion(
+        outcome,
+        message=(
+            "HTTP 409 MEMBERSHIP_CONFLICT: authority CAS journal ledger outbox "
+            "principal receipt registry relay reconciliation row version token "
+            "writer claim hash; BUNDLE-raw-17; "
+            "UUID=123e4567-e89b-42d3-a456-426614174000"
+        ),
+        receipt_id="receipt-raw-17",
+        error_code="MEMBERSHIP_CONFLICT",
     )
 
-    assert notice.message == (
-        f"{OPERATOR_REVIEW_CORE}\n"
-        "상세: MEMBERSHIP_CONFLICT · authoritative membership hash mismatch"
-    )
-    assert "현재 트레이와 스캔 목록을 유지합니다" not in notice.message
+    notice = notice_for_completion(snapshot)
 
-
-def test_operator_review_preserves_arbitrary_diagnostic_detail_verbatim():
-    detail = "MEMBERSHIP_CONFLICT: server bundle version=17"
-
-    notice = notice_for_completion(
-        _completion(CompletionOutcome.OPERATOR_REVIEW, message=detail)
-    )
-
-    assert notice.message == f"{OPERATOR_REVIEW_CORE}\n{detail}"
+    forbidden = {
+        snapshot.message,
+        snapshot.receipt_id,
+        snapshot.error_code,
+        "CAS",
+        "HTTP",
+        "UUID",
+        "authority",
+        "journal",
+        "writer",
+        "ledger",
+        "hash",
+        "outbox",
+        "principal",
+        "receipt",
+        "registry",
+        "row version",
+        "token",
+        "BUNDLE-raw-17",
+        "123e4567-e89b-42d3-a456-426614174000",
+    }
+    assert all(value not in notice.message for value in forbidden)
 
 
 def test_operator_review_remains_blocking_after_notice_acknowledgement():

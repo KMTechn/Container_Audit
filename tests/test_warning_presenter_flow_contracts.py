@@ -86,9 +86,8 @@ def test_operator_review_snapshot_preserves_scan_context_and_cannot_be_cleared_b
     assert presenter.state.last_normal_scan == "AAA2270730100-003"
     assert presenter.state.completion.outcome is CompletionOutcome.OPERATOR_REVIEW
     assert presenter.state.is_blocking is True
-    assert presenter.state.active_notice.message.startswith(OPERATOR_REVIEW_CORE)
-    assert presenter.state.active_notice.message.count(OPERATOR_REVIEW_CORE) == 1
-    assert "MEMBERSHIP_CONFLICT" in presenter.state.active_notice.message
+    assert presenter.state.active_notice.message == OPERATOR_REVIEW_CORE
+    assert "MEMBERSHIP_CONFLICT" not in presenter.state.active_notice.message
 
     assert presenter.acknowledge() is True
     assert presenter.state.active_notice is None
@@ -146,13 +145,14 @@ def test_settled_completion_wording_distinguishes_acked_from_retry_wait(
     forbidden_text,
     confirmed,
 ):
-    snapshot = _completion(outcome, message="서버 응답 상세")
+    snapshot = _completion(outcome, message="서버 응답 상세: receipt_id=raw-17")
     notice = notice_for_completion(snapshot)
 
     assert notice.title == expected_title
     assert required_text in notice.message
     assert forbidden_text not in notice.message
-    assert "서버 응답 상세" in notice.message
+    assert "서버 응답 상세" not in notice.message
+    assert "raw-17" not in notice.message
     assert snapshot.server_confirmed is confirmed
     assert notice.blocking is (outcome is CompletionOutcome.RETRY_WAIT)
 
