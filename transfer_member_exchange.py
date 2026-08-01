@@ -1616,33 +1616,126 @@ class TransferMemberExchangeCoordinator:
 
         def source_partitions(
             sources: list[Any],
-        ) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]] | None:
-            partitions: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+        ) -> dict[
+            str,
+            tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+        ] | None:
+            partitions: dict[
+                str,
+                tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]],
+            ] = {}
             for source in sources:
                 if not isinstance(source, Mapping):
                     return None
                 bundle_id = str(source.get("bundle_id") or "")
                 source_members = source.get("source_member_ids")
                 selected_members = source.get("selected_member_ids")
+                remainder_members = source.get("remainder_member_ids")
                 if (
                     not bundle_id
                     or bundle_id in partitions
                     or not isinstance(source_members, list)
                     or not isinstance(selected_members, list)
+                    or not isinstance(remainder_members, list)
                 ):
                     return None
                 partitions[bundle_id] = (
                     tuple(sorted(str(value) for value in source_members)),
                     tuple(sorted(str(value) for value in selected_members)),
+                    tuple(sorted(str(value) for value in remainder_members)),
                 )
             return partitions
 
+        def source_identities(sources: list[Any]) -> dict[str, dict[str, Any]] | None:
+            mutable_fields = {
+                "entity_version",
+                "source_member_ids",
+                "source_member_count",
+                "source_membership_hash",
+                "selected_member_ids",
+                "selected_member_count",
+                "selected_membership_hash",
+                "remainder_member_ids",
+                "remainder_member_count",
+                "remainder_membership_hash",
+            }
+            identities: dict[str, dict[str, Any]] = {}
+            for source in sources:
+                if not isinstance(source, Mapping):
+                    return None
+                bundle_id = str(source.get("bundle_id") or "")
+                if not bundle_id or bundle_id in identities:
+                    return None
+                identities[bundle_id] = {
+                    str(key): value
+                    for key, value in source.items()
+                    if str(key) not in mutable_fields
+                }
+            return identities
+
         predecessor_source_partitions = source_partitions(predecessor_sources)
         successor_source_partitions = source_partitions(successor_sources)
+        predecessor_source_identities = source_identities(predecessor_sources)
+        successor_source_identities = source_identities(successor_sources)
+        stable_source_fields = (
+            "authority_scope_id",
+            "ledger_plane",
+            "plane_epoch",
+            "item_id",
+            "uom",
+            "source_bundle_count",
+            "source_bundle_ids",
+            "source_session_ids",
+            "source_iin",
+            "remainder_cover_groups",
+        )
         receipt_target_members_raw = data.get("member_ids")
         receipt_target_members = (
             tuple(sorted(str(value) for value in receipt_target_members_raw))
             if isinstance(receipt_target_members_raw, list)
+            else None
+        )
+        command_pairs = payload.get("pairs")
+        command_pairs = command_pairs if isinstance(command_pairs, list) else []
+        old_member_ids = {
+            str(pair.get("old_unit_id") or "")
+            for pair in command_pairs
+            if isinstance(pair, Mapping)
+        }
+        new_member_ids = {
+            str(pair.get("new_unit_id") or "")
+            for pair in command_pairs
+            if isinstance(pair, Mapping)
+        }
+        predecessor_target_partition = (
+            predecessor_source_partitions.get(target_bundle_id)
+            if predecessor_source_partitions is not None
+            else None
+        )
+        client_exact_evidence = command.get("client_exact_evidence")
+        target_evidence = (
+            client_exact_evidence.get("target")
+            if isinstance(client_exact_evidence, Mapping)
+            else None
+        )
+        command_target_members_raw = (
+            target_evidence.get("member_ids")
+            if isinstance(target_evidence, Mapping)
+            else None
+        )
+        command_target_members = (
+            tuple(sorted(str(value) for value in command_target_members_raw))
+            if isinstance(command_target_members_raw, list)
+            else None
+        )
+        expected_target_selected = (
+            tuple(
+                sorted(
+                    (set(predecessor_target_partition[1]) - old_member_ids)
+                    | new_member_ids
+                )
+            )
+            if predecessor_target_partition is not None
             else None
         )
         donor_bundle_ids = {
@@ -1716,11 +1809,25 @@ class TransferMemberExchangeCoordinator:
             or set(predecessor_source_versions) != set(successor_source_versions)
             or predecessor_source_partitions is None
             or successor_source_partitions is None
+            or predecessor_source_identities is None
+            or successor_source_identities is None
+            or predecessor_source_identities != successor_source_identities
+            or any(
+                predecessor_source.get(field) != successor_source.get(field)
+                for field in stable_source_fields
+            )
             or set(predecessor_source_partitions)
             != set(successor_source_partitions)
             or receipt_target_members is None
+            or predecessor_target_partition is None
+            or command_target_members != predecessor_target_partition[0]
+            or expected_target_selected is None
             or successor_source_partitions.get(target_bundle_id)
-            != (receipt_target_members, receipt_target_members)
+            != (
+                receipt_target_members,
+                expected_target_selected,
+                predecessor_target_partition[2],
+            )
             or any(
                 successor_source_partitions[bundle_id]
                 != predecessor_source_partitions[bundle_id]

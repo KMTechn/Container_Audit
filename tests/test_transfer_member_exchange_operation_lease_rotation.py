@@ -195,6 +195,16 @@ def _mismatch_source_partitions(snapshot):
     return _refresh_topology(snapshot)
 
 
+def _mismatch_accounting_iin(snapshot):
+    source = snapshot["work_group_source"]
+    source["source_iin"] = "IIN-ALTERED"
+    for member in source["members"]:
+        member["current_inbound_iin"] = "IIN-ALTERED"
+    for bundle in source["source_bundles"]:
+        bundle["accounting_inbound_iin"] = "IIN-ALTERED"
+    return _refresh_topology(snapshot)
+
+
 def _target_response(snapshot):
     result = deepcopy(snapshot)
     source = snapshot["work_group_source"]
@@ -537,8 +547,9 @@ def _runtime(
     lose_first_response=False,
     device_id="DEVICE-01",
     successor_snapshot_mutator=None,
+    source_mode="merge",
 ):
-    before = _resolved_work_group_phs2(mode="merge")
+    before = _resolved_work_group_phs2(mode=source_mode)
     after = _updated_snapshot(before)
     if successor_snapshot_mutator is not None:
         after = successor_snapshot_mutator(after)
@@ -691,8 +702,15 @@ def test_lost_ack_restart_reposts_same_command_and_atomically_rotates_l1_to_l2(
         _mismatch_unaffected_source_version,
         _mismatch_work_group_version,
         _mismatch_source_partitions,
+        _mismatch_accounting_iin,
     ),
-    ids=("target-bundle", "unaffected-source", "work-group", "source-partition"),
+    ids=(
+        "target-bundle",
+        "unaffected-source",
+        "work-group",
+        "source-partition",
+        "accounting-iin",
+    ),
 )
 def test_signed_successor_version_mismatch_is_fail_closed(tmp_path, mutator):
     coordinator, client, manager, before = _runtime(
@@ -766,6 +784,84 @@ def test_rotation_rejects_command_target_cas_newer_than_signed_predecessor(
     assert manager.store.state(L1) == "PREFETCHED"
     with pytest.raises(OperationLeaseError):
         manager.store.load(L2)
+
+
+def test_rotation_accepts_exact_split_source_partition(tmp_path):
+    coordinator, client, manager, before = _runtime(tmp_path, source_mode="split")
+    target_source = next(
+        source
+        for source in before["work_group_source"]["source_bundles"]
+        if source["bundle_id"] == TARGET_BUNDLE
+    )
+    before_member_ids = list(target_source["source_member_ids"])
+
+    def barcode_for(unit_id):
+        if unit_id == NEW_UNIT:
+            return NEW_BARCODE
+        return f"{ITEM}-SERIAL-{unit_id.rsplit('-', 1)[-1]}"
+
+    def resolve_split_source(_identity):
+        response = _target_response(before)
+        barcodes = [barcode_for(unit_id) for unit_id in before_member_ids]
+        prototype = dict(before["work_group_source"]["members"][0])
+        response["bundle"].update(
+            {
+                "entity_version": target_source["entity_version"],
+                "member_ids": before_member_ids,
+                "member_count": len(before_member_ids),
+                "membership_hash": membership_hash(before_member_ids),
+                "barcode_member_count": len(barcodes),
+                "barcode_membership_hash": membership_hash(barcodes),
+                "members": [
+                    {
+                        **prototype,
+                        "unit_id": unit_id,
+                        "normalized_barcode": barcode,
+                        "unit_state": "CONSUMED",
+                        "location_code": "PHS_GOOD",
+                    }
+                    for unit_id, barcode in zip(
+                        before_member_ids, barcodes, strict=True
+                    )
+                ],
+            }
+        )
+        return response
+
+    client.resolve_source = resolve_split_source
+    original_receipt = client._receipt
+
+    def receipt_with_full_split_target(command):
+        receipt = original_receipt(command)
+        member_ids = [
+            NEW_UNIT if unit_id == OLD_UNIT else unit_id
+            for unit_id in before_member_ids
+        ]
+        barcodes = [barcode_for(unit_id) for unit_id in member_ids]
+        receipt["data"].update(
+            {
+                "member_ids": member_ids,
+                "members": [
+                    {"unit_id": unit_id, "normalized_barcode": barcode}
+                    for unit_id, barcode in zip(member_ids, barcodes, strict=True)
+                ],
+                "member_count": len(member_ids),
+                "membership_hash": membership_hash(member_ids),
+                "normalized_barcodes": barcodes,
+                "barcode_membership_hash": membership_hash(barcodes),
+            }
+        )
+        return receipt
+
+    client._receipt = receipt_with_full_split_target
+    prepared = _prepare(coordinator, before)
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "ACKED"
+    assert coordinator.ensure_local_rotation(prepared.intent_id) == L2
+    assert manager.store.state(L1) == "ROTATED"
+    assert manager.store.state(L2) == "PREFETCHED"
 
 
 def test_rotation_sql_failure_rolls_back_both_lease_transitions(tmp_path):
