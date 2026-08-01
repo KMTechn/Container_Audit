@@ -124,6 +124,59 @@ def _updated_snapshot(before):
     return snapshot
 
 
+def _refresh_topology(snapshot):
+    source = snapshot["work_group_source"]
+    barcodes = [row["normalized_barcode"] for row in source["members"]]
+    topology_hash = _sha256(
+        {
+            "phs_work_group": snapshot["phs_work_group"],
+            "source_bundles": source["source_bundles"],
+            "remainder_cover_groups": source["remainder_cover_groups"],
+            "source_iin": source["source_iin"],
+            "barcode_membership_hash": membership_hash(barcodes),
+            "transfer_bundle_id": source["transfer_bundle_id"],
+        }
+    )
+    source["topology_hash"] = topology_hash
+    snapshot["topology_hash"] = topology_hash
+    return snapshot
+
+
+def _mismatch_target_bundle_version(snapshot):
+    key = f"bundle:{TARGET_BUNDLE}"
+    snapshot["entity_versions"][key] += 1
+    snapshot["work_group_source"]["entity_versions"][key] += 1
+    for source in snapshot["work_group_source"]["source_bundles"]:
+        if source["bundle_id"] == TARGET_BUNDLE:
+            source["entity_version"] += 1
+    return _refresh_topology(snapshot)
+
+
+def _mismatch_unaffected_source_version(snapshot):
+    source_id = "PHS-SERVER-002"
+    key = f"bundle:{source_id}"
+    snapshot["entity_versions"][key] += 1
+    snapshot["work_group_source"]["entity_versions"][key] += 1
+    for source in snapshot["work_group_source"]["source_bundles"]:
+        if source["bundle_id"] == source_id:
+            source["entity_version"] += 1
+    return _refresh_topology(snapshot)
+
+
+def _mismatch_work_group_version(snapshot):
+    group_id = snapshot["phs_work_group"]["group_id"]
+    key = f"phs_work_group:{group_id}"
+    snapshot["entity_versions"][key] += 1
+    snapshot["work_group_source"]["entity_versions"][key] += 1
+    for group in (
+        snapshot["phs_work_group"],
+        snapshot["phs_label_resolution"]["scanned_label"],
+        *snapshot["phs_label_resolution"]["effective_labels"],
+    ):
+        group["group_entity_version"] += 1
+    return _refresh_topology(snapshot)
+
+
 def _target_response(snapshot):
     result = deepcopy(snapshot)
     source = snapshot["work_group_source"]
@@ -294,6 +347,9 @@ class _RotationClient:
             fence=2,
             lease_id=L2,
         )
+        expected_after = _updated_snapshot(self.before)
+        before_group = self.before["phs_work_group"]
+        after_group = expected_after["phs_work_group"]
         members = [NEW_UNIT, "unit-002"]
         barcodes = [NEW_BARCODE, f"{ITEM}-SERIAL-002"]
         receipt_id = "receipt-rotation-1"
@@ -381,6 +437,40 @@ class _RotationClient:
                 "target_label_membership_bound": False,
                 "replacement_source_bundle_cardinality": "EXACTLY_ONE_ACTIVE_MEMBER",
                 "multi_member_source_policy": "REJECT_STALE_PHYSICAL_LABEL",
+                "phs_work_group_replacement": {
+                    "installed": True,
+                    "target_group": {
+                        "role": "TARGET",
+                        "bundle_id": TARGET_BUNDLE,
+                        "group_id": before_group["group_id"],
+                        "member_count_before": before_group["member_count"],
+                        "member_count_after": after_group["member_count"],
+                        "membership_hash_before": before_group[
+                            "membership_hash"
+                        ],
+                        "membership_hash_after": after_group["membership_hash"],
+                        "membership_version_before": before_group[
+                            "membership_version"
+                        ],
+                        "membership_version_after": after_group[
+                            "membership_version"
+                        ],
+                        "entity_version_before": before_group[
+                            "group_entity_version"
+                        ],
+                        "entity_version_after": after_group[
+                            "group_entity_version"
+                        ],
+                    },
+                    "donor_groups": [
+                        {
+                            "role": "DONOR",
+                            "bundle_id": DONOR_BUNDLE,
+                            "group_id": "PHSG-DONOR-ROTATION",
+                            "state_after": "CANCELLED",
+                        }
+                    ],
+                },
                 "atomic": True,
                 "operation_lease_rotation": {
                     "contract_version": ROTATION_RESULT_CONTRACT_VERSION,
@@ -423,9 +513,17 @@ class _RotationClient:
         )
 
 
-def _runtime(tmp_path, *, lose_first_response=False, device_id="DEVICE-01"):
+def _runtime(
+    tmp_path,
+    *,
+    lose_first_response=False,
+    device_id="DEVICE-01",
+    successor_snapshot_mutator=None,
+):
     before = _resolved_work_group_phs2(mode="merge")
     after = _updated_snapshot(before)
+    if successor_snapshot_mutator is not None:
+        after = successor_snapshot_mutator(after)
     scan_payload = before["phs_work_group"]["scan_payload"]
     client = _RotationClient(
         before,
@@ -566,6 +664,41 @@ def test_lost_ack_restart_reposts_same_command_and_atomically_rotates_l1_to_l2(
         assert connection.execute(
             "SELECT COUNT(*) FROM terminal_operation_lease_artifacts"
         ).fetchone()[0] == 2
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    (
+        _mismatch_target_bundle_version,
+        _mismatch_unaffected_source_version,
+        _mismatch_work_group_version,
+    ),
+    ids=("target-bundle", "unaffected-source", "work-group"),
+)
+def test_signed_successor_version_mismatch_is_fail_closed(tmp_path, mutator):
+    coordinator, client, manager, before = _runtime(
+        tmp_path,
+        successor_snapshot_mutator=mutator,
+    )
+    prepared = _prepare(coordinator, before)
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert (
+        result.error_code
+        == "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH"
+    )
+    assert client.posts == 1
+    row = coordinator.store.load(prepared.intent_id)
+    assert row["receipt_json"] is None
+    assert manager.store.state(L1) == "PREFETCHED"
+    with pytest.raises(OperationLeaseError):
+        manager.store.load(L2)
+    assert manager.store.rotation(prepared.intent_id) is None
+
+    coordinator.attempt(prepared.intent_id)
+    assert client.posts == 1
 
 
 def test_rotation_sql_failure_rolls_back_both_lease_transitions(tmp_path):

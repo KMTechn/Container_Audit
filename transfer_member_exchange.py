@@ -1468,6 +1468,243 @@ class TransferMemberExchangeCoordinator:
                 "서버 교체 receipt가 요청한 exact membership/CAS 결과와 일치하지 않습니다.",
             )
 
+    @staticmethod
+    def _validate_rotation_version_topology(
+        *,
+        command: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+        operation_snapshot: Mapping[str, Any],
+        preflight: Any,
+        claims: Mapping[str, Any],
+        predecessor_context: Mapping[str, Any],
+    ) -> None:
+        data = receipt.get("data")
+        data = data if isinstance(data, Mapping) else receipt
+        receipt_versions = receipt.get("entity_versions")
+        successor_versions = claims.get("expected_versions")
+        snapshot_versions = operation_snapshot.get("entity_versions")
+        predecessor_claims = predecessor_context.get("claims")
+        predecessor_versions = (
+            predecessor_claims.get("expected_versions")
+            if isinstance(predecessor_claims, Mapping)
+            else None
+        )
+        predecessor_artifact = predecessor_context.get("artifact")
+        predecessor_snapshot = (
+            predecessor_artifact.get("operation_snapshot")
+            if isinstance(predecessor_artifact, Mapping)
+            else None
+        )
+        predecessor_group = (
+            predecessor_snapshot.get("phs_work_group")
+            if isinstance(predecessor_snapshot, Mapping)
+            else None
+        )
+        predecessor_source = (
+            predecessor_snapshot.get("work_group_source")
+            if isinstance(predecessor_snapshot, Mapping)
+            else None
+        )
+        successor_group = operation_snapshot.get("phs_work_group")
+        successor_source = operation_snapshot.get("work_group_source")
+        replacement_proof = (
+            data.get("phs_work_group_replacement")
+            if isinstance(data, Mapping)
+            else None
+        )
+        target_proof = (
+            replacement_proof.get("target_group")
+            if isinstance(replacement_proof, Mapping)
+            else None
+        )
+        if (
+            not isinstance(receipt_versions, Mapping)
+            or not isinstance(successor_versions, Mapping)
+            or not isinstance(snapshot_versions, Mapping)
+            or not isinstance(predecessor_versions, Mapping)
+            or not isinstance(predecessor_group, Mapping)
+            or not isinstance(predecessor_source, Mapping)
+            or not isinstance(successor_group, Mapping)
+            or not isinstance(successor_source, Mapping)
+            or not isinstance(replacement_proof, Mapping)
+            or replacement_proof.get("installed") is not True
+            or not isinstance(target_proof, Mapping)
+        ):
+            raise OperationLeaseError(
+                "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH",
+                "rotation receipt lacks exact successor CAS topology evidence",
+            )
+        receipt_version_map = {
+            str(key): value for key, value in receipt_versions.items()
+        }
+        successor_version_map = {
+            str(key): value for key, value in successor_versions.items()
+        }
+        snapshot_version_map = {
+            str(key): value for key, value in snapshot_versions.items()
+        }
+        predecessor_version_map = {
+            str(key): value for key, value in predecessor_versions.items()
+        }
+        if (
+            successor_version_map != snapshot_version_map
+            or successor_version_map != dict(preflight.entity_versions)
+            or any(
+                isinstance(value, bool) or not isinstance(value, int) or value < 0
+                for versions in (
+                    receipt_version_map,
+                    successor_version_map,
+                    predecessor_version_map,
+                )
+                for value in versions.values()
+            )
+        ):
+            raise OperationLeaseError(
+                "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH",
+                "signed successor versions differ from its exact resolver snapshot",
+            )
+
+        payload = command.get("payload")
+        payload = payload if isinstance(payload, Mapping) else {}
+        target_bundle_id = str(payload.get("target_bundle_id") or "")
+        damage_bundle_id = str(payload.get("damage_bundle_id") or "")
+        target_bundle_key = f"bundle:{target_bundle_id}"
+        damage_bundle_key = f"bundle:{damage_bundle_id}"
+        predecessor_group_id = str(predecessor_group.get("group_id") or "")
+        successor_group_id = str(successor_group.get("group_id") or "")
+        predecessor_label_id = str(predecessor_group.get("label_id") or "")
+        successor_label_id = str(successor_group.get("label_id") or "")
+        group_key = f"phs_work_group:{successor_group_id}"
+        membership_key = f"phs_work_membership:{successor_group_id}"
+        label_version_key = f"phs_work_label_version:{successor_group_id}"
+        label_key = f"phs_label:{successor_label_id}"
+        predecessor_transfer_id = str(
+            predecessor_source.get("transfer_bundle_id") or ""
+        )
+        successor_transfer_id = str(successor_source.get("transfer_bundle_id") or "")
+        predecessor_transfer_key = f"bundle:{predecessor_transfer_id}"
+        successor_transfer_key = f"bundle:{successor_transfer_id}"
+        predecessor_sources = predecessor_source.get("source_bundles")
+        successor_sources = successor_source.get("source_bundles")
+        if not isinstance(predecessor_sources, list) or not isinstance(
+            successor_sources, list
+        ):
+            raise OperationLeaseError(
+                "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH",
+                "rotation resolver source topology is missing",
+            )
+        predecessor_source_versions = {
+            f"bundle:{str(source.get('bundle_id') or '')}": source.get(
+                "entity_version"
+            )
+            for source in predecessor_sources
+            if isinstance(source, Mapping)
+        }
+        successor_source_versions = {
+            f"bundle:{str(source.get('bundle_id') or '')}": source.get(
+                "entity_version"
+            )
+            for source in successor_sources
+            if isinstance(source, Mapping)
+        }
+        donor_bundle_ids = {
+            str(pair.get("new_source_bundle_id") or "")
+            for pair in payload.get("pairs") or []
+            if isinstance(pair, Mapping)
+        }
+        donor_bundle_keys = {f"bundle:{bundle_id}" for bundle_id in donor_bundle_ids}
+        expected_receipt_keys = {
+            target_bundle_key,
+            damage_bundle_key,
+            *donor_bundle_keys,
+        }
+        common_receipt_keys = set(receipt_version_map) & set(successor_version_map)
+        expected_successor_versions = dict(predecessor_version_map)
+        expected_successor_versions.pop(predecessor_transfer_key, None)
+        expected_successor_versions[successor_transfer_key] = 0
+        expected_successor_versions[target_bundle_key] = receipt_version_map.get(
+            target_bundle_key
+        )
+        expected_successor_versions[group_key] = target_proof.get(
+            "entity_version_after"
+        )
+        expected_successor_versions[membership_key] = target_proof.get(
+            "membership_version_after"
+        )
+        if (
+            not target_bundle_id
+            or not damage_bundle_id
+            or not predecessor_group_id
+            or predecessor_group_id != successor_group_id
+            or predecessor_label_id != successor_label_id
+            or target_proof.get("role") != "TARGET"
+            or any(
+                isinstance(target_proof.get(field), bool)
+                or not isinstance(target_proof.get(field), int)
+                or target_proof.get(field) < 1
+                for field in (
+                    "membership_version_before",
+                    "membership_version_after",
+                    "entity_version_before",
+                    "entity_version_after",
+                )
+            )
+            or target_proof.get("bundle_id") != target_bundle_id
+            or target_proof.get("group_id") != successor_group_id
+            or target_proof.get("entity_version_before")
+            != predecessor_version_map.get(group_key)
+            or target_proof.get("entity_version_after")
+            != int(target_proof.get("entity_version_before") or 0) + 1
+            or target_proof.get("membership_version_before")
+            != predecessor_version_map.get(membership_key)
+            or target_proof.get("membership_version_after")
+            != int(target_proof.get("membership_version_before") or 0) + 1
+            or target_proof.get("member_count_before")
+            != predecessor_group.get("member_count")
+            or target_proof.get("member_count_after") != preflight.member_count
+            or target_proof.get("membership_hash_before")
+            != predecessor_group.get("membership_hash")
+            or target_proof.get("membership_hash_after") != preflight.membership_hash
+            or receipt_version_map.get(target_bundle_key) is None
+            or set(receipt_version_map) != expected_receipt_keys
+            or target_bundle_key not in predecessor_version_map
+            or target_bundle_key not in successor_version_map
+            or successor_version_map.get(target_bundle_key)
+            != receipt_version_map.get(target_bundle_key)
+            or damage_bundle_key in successor_version_map
+            or any(key in successor_version_map for key in donor_bundle_keys)
+            or set(predecessor_source_versions) != set(successor_source_versions)
+            or any(
+                predecessor_source_versions[key]
+                != predecessor_version_map.get(key)
+                for key in predecessor_source_versions
+            )
+            or any(
+                successor_source_versions[key] != successor_version_map.get(key)
+                for key in successor_source_versions
+            )
+            or any(
+                successor_source_versions[key] != predecessor_source_versions[key]
+                for key in successor_source_versions
+                if key != target_bundle_key
+            )
+            or any(
+                successor_version_map[key] != receipt_version_map[key]
+                for key in common_receipt_keys
+            )
+            or predecessor_transfer_id == successor_transfer_id
+            or successor_version_map.get(successor_transfer_key) != 0
+            or successor_version_map.get(label_version_key)
+            != predecessor_version_map.get(label_version_key)
+            or successor_version_map.get(label_key)
+            != predecessor_version_map.get(label_key)
+            or successor_version_map != expected_successor_versions
+        ):
+            raise OperationLeaseError(
+                "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH",
+                "signed successor versions do not equal the committed replacement topology",
+            )
+
     def _verify_rotation_receipt(
         self,
         row: sqlite3.Row,
@@ -1525,6 +1762,14 @@ class TransferMemberExchangeCoordinator:
             normalized, claims = self.operation_lease_manager.verify_authenticated(
                 artifact=artifact,
                 expected=binding,
+            )
+            self._validate_rotation_version_topology(
+                command=command,
+                receipt=receipt,
+                operation_snapshot=operation_snapshot,
+                preflight=preflight,
+                claims=claims,
+                predecessor_context=predecessor_context,
             )
             predecessor_artifact = predecessor_context["artifact"]
             predecessor_snapshot = predecessor_artifact.get("operation_snapshot")
