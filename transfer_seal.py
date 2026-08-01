@@ -2212,6 +2212,9 @@ class LogisticsTransferClient:
         scope_id = str(context.get("authority_scope_id") or "").strip()
         idempotency_key = str(context.get("idempotency_key") or "").strip()
         payload = context.get("payload")
+        rotation_command = isinstance(payload, Mapping) and isinstance(
+            payload.get("operation_lease_rotation"), Mapping
+        )
         target_bundle_id = (
             str(payload.get("target_bundle_id") or "").strip()
             if isinstance(payload, Mapping)
@@ -2239,6 +2242,8 @@ class LogisticsTransferClient:
             )
             return dict(result or {})
         except TransferSealError as exc:
+            if rotation_command:
+                raise
             should_recover_receipt = (
                 exc.committed is True
                 or exc.committed is None
@@ -2254,12 +2259,13 @@ class LogisticsTransferClient:
                 return recovered
             raise exc
         except Exception as exc:
-            try:
-                recovered = self.get_receipt(scope_id, idempotency_key)
-            except Exception:
-                recovered = None
-            if recovered is not None:
-                return recovered
+            if not rotation_command:
+                try:
+                    recovered = self.get_receipt(scope_id, idempotency_key)
+                except Exception:
+                    recovered = None
+                if recovered is not None:
+                    return recovered
             raise TransferSealError(
                 "TRANSPORT_ERROR",
                 "중앙 제품 교체 응답을 확인하지 못했습니다.",

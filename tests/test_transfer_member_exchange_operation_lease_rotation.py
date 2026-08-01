@@ -177,6 +177,24 @@ def _mismatch_work_group_version(snapshot):
     return _refresh_topology(snapshot)
 
 
+def _mismatch_source_partitions(snapshot):
+    sources = {
+        source["bundle_id"]: source
+        for source in snapshot["work_group_source"]["source_bundles"]
+    }
+    partitions = {
+        TARGET_BUNDLE: ["unit-002", "unit-003"],
+        "PHS-SERVER-002": [NEW_UNIT, "unit-004"],
+    }
+    for bundle_id, member_ids in partitions.items():
+        source = sources[bundle_id]
+        for prefix in ("source", "selected"):
+            source[f"{prefix}_member_ids"] = list(member_ids)
+            source[f"{prefix}_member_count"] = len(member_ids)
+            source[f"{prefix}_membership_hash"] = membership_hash(member_ids)
+    return _refresh_topology(snapshot)
+
+
 def _target_response(snapshot):
     result = deepcopy(snapshot)
     source = snapshot["work_group_source"]
@@ -672,8 +690,9 @@ def test_lost_ack_restart_reposts_same_command_and_atomically_rotates_l1_to_l2(
         _mismatch_target_bundle_version,
         _mismatch_unaffected_source_version,
         _mismatch_work_group_version,
+        _mismatch_source_partitions,
     ),
-    ids=("target-bundle", "unaffected-source", "work-group"),
+    ids=("target-bundle", "unaffected-source", "work-group", "source-partition"),
 )
 def test_signed_successor_version_mismatch_is_fail_closed(tmp_path, mutator):
     coordinator, client, manager, before = _runtime(
@@ -699,6 +718,54 @@ def test_signed_successor_version_mismatch_is_fail_closed(tmp_path, mutator):
 
     coordinator.attempt(prepared.intent_id)
     assert client.posts == 1
+
+
+def test_rotation_rejects_command_target_cas_newer_than_signed_predecessor(
+    tmp_path,
+):
+    coordinator, client, manager, signed_before = _runtime(tmp_path)
+    current = deepcopy(signed_before)
+    target_key = f"bundle:{TARGET_BUNDLE}"
+    current_versions = dict(current["entity_versions"])
+    current_versions[target_key] += 1
+    current["entity_versions"] = dict(current_versions)
+    current["work_group_source"]["entity_versions"] = dict(current_versions)
+    for source in current["work_group_source"]["source_bundles"]:
+        if source["bundle_id"] == TARGET_BUNDLE:
+            source["entity_version"] += 1
+    current = _refresh_topology(current)
+    client.before = current
+    client.after = _updated_snapshot(current)
+
+    def resolve_current(_identity):
+        response = _target_response(current)
+        response["bundle"]["entity_version"] = current["entity_versions"][target_key]
+        return response
+
+    client.resolve_source = resolve_current
+    original_receipt = client._receipt
+
+    def receipt_with_current_cas(command):
+        receipt = original_receipt(command)
+        receipt["entity_versions"][target_key] = (
+            current["entity_versions"][target_key] + 1
+        )
+        return receipt
+
+    client._receipt = receipt_with_current_cas
+    prepared = _prepare(coordinator, signed_before)
+
+    result = coordinator.attempt(prepared.intent_id)
+
+    assert result.status == "OPERATOR_REVIEW"
+    assert (
+        result.error_code
+        == "OPERATION_LEASE_ROTATION_SUCCESSOR_VERSION_MISMATCH"
+    )
+    assert coordinator.store.load(prepared.intent_id)["receipt_json"] is None
+    assert manager.store.state(L1) == "PREFETCHED"
+    with pytest.raises(OperationLeaseError):
+        manager.store.load(L2)
 
 
 def test_rotation_sql_failure_rolls_back_both_lease_transitions(tmp_path):

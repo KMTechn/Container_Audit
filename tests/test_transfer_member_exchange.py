@@ -4,6 +4,8 @@ import datetime
 import json
 from urllib.parse import parse_qs, urlsplit
 
+import pytest
+
 from Container_Audit import ContainerAudit, ProductExchangeSession, TraySession
 from transfer_member_exchange import (
     EXCHANGE_CAPABILITY_ID,
@@ -13,7 +15,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeStore,
     _empty_membership_hash,
 )
-from transfer_seal import LogisticsTransferClient, membership_hash
+from transfer_seal import LogisticsTransferClient, TransferSealError, membership_hash
 
 
 SCOPE = "scope-exchange"
@@ -535,6 +537,48 @@ def test_non_json_500_recovers_committed_receipt_without_duplicate_post(tmp_path
     assert result.status == "ACKED"
     assert len(posted) == 1
     assert len(receipt_gets) == 1
+
+
+@pytest.mark.parametrize("failure_kind", ("http-500", "transport"))
+def test_rotation_lost_ack_never_uses_generic_receipt_get(failure_kind):
+    def handler(call):
+        if call["method"] != "POST":
+            pytest.fail("rotation recovery must replay the exact POST, not receipt GET")
+        if failure_kind == "transport":
+            raise ConnectionError("lost response after commit")
+        return _Response(
+            500,
+            {
+                "ok": False,
+                "committed": True,
+                "retryable": True,
+                "error": {"code": "ACK_LOST", "message": "lost response"},
+            },
+        )
+
+    session = _Session(handler)
+    client = LogisticsTransferClient(
+        "https://logistics.test",
+        "token",
+        "host-1",
+        device_id="device-1",
+        session=session,
+    )
+    command = {
+        "authority_scope_id": SCOPE,
+        "idempotency_key": "rotation-lost-ack",
+        "payload": {
+            "target_bundle_id": TARGET,
+            "operation_lease_rotation": {
+                "contract_version": "terminal-operation-lease-rotation-request-v1"
+            },
+        },
+    }
+
+    with pytest.raises(TransferSealError):
+        client.replace_bundle_members(command)
+
+    assert [call["method"] for call in session.calls] == ["POST"]
 
 
 def test_restart_recovers_saved_exchange_receipt_before_reposting(tmp_path):

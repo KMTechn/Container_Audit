@@ -1481,6 +1481,7 @@ class TransferMemberExchangeCoordinator:
         data = receipt.get("data")
         data = data if isinstance(data, Mapping) else receipt
         receipt_versions = receipt.get("entity_versions")
+        command_versions = command.get("expected_versions")
         successor_versions = claims.get("expected_versions")
         snapshot_versions = operation_snapshot.get("entity_versions")
         predecessor_claims = predecessor_context.get("claims")
@@ -1519,6 +1520,7 @@ class TransferMemberExchangeCoordinator:
         )
         if (
             not isinstance(receipt_versions, Mapping)
+            or not isinstance(command_versions, Mapping)
             or not isinstance(successor_versions, Mapping)
             or not isinstance(snapshot_versions, Mapping)
             or not isinstance(predecessor_versions, Mapping)
@@ -1537,6 +1539,9 @@ class TransferMemberExchangeCoordinator:
         receipt_version_map = {
             str(key): value for key, value in receipt_versions.items()
         }
+        command_version_map = {
+            str(key): value for key, value in command_versions.items()
+        }
         successor_version_map = {
             str(key): value for key, value in successor_versions.items()
         }
@@ -1553,6 +1558,7 @@ class TransferMemberExchangeCoordinator:
                 isinstance(value, bool) or not isinstance(value, int) or value < 0
                 for versions in (
                     receipt_version_map,
+                    command_version_map,
                     successor_version_map,
                     predecessor_version_map,
                 )
@@ -1607,6 +1613,38 @@ class TransferMemberExchangeCoordinator:
             for source in successor_sources
             if isinstance(source, Mapping)
         }
+
+        def source_partitions(
+            sources: list[Any],
+        ) -> dict[str, tuple[tuple[str, ...], tuple[str, ...]]] | None:
+            partitions: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+            for source in sources:
+                if not isinstance(source, Mapping):
+                    return None
+                bundle_id = str(source.get("bundle_id") or "")
+                source_members = source.get("source_member_ids")
+                selected_members = source.get("selected_member_ids")
+                if (
+                    not bundle_id
+                    or bundle_id in partitions
+                    or not isinstance(source_members, list)
+                    or not isinstance(selected_members, list)
+                ):
+                    return None
+                partitions[bundle_id] = (
+                    tuple(sorted(str(value) for value in source_members)),
+                    tuple(sorted(str(value) for value in selected_members)),
+                )
+            return partitions
+
+        predecessor_source_partitions = source_partitions(predecessor_sources)
+        successor_source_partitions = source_partitions(successor_sources)
+        receipt_target_members_raw = data.get("member_ids")
+        receipt_target_members = (
+            tuple(sorted(str(value) for value in receipt_target_members_raw))
+            if isinstance(receipt_target_members_raw, list)
+            else None
+        )
         donor_bundle_ids = {
             str(pair.get("new_source_bundle_id") or "")
             for pair in payload.get("pairs") or []
@@ -1669,11 +1707,26 @@ class TransferMemberExchangeCoordinator:
             or set(receipt_version_map) != expected_receipt_keys
             or target_bundle_key not in predecessor_version_map
             or target_bundle_key not in successor_version_map
+            or command_version_map.get(target_bundle_key)
+            != predecessor_version_map.get(target_bundle_key)
             or successor_version_map.get(target_bundle_key)
             != receipt_version_map.get(target_bundle_key)
             or damage_bundle_key in successor_version_map
             or any(key in successor_version_map for key in donor_bundle_keys)
             or set(predecessor_source_versions) != set(successor_source_versions)
+            or predecessor_source_partitions is None
+            or successor_source_partitions is None
+            or set(predecessor_source_partitions)
+            != set(successor_source_partitions)
+            or receipt_target_members is None
+            or successor_source_partitions.get(target_bundle_id)
+            != (receipt_target_members, receipt_target_members)
+            or any(
+                successor_source_partitions[bundle_id]
+                != predecessor_source_partitions[bundle_id]
+                for bundle_id in successor_source_partitions
+                if bundle_id != target_bundle_id
+            )
             or any(
                 predecessor_source_versions[key]
                 != predecessor_version_map.get(key)
