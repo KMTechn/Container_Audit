@@ -75,6 +75,22 @@ def test_two_pair_successor_member_map_rejects_swapped_new_barcodes():
     assert not _matches_exact_member_map(swapped, expected)
 
 
+def test_two_pair_successor_member_map_accepts_exact_new_barcodes():
+    expected = {
+        "unit-new-001": f"{ITEM}-SERIAL-NEW-001",
+        "unit-new-002": f"{ITEM}-SERIAL-NEW-002",
+    }
+    exact = [
+        {
+            "unit_id": unit_id,
+            "normalized_barcode": barcode,
+        }
+        for unit_id, barcode in reversed(expected.items())
+    ]
+
+    assert _matches_exact_member_map(exact, expected)
+
+
 def _replace_exact(value):
     if isinstance(value, dict):
         return {key: _replace_exact(item) for key, item in value.items()}
