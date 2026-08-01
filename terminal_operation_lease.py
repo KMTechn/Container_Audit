@@ -34,6 +34,8 @@ ARTIFACT_CONTRACT_VERSION = "terminal-operation-lease-artifact-v1"
 KEYRING_CONTRACT_VERSION = "terminal-operation-lease-keyring-v1"
 KEYRING_STORE_CONTRACT_VERSION = "terminal-operation-lease-keyring-store-v1"
 CONSUME_CONTRACT_VERSION = "terminal-operation-lease-consume-v1"
+ROTATION_REQUEST_CONTRACT_VERSION = "terminal-operation-lease-rotation-request-v1"
+ROTATION_RESULT_CONTRACT_VERSION = "terminal-operation-lease-rotation-result-v1"
 STORE_SCHEMA_VERSION = "container-terminal-operation-lease-store-v1"
 CONTAINER_PROGRAM = "Container_Audit"
 TRANSFER_OPERATION = "SEAL_TRANSFER_BUNDLE"
@@ -1038,6 +1040,19 @@ class OperationLeaseStore:
                     receipt_hash TEXT NOT NULL CHECK(length(receipt_hash)=64),
                     acked_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS terminal_operation_lease_rotations (
+                    exchange_intent_id TEXT PRIMARY KEY,
+                    operation_result_id TEXT NOT NULL UNIQUE,
+                    predecessor_lease_id TEXT NOT NULL UNIQUE
+                        REFERENCES terminal_operation_lease_artifacts(lease_id),
+                    successor_lease_id TEXT NOT NULL UNIQUE
+                        REFERENCES terminal_operation_lease_artifacts(lease_id),
+                    successor_issue_idempotency_key TEXT NOT NULL UNIQUE,
+                    rotation_result_json TEXT NOT NULL,
+                    rotation_result_hash TEXT NOT NULL CHECK(length(rotation_result_hash)=64),
+                    rotated_at TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS terminal_operation_lease_reviews (
                     lease_id TEXT PRIMARY KEY
                         REFERENCES terminal_operation_lease_artifacts(lease_id),
@@ -1071,6 +1086,12 @@ class OperationLeaseStore:
                 CREATE TRIGGER IF NOT EXISTS trg_terminal_lease_receipt_delete
                 BEFORE DELETE ON terminal_operation_lease_receipts
                 BEGIN SELECT RAISE(ABORT, 'terminal operation receipt is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_terminal_lease_rotation_update
+                BEFORE UPDATE ON terminal_operation_lease_rotations
+                BEGIN SELECT RAISE(ABORT, 'terminal operation rotation is append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_terminal_lease_rotation_delete
+                BEFORE DELETE ON terminal_operation_lease_rotations
+                BEGIN SELECT RAISE(ABORT, 'terminal operation rotation is append-only'); END;
                 CREATE TRIGGER IF NOT EXISTS trg_terminal_lease_review_update
                 BEFORE UPDATE ON terminal_operation_lease_reviews
                 BEGIN SELECT RAISE(ABORT, 'terminal operation review is append-only'); END;
@@ -1232,6 +1253,21 @@ class OperationLeaseStore:
                 """SELECT * FROM terminal_operation_lease_issue_attempts
                     WHERE issue_idempotency_key=?""",
                 (key,),
+            ).fetchone()
+        if row is None:
+            raise _error(
+                "OPERATION_LEASE_ISSUE_ATTEMPT_NOT_FOUND",
+                "durable operation lease issue attempt was not found",
+            )
+        return row
+
+    def issue_attempt_for_lease(self, lease_id: str) -> sqlite3.Row:
+        normalized = _bounded_text(lease_id, field="lease_id", maximum=128)
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT * FROM terminal_operation_lease_issue_attempts
+                    WHERE lease_id=?""",
+                (normalized,),
             ).fetchone()
         if row is None:
             raise _error(
@@ -1525,6 +1561,303 @@ class OperationLeaseStore:
             (target_status, utc_text(), attempt["attempt_id"]),
         )
 
+    def record_rotation(
+        self,
+        *,
+        exchange_intent_id: str,
+        operation_result_id: str,
+        predecessor_lease_id: str,
+        successor_issue_idempotency_key: str,
+        rotation_result: Mapping[str, Any],
+        successor_artifact: Mapping[str, Any],
+        successor_claims: Mapping[str, Any],
+        issue_request: Mapping[str, Any],
+    ) -> sqlite3.Row:
+        """Atomically terminalize L1 and persist authenticated L2 as PREFETCHED."""
+
+        intent_id = _bounded_text(
+            exchange_intent_id, field="exchange_intent_id", maximum=256
+        )
+        receipt_id = _bounded_text(
+            operation_result_id, field="operation_result_id", maximum=256
+        )
+        predecessor_id = _bounded_text(
+            predecessor_lease_id, field="predecessor_lease_id", maximum=128
+        )
+        successor_key = _bounded_text(
+            successor_issue_idempotency_key,
+            field="successor_issue_idempotency_key",
+            maximum=256,
+        )
+        result = dict(rotation_result or {})
+        if set(result) != {"contract_version", "predecessor", "successor"} or result.get(
+            "contract_version"
+        ) != ROTATION_RESULT_CONTRACT_VERSION:
+            raise _error(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "rotation result does not contain the exact v1 fields",
+            )
+        predecessor = result.get("predecessor")
+        successor = result.get("successor")
+        if (
+            not isinstance(predecessor, Mapping)
+            or set(predecessor)
+            != {"lease_id", "status", "fence", "operation_result_id", "consumed_at"}
+            or not isinstance(successor, Mapping)
+            or set(successor) != {"issue_idempotency_key", "artifact"}
+            or predecessor.get("lease_id") != predecessor_id
+            or predecessor.get("status") != "CONSUMED"
+            or predecessor.get("operation_result_id") != receipt_id
+            or successor.get("issue_idempotency_key") != successor_key
+            or dict(successor.get("artifact") or {}) != dict(successor_artifact or {})
+        ):
+            raise _error(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "rotation predecessor or successor evidence is not exact",
+            )
+        rotated_at = utc_text(
+            parse_utc_text(predecessor.get("consumed_at"), field="consumed_at")
+        )
+        artifact = dict(successor_artifact)
+        claims = dict(successor_claims)
+        request = dict(issue_request)
+        successor_id = _bounded_text(
+            claims.get("lease_id"), field="successor_lease_id", maximum=128
+        )
+        if successor_id == predecessor_id:
+            raise _error(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "rotation successor must differ from its predecessor",
+            )
+        if artifact.get("lease_id") != successor_id:
+            raise _error(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "rotation successor artifact differs from verified claims",
+            )
+        result_json = canonical_json_bytes(result).decode("utf-8")
+        result_hash = hashlib.sha256(result_json.encode("utf-8")).hexdigest()
+        artifact_json = canonical_json_bytes(artifact).decode("utf-8")
+        claims_json = canonical_json_bytes(claims).decode("utf-8")
+        request_json = canonical_json_bytes(request).decode("utf-8")
+        artifact_values = (
+            successor_id,
+            successor_key,
+            request_json,
+            canonical_hash(request),
+            artifact_json,
+            hashlib.sha256(artifact_json.encode("utf-8")).hexdigest(),
+            hashlib.sha256(str(artifact["token"]).encode("ascii")).hexdigest(),
+            claims_json,
+            str(claims["snapshot_hash"]),
+            str(claims["expires_at"]),
+            int(claims["fence"]),
+            utc_text(),
+        )
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """SELECT * FROM terminal_operation_lease_rotations
+                    WHERE exchange_intent_id=?""",
+                (intent_id,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["operation_result_id"] != receipt_id
+                    or existing["predecessor_lease_id"] != predecessor_id
+                    or existing["successor_lease_id"] != successor_id
+                    or existing["successor_issue_idempotency_key"] != successor_key
+                    or existing["rotation_result_json"] != result_json
+                    or existing["rotation_result_hash"] != result_hash
+                    or existing["rotated_at"] != rotated_at
+                ):
+                    raise sqlite3.IntegrityError(
+                        "durable terminal operation rotation differs from replay"
+                    )
+                successor_row = connection.execute(
+                    """SELECT * FROM terminal_operation_lease_artifacts
+                        WHERE lease_id=?""",
+                    (successor_id,),
+                ).fetchone()
+                successor_attempt = connection.execute(
+                    """SELECT * FROM terminal_operation_lease_issue_attempts
+                        WHERE lease_id=?""",
+                    (successor_id,),
+                ).fetchone()
+                predecessor_attempt = connection.execute(
+                    """SELECT * FROM terminal_operation_lease_issue_attempts
+                        WHERE lease_id=?""",
+                    (predecessor_id,),
+                ).fetchone()
+                if (
+                    successor_row is None
+                    or successor_attempt is None
+                    or successor_attempt["status"] != ISSUE_PREFETCHED
+                    or predecessor_attempt is None
+                    or predecessor_attempt["status"] != ISSUE_ACKED
+                ):
+                    raise sqlite3.IntegrityError(
+                        "durable terminal operation rotation is incomplete"
+                    )
+                connection.commit()
+                return successor_row
+
+            predecessor_artifact = connection.execute(
+                """SELECT * FROM terminal_operation_lease_artifacts
+                    WHERE lease_id=?""",
+                (predecessor_id,),
+            ).fetchone()
+            predecessor_attempt = connection.execute(
+                """SELECT * FROM terminal_operation_lease_issue_attempts
+                    WHERE lease_id=?""",
+                (predecessor_id,),
+            ).fetchone()
+            if predecessor_artifact is None or predecessor_attempt is None:
+                raise sqlite3.IntegrityError(
+                    "rotation predecessor has no durable local artifact"
+                )
+            if predecessor_attempt["status"] != ISSUE_PREFETCHED:
+                raise sqlite3.IntegrityError(
+                    "rotation predecessor is not the active prefetched lease"
+                )
+            if (
+                predecessor_attempt["issue_request_json"] != request_json
+                or predecessor_attempt["issue_request_hash"] != canonical_hash(request)
+                or predecessor_attempt["authority_scope_id"]
+                != claims.get("authority_scope_id")
+                or predecessor_attempt["device_id"] != claims.get("device_id")
+                or predecessor_attempt["source_host_id"] != claims.get("source_host_id")
+                or predecessor_attempt["physical_qr_sha256"]
+                != claims.get("physical_qr_sha256")
+            ):
+                raise sqlite3.IntegrityError(
+                    "rotation successor differs from predecessor terminal identity"
+                )
+            try:
+                predecessor_claims = json.loads(
+                    str(predecessor_artifact["claims_json"])
+                )
+            except json.JSONDecodeError as exc:
+                raise sqlite3.IntegrityError(
+                    "rotation predecessor claims are invalid"
+                ) from exc
+            stable_claim_keys = {
+                "site_id",
+                "program",
+                "device_id",
+                "source_host_id",
+                "authority_scope_id",
+                "ledger_plane",
+                "plane_epoch",
+                "operation",
+                "resource_id",
+                "physical_label_id",
+                "physical_qr_sha256",
+                "item_id",
+                "quantity",
+                "member_count",
+            }
+            if (
+                any(predecessor_claims.get(key) != claims.get(key) for key in stable_claim_keys)
+                or predecessor.get("fence") != predecessor_claims.get("fence")
+                or claims.get("fence") != int(predecessor_claims.get("fence") or 0) + 1
+            ):
+                raise _error(
+                    "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                    "rotation successor is not the next lease for the same terminal resource",
+                )
+
+            updated = connection.execute(
+                """UPDATE terminal_operation_lease_issue_attempts
+                      SET status='ACKED',updated_at=?
+                    WHERE attempt_id=? AND status='PREFETCHED'""",
+                (utc_text(), predecessor_attempt["attempt_id"]),
+            )
+            if updated.rowcount != 1:
+                raise sqlite3.IntegrityError(
+                    "rotation predecessor terminalization was not atomic"
+                )
+            successor_attempt_id = "TRANSFER-LEASE-ROTATION-" + canonical_hash(
+                {
+                    "exchange_intent_id": intent_id,
+                    "successor_issue_idempotency_key": successor_key,
+                }
+            )[:32]
+            connection.execute(
+                """INSERT INTO terminal_operation_lease_issue_attempts(
+                       attempt_id,resource_key,device_id,source_host_id,
+                       authority_scope_id,physical_qr_sha256,
+                       issue_idempotency_key,issue_request_json,
+                       issue_request_hash,status,lease_id,
+                       terminal_evidence_json,terminal_evidence_hash,
+                       created_at,updated_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,'PREFETCHED',?,?,?,?,?)""",
+                (
+                    successor_attempt_id,
+                    predecessor_attempt["resource_key"],
+                    predecessor_attempt["device_id"],
+                    predecessor_attempt["source_host_id"],
+                    predecessor_attempt["authority_scope_id"],
+                    predecessor_attempt["physical_qr_sha256"],
+                    successor_key,
+                    request_json,
+                    canonical_hash(request),
+                    successor_id,
+                    result_json,
+                    result_hash,
+                    utc_text(),
+                    utc_text(),
+                ),
+            )
+            connection.execute(
+                """INSERT INTO terminal_operation_lease_artifacts(
+                       lease_id,issue_idempotency_key,issue_request_json,
+                       issue_request_hash,artifact_json,artifact_hash,token_hash,
+                       claims_json,snapshot_hash,expires_at,fence,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                artifact_values,
+            )
+            successor_row = connection.execute(
+                """SELECT * FROM terminal_operation_lease_artifacts
+                    WHERE lease_id=?""",
+                (successor_id,),
+            ).fetchone()
+            if successor_row is None:
+                raise sqlite3.IntegrityError(
+                    "rotation successor artifact was not persisted"
+                )
+            connection.execute(
+                """INSERT INTO terminal_operation_lease_rotations(
+                       exchange_intent_id,operation_result_id,
+                       predecessor_lease_id,successor_lease_id,
+                       successor_issue_idempotency_key,rotation_result_json,
+                       rotation_result_hash,rotated_at,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?)""",
+                (
+                    intent_id,
+                    receipt_id,
+                    predecessor_id,
+                    successor_id,
+                    successor_key,
+                    result_json,
+                    result_hash,
+                    rotated_at,
+                    utc_text(),
+                ),
+            )
+            connection.commit()
+        return successor_row
+
+    def rotation(self, exchange_intent_id: str) -> sqlite3.Row | None:
+        intent_id = _bounded_text(
+            exchange_intent_id, field="exchange_intent_id", maximum=256
+        )
+        with self._connect() as connection:
+            return connection.execute(
+                """SELECT * FROM terminal_operation_lease_rotations
+                    WHERE exchange_intent_id=?""",
+                (intent_id,),
+            ).fetchone()
+
     def record_local_completion(
         self,
         *,
@@ -1813,6 +2146,12 @@ class OperationLeaseStore:
         self.load(lease_id)
         with self._connect() as connection:
             if connection.execute(
+                """SELECT 1 FROM terminal_operation_lease_rotations
+                    WHERE predecessor_lease_id=?""",
+                (lease_id,),
+            ).fetchone():
+                return "ROTATED"
+            if connection.execute(
                 "SELECT 1 FROM terminal_operation_lease_reviews WHERE lease_id=?",
                 (lease_id,),
             ).fetchone():
@@ -1858,6 +2197,130 @@ class OperationLeaseManager:
             explicit_new=explicit_new,
         )
         return str(row["issue_idempotency_key"])
+
+    def rotation_predecessor_context(
+        self,
+        lease_id: str,
+        *,
+        device_id: str,
+        source_host_id: str,
+        authority_scope_id: str,
+        now: datetime | None = None,
+        allow_consumed_recovery: bool = False,
+    ) -> dict[str, Any]:
+        """Return exact signed L1 proof only for this active terminal holder."""
+
+        artifact_row = self.store.load(lease_id)
+        issue_attempt = self.store.issue_attempt_for_lease(lease_id)
+        allowed_local_statuses = (
+            {ISSUE_PREFETCHED, ISSUE_ACKED}
+            if allow_consumed_recovery
+            else {ISSUE_PREFETCHED}
+        )
+        if issue_attempt["status"] not in allowed_local_statuses:
+            raise _error(
+                "OPERATION_LEASE_ROTATION_PREDECESSOR_NOT_ACTIVE",
+                "rotation predecessor is not the active prefetched lease",
+            )
+        try:
+            stored_claims = json.loads(str(artifact_row["claims_json"]))
+            issue_request = json.loads(str(issue_attempt["issue_request_json"]))
+        except json.JSONDecodeError as exc:
+            raise _error(
+                "OPERATION_LEASE_LOCAL_ARTIFACT_INVALID",
+                "stored lease rotation context cannot be parsed",
+            ) from exc
+        if not isinstance(stored_claims, dict) or set(stored_claims) != LEASE_CLAIM_KEYS:
+            raise _error(
+                "OPERATION_LEASE_LOCAL_ARTIFACT_INVALID",
+                "stored lease claims do not match the exact v1 contract",
+            )
+        expected = {key: stored_claims[key] for key in LEASE_BINDING_KEYS}
+        artifact, claims = self.keyring.verify(
+            self.store.artifact(lease_id),
+            expected=expected,
+            now=now,
+            allow_expired=allow_consumed_recovery,
+        )
+        if canonical_json_bytes(claims) != canonical_json_bytes(stored_claims):
+            raise _error(
+                "OPERATION_LEASE_LOCAL_ARTIFACT_INVALID",
+                "stored lease claims differ from signed predecessor proof",
+            )
+        expected_terminal = {
+            "program": CONTAINER_PROGRAM,
+            "device_id": _bounded_text(device_id, field="device_id", maximum=128),
+            "source_host_id": _bounded_text(
+                source_host_id, field="source_host_id", maximum=128
+            ),
+            "authority_scope_id": _bounded_text(
+                authority_scope_id, field="authority_scope_id"
+            ),
+            "operation": TRANSFER_OPERATION,
+        }
+        if any(claims.get(key) != value for key, value in expected_terminal.items()):
+            raise _error(
+                "OPERATION_LEASE_MACHINE_SCOPE_FORBIDDEN",
+                "rotation predecessor belongs to a different terminal holder",
+            )
+        return {
+            "evidence": {
+                "token": artifact["token"],
+                "lease_id": artifact["lease_id"],
+                "fence": artifact["fence"],
+                "snapshot_hash": artifact["snapshot_hash"],
+            },
+            "artifact": artifact,
+            "issue_request": issue_request,
+            "claims": claims,
+        }
+
+    def verify_authenticated(
+        self,
+        *,
+        artifact: Mapping[str, Any],
+        expected: Mapping[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Verify an online artifact and authenticated keyring without persisting it."""
+
+        normalized, _claims = validate_artifact(
+            dict(artifact), expected=expected, now=now
+        )
+        self.keyring.bootstrap_authenticated(
+            normalized["keyring"], authenticated_online=True
+        )
+        return self.keyring.verify(normalized, expected=expected, now=now)
+
+    def accept_rotation(
+        self,
+        *,
+        exchange_intent_id: str,
+        operation_result_id: str,
+        predecessor_lease_id: str,
+        successor_issue_idempotency_key: str,
+        rotation_result: Mapping[str, Any],
+        successor_artifact: Mapping[str, Any],
+        expected: Mapping[str, Any],
+        issue_request: Mapping[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        normalized, claims = self.verify_authenticated(
+            artifact=successor_artifact,
+            expected=expected,
+            now=now,
+        )
+        self.store.record_rotation(
+            exchange_intent_id=exchange_intent_id,
+            operation_result_id=operation_result_id,
+            predecessor_lease_id=predecessor_lease_id,
+            successor_issue_idempotency_key=successor_issue_idempotency_key,
+            rotation_result=rotation_result,
+            successor_artifact=normalized,
+            successor_claims=claims,
+            issue_request=issue_request,
+        )
+        return normalized, claims
 
     def accept_authenticated(
         self,
@@ -1956,6 +2419,8 @@ __all__ = [
     "OperationLeaseManager",
     "OperationLeaseStore",
     "PinnedOperationLeaseKeyring",
+    "ROTATION_REQUEST_CONTRACT_VERSION",
+    "ROTATION_RESULT_CONTRACT_VERSION",
     "TRANSFER_OPERATION",
     "canonical_hash",
     "canonical_json_bytes",
