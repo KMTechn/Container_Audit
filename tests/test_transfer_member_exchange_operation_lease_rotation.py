@@ -33,6 +33,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeCoordinator,
     TransferMemberExchangeStore,
     _empty_membership_hash,
+    _matches_exact_member_map,
 )
 from transfer_seal import (
     CONTRACT_VERSION,
@@ -55,6 +56,25 @@ L1 = "operation-lease-rotation-l1"
 L2 = "operation-lease-rotation-l2"
 
 
+def test_two_pair_successor_member_map_rejects_swapped_new_barcodes():
+    expected = {
+        "unit-new-001": f"{ITEM}-SERIAL-NEW-001",
+        "unit-new-002": f"{ITEM}-SERIAL-NEW-002",
+    }
+    swapped = [
+        {
+            "unit_id": "unit-new-001",
+            "normalized_barcode": expected["unit-new-002"],
+        },
+        {
+            "unit_id": "unit-new-002",
+            "normalized_barcode": expected["unit-new-001"],
+        },
+    ]
+
+    assert not _matches_exact_member_map(swapped, expected)
+
+
 def _replace_exact(value):
     if isinstance(value, dict):
         return {key: _replace_exact(item) for key, item in value.items()}
@@ -66,6 +86,10 @@ def _replace_exact(value):
 def _updated_snapshot(before):
     snapshot = _replace_exact(deepcopy(before))
     source = snapshot["work_group_source"]
+    for member in source["members"]:
+        if member["unit_id"] == NEW_UNIT:
+            member["inbound_iin"] = "ORIGIN-IIN-NEW"
+            member["current_inbound_iin"] = source["source_iin"]
     member_ids = list(source["member_ids"])
     barcodes = [row["normalized_barcode"] for row in source["members"]]
     group_proofs = [
@@ -205,6 +229,20 @@ def _mismatch_accounting_iin(snapshot):
     return _refresh_topology(snapshot)
 
 
+def _mismatch_retained_member_provenance(snapshot):
+    for member in snapshot["work_group_source"]["members"]:
+        if member["unit_id"] == "unit-002":
+            member["inbound_iin"] = "ORIGIN-ALTERED"
+    return _refresh_topology(snapshot)
+
+
+def _mismatch_new_member_provenance(snapshot):
+    for member in snapshot["work_group_source"]["members"]:
+        if member["unit_id"] == NEW_UNIT:
+            member["inbound_iin"] = "ORIGIN-ALTERED"
+    return _refresh_topology(snapshot)
+
+
 def _target_response(snapshot):
     result = deepcopy(snapshot)
     source = snapshot["work_group_source"]
@@ -247,7 +285,8 @@ def _good_response(snapshot):
     member = {
         "unit_id": NEW_UNIT,
         "normalized_barcode": NEW_BARCODE,
-        "inbound_iin": source_iin,
+        "inbound_iin": "ORIGIN-IIN-NEW",
+        "current_inbound_iin": source_iin,
         "item_id": ITEM,
         "uom": "EA",
         "unit_state": "CONSUMED",
@@ -703,6 +742,8 @@ def test_lost_ack_restart_reposts_same_command_and_atomically_rotates_l1_to_l2(
         _mismatch_work_group_version,
         _mismatch_source_partitions,
         _mismatch_accounting_iin,
+        _mismatch_retained_member_provenance,
+        _mismatch_new_member_provenance,
     ),
     ids=(
         "target-bundle",
@@ -710,6 +751,8 @@ def test_lost_ack_restart_reposts_same_command_and_atomically_rotates_l1_to_l2(
         "work-group",
         "source-partition",
         "accounting-iin",
+        "retained-member-provenance",
+        "new-member-provenance",
     ),
 )
 def test_signed_successor_version_mismatch_is_fail_closed(tmp_path, mutator):

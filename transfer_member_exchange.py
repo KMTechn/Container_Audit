@@ -51,6 +51,14 @@ CENTRAL_ACKED_ROTATION_PENDING = "CENTRAL_ACKED_ROTATION_PENDING"
 GOOD_SOURCE_CONTRACT_VERSION = "logistics-good-replacement-source-v1"
 GOOD_SOURCE_RESOLVER_PATH = "/logistics/api/v1/replacements/good-source/resolve"
 MAX_EXCHANGE_PAIRS = 2
+MEMBER_PROVENANCE_FIELDS = (
+    "unit_id",
+    "normalized_barcode",
+    "inbound_iin",
+    "current_inbound_iin",
+    "item_id",
+    "uom",
+)
 PENDING_EXCHANGE_STATUSES = (
     "PREPARED",
     "COMMAND_READY",
@@ -80,6 +88,28 @@ def _canonical_json(value: Any) -> str:
 
 def _sha256(value: Any) -> str:
     return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def _member_provenance(row: Mapping[str, Any]) -> dict[str, str]:
+    provenance = {
+        field: str(row.get(field) or "").strip()
+        for field in MEMBER_PROVENANCE_FIELDS
+    }
+    try:
+        provenance["normalized_barcode"] = normalize_barcode(
+            provenance["normalized_barcode"]
+        )
+    except ValueError as exc:
+        raise TransferSealError(
+            "RESOLVER_CONTRACT_INVALID",
+            "교체 제품의 불변 원천 증거가 손상됐습니다.",
+        ) from exc
+    if any(not value for value in provenance.values()):
+        raise TransferSealError(
+            "RESOLVER_CONTRACT_INVALID",
+            "교체 제품의 불변 원천 증거가 누락됐습니다.",
+        )
+    return provenance
 
 
 def _identifier(value: Any, field: str) -> str:
@@ -119,6 +149,10 @@ def _member_pairs(value: Any) -> tuple[tuple[str, str], ...]:
     ):
         return ()
     return result
+
+
+def _matches_exact_member_map(value: Any, expected: Mapping[str, str]) -> bool:
+    return _member_pairs(value) == tuple(sorted(expected.items()))
 
 
 def _canonical_barcodes(value: Any) -> tuple[str, ...]:
@@ -1148,6 +1182,13 @@ class TransferMemberExchangeCoordinator:
                         list(source["by_barcode"].values())
                     )
                 ],
+                "member_provenance": [
+                    _member_provenance(row)
+                    for row in sorted(
+                        source["by_barcode"].values(),
+                        key=lambda value: str(value.get("unit_id") or ""),
+                    )
+                ],
                 "member_count": len(source["member_ids"]),
                 "normalized_barcodes": sorted(source["by_barcode"]),
                 "barcode_membership_hash": membership_hash(source["by_barcode"]),
@@ -1677,6 +1718,40 @@ class TransferMemberExchangeCoordinator:
         successor_source_partitions = source_partitions(successor_sources)
         predecessor_source_identities = source_identities(predecessor_sources)
         successor_source_identities = source_identities(successor_sources)
+
+        def member_rows(source: Mapping[str, Any]) -> dict[str, dict[str, Any]] | None:
+            rows = source.get("members")
+            if not isinstance(rows, list):
+                return None
+            normalized: dict[str, dict[str, Any]] = {}
+            for row in rows:
+                if not isinstance(row, Mapping):
+                    return None
+                unit_id = str(row.get("unit_id") or "")
+                if not unit_id or unit_id in normalized:
+                    return None
+                normalized[unit_id] = dict(row)
+            return normalized
+
+        predecessor_member_rows = member_rows(predecessor_source)
+        successor_member_rows = member_rows(successor_source)
+
+        def provenance_rows(value: Any) -> dict[str, dict[str, str]] | None:
+            if not isinstance(value, list):
+                return None
+            result: dict[str, dict[str, str]] = {}
+            try:
+                for row in value:
+                    if not isinstance(row, Mapping):
+                        return None
+                    provenance = _member_provenance(row)
+                    unit_id = provenance["unit_id"]
+                    if unit_id in result:
+                        return None
+                    result[unit_id] = provenance
+            except TransferSealError:
+                return None
+            return result
         stable_source_fields = (
             "authority_scope_id",
             "ledger_plane",
@@ -1707,12 +1782,37 @@ class TransferMemberExchangeCoordinator:
             for pair in command_pairs
             if isinstance(pair, Mapping)
         }
+        client_exact_evidence = command.get("client_exact_evidence")
+        source_evidence_by_bundle = (
+            client_exact_evidence.get("sources")
+            if isinstance(client_exact_evidence, Mapping)
+            else None
+        )
+        command_new_member_provenance: dict[str, dict[str, str]] | None = {}
+        if not isinstance(source_evidence_by_bundle, Mapping):
+            command_new_member_provenance = None
+        else:
+            for pair in command_pairs:
+                if not isinstance(pair, Mapping):
+                    command_new_member_provenance = None
+                    break
+                source_bundle_id = str(pair.get("new_source_bundle_id") or "")
+                new_unit_id = str(pair.get("new_unit_id") or "")
+                source_evidence = source_evidence_by_bundle.get(source_bundle_id)
+                rows = provenance_rows(
+                    source_evidence.get("member_provenance")
+                    if isinstance(source_evidence, Mapping)
+                    else None
+                )
+                if rows is None or new_unit_id not in rows:
+                    command_new_member_provenance = None
+                    break
+                command_new_member_provenance[new_unit_id] = rows[new_unit_id]
         predecessor_target_partition = (
             predecessor_source_partitions.get(target_bundle_id)
             if predecessor_source_partitions is not None
             else None
         )
-        client_exact_evidence = command.get("client_exact_evidence")
         target_evidence = (
             client_exact_evidence.get("target")
             if isinstance(client_exact_evidence, Mapping)
@@ -1812,6 +1912,21 @@ class TransferMemberExchangeCoordinator:
             or predecessor_source_identities is None
             or successor_source_identities is None
             or predecessor_source_identities != successor_source_identities
+            or predecessor_member_rows is None
+            or successor_member_rows is None
+            or command_new_member_provenance is None
+            or set(command_new_member_provenance) != new_member_ids
+            or set(successor_member_rows)
+            != ((set(predecessor_member_rows) - old_member_ids) | new_member_ids)
+            or any(
+                successor_member_rows[unit_id] != predecessor_member_rows[unit_id]
+                for unit_id in set(predecessor_member_rows) - old_member_ids
+            )
+            or any(
+                _member_provenance(successor_member_rows[unit_id])
+                != command_new_member_provenance[unit_id]
+                for unit_id in new_member_ids
+            )
             or any(
                 predecessor_source.get(field) != successor_source.get(field)
                 for field in stable_source_fields
@@ -1938,6 +2053,7 @@ class TransferMemberExchangeCoordinator:
                 if isinstance(predecessor_snapshot, Mapping)
                 else None
             )
+            successor_source = operation_snapshot.get("work_group_source")
             predecessor_members = (
                 predecessor_source.get("members")
                 if isinstance(predecessor_source, Mapping)
@@ -1979,6 +2095,12 @@ class TransferMemberExchangeCoordinator:
             if (
                 not predecessor_pairs
                 or len(expected_barcode_map) != len(expected_member_ids)
+                or not _matches_exact_member_map(
+                    successor_source.get("members")
+                    if isinstance(successor_source, Mapping)
+                    else None,
+                    expected_barcode_map,
+                )
                 or tuple(sorted(preflight.member_ids)) != tuple(expected_member_ids)
                 or tuple(sorted(preflight.normalized_barcodes))
                 != tuple(sorted(expected_barcode_map.values()))
