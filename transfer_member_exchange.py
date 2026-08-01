@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import secrets
 import sqlite3
 import unicodedata
 from contextlib import contextmanager
@@ -21,6 +22,14 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote, urlencode
 
+from label_qr import parse_new_format_qr
+from terminal_operation_lease import (
+    ROTATION_REQUEST_CONTRACT_VERSION,
+    ROTATION_RESULT_CONTRACT_VERSION,
+    OperationLeaseError,
+    OperationLeaseManager,
+    normalize_keyring,
+)
 from transfer_seal import (
     CONTRACT_VERSION,
     LogisticsTransferClient,
@@ -28,6 +37,8 @@ from transfer_seal import (
     membership_hash,
     normalize_barcode,
     source_identity_from_label,
+    transfer_operation_lease_binding,
+    validate_compact_phs2_fields,
     validate_compact_phs2_preflight,
 )
 
@@ -35,6 +46,8 @@ from transfer_seal import (
 EXCHANGE_SCHEMA_VERSION = "container-audit-member-exchange-v1"
 EXCHANGE_COMMAND_TYPE = "REPLACE_BUNDLE_MEMBERS"
 EXCHANGE_CAPABILITY_ID = "bundle_member_replacement_v1"
+ROTATION_CAPABILITY_ID = "terminal_operation_lease_rotation_v1"
+CENTRAL_ACKED_ROTATION_PENDING = "CENTRAL_ACKED_ROTATION_PENDING"
 GOOD_SOURCE_CONTRACT_VERSION = "logistics-good-replacement-source-v1"
 GOOD_SOURCE_RESOLVER_PATH = "/logistics/api/v1/replacements/good-source/resolve"
 MAX_EXCHANGE_PAIRS = 2
@@ -209,6 +222,9 @@ class MemberExchangeAttempt:
     damage_bundle_id: str = ""
     receipt_id: str = ""
     idempotency_key: str = ""
+    predecessor_operation_lease_id: str = ""
+    successor_operation_lease_id: str = ""
+    operation_lease_rotation_state: str = ""
     entity_versions: dict[str, int] = field(default_factory=dict)
     target_label_action: str = ""
     target_label_identity_remains_valid: bool = False
@@ -259,6 +275,9 @@ class TransferMemberExchangeStore:
                     new_barcodes_json TEXT NOT NULL,
                     pair_count INTEGER NOT NULL CHECK(pair_count BETWEEN 1 AND 2),
                     intent_hash TEXT NOT NULL UNIQUE,
+                    predecessor_lease_id TEXT,
+                    predecessor_evidence_json TEXT,
+                    successor_issue_idempotency_key TEXT,
                     command_id TEXT UNIQUE,
                     command_json TEXT,
                     command_hash TEXT,
@@ -292,6 +311,39 @@ class TransferMemberExchangeStore:
                 BEGIN SELECT RAISE(ABORT, 'transfer member exchange command is immutable'); END;
                 """
             )
+            columns = {
+                str(row["name"])
+                for row in conn.execute(
+                    "PRAGMA table_info(transfer_member_exchange_intents)"
+                ).fetchall()
+            }
+            for name in (
+                "predecessor_lease_id",
+                "predecessor_evidence_json",
+                "successor_issue_idempotency_key",
+            ):
+                if name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE transfer_member_exchange_intents ADD COLUMN {name} TEXT"
+                    )
+            conn.executescript(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                    uq_transfer_member_exchange_successor_issue_key
+                ON transfer_member_exchange_intents(successor_issue_idempotency_key)
+                WHERE successor_issue_idempotency_key IS NOT NULL;
+                CREATE TRIGGER IF NOT EXISTS
+                    trg_transfer_member_exchange_rotation_identity_immutable
+                BEFORE UPDATE OF predecessor_lease_id,predecessor_evidence_json,
+                                 successor_issue_idempotency_key
+                ON transfer_member_exchange_intents
+                WHEN NEW.predecessor_lease_id IS NOT OLD.predecessor_lease_id
+                  OR NEW.predecessor_evidence_json IS NOT OLD.predecessor_evidence_json
+                  OR NEW.successor_issue_idempotency_key
+                     IS NOT OLD.successor_issue_idempotency_key
+                BEGIN SELECT RAISE(ABORT, 'transfer member exchange rotation identity is immutable'); END;
+                """
+            )
 
     def prepare(
         self,
@@ -302,6 +354,7 @@ class TransferMemberExchangeStore:
         operator: str,
         old_barcodes: Iterable[str],
         new_barcodes: Iterable[str],
+        predecessor_lease_evidence: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
         old_values = tuple(normalize_barcode(value) for value in old_barcodes)
         new_values = tuple(normalize_barcode(value) for value in new_barcodes)
@@ -313,6 +366,27 @@ class TransferMemberExchangeStore:
             or set(old_values) & set(new_values)
         ):
             raise ValueError("exchange requires one or two unique, disjoint barcode pairs")
+        predecessor: dict[str, Any] | None = None
+        if predecessor_lease_evidence is not None:
+            predecessor = dict(predecessor_lease_evidence)
+            snapshot_hash = str(predecessor.get("snapshot_hash") or "").lower()
+            if (
+                set(predecessor) != {"token", "lease_id", "fence", "snapshot_hash"}
+                or not str(predecessor.get("token") or "").strip()
+                or not str(predecessor.get("lease_id") or "").strip()
+                or isinstance(predecessor.get("fence"), bool)
+                or not isinstance(predecessor.get("fence"), int)
+                or predecessor.get("fence") < 1
+                or len(snapshot_hash) != 64
+                or any(value not in "0123456789abcdef" for value in snapshot_hash)
+            ):
+                raise ValueError("predecessor lease evidence must be exact signed v1 proof")
+            predecessor = {
+                "token": str(predecessor["token"]),
+                "lease_id": _identifier(predecessor["lease_id"], "lease_id"),
+                "fence": int(predecessor["fence"]),
+                "snapshot_hash": snapshot_hash,
+            }
         material = {
             "master_label": _identifier(master_label, "master_label"),
             "source_identity": {
@@ -321,18 +395,37 @@ class TransferMemberExchangeStore:
             "item_id": _identifier(item_id, "item_id"),
             "old_barcodes": list(old_values),
             "new_barcodes": list(new_values),
+            "predecessor_lease_id": (
+                predecessor["lease_id"] if predecessor is not None else ""
+            ),
+            "predecessor_evidence_hash": (
+                _sha256(predecessor) if predecessor is not None else ""
+            ),
         }
         digest = _sha256(material)
         intent_id = f"transfer-exchange-intent-{digest[:32]}"
         now = _utc_now()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            successor_key = (
+                "container-operation-lease-rotation:"
+                + _sha256(
+                    {
+                        "intent_id": intent_id,
+                        "nonce": secrets.token_hex(32),
+                    }
+                )
+                if predecessor is not None
+                else None
+            )
             conn.execute(
                 """INSERT OR IGNORE INTO transfer_member_exchange_intents (
                        intent_id,schema_version,status,local_apply_status,master_label,
                        source_identity_json,item_id,operator,old_barcodes_json,
-                       new_barcodes_json,pair_count,intent_hash,created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       new_barcodes_json,pair_count,intent_hash,
+                       predecessor_lease_id,predecessor_evidence_json,
+                       successor_issue_idempotency_key,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     EXCHANGE_SCHEMA_VERSION,
@@ -346,6 +439,9 @@ class TransferMemberExchangeStore:
                     _canonical_json(material["new_barcodes"]),
                     len(old_values),
                     digest,
+                    predecessor["lease_id"] if predecessor is not None else None,
+                    _canonical_json(predecessor) if predecessor is not None else None,
+                    successor_key,
                     now,
                     now,
                 ),
@@ -359,6 +455,26 @@ class TransferMemberExchangeStore:
                     WHERE intent_id=?""",
                 (intent_id,),
             ).fetchone()
+            expected_predecessor_json = (
+                _canonical_json(predecessor) if predecessor is not None else None
+            )
+            if (
+                row is None
+                or row["predecessor_lease_id"]
+                != (predecessor["lease_id"] if predecessor is not None else None)
+                or row["predecessor_evidence_json"] != expected_predecessor_json
+                or (
+                    predecessor is not None
+                    and not str(row["successor_issue_idempotency_key"] or "").strip()
+                )
+                or (
+                    predecessor is None
+                    and row["successor_issue_idempotency_key"] is not None
+                )
+            ):
+                raise sqlite3.IntegrityError(
+                    "durable exchange rotation identity differs from retry"
+                )
             if dismissal is not None:
                 if (
                     row is None
@@ -496,9 +612,18 @@ class TransferMemberExchangeStore:
             "PHS2_MEMBER_NOT_AVAILABLE",
         }
         terminal_http = error.status_code in {400, 403, 409, 412, 422}
+        terminal_operation_lease = error.code.upper().startswith(
+            "OPERATION_LEASE_"
+        ) and error.code.upper() not in {
+            "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+        }
         status = (
             "OPERATOR_REVIEW"
-            if error.code.upper() in operator_review_codes or terminal_http
+            if (
+                error.code.upper() in operator_review_codes
+                or terminal_http
+                or terminal_operation_lease
+            )
             else "RETRY_WAIT"
         )
         with self._connect() as conn:
@@ -688,9 +813,11 @@ class TransferMemberExchangeCoordinator:
         self,
         store: TransferMemberExchangeStore,
         client: LogisticsTransferClient | None,
+        operation_lease_manager: OperationLeaseManager | None = None,
     ) -> None:
         self.store = store
         self.client = client
+        self.operation_lease_manager = operation_lease_manager
 
     def prepare(
         self,
@@ -701,7 +828,26 @@ class TransferMemberExchangeCoordinator:
         operator: str,
         old_barcodes: Iterable[str],
         new_barcodes: Iterable[str],
+        operation_lease_id: str = "",
     ) -> MemberExchangeAttempt:
+        predecessor_evidence = None
+        normalized_lease_id = str(operation_lease_id or "").strip()
+        if normalized_lease_id:
+            if self.client is None or self.operation_lease_manager is None:
+                raise TransferSealError(
+                    "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                    "현재 PC의 이적 확인 정보를 중앙 교체에 연결할 수 없습니다.",
+                )
+            try:
+                context = self.operation_lease_manager.rotation_predecessor_context(
+                    normalized_lease_id,
+                    device_id=self.client.device_id,
+                    source_host_id=self.client.source_host_id,
+                    authority_scope_id=self.client.authority_scope_id,
+                )
+                predecessor_evidence = context["evidence"]
+            except OperationLeaseError as exc:
+                raise TransferSealError(exc.code, exc.message) from exc
         row = self.store.prepare(
             master_label=master_label,
             source_identity=source_identity_from_label(master_label_fields),
@@ -709,10 +855,11 @@ class TransferMemberExchangeCoordinator:
             operator=operator,
             old_barcodes=old_barcodes,
             new_barcodes=new_barcodes,
+            predecessor_lease_evidence=predecessor_evidence,
         )
         return self._attempt(row)
 
-    def _require_capability(self) -> None:
+    def _require_capability(self, *, require_rotation: bool = False) -> None:
         if self.client is None:
             raise TransferSealError(
                 "LOGISTICS_CLIENT_NOT_CONFIGURED",
@@ -754,6 +901,32 @@ class TransferMemberExchangeCoordinator:
                 "CAPABILITY_UNAVAILABLE",
                 "서버가 exact 중앙 제품 교체 계약을 광고하지 않습니다.",
             )
+        if require_rotation:
+            rotation = (
+                capabilities.get(ROTATION_CAPABILITY_ID)
+                if isinstance(capabilities, Mapping)
+                else None
+            )
+            if (
+                ROTATION_CAPABILITY_ID not in ids
+                or not isinstance(rotation, Mapping)
+                or rotation.get("enabled") is not True
+                or rotation.get("command_type") != EXCHANGE_COMMAND_TYPE
+                or rotation.get("request_contract_version")
+                != ROTATION_REQUEST_CONTRACT_VERSION
+                or rotation.get("result_contract_version")
+                != ROTATION_RESULT_CONTRACT_VERSION
+                or rotation.get("predecessor_operation")
+                != "SEAL_TRANSFER_BUNDLE"
+                or rotation.get("successor_operation")
+                != "SEAL_TRANSFER_BUNDLE"
+                or rotation.get("atomic") is not True
+                or rotation.get("lost_ack_replay") != "STORED_COMMAND_RECEIPT"
+            ):
+                raise TransferSealError(
+                    "CAPABILITY_UNAVAILABLE",
+                    "서버가 원자적 이적 확인 정보 회전 계약을 광고하지 않습니다.",
+                )
 
     @staticmethod
     def _target_projection(resolved: Mapping[str, Any]) -> dict[str, Any]:
@@ -874,7 +1047,23 @@ class TransferMemberExchangeCoordinator:
         return source
 
     def _build_command(self, row: sqlite3.Row) -> dict[str, Any]:
-        self._require_capability()
+        predecessor_evidence = (
+            json.loads(row["predecessor_evidence_json"])
+            if row["predecessor_evidence_json"]
+            else None
+        )
+        require_rotation = predecessor_evidence is not None
+        if require_rotation and (
+            not str(row["predecessor_lease_id"] or "").strip()
+            or not str(row["successor_issue_idempotency_key"] or "").strip()
+            or not isinstance(predecessor_evidence, Mapping)
+            or predecessor_evidence.get("lease_id") != row["predecessor_lease_id"]
+        ):
+            raise TransferSealError(
+                "OPERATION_LEASE_ROTATION_EVIDENCE_MISSING",
+                "중앙 교체에 필요한 기존 이적 확인 정보가 없습니다.",
+            )
+        self._require_capability(require_rotation=require_rotation)
         assert self.client is not None
         identity = json.loads(row["source_identity_json"])
         resolved_target = self.client.resolve_source(
@@ -982,6 +1171,20 @@ class TransferMemberExchangeCoordinator:
                 }
             )[:24].upper()
         )
+        payload: dict[str, Any] = {
+            "target_bundle_id": target["bundle_id"],
+            "damage_bundle_id": damage_bundle_id,
+            "damage_external_label": damage_bundle_id,
+            "pairs": pairs,
+        }
+        if require_rotation:
+            payload["operation_lease_rotation"] = {
+                "contract_version": ROTATION_REQUEST_CONTRACT_VERSION,
+                "predecessor": dict(predecessor_evidence),
+                "successor_issue_idempotency_key": str(
+                    row["successor_issue_idempotency_key"]
+                ),
+            }
         return {
             "contract_version": CONTRACT_VERSION,
             "command_type": EXCHANGE_COMMAND_TYPE,
@@ -991,12 +1194,7 @@ class TransferMemberExchangeCoordinator:
             "plane_epoch": target["plane_epoch"],
             "idempotency_key": f"container-member-exchange:{row['intent_hash']}",
             "expected_versions": expected_versions,
-            "payload": {
-                "target_bundle_id": target["bundle_id"],
-                "damage_bundle_id": damage_bundle_id,
-                "damage_external_label": damage_bundle_id,
-                "pairs": pairs,
-            },
+            "payload": payload,
             "client_exact_evidence": {
                 "target": {
                     "member_ids": list(target["member_ids"]),
@@ -1024,9 +1222,69 @@ class TransferMemberExchangeCoordinator:
         }
 
     @staticmethod
+    def _rotation_result(
+        command: Mapping[str, Any], receipt: Mapping[str, Any]
+    ) -> dict[str, Any] | None:
+        payload = command.get("payload")
+        payload = payload if isinstance(payload, Mapping) else {}
+        request = payload.get("operation_lease_rotation")
+        data = receipt.get("data")
+        data = data if isinstance(data, Mapping) else receipt
+        result = data.get("operation_lease_rotation") if isinstance(data, Mapping) else None
+        if request is None:
+            if result is not None:
+                raise TransferSealError(
+                    "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                    "서버가 요청하지 않은 이적 확인 정보 회전 결과를 반환했습니다.",
+                )
+            return None
+        if (
+            not isinstance(request, Mapping)
+            or set(request)
+            != {"contract_version", "predecessor", "successor_issue_idempotency_key"}
+            or request.get("contract_version") != ROTATION_REQUEST_CONTRACT_VERSION
+            or not isinstance(request.get("predecessor"), Mapping)
+            or set(request["predecessor"])
+            != {"token", "lease_id", "fence", "snapshot_hash"}
+            or not isinstance(result, Mapping)
+            or set(result) != {"contract_version", "predecessor", "successor"}
+            or result.get("contract_version") != ROTATION_RESULT_CONTRACT_VERSION
+        ):
+            raise TransferSealError(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "서버 이적 확인 정보 회전 계약이 exact v1 형식과 다릅니다.",
+            )
+        predecessor = result.get("predecessor")
+        successor = result.get("successor")
+        request_predecessor = request["predecessor"]
+        receipt_id = str(receipt.get("receipt_id") or "").strip()
+        if (
+            not isinstance(predecessor, Mapping)
+            or set(predecessor)
+            != {"lease_id", "status", "fence", "operation_result_id", "consumed_at"}
+            or predecessor.get("lease_id") != request_predecessor.get("lease_id")
+            or predecessor.get("status") != "CONSUMED"
+            or predecessor.get("fence") != request_predecessor.get("fence")
+            or predecessor.get("operation_result_id") != receipt_id
+            or not str(predecessor.get("consumed_at") or "").strip()
+            or not isinstance(successor, Mapping)
+            or set(successor) != {"issue_idempotency_key", "artifact"}
+            or successor.get("issue_idempotency_key")
+            != request.get("successor_issue_idempotency_key")
+            or not isinstance(successor.get("artifact"), Mapping)
+            or successor["artifact"].get("lease_id") == predecessor.get("lease_id")
+        ):
+            raise TransferSealError(
+                "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                "서버 이적 확인 정보 회전 결과가 요청과 일치하지 않습니다.",
+            )
+        return dict(result)
+
+    @staticmethod
     def _validate_receipt(
         command: Mapping[str, Any], receipt: Mapping[str, Any]
     ) -> None:
+        TransferMemberExchangeCoordinator._rotation_result(command, receipt)
         data_value = receipt.get("data")
         data = dict(data_value) if isinstance(data_value, Mapping) else dict(receipt)
         payload = command["payload"]
@@ -1210,6 +1468,176 @@ class TransferMemberExchangeCoordinator:
                 "서버 교체 receipt가 요청한 exact membership/CAS 결과와 일치하지 않습니다.",
             )
 
+    def _verify_rotation_receipt(
+        self,
+        row: sqlite3.Row,
+        command: Mapping[str, Any],
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        result = self._rotation_result(command, receipt)
+        if result is None:
+            return None
+        if self.client is None or self.operation_lease_manager is None:
+            raise TransferSealError(
+                "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                "회전된 이적 확인 정보를 검증할 로컬 보안 저장소가 없습니다.",
+            )
+        request = command["payload"]["operation_lease_rotation"]
+        predecessor_id = str(request["predecessor"]["lease_id"])
+        try:
+            predecessor_context = (
+                self.operation_lease_manager.rotation_predecessor_context(
+                    predecessor_id,
+                    device_id=self.client.device_id,
+                    source_host_id=self.client.source_host_id,
+                    authority_scope_id=self.client.authority_scope_id,
+                    allow_consumed_recovery=True,
+                )
+            )
+            if predecessor_context["evidence"] != dict(request["predecessor"]):
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_ROTATION_PREDECESSOR_MISMATCH",
+                    "durable predecessor differs from the immutable exchange command",
+                )
+            issue_request = dict(predecessor_context["issue_request"])
+            scan_payload = str(issue_request.get("scan_payload") or "").strip()
+            fields = parse_new_format_qr(scan_payload)
+            canonical_fields = validate_compact_phs2_fields(fields or {})
+            successor = result["successor"]
+            artifact = dict(successor["artifact"])
+            operation_snapshot = artifact.get("operation_snapshot")
+            if not isinstance(operation_snapshot, Mapping):
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_SNAPSHOT_INVALID",
+                    "rotation successor has no exact operation snapshot",
+                )
+            preflight = validate_compact_phs2_preflight(
+                canonical_fields, operation_snapshot
+            )
+            keyring = normalize_keyring(artifact.get("keyring"))
+            binding = transfer_operation_lease_binding(
+                client=self.client,
+                scan_payload=scan_payload,
+                preflight=preflight,
+                operation_snapshot=operation_snapshot,
+                site_id=keyring["site_id"],
+            )
+            normalized, claims = self.operation_lease_manager.verify_authenticated(
+                artifact=artifact,
+                expected=binding,
+            )
+            predecessor_artifact = predecessor_context["artifact"]
+            predecessor_snapshot = predecessor_artifact.get("operation_snapshot")
+            predecessor_source = (
+                predecessor_snapshot.get("work_group_source")
+                if isinstance(predecessor_snapshot, Mapping)
+                else None
+            )
+            predecessor_members = (
+                predecessor_source.get("members")
+                if isinstance(predecessor_source, Mapping)
+                else None
+            )
+            predecessor_pairs = _member_pairs(predecessor_members)
+            command_pairs = list(command["payload"].get("pairs") or [])
+            old_ids = {
+                str(pair.get("old_unit_id") or "")
+                for pair in command_pairs
+                if isinstance(pair, Mapping)
+            }
+            new_ids = {
+                str(pair.get("new_unit_id") or "")
+                for pair in command_pairs
+                if isinstance(pair, Mapping)
+            }
+            expected_member_ids = sorted(
+                ({unit_id for unit_id, _barcode in predecessor_pairs} - old_ids)
+                | new_ids
+            )
+            expected_barcode_map = dict(predecessor_pairs)
+            for old_id in old_ids:
+                expected_barcode_map.pop(old_id, None)
+            exact_sources = command.get("client_exact_evidence", {}).get("sources", {})
+            for pair in command_pairs:
+                source = (
+                    exact_sources.get(pair.get("new_source_bundle_id"))
+                    if isinstance(exact_sources, Mapping)
+                    and isinstance(pair, Mapping)
+                    else None
+                )
+                source_map = dict(_member_pairs(source.get("members"))) if isinstance(
+                    source, Mapping
+                ) else {}
+                new_id = str(pair.get("new_unit_id") or "")
+                if new_id in source_map:
+                    expected_barcode_map[new_id] = source_map[new_id]
+            if (
+                not predecessor_pairs
+                or len(expected_barcode_map) != len(expected_member_ids)
+                or tuple(sorted(preflight.member_ids)) != tuple(expected_member_ids)
+                or tuple(sorted(preflight.normalized_barcodes))
+                != tuple(sorted(expected_barcode_map.values()))
+                or claims.get("snapshot_hash")
+                == predecessor_context["claims"].get("snapshot_hash")
+                or claims.get("membership_hash")
+                == predecessor_context["claims"].get("membership_hash")
+                or claims.get("expected_versions")
+                == predecessor_context["claims"].get("expected_versions")
+            ):
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_ROTATION_SUCCESSOR_SNAPSHOT_MISMATCH",
+                    "rotation successor is not the exact post-replacement work-group snapshot",
+                )
+            if claims.get("fence") != int(request["predecessor"]["fence"]) + 1:
+                raise OperationLeaseError(
+                    "OPERATION_LEASE_ROTATION_RESULT_INVALID",
+                    "rotation successor fence is not the next resource fence",
+                )
+        except OperationLeaseError as exc:
+            raise TransferSealError(exc.code, exc.message) from exc
+        return {
+            "result": result,
+            "artifact": normalized,
+            "claims": claims,
+            "binding": binding,
+            "issue_request": issue_request,
+        }
+
+    def ensure_local_rotation(self, intent_id: str) -> str:
+        """Persist verified L1 consumption and L2 before tray membership changes."""
+
+        row = self.store.load(intent_id)
+        if row["status"] != "ACKED" or not row["receipt_json"]:
+            raise TransferSealError(
+                "OPERATION_LEASE_ROTATION_RESULT_MISSING",
+                "중앙 교체 완료 영수증이 아직 없습니다.",
+                retryable=True,
+                committed=None,
+            )
+        command = json.loads(row["command_json"] or "{}")
+        receipt = json.loads(row["receipt_json"])
+        verified = self._verify_rotation_receipt(row, command, receipt)
+        if verified is None:
+            return ""
+        request = command["payload"]["operation_lease_rotation"]
+        result = verified["result"]
+        try:
+            normalized, _claims = self.operation_lease_manager.accept_rotation(
+                exchange_intent_id=str(row["intent_id"]),
+                operation_result_id=str(receipt["receipt_id"]),
+                predecessor_lease_id=str(request["predecessor"]["lease_id"]),
+                successor_issue_idempotency_key=str(
+                    request["successor_issue_idempotency_key"]
+                ),
+                rotation_result=result,
+                successor_artifact=verified["artifact"],
+                expected=verified["binding"],
+                issue_request=verified["issue_request"],
+            )
+        except OperationLeaseError as exc:
+            raise TransferSealError(exc.code, exc.message) from exc
+        return str(normalized["lease_id"])
+
     def attempt(self, intent_id: str) -> MemberExchangeAttempt:
         row = self.store.load(intent_id)
         if self.store.has_dismissed_command_fence(intent_id):
@@ -1224,13 +1652,20 @@ class TransferMemberExchangeCoordinator:
             if row["command_json"] is None:
                 row = self.store.bind_command(intent_id, self._build_command(row))
             command = json.loads(row["command_json"])
+            rotation_payload = command.get("payload")
+            rotation_command = (
+                isinstance(rotation_payload, Mapping)
+                and isinstance(
+                    rotation_payload.get("operation_lease_rotation"), Mapping
+                )
+            )
             if self.client is None:
                 raise TransferSealError(
                     "LOGISTICS_CLIENT_NOT_CONFIGURED",
                     "물류 서버 설정이 없어 중앙 제품 교체를 진행할 수 없습니다.",
                     retryable=True,
                 )
-            if command_was_durable:
+            if command_was_durable and not rotation_command:
                 receipt_lookup = getattr(self.client, "get_receipt", None)
                 if callable(receipt_lookup):
                     try:
@@ -1246,11 +1681,13 @@ class TransferMemberExchangeCoordinator:
                         if operator_review:
                             try:
                                 self._validate_receipt(command, receipt)
+                                self._verify_rotation_receipt(row, command, receipt)
                                 row = self.store.record_receipt(intent_id, receipt)
                             except Exception:
                                 return self._attempt(row)
                         else:
                             self._validate_receipt(command, receipt)
+                            self._verify_rotation_receipt(row, command, receipt)
                             row = self.store.record_receipt(intent_id, receipt)
                         return self._attempt(row)
                 if operator_review:
@@ -1258,8 +1695,14 @@ class TransferMemberExchangeCoordinator:
                     # bundles. It is receipt-only from this point and must not
                     # issue the immutable POST again.
                     return self._attempt(row)
+            elif command_was_durable and operator_review:
+                # A terminally reviewed rotation command is never posted again.
+                # Lost-ACK rows remain RETRY_WAIT and replay the exact machine-
+                # authenticated POST so L2 is not exposed through receipt GET.
+                return self._attempt(row)
             receipt = self.client.replace_bundle_members(command)
             self._validate_receipt(command, receipt)
+            self._verify_rotation_receipt(row, command, receipt)
             row = self.store.record_receipt(intent_id, receipt)
         except TransferSealError as exc:
             row = self.store.record_error(intent_id, exc)
@@ -1294,6 +1737,32 @@ class TransferMemberExchangeCoordinator:
             if isinstance(receipt, Mapping) and isinstance(receipt.get("data"), Mapping)
             else receipt
         )
+        rotation_request = (
+            payload.get("operation_lease_rotation")
+            if isinstance(payload.get("operation_lease_rotation"), Mapping)
+            else {}
+        )
+        rotation_predecessor = (
+            rotation_request.get("predecessor")
+            if isinstance(rotation_request.get("predecessor"), Mapping)
+            else {}
+        )
+        rotation_result = (
+            receipt_data.get("operation_lease_rotation")
+            if isinstance(receipt_data, Mapping)
+            and isinstance(receipt_data.get("operation_lease_rotation"), Mapping)
+            else {}
+        )
+        rotation_successor = (
+            rotation_result.get("successor")
+            if isinstance(rotation_result.get("successor"), Mapping)
+            else {}
+        )
+        successor_artifact = (
+            rotation_successor.get("artifact")
+            if isinstance(rotation_successor.get("artifact"), Mapping)
+            else {}
+        )
         versions = receipt.get("entity_versions") if isinstance(receipt, Mapping) else {}
         return MemberExchangeAttempt(
             intent_id=str(row["intent_id"]),
@@ -1305,6 +1774,21 @@ class TransferMemberExchangeCoordinator:
             damage_bundle_id=str(payload.get("damage_bundle_id") or ""),
             receipt_id=str(receipt.get("receipt_id") or ""),
             idempotency_key=str(row["command_id"] or ""),
+            predecessor_operation_lease_id=str(
+                rotation_predecessor.get("lease_id") or ""
+            ),
+            successor_operation_lease_id=str(
+                successor_artifact.get("lease_id") or ""
+            ),
+            operation_lease_rotation_state=(
+                CENTRAL_ACKED_ROTATION_PENDING
+                if (
+                    rotation_result
+                    and row["status"] == "ACKED"
+                    and row["local_apply_status"] != "APPLIED"
+                )
+                else ("ROTATION_APPLIED" if rotation_result else "")
+            ),
             entity_versions={
                 str(key): int(value)
                 for key, value in (versions.items() if isinstance(versions, Mapping) else ())

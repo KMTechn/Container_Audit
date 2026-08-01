@@ -1206,6 +1206,7 @@ class ContainerAudit:
         self.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
             TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
             self.transfer_seal_coordinator.client,
+            getattr(self.transfer_seal_coordinator, "operation_lease_manager", None),
         )
         self.phs_label_exchange_coordinator = PHSLabelExchangeCoordinator(
             PHSLabelExchangeJournal(
@@ -8311,6 +8312,7 @@ class ContainerAudit:
         coordinator = TransferMemberExchangeCoordinator(
             TransferMemberExchangeStore(seal_coordinator.store.db_path),
             seal_coordinator.client,
+            getattr(seal_coordinator, "operation_lease_manager", None),
         )
         self.transfer_member_exchange_coordinator = coordinator
         return coordinator
@@ -10268,6 +10270,28 @@ class ContainerAudit:
     ) -> bool:
         coordinator = self._transfer_member_exchange_runtime()
         try:
+            successor_lease_id = coordinator.ensure_local_rotation(attempt.intent_id)
+        except TransferSealError as exc:
+            coordinator.store.mark_local_review(
+                attempt.intent_id,
+                f"{exc.code}: authenticated lease rotation could not be accepted",
+            )
+            return False
+        except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+            # The central receipt remains ACKED/PENDING and blocks every unsafe
+            # action. Restart can retry the same immutable receipt and L2.
+            print(
+                "중앙 제품 교체 lease 회전 저장 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            return False
+        if attempt.predecessor_operation_lease_id and not successor_lease_id:
+            coordinator.store.mark_local_review(
+                attempt.intent_id,
+                "central exchange receipt has no durable successor operation lease",
+            )
+            return False
+        try:
             after, scan_times, evidence = self._member_exchange_apply_plan(attempt)
         except (TypeError, ValueError) as exc:
             coordinator.store.mark_local_review(attempt.intent_id, str(exc))
@@ -10275,10 +10299,37 @@ class ContainerAudit:
         before = list(self.current_tray.scanned_barcodes)
         before_times = list(self.current_tray.scan_times)
         before_error_state = bool(self.current_tray.has_error_or_reset)
+        before_operation_lease_id = str(
+            getattr(self.current_tray, "operation_lease_id", "") or ""
+        )
+        if attempt.predecessor_operation_lease_id and before_operation_lease_id not in {
+            attempt.predecessor_operation_lease_id,
+            successor_lease_id,
+        }:
+            coordinator.store.mark_local_review(
+                attempt.intent_id,
+                "active tray operation lease differs from central rotation predecessor",
+            )
+            return False
+        if successor_lease_id:
+            self.current_tray.operation_lease_id = successor_lease_id
         self.current_tray.scanned_barcodes = after
         self.current_tray.scan_times = scan_times
         self.current_tray.has_error_or_reset = True
+        evidence.update(
+            {
+                "predecessor_operation_lease_id": (
+                    attempt.predecessor_operation_lease_id or None
+                ),
+                "successor_operation_lease_id": successor_lease_id or None,
+                "operation_lease_rotation_durable": bool(successor_lease_id),
+            }
+        )
+        evidence["evidence_hash"] = stable_hash(
+            {key: value for key, value in evidence.items() if key != "evidence_hash"}
+        )
         if not self._save_current_tray_state():
+            self.current_tray.operation_lease_id = before_operation_lease_id
             self.current_tray.scanned_barcodes = before
             self.current_tray.scan_times = before_times
             self.current_tray.has_error_or_reset = before_error_state
@@ -10289,6 +10340,7 @@ class ContainerAudit:
             else "PRODUCT_EXCHANGE_COMPLETED"
         )
         if not self._log_event(event_type, detail=evidence, synchronous=True):
+            self.current_tray.operation_lease_id = before_operation_lease_id
             self.current_tray.scanned_barcodes = before
             self.current_tray.scan_times = before_times
             self.current_tray.has_error_or_reset = before_error_state
@@ -10332,11 +10384,43 @@ class ContainerAudit:
                     return
                 continue
             if not (old_values & current) and new_values.issubset(current):
+                try:
+                    successor_lease_id = coordinator.ensure_local_rotation(
+                        attempt.intent_id
+                    )
+                except TransferSealError as exc:
+                    coordinator.store.mark_local_review(
+                        attempt.intent_id,
+                        f"{exc.code}: saved tray cannot verify lease rotation",
+                    )
+                    return
+                except (KeyError, TypeError, ValueError, sqlite3.Error):
+                    # Keep ACKED/PENDING. The next restart or action retries the
+                    # same stored receipt without issuing another command.
+                    return
+                current_lease_id = str(
+                    getattr(self.current_tray, "operation_lease_id", "") or ""
+                )
+                if successor_lease_id and current_lease_id != successor_lease_id:
+                    if current_lease_id != attempt.predecessor_operation_lease_id:
+                        coordinator.store.mark_local_review(
+                            attempt.intent_id,
+                            "saved tray lease is neither the rotation predecessor nor successor",
+                        )
+                        return
+                    self.current_tray.operation_lease_id = successor_lease_id
+                    if not self._save_current_tray_state():
+                        self.current_tray.operation_lease_id = current_lease_id
+                        return
                 evidence = {
                     "exchange_intent_id": attempt.intent_id,
                     "central_receipt_id": attempt.receipt_id,
                     "reconciled_existing_state": True,
                     "after_selection_hash": stable_hash(sorted(current)),
+                    "predecessor_operation_lease_id": (
+                        attempt.predecessor_operation_lease_id or None
+                    ),
+                    "successor_operation_lease_id": successor_lease_id or None,
                 }
                 try:
                     coordinator.store.mark_local_applied(attempt.intent_id, evidence)
@@ -10465,6 +10549,17 @@ class ContainerAudit:
                 )
                 return
             coordinator = self._transfer_member_exchange_runtime()
+            operation_lease_id = str(
+                getattr(self.current_tray, "operation_lease_id", "") or ""
+            ).strip()
+            if not operation_lease_id:
+                self.exchange_complete_button.config(state=tk.NORMAL)
+                messagebox.showerror(
+                    "중앙 교체 차단",
+                    "현재 트레이의 이적 확인 정보가 없어 제품을 교체할 수 없습니다. "
+                    "현재 트레이를 유지하고 관리자에게 문의하세요.",
+                )
+                return
             try:
                 prepared = coordinator.prepare(
                     master_label=self.current_tray.master_label_code,
@@ -10473,10 +10568,11 @@ class ContainerAudit:
                     operator=persistent_operator_name(self.worker_name),
                     old_barcodes=session.defective_barcodes,
                     new_barcodes=session.good_barcodes,
+                    operation_lease_id=operation_lease_id,
                 )
                 self._active_transfer_exchange_intent_id = prepared.intent_id
                 attempt = coordinator.attempt(prepared.intent_id)
-            except (TypeError, ValueError) as exc:
+            except (TransferSealError, TypeError, ValueError) as exc:
                 print(
                     "중앙 제품 교체 준비 실패: "
                     f"{exc.__class__.__name__}: {exc}"
