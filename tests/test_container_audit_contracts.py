@@ -875,6 +875,7 @@ def test_updater_script_backs_up_before_copy_and_rolls_back_on_failure():
     assert script.count("robocopy ") == 3
     assert script.count(" /MIR ") == 3
     assert script.count(" /IS ") == 2
+    assert script.count(" /IT ") == 2
     assert "move /Y" in script
     assert "state=BACKUP_COMPLETED" in script
     assert "state=UPDATE_COMPLETED" in script
@@ -1034,6 +1035,7 @@ def test_robocopy_mirror_exclusions_preserve_all_runtime_state(tmp_path):
             str(application),
             "/MIR",
             "/IS",
+            "/IT",
             "/COPY:DAT",
             "/DCOPY:DAT",
             "/R:1",

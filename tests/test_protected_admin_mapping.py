@@ -725,6 +725,10 @@ def test_cli_dry_run_ignores_credential_environment_and_does_not_prompt(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL integration test")
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS", "").lower() == "true",
+    reason="GitHub Actions is not the trusted Windows ACL integration target",
+)
 def test_windows_empty_temp_file_acl_readback_is_exact(tmp_path: Path) -> None:
     identity = subprocess.run(
         ["whoami.exe"],
@@ -749,6 +753,10 @@ def test_windows_empty_temp_file_acl_readback_is_exact(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL integration test")
+@pytest.mark.skipif(
+    os.environ.get("GITHUB_ACTIONS", "").lower() == "true",
+    reason="GitHub Actions is not the trusted Windows ACL integration target",
+)
 def test_windows_temp_profile_acl_integration(tmp_path: Path) -> None:
     import ctypes
 
