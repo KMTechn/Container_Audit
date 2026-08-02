@@ -1496,6 +1496,43 @@ def test_check_for_updates_defaults_off_before_network(monkeypatch):
     assert container_audit_module.check_for_updates() == (None, None, None)
 
 
+def test_frozen_release_bootstraps_signed_private_manifest_without_saved_settings(monkeypatch):
+    monkeypatch.delenv(container_audit_module.UPDATE_PROVIDER_ENV, raising=False)
+    monkeypatch.delenv(container_audit_module.UPDATE_MANIFEST_URL_ENV, raising=False)
+    monkeypatch.delenv(container_audit_module.UPDATE_MANIFEST_SIGNATURE_URL_ENV, raising=False)
+    monkeypatch.delenv(container_audit_module.UPDATE_MANIFEST_PUBLIC_KEY_ENV, raising=False)
+    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(container_audit_module, "_load_update_settings", lambda: {})
+
+    assert container_audit_module._get_update_provider() == "private_manifest"
+    assert (
+        container_audit_module._get_update_manifest_url()
+        == container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_URL
+    )
+    assert (
+        container_audit_module._get_update_manifest_signature_url(
+            container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_URL
+        )
+        == container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL
+    )
+    assert (
+        container_audit_module._get_update_manifest_public_key()
+        == container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
+    )
+
+
+def test_frozen_release_respects_explicit_saved_provider_off(monkeypatch):
+    monkeypatch.delenv(container_audit_module.UPDATE_PROVIDER_ENV, raising=False)
+    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(
+        container_audit_module,
+        "_load_update_settings",
+        lambda: {"provider": "off"},
+    )
+
+    assert container_audit_module._get_update_provider() == "off"
+
+
 def test_check_for_updates_skips_zip_without_checksum(monkeypatch):
     monkeypatch.setenv("CONTAINER_AUDIT_UPDATE_PROVIDER", "github")
 

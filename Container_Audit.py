@@ -282,6 +282,14 @@ MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
 UPDATE_EVIDENCE_SCHEMA = "container-audit-update-evidence-v1"
+UPDATE_BOOTSTRAP_MANIFEST_URL = (
+    "https://worker.kmtecherp.com/static/update-feed/channels/"
+    "container_audit/stable/latest.json"
+)
+UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL = UPDATE_BOOTSTRAP_MANIFEST_URL + ".sig"
+UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY = (
+    "10d3baf546e05daaa0bbbbdd3f69630c90a245293a1690e2cfa47071292ac4a2"
+)
 
 
 def _default_automatic_install_policy() -> Dict[str, Any]:
@@ -366,7 +374,14 @@ def _verify_update_checksum(zip_path: str, checksum_text: str, *, expected_filen
 
 def _get_update_provider() -> str:
     settings = _load_update_settings()
-    return str(os.environ.get(UPDATE_PROVIDER_ENV) or settings.get("provider") or UPDATE_PROVIDER_OFF).strip().lower()
+    configured = os.environ.get(UPDATE_PROVIDER_ENV)
+    if configured is None:
+        configured = settings.get("provider")
+    if configured is not None:
+        return str(configured).strip().lower() or UPDATE_PROVIDER_OFF
+    if _release_runtime_mode():
+        return UPDATE_PROVIDER_PRIVATE_MANIFEST
+    return UPDATE_PROVIDER_OFF
 
 
 def _get_update_channel() -> str:
@@ -392,17 +407,34 @@ def _load_update_settings() -> Dict[str, str]:
 
 def _get_update_manifest_url() -> str:
     settings = _load_update_settings()
-    return str(os.environ.get(UPDATE_MANIFEST_URL_ENV) or settings.get("manifest_url") or "").strip()
+    return str(
+        os.environ.get(UPDATE_MANIFEST_URL_ENV)
+        or settings.get("manifest_url")
+        or UPDATE_BOOTSTRAP_MANIFEST_URL
+    ).strip()
 
 
 def _get_update_manifest_signature_url(manifest_url: str) -> str:
     settings = _load_update_settings()
-    return str(os.environ.get(UPDATE_MANIFEST_SIGNATURE_URL_ENV) or settings.get("manifest_signature_url") or "").strip() or f"{manifest_url}.sig"
+    configured = str(
+        os.environ.get(UPDATE_MANIFEST_SIGNATURE_URL_ENV)
+        or settings.get("manifest_signature_url")
+        or ""
+    ).strip()
+    if configured:
+        return configured
+    if manifest_url == UPDATE_BOOTSTRAP_MANIFEST_URL:
+        return UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL
+    return f"{manifest_url}.sig"
 
 
 def _get_update_manifest_public_key() -> str:
     settings = _load_update_settings()
-    return str(os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV) or settings.get("manifest_public_key") or "").strip()
+    return str(
+        os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV)
+        or settings.get("manifest_public_key")
+        or UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
+    ).strip()
 
 
 def _check_github_release_for_updates() -> Optional[Dict[str, Any]]:
