@@ -32,7 +32,7 @@
 cd C:\company\program\Container_Audit
 pip install -r requirements.txt
 python Container_Audit.py
-python -m py_compile Container_Audit.py
+python -m pytest -q -p no:cacheprovider <changed-test-node>
 ```
 
 수동 테스트용 입력 후보:

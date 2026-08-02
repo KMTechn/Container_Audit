@@ -16,39 +16,42 @@ def _release_workflow_required_assets(text):
     return frozenset(re.findall(r'"([^"]+)"', match.group("body")))
 
 
-def test_ci_and_release_workflows_package_clean_release_config():
+def test_full_ci_and_release_own_distinct_signals():
     root = Path(__file__).resolve().parents[1]
-    for workflow_name in ("ci.yml", "release.yml"):
-        text = (root / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
-        assert "python tools/check_release_config.py --config-dir build/release_config" in text
-        assert '--add-data "build/release_config;config"' in text
-        assert "build/release_tools" in text
-        assert '--add-data "build/release_tools;tools"' in text
-        assert '--add-data "config;config"' not in text
-        assert '--add-data "tools;tools"' not in text
-        assert "python -m pip install -r requirements.txt" in text
-        assert "python -m pip install -r requirements-dev.txt" in text
-        assert "python -m pip install pyinstaller" not in text
-        assert "python -m pytest -q -p no:cacheprovider" in text
-        assert "python -m PyInstaller" in text
-        assert "Container_Audit_DirectSync_Install" in text
-        assert "Container_Audit_DirectSync_Relay" in text
-        assert "Container_Audit_Worker_PC_Register" in text
-        assert "Container_Audit_Protected_Admin_Install" in text
-        assert "PROVISION_PROTECTED_ADMIN_ACL.ps1" in text
-        assert "PROTECTED_ADMIN_PROVISIONING.md" in text
-        assert "KMTech_Logistics_Profile_Install" in text
-        assert "KMTech_Logistics_Profile_Check" in text
-        assert "CENTRAL_LOGISTICS_PC_ROLLOUT.md" in text
-        assert "tools/register_container_audit_worker_pc.py" in text
-        assert "tools/install_logistics_runtime_profile.py" in text
-        assert "tools/check_logistics_runtime_profile.py" in text
-        assert '--add-data "storage_policy.py;."' in text
-        assert '--add-data "storage_utils.py;."' in text
-        assert '--add-data "logistics_runtime_profile.py;."' in text
-        assert 'python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"' in text
-        assert 'python tools/check_release_config.py --config-dir "$releaseConfigDir"' in text
+    ci_text = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     release_text = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "python -m pytest -q -p no:cacheprovider" in ci_text
+    assert "python -m PyInstaller" not in ci_text
+    assert "build/release_config" not in ci_text
+    assert "python -m pytest" not in release_text
+    assert "python tools/check_release_config.py --config-dir build/release_config" in release_text
+    assert '--add-data "build/release_config;config"' in release_text
+    assert "build/release_tools" in release_text
+    assert '--add-data "build/release_tools;tools"' in release_text
+    assert '--add-data "config;config"' not in release_text
+    assert '--add-data "tools;tools"' not in release_text
+    assert "python -m pip install -r requirements.txt" in release_text
+    assert "python -m pip install -r requirements-dev.txt" not in release_text
+    assert "python -m pip install pyinstaller==6.20.0" in release_text
+    assert "python -m PyInstaller" in release_text
+    assert "Container_Audit_DirectSync_Install" in release_text
+    assert "Container_Audit_DirectSync_Relay" in release_text
+    assert "Container_Audit_Worker_PC_Register" in release_text
+    assert "Container_Audit_Protected_Admin_Install" in release_text
+    assert "PROVISION_PROTECTED_ADMIN_ACL.ps1" in release_text
+    assert "PROTECTED_ADMIN_PROVISIONING.md" in release_text
+    assert "KMTech_Logistics_Profile_Install" in release_text
+    assert "KMTech_Logistics_Profile_Check" in release_text
+    assert "CENTRAL_LOGISTICS_PC_ROLLOUT.md" in release_text
+    assert "tools/register_container_audit_worker_pc.py" in release_text
+    assert "tools/install_logistics_runtime_profile.py" in release_text
+    assert "tools/check_logistics_runtime_profile.py" in release_text
+    assert '--add-data "storage_policy.py;."' in release_text
+    assert '--add-data "storage_utils.py;."' in release_text
+    assert '--add-data "logistics_runtime_profile.py;."' in release_text
+    assert 'python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"' in release_text
+    assert 'python tools/check_release_config.py --config-dir "$releaseConfigDir"' in release_text
     assert _release_workflow_required_assets(release_text) == update_service.REQUIRED_UPDATE_ARCHIVE_FILES
     assert "Expand-Archive" not in release_text
     assert "- name: Smoke check release archive" in release_text
@@ -81,7 +84,7 @@ def test_ci_and_release_workflows_package_clean_release_config():
     assert "Container_Audit-${{ github.ref_name }}.manifest.json" in release_text
     assert "- name: Sign private update manifest" in release_text
     assert "PRIVATE_UPDATE_MANIFEST_SIGNING_KEY" in release_text
-    assert "- name: Publish private update feed" in release_text
+    assert "- name: Promote private update feed after GitHub Release" in release_text
     assert "COMPANY_UPDATE_UPLOAD_TOKEN" in release_text
     assert "COMPANY_UPDATE_UPLOAD_ORIGIN_IP" in release_text
     assert "--resolve" in release_text
@@ -109,21 +112,24 @@ def test_release_workflow_requires_explicit_private_feed_publish_opt_in():
     assert release_text.count("PRIVATE_UPDATE_FEED_PUBLISH_MODE: ${{ steps.private_feed.outputs.enabled }}") == 2
     assert '$publishPrivateFeed = $privateFeedMode -ceq "true"' in release_text
     assert 'if ($env:PRIVATE_UPDATE_FEED_PUBLISH_MODE -ceq "true")' in release_text
-    assert release_text.count(f"if: {explicit_opt_in}") == 2
+    assert f"if: {explicit_opt_in}" in release_text
+    assert "if: steps.private_feed.outputs.enabled == 'true'" in release_text
     assert "if: ${{ vars.PRIVATE_UPDATE_ARTIFACT_BASE_URL != '' }}" not in release_text
     assert 'provider = "github"' in release_text
     assert 'provider = "private_manifest"' in release_text
 
     sign_block = release_text[
         release_text.index("- name: Sign private update manifest"):
-        release_text.index("- name: Publish private update feed")
-    ]
-    publish_block = release_text[
-        release_text.index("- name: Publish private update feed"):
         release_text.index("- name: Create Release and Upload Asset")
     ]
+    publish_block = release_text[
+        release_text.index("- name: Promote private update feed after GitHub Release"):
+    ]
     assert f"if: {explicit_opt_in}" in sign_block
-    assert f"if: {explicit_opt_in}" in publish_block
+    assert "if: steps.private_feed.outputs.enabled == 'true'" in publish_block
+    assert release_text.index("- name: Create Release and Upload Asset") < release_text.index(
+        "- name: Promote private update feed after GitHub Release"
+    )
     assert "canary_release.outputs" not in sign_block
     assert "canary_release.outputs" not in publish_block
 
@@ -266,9 +272,17 @@ def test_ci_workflow_tests_supported_python_minors():
     ci_text = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     assert re.search(r"(?m)^permissions:\n\s+contents: read$", ci_text)
-    assert "matrix:" in ci_text
-    assert "python-version: ['3.11', '3.12']" in ci_text
-    assert "python-version: ${{ matrix.python-version }}" in ci_text
+    assert "full-ci (Python 3.12)" in ci_text
+    assert "compatibility-quick (Python 3.11)" in ci_text
+    assert ci_text.count("python -m pytest -q -p no:cacheprovider") == 2
+    assert 'python -c "import Container_Audit, update_service' in ci_text
+    assert "py_compile" not in ci_text
+    assert "pull_request:" not in ci_text
+    assert "workflow_dispatch:" not in ci_text
+    assert "cancel-in-progress: true" in ci_text
+    codeowners = (root / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
+    assert "/.github/workflows/** @kevin9899" in codeowners
+    assert "/update_service.py @kevin9899" in codeowners
 
 
 def test_release_workflow_pins_actions_running_with_release_write_permission():

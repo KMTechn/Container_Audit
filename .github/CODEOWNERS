@@ -1,0 +1,9 @@
+# GitHub rulesets must require Code Owner review for these release-critical paths.
+/.github/CODEOWNERS @kevin9899
+/.github/workflows/** @kevin9899
+/RELEASE_GATE_CONTRACT.md @kevin9899
+/Container_Audit.py @kevin9899
+/update_service.py @kevin9899
+/tools/check_release_config.py @kevin9899
+/tools/check_update_archive.py @kevin9899
+/requirements*.txt @kevin9899

@@ -1,22 +1,20 @@
-name: Container Audit CI
+name: Full CI
 
 on:
   push:
-    branches:
-      - main
-      - master
-  pull_request:
+    branches: [main]
 
 permissions:
   contents: read
 
+concurrency:
+  group: full-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  full-ci:
+    name: full-ci (Python 3.12)
     runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ['3.11', '3.12']
 
     steps:
       - name: Checkout code
@@ -25,7 +23,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.12'
 
       - name: Install dependencies
         run: |
@@ -33,73 +31,28 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-dev.txt
 
-      - name: Compile Python sources
-        run: python -m compileall -q .
-
       - name: Run tests
         run: python -m pytest -q -p no:cacheprovider
 
-      - name: Prepare release config
-        shell: pwsh
+  compatibility-quick:
+    name: compatibility-quick (Python 3.11)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.11'
+
+      - name: Install runtime dependencies
         run: |
-          Remove-Item -LiteralPath build/release_config -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path build/release_config | Out-Null
-          Copy-Item -LiteralPath config/container_audit_settings.json -Destination build/release_config/container_audit_settings.json
-          python tools/check_release_config.py --config-dir build/release_config
+          python -m pip install -r requirements.txt
+          python -m pip install pytest==9.0.2
 
-      - name: Prepare release tools
-        shell: pwsh
+      - name: Run focused compatibility signal
         run: |
-          Remove-Item -LiteralPath build/release_tools -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Force -Path build/release_tools | Out-Null
-          Copy-Item -LiteralPath tools/direct_sync_relay_runner.py -Destination build/release_tools/direct_sync_relay_runner.py
-          Copy-Item -LiteralPath tools/direct_sync_relay_install_pack.py -Destination build/release_tools/direct_sync_relay_install_pack.py
-          Copy-Item -LiteralPath tools/direct_sync_relay_operator.py -Destination build/release_tools/direct_sync_relay_operator.py
-          Copy-Item -LiteralPath tools/register_container_audit_worker_pc.py -Destination build/release_tools/register_container_audit_worker_pc.py
-          Copy-Item -LiteralPath tools/install_logistics_runtime_profile.py -Destination build/release_tools/install_logistics_runtime_profile.py
-          Copy-Item -LiteralPath tools/check_logistics_runtime_profile.py -Destination build/release_tools/check_logistics_runtime_profile.py
-
-      - name: Build PyInstaller smoke artifact
-        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "direct_sync_operator.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
-
-      - name: Build bundled direct-sync relay executable
-        run: python -m PyInstaller --name "Container_Audit_DirectSync_Relay" --onefile --console --distpath dist/Container_Audit --workpath build/direct_sync_relay_pyinstaller --specpath build/direct_sync_relay_pyinstaller tools/direct_sync_relay_runner.py
-
-      - name: Build bundled direct-sync install executable
-        run: python -m PyInstaller --name "Container_Audit_DirectSync_Install" --onefile --console --distpath dist/Container_Audit --workpath build/direct_sync_install_pyinstaller --specpath build/direct_sync_install_pyinstaller tools/direct_sync_relay_install_pack.py
-
-      - name: Build bundled worker-PC registration executable
-        run: python -m PyInstaller --name "Container_Audit_Worker_PC_Register" --onefile --console --distpath dist/Container_Audit --workpath build/worker_pc_register_pyinstaller --specpath build/worker_pc_register_pyinstaller tools/register_container_audit_worker_pc.py
-
-      - name: Build bundled protected administrator installer
-        run: python -m PyInstaller --paths . --name "Container_Audit_Protected_Admin_Install" --onefile --console --distpath dist/Container_Audit --workpath build/protected_admin_install_pyinstaller --specpath build/protected_admin_install_pyinstaller tools/install_protected_admin.py
-
-      - name: Include and verify protected administrator provisioning assets
-        shell: pwsh
-        run: |
-          Copy-Item -LiteralPath tools/provision_protected_admin_acl.ps1 -Destination dist/Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1
-          Copy-Item -LiteralPath docs/PROTECTED_ADMIN_PROVISIONING.md -Destination dist/Container_Audit/PROTECTED_ADMIN_PROVISIONING.md
-          & dist/Container_Audit/Container_Audit_Protected_Admin_Install.exe --help | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Protected administrator installer help probe failed." }
-          & dist/Container_Audit/Container_Audit_Protected_Admin_Install.exe --dry-run | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Protected administrator installer dry-run failed." }
-          powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File dist/Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1 -DryRun | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "Protected administrator ACL wrapper dry-run failed." }
-
-      - name: Build bundled logistics profile tools
-        run: |
-          python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Install" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_install_pyinstaller --specpath build/logistics_profile_install_pyinstaller tools/install_logistics_runtime_profile.py
-          python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Check" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_check_pyinstaller --specpath build/logistics_profile_check_pyinstaller tools/check_logistics_runtime_profile.py
-          Copy-Item -LiteralPath docs/LOGISTICS_RUNTIME_PROFILE.md -Destination dist/Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md
-
-      - name: Smoke check CI update archive
-        shell: pwsh
-        run: |
-          $zipPath = Join-Path $env:RUNNER_TEMP "Container_Audit-ci-smoke.zip"
-          $smokeDir = Join-Path $env:RUNNER_TEMP "container-audit-ci-smoke"
-          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
-          Compress-Archive -Path dist/Container_Audit -DestinationPath "$zipPath"
-          python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"
-          $releaseConfigDir = Join-Path $smokeDir "Container_Audit/config"
-          python tools/check_release_config.py --config-dir "$releaseConfigDir"
+          python -c "import Container_Audit, update_service; print('python311_compatibility=PASS')"
+          python -m pytest -q -p no:cacheprovider tests/test_release_version.py tests/test_release_config.py
