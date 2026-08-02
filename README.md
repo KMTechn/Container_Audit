@@ -75,9 +75,12 @@ tkinter    # GUI 프레임워크 (Python 내장)
 # 애플리케이션 실행
 python Container_Audit.py
 
-# 코드 품질 검사
-python -m py_compile Container_Audit.py
+# 변경 영역 quick-check
+python -m pytest -q -p no:cacheprovider <changed-test-node>
 ```
+
+일부 entrypoint만 다시 `py_compile`하지 않는다. 최종 전체 회귀는 `main` push의
+Full CI가 exact SHA에서 한 번 실행한다.
 
 ## 🎯 핵심 기능 상세
 
