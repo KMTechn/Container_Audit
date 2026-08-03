@@ -9,6 +9,7 @@ from pathlib import Path
 import queue
 import shutil
 import subprocess
+import threading
 
 import pytest
 
@@ -24,6 +25,7 @@ import replacement_log_lookup
 import session_history
 import storage_utils
 import tray_state
+import update_service
 import worker_registry
 from Container_Audit import ContainerAudit, ProductExchangeSession, TraySession, WorkerRegistry
 
@@ -1521,6 +1523,157 @@ def test_frozen_release_bootstraps_signed_private_manifest_without_saved_setting
         container_audit_module._get_update_manifest_public_key()
         == container_audit_module.UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
     )
+
+
+def test_legacy_test1_settings_bootstrap_private_update_prompt_on_tk_thread(tmp_path, monkeypatch):
+    config_path = tmp_path / "config" / "container_audit_settings.json"
+    config_path.parent.mkdir()
+    legacy_settings = {
+        "scale_factor": 1.0,
+        "column_widths_validator": {},
+        "paned_window_sash_positions": {"0": 466, "1": 2180},
+    }
+    config_path.write_text(json.dumps(legacy_settings), encoding="utf-8")
+    monkeypatch.setattr(
+        container_audit_module,
+        "resource_path",
+        lambda relative: str(tmp_path / Path(relative)),
+    )
+    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
+    for env_name in (
+        container_audit_module.UPDATE_PROVIDER_ENV,
+        container_audit_module.UPDATE_MANIFEST_URL_ENV,
+        container_audit_module.UPDATE_MANIFEST_SIGNATURE_URL_ENV,
+        container_audit_module.UPDATE_MANIFEST_PUBLIC_KEY_ENV,
+        container_audit_module.UPDATE_CHANNEL_ENV,
+        update_service.UPDATE_PC_ID_ENV,
+    ):
+        monkeypatch.delenv(env_name, raising=False)
+
+    manifest_url = (
+        "https://worker.kmtecherp.com/static/update-feed/channels/"
+        "container_audit/stable/latest.json"
+    )
+    signature_url = f"{manifest_url}.sig"
+    public_key = "10d3baf546e05daaa0bbbbdd3f69630c90a245293a1690e2cfa47071292ac4a2"
+    assert json.loads(config_path.read_text(encoding="utf-8")) == legacy_settings
+    assert container_audit_module._get_update_provider() == "private_manifest"
+    assert container_audit_module._get_update_channel() == "stable"
+    assert container_audit_module._get_update_manifest_url() == manifest_url
+    assert container_audit_module._get_update_manifest_signature_url(manifest_url) == signature_url
+    assert container_audit_module._get_update_manifest_public_key() == public_key
+
+    current_pc_id = update_service.canonical_update_pc_id()
+    candidate_manifest = {
+        "schema_version": "kmtech-private-update-manifest-v1",
+        "manifest_version": 1,
+        "app_id": "Container_Audit",
+        "package_id": "Container_Audit",
+        "channel": "stable",
+        "version": "v9.9.9",
+        "artifact": {
+            "name": "Container_Audit-v9.9.9.zip",
+            "url": "https://worker.kmtecherp.com/static/update-feed/packages/Container_Audit-v9.9.9.zip",
+            "size_bytes": 123,
+            "sha256": "a" * 64,
+        },
+        "archive": {
+            "format": "zip",
+            "top_level": "Container_Audit",
+            "entrypoint": "Container_Audit.exe",
+            "required_files": ["Container_Audit/Container_Audit.exe"],
+        },
+        "install": _automatic_install_policy(),
+        "rollout": {
+            "percentage": 0,
+            "allow_pc_ids": [current_pc_id.upper()],
+            "deny_pc_ids": [],
+        },
+    }
+    main_thread_id = threading.get_ident()
+    request_thread_ids = []
+    verification_thread_ids = []
+
+    class FakeResponse:
+        def __init__(self, *, payload=None, content=b""):
+            self._payload = payload
+            self.content = content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return self._payload
+
+    def fake_get(url, **kwargs):
+        request_thread_ids.append(threading.get_ident())
+        if url == manifest_url:
+            return FakeResponse(payload=candidate_manifest)
+        if url == signature_url:
+            return FakeResponse(content=b"mocked-signed-manifest")
+        raise AssertionError(f"unexpected update URL: {url}")
+
+    def fake_verify(manifest, signature, selected_public_key):
+        verification_thread_ids.append(threading.get_ident())
+        assert manifest == candidate_manifest
+        assert signature == b"mocked-signed-manifest"
+        assert selected_public_key == public_key
+
+    monkeypatch.setattr(container_audit_module.requests, "get", fake_get)
+    monkeypatch.setattr(container_audit_module, "verify_update_manifest_signature", fake_verify)
+
+    queued_callbacks = []
+
+    class FakeParent:
+        def after(self, delay, callback):
+            assert delay == 0
+            queued_callbacks.append(callback)
+
+    parent = FakeParent()
+    created_threads = []
+    real_thread_class = threading.Thread
+
+    class CapturingThreading:
+        @staticmethod
+        def Thread(*args, **kwargs):
+            thread = real_thread_class(*args, **kwargs)
+            created_threads.append(thread)
+            return thread
+
+    monkeypatch.setattr(container_audit_module, "threading", CapturingThreading)
+    prompt_thread_ids = []
+    prompt_parents = []
+    tk_thread_ids = []
+
+    def fake_askyesno(*args, **kwargs):
+        prompt_thread_ids.append(threading.get_ident())
+        prompt_parents.append(kwargs.get("parent"))
+        return False
+
+    def fake_tk():
+        tk_thread_ids.append(threading.get_ident())
+        raise AssertionError("the supplied Tk parent must be reused")
+
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", fake_askyesno)
+    monkeypatch.setattr(container_audit_module.tk, "Tk", fake_tk)
+
+    container_audit_module.schedule_update_check(parent)
+    assert len(created_threads) == 1
+    created_threads[0].join(timeout=2)
+    assert not created_threads[0].is_alive()
+    assert len(queued_callbacks) == 1
+    assert prompt_thread_ids == []
+    assert tk_thread_ids == []
+    assert request_thread_ids and all(thread_id != main_thread_id for thread_id in request_thread_ids)
+    assert verification_thread_ids and all(
+        thread_id != main_thread_id for thread_id in verification_thread_ids
+    )
+
+    queued_callbacks[0]()
+
+    assert prompt_thread_ids == [main_thread_id]
+    assert prompt_parents == [parent]
+    assert tk_thread_ids == []
 
 
 def test_frozen_release_respects_explicit_saved_provider_off(monkeypatch):
