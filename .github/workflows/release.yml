@@ -220,7 +220,7 @@ jobs:
           $zipPath = "Container_Audit-${{ github.ref_name }}.zip"
           $smokeDir = Join-Path $env:RUNNER_TEMP "container-audit-release-smoke"
           Remove-Item -LiteralPath $smokeDir -Recurse -Force -ErrorAction SilentlyContinue
-          python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"
+          python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir" --package-root "dist/Container_Audit"
           $required = @(
             "Container_Audit/Container_Audit.exe",
             "Container_Audit/assets/Item.csv",

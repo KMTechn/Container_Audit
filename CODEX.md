@@ -30,10 +30,12 @@
 
 ```powershell
 cd C:\company\program\Container_Audit
-pip install -r requirements.txt
 python Container_Audit.py
 python -m pytest -q -p no:cacheprovider <changed-test-node>
 ```
+
+의존성 설치는 1회 환경 준비 단계이며 `quick-check`나 검증 script가 자동으로
+실행하지 않는다. 준비가 필요할 때만 별도로 `python -m pip install -r requirements.txt`를 사용한다.
 
 수동 테스트용 입력 후보:
 

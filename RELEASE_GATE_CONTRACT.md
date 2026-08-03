@@ -6,16 +6,21 @@ This contract separates fast feedback, full regression, release-only evidence, a
 | --- | --- | --- | --- | --- |
 | quick | Changed-area contract breakage | Focused pytest node; Python 3.11 import/version compatibility is a distinct CI lane, not selected compile | Before main push | Do not push |
 | full | Functional regression | Python 3.12 full pytest once and source release-config contract; Python 3.11 is compatibility-only | Once per main-push SHA; no PR or manual trigger | Make a focused fix and validate the new SHA; do not tag the failed SHA |
-| release | Wrong tag/SHA, malformed package/archive/hash/signature | exact tag commit equals `origin/main`, exact-SHA main `Full CI` success, version/config, PyInstaller, safe extraction, SHA-256, manifest signature self-verification | Tag push | Before GitHub publication: publish nothing. After canary GitHub Release: a feed failure leaves the prerelease quarantined and unpromoted |
+| release | Wrong tag/SHA, malformed or altered package/archive/hash/signature | exact tag commit equals `origin/main`, exact-SHA main `Full CI` success, version/config, PyInstaller, CRC/safe extraction, exact staged membership and byte parity, SHA-256, manifest signature self-verification | Tag push | Before GitHub publication: publish nothing. After canary GitHub Release: a feed failure leaves the prerelease quarantined and unpromoted |
 | test1 | Frozen GUI, scanner, relay, canary, or rollback failure | Exact ZIP SHA on TEST1, real UI/scanner, direct-sync receipt, update and rollback preservation | After GitHub artifact exists, before stable rollout | Keep rollout at 0, quarantine artifact |
 
 ## Exact commands
 
-Quick compatibility signal:
+One-time environment setup (not part of `quick-check`):
 
 ```powershell
 python -m pip install -r requirements.txt
 python -m pip install pytest==9.0.2
+```
+
+Quick compatibility signal:
+
+```powershell
 python -c "import Container_Audit, update_service; print('python311_compatibility=PASS')"
 python -m pytest -q -p no:cacheprovider tests/test_release_version.py tests/test_release_config.py
 ```

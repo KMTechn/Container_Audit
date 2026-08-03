@@ -2,8 +2,9 @@
 /.github/CODEOWNERS @kevin9899
 /.github/workflows/** @kevin9899
 /RELEASE_GATE_CONTRACT.md @kevin9899
+/CODEX.md @kevin9899
 /Container_Audit.py @kevin9899
 /update_service.py @kevin9899
-/tools/check_release_config.py @kevin9899
-/tools/check_update_archive.py @kevin9899
+/tools/** @kevin9899
+/tests/test_check_update_archive.py @kevin9899
 /requirements*.txt @kevin9899
