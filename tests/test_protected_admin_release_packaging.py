@@ -34,6 +34,11 @@ def test_release_contract_contains_source_free_protected_admin_bundle() -> None:
     # The source-free installer and its runtime checks are release-artifact
     # contracts, so they run once after the exact-SHA Full CI succeeds.
     assert "Require successful exact-SHA main Full CI" in release_workflow
+    assert "-f status=completed" in release_workflow
+    assert "-f status=success" not in release_workflow
+    assert "if ($matches.Count -ne 1)" in release_workflow
+    assert "$run.run_attempt -ne 1" in release_workflow
+    assert '$run.conclusion -cne "success"' in release_workflow
     assert "python -m pytest" not in release_workflow
     assert (
         f'--name "{INSTALLER_NAME.removesuffix(".exe")}" --onefile --console'
