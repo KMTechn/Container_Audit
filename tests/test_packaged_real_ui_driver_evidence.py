@@ -265,7 +265,12 @@ def test_driver_finalization_hashes_report_after_clipboard_restore(tmp_path, mon
     driver.output_root = tmp_path
     driver.original_clipboard = ClipboardSnapshot("TEXT", "operator clipboard")
     driver.clipboard_mutated = True
-    driver.report = {"status": "PASS"}
+    driver.report = {
+        "status": "PASS",
+        "artifact_identity": {
+            "process": {"matches_installed_executable": True},
+        },
+    }
     driver.source_snapshot_bytes = {
         "driver_source_snapshot.py": b"executed driver bytes",
         "capture_helper_source_snapshot.py": b"executed helper bytes",
@@ -279,6 +284,7 @@ def test_driver_finalization_hashes_report_after_clipboard_restore(tmp_path, mon
         "capture_clipboard_snapshot",
         lambda: ClipboardSnapshot("TEXT", "operator clipboard"),
     )
+    monkeypatch.setattr(driver_module, "finalize_artifact_identity", lambda _value: None)
 
     driver._finalize_evidence()
 
@@ -313,6 +319,7 @@ def test_clipboard_restore_failure_fails_final_report(tmp_path, monkeypatch):
         "capture_clipboard_snapshot",
         lambda: ClipboardSnapshot("EMPTY"),
     )
+    monkeypatch.setattr(driver_module, "finalize_artifact_identity", lambda _value: None)
     driver._finalize_evidence()
 
     payload = json.loads(
@@ -364,7 +371,12 @@ def test_empty_clipboard_baseline_is_cleared_and_verified(tmp_path, monkeypatch)
     driver.output_root = tmp_path
     driver.original_clipboard = ClipboardSnapshot("EMPTY")
     driver.clipboard_mutated = True
-    driver.report = {"status": "PASS"}
+    driver.report = {
+        "status": "PASS",
+        "artifact_identity": {
+            "process": {"matches_installed_executable": True},
+        },
+    }
     driver.source_snapshot_bytes = {"driver_source_snapshot.py": b"driver"}
     cleared: list[bool] = []
     monkeypatch.setattr(driver_module, "clear_clipboard", lambda: cleared.append(True))
@@ -373,6 +385,7 @@ def test_empty_clipboard_baseline_is_cleared_and_verified(tmp_path, monkeypatch)
         "capture_clipboard_snapshot",
         lambda: ClipboardSnapshot("EMPTY"),
     )
+    monkeypatch.setattr(driver_module, "finalize_artifact_identity", lambda _value: None)
 
     driver._finalize_evidence()
 

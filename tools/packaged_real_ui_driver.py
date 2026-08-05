@@ -33,6 +33,12 @@ from manual_real_ui_walkthrough_capture import (  # noqa: E402
     capture_window,
     move_window_to_geometry,
 )
+from run_test1_exact_artifact import (  # noqa: E402
+    ArtifactIdentityError,
+    attest_process_identity,
+    finalize_artifact_identity,
+    preflight_artifact_identity,
+)
 
 
 def _import_pywinauto():
@@ -799,6 +805,29 @@ class Driver:
             )
         ):
             self.report["status"] = "FAIL"
+        artifact_identity = self.report.get("artifact_identity")
+        process_identity_matches = bool(
+            isinstance(artifact_identity, dict)
+            and artifact_identity.get("process", {}).get(
+                "matches_installed_executable"
+            )
+            is True
+        )
+        try:
+            if not process_identity_matches:
+                raise ArtifactIdentityError(
+                    "launched process was not bound to the attested executable"
+                )
+            finalize_artifact_identity(artifact_identity)
+        except (ArtifactIdentityError, OSError) as exc:
+            pass_checks["exact_artifact_identity"] = False
+            self.report["artifact_identity_error"] = (
+                f"{exc.__class__.__name__}: {exc}"
+            )
+            self.report["status"] = "FAIL"
+        else:
+            pass_checks["exact_artifact_identity"] = True
+            artifact_identity["status"] = "PASS"
         self._save_report()
         for name, payload in self.source_snapshot_bytes.items():
             (self.output_root / name).write_bytes(payload)
@@ -842,14 +871,24 @@ class Driver:
             raise RuntimeError(
                 "clipboard baseline cannot be preserved exactly; refusing to send scanner input"
             )
+        self.report["artifact_identity"] = preflight_artifact_identity(
+            archive_path=self.args.archive,
+            expected_archive_sha256=self.args.expected_archive_sha256,
+            executable_path=self.args.exe,
+            expected_executable_sha256=self.args.expected_exe_sha256,
+            archive_member=self.args.archive_member,
+        )
 
     def _set_clipboard_for_input(self, value: str) -> None:
         self.clipboard_mutated = True
         set_clipboard_text(value)
 
     def launch(self) -> None:
+        executable_path = Path(
+            self.report["artifact_identity"]["installed_executable"]["path"]
+        )
         if self.args.preseed_worker:
-            registry_path = self.args.exe.parent / "config" / "worker_registry.json"
+            registry_path = executable_path.parent / "config" / "worker_registry.json"
             registry_path.parent.mkdir(parents=True, exist_ok=True)
             registry_path.write_text(
                 json.dumps(
@@ -873,7 +912,26 @@ class Driver:
         env["CONTAINER_AUDIT_STARTUP_GEOMETRY"] = self.args.geometry
         env["CONTAINER_AUDIT_DATA_ROOT"] = str(self.data_root)
         env["PYTHONUTF8"] = "1"
-        self.process = subprocess.Popen([str(self.args.exe)], cwd=str(self.args.exe.parent), env=env)
+        self.process = subprocess.Popen(
+            [str(executable_path)],
+            cwd=str(executable_path.parent),
+            env=env,
+        )
+        try:
+            attest_process_identity(
+                self.report["artifact_identity"],
+                pid=self.process.pid,
+                timeout_seconds=self.args.process_identity_timeout,
+                process_poll=self.process.poll,
+            )
+        except Exception:
+            self.process.terminate()
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+            raise
+        self._save_report()
         self.app = self.Application(backend="win32").connect(process=self.process.pid, timeout=self.args.startup_timeout)
         self.report["pid"] = self.process.pid
         deadline = time.time() + self.args.startup_timeout
@@ -2593,7 +2651,15 @@ class Driver:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Drive packaged Container_Audit.exe through the real UI.")
+    parser.add_argument("--archive", type=Path, required=True)
+    parser.add_argument("--expected-archive-sha256", required=True)
     parser.add_argument("--exe", type=Path, required=True)
+    parser.add_argument("--expected-exe-sha256", required=True)
+    parser.add_argument(
+        "--archive-member",
+        default="Container_Audit/Container_Audit.exe",
+    )
+    parser.add_argument("--process-identity-timeout", type=float, default=5.0)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument(

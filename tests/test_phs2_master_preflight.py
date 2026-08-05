@@ -688,5 +688,29 @@ def test_compact_phs2_partial_submit_is_blocked_before_confirmation(tmp_path, mo
         f"{ITEM}-SERIAL-002",
     ]
     assert app.statuses
-    assert "일부 제출할 수 없습니다" in app.statuses[-1][0]
-    assert "RSL1" in app.statuses[-1][0]
+    message = app.statuses[-1][0]
+    assert "일부 제출할 수 없습니다" in message
+    assert "이름·시간·품목·수량·수기 코드" in message
+    assert "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다" in message
+    assert "RSL1 절차를 사용" not in message
+
+
+def test_compact_phs2_incomplete_completion_uses_current_remainder_guidance(tmp_path):
+    app = _app(tmp_path, BlockingClient(_resolved(count=3)))
+    app.current_tray = TraySession(
+        master_label_code=COMPACT_QR,
+        item_code=ITEM,
+        item_name="fixture item",
+        scanned_barcodes=[f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"],
+        tray_size=3,
+    )
+    app._phs_label_exchange_blocks_tray_transition = lambda _action: False
+    app._transfer_member_exchange_blocks_local_action = lambda _action: False
+
+    assert app.complete_tray() is False
+
+    message = app.statuses[-1][0]
+    assert "등록된 제품을 모두 스캔해야 이적할 수 있습니다" in message
+    assert "이름·시간·품목·수량·수기 코드" in message
+    assert "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다" in message
+    assert "RSL1로 별도 발행" not in message

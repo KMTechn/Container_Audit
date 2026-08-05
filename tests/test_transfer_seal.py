@@ -2044,6 +2044,9 @@ def test_partial_phs_seal_is_blocked_before_post(tmp_path):
     result = coordinator.attempt(prepared.intent_id)
     assert result.status == "OPERATOR_REVIEW"
     assert result.error_code == "PARTIAL_PHS_TRANSFER_FORBIDDEN"
+    assert "이름·시간·품목·수량·수기 코드" in result.error_message
+    assert "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다" in result.error_message
+    assert "잔량은 RSL1을 사용" not in result.error_message
     assert posted == []
 
 
