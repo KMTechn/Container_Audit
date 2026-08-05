@@ -17,11 +17,28 @@ import sqlite3
 import time
 import unicodedata
 import uuid
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, BinaryIO, Callable, Dict, Iterable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlparse
+
+from producer_runtime_client import (
+    METADATA_FIELDS as RUNTIME_METADATA_FIELDS,
+    OPERATOR_REVIEW_CODES as RUNTIME_OPERATOR_REVIEW_CODES,
+    apply_runtime_receipt_in_transaction,
+    client_runtime_lease_mode,
+    disable_runtime_authority_in_transaction,
+    init_runtime_schema,
+    mark_runtime_operator_review_in_transaction,
+    prepare_runtime_metadata,
+    redact_runtime_secrets,
+    release_runtime_request_in_transaction,
+    RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY,
+    RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED,
+    runtime_receipt_result,
+    scrub_terminal_runtime_metadata,
+)
 
 
 CONTRACT_VERSION = "producer-ingest-source-file-v1"
@@ -79,6 +96,10 @@ class DirectSyncPushError(Exception):
     pass
 
 
+class RelayLeaseLostBeforeSourcePost(DirectSyncPushError):
+    pass
+
+
 class RelaySpoolFileError(DirectSyncPushError):
     pass
 
@@ -89,14 +110,16 @@ class ProducerCredentials:
     key_id: str
     secret: str | bytes
     endpoint_url: str
+    runtime_lease_mode: str = "enforce"
 
 
 @dataclass(frozen=True)
 class SourceFilePlan:
     source_file_path: str
-    metadata: Dict[str, Any]
+    metadata: Dict[str, Any] = field(repr=False)
     content_sha256: str
     byte_length: int
+    runtime_fencing_policy: str = RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED
 
 
 @dataclass(frozen=True)
@@ -111,6 +134,9 @@ class UploadResult:
     error_code: str = ""
     error_message: str = ""
     relay_id: str = ""
+    _runtime_lease: Dict[str, Any] | None = field(default=None, repr=False, compare=False)
+    _runtime_disposition: str = field(default="", repr=False, compare=False)
+    _runtime_token_unconsumed: bool = field(default=False, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -136,7 +162,8 @@ class RelayQueueRow:
     content_sha256: str
     byte_length: int
     attempt_count: int
-    metadata: Dict[str, Any]
+    metadata: Dict[str, Any] = field(repr=False)
+    runtime_fencing_policy: str = RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED
     producer_id: str = ""
     key_id: str = ""
     endpoint_url: str = ""
@@ -823,6 +850,7 @@ def _redact_remote_error_message(
     *,
     credentials: ProducerCredentials,
     headers: Mapping[str, str],
+    runtime_request_token: str = "",
     limit: int = 500,
 ) -> str:
     text = str(value or "")
@@ -831,9 +859,16 @@ def _redact_remote_error_message(
         headers.get("X-Producer-Signature", ""),
         SIGNATURE_VERSION,
         "X-Producer-Signature",
+        runtime_request_token,
     ):
         if sensitive:
-            text = text.replace(str(sensitive), "[redacted]")
+            variants = {str(sensitive)}
+            if isinstance(sensitive, bytes):
+                variants.add(sensitive.decode("utf-8", errors="ignore"))
+                variants.add(sensitive.hex())
+            for variant in variants:
+                if variant:
+                    text = text.replace(variant, "[redacted]")
     text = AUTHORIZATION_HEADER_RE.sub("[redacted]", text)
     text = CONTROL_TEXT_RE.sub(" ", text)
     return text.strip()[:limit]
@@ -844,20 +879,31 @@ def _redact_remote_error_payload(
     *,
     credentials: ProducerCredentials,
     headers: Mapping[str, str],
+    runtime_request_token: str = "",
 ) -> Dict[str, Any]:
     def redact_value(value: Any) -> Any:
         if isinstance(value, str):
-            return _redact_remote_error_message(value, credentials=credentials, headers=headers)
+            return _redact_remote_error_message(
+                value,
+                credentials=credentials,
+                headers=headers,
+                runtime_request_token=runtime_request_token,
+            )
         if isinstance(value, list):
             return [redact_value(item) for item in value]
         if isinstance(value, dict):
             return {
-                _redact_remote_error_message(key, credentials=credentials, headers=headers): redact_value(item)
+                _redact_remote_error_message(
+                    key,
+                    credentials=credentials,
+                    headers=headers,
+                    runtime_request_token=runtime_request_token,
+                ): redact_value(item)
                 for key, item in value.items()
             }
         return value
 
-    return redact_value(dict(payload))
+    return redact_runtime_secrets(redact_value(dict(payload)))
 
 
 def _transport_error_result(exc: Exception) -> UploadResult:
@@ -1031,7 +1077,7 @@ def _with_upload_status_artifact(
     suffix = hashlib.sha256(suffix_input.encode("utf-8")).hexdigest()[:12]
     status_path = Path(status_dir) / f"direct_sync_upload_status_{suffix}.json"
     status_path_text = str(status_path)
-    receipt = dict(result.receipt or {})
+    receipt = redact_runtime_secrets(dict(result.receipt or {}))
     status_write_error_code = ""
     status_write_error_message = ""
     try:
@@ -1046,8 +1092,8 @@ def _with_upload_status_artifact(
                 "receipt": receipt,
                 "error_code": result.error_code,
                 "error_message": result.error_message,
-                "metadata": dict(plan.metadata),
-                "status_context": context,
+                "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
+                "status_context": redact_runtime_secrets(context),
                 "source_file_path": plan.source_file_path,
                 "generated_at": utc_now_text(),
             },
@@ -1072,6 +1118,9 @@ def _with_upload_status_artifact(
         error_code=status_write_error_code or result.error_code,
         error_message=status_write_error_message or result.error_message,
         relay_id=result.relay_id,
+        _runtime_lease=result._runtime_lease,
+        _runtime_disposition=result._runtime_disposition,
+        _runtime_token_unconsumed=result._runtime_token_unconsumed,
     )
 
 
@@ -1083,7 +1132,12 @@ def _upload_response_result(
     headers: Mapping[str, str],
 ) -> UploadResult:
     payload, payload_is_valid_json = _response_json(response)
-    safe_payload = _redact_remote_error_payload(payload, credentials=credentials, headers=headers)
+    safe_payload = _redact_remote_error_payload(
+        payload,
+        credentials=credentials,
+        headers=headers,
+        runtime_request_token=str(plan.metadata.get("runtime_request_token") or ""),
+    )
     status_code = int(getattr(response, "status_code", 0) or 0)
     retry_after_seconds = _retry_after_header_seconds(_response_header(response, "Retry-After"))
     committed_value = payload.get("committed")
@@ -1121,8 +1175,36 @@ def _upload_response_result(
         )
     committed = committed_value is True
     error = safe_payload.get("error") if isinstance(safe_payload.get("error"), dict) else {}
+    runtime_lease: Dict[str, Any] | None = None
+    runtime_disposition = ""
+    legacy_exact_replay = (
+        plan.runtime_fencing_policy == RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY
+    )
     if committed:
         receipt_error_code, receipt_error_message, errors, quarantined = _committed_receipt_issue(plan, payload)
+        runtime_lease, runtime_error_code, runtime_error_message = runtime_receipt_result(
+            plan.metadata, payload
+        )
+        legacy_receipt_accepted = (
+            legacy_exact_replay
+            and runtime_lease is None
+            and runtime_error_code
+            in {"", "runtime_lease_receipt_missing", "runtime_lease_receipt_observed_legacy"}
+            and not receipt_error_code
+        )
+        observe_receipt_accepted = (
+            runtime_error_code
+            in {"runtime_lease_receipt_missing", "runtime_lease_receipt_observed_legacy"}
+            and client_runtime_lease_mode(credentials) == "observe"
+            and not receipt_error_code
+        )
+        if legacy_receipt_accepted or observe_receipt_accepted:
+            safe_payload = dict(safe_payload)
+            safe_payload["_local_runtime_lease_status"] = "legacy_accepted"
+            runtime_disposition = "legacy_accepted"
+        elif runtime_error_code:
+            receipt_error_code = runtime_error_code
+            receipt_error_message = runtime_error_message
         success = 200 <= status_code < 300 and not receipt_error_code and errors == 0 and quarantined == 0
     else:
         receipt_error_code, receipt_error_message = "", ""
@@ -1142,6 +1224,14 @@ def _upload_response_result(
         retry_after_seconds=retry_after_seconds if retryable else None,
         error_code=receipt_error_code or producer_error_code,
         error_message=receipt_error_message or producer_error_message,
+        _runtime_lease=runtime_lease,
+        _runtime_disposition=runtime_disposition,
+        _runtime_token_unconsumed=(
+            not committed
+            and payload_is_valid_json
+            and committed_value is False
+            and status_code >= 400
+        ),
     )
 
 
@@ -1153,6 +1243,7 @@ def upload_source_file(
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     status_dir: str | os.PathLike[str] = "",
     status_context: Mapping[str, Any] | None = None,
+    before_post: Callable[[], None] | None = None,
 ) -> UploadResult:
     if session is None:
         import requests
@@ -1175,6 +1266,8 @@ def upload_source_file(
                 result = _source_file_digest_mismatch_result()
                 return _with_upload_status_artifact(plan, result, status_dir, status_context=status_context)
             headers = signed_headers(credentials, plan.metadata)
+            if before_post is not None:
+                before_post()
             try:
                 response = session.post(
                     credentials.endpoint_url,
@@ -1245,6 +1338,7 @@ def _relay_batches_table_exists(conn: sqlite3.Connection) -> bool:
 def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
     conn = _connect_relay_db(db_path)
     try:
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS direct_sync_relay_batches (
@@ -1268,12 +1362,15 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
                 producer_id TEXT,
                 key_id TEXT,
                 endpoint_url TEXT,
+                runtime_fencing_policy TEXT NOT NULL DEFAULT 'runtime_required'
+                    CHECK(runtime_fencing_policy IN ('runtime_required', 'legacy_exact_replay')),
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
             """
         )
         _ensure_relay_queue_columns(conn)
+        init_runtime_schema(conn)
         conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_direct_sync_relay_status_due
@@ -1281,6 +1378,10 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
             """
         )
         conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -1296,6 +1397,21 @@ def _ensure_relay_queue_columns(conn: sqlite3.Connection) -> None:
     for column, statement in migrations.items():
         if column not in columns:
             conn.execute(statement)
+    if "runtime_fencing_policy" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE direct_sync_relay_batches
+            ADD COLUMN runtime_fencing_policy TEXT NOT NULL DEFAULT 'runtime_required'
+                CHECK(runtime_fencing_policy IN ('runtime_required', 'legacy_exact_replay'))
+            """
+        )
+        conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET runtime_fencing_policy='legacy_exact_replay'
+            WHERE attempt_count > 0
+            """
+        )
 
 
 def _relay_metadata(row: sqlite3.Row) -> tuple[Dict[str, Any], str]:
@@ -1336,6 +1452,7 @@ def _relay_row(row: sqlite3.Row, *, deduped_existing: bool = False) -> RelayQueu
         byte_length=int(row["byte_length"]),
         attempt_count=int(row["attempt_count"]),
         metadata=metadata,
+        runtime_fencing_policy=str(row["runtime_fencing_policy"] or ""),
         producer_id=str(row["producer_id"] or ""),
         key_id=str(row["key_id"] or ""),
         endpoint_url=str(row["endpoint_url"] or ""),
@@ -1353,6 +1470,44 @@ def _json_object_from_text(text: str) -> Dict[str, Any]:
     return payload
 
 
+def _upload_status_runtime_safe_metadata(metadata: Mapping[str, Any]) -> Dict[str, Any]:
+    safe = redact_runtime_secrets(dict(metadata))
+    token = metadata.get("runtime_request_token")
+    if isinstance(token, str) and token:
+        safe["runtime_request_token_sha256"] = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    return safe
+
+
+def _terminal_safe_metadata_matches_status_artifact(
+    terminal_metadata: Mapping[str, Any], artifact_metadata: Any
+) -> bool:
+    if not isinstance(artifact_metadata, Mapping):
+        return False
+    terminal = dict(terminal_metadata)
+    artifact = dict(artifact_metadata)
+    if redact_runtime_secrets(terminal) != terminal or redact_runtime_secrets(artifact) != artifact:
+        return False
+    terminal_hash = terminal.get("runtime_request_token_sha256")
+    artifact_hash = artifact.get("runtime_request_token_sha256")
+    runtime_terminal_shape = terminal_hash is not None or artifact_hash is not None
+    if not runtime_terminal_shape:
+        return terminal == artifact
+    if "runtime_request_token" in terminal:
+        return False
+    if artifact.get("runtime_request_token") != "[redacted]":
+        return False
+    if not isinstance(terminal_hash, str) or re.fullmatch(r"[0-9a-f]{64}", terminal_hash) is None:
+        return False
+    if artifact_hash != terminal_hash:
+        return False
+    terminal_without_hash = dict(terminal)
+    terminal_without_hash.pop("runtime_request_token_sha256", None)
+    artifact_without_token = dict(artifact)
+    artifact_without_token.pop("runtime_request_token", None)
+    artifact_without_token.pop("runtime_request_token_sha256", None)
+    return terminal_without_hash == artifact_without_token
+
+
 def _upload_status_artifact_matches_relay(
     *,
     status_path: str,
@@ -1363,12 +1518,19 @@ def _upload_status_artifact_matches_relay(
         status = _json_object_from_text(Path(status_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, DirectSyncPushError):
         return False
+    safe_receipt = redact_runtime_secrets(dict(receipt))
+    artifact_receipt = status.get("receipt")
     return (
-        status.get("success") is True
+        safe_receipt == dict(receipt)
+        and isinstance(artifact_receipt, Mapping)
+        and redact_runtime_secrets(dict(artifact_receipt)) == dict(artifact_receipt)
+        and status.get("success") is True
         and status.get("committed") is True
         and status.get("retryable") is False
-        and status.get("receipt") == dict(receipt)
-        and status.get("metadata") == dict(plan.metadata)
+        and artifact_receipt == safe_receipt
+        and _terminal_safe_metadata_matches_status_artifact(
+            plan.metadata, status.get("metadata")
+        )
         and str(status.get("source_file_path") or "") == str(plan.source_file_path)
     )
 
@@ -1539,8 +1701,8 @@ def acked_relay_retention_candidates(
                     relative_path=relay_row.relative_path,
                     content_sha256=relay_row.content_sha256,
                     byte_length=relay_row.byte_length,
-                    metadata=dict(relay_row.metadata),
-                    receipt=receipt,
+                    metadata=redact_runtime_secrets(dict(relay_row.metadata)),
+                    receipt=redact_runtime_secrets(receipt),
                 )
             )
         except (OSError, DirectSyncPushError, json.JSONDecodeError, ValueError, TypeError):
@@ -1733,8 +1895,9 @@ def enqueue_source_file_for_relay(
                 relay_id, status, source_file_path, spooled_file_path,
                 producer_manifest_path, relative_path, content_sha256,
                 byte_length, attempt_count, next_attempt_at, metadata_json,
-                producer_id, key_id, endpoint_url, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)
+                producer_id, key_id, endpoint_url, runtime_fencing_policy,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 relay_id,
@@ -1750,6 +1913,7 @@ def enqueue_source_file_for_relay(
                 credentials.producer_id,
                 credentials.key_id,
                 credentials.endpoint_url,
+                RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED,
                 now,
                 now,
             ),
@@ -1946,6 +2110,9 @@ def _set_relay_status(
     error_message: str = "",
     expected_lease_owner: str = "",
     expected_attempt_count: int | None = None,
+    runtime_credentials: ProducerCredentials | None = None,
+    runtime_lease: Mapping[str, Any] | None = None,
+    runtime_authority_action: str = "",
 ) -> bool:
     now = utc_now_text()
     conn = _connect_relay_db(db_path)
@@ -1980,8 +2147,113 @@ def _set_relay_status(
             """,
             params,
         )
+        runtime_review = error_code in RUNTIME_OPERATOR_REVIEW_CODES or error_code.startswith(
+            "runtime_lease_receipt"
+        )
+        authority_action = str(runtime_authority_action or "").strip().lower()
+        if authority_action not in {"", "legacy_accepted", "operator_review", "release"}:
+            raise DirectSyncPushError("runtime authority action is invalid")
+        if not authority_action and runtime_review:
+            authority_action = "operator_review"
+        terminal_runtime_metadata = status in {
+            RELAY_STATUS_ACKED,
+            RELAY_STATUS_FAILED_PERMANENT,
+            RELAY_STATUS_OPERATOR_REVIEW,
+        }
+        if int(cursor.rowcount) == 1 and (
+            runtime_lease is not None or authority_action or terminal_runtime_metadata
+        ):
+            relay_row = conn.execute(
+                "SELECT metadata_json FROM direct_sync_relay_batches WHERE relay_id=?",
+                (relay_id,),
+            ).fetchone()
+            if relay_row is None:
+                raise DirectSyncPushError("relay row disappeared during runtime state update")
+            raw_runtime_metadata = str(relay_row["metadata_json"] or "")
+            token_in_metadata = '"runtime_request_token"' in raw_runtime_metadata
+            if not authority_action and runtime_lease is None and terminal_runtime_metadata:
+                assigned = conn.execute(
+                    "SELECT 1 FROM direct_sync_runtime_authority WHERE assigned_relay_id=? LIMIT 1",
+                    (relay_id,),
+                ).fetchone()
+                if assigned is not None:
+                    authority_action = "operator_review"
+            runtime_metadata: Dict[str, Any] | None = None
+            if runtime_lease is not None or authority_action or token_in_metadata:
+                try:
+                    runtime_metadata = _json_object_from_text(raw_runtime_metadata)
+                except (DirectSyncPushError, json.JSONDecodeError, TypeError, ValueError):
+                    if runtime_lease is not None or authority_action == "release":
+                        raise
+                    runtime_metadata = {}
+            if runtime_lease is not None:
+                if runtime_credentials is None:
+                    raise DirectSyncPushError("runtime receipt update is missing credential scope")
+                assert runtime_metadata is not None
+                apply_runtime_receipt_in_transaction(
+                    conn,
+                    relay_id=relay_id,
+                    metadata=runtime_metadata,
+                    credentials=runtime_credentials,
+                    runtime_lease=runtime_lease,
+                    now=now,
+                )
+            elif authority_action == "release":
+                assert runtime_metadata is not None
+                release_runtime_request_in_transaction(
+                    conn,
+                    relay_id=relay_id,
+                    metadata=runtime_metadata,
+                    credentials=runtime_credentials,
+                    now=now,
+                )
+            elif authority_action == "legacy_accepted":
+                disable_runtime_authority_in_transaction(
+                    conn,
+                    relay_id=relay_id,
+                    metadata=runtime_metadata or {},
+                    credentials=runtime_credentials,
+                    now=now,
+                )
+            elif authority_action == "operator_review":
+                mark_runtime_operator_review_in_transaction(
+                    conn,
+                    relay_id=relay_id,
+                    metadata=runtime_metadata or {},
+                    credentials=runtime_credentials,
+                    error_code=error_code,
+                    now=now,
+                )
+            if (
+                terminal_runtime_metadata
+                and runtime_metadata is not None
+                and "runtime_request_token" in runtime_metadata
+            ):
+                conn.execute(
+                    "UPDATE direct_sync_relay_batches SET metadata_json=? WHERE relay_id=?",
+                    (canonical_json(scrub_terminal_runtime_metadata(runtime_metadata)), relay_id),
+                )
+            elif terminal_runtime_metadata and token_in_metadata:
+                conn.execute(
+                    "UPDATE direct_sync_relay_batches SET metadata_json=? WHERE relay_id=?",
+                    (
+                        canonical_json(
+                            {
+                                "terminal_metadata_invalid": True,
+                                "metadata_sha256": hashlib.sha256(
+                                    raw_runtime_metadata.encode("utf-8")
+                                ).hexdigest(),
+                            }
+                        ),
+                        relay_id,
+                    ),
+                )
         conn.commit()
         return int(cursor.rowcount) == 1
+    except BaseException:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
     finally:
         conn.close()
 
@@ -2136,6 +2408,9 @@ def _set_claimed_relay_status(
     next_attempt_at: str = "",
     error_code: str = "",
     error_message: str = "",
+    runtime_credentials: ProducerCredentials | None = None,
+    runtime_lease: Mapping[str, Any] | None = None,
+    runtime_authority_action: str = "",
 ) -> bool:
     return _set_relay_status(
         db_path=db_path,
@@ -2148,6 +2423,9 @@ def _set_claimed_relay_status(
         error_message=error_message,
         expected_lease_owner=row.lease_owner,
         expected_attempt_count=row.attempt_count,
+        runtime_credentials=runtime_credentials,
+        runtime_lease=runtime_lease,
+        runtime_authority_action=runtime_authority_action,
     )
 
 
@@ -2168,7 +2446,46 @@ def _source_file_plan_from_relay_row(row: RelayQueueRow) -> SourceFilePlan:
         metadata=metadata,
         content_sha256=row.content_sha256,
         byte_length=row.byte_length,
+        runtime_fencing_policy=row.runtime_fencing_policy,
     )
+
+
+def _persist_legacy_exact_replay_before_source_post(
+    *,
+    db_path: str | os.PathLike[str],
+    relay_id: str,
+    expected_lease_owner: str,
+    expected_attempt_count: int,
+    now: str,
+) -> None:
+    """Pin a no-runtime request fingerprint immediately before source HTTP I/O."""
+
+    conn = _connect_relay_db(db_path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        cursor = conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET runtime_fencing_policy=?, updated_at=?
+            WHERE relay_id=? AND status=? AND lease_owner=? AND attempt_count=?
+            """,
+            (
+                RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY,
+                now,
+                relay_id,
+                RELAY_STATUS_LEASED,
+                expected_lease_owner,
+                expected_attempt_count,
+            ),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            raise RelayLeaseLostBeforeSourcePost(
+                "relay lease changed before legacy exact-replay source POST"
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredentials) -> tuple[str, str]:
@@ -2177,10 +2494,14 @@ def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredential
             "relay_credentials_unpinned",
             "relay batch was queued before producer credentials were pinned; operator review is required",
         )
+    endpoint_changed = row.endpoint_url != credentials.endpoint_url
     if (
         row.producer_id != credentials.producer_id
         or row.key_id != credentials.key_id
-        or row.endpoint_url != credentials.endpoint_url
+        or (
+            endpoint_changed
+            and row.runtime_fencing_policy != RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY
+        )
     ):
         return (
             "relay_credentials_changed",
@@ -2303,6 +2624,11 @@ def drain_one_relay_batch(
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
+    if (
+        row.runtime_fencing_policy == RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY
+        and credentials.endpoint_url != row.endpoint_url
+    ):
+        credentials = replace(credentials, endpoint_url=row.endpoint_url)
     if pre_upload_pause_check is not None:
         pause_state = pre_upload_pause_check()
         if _pause_requested(pause_state):
@@ -2315,6 +2641,80 @@ def drain_one_relay_batch(
             ):
                 return _relay_status_update_conflict(row, prior_result=result)
             return _local_relay_upload_result(row, result)
+    runtime_preparation = prepare_runtime_metadata(
+        db_path=db_path,
+        relay_id=row.relay_id,
+        metadata=plan.metadata,
+        credentials=credentials,
+        expected_lease_owner=row.lease_owner,
+        expected_attempt_count=row.attempt_count,
+        runtime_fencing_policy=row.runtime_fencing_policy,
+        session=session,
+        timeout=timeout,
+        now=now,
+    )
+    if runtime_preparation.metadata is None:
+        result = UploadResult(
+            success=False,
+            status_code=runtime_preparation.status_code,
+            committed=False,
+            retryable=runtime_preparation.retryable,
+            receipt=runtime_preparation.receipt,
+            retry_after_seconds=runtime_preparation.retry_after_seconds,
+            error_code=runtime_preparation.error_code,
+            error_message=runtime_preparation.error_message,
+        )
+        if runtime_preparation.operator_review:
+            target_status = RELAY_STATUS_OPERATOR_REVIEW
+            next_attempt_at = ""
+        elif runtime_preparation.retryable:
+            target_status = RELAY_STATUS_RETRY_WAIT
+            retry_after = (
+                runtime_preparation.retry_after_seconds
+                if runtime_preparation.retry_after_seconds is not None
+                else _retry_after_seconds(row.attempt_count, retry_base_seconds, row.relay_id)
+            )
+            next_attempt_at = (
+                datetime.fromisoformat(now.replace("Z", "+00:00")).astimezone(timezone.utc)
+                + timedelta(seconds=retry_after)
+            ).isoformat().replace("+00:00", "Z")
+        else:
+            target_status = RELAY_STATUS_FAILED_PERMANENT
+            next_attempt_at = ""
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=target_status,
+            receipt=result.receipt,
+            next_attempt_at=next_attempt_at,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action=(
+                "" if runtime_preparation.retryable else "operator_review"
+            ),
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+        return _local_relay_upload_result(row, result)
+    row = replace(row, metadata=dict(runtime_preparation.metadata))
+    plan = replace(plan, metadata=dict(runtime_preparation.metadata))
+    before_post: Callable[[], None] | None = None
+    if not any(field_name in plan.metadata for field_name in RUNTIME_METADATA_FIELDS):
+        row = replace(
+            row,
+            runtime_fencing_policy=RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY,
+        )
+        plan = replace(
+            plan,
+            runtime_fencing_policy=RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY,
+        )
+        before_post = lambda: _persist_legacy_exact_replay_before_source_post(
+            db_path=db_path,
+            relay_id=row.relay_id,
+            expected_lease_owner=row.lease_owner,
+            expected_attempt_count=row.attempt_count,
+            now=now,
+        )
     try:
         result = upload_source_file(
             plan,
@@ -2323,7 +2723,10 @@ def drain_one_relay_batch(
             timeout=timeout,
             status_dir=status_dir,
             status_context={"relay_id": row.relay_id, "attempt_count": row.attempt_count},
+            before_post=before_post,
         )
+    except RelayLeaseLostBeforeSourcePost:
+        return _relay_status_update_conflict(row)
     except Exception as exc:
         result = _upload_exception_result(row, exc)
         if not _set_claimed_relay_status(
@@ -2333,6 +2736,8 @@ def drain_one_relay_batch(
             receipt=result.receipt,
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action="operator_review",
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
@@ -2346,6 +2751,9 @@ def drain_one_relay_batch(
             upload_status_path=result.status_path,
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_lease=result._runtime_lease,
+            runtime_authority_action=result._runtime_disposition,
         ):
             return _relay_status_update_conflict(row, committed=result.committed, prior_result=result)
     elif result.committed:
@@ -2357,8 +2765,44 @@ def drain_one_relay_batch(
             upload_status_path=result.status_path,
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_lease=result._runtime_lease,
+            runtime_authority_action=(
+                result._runtime_disposition
+                or ("operator_review" if result._runtime_lease is None else "")
+            ),
         ):
             return _relay_status_update_conflict(row, committed=True, prior_result=result)
+    elif (
+        row.runtime_fencing_policy == RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY
+        and result._runtime_token_unconsumed
+        and client_runtime_lease_mode(credentials) == "enforce"
+    ):
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=RELAY_STATUS_OPERATOR_REVIEW,
+            receipt=result.receipt,
+            upload_status_path=result.status_path,
+            error_code=result.error_code or "legacy_exact_replay_not_committed",
+            error_message=result.error_message or "legacy exact replay was explicitly not committed",
+            runtime_credentials=credentials,
+            runtime_authority_action="operator_review",
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
+    elif result.error_code in RUNTIME_OPERATOR_REVIEW_CODES:
+        if not _set_claimed_relay_status(
+            row,
+            db_path=db_path,
+            status=RELAY_STATUS_OPERATOR_REVIEW,
+            receipt=result.receipt,
+            upload_status_path=result.status_path,
+            error_code=result.error_code,
+            error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action="operator_review",
+        ):
+            return _relay_status_update_conflict(row, prior_result=result)
     elif result.retryable:
         retry_after = (
             result.retry_after_seconds
@@ -2392,6 +2836,10 @@ def drain_one_relay_batch(
             upload_status_path=result.status_path,
             error_code=result.error_code,
             error_message=result.error_message,
+            runtime_credentials=credentials,
+            runtime_authority_action=(
+                "release" if result._runtime_token_unconsumed else "operator_review"
+            ),
         ):
             return _relay_status_update_conflict(row, committed=result.committed, prior_result=result)
     return result

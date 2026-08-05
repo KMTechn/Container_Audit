@@ -176,7 +176,7 @@ jobs:
 
       - name: Build with PyInstaller (One-Folder mode)
         # 아이콘 지정 및 hidden-import 옵션을 포함한 최종 명령어
-        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "direct_sync_operator.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
+        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "producer_runtime_client.py;." --add-data "direct_sync_operator.py;." --add-data "event_log_store.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
 
       - name: Build bundled direct-sync relay executable
         run: python -m PyInstaller --name "Container_Audit_DirectSync_Relay" --onefile --console --distpath dist/Container_Audit --workpath build/direct_sync_relay_pyinstaller --specpath build/direct_sync_relay_pyinstaller tools/direct_sync_relay_runner.py
@@ -253,7 +253,9 @@ jobs:
             "Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md",
             "Container_Audit/direct_sync_push.py",
             "Container_Audit/direct_sync_runtime.py",
+            "Container_Audit/producer_runtime_client.py",
             "Container_Audit/direct_sync_operator.py",
+            "Container_Audit/event_log_store.py",
             "Container_Audit/storage_policy.py",
             "Container_Audit/storage_utils.py",
             "Container_Audit/logistics_runtime_profile.py"
@@ -264,6 +266,10 @@ jobs:
               throw "Missing release asset: $relative"
             }
           }
+          python -I "$smokeDir/Container_Audit/tools/direct_sync_relay_runner.py" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Staged direct-sync relay source help probe failed." }
+          python -I "$smokeDir/Container_Audit/tools/direct_sync_relay_operator.py" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Staged direct-sync operator source help probe failed." }
           $releaseConfigDir = Join-Path $smokeDir "Container_Audit/config"
           python tools/check_release_config.py --config-dir "$releaseConfigDir"
           $hash = Get-FileHash -LiteralPath $zipPath -Algorithm SHA256

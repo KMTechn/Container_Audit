@@ -424,6 +424,8 @@ def test_install_pack_honors_explicit_python_exe_even_when_bundled_relay_exists(
     (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_runtime.py").write_text("", encoding="utf-8")
+    (app_root / "producer_runtime_client.py").write_text("", encoding="utf-8")
+    (app_root / "event_log_store.py").write_text("", encoding="utf-8")
     (app_root / "storage_policy.py").write_text("", encoding="utf-8")
     (app_root / "Container_Audit_DirectSync_Relay.exe").write_bytes(b"relay-exe")
     report_path = tmp_path / "install-pack-explicit-python.json"
@@ -738,6 +740,8 @@ def test_install_pack_dry_run_skips_python_runtime_import_probe_by_default(tmp_p
     (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_runtime.py").write_text("raise RuntimeError('broken runtime import')\n", encoding="utf-8")
+    (app_root / "producer_runtime_client.py").write_text("", encoding="utf-8")
+    (app_root / "event_log_store.py").write_text("", encoding="utf-8")
     (app_root / "storage_policy.py").write_text("", encoding="utf-8")
     report_path = tmp_path / "install-pack-runtime-import-skipped.json"
     completed = subprocess.run(
@@ -784,6 +788,10 @@ def test_python_runtime_import_probe_includes_lazy_requests_dependency(tmp_path,
 
     assert report["status"] == "PASS"
     assert "requests" in report["required_modules"]
+    assert "producer_runtime_client" in report["required_modules"]
+    assert "event_log_store" in report["required_modules"]
+    assert "import producer_runtime_client" in observed["command"][2]
+    assert "import event_log_store" in observed["command"][2]
     assert "import requests" in observed["command"][2]
     assert observed["timeout"] == 15
 
@@ -796,6 +804,8 @@ def test_install_pack_blocks_python_that_cannot_import_runtime_modules_when_prob
     (app_root / "direct_sync_push.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_operator.py").write_text("", encoding="utf-8")
     (app_root / "direct_sync_runtime.py").write_text("raise RuntimeError('broken runtime import')\n", encoding="utf-8")
+    (app_root / "producer_runtime_client.py").write_text("", encoding="utf-8")
+    (app_root / "event_log_store.py").write_text("", encoding="utf-8")
     (app_root / "storage_policy.py").write_text("", encoding="utf-8")
     report_path = tmp_path / "install-pack-runtime-import.json"
     completed = subprocess.run(

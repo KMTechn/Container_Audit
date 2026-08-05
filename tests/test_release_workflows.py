@@ -1,9 +1,11 @@
+import ast
 import base64
 import json
 import os
 import re
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
@@ -49,10 +51,14 @@ def test_full_ci_and_release_own_distinct_signals():
     assert "tools/check_logistics_runtime_profile.py" in release_text
     assert '--add-data "storage_policy.py;."' in release_text
     assert '--add-data "storage_utils.py;."' in release_text
+    assert '--add-data "producer_runtime_client.py;."' in release_text
+    assert '--add-data "event_log_store.py;."' in release_text
     assert '--add-data "logistics_runtime_profile.py;."' in release_text
     assert 'python tools/check_update_archive.py --zip-path "$zipPath" --destination "$smokeDir"' in release_text
     assert 'python tools/check_release_config.py --config-dir "$releaseConfigDir"' in release_text
     assert _release_workflow_required_assets(release_text) == update_service.REQUIRED_UPDATE_ARCHIVE_FILES
+    assert 'python -I "$smokeDir/Container_Audit/tools/direct_sync_relay_runner.py" --help' in release_text
+    assert 'python -I "$smokeDir/Container_Audit/tools/direct_sync_relay_operator.py" --help' in release_text
     assert "Expand-Archive" not in release_text
     assert "- name: Smoke check release archive" in release_text
     assert "Get-FileHash -LiteralPath $zipPath -Algorithm SHA256" in release_text
@@ -97,6 +103,75 @@ def test_full_ci_and_release_own_distinct_signals():
     assert "PRIVATE_UPDATE_MANIFEST_URL and PRIVATE_UPDATE_MANIFEST_PUBLIC_KEY must be set together." in release_text
     upload_block = release_text[release_text.index("- name: Create Release and Upload Asset"):]
     assert "Container_Audit-${{ github.ref_name }}.manifest.json" not in upload_block
+
+
+def test_pyinstaller_spec_includes_runtime_client_data_boundary():
+    root = Path(__file__).resolve().parents[1]
+    spec_text = (root / "Container_Audit.spec").read_text(encoding="utf-8")
+    release_text = (root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "('producer_runtime_client.py', '.')" in spec_text
+    assert "('event_log_store.py', '.')" in spec_text
+    spec_tree = ast.parse(spec_text)
+    datas = None
+    for node in ast.walk(spec_tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "Analysis":
+            datas_keyword = next(keyword for keyword in node.keywords if keyword.arg == "datas")
+            datas = set(ast.literal_eval(datas_keyword.value))
+            break
+    assert datas is not None
+    workflow_datas = {
+        tuple(value.split(";", 1))
+        for value in re.findall(r'--add-data "([^"]+)"', release_text)
+    }
+    assert datas == workflow_datas
+    assert "name='Container_Audit'" in spec_text
+    assert "console=False" in spec_text
+    assert "contents_directory='.'" in spec_text
+    assert "hiddenimports=['pygame', 'PIL.Image', 'PIL.ImageTk']" in spec_text
+
+
+def test_staged_direct_sync_source_tools_import_from_isolated_release_root(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    staged_root = tmp_path / "staged" / "Container_Audit"
+    staged_tools = staged_root / "tools"
+    staged_tools.mkdir(parents=True)
+
+    for relative_path in (
+        "direct_sync_push.py",
+        "direct_sync_runtime.py",
+        "producer_runtime_client.py",
+        "direct_sync_operator.py",
+        "event_log_store.py",
+        "storage_policy.py",
+        "tools/direct_sync_relay_runner.py",
+        "tools/direct_sync_relay_operator.py",
+    ):
+        source = root / relative_path
+        destination = staged_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+
+    for script, description in (
+        (
+            staged_tools / "direct_sync_relay_runner.py",
+            "Container_Audit direct-sync relay runner",
+        ),
+        (
+            staged_tools / "direct_sync_relay_operator.py",
+            "Container_Audit direct-sync relay operator control",
+        ),
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-I", str(script), "--help"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+        assert description in completed.stdout
 
 
 def test_release_workflow_requires_explicit_private_feed_publish_opt_in():

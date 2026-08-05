@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import direct_sync_push
+from producer_runtime_client import RuntimePreparation
 from event_contracts import plan_b_event_detail
 from event_log_store import append_event_log_entry
 from direct_sync_push import (
@@ -38,6 +39,16 @@ from direct_sync_push import (
     signed_headers,
     upload_source_file,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_legacy_relay_tests_from_runtime_lease(monkeypatch):
+    monkeypatch.setattr(
+        direct_sync_push,
+        "prepare_runtime_metadata",
+        lambda **kwargs: RuntimePreparation(metadata=dict(kwargs["metadata"])),
+    )
+    monkeypatch.setattr(direct_sync_push, "client_runtime_lease_mode", lambda _credentials: "observe")
 
 
 def test_retry_after_seconds_uses_stable_bounded_jitter():
@@ -2939,7 +2950,18 @@ def test_drain_does_not_ack_when_lease_changes_before_status_update(tmp_path, mo
     )
     server_source_file_id = f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
 
-    def fake_upload(plan, _credentials, *, session=None, timeout=30, status_dir="", status_context=None):
+    def fake_upload(
+        plan,
+        _credentials,
+        *,
+        session=None,
+        timeout=30,
+        status_dir="",
+        status_context=None,
+        before_post=None,
+    ):
+        if before_post is not None:
+            before_post()
         with sqlite3.connect(db_path) as conn:
             conn.execute(
                 """
@@ -3010,7 +3032,18 @@ def test_drain_extends_lease_beyond_long_upload_timeout(tmp_path, monkeypatch):
     started_at = datetime.now(timezone.utc)
     server_source_file_id = f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
 
-    def fake_upload(plan, _credentials, *, session=None, timeout=30, status_dir="", status_context=None):
+    def fake_upload(
+        plan,
+        _credentials,
+        *,
+        session=None,
+        timeout=30,
+        status_dir="",
+        status_context=None,
+        before_post=None,
+    ):
+        if before_post is not None:
+            before_post()
         with sqlite3.connect(db_path) as conn:
             conn.row_factory = sqlite3.Row
             current = conn.execute(
@@ -3092,7 +3125,7 @@ def test_acked_relay_retention_report_is_read_only_and_candidates_require_full_e
     candidates = acked_relay_retention_candidates(db_path)
     assert len(candidates) == 1
     assert candidates[0].relay_id == row.relay_id
-    assert candidates[0].receipt == receipt
+    assert candidates[0].receipt == result.receipt
     assert len(
         acked_relay_retention_candidates(
             db_path,
@@ -3114,10 +3147,10 @@ def test_acked_relay_retention_report_is_read_only_and_candidates_require_full_e
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             "UPDATE direct_sync_relay_batches SET receipt_json = ? WHERE relay_id = ?",
-            (json.dumps(receipt, ensure_ascii=False, sort_keys=True), row.relay_id),
+            (json.dumps(result.receipt, ensure_ascii=False, sort_keys=True), row.relay_id),
         )
         conn.commit()
-    status_receipt_mismatch = dict(receipt)
+    status_receipt_mismatch = dict(result.receipt)
     status_receipt_mismatch["request_id"] = "request-wrong-status-artifact"
     Path(candidates[0].upload_status_path).write_text(
         json.dumps(
@@ -3135,7 +3168,7 @@ def test_acked_relay_retention_report_is_read_only_and_candidates_require_full_e
     assert acked_relay_retention_candidates(db_path) == ()
 
     Path(candidates[0].upload_status_path).write_text(
-        json.dumps({"success": True, "committed": True, "receipt": receipt, "metadata": {"relative_path": "wrong"}}),
+        json.dumps({"success": True, "committed": True, "receipt": result.receipt, "metadata": {"relative_path": "wrong"}}),
         encoding="utf-8",
     )
     assert acked_relay_retention_candidates(db_path) == ()
