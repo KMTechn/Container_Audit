@@ -19,6 +19,7 @@ class CompletionOutcome(str, Enum):
     ACKED = "ACKED"
     LINKED = "LINKED"
     RETRY_WAIT = "RETRY_WAIT"
+    LOCAL_EVENT_RETRY = "LOCAL_EVENT_RETRY"
     OPERATOR_REVIEW = "OPERATOR_REVIEW"
 
 
@@ -86,7 +87,17 @@ class CompletionOutcomeSnapshot:
     def blocks_completion(self) -> bool:
         return self.outcome in {
             CompletionOutcome.RETRY_WAIT,
+            CompletionOutcome.LOCAL_EVENT_RETRY,
             CompletionOutcome.OPERATOR_REVIEW,
+        }
+
+    @property
+    def operator_retryable(self) -> bool:
+        """Whether the same immutable completion intent may be retried in-place."""
+
+        return self.outcome in {
+            CompletionOutcome.RETRY_WAIT,
+            CompletionOutcome.LOCAL_EVENT_RETRY,
         }
 
     @property
@@ -133,6 +144,13 @@ _COMPLETION_NOTICE_DEFAULTS = {
         "서버 이적 확인 대기",
         "서버 이적 확인이 아직 완료되지 않았습니다. 자동 재시도를 기다려 주세요.",
         NoticeSeverity.WARNING,
+        True,
+    ),
+    CompletionOutcome.LOCAL_EVENT_RETRY: (
+        "completion.local_event_retry",
+        "완료 기록 저장 재시도",
+        "완료 처리는 확정됐지만 기록 저장이 끝나지 않았습니다. 완료 기록 재시도를 눌러 주세요.",
+        NoticeSeverity.ERROR,
         True,
     ),
     CompletionOutcome.OPERATOR_REVIEW: (

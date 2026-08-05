@@ -13,6 +13,8 @@ class TrayStateValidationError(ValueError):
 FUTURE_TIMESTAMP_SKEW_SECONDS = 300.0
 OPERATOR_REVIEW_STATE_KEY = "pending_operator_review"
 OPERATOR_REVIEW_STATE_SCHEMA_VERSION = 1
+COMPLETION_EVENT_STATE_KEY = "pending_completion_event"
+COMPLETION_EVENT_STATE_SCHEMA_VERSION = 1
 
 
 def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
@@ -197,9 +199,13 @@ def _validate_pending_operator_review(
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} must be a JSON object")
     if payload.get("schema_version") != OPERATOR_REVIEW_STATE_SCHEMA_VERSION:
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} has an unsupported schema version")
-    if payload.get("outcome") not in {"OPERATOR_REVIEW", "RETRY_WAIT"}:
+    if payload.get("outcome") not in {
+        "OPERATOR_REVIEW",
+        "RETRY_WAIT",
+        "LOCAL_EVENT_RETRY",
+    }:
         raise TrayStateValidationError(
-            f"{OPERATOR_REVIEW_STATE_KEY} outcome must be OPERATOR_REVIEW or RETRY_WAIT"
+            f"{OPERATOR_REVIEW_STATE_KEY} outcome is unsupported"
         )
     for key in ("item_name", "master_label", "message", "receipt_id", "error_code"):
         if not isinstance(payload.get(key), str):
@@ -224,6 +230,106 @@ def _validate_pending_operator_review(
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY} item_name does not match tray state")
     if not payload["message"].strip():
         raise TrayStateValidationError(f"{OPERATOR_REVIEW_STATE_KEY}.message must not be empty")
+
+
+def _validate_pending_completion_event(
+    state: Mapping[str, Any],
+    *,
+    now: datetime.datetime,
+    future_clock_skew_seconds: float,
+) -> None:
+    payload = state.get(COMPLETION_EVENT_STATE_KEY)
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping):
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY} must be a JSON object"
+        )
+    if payload.get("schema_version") != COMPLETION_EVENT_STATE_SCHEMA_VERSION:
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY} has an unsupported schema version"
+        )
+    for key in (
+        "event_type",
+        "idempotency_key",
+        "observed_at",
+        "projection_log_name",
+        "projection_worker_name",
+        "transfer_intent_id",
+    ):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise TrayStateValidationError(
+                f"{COMPLETION_EVENT_STATE_KEY}.{key} must be non-empty text"
+            )
+    if payload["event_type"] != "TRAY_COMPLETE":
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.event_type must be TRAY_COMPLETE"
+        )
+    intent_id = payload["transfer_intent_id"].strip()
+    if payload["idempotency_key"].strip() != f"tray-complete:{intent_id}":
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.idempotency_key does not match transfer intent"
+        )
+    log_name = payload["projection_log_name"].strip()
+    if (
+        log_name != Path(log_name).name
+        or "/" in log_name
+        or "\\" in log_name
+        or not log_name.lower().endswith(".csv")
+    ):
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.projection_log_name is invalid"
+        )
+    projection_worker_name = payload["projection_worker_name"].strip()
+    if (
+        len(projection_worker_name) > 128
+        or any(ord(character) < 32 for character in projection_worker_name)
+    ):
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.projection_worker_name is invalid"
+        )
+    observed_at = _parse_iso_datetime(
+        payload["observed_at"], key=f"{COMPLETION_EVENT_STATE_KEY}.observed_at"
+    )
+    _reject_future_datetime(
+        observed_at,
+        key=f"{COMPLETION_EVENT_STATE_KEY}.observed_at",
+        now=now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
+    )
+    for key in ("was_restored_session", "log_may_have_been_attempted"):
+        if not isinstance(payload.get(key), bool):
+            raise TrayStateValidationError(
+                f"{COMPLETION_EVENT_STATE_KEY}.{key} must be a boolean"
+            )
+    transfer_detail = payload.get("transfer_detail")
+    if not isinstance(transfer_detail, Mapping):
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.transfer_detail must be a JSON object"
+        )
+    if len(transfer_detail) > 64:
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.transfer_detail is too large"
+        )
+    detail_intent = str(transfer_detail.get("transfer_seal_intent_id") or "").strip()
+    if transfer_detail and detail_intent != intent_id:
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.transfer_detail intent mismatch"
+        )
+    if payload["log_may_have_been_attempted"] and not transfer_detail:
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY}.transfer_detail is required after log admission"
+        )
+    review = state.get(OPERATOR_REVIEW_STATE_KEY)
+    if isinstance(review, Mapping) and review.get("outcome") not in {
+        "OPERATOR_REVIEW",
+        "RETRY_WAIT",
+        "LOCAL_EVENT_RETRY",
+    }:
+        raise TrayStateValidationError(
+            f"{COMPLETION_EVENT_STATE_KEY} conflicts with non-retryable completion state"
+        )
 
 
 def _parse_iso_datetime(value: str, *, key: str) -> datetime.datetime:
@@ -349,6 +455,11 @@ def validate_tray_state(
         state,
         scanned_barcodes=scanned_barcodes,
         tray_size=tray_size,
+    )
+    _validate_pending_completion_event(
+        state,
+        now=validation_now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
     )
 
     return state

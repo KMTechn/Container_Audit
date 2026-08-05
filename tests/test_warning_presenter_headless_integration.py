@@ -1,4 +1,5 @@
 import datetime
+from pathlib import Path
 import sqlite3
 
 import pytest
@@ -144,6 +145,8 @@ def _completion_app(*, seal_status, ledger_succeeds, events):
         app.warning_presenter.record_normal_scan(barcode)
     events.clear()
     app.worker_name = "홍길동"
+    app.save_folder = str(Path(__file__).resolve().parent)
+    app.log_file_path = str(Path(app.save_folder) / "headless-completion-events.csv")
     app.completed_master_labels = set()
     app.work_summary = {}
     app.total_tray_count = 0
@@ -468,7 +471,7 @@ def test_permanent_local_outbox_failure_never_shows_completion_success():
     assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)
 
 
-def test_completion_log_failure_does_not_publish_snapshot_or_reset_active_tray():
+def test_completion_log_failure_after_acked_transfer_publishes_retry_lock_without_reset():
     events = []
     app = _completion_app(seal_status="ACKED", ledger_succeeds=False, events=events)
     original_tray = app.current_tray
@@ -477,8 +480,15 @@ def test_completion_log_failure_does_not_publish_snapshot_or_reset_active_tray()
     assert app.complete_tray() is False
 
     assert ("log_event", "TRAY_COMPLETE", True) in events
-    assert not any(event[0] == "present_completion" for event in events)
-    assert app.warning_presenter.state.completion is None
+    assert ("save_state", None) in events
+    assert (
+        "present_completion",
+        CompletionOutcome.LOCAL_EVENT_RETRY,
+    ) in events
+    assert app.warning_presenter.state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY
+    assert app.warning_presenter.state.is_blocking is True
     assert app.current_tray is original_tray
     assert app.scanned_listbox.rows == original_rows
+    assert not any(event[0] == "remember_label" for event in events)
+    assert not any(event[0] == "delete_state" for event in events)
     assert not any(event[0] == "reset_ui" for event in events)

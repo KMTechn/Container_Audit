@@ -2675,17 +2675,15 @@ class TransferSealStore:
                 self._ensure_linked_event(conn, row)
             conn.commit()
 
-    def prepare(
-        self,
+    @staticmethod
+    def preview_intent(
         *,
         master_label: str,
         source_identity: Mapping[str, Any],
         item_id: str,
-        operator: str,
         scanned_barcodes: Iterable[str],
-        relay_log_file_path: str = "",
         operation_lease_id: str = "",
-    ) -> sqlite3.Row:
+    ) -> dict[str, Any]:
         raw_barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
         normalized = [normalize_barcode(value) for value in raw_barcodes]
         if not raw_barcodes or len(set(normalized)) != len(normalized):
@@ -2705,6 +2703,39 @@ class TransferSealStore:
         digest = _sha256(intent_material)
         intent_id = f"transfer-intent-{digest[:32]}"
         idempotency_key = f"container-seal:{digest}"
+        return {
+            "intent_material": intent_material,
+            "raw_barcodes": raw_barcodes,
+            "operation_lease_id": normalized_operation_lease_id,
+            "intent_hash": digest,
+            "intent_id": intent_id,
+            "idempotency_key": idempotency_key,
+        }
+
+    def prepare(
+        self,
+        *,
+        master_label: str,
+        source_identity: Mapping[str, Any],
+        item_id: str,
+        operator: str,
+        scanned_barcodes: Iterable[str],
+        relay_log_file_path: str = "",
+        operation_lease_id: str = "",
+    ) -> sqlite3.Row:
+        preview = self.preview_intent(
+            master_label=master_label,
+            source_identity=source_identity,
+            item_id=item_id,
+            scanned_barcodes=scanned_barcodes,
+            operation_lease_id=operation_lease_id,
+        )
+        intent_material = preview["intent_material"]
+        raw_barcodes = preview["raw_barcodes"]
+        normalized_operation_lease_id = preview["operation_lease_id"]
+        digest = preview["intent_hash"]
+        intent_id = preview["intent_id"]
+        idempotency_key = preview["idempotency_key"]
         normalized_relay_log_path = (
             os.path.abspath(str(relay_log_file_path).strip())
             if str(relay_log_file_path or "").strip()
@@ -3527,6 +3558,47 @@ class TransferSealCoordinator:
         except OperationLeaseError as exc:
             raise TransferSealError(exc.code, exc.message) from exc
         return dict(snapshot), preflight
+
+    def preview(
+        self,
+        *,
+        master_label: str,
+        master_label_fields: Mapping[str, Any],
+        item_id: str,
+        scanned_barcodes: Iterable[str],
+        operation_lease_id: str = "",
+    ) -> SealAttempt:
+        """Compute the exact transfer identity without creating local ledger rows."""
+
+        scans = list(scanned_barcodes)
+        identity = source_identity_from_label(master_label_fields)
+        if not identity["item_id"]:
+            identity["item_id"] = str(item_id or "").strip()
+        normalized_lease_id = str(operation_lease_id or "").strip()
+        if normalized_lease_id:
+            self._verified_operation_lease(
+                lease_id=normalized_lease_id,
+                master_label=master_label,
+                master_label_fields=master_label_fields,
+                item_id=item_id,
+                scanned_barcodes=scans,
+            )
+        preview = self.store.preview_intent(
+            master_label=master_label,
+            source_identity=identity,
+            item_id=item_id,
+            scanned_barcodes=scans,
+            operation_lease_id=normalized_lease_id,
+        )
+        return SealAttempt(
+            intent_id=str(preview["intent_id"]),
+            status="PREPARED",
+            command_id=str(preview["idempotency_key"]),
+            operation_lease_id=normalized_lease_id,
+            operation_lease_state=(
+                "PREFETCHED" if normalized_lease_id else ""
+            ),
+        )
 
     def prepare(
         self,

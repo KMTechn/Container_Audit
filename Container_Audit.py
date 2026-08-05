@@ -10,7 +10,7 @@ import threading
 import time
 import json
 import re
-from typing import List, Dict, Optional, Any, Mapping, Sequence
+from typing import List, Dict, Optional, Any, Callable, Mapping, Sequence
 from PIL import Image, ImageTk
 from dataclasses import dataclass, field
 import queue
@@ -91,11 +91,14 @@ from responsive_layout import (
     select_layout_profile,
     worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
+from runtime_instance import acquire_runtime_instance
 from session_history import load_session_history
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
 from storage_utils import atomic_write_json
 from tray_state import (
+    COMPLETION_EVENT_STATE_KEY,
+    COMPLETION_EVENT_STATE_SCHEMA_VERSION,
     OPERATOR_REVIEW_STATE_KEY,
     OPERATOR_REVIEW_STATE_SCHEMA_VERSION,
     TrayStateValidationError,
@@ -2206,8 +2209,8 @@ class ContainerAudit:
 
     def _operator_review_state_payload(self) -> Optional[Dict[str, Any]]:
         # Keep the historic JSON key for backward compatibility.  It now also
-        # persists RETRY_WAIT, because a restart must not release a tray whose
-        # central transfer commit is still unknown.
+        # persists retryable completion states, because a restart must not
+        # release a tray whose transfer or local completion record is unsettled.
         snapshot = self._active_blocking_completion_snapshot()
         if snapshot is None:
             return None
@@ -2223,6 +2226,32 @@ class ContainerAudit:
             "receipt_id": str(snapshot.receipt_id or ""),
             "error_code": str(snapshot.error_code or ""),
         }
+
+    @staticmethod
+    def _completion_event_contract_from_state(
+        state: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        payload = state.get(COMPLETION_EVENT_STATE_KEY)
+        if payload is None:
+            return None
+        return {
+            "schema_version": int(payload["schema_version"]),
+            "event_type": str(payload["event_type"]),
+            "idempotency_key": str(payload["idempotency_key"]),
+            "observed_at": str(payload["observed_at"]),
+            "projection_log_name": str(payload["projection_log_name"]),
+            "projection_worker_name": str(payload["projection_worker_name"]),
+            "transfer_intent_id": str(payload["transfer_intent_id"]),
+            "was_restored_session": bool(payload["was_restored_session"]),
+            "log_may_have_been_attempted": bool(
+                payload["log_may_have_been_attempted"]
+            ),
+            "transfer_detail": dict(payload["transfer_detail"]),
+        }
+
+    def _active_completion_event_contract(self) -> Optional[Dict[str, Any]]:
+        payload = getattr(self, "_pending_completion_event_contract", None)
+        return dict(payload) if isinstance(payload, Mapping) else None
 
     def _operator_review_snapshot_from_state(
         self,
@@ -2244,10 +2273,45 @@ class ContainerAudit:
         )
 
     def _restore_operator_review_from_state(self, state: Dict[str, Any]) -> bool:
+        completion_event = self._completion_event_contract_from_state(state)
+        self._pending_completion_event_contract = completion_event
         snapshot = self._operator_review_snapshot_from_state(state)
         presenter = self._warning_state_presenter()
+        if snapshot is None and completion_event is not None:
+            transfer_detail = completion_event.get("transfer_detail") or {}
+            log_was_attempted = bool(
+                completion_event.get("log_may_have_been_attempted")
+            )
+            snapshot = CompletionOutcomeSnapshot(
+                outcome=(
+                    CompletionOutcome.LOCAL_EVENT_RETRY
+                    if log_was_attempted
+                    else CompletionOutcome.RETRY_WAIT
+                ),
+                item_name=str(self.current_tray.item_name or ""),
+                master_label=str(self.current_tray.master_label_code or ""),
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=max(
+                    len(self.current_tray.scanned_barcodes),
+                    int(self.current_tray.tray_size or 0),
+                ),
+                message=(
+                    "완료 기록 저장 도중 프로그램이 종료되었습니다. "
+                    "트레이를 잠근 채 동일 완료 기록을 재확인해야 합니다."
+                    if log_was_attempted
+                    else "이적 요청 준비 뒤 프로그램이 종료되었습니다. "
+                    "트레이를 잠근 채 동일 이적 요청을 서버에서 재확인해야 합니다."
+                ),
+                receipt_id=str(transfer_detail.get("transfer_seal_receipt_id") or ""),
+                error_code=(
+                    "TRAY_COMPLETE_EVENT_RECOVERY_REQUIRED"
+                    if log_was_attempted
+                    else "TRAY_COMPLETE_TRANSFER_RECOVERY_REQUIRED"
+                ),
+            )
         if snapshot is None:
             self._pending_operator_review_snapshot = None
+            self._pending_completion_event_contract = None
             presenter.clear_completion()
             return False
         self._pending_operator_review_snapshot = snapshot
@@ -2260,6 +2324,9 @@ class ContainerAudit:
 
     def _current_tray_state_snapshot(self) -> Dict[str, Any]:
         state = tray_session_to_state(self.current_tray, worker_name=self.worker_name)
+        completion_event = self._active_completion_event_contract()
+        if completion_event is not None:
+            state[COMPLETION_EVENT_STATE_KEY] = completion_event
         operator_review = self._operator_review_state_payload()
         if operator_review is not None:
             state[OPERATOR_REVIEW_STATE_KEY] = operator_review
@@ -2304,6 +2371,9 @@ class ContainerAudit:
             current_worker_persistent = persistent_operator_name(self.worker_name)
             saved_master_label = saved_state.get('master_label_code')
             saved_operator_review = self._operator_review_snapshot_from_state(saved_state)
+            saved_completion_event = self._completion_event_contract_from_state(
+                saved_state
+            )
             if saved_master_label and self._is_completed_master_label(saved_master_label):
                 self.current_tray = TraySession()
                 if not self._delete_current_tray_state():
@@ -2332,7 +2402,10 @@ class ContainerAudit:
                 return
             if saved_worker == current_worker_persistent:
                 msg = f"이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n· 품목: {saved_state.get('item_name', '알 수 없음')}\n· 스캔 수: {len(saved_state.get('scanned_barcodes', []))}개"
-                restore_required = saved_operator_review is not None
+                restore_required = (
+                    saved_operator_review is not None
+                    or saved_completion_event is not None
+                )
                 if restore_required or messagebox.askyesno("이전 작업 복구", msg):
                     restore_detail = {
                         'message': 'Same worker restored their session.',
@@ -2370,14 +2443,23 @@ class ContainerAudit:
                         "_pending_operator_review_snapshot",
                         None,
                     )
+                    previous_completion_event = getattr(
+                        self,
+                        "_pending_completion_event_contract",
+                        None,
+                    )
                     self.current_tray = tray_session_from_state(
                         saved_state,
                         session_factory=TraySession,
                         default_tray_size=self.TRAY_SIZE,
                     )
                     self._pending_operator_review_snapshot = saved_operator_review
+                    self._pending_completion_event_contract = saved_completion_event
                     if not self._save_current_tray_state():
                         self._pending_operator_review_snapshot = previous_operator_review
+                        self._pending_completion_event_contract = (
+                            previous_completion_event
+                        )
                         self.current_tray = TraySession()
                         messagebox.showwarning("작업 저장 경고", "인수한 작업 상태의 작업자 정보를 저장하지 못해 작업을 복구하지 않습니다.")
                         return
@@ -2404,6 +2486,9 @@ class ContainerAudit:
                             print(f"작업 인수 상태 롤백 실패: {exc}")
                             rollback_ok = False
                         self._pending_operator_review_snapshot = previous_operator_review
+                        self._pending_completion_event_contract = (
+                            previous_completion_event
+                        )
                         self.current_tray = TraySession()
                         if rollback_ok:
                             messagebox.showerror("작업 기록 실패", "작업 인수 기록을 남기지 못해 이전 작업 상태를 보존합니다.")
@@ -2414,7 +2499,10 @@ class ContainerAudit:
                     self._invalidate_pending_scan_callbacks()
                     self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
                 elif response is False:
-                    if saved_operator_review is not None:
+                    if (
+                        saved_operator_review is not None
+                        or saved_completion_event is not None
+                    ):
                         messagebox.showwarning(
                             "삭제 불가",
                             "담당자 확인이 필요한 트레이는 삭제할 수 없습니다. "
@@ -3184,9 +3272,9 @@ class ContainerAudit:
         scanned_count = len(getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or [])
         blocking_completion = self._active_blocking_completion_snapshot()
         operator_review = blocking_completion is not None
-        retry_wait = bool(
+        retryable_completion = bool(
             blocking_completion is not None
-            and blocking_completion.outcome is CompletionOutcome.RETRY_WAIT
+            and blocking_completion.operator_retryable
         )
         precommand_retry = (
             self._precommand_operator_review_retry_context() is not None
@@ -3208,8 +3296,11 @@ class ContainerAudit:
             exact_exchange_blocked=exact_exchange_blocked,
             active_transfer_exchange_available=active_transfer_exchange_available,
         )
-        if retry_wait:
-            labels["submit"] = "서버 재확인" if not compact_labels else "재확인"
+        if retryable_completion:
+            if blocking_completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
+                labels["submit"] = "완료 기록 재시도" if not compact_labels else "기록 재시도"
+            else:
+                labels["submit"] = "서버 재확인" if not compact_labels else "재확인"
 
         mutation_state = (
             tk.DISABLED
@@ -3238,7 +3329,7 @@ class ContainerAudit:
                 if active_tray
                 and scanned_count
                 and not phs_transition_blocked
-                and (not operator_review or retry_wait or precommand_retry)
+                and (not operator_review or retryable_completion or precommand_retry)
                 else tk.DISABLED
             ),
             text=labels["submit"],
@@ -7237,11 +7328,83 @@ class ContainerAudit:
             return False
         return float(work_time) / tray_capacity >= 5.0
 
+    def _completion_projection_log_path(
+        self,
+        projection_log_name: str = "",
+    ) -> Path:
+        save_root = Path(
+            str(
+                getattr(self, "save_folder", "")
+                or Path(str(getattr(self, "log_file_path", "") or "")).parent
+            )
+        ).resolve(strict=False)
+        if projection_log_name:
+            log_name = str(projection_log_name).strip()
+            if (
+                log_name != Path(log_name).name
+                or "/" in log_name
+                or "\\" in log_name
+                or not log_name.lower().endswith(".csv")
+            ):
+                raise ValueError("completion projection log name is invalid")
+            target = save_root / log_name
+        else:
+            target = Path(str(getattr(self, "log_file_path", "") or ""))
+        if not str(target) or target.resolve(strict=False).parent != save_root:
+            raise ValueError("completion projection log must be inside the event folder")
+        return target.resolve(strict=False)
+
+    def _freeze_completion_measurements(
+        self,
+        observed_at: datetime.datetime,
+    ) -> None:
+        if getattr(self, "is_idle", False):
+            last_activity = getattr(self, "last_activity_time", None)
+            if isinstance(last_activity, datetime.datetime):
+                self.current_tray.total_idle_seconds += max(
+                    0.0,
+                    (observed_at - last_activity).total_seconds(),
+                )
+            self.last_activity_time = observed_at
+            self.is_idle = False
+        self._stop_stopwatch()
+        self._stop_idle_checker()
+
+    def _completion_event_contract(
+        self,
+        *,
+        observed_at: datetime.datetime,
+        projection_log_path: Path,
+        projection_worker_name: str,
+        transfer_attempt: SealAttempt,
+        was_restored_session: bool,
+        transfer_detail: Mapping[str, Any],
+        log_may_have_been_attempted: bool,
+    ) -> Dict[str, Any]:
+        intent_id = str(transfer_attempt.intent_id or "").strip()
+        if not intent_id:
+            raise ValueError("completion transfer intent is missing")
+        projection_worker = persistent_operator_name(projection_worker_name)
+        if not projection_worker:
+            raise ValueError("completion projection worker is missing")
+        return {
+            "schema_version": COMPLETION_EVENT_STATE_SCHEMA_VERSION,
+            "event_type": "TRAY_COMPLETE",
+            "idempotency_key": f"tray-complete:{intent_id}",
+            "observed_at": observed_at.isoformat(),
+            "projection_log_name": projection_log_path.name,
+            "projection_worker_name": projection_worker,
+            "transfer_intent_id": intent_id,
+            "was_restored_session": bool(was_restored_session),
+            "log_may_have_been_attempted": bool(log_may_have_been_attempted),
+            "transfer_detail": dict(transfer_detail),
+        }
+
     def complete_tray(self):
         blocking_completion = self._active_blocking_completion_snapshot()
         if (
             blocking_completion is not None
-            and blocking_completion.outcome is not CompletionOutcome.RETRY_WAIT
+            and not blocking_completion.operator_retryable
             and self._operator_review_blocks_mutation()
         ):
             self._render_warning_state()
@@ -7271,20 +7434,103 @@ class ContainerAudit:
         is_partial = self.current_tray.is_partial_submission
         is_restored = self.current_tray.is_restored_session
         master_label = self.current_tray.master_label_code
+        existing_event_contract = self._active_completion_event_contract()
+        try:
+            if existing_event_contract is not None:
+                completion_observed_at = datetime.datetime.fromisoformat(
+                    str(existing_event_contract["observed_at"])
+                )
+                completion_was_restored = bool(
+                    existing_event_contract["was_restored_session"]
+                )
+                completion_projection_worker = str(
+                    existing_event_contract["projection_worker_name"]
+                )
+                projection_log_path = self._completion_projection_log_path(
+                    str(existing_event_contract["projection_log_name"])
+                )
+            else:
+                completion_observed_at = datetime.datetime.now()
+                completion_was_restored = bool(is_restored)
+                completion_projection_worker = persistent_operator_name(
+                    self.worker_name
+                )
+                projection_log_path = self._completion_projection_log_path()
+        except (KeyError, TypeError, ValueError) as e:
+            print(f"트레이 완료 기록 경로 확인 실패: {e}")
+            self.show_status_message(
+                "트레이 완료 기록 위치를 확인할 수 없어 이적을 시작하지 않습니다.",
+                self.COLOR_DANGER,
+            )
+            return False
 
         try:
             log_detail = build_tray_complete_detail(
                 self.current_tray,
                 master_label_fields=master_label_fields,
-                end_time=datetime.datetime.now(),
+                end_time=completion_observed_at,
             )
+            log_detail["is_restored_session"] = completion_was_restored
         except Exception as e:
             print(f"트레이 완료 기록 생성 실패: {e}")
             self.show_status_message("트레이 완료 기록 생성에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
             return False
+
+        def persist_prepared_completion_contract(
+            prepared_attempt: SealAttempt,
+        ) -> None:
+            prepared_intent_id = str(prepared_attempt.intent_id or "").strip()
+            if existing_event_contract is not None:
+                if prepared_intent_id != str(
+                    existing_event_contract.get("transfer_intent_id") or ""
+                ).strip():
+                    raise TransferSealError(
+                        "TRAY_COMPLETE_RETRY_INTENT_MISMATCH",
+                        "저장된 완료 기록과 새 이적 의도가 다릅니다.",
+                    )
+                prepared_contract = dict(existing_event_contract)
+            else:
+                prepared_contract = self._completion_event_contract(
+                    observed_at=completion_observed_at,
+                    projection_log_path=projection_log_path,
+                    projection_worker_name=completion_projection_worker,
+                    transfer_attempt=prepared_attempt,
+                    was_restored_session=completion_was_restored,
+                    transfer_detail={},
+                    log_may_have_been_attempted=False,
+                )
+            self._pending_completion_event_contract = prepared_contract
+            if self._save_current_tray_state():
+                return
+            self._present_completion_outcome(
+                CompletionOutcome.RETRY_WAIT,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message=(
+                    "이적 요청은 준비됐지만 완료 복구 계약을 저장하지 못했습니다. "
+                    "트레이를 잠근 채 프로그램을 종료하지 말고 담당자에게 알리세요."
+                ),
+                error_code="TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
+            )
+            raise TransferSealError(
+                "TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
+                "이적 요청 전 완료 복구 계약을 저장하지 못했습니다.",
+                retryable=True,
+            )
+
         if is_test:
+            test_intent_suffix = self._stable_hash(
+                {
+                    "master_label": master_label,
+                    "start_time": log_detail.get("start_time"),
+                    "product_barcodes": log_detail.get("product_barcodes") or [],
+                    "is_test_tray": True,
+                }
+            )[:24]
             transfer_attempt = SealAttempt(
-                intent_id="test-transfer-seal-skipped",
+                intent_id=f"test-transfer-seal-skipped-{test_intent_suffix}",
                 status="TEST_SKIPPED",
             )
         else:
@@ -7292,9 +7538,26 @@ class ContainerAudit:
                 transfer_attempt = self._prepare_and_attempt_transfer_seal(
                     master_label_fields=master_label_fields,
                     log_detail=log_detail,
+                    on_prepared=persist_prepared_completion_contract,
                 )
             except Exception as e:
                 print(f"이적 seal 로컬 보존 실패: {e}")
+                if (
+                    self._active_completion_event_contract() is not None
+                    and self._active_blocking_completion_snapshot() is None
+                ):
+                    self._present_completion_outcome(
+                        CompletionOutcome.RETRY_WAIT,
+                        item_name=self.current_tray.item_name,
+                        master_label=master_label,
+                        scan_count=len(self.current_tray.scanned_barcodes),
+                        target_count=self.current_tray.tray_size,
+                        message=(
+                            "이적 의도는 안전하게 고정했지만 로컬 원장 또는 서버 확인을 "
+                            "마치지 못했습니다. 트레이를 잠근 채 같은 요청을 재확인하세요."
+                        ),
+                        error_code="TRAY_COMPLETE_PREPARED_ATTEMPT_FAILED",
+                    )
                 self.show_status_message(
                     "이적 정보를 이 PC에 안전하게 저장하지 못해 작업 상태를 유지합니다.",
                     self.COLOR_DANGER,
@@ -7305,7 +7568,28 @@ class ContainerAudit:
             transfer_attempt.status == "OPERATOR_REVIEW" and locally_linked
         )
         post_review_case: Optional[Dict[str, Any]] = None
+        if (
+            existing_event_contract is not None
+            and str(existing_event_contract.get("transfer_intent_id") or "")
+            != str(transfer_attempt.intent_id or "")
+        ):
+            self._freeze_completion_measurements(completion_observed_at)
+            self._present_completion_outcome(
+                CompletionOutcome.OPERATOR_REVIEW,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message=(
+                    "완료 기록 재시도의 이적 의도가 이전 기록과 다릅니다. "
+                    "트레이를 유지하고 관리자에게 확인하세요."
+                ),
+                receipt_id=transfer_attempt.receipt_id,
+                error_code="TRAY_COMPLETE_RETRY_INTENT_MISMATCH",
+            )
+            return False
         if transfer_attempt.status == "OPERATOR_REVIEW" and not locally_linked:
+            self._freeze_completion_measurements(completion_observed_at)
             safe_message = (
                 "서버 확인 미완료 · 현재 트레이와 스캔 목록을 유지합니다.\n"
                 "작업을 계속하지 말고 관리자에게 알려 주세요."
@@ -7326,6 +7610,40 @@ class ContainerAudit:
             and transfer_attempt.status != "ACKED"
             and not locally_linked
         ):
+            if (
+                existing_event_contract is not None
+                and existing_event_contract.get("log_may_have_been_attempted") is True
+            ):
+                self._freeze_completion_measurements(completion_observed_at)
+                self._present_completion_outcome(
+                    CompletionOutcome.OPERATOR_REVIEW,
+                    item_name=self.current_tray.item_name,
+                    master_label=master_label,
+                    scan_count=len(self.current_tray.scanned_barcodes),
+                    target_count=self.current_tray.tray_size,
+                    message=(
+                        "로컬 완료 기록 이후 중앙 이적 증거가 이전 상태로 돌아갔습니다. "
+                        "트레이를 유지하고 관리자에게 확인하세요."
+                    ),
+                    receipt_id=transfer_attempt.receipt_id,
+                    error_code="TRAY_COMPLETE_TRANSFER_EVIDENCE_REGRESSION",
+                )
+                return False
+            self._freeze_completion_measurements(completion_observed_at)
+            retry_contract = self._completion_event_contract(
+                observed_at=completion_observed_at,
+                projection_log_path=projection_log_path,
+                projection_worker_name=completion_projection_worker,
+                transfer_attempt=transfer_attempt,
+                was_restored_session=completion_was_restored,
+                transfer_detail=(
+                    existing_event_contract.get("transfer_detail") or {}
+                    if existing_event_contract is not None
+                    else {}
+                ),
+                log_may_have_been_attempted=False,
+            )
+            self._pending_completion_event_contract = retry_contract
             self._present_completion_outcome(
                 CompletionOutcome.RETRY_WAIT,
                 item_name=self.current_tray.item_name,
@@ -7340,10 +7658,110 @@ class ContainerAudit:
                 error_code=transfer_attempt.error_code,
             )
             return False
-        self._attach_transfer_seal_detail(log_detail, transfer_attempt)
-        if not self._log_event('TRAY_COMPLETE', detail=log_detail, synchronous=True):
-            self.show_status_message("트레이 완료 기록 저장에 실패했습니다. 작업 상태를 보존합니다.", self.COLOR_DANGER)
+        self._freeze_completion_measurements(completion_observed_at)
+        try:
+            log_detail = build_tray_complete_detail(
+                self.current_tray,
+                master_label_fields=master_label_fields,
+                end_time=completion_observed_at,
+            )
+            log_detail["is_restored_session"] = completion_was_restored
+        except Exception as e:
+            print(f"고정된 트레이 완료 기록 생성 실패: {e}")
+            self._present_completion_outcome(
+                CompletionOutcome.OPERATOR_REVIEW,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message="고정된 완료 기록을 다시 만들 수 없습니다. 담당자에게 확인하세요.",
+                receipt_id=transfer_attempt.receipt_id,
+                error_code="TRAY_COMPLETE_EVENT_REBUILD_FAILED",
+            )
             return False
+        base_detail_keys = set(log_detail)
+        self._attach_transfer_seal_detail(log_detail, transfer_attempt)
+        current_transfer_detail = {
+            key: value
+            for key, value in log_detail.items()
+            if key not in base_detail_keys
+        }
+        stored_transfer_detail = (
+            dict(existing_event_contract.get("transfer_detail") or {})
+            if existing_event_contract is not None
+            else {}
+        )
+        if stored_transfer_detail:
+            log_detail.update(stored_transfer_detail)
+        else:
+            stored_transfer_detail = current_transfer_detail
+        prior_log_attempt = bool(
+            existing_event_contract is not None
+            and existing_event_contract.get("log_may_have_been_attempted") is True
+        )
+        completion_event_contract = self._completion_event_contract(
+            observed_at=completion_observed_at,
+            projection_log_path=projection_log_path,
+            projection_worker_name=completion_projection_worker,
+            transfer_attempt=transfer_attempt,
+            was_restored_session=completion_was_restored,
+            transfer_detail=stored_transfer_detail,
+            log_may_have_been_attempted=True,
+        )
+        log_detail["idempotency_key"] = completion_event_contract["idempotency_key"]
+        self._pending_completion_event_contract = completion_event_contract
+        if not self._save_current_tray_state():
+            self._present_completion_outcome(
+                CompletionOutcome.LOCAL_EVENT_RETRY,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message=(
+                    "완료 기록의 재시도 계약을 저장하지 못했습니다. "
+                    "프로그램을 종료하지 말고 담당자에게 알리세요."
+                ),
+                receipt_id=transfer_attempt.receipt_id,
+                error_code="TRAY_COMPLETE_RETRY_CONTRACT_PERSIST_FAILED",
+            )
+            return False
+        self._last_log_event_was_replay = False
+        completion_projection_is_other_worker = (
+            persistent_operator_name(completion_projection_worker)
+            != persistent_operator_name(self.worker_name)
+        )
+        completion_log_overrides = (
+            {"worker_name_override": completion_projection_worker}
+            if completion_projection_is_other_worker
+            else {}
+        )
+        if not self._log_event(
+            'TRAY_COMPLETE',
+            detail=log_detail,
+            synchronous=True,
+            idempotency_key=completion_event_contract["idempotency_key"],
+            event_timestamp=completion_event_contract["observed_at"],
+            log_file_path_override=str(projection_log_path),
+            deduplicate=prior_log_attempt,
+            **completion_log_overrides,
+        ):
+            self._present_completion_outcome(
+                CompletionOutcome.LOCAL_EVENT_RETRY,
+                item_name=self.current_tray.item_name,
+                master_label=master_label,
+                scan_count=len(self.current_tray.scanned_barcodes),
+                target_count=self.current_tray.tray_size,
+                message=(
+                    "완료 처리는 확정됐지만 TRAY_COMPLETE 기록을 저장하지 못했습니다. "
+                    "트레이·스캔 목록을 잠갔습니다. 같은 완료 요청으로 기록 저장을 재시도하세요."
+                ),
+                receipt_id=transfer_attempt.receipt_id,
+                error_code="TRAY_COMPLETE_EVENT_PERSIST_FAILED",
+            )
+            return False
+        completion_event_replayed = bool(
+            getattr(self, "_last_log_event_was_replay", False)
+        )
         if post_review_required:
             try:
                 post_review_case = self._project_transfer_post_review_for_intent(
@@ -7387,13 +7805,25 @@ class ContainerAudit:
 
         self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
 
+        completion_summary_requires_reload = (
+            completion_event_replayed
+            or completion_projection_is_other_worker
+        )
+        if completion_summary_requires_reload:
+            # The durable CSV row may have survived a lost local acknowledgement
+            # or process crash. Rebuild counters from the append-only source
+            # instead of applying the same completion to memory a second time.
+            self._load_session_state()
+
         if not is_test and not is_partial and self._parse_new_format_qr(master_label):
             self._remember_completed_master_label(master_label)
 
         item_code = self.current_tray.item_code
         if item_code not in self.work_summary: self.work_summary[item_code] = {'name': self.current_tray.item_name, 'spec': self.current_tray.item_spec, 'count': 0, 'test_count': 0}
         
-        if is_test: 
+        if completion_summary_requires_reload:
+            pass
+        elif is_test:
             self.work_summary[item_code]['test_count'] += 1
             self.show_status_message(f"테스트 트레이 완료!", self.COLOR_SUCCESS)
         else:
@@ -7408,8 +7838,7 @@ class ContainerAudit:
                     self._update_best_time_records(work_time) # 30일 최고 기록 갱신
                 except Exception as e:
                     print(f"최고 기록 갱신 실패: {e}")
-
-
+        self._pending_completion_event_contract = None
         self.current_tray = TraySession()
         self._invalidate_pending_scan_callbacks()
         state_delete_failed = self._delete_current_tray_state() is False
@@ -7542,7 +7971,7 @@ class ContainerAudit:
         blocking_completion = self._active_blocking_completion_snapshot()
         if (
             blocking_completion is not None
-            and blocking_completion.outcome is CompletionOutcome.RETRY_WAIT
+            and blocking_completion.operator_retryable
         ):
             self._update_last_activity_time()
             self.complete_tray()
@@ -7899,7 +8328,10 @@ class ContainerAudit:
                     acknowledge_button.grid()
                     acknowledge_button.configure(
                         text=(
-                            "서버 재확인 사용"
+                            "완료 기록 재시도 사용"
+                            if state.completion is not None
+                            and state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY
+                            else "서버 재확인 사용"
                             if state.completion is not None
                             and state.completion.outcome is CompletionOutcome.RETRY_WAIT
                             else "담당자 확인 필요"
@@ -7947,6 +8379,8 @@ class ContainerAudit:
                     status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
+                    status_value.configure(text="완료 기록 대기", foreground=self.COLOR_DANGER)
             status_label = getattr(self, "status_label", None)
             if status_label is not None:
                 if state.completion is not None and state.completion.blocks_completion:
@@ -7954,6 +8388,11 @@ class ContainerAudit:
                         status_label.configure(
                             text="스캔 중지 · 서버 승인 대기",
                             fg=self.COLOR_IDLE,
+                        )
+                    elif state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
+                        status_label.configure(
+                            text="스캔 중지 · 완료 기록 재시도",
+                            fg=self.COLOR_DANGER,
                         )
                     else:
                         status_label.configure(
@@ -7980,7 +8419,9 @@ class ContainerAudit:
                 target_count = max(0, int(getattr(tray, "tray_size", 0) or 0))
                 if state.completion is not None and state.completion.blocks_completion:
                     follow_up = (
-                        "스캔 중지 · 서버 재확인 버튼 사용"
+                        "스캔 중지 · 완료 기록 재시도 버튼 사용"
+                        if state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY
+                        else "스캔 중지 · 서버 재확인 버튼 사용"
                         if state.completion.outcome is CompletionOutcome.RETRY_WAIT
                         else "스캔 중지 · 담당자 확인"
                     )
@@ -8261,13 +8702,31 @@ class ContainerAudit:
         detail: Optional[Dict] = None,
         synchronous: bool = False,
         canonical_event_name: Optional[str] = None,
+        idempotency_key: str = "",
+        event_timestamp: str = "",
+        log_file_path_override: str = "",
+        deduplicate: bool = False,
+        worker_name_override: str = "",
     ) -> bool:
-        if not self.worker_name: return False
-        if not self.log_file_path: return False
+        projection_worker_name = persistent_operator_name(
+            worker_name_override or self.worker_name
+        )
+        if not projection_worker_name: return False
+        target_log_file_path = str(
+            log_file_path_override or self.log_file_path or ""
+        ).strip()
+        if not target_log_file_path: return False
+        normalized_idempotency_key = str(idempotency_key or "").strip()
+        raw_detail = dict(detail or {})
+        if normalized_idempotency_key:
+            existing_key = str(raw_detail.get("idempotency_key") or "").strip()
+            if existing_key and existing_key != normalized_idempotency_key:
+                return False
+            raw_detail["idempotency_key"] = normalized_idempotency_key
         try:
             enriched_detail = self._plan_b_event_detail(
                 event_type,
-                detail or {},
+                raw_detail,
                 canonical_event_name=canonical_event_name,
             )
             enriched_detail = sanitize_persistent_value(enriched_detail)
@@ -8283,8 +8742,8 @@ class ContainerAudit:
             return False
         safe_event_type = redact_protected_admin_identity(event_type)
         log_entry = {
-            'timestamp': datetime.datetime.now().isoformat(),
-            'worker_name': persistent_operator_name(self.worker_name),
+            'timestamp': str(event_timestamp or datetime.datetime.now().isoformat()),
+            'worker_name': projection_worker_name,
             'event': safe_event_type,
             'details': details_json,
         }
@@ -8292,7 +8751,22 @@ class ContainerAudit:
             try:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
                     self.log_queue.join()
-                append_event_log_entry(self.log_file_path, log_entry, durable=True)
+                if normalized_idempotency_key and deduplicate:
+                    appended = append_event_log_entry_idempotent(
+                        target_log_file_path,
+                        log_entry,
+                        event_type=safe_event_type,
+                        idempotency_key=normalized_idempotency_key,
+                        durable=True,
+                    )
+                    self._last_log_event_was_replay = not appended
+                else:
+                    append_event_log_entry(
+                        target_log_file_path,
+                        log_entry,
+                        durable=True,
+                    )
+                    self._last_log_event_was_replay = False
                 if event_type in {
                     "TRAY_COMPLETE",
                     "PRODUCT_EXCHANGE_COMPLETED",
@@ -8305,7 +8779,7 @@ class ContainerAudit:
                 self._record_log_write_error(error_message)
                 print(error_message)
                 return False
-        self.log_queue.put({'log_file_path': self.log_file_path, 'log_entry': log_entry})
+        self.log_queue.put({'log_file_path': target_log_file_path, 'log_entry': log_entry})
         return True
 
     def _trigger_session_direct_sync(self, reason: str) -> None:
@@ -8581,6 +9055,7 @@ class ContainerAudit:
         *,
         master_label_fields: Dict[str, Any],
         log_detail: Dict[str, Any],
+        on_prepared: Optional[Callable[[SealAttempt], None]] = None,
     ) -> SealAttempt:
         coordinator = self._transfer_seal_runtime()
         source_label_payload = str(
@@ -8604,6 +9079,16 @@ class ContainerAudit:
                 "OPERATION_LEASE_REQUIRED",
                 "이 트레이의 오프라인 이적 확인 정보가 없어 완료할 수 없습니다.",
             )
+        prepare_arguments = {
+            "master_label": source_label_payload,
+            "master_label_fields": source_label_fields,
+            "item_id": self.current_tray.item_code,
+            "scanned_barcodes": log_detail.get("product_barcodes") or (),
+            "operation_lease_id": operation_lease_id,
+        }
+        previewed = coordinator.preview(**prepare_arguments)
+        if on_prepared is not None:
+            on_prepared(previewed)
         prepared = coordinator.prepare(
             master_label=source_label_payload,
             master_label_fields=source_label_fields,
@@ -8615,6 +9100,11 @@ class ContainerAudit:
             ),
             operation_lease_id=operation_lease_id,
         )
+        if prepared.intent_id != previewed.intent_id:
+            raise TransferSealError(
+                "TRANSFER_INTENT_PREVIEW_MISMATCH",
+                "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
+            )
         drain_through = getattr(coordinator, "drain_pending_through", None)
         if callable(drain_through):
             results = drain_through(prepared.intent_id)
@@ -10701,10 +11191,36 @@ def prepare_startup_item_catalog() -> str:
 
 
 def main():
-    prepare_startup_item_catalog()
-    app = ContainerAudit()
-    app.root.after(500, lambda: schedule_update_check(app.root))
-    app.run()
+    if getattr(sys, 'frozen', False):
+        application_path = os.path.dirname(sys.executable)
+    else:
+        application_path = os.path.dirname(os.path.abspath(__file__))
+    storage_paths = build_container_audit_storage_paths(
+        application_path=application_path
+    )
+    try:
+        instance_lease = acquire_runtime_instance(storage_paths.data_root)
+    except OSError:
+        messagebox.showerror(
+            "프로그램 실행 잠금 실패",
+            "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
+            "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+        )
+        return
+    if instance_lease is None:
+        messagebox.showwarning(
+            "프로그램이 이미 실행 중입니다",
+            "같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
+            "열려 있는 창을 사용해 주세요.",
+        )
+        return
+    try:
+        prepare_startup_item_catalog()
+        app = ContainerAudit()
+        app.root.after(500, lambda: schedule_update_check(app.root))
+        app.run()
+    finally:
+        instance_lease.release()
 
 
 if __name__ == "__main__":

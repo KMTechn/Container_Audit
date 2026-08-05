@@ -352,9 +352,14 @@ def test_other_worker_cannot_delete_operator_review_state_when_takeover_declined
     assert after[OPERATOR_REVIEW_STATE_KEY]["outcome"] == "OPERATOR_REVIEW"
 
 
-def test_partial_submission_operator_review_preserves_partial_flag_in_snapshot_and_restore():
+def test_partial_submission_operator_review_preserves_partial_flag_in_snapshot_and_restore(
+    tmp_path,
+):
     app = ContainerAudit.__new__(ContainerAudit)
     app.worker_name = "partial-worker"
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "partial-events.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.current_tray = _review_tray(
         master_label=PARTIAL_MASTER_LABEL,
         tray_size=3,
@@ -378,6 +383,8 @@ def test_partial_submission_operator_review_preserves_partial_flag_in_snapshot_a
     app._update_action_button_states = lambda: None
     app._start_warning_beep = lambda: None
     app._stop_warning_beep = lambda: None
+    app._stop_stopwatch = lambda: None
+    app._stop_idle_checker = lambda: None
 
     assert app._complete_current_tray_as_partial() is False
 
