@@ -173,10 +173,13 @@ def _stub_guard_feedback(app):
     app._schedule_focus_return = lambda: None
 
 
-def _completion_app(*, delete_succeeds, prior_operator_review):
+def _completion_app(tmp_path, *, delete_succeeds, prior_operator_review):
     app = ContainerAudit.__new__(ContainerAudit)
     app.current_tray = _active_tray()
     app.worker_name = "completion-worker"
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "completion-events.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.warning_presenter = WarningPresenter()
     app.warning_presenter.record_normal_scan(PRODUCT_BARCODE)
     if prior_operator_review:
@@ -625,8 +628,12 @@ def test_stale_operator_review_blocks_exchange_entrypoint(monkeypatch):
     assert calls == []
 
 
-def test_state_delete_failure_releases_stale_operator_review_block_after_durable_completion():
-    app = _completion_app(delete_succeeds=False, prior_operator_review=True)
+def test_state_delete_failure_releases_stale_operator_review_block_after_durable_completion(tmp_path):
+    app = _completion_app(
+        tmp_path,
+        delete_succeeds=False,
+        prior_operator_review=True,
+    )
     # Isolate the post-ledger cleanup path: this models a completion attempt
     # already admitted before a stale presenter snapshot became observable.
     app._operator_review_blocks_mutation = lambda: False
@@ -638,8 +645,12 @@ def test_state_delete_failure_releases_stale_operator_review_block_after_durable
     assert state.completion is None or state.completion.outcome is not CompletionOutcome.OPERATOR_REVIEW
 
 
-def test_old_status_timer_cannot_clear_new_completion_notice():
-    app = _completion_app(delete_succeeds=True, prior_operator_review=False)
+def test_old_status_timer_cannot_clear_new_completion_notice(tmp_path):
+    app = _completion_app(
+        tmp_path,
+        delete_succeeds=True,
+        prior_operator_review=False,
+    )
     app.show_status_message("이전 임시 상태", app.COLOR_PRIMARY, duration=4000)
     old_job = app.status_message_job
 

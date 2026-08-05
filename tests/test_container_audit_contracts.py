@@ -663,6 +663,8 @@ def _completion_app(tmp_path):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.log_file_path = str(tmp_path / "events.csv")
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "_current_tray_state_fixture.json"
     app.log_queue = queue.Queue()
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -729,10 +731,40 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
 
     monkeypatch.setattr(container_audit_module, "schedule_update_check", lambda root: calls.append("updates"))
     monkeypatch.setattr(container_audit_module, "ContainerAudit", FakeApp)
+    monkeypatch.setattr(
+        container_audit_module,
+        "acquire_runtime_instance",
+        lambda _data_root: type("Lease", (), {"release": lambda self: calls.append("release")})(),
+    )
 
     container_audit_module.main()
 
-    assert calls == ["init", ("after", 500), "run"]
+    assert calls == ["init", ("after", 500), "run", "release"]
+
+
+def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch):
+    calls = []
+    monkeypatch.setattr(container_audit_module, "acquire_runtime_instance", lambda _data_root: None)
+    monkeypatch.setattr(
+        container_audit_module,
+        "prepare_startup_item_catalog",
+        lambda: (_ for _ in ()).throw(AssertionError("duplicate runtime must stop before catalog writes")),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "ContainerAudit",
+        lambda: (_ for _ in ()).throw(AssertionError("duplicate runtime must stop before UI creation")),
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showwarning",
+        lambda title, message: calls.append((title, message)),
+    )
+
+    container_audit_module.main()
+
+    assert len(calls) == 1
+    assert "이미 실행 중" in calls[0][0]
 
 
 def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
@@ -5197,7 +5229,7 @@ def test_on_closing_logs_discard_when_operator_declines_save(monkeypatch):
     app.save_settings = lambda: None
     app._cancel_all_jobs = lambda: setattr(app, "cancelled", True)
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_kwargs: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
@@ -5299,7 +5331,7 @@ def test_on_closing_logs_partial_exchange_cancel_before_shutdown(monkeypatch):
     app.save_settings = lambda: None
     app._cancel_all_jobs = lambda: setattr(app, "cancelled", True)
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_kwargs: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
@@ -6905,6 +6937,13 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
     captured = {}
 
     class Coordinator:
+        def preview(self, **kwargs):
+            captured["preview"] = dict(kwargs)
+            return container_audit_module.SealAttempt(
+                intent_id="intent-physical-label",
+                status="PREPARED",
+            )
+
         def prepare(self, **kwargs):
             captured.update(kwargs)
             return container_audit_module.SealAttempt(
@@ -6966,7 +7005,7 @@ def test_complete_tray_reports_state_delete_failure_after_completion(tmp_path):
     app = _completion_app(tmp_path)
     app._delete_current_tray_state = lambda: False
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_kwargs: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
 
@@ -7143,10 +7182,392 @@ def test_complete_tray_preserves_active_tray_when_completion_log_fails(tmp_path)
     assert app.idle_stopped is False
     assert app.state_deleted is False
     assert app.scanned_listbox.deleted is False
-    assert app.messages
+    assert app._active_blocking_completion_snapshot() is None
+    assert not (tmp_path / app.CURRENT_TRAY_STATE_FILE).exists()
 
 
-def test_submit_current_tray_rolls_back_partial_flag_when_completion_log_fails(tmp_path, monkeypatch):
+def test_durable_transfer_locks_tray_until_completion_event_retry_succeeds(tmp_path):
+    app = _completion_app(tmp_path)
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "_current_tray_state_fixture.json"
+    phs2_label = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input_tag_complete_retry|"
+        "CLC=AAA2270730100|LBL=PHSL-COMPLETE-RETRY|HSH=1111111111111111"
+    )
+    app.current_tray.master_label_code = phs2_label
+    app.current_tray.canonical_input_tag_qr = phs2_label
+    app.current_tray.active_label_qr_payload = phs2_label
+    app.current_tray.active_label_id = "PHSL-COMPLETE-RETRY"
+    app.current_tray.tray_size = 2
+    app.current_tray.has_error_or_reset = False
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    seal_calls = []
+    log_results = iter((False, True))
+
+    def prepare_and_attempt(**_kwargs):
+        seal_calls.append("intent-transfer-complete-retry")
+        return container_audit_module.SealAttempt(
+            intent_id="intent-transfer-complete-retry",
+            status="ACKED",
+            local_completion_id="local-completion-retry",
+            receipt_id="receipt-transfer-complete-retry",
+        )
+
+    def persist_completion(event, *, detail=None, synchronous=False, **_kwargs):
+        assert event == "TRAY_COMPLETE"
+        assert detail["transfer_seal_intent_id"] == "intent-transfer-complete-retry"
+        assert synchronous is True
+        return next(log_results)
+
+    app._prepare_and_attempt_transfer_seal = prepare_and_attempt
+    app._log_event = persist_completion
+
+    assert app.complete_tray() is False
+
+    blocking = app._active_blocking_completion_snapshot()
+    assert blocking is not None
+    assert blocking.outcome is container_audit_module.CompletionOutcome.LOCAL_EVENT_RETRY
+    assert blocking.operator_retryable is True
+    assert blocking.receipt_id == "receipt-transfer-complete-retry"
+    assert blocking.error_code == "TRAY_COMPLETE_EVENT_PERSIST_FAILED"
+    assert app.current_tray.scanned_barcodes == ["BC-1", "BC-2"]
+    persisted = json.loads((tmp_path / app.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8"))
+    assert persisted[tray_state.OPERATOR_REVIEW_STATE_KEY]["outcome"] == "LOCAL_EVENT_RETRY"
+    assert (
+        tray_state.validate_tray_state(persisted, default_tray_size=60)
+        is persisted
+    )
+    assert persisted[tray_state.COMPLETION_EVENT_STATE_KEY]["idempotency_key"] == (
+        "tray-complete:intent-transfer-complete-retry"
+    )
+
+    restarted = _completion_app(tmp_path)
+    restarted.current_tray = TraySession()
+    restarted._render_warning_state = lambda: None
+    restarted._restore_tray_from_state(persisted)
+    assert restarted._restore_operator_review_from_state(persisted) is True
+    restored_blocking = restarted._active_blocking_completion_snapshot()
+    assert restored_blocking is not None
+    assert restored_blocking.outcome is container_audit_module.CompletionOutcome.LOCAL_EVENT_RETRY
+    assert restored_blocking.operator_retryable is True
+    assert restarted._operator_review_blocks_mutation() is True
+
+    app.undo_last_scan()
+    assert app.current_tray.scanned_barcodes == ["BC-1", "BC-2"]
+
+    app._delete_current_tray_state = container_audit_module.ContainerAudit._delete_current_tray_state.__get__(app)
+    assert app.complete_tray() is True
+
+    assert seal_calls == [
+        "intent-transfer-complete-retry",
+        "intent-transfer-complete-retry",
+    ]
+    assert app.current_tray.master_label_code == ""
+    assert app.work_summary["AAA2270730100"]["count"] == 1
+    assert app.total_tray_count == 1
+    assert app._active_blocking_completion_snapshot() is None
+    assert not (tmp_path / app.CURRENT_TRAY_STATE_FILE).exists()
+
+
+def test_prepared_transfer_contract_survives_crash_before_terminal_attempt(tmp_path):
+    app = _completion_app(tmp_path)
+    phs2_label = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input-tag-prepared-crash|"
+        "CLC=AAA2270730100|LBL=PHSL-PREPARED-CRASH|HSH=3333333333333333"
+    )
+    app.current_tray.master_label_code = phs2_label
+    app.current_tray.canonical_input_tag_qr = phs2_label
+    app.current_tray.active_label_qr_payload = phs2_label
+    app.current_tray.active_label_id = "PHSL-PREPARED-CRASH"
+    app.current_tray.tray_size = 2
+    app.current_tray.has_error_or_reset = False
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+
+    def prepare_then_crash(*, on_prepared, **_kwargs):
+        on_prepared(
+            container_audit_module.SealAttempt(
+                intent_id="intent-transfer-prepared-crash",
+                status="PREPARED",
+            )
+        )
+        raise SystemExit("simulated process termination before transfer attempt")
+
+    app._prepare_and_attempt_transfer_seal = prepare_then_crash
+
+    with pytest.raises(SystemExit, match="before transfer attempt"):
+        app.complete_tray()
+
+    state_path = tmp_path / app.CURRENT_TRAY_STATE_FILE
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    tray_state.validate_tray_state(persisted, default_tray_size=60)
+    completion_contract = persisted[tray_state.COMPLETION_EVENT_STATE_KEY]
+    assert completion_contract["transfer_intent_id"] == (
+        "intent-transfer-prepared-crash"
+    )
+    assert completion_contract["log_may_have_been_attempted"] is False
+    assert completion_contract["projection_worker_name"] == "홍길동"
+
+    restarted = _completion_app(tmp_path)
+    restarted.current_tray = TraySession()
+    restarted._render_warning_state = lambda: None
+    restarted._restore_tray_from_state(persisted)
+    blocking = restarted._active_blocking_completion_snapshot()
+    assert blocking is not None
+    assert blocking.outcome is container_audit_module.CompletionOutcome.RETRY_WAIT
+    assert blocking.error_code == "TRAY_COMPLETE_TRANSFER_RECOVERY_REQUIRED"
+    assert restarted._operator_review_blocks_mutation() is True
+
+
+def test_prepared_contract_is_reflushed_before_retrying_after_storage_recovers(
+    tmp_path,
+):
+    app = _completion_app(tmp_path)
+    app.current_tray.master_label_code = "PHS=1|CLC=AAA2270730100|QT=2"
+    app.current_tray.tray_size = 2
+    app.current_tray.has_error_or_reset = False
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    storage_available = False
+    durable_contract_saved = False
+    calls = []
+
+    def save_state():
+        nonlocal durable_contract_saved
+        calls.append("save-success" if storage_available else "save-failed")
+        if storage_available:
+            durable_contract_saved = True
+            return True
+        return False
+
+    def prepare_and_attempt(*, on_prepared, **_kwargs):
+        prepared = container_audit_module.SealAttempt(
+            intent_id="intent-transfer-storage-recovered",
+            status="PREPARED",
+        )
+        on_prepared(prepared)
+        assert durable_contract_saved is True
+        calls.append("prepare-after-durable-contract")
+        return container_audit_module.SealAttempt(
+            intent_id=prepared.intent_id,
+            status="ACKED",
+            local_completion_id="local-completion-storage-recovered",
+        )
+
+    app._save_current_tray_state = save_state
+    app._prepare_and_attempt_transfer_seal = prepare_and_attempt
+    app._log_event = lambda *_args, **_kwargs: True
+
+    assert app.complete_tray() is False
+    assert calls == ["save-failed", "save-failed"]
+    assert "prepare-after-durable-contract" not in calls
+    assert app._active_completion_event_contract() is not None
+    assert app._active_blocking_completion_snapshot().outcome is (
+        container_audit_module.CompletionOutcome.RETRY_WAIT
+    )
+
+    storage_available = True
+    assert app.complete_tray() is True
+
+    assert calls[2:4] == [
+        "save-success",
+        "prepare-after-durable-contract",
+    ]
+
+
+def test_completion_append_ack_loss_restarts_without_duplicate_tray_complete(
+    tmp_path,
+    monkeypatch,
+):
+    app = _completion_app(tmp_path)
+    app.log_file_path = str(
+        tmp_path
+        / f"이적작업이벤트로그_홍길동_{datetime.date.today().strftime('%Y%m%d')}.csv"
+    )
+    phs2_label = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=input-tag-ack-loss|"
+        "CLC=AAA2270730100|LBL=PHSL-ACK-LOSS|HSH=2222222222222222"
+    )
+    app.current_tray.master_label_code = phs2_label
+    app.current_tray.canonical_input_tag_qr = phs2_label
+    app.current_tray.active_label_qr_payload = phs2_label
+    app.current_tray.active_label_id = "PHSL-ACK-LOSS"
+    app.current_tray.tray_size = 2
+    app.current_tray.has_error_or_reset = False
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+
+    attempt = container_audit_module.SealAttempt(
+        intent_id="intent-transfer-ack-loss",
+        status="ACKED",
+        local_completion_id="local-completion-ack-loss",
+        receipt_id="receipt-transfer-ack-loss",
+    )
+    app._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
+    original_append = container_audit_module.append_event_log_entry
+    append_calls = []
+
+    def append_then_lose_ack(log_file_path, log_entry, *, durable=False):
+        append_calls.append(log_entry)
+        original_append(log_file_path, log_entry, durable=durable)
+        raise OSError("simulated acknowledgement loss after fsync")
+
+    monkeypatch.setattr(
+        container_audit_module,
+        "append_event_log_entry",
+        append_then_lose_ack,
+    )
+
+    assert app.complete_tray() is False
+
+    state_path = tmp_path / app.CURRENT_TRAY_STATE_FILE
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    tray_state.validate_tray_state(persisted, default_tray_size=60)
+    assert persisted[tray_state.OPERATOR_REVIEW_STATE_KEY]["outcome"] == (
+        "LOCAL_EVENT_RETRY"
+    )
+    assert len(append_calls) == 1
+
+    with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as f_handle:
+        first_rows = list(csv.DictReader(f_handle))
+    assert [row["event"] for row in first_rows].count("TRAY_COMPLETE") == 1
+
+    restarted = _completion_app(tmp_path)
+    restarted.log_file_path = app.log_file_path
+    restarted.current_tray = TraySession()
+    restarted._render_warning_state = lambda: None
+    restarted._update_action_button_states = lambda: None
+    restarted._restore_tray_from_state(persisted)
+    assert restarted._restore_operator_review_from_state(persisted) is True
+    restarted._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
+    restarted._delete_current_tray_state = (
+        container_audit_module.ContainerAudit._delete_current_tray_state.__get__(
+            restarted
+        )
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "append_event_log_entry",
+        original_append,
+    )
+
+    assert restarted.complete_tray() is True
+
+    with Path(restarted.log_file_path).open(
+        newline="", encoding="utf-8-sig"
+    ) as f_handle:
+        rows = list(csv.DictReader(f_handle))
+    completion_rows = [row for row in rows if row["event"] == "TRAY_COMPLETE"]
+    assert len(completion_rows) == 1
+    completion_detail = json.loads(completion_rows[0]["details"])
+    assert completion_detail["idempotency_key"] == (
+        "tray-complete:intent-transfer-ack-loss"
+    )
+    assert restarted.work_summary["AAA2270730100"]["count"] == 1
+    assert restarted.total_tray_count == 1
+    assert not state_path.exists()
+
+
+def test_pending_completion_takeover_preserves_original_projection_owner(
+    tmp_path,
+    monkeypatch,
+):
+    today_text = datetime.date.today().strftime("%Y%m%d")
+    original_worker = "original-worker"
+    next_worker = "next-worker"
+    original_log = tmp_path / f"이적작업이벤트로그_{original_worker}_{today_text}.csv"
+    next_log = tmp_path / f"이적작업이벤트로그_{next_worker}_{today_text}.csv"
+    attempt = container_audit_module.SealAttempt(
+        intent_id="intent-transfer-takeover-pending",
+        status="ACKED",
+        local_completion_id="local-completion-takeover-pending",
+        receipt_id="receipt-transfer-takeover-pending",
+    )
+
+    original = _completion_app(tmp_path)
+    original.worker_name = original_worker
+    original.log_file_path = str(original_log)
+    original.current_tray.master_label_code = "PHS=1|CLC=AAA2270730100|QT=2"
+    original.current_tray.tray_size = 2
+    original.current_tray.has_error_or_reset = False
+    original._render_warning_state = lambda: None
+    original._update_action_button_states = lambda: None
+    original._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
+    original._log_event = lambda *_args, **_kwargs: False
+
+    assert original.complete_tray() is False
+
+    before_takeover = json.loads(
+        (tmp_path / original.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8")
+    )
+    assert before_takeover[tray_state.COMPLETION_EVENT_STATE_KEY][
+        "projection_worker_name"
+    ] == original_worker
+    assert before_takeover[tray_state.COMPLETION_EVENT_STATE_KEY][
+        "projection_log_name"
+    ] == original_log.name
+
+    takeover = _completion_app(tmp_path)
+    takeover.worker_name = next_worker
+    takeover.log_file_path = str(next_log)
+    takeover.current_tray = TraySession()
+    takeover.completed_master_labels = set()
+    takeover._invalidate_pending_scan_callbacks = lambda: None
+    takeover._render_warning_state = lambda: None
+    takeover._update_action_button_states = lambda: None
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "askyesnocancel",
+        lambda *_args, **_kwargs: True,
+    )
+
+    takeover._load_current_tray_state()
+
+    after_takeover = json.loads(
+        (tmp_path / takeover.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8")
+    )
+    assert after_takeover["worker_name"] == next_worker
+    assert after_takeover[tray_state.COMPLETION_EVENT_STATE_KEY] == (
+        before_takeover[tray_state.COMPLETION_EVENT_STATE_KEY]
+    )
+    assert takeover._operator_review_blocks_mutation() is True
+
+    takeover._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
+    takeover._delete_current_tray_state = (
+        container_audit_module.ContainerAudit._delete_current_tray_state.__get__(
+            takeover
+        )
+    )
+    assert takeover.complete_tray() is True
+
+    with original_log.open(newline="", encoding="utf-8-sig") as f_handle:
+        original_rows = list(csv.DictReader(f_handle))
+    completion_rows = [
+        row for row in original_rows if row["event"] == "TRAY_COMPLETE"
+    ]
+    assert len(completion_rows) == 1
+    assert completion_rows[0]["worker_name"] == original_worker
+
+    original_history = session_history.load_session_history(
+        save_folder=tmp_path,
+        worker_name=original_worker,
+        today=datetime.date.today(),
+        tray_size=60,
+    )
+    next_history = session_history.load_session_history(
+        save_folder=tmp_path,
+        worker_name=next_worker,
+        today=datetime.date.today(),
+        tray_size=60,
+    )
+    assert original_history.work_summary["AAA2270730100"]["count"] == 1
+    assert original_history.total_tray_count == 1
+    assert next_history.work_summary == {}
+    assert next_history.total_tray_count == 0
+
+
+def test_submit_current_tray_rolls_back_partial_flag_when_log_preflight_fails(tmp_path, monkeypatch):
     app = _completion_app(tmp_path)
     app.log_file_path = ""
     app.current_tray.is_partial_submission = False
@@ -7158,6 +7579,7 @@ def test_submit_current_tray_rolls_back_partial_flag_when_completion_log_fails(t
 
     assert app.current_tray.master_label_code == "PHS=1|CLC=AAA2270730100|QT=60"
     assert app.current_tray.is_partial_submission is False
+    assert app._active_blocking_completion_snapshot() is None
     assert app.activity_updated is True
     assert app.focus_scheduled is True
 

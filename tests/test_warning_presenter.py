@@ -125,6 +125,7 @@ def test_error_and_clear_do_not_erase_last_normal_scan():
         (CompletionOutcome.ACKED, NoticeSeverity.SUCCESS, False, True),
         (CompletionOutcome.LINKED, NoticeSeverity.SUCCESS, False, False),
         (CompletionOutcome.RETRY_WAIT, NoticeSeverity.WARNING, True, False),
+        (CompletionOutcome.LOCAL_EVENT_RETRY, NoticeSeverity.ERROR, True, False),
         (CompletionOutcome.OPERATOR_REVIEW, NoticeSeverity.ERROR, True, False),
     ],
 )
@@ -138,6 +139,11 @@ def test_completion_outcomes_have_distinct_non_misleading_presentation(outcome, 
     assert snapshot.server_confirmed is confirmed
     if outcome is CompletionOutcome.RETRY_WAIT:
         assert "아직 완료되지 않았습니다" in notice.message
+        assert snapshot.operator_retryable is True
+    if outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
+        assert "완료 처리는 확정됐지만" in notice.message
+        assert "완료 기록 재시도" in notice.message
+        assert snapshot.operator_retryable is True
     if outcome is CompletionOutcome.LINKED:
         assert "이 PC에 이적 정보를 안전하게 저장했습니다." in notice.message
         assert "원장" not in notice.message
@@ -200,6 +206,7 @@ def test_operator_review_hides_diagnostic_detail_from_operator(diagnostic_detail
         CompletionOutcome.ACKED,
         CompletionOutcome.LINKED,
         CompletionOutcome.RETRY_WAIT,
+        CompletionOutcome.LOCAL_EVENT_RETRY,
         CompletionOutcome.OPERATOR_REVIEW,
     ],
 )

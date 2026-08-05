@@ -1273,6 +1273,41 @@ def test_store_prepare_is_idempotent_and_rejects_normalized_duplicate(tmp_path):
         )
 
 
+def test_coordinator_preview_is_side_effect_free_and_matches_prepared_intent(
+    tmp_path,
+):
+    store = TransferSealStore(tmp_path / "preview.db")
+    coordinator = TransferSealCoordinator(store, None)
+    arguments = {
+        "master_label": "MASTER-PREVIEW-1",
+        "master_label_fields": {"BND": SOURCE, "CLC": ITEM},
+        "item_id": ITEM,
+        "scanned_barcodes": ["BC-PREVIEW-1", "BC-PREVIEW-2"],
+    }
+
+    preview = coordinator.preview(**arguments)
+
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_seal_intents"
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_completion_ledger"
+        ).fetchone()[0] == 0
+
+    prepared = coordinator.prepare(operator="tester", **arguments)
+
+    assert prepared.intent_id == preview.intent_id
+    assert prepared.command_id == preview.command_id
+    with store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_seal_intents"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_completion_ledger"
+        ).fetchone()[0] == 1
+
+
 def test_offline_multi_event_keeps_linked_ledger_and_fifo_outbox(tmp_path):
     coordinator = TransferSealCoordinator(
         TransferSealStore(tmp_path / "offline.db"),
