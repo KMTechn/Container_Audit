@@ -3948,7 +3948,9 @@ class TransferSealCoordinator:
         if bundle.get("bundle_type") == "PHS" and selected != sorted(source_members):
             raise TransferSealError(
                 "PARTIAL_PHS_TRANSFER_FORBIDDEN",
-                "PHS=2 현품표는 exact membership 전량만 이적할 수 있습니다. 잔량은 RSL1을 사용하세요.",
+                "PHS=2 현품표는 exact membership 전량만 이적할 수 있습니다. "
+                "잔량은 검사 공정에서 이름·시간·품목·수량·수기 코드를 적는 새 양식으로 처리하세요. "
+                "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다.",
             )
         selected_hash = membership_hash(selected)
         transfer_bundle_id = _deterministic_id(

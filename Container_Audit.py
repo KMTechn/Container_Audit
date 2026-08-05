@@ -266,7 +266,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.52"
+CURRENT_VERSION = "v2.0.53"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
@@ -1000,7 +1000,7 @@ if errorlevel 1 (
 )
 >> {safe_evidence} echo state=BACKUP_COMPLETED
 
-robocopy {safe_source} {safe_application} /MIR /IS /IT /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
+robocopy {safe_source} {safe_application} /MIR /IS /IT /IM /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
 set "APPLY_EXIT=%ERRORLEVEL%"
 if %APPLY_EXIT% GEQ 8 goto ROLLBACK
 
@@ -1026,7 +1026,7 @@ exit /b 0
 :ROLLBACK
 >> {safe_evidence} echo state=UPDATE_APPLY_FAILED
 >> {safe_evidence} echo apply_exit=%APPLY_EXIT%
-robocopy {safe_backup} {safe_application} /MIR /IS /IT /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
+robocopy {safe_backup} {safe_application} /MIR /IS /IT /IM /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
 set "ROLLBACK_EXIT=%ERRORLEVEL%"
 if %ROLLBACK_EXIT% GEQ 8 (
     >> {safe_evidence} echo state=ROLLBACK_FAILED
@@ -7260,7 +7260,8 @@ class ContainerAudit:
         ):
             self.show_status_message(
                 "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다. "
-                "잔량은 검사 공정에서 RSL1로 별도 발행하세요.",
+                "잔량은 검사 공정에서 이름·시간·품목·수량·수기 코드를 적는 새 양식으로 처리하세요. "
+                "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
@@ -7561,7 +7562,8 @@ class ContainerAudit:
         ):
             self.show_status_message(
                 "PHS=2 현품표는 일부 제출할 수 없습니다. 등록된 제품을 모두 스캔하세요. "
-                "잔량은 RSL1 절차를 사용해야 합니다.",
+                "잔량은 검사 공정에서 이름·시간·품목·수량·수기 코드를 적는 새 양식으로 처리하세요. "
+                "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다.",
                 self.COLOR_DANGER,
                 duration=0,
             )
