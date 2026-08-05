@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 import direct_sync_operator
+import direct_sync_push
 from tools import direct_sync_relay_operator as operator_cli
 from direct_sync_operator import operator_status, pause_relay, resume_relay, retry_dead_relay_batch
 from direct_sync_push import (
@@ -17,8 +18,31 @@ from direct_sync_push import (
     relay_queue_status,
 )
 from direct_sync_runtime import enqueue_completed_source_file, load_credentials_from_json, run_relay_once
+from producer_runtime_client import RuntimePreparation
 from tests.test_direct_sync_runtime import EchoAcceptedSession, FakeResponse, FakeSession, make_config, write_csv
 from tools.direct_sync_relay_operator import main
+
+
+@pytest.fixture(autouse=True)
+def _isolate_operator_contract_tests_from_runtime_lease(monkeypatch):
+    """Exercise operator controls against their explicit legacy relay fixture.
+
+    Runtime lease acquisition/fencing has its own integration suite.  These
+    tests intentionally inject source-file responses directly so a fixture
+    session that only implements that endpoint must not be mistaken for a
+    failed runtime-lease transport.
+    """
+
+    monkeypatch.setattr(
+        direct_sync_push,
+        "prepare_runtime_metadata",
+        lambda **kwargs: RuntimePreparation(metadata=dict(kwargs["metadata"])),
+    )
+    monkeypatch.setattr(
+        direct_sync_push,
+        "client_runtime_lease_mode",
+        lambda _credentials: "observe",
+    )
 
 
 class RestoreResponse:

@@ -518,7 +518,9 @@ def _app_root_dependency_report(app_root: str | os.PathLike[str]) -> dict:
         "runner_script": root / "tools" / "direct_sync_relay_runner.py",
         "direct_sync_runtime": root / "direct_sync_runtime.py",
         "direct_sync_push": root / "direct_sync_push.py",
+        "producer_runtime_client": root / "producer_runtime_client.py",
         "direct_sync_operator": root / "direct_sync_operator.py",
+        "event_log_store": root / "event_log_store.py",
         "storage_policy": root / "storage_policy.py",
     }
     missing = [name for name, path in required.items() if not path.is_file()]
@@ -556,7 +558,14 @@ def _python_executable_report(python_exe: str | os.PathLike[str]) -> dict:
 def _python_runtime_import_report(python_exe: str | os.PathLike[str], app_root: str | os.PathLike[str]) -> dict:
     resolved_python = Path(str(python_exe or "")).expanduser().resolve()
     resolved_app_root = Path(app_root).expanduser().resolve()
-    modules = ["requests", "direct_sync_push", "direct_sync_runtime", "direct_sync_operator"]
+    modules = [
+        "requests",
+        "producer_runtime_client",
+        "direct_sync_push",
+        "direct_sync_runtime",
+        "direct_sync_operator",
+        "event_log_store",
+    ]
     code = "\n".join(
         [
             "import sys",
