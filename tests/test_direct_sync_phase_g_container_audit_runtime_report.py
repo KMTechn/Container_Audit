@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tools import direct_sync_phase_g_container_audit_runtime_report as report_module
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PHASE_G_REPORT_SCRIPT = REPO_ROOT / "tools" / "direct_sync_phase_g_container_audit_runtime_report.py"
@@ -18,6 +20,50 @@ def _assert_endpoint_transport_report(report):
     assert len(endpoint["endpoint_host_sha256"]) == 64
     assert endpoint["query_or_fragment_present"] is False
     assert endpoint["userinfo_present"] is False
+
+
+def _assert_stateful_runtime_contract(report):
+    assert report["status"] == "PASS"
+    contract = report["runtime_contract"]
+    assert contract["issue_count"] > 0
+    assert contract["renew_count"] > 0
+    assert contract["renewal_proof_count"] == contract["renew_count"]
+    assert contract["consume_count"] == 1
+    assert contract["exact_replay_count"] == 1
+    assert contract["exact_runtime_request"] is True
+    assert contract["exact_replay_response"] is True
+    assert contract["exact_runtime_receipt"] is True
+    assert contract["stored_replay_response_match"] is True
+    assert contract["local_rotation_applied"] is True
+    assert contract["local_next_request_sequence"] == 3
+    assert contract["lease_operations"] == ["issue", "renew"]
+    assert contract["first_lease_post_count"] == 2
+    assert contract["retry_lease_post_count"] == 0
+
+
+def test_phase_g_runtime_contract_fails_when_renewal_is_not_exercised(tmp_path, monkeypatch):
+    original_init = report_module.RuntimeLeaseFixtureAuthority.__init__
+
+    def initialize_without_forced_renewal(self, *, force_renew_on_issue=False):
+        original_init(self, force_renew_on_issue=False)
+
+    monkeypatch.setattr(
+        report_module.RuntimeLeaseFixtureAuthority,
+        "__init__",
+        initialize_without_forced_renewal,
+    )
+    report_module._make_manifest(tmp_path)
+    report_module._make_credential(tmp_path)
+
+    report = report_module._lost_ack_replay_report(tmp_path)
+
+    assert report["status"] == "FAIL"
+    contract = report["runtime_contract"]
+    assert contract["issue_count"] == 1
+    assert contract["renew_count"] == 0
+    assert contract["consume_count"] == 1
+    assert contract["exact_replay_count"] == 1
+    assert contract["exact_replay_response"] is True
 
 
 def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blocked(tmp_path):
@@ -107,7 +153,7 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert runtime_report["operator_status_report"]["status"] == "PASS"
     assert runtime_report["operator_control_report"]["status"] == "PASS"
     assert runtime_report["lost_ack_replay_report"]["status"] == "BLOCKED"
-    assert runtime_report["lost_ack_replay_report"]["local_replay_report"]["status"] == "PASS"
+    _assert_stateful_runtime_contract(runtime_report["lost_ack_replay_report"]["local_replay_report"])
     assert runtime_report["reboot_recovery_report"]["status"] == "BLOCKED"
     assert runtime_report["operator_pause_path_present"] is True
     assert runtime_report["runner_has_operator_pause"] is True
@@ -150,7 +196,7 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert report["source_scan_admission_report"]["nested_file_selected"] is False
     assert report["source_scan_admission_report"]["recursive_glob_rejected"] is True
     assert report["source_scan_admission_report"]["path_glob_rejected"] is True
-    assert report["lost_ack_replay_report"]["local_replay_report"]["status"] == "PASS"
+    _assert_stateful_runtime_contract(report["lost_ack_replay_report"]["local_replay_report"])
     assert report["reboot_recovery_report"]["status"] == "BLOCKED"
     assert report["production_install_pack_report"]["local_dry_run_report"]["status"] == "PASS"
     assert report["production_install_pack_report"]["local_dry_run_report"]["operator_pause_path"]
@@ -163,3 +209,5 @@ def test_phase_g_container_audit_runtime_report_is_local_pass_but_production_blo
     assert "container-phase-g-local-secret" not in report_text
     assert "container-phase-g-secret-ref-fixture" not in report_text
     assert "X-Producer-Signature" not in report_text
+    assert '"runtime_request_token"' not in report_text
+    assert '"next_request_token"' not in report_text
