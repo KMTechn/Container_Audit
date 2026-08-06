@@ -767,6 +767,53 @@ def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch)
     assert "이미 실행 중" in calls[0][0]
 
 
+def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_details(
+    monkeypatch,
+):
+    sensitive_marker = "profile-token-must-not-leak"
+    calls = []
+
+    class Lease:
+        def release(self):
+            calls.append("release")
+
+    monkeypatch.setattr(
+        container_audit_module,
+        "acquire_runtime_instance",
+        lambda _data_root: Lease(),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "prepare_startup_item_catalog",
+        lambda: (_ for _ in ()).throw(
+            container_audit_module.ItemCatalogSyncError(sensitive_marker)
+        ),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "ContainerAudit",
+        lambda: (_ for _ in ()).throw(
+            AssertionError("catalog failure must stop before Tk construction")
+        ),
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda title, message: calls.append((title, message)),
+    )
+
+    result = container_audit_module.main()
+
+    assert result == container_audit_module.ITEM_CATALOG_STARTUP_EXIT_CODE == 3
+    assert calls[-1] == "release"
+    dialogs = [entry for entry in calls if isinstance(entry, tuple)]
+    assert len(dialogs) == 1
+    assert "중앙 품목 목록" in dialogs[0][0]
+    assert "IT 담당자" in dialogs[0][1]
+    assert sensitive_marker not in dialogs[0][0]
+    assert sensitive_marker not in dialogs[0][1]
+
+
 def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
     monkeypatch.setattr(container_audit_module.sys, "frozen", False, raising=False)
     monkeypatch.setattr(

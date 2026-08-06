@@ -4,6 +4,7 @@ from tkinter import font as tkfont
 import csv
 import datetime
 import hashlib
+import io
 import os
 import sys
 import threading
@@ -39,7 +40,13 @@ from event_payloads import (
     product_barcodes_from_completion,
 )
 from item_catalog import ItemCatalog
-from item_catalog_sync import ACTIVE_PATH_ENV, refresh_item_catalog
+from item_catalog_sync import (
+    ACTIVE_PATH_ENV,
+    ItemCatalogSyncError,
+    get_verified_catalog_snapshot,
+    refresh_item_catalog,
+    requires_verified_catalog_snapshot,
+)
 from label_qr import (
     canonical_master_label_key,
     inspection_master_item_code,
@@ -1467,6 +1474,22 @@ class ContainerAudit:
 
     def load_items(self) -> List[Dict[str, str]]:
         item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
+        verified_payload = get_verified_catalog_snapshot(item_path)
+        if requires_verified_catalog_snapshot(item_path):
+            if verified_payload is None:
+                raise ItemCatalogSyncError(
+                    "central item catalog snapshot is unavailable after verification"
+                )
+            try:
+                return list(
+                    csv.DictReader(
+                        io.StringIO(verified_payload.decode("utf-8"), newline="")
+                    )
+                )
+            except (UnicodeError, csv.Error) as exc:
+                raise ItemCatalogSyncError(
+                    "central item catalog snapshot could not be parsed"
+                ) from exc
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
             try:
@@ -11186,8 +11209,34 @@ class ContainerAudit:
 def prepare_startup_item_catalog() -> str:
     bundled_path = Path(resource_path(os.path.join("assets", "Item.csv")))
     active_path = refresh_item_catalog(bundled_path)
+    if (
+        requires_verified_catalog_snapshot(active_path)
+        and get_verified_catalog_snapshot(active_path) is None
+    ):
+        raise ItemCatalogSyncError(
+            "central item catalog snapshot is unavailable after verification"
+        )
     os.environ[ACTIVE_PATH_ENV] = str(active_path)
     return str(active_path)
+
+
+ITEM_CATALOG_STARTUP_EXIT_CODE = 3
+ITEM_CATALOG_STARTUP_ERROR_TITLE = "중앙 품목 목록 확인 실패"
+ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
+    "중앙 품목 목록을 확인할 수 없어 프로그램 시작을 중단했습니다.\n\n"
+    "네트워크 연결과 이 PC의 중앙 물류 설정을 확인한 뒤 다시 실행하세요. "
+    "계속 실패하면 IT 담당자에게 문의하세요."
+)
+
+
+def _show_item_catalog_startup_error() -> None:
+    try:
+        messagebox.showerror(
+            ITEM_CATALOG_STARTUP_ERROR_TITLE,
+            ITEM_CATALOG_STARTUP_ERROR_MESSAGE,
+        )
+    except Exception:  # The fail-closed exit must survive Tk initialization failures.
+        pass
 
 
 def main():
@@ -11215,13 +11264,18 @@ def main():
         )
         return
     try:
-        prepare_startup_item_catalog()
+        try:
+            prepare_startup_item_catalog()
+        except ItemCatalogSyncError:
+            _show_item_catalog_startup_error()
+            return ITEM_CATALOG_STARTUP_EXIT_CODE
         app = ContainerAudit()
         app.root.after(500, lambda: schedule_update_check(app.root))
         app.run()
+        return 0
     finally:
         instance_lease.release()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
