@@ -38,6 +38,9 @@ from storage_policy import (  # noqa: E402
     is_legacy_syncthing_path,
 )
 from storage_utils import atomic_write_json  # noqa: E402
+from tools.install_logistics_runtime_profile import (  # noqa: E402
+    ensure_runtime_profile_from_enrollment_bundle,
+)
 
 
 DEFAULT_ENDPOINT_URL = "https://worker.kmtecherp.com/api/producer-ingest/v1/source-file"
@@ -441,12 +444,27 @@ def _self_enroll(
             raise DirectSyncPushError("self-enroll response missing valid secret") from exc
     if not secret.strip():
         raise DirectSyncPushError("self-enroll response missing valid secret")
-    bootstrap_report = _bootstrap_secret_ref(
-        secret_ref_scheme=secret_ref_scheme,
-        secret_ref_target=secret_ref_target,
-        credential=credential,
-        secret=secret,
+    identity = manifest["pc_identity"]
+    machine_profile = ensure_runtime_profile_from_enrollment_bundle(
+        response_payload,
+        expected_app=CONTAINER_AUDIT_APP,
+        expected_program="Container_Audit",
+        expected_source_host_id=str(identity["source_host_id"]),
+        expected_device_id=str(identity["pc_id"]),
     )
+    if machine_profile is None and bool(getattr(args, "require_machine_credential_bundle", False)):
+        raise DirectSyncPushError("self-enroll response missing machine credential bundle")
+    try:
+        bootstrap_report = _bootstrap_secret_ref(
+            secret_ref_scheme=secret_ref_scheme,
+            secret_ref_target=secret_ref_target,
+            credential=credential,
+            secret=secret,
+        )
+    except Exception:
+        for created_path in (machine_profile or {}).get("created_paths", []):
+            Path(created_path).unlink(missing_ok=True)
+        raise
     credential = dict(credential)
     credential["producer_id"] = str(response_payload.get("producer_id") or credential["producer_id"])
     credential["key_id"] = str(response_payload.get("key_id") or credential["key_id"])
@@ -459,6 +477,7 @@ def _self_enroll(
         "secret_fingerprint_sha256": response_payload.get("secret_fingerprint_sha256"),
         "server_binding": response_payload.get("server_binding") or {},
         "secret_bootstrap": bootstrap_report,
+        "machine_profiles": {"logistics": machine_profile} if machine_profile else {},
     }
 
 
@@ -550,6 +569,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key-id", default="")
     parser.add_argument("--secret-ref", default="")
     parser.add_argument("--self-enroll", action="store_true")
+    parser.add_argument("--require-machine-credential-bundle", action="store_true")
     parser.add_argument("--enrollment-url", default="")
     parser.add_argument("--enrollment-token", default="")
     parser.add_argument("--enrollment-token-env", default=DEFAULT_ENROLLMENT_TOKEN_ENV)

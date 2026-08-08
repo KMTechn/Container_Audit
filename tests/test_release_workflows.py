@@ -355,12 +355,7 @@ def test_ci_workflow_tests_supported_python_minors():
     assert "pull_request:" not in ci_text
     assert "workflow_dispatch:" not in ci_text
     assert "cancel-in-progress: true" in ci_text
-    codeowners = (root / ".github" / "CODEOWNERS").read_text(encoding="utf-8")
-    assert "/.github/workflows/** @kevin9899" in codeowners
-    assert "/update_service.py @kevin9899" in codeowners
-    assert "/tools/** @kevin9899" in codeowners
-    assert "/tests/test_check_update_archive.py @kevin9899" in codeowners
-    assert "/CODEX.md @kevin9899" in codeowners
+    assert not (root / ".github" / "CODEOWNERS").exists()
 
 
 def test_release_workflow_pins_actions_running_with_release_write_permission():

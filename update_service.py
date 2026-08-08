@@ -102,6 +102,7 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/KMTech_Logistics_Profile_Install.exe",
         "Container_Audit/KMTech_Logistics_Profile_Check.exe",
         "Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md",
+        "Container_Audit/INSTALL_THIS_PC.ps1",
         "Container_Audit/direct_sync_push.py",
         "Container_Audit/direct_sync_runtime.py",
         "Container_Audit/producer_runtime_client.py",

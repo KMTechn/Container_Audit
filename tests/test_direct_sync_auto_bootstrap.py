@@ -40,9 +40,19 @@ def test_install_command_prefers_bundled_install_exe(tmp_path):
 
     assert command[0] == str(install_exe.resolve())
     assert "--apply" in command
+    assert "--confirm-production-install" not in command
     assert command[command.index("--program-data-root") + 1] == str(direct_sync_root.resolve())
     assert command[command.index("--scan-source-dir") + 1] == str(events_dir.resolve())
     assert bootstrap.DEFAULT_SOURCE_GLOB in command
+
+
+def test_builtin_bootstrap_requires_explicit_enable(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", raising=False)
+    assert bootstrap._enabled() is False
+
+    monkeypatch.setenv("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", "true")
+    assert bootstrap._enabled() is True
 
 
 def test_session_direct_sync_command_forces_zero_age_scan_and_drain(tmp_path):

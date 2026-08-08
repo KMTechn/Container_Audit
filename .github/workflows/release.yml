@@ -207,6 +207,7 @@ jobs:
           python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Install" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_install_pyinstaller --specpath build/logistics_profile_install_pyinstaller tools/install_logistics_runtime_profile.py
           python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Check" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_check_pyinstaller --specpath build/logistics_profile_check_pyinstaller tools/check_logistics_runtime_profile.py
           Copy-Item -LiteralPath docs/LOGISTICS_RUNTIME_PROFILE.md -Destination dist/Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md
+          Copy-Item -LiteralPath INSTALL_THIS_PC.ps1 -Destination dist/Container_Audit/INSTALL_THIS_PC.ps1
 
       - name: Zip the build folder
         run: |
@@ -251,6 +252,7 @@ jobs:
             "Container_Audit/KMTech_Logistics_Profile_Install.exe",
             "Container_Audit/KMTech_Logistics_Profile_Check.exe",
             "Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md",
+            "Container_Audit/INSTALL_THIS_PC.ps1",
             "Container_Audit/direct_sync_push.py",
             "Container_Audit/direct_sync_runtime.py",
             "Container_Audit/producer_runtime_client.py",

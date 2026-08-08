@@ -36,7 +36,7 @@ def _enabled() -> bool:
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return False
     value = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", "").strip().lower()
-    return value not in {"0", "false", "no", "off", "disabled"}
+    return value in {"1", "true", "yes", "on", "enabled"}
 
 
 def _session_sync_trigger_enabled() -> bool:
@@ -499,10 +499,6 @@ def start_direct_sync_auto_bootstrap(
         timeout_seconds = 180
     server_base_url = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL", "").strip() or DEFAULT_SERVER_BASE_URL
     task_name = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_NAME", "").strip() or DEFAULT_TASK_NAME
-    confirm_production_install = os.environ.get(
-        "CONTAINER_AUDIT_DIRECT_SYNC_CONFIRM_PRODUCTION_INSTALL",
-        "",
-    ).strip().lower() in {"1", "true", "yes", "on"}
     allow_interactive_task_for_local_test = os.environ.get(
         "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_INTERACTIVE_TASK_FOR_LOCAL_TEST",
         "",
@@ -519,7 +515,10 @@ def start_direct_sync_auto_bootstrap(
             "task_name": task_name,
             "server_base_url": server_base_url,
             "timeout_seconds": timeout_seconds,
-            "confirm_production_install": confirm_production_install,
+            # An explicitly enabled built-in bootstrap is the install
+            # boundary. Ordinary app startup remains mutation-free; the
+            # packaged INSTALL_THIS_PC.ps1 is the normal first-install path.
+            "confirm_production_install": True,
             "task_run_user": task_run_user,
             "task_run_password_env": task_run_password_env,
             "task_run_password_file": task_run_password_file,
