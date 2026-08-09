@@ -632,11 +632,18 @@ def retry_dead_relay_batch(
     reason: str,
     audit_log_path: str | os.PathLike[str] = "",
     allow_operator_review: bool = False,
+    expected_error_codes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
     relay = _require_text(relay_id, field_name="relay_id", max_length=128)
     operator = _require_text(operator_id, field_name="operator_id", max_length=128)
     reason_text = _require_text(reason, field_name="reason")
     reason_fields = _reason_evidence(reason_text)
+    expected_codes = tuple(
+        dict.fromkeys(
+            _require_text(code, field_name="expected_error_code", max_length=128)
+            for code in expected_error_codes
+        )
+    )
     if not Path(db_path).is_file():
         report = {
             "status": "BLOCKED",
@@ -677,6 +684,7 @@ def retry_dead_relay_batch(
             return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         previous_status = str(row["status"])
         previous_attempt_count = int(row["attempt_count"])
+        previous_error_code = str(row["last_error_code"] or "")
         retryable_statuses = set(RETRYABLE_DEAD_STATUSES)
         if allow_operator_review:
             retryable_statuses.add(RELAY_STATUS_OPERATOR_REVIEW)
@@ -691,6 +699,21 @@ def retry_dead_relay_batch(
                 **reason_fields,
                 "previous_status": previous_status,
                 "error_code": "relay_status_not_retryable_by_operator",
+            }
+            return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
+        if expected_codes and previous_error_code not in expected_codes:
+            conn.rollback()
+            report = {
+                "status": "BLOCKED",
+                "operation": "retry-dead",
+                "relay_id": relay,
+                "operator_id": operator,
+                "tool_version": OPERATOR_TOOL_VERSION,
+                **reason_fields,
+                "previous_status": previous_status,
+                "previous_error_code": previous_error_code,
+                "expected_error_codes": list(expected_codes),
+                "error_code": "relay_failure_cause_not_approved_for_retry",
             }
             return _with_operator_audit_status(audit_log_path, action="retry-dead-blocked", report=report)
         if previous_status == RELAY_STATUS_OPERATOR_REVIEW:
@@ -843,6 +866,8 @@ def retry_dead_relay_batch(
         "tool_version": OPERATOR_TOOL_VERSION,
         **reason_fields,
         "previous_status": previous_status,
+        "previous_error_code": previous_error_code,
+        "expected_error_codes": list(expected_codes),
         "new_status": RELAY_STATUS_PENDING,
         "previous_attempt_count": previous_attempt_count,
         "content_sha256": expected_hash,

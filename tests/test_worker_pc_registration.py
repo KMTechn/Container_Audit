@@ -66,6 +66,8 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
         "TRAY_RESET",
         "MASTER_LABEL_REPLACEMENT_APPLIED",
         "PHS_REPLACEMENT_WAITING_MARKED",
+        "PHS_RECONCILIATION_ACTION_RESOLVED",
+        "PHS_RECONCILIATION_LABEL_EXCHANGED",
         "WORK_END",
     ]
     assert manifest["sync"]["sync_transport"] == "http_push"
@@ -98,6 +100,9 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
                 "key_id": "server-key-pc-02",
                 "secret": "server-issued-secret-pc-02",
                 "secret_fingerprint_sha256": "f" * 64,
+                "active_manifest_hashes": [
+                    registration.manifest_hash(captured["json"]["manifest"])
+                ],
                 "server_binding": {
                     "producer_manifest_path": "/var/lib/worker-analysis/producers/producer-pc-02/producer_manifest.json",
                     "registry_path": "/var/lib/worker-analysis/producers/producer-pc-02/source_registry.json",
@@ -142,6 +147,9 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
 
     assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
     assert report["server_registration_verified"] is True
+    assert report["manifest_hash_verified"] is True
+    assert report["persisted_manifest_hash_verified"] is True
+    assert report["manifest_hash"] == registration.manifest_hash(captured["json"]["manifest"])
     assert report["secret_bootstrap_verified"] is True
     assert report["raw_secret_written"] is False
     assert credential["producer_id"] == "producer-pc-02"
@@ -175,6 +183,9 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
                 "key_id": "server-key-pc-ip",
                 "secret": "server-issued-secret-pc-ip",
                 "secret_fingerprint_sha256": "a" * 64,
+                "active_manifest_hashes": [
+                    registration.manifest_hash(captured["json"]["manifest"])
+                ],
                 "server_binding": {
                     "producer_manifest_path": "/var/lib/worker-analysis/producers/producer-pc-ip/producer_manifest.json",
                     "registry_path": "/var/lib/worker-analysis/producers/producer-pc-ip/source_registry.json",
@@ -183,6 +194,7 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
 
     def fake_post(url, *, json, headers, timeout):
         captured["url"] = url
+        captured["json"] = json
         captured["headers"] = headers
         captured["timeout"] = timeout
         return FakeResponse()
@@ -224,6 +236,113 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert captured["dpapi_data_dir"] == str(expected_direct_sync_root)
     assert captured["dpapi_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
     assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
+
+
+def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_write(tmp_path, monkeypatch):
+    report_path = tmp_path / "registration-manifest-hash-mismatch.json"
+    writes = []
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": "enrolled",
+                "producer_id": "producer-pc-hash",
+                "key_id": "server-key-pc-hash",
+                "secret": "server-issued-secret-pc-hash",
+                "active_manifest_hashes": ["0" * 64],
+            }
+
+    monkeypatch.setattr(registration.requests, "post", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-HASH",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert "does not authorize the requested manifest hash" in report["blocked_reason"]
+    assert writes == []
+
+
+def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, monkeypatch):
+    report_path = tmp_path / "registration-preserve-profile.json"
+    captured = {}
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": "already_enrolled",
+                "producer_id": "producer-pc-preserve",
+                "key_id": "server-key-pc-preserve",
+                "secret": "server-issued-secret-pc-preserve",
+                "active_manifest_hashes": [
+                    registration.manifest_hash(captured["manifest"])
+                ],
+                "machine_credential_bundle": {"must_not_be_applied": True},
+            }
+
+    def fake_post(_url, *, json, **_kwargs):
+        captured["manifest"] = json["manifest"]
+        return FakeResponse()
+
+    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(
+        registration,
+        "ensure_runtime_profile_from_enrollment_bundle",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("existing machine profile must not be replaced")
+        ),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, secret: Path(data_dir) / "secrets" / f"{target_name}.dpapi",
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-PRESERVE",
+            "--self-enroll",
+            "--preserve-existing-machine-profile",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
+    assert report["manifest_hash_verified"] is True
+    assert report["persisted_manifest_hash_verified"] is True
+    assert report["machine_profile_mode"] == "preserved_existing"
+    assert report["machine_profiles"] == {}
 
 
 def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch):

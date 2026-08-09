@@ -892,6 +892,8 @@ def test_operator_retry_dead_cli_blocks_spool_digest_read_error(tmp_path, monkey
             "operator-a",
             "--reason",
             "server contract fixed",
+            "--expected-error-code",
+            "metadata_invalid",
         ]
     )
 
@@ -899,6 +901,49 @@ def test_operator_retry_dead_cli_blocks_spool_digest_read_error(tmp_path, monkey
     assert exit_code == 2
     assert "direct_sync_operator_status=BLOCKED" in output
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_FAILED_PERMANENT] == 1
+
+
+def test_operator_retry_dead_requires_matching_approved_failure_cause(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    relay_id = enqueued["last_result"]["relay_id"]
+    run_relay_once(
+        config,
+        session=FakeSession(
+            FakeResponse(
+                400,
+                {
+                    "committed": False,
+                    "retryable": False,
+                    "error": {"code": "metadata_invalid", "message": "bad metadata"},
+                },
+            )
+        ),
+    )
+
+    blocked = retry_dead_relay_batch(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="manifest approval repaired",
+        expected_error_codes=("manifest_unauthorized",),
+    )
+    approved = retry_dead_relay_batch(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="metadata contract repaired",
+        expected_error_codes=("metadata_invalid",),
+    )
+
+    assert blocked["status"] == "BLOCKED"
+    assert blocked["error_code"] == "relay_failure_cause_not_approved_for_retry"
+    assert blocked["previous_error_code"] == "metadata_invalid"
+    assert approved["status"] == "PASS"
+    assert approved["previous_error_code"] == "metadata_invalid"
+    assert approved["expected_error_codes"] == ["metadata_invalid"]
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
 
 
 def test_operator_retry_dead_blocks_operator_review_rows(tmp_path):
@@ -973,6 +1018,8 @@ def test_operator_retry_dead_allows_non_committed_operator_review_with_flag(tmp_
             "operator-a",
             "--reason",
             "transient upload exception repaired",
+            "--expected-error-code",
+            "upload_unhandled_exception",
             "--allow-operator-review",
             "--report-path",
             str(report_path),

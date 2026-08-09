@@ -29,6 +29,8 @@ from direct_sync_push import (  # noqa: E402
     DEFAULT_SOURCE_TRANSPORT,
     DEFAULT_STREAM_NAME,
     DirectSyncPushError,
+    load_json_no_duplicate_keys,
+    manifest_hash,
     validate_endpoint_url,
 )
 from direct_sync_runtime import _safe_secret_ref_name, _wincred_target_name  # noqa: E402
@@ -63,6 +65,8 @@ CONTAINER_AUDIT_RAW_EVENTS = [
     "TRAY_RESET",
     "MASTER_LABEL_REPLACEMENT_APPLIED",
     "PHS_REPLACEMENT_WAITING_MARKED",
+    "PHS_RECONCILIATION_ACTION_RESOLVED",
+    "PHS_RECONCILIATION_LABEL_EXCHANGED",
     "WORK_END",
 ]
 
@@ -407,6 +411,7 @@ def _self_enroll(
     secret_ref_scheme: str,
     secret_ref_target: str,
 ) -> tuple[dict, dict]:
+    expected_manifest_hash = manifest_hash(manifest)
     token = args.enrollment_token or os.getenv(args.enrollment_token_env or DEFAULT_ENROLLMENT_TOKEN_ENV, "")
     enrollment_url = _validate_enrollment_url(
         args.enrollment_url or _default_enrollment_url(credential["endpoint_url"]),
@@ -435,6 +440,16 @@ def _self_enroll(
     if response.status_code >= 400:
         code = str((response_payload.get("error") or {}).get("code") or response.status_code)
         raise DirectSyncPushError(f"self-enroll failed: {code}")
+    active_manifest_hashes = response_payload.get("active_manifest_hashes")
+    if (
+        not isinstance(active_manifest_hashes, list)
+        or expected_manifest_hash not in {
+            str(value).strip().lower() for value in active_manifest_hashes
+        }
+    ):
+        raise DirectSyncPushError(
+            "self-enroll response does not authorize the requested manifest hash"
+        )
     secret = str(response_payload.get("secret") or "")
     if not secret:
         secret_hex = str(response_payload.get("secret_hex") or "").strip()
@@ -445,13 +460,18 @@ def _self_enroll(
     if not secret.strip():
         raise DirectSyncPushError("self-enroll response missing valid secret")
     identity = manifest["pc_identity"]
-    machine_profile = ensure_runtime_profile_from_enrollment_bundle(
-        response_payload,
-        expected_app=CONTAINER_AUDIT_APP,
-        expected_program="Container_Audit",
-        expected_source_host_id=str(identity["source_host_id"]),
-        expected_device_id=str(identity["pc_id"]),
+    preserve_existing_machine_profile = bool(
+        getattr(args, "preserve_existing_machine_profile", False)
     )
+    machine_profile = None
+    if not preserve_existing_machine_profile:
+        machine_profile = ensure_runtime_profile_from_enrollment_bundle(
+            response_payload,
+            expected_app=CONTAINER_AUDIT_APP,
+            expected_program="Container_Audit",
+            expected_source_host_id=str(identity["source_host_id"]),
+            expected_device_id=str(identity["pc_id"]),
+        )
     if machine_profile is None and bool(getattr(args, "require_machine_credential_bundle", False)):
         raise DirectSyncPushError("self-enroll response missing machine credential bundle")
     try:
@@ -470,6 +490,8 @@ def _self_enroll(
     credential["key_id"] = str(response_payload.get("key_id") or credential["key_id"])
     return credential, {
         "server_registration_verified": True,
+        "manifest_hash_verified": True,
+        "manifest_hash": expected_manifest_hash,
         "secret_bootstrap_verified": True,
         "enrollment_url": enrollment_url,
         "enrollment_status": response_payload.get("status"),
@@ -478,6 +500,9 @@ def _self_enroll(
         "server_binding": response_payload.get("server_binding") or {},
         "secret_bootstrap": bootstrap_report,
         "machine_profiles": {"logistics": machine_profile} if machine_profile else {},
+        "machine_profile_mode": (
+            "preserved_existing" if preserve_existing_machine_profile else "enrollment_bundle"
+        ),
     }
 
 
@@ -569,7 +594,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--key-id", default="")
     parser.add_argument("--secret-ref", default="")
     parser.add_argument("--self-enroll", action="store_true")
-    parser.add_argument("--require-machine-credential-bundle", action="store_true")
+    machine_profile_group = parser.add_mutually_exclusive_group()
+    machine_profile_group.add_argument("--require-machine-credential-bundle", action="store_true")
+    machine_profile_group.add_argument("--preserve-existing-machine-profile", action="store_true")
     parser.add_argument("--enrollment-url", default="")
     parser.add_argument("--enrollment-token", default="")
     parser.add_argument("--enrollment-token-env", default=DEFAULT_ENROLLMENT_TOKEN_ENV)
@@ -628,6 +655,23 @@ def main(argv: list[str] | None = None) -> int:
 
     atomic_write_json(str(manifest_path), manifest, indent=2)
     atomic_write_json(str(credential_path), credential, indent=2)
+    persisted_manifest_hash = manifest_hash(
+        load_json_no_duplicate_keys(manifest_path.read_bytes())
+    )
+    expected_manifest_hash = str(report.get("manifest_hash") or "")
+    if bool(report.get("server_registration_verified")):
+        if not expected_manifest_hash or persisted_manifest_hash != expected_manifest_hash:
+            report.update(
+                {
+                    "status": "BLOCKED",
+                    "blocked_reason": "persisted manifest hash differs from the server-authorized manifest hash",
+                    "persisted_manifest_hash_verified": False,
+                }
+            )
+            atomic_write_json(str(report_path), report, indent=2)
+            print(f"registration_report={report_path.resolve()}")
+            return 2
+        report["persisted_manifest_hash_verified"] = True
     atomic_write_json(str(report_path), report, indent=2)
     print(f"registration_report={report_path.resolve()}")
     return 0

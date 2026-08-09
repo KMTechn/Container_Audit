@@ -10201,3 +10201,23 @@ def test_plan_b_event_detail_allows_explicit_canonical_alias():
     assert enriched["raw_event_name"] == "TRAY_RESTORED_FROM_PARK"
     assert enriched["canonical_event_name"] == "TRAY_RESTORED"
     assert enriched["dispatch_key"] == "container_audit|legacy_transfer_csv|TRAY_RESTORED_FROM_PARK"
+
+
+def test_transfer_seal_event_detail_hashes_opaque_qr_instead_of_logging_it():
+    opaque_qr = "TRF=1|TOKEN=server-issued-opaque-value"
+    detail = {}
+
+    ContainerAudit._attach_transfer_seal_detail(
+        detail,
+        container_audit_module.SealAttempt(
+            intent_id="intent-1",
+            status="ACKED",
+            seal_qr_payload=opaque_qr,
+        ),
+    )
+
+    assert "seal_qr_payload" not in detail
+    assert detail["transfer_seal_qr_sha256"] == hashlib.sha256(
+        opaque_qr.encode("utf-8")
+    ).hexdigest()
+    assert "TOKEN" not in json.dumps(detail, ensure_ascii=False)

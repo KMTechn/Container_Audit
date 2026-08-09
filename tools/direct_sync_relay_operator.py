@@ -102,6 +102,12 @@ def main(argv: list[str] | None = None) -> int:
     retry_parser.add_argument("--audit-log-path", default="")
     retry_parser.add_argument("--report-path", default="")
     retry_parser.add_argument("--allow-operator-review", action="store_true")
+    retry_parser.add_argument(
+        "--expected-error-code",
+        action="append",
+        required=True,
+        help="Retry only when the row's last error matches this approved, resolved cause (repeatable)",
+    )
 
     restore_parser = subparsers.add_parser("restore-spool", help="Restore an ACKED relay spool file from server raw artifact")
     restore_parser.add_argument("--db-path", required=True)
@@ -154,6 +160,7 @@ def main(argv: list[str] | None = None) -> int:
                     reason=args.reason,
                     audit_log_path=args.audit_log_path,
                     allow_operator_review=args.allow_operator_review,
+                    expected_error_codes=tuple(args.expected_error_code),
                 ),
                 args.report_path,
             )

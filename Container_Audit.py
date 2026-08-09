@@ -276,7 +276,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.55"
+CURRENT_VERSION = "v2.0.56"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
@@ -7715,6 +7715,16 @@ class ContainerAudit:
             else {}
         )
         if stored_transfer_detail:
+            legacy_seal_qr_payload = str(
+                stored_transfer_detail.pop("seal_qr_payload", "") or ""
+            )
+            if legacy_seal_qr_payload:
+                stored_transfer_detail.setdefault(
+                    "transfer_seal_qr_sha256",
+                    hashlib.sha256(
+                        legacy_seal_qr_payload.encode("utf-8")
+                    ).hexdigest(),
+                )
             log_detail.update(stored_transfer_detail)
         else:
             stored_transfer_detail = current_transfer_detail
@@ -9150,7 +9160,11 @@ class ContainerAudit:
                 "transfer_remainder_bundle_id": attempt.remainder_bundle_id or None,
                 "transfer_member_count": attempt.member_count,
                 "transfer_membership_hash": attempt.membership_hash or None,
-                "seal_qr_payload": attempt.seal_qr_payload or None,
+                "transfer_seal_qr_sha256": (
+                    hashlib.sha256(attempt.seal_qr_payload.encode("utf-8")).hexdigest()
+                    if attempt.seal_qr_payload
+                    else None
+                ),
                 "transfer_seal_receipt_id": attempt.receipt_id or None,
                 "transfer_authority_scope_id": attempt.authority_scope_id or None,
                 "transfer_authority_epoch": attempt.authority_epoch or None,

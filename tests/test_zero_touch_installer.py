@@ -70,6 +70,15 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "Remove-NewMachineProfilesFromRegistrationReport" in text
     assert "created_paths" in text
     assert "Unregister-ScheduledTask -TaskName $TaskName" in text
+    assert "persisted_manifest_hash_verified" in text
+    assert "runtime.manifest_hash" in text
+    assert "AuthorizedManifestHash" in text
+    assert "Wait-CleanAcceptedReceipt" in text
+    assert 'status -ceq "acked"' in text
+    assert 'receipt.status -cne "accepted"' in text
+    assert '"errors" "Receipt error count"' in text
+    assert '"quarantined" "Receipt quarantine count"' in text
+    assert "APPLIED_UNPROVEN" in text
 
 
 def test_release_stages_common_installer_entrypoint():
