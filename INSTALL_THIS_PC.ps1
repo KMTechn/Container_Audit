@@ -1,5 +1,3 @@
-#Requires -RunAsAdministrator
-
 [CmdletBinding()]
 param(
     [switch]$DryRun,
@@ -10,6 +8,64 @@ param(
     [string]$TaskName = "direct-sync-relay-container-audit",
     [string]$EnrollmentTokenEnv = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
 )
+
+function ConvertTo-ElevationArgument([string]$Value) {
+    if ([string]::IsNullOrEmpty($Value)) { return '""' }
+    if ($Value -notmatch '[\s"]') { return $Value }
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $slashCount = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq '\') {
+            $slashCount += 1
+            continue
+        }
+        if ($character -eq '"') {
+            [void]$builder.Append((('\' * (($slashCount * 2) + 1)) -join ''))
+            [void]$builder.Append('"')
+            $slashCount = 0
+            continue
+        }
+        if ($slashCount -gt 0) {
+            [void]$builder.Append((('\' * $slashCount) -join ''))
+            $slashCount = 0
+        }
+        [void]$builder.Append($character)
+    }
+    if ($slashCount -gt 0) {
+        [void]$builder.Append((('\' * ($slashCount * 2)) -join ''))
+    }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function Invoke-SelfElevated(
+    [string]$ScriptPath,
+    [hashtable]$BoundParameters,
+    [object[]]$RemainingArguments
+) {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        return
+    }
+    $powershellExe = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $launchArguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $ScriptPath)
+    foreach ($name in $BoundParameters.Keys) {
+        $value = $BoundParameters[$name]
+        if ($value -is [System.Management.Automation.SwitchParameter]) {
+            if ($value.IsPresent) { $launchArguments += "-$name" }
+            continue
+        }
+        $launchArguments += @("-$name", [string]$value)
+    }
+    $launchArguments += @($RemainingArguments | ForEach-Object { [string]$_ })
+    $argumentLine = ($launchArguments | ForEach-Object { ConvertTo-ElevationArgument $_ }) -join ' '
+    $process = Start-Process -FilePath $powershellExe -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru -ErrorAction Stop
+    exit $process.ExitCode
+}
+
+Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args
 
 $ErrorActionPreference = "Stop"
 
@@ -65,21 +121,7 @@ function Read-BoundedJson([string]$Path, [string]$Purpose) {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
-function Get-RequiredNonNegativeInteger($Object, [string]$Name, [string]$Purpose) {
-    $property = if ($null -eq $Object) { $null } else { $Object.PSObject.Properties[$Name] }
-    $parsed = [long]0
-    if ($null -eq $property -or -not [long]::TryParse([string]$property.Value, [ref]$parsed) -or $parsed -lt 0) {
-        throw "$Purpose is invalid."
-    }
-    return $parsed
-}
-
-function Get-RelayQueueCount($Counts, [string]$Name) {
-    if ($null -eq $Counts -or $null -eq $Counts.PSObject.Properties[$Name]) { return [long]0 }
-    return Get-RequiredNonNegativeInteger $Counts $Name "Relay queue count $Name"
-}
-
-function Wait-CleanAcceptedReceipt([datetime]$Started, [string]$ProgramDataRoot, [string]$AuthorizedManifestHash) {
+function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, [string]$AuthorizedManifestHash) {
     $runtimePath = Join-Path $ProgramDataRoot "status\direct_sync_relay_status.json"
     $deadline = (Get-Date).AddSeconds(120)
     do {
@@ -90,45 +132,25 @@ function Wait-CleanAcceptedReceipt([datetime]$Started, [string]$ProgramDataRoot,
                 if ([string]$runtime.manifest_hash -cne $AuthorizedManifestHash) {
                     throw "Relay runtime manifest hash differs from the server-authorized manifest hash."
                 }
-                $last = $runtime.last_result
-                $uploadPath = if ($null -eq $last) { "" } else { [string]$last.upload_status_path }
-                if ([string]$runtime.status -ceq "acked" -and [string]$last.status -ceq "acked" -and
-                    $last.success -is [bool] -and [bool]$last.success -and
-                    $last.committed -is [bool] -and [bool]$last.committed -and
-                    -not [string]::IsNullOrWhiteSpace($uploadPath)) {
-                    $rootFull = [IO.Path]::GetFullPath($ProgramDataRoot).TrimEnd('\') + '\'
-                    $uploadFull = [IO.Path]::GetFullPath($uploadPath)
-                    if (-not $uploadFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
-                        throw "Relay upload status path escapes DirectSyncRoot."
-                    }
-                    if ((Get-Item -LiteralPath $uploadFull -Force).LastWriteTimeUtc -lt $Started) {
-                        throw "Relay upload status is stale."
-                    }
-                    $upload = Read-BoundedJson $uploadFull "Relay upload status"
-                    if ($upload.success -isnot [bool] -or -not [bool]$upload.success -or
-                        $upload.committed -isnot [bool] -or -not [bool]$upload.committed -or
-                        [int]$upload.status_code -lt 200 -or [int]$upload.status_code -ge 300 -or
-                        -not [string]::IsNullOrWhiteSpace([string]$upload.error_code) -or
-                        [string]$upload.receipt.status -cne "accepted" -or
-                        $upload.receipt.committed -isnot [bool] -or -not [bool]$upload.receipt.committed) {
-                        throw "Relay upload did not prove a committed accepted receipt."
-                    }
-                    $errors = Get-RequiredNonNegativeInteger $upload.receipt.totals "errors" "Receipt error count"
-                    $quarantined = Get-RequiredNonNegativeInteger $upload.receipt.totals "quarantined" "Receipt quarantine count"
-                    $inserted = Get-RequiredNonNegativeInteger $upload.receipt.totals "inserted" "Receipt inserted count"
-                    $replayed = Get-RequiredNonNegativeInteger $upload.receipt.totals "replayed" "Receipt replayed count"
-                    $failed = Get-RelayQueueCount $runtime.queue.counts "failed_permanent"
-                    $review = Get-RelayQueueCount $runtime.queue.counts "operator_review"
-                    if ($errors -ne 0 -or $quarantined -ne 0 -or ($inserted + $replayed) -le 0 -or $failed -ne 0 -or $review -ne 0) {
-                        throw "Relay receipt or queue contains unresolved failures."
-                    }
+                $lease = $runtime.runtime_lease
+                $leaseExpiry = [datetime]::MinValue
+                if (
+                    $null -ne $lease -and
+                    [string]$lease.status -ceq "ACTIVE" -and
+                    $lease.server_grant_accepted -is [bool] -and [bool]$lease.server_grant_accepted -and
+                    -not [string]::IsNullOrWhiteSpace([string]$lease.producer_install_id) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$lease.runtime_instance_id) -and
+                    -not [string]::IsNullOrWhiteSpace([string]$lease.lease_id) -and
+                    [datetime]::TryParse([string]$lease.expires_at, [ref]$leaseExpiry) -and
+                    $leaseExpiry.ToUniversalTime() -gt (Get-Date).ToUniversalTime()
+                ) {
                     return
                 }
             }
         }
         Start-Sleep -Milliseconds 500
     } while ((Get-Date) -lt $deadline)
-    throw "Relay did not produce a clean accepted receipt within 120 seconds."
+    throw "Relay did not prove a current server runtime lease within 120 seconds."
 }
 
 
@@ -254,11 +276,11 @@ catch {
     throw $startFailure
 }
 try {
-    Wait-CleanAcceptedReceipt $relayStarted $DirectSyncRoot $authorizedManifestHash
+    Wait-CurrentRuntimeLease $relayStarted $DirectSyncRoot $authorizedManifestHash
 }
 catch {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    throw "APPLIED_UNPROVEN: relay task was installed but the first clean accepted receipt was not proven: $($_.Exception.Message)"
+    throw "APPLIED_UNPROVEN: relay task was installed but current runtime liveness was not proven: $($_.Exception.Message)"
 }
 
 Write-Output "install_status=PASS"

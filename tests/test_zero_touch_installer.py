@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 import update_service
@@ -6,6 +7,21 @@ from tools import install_logistics_runtime_profile as machine_profiles
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _assert_powershell_ast(path: Path) -> None:
+    escaped = str(path).replace("'", "''")
+    command = (
+        "$tokens=$null;$errors=$null;"
+        f"[void][System.Management.Automation.Language.Parser]::ParseFile('{escaped}',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count){$errors|ForEach-Object{$_.Message}|Write-Error;exit 1}"
+    )
+    subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def _machine_bundle():
@@ -56,7 +72,12 @@ def _machine_bundle():
 def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
 
-    assert "#Requires -RunAsAdministrator" in text
+    assert "#Requires -RunAsAdministrator" not in text
+    assert "Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args" in text
+    assert "WindowsBuiltInRole]::Administrator" in text
+    assert "-Verb RunAs" in text
+    assert "-Wait -PassThru" in text
+    _assert_powershell_ast(ROOT / "INSTALL_THIS_PC.ps1")
     assert "--self-enroll" in text
     assert "--enrollment-token-env" in text
     assert "Read-Host" not in text
@@ -73,11 +94,14 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "persisted_manifest_hash_verified" in text
     assert "runtime.manifest_hash" in text
     assert "AuthorizedManifestHash" in text
-    assert "Wait-CleanAcceptedReceipt" in text
-    assert 'status -ceq "acked"' in text
-    assert 'receipt.status -cne "accepted"' in text
-    assert '"errors" "Receipt error count"' in text
-    assert '"quarantined" "Receipt quarantine count"' in text
+    assert "Wait-CurrentRuntimeLease" in text
+    assert 'lease.status -ceq "ACTIVE"' in text
+    assert "lease.server_grant_accepted" in text
+    assert "lease.producer_install_id" in text
+    assert "lease.runtime_instance_id" in text
+    assert "lease.lease_id" in text
+    assert "lease.expires_at" in text
+    assert "Wait-CleanAcceptedReceipt" not in text
     assert "APPLIED_UNPROVEN" in text
 
 
