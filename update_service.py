@@ -111,6 +111,10 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/storage_policy.py",
         "Container_Audit/storage_utils.py",
         "Container_Audit/logistics_runtime_profile.py",
+        "Container_Audit/build-identity.json",
+        "Container_Audit/build-compatibility.json",
+        "Container_Audit/build-manifest.json",
+        "Container_Audit/contract.lock.json",
     }
 )
 ALLOWED_RELEASE_ASSET_HOSTS = frozenset(

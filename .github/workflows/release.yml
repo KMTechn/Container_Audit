@@ -70,6 +70,15 @@ jobs:
       - name: Check release version
         run: python tools/check_release_version.py --tag "${{ github.ref_name }}"
 
+      - name: Prepare exact factory compatibility identity
+        run: >-
+          python -m kmtech_factory_contracts.build_cli prepare
+          --repository .
+          --stage-root build/factory_contract_identity
+          --app-id container_audit
+          --app-version "${{ github.ref_name }}"
+          --db-schema-current 0
+
       - name: Resolve private update feed publish mode
         id: private_feed
         shell: pwsh
@@ -176,7 +185,7 @@ jobs:
 
       - name: Build with PyInstaller (One-Folder mode)
         # 아이콘 지정 및 hidden-import 옵션을 포함한 최종 명령어
-        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "producer_runtime_client.py;." --add-data "direct_sync_operator.py;." --add-data "event_log_store.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
+        run: python -m PyInstaller --name "Container_Audit" --onedir --windowed --contents-directory "." --icon="assets/logo.ico" --add-data "assets;assets" --add-data "build/release_config;config" --add-data "build/release_tools;tools" --add-data "direct_sync_push.py;." --add-data "direct_sync_runtime.py;." --add-data "producer_runtime_client.py;." --add-data "direct_sync_operator.py;." --add-data "event_log_store.py;." --add-data "storage_policy.py;." --add-data "storage_utils.py;." --add-data "logistics_runtime_profile.py;." --add-data "kmtech_factory_contracts/bundle;kmtech_factory_contracts/bundle" --add-data "build/factory_contract_identity/build-identity.json;." --add-data "build/factory_contract_identity/build-compatibility.json;." --add-data "contract.lock.json;." --hidden-import pygame --hidden-import PIL.Image --hidden-import PIL.ImageTk Container_Audit.py
 
       - name: Build bundled direct-sync relay executable
         run: python -m PyInstaller --name "Container_Audit_DirectSync_Relay" --onefile --console --distpath dist/Container_Audit --workpath build/direct_sync_relay_pyinstaller --specpath build/direct_sync_relay_pyinstaller tools/direct_sync_relay_runner.py
@@ -208,6 +217,21 @@ jobs:
           python -m PyInstaller --paths . --name "KMTech_Logistics_Profile_Check" --onefile --console --distpath dist/Container_Audit --workpath build/logistics_profile_check_pyinstaller --specpath build/logistics_profile_check_pyinstaller tools/check_logistics_runtime_profile.py
           Copy-Item -LiteralPath docs/LOGISTICS_RUNTIME_PROFILE.md -Destination dist/Container_Audit/CENTRAL_LOGISTICS_PC_ROLLOUT.md
           Copy-Item -LiteralPath INSTALL_THIS_PC.ps1 -Destination dist/Container_Audit/INSTALL_THIS_PC.ps1
+
+      - name: Seal and verify exact factory package manifest
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          python -m kmtech_factory_contracts.build_cli manifest `
+            --stage-root dist/Container_Audit `
+            --expected-file Container_Audit.exe `
+            --expected-file contract.lock.json `
+            --expected-file build-identity.json `
+            --expected-file build-compatibility.json
+          $contractHash = (python -c "from kmtech_factory_contracts.bundle import CONTRACT_BUNDLE_SHA256; print(CONTRACT_BUNDLE_SHA256)").Trim()
+          python -m kmtech_factory_contracts.build_cli verify `
+            --stage-root dist/Container_Audit `
+            --expected-contract-sha256 $contractHash
 
       - name: Zip the build folder
         run: |
@@ -260,7 +284,11 @@ jobs:
             "Container_Audit/event_log_store.py",
             "Container_Audit/storage_policy.py",
             "Container_Audit/storage_utils.py",
-            "Container_Audit/logistics_runtime_profile.py"
+            "Container_Audit/logistics_runtime_profile.py",
+            "Container_Audit/build-identity.json",
+            "Container_Audit/build-compatibility.json",
+            "Container_Audit/build-manifest.json",
+            "Container_Audit/contract.lock.json"
           )
           foreach ($relative in $required) {
             $candidate = Join-Path $smokeDir $relative

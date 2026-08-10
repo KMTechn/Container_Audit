@@ -25,6 +25,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
 from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap, start_session_direct_sync
@@ -180,6 +181,24 @@ from warning_presenter import (
     WarningPresenter,
     notice_for_completion,
 )
+
+
+FACTORY_CONTRACT_APP_ID = "container_audit"
+
+
+def _factory_contract_lock_path() -> Path:
+    runtime_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return runtime_root / "contract.lock.json"
+
+
+def verify_factory_contract_startup(lock_path=None):
+    resolved_lock_path = (
+        Path(lock_path) if lock_path is not None else _factory_contract_lock_path()
+    )
+    return load_and_verify_contract_lock(
+        resolved_lock_path,
+        expected_app_id=FACTORY_CONTRACT_APP_ID,
+    )
 
 
 _TK_GEOMETRY_RE = re.compile(
@@ -11254,6 +11273,7 @@ def _show_item_catalog_startup_error() -> None:
 
 
 def main():
+    verify_factory_contract_startup()
     if getattr(sys, 'frozen', False):
         application_path = os.path.dirname(sys.executable)
     else:

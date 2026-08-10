@@ -5,7 +5,7 @@ a = Analysis(
     ['Container_Audit.py'],
     pathex=[],
     binaries=[],
-    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('logistics_runtime_profile.py', '.')],
+    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('logistics_runtime_profile.py', '.'), ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle'), ('build/factory_contract_identity/build-identity.json', '.'), ('build/factory_contract_identity/build-compatibility.json', '.'), ('contract.lock.json', '.')],
     hiddenimports=['pygame', 'PIL.Image', 'PIL.ImageTk'],
     hookspath=[],
     hooksconfig={},
