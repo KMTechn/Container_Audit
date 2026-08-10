@@ -6,7 +6,10 @@ param(
     [string]$DataRoot = "",
     [string]$DirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit",
     [string]$TaskName = "direct-sync-relay-container-audit",
-    [string]$EnrollmentTokenEnv = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
+    [string]$EnrollmentTokenEnv = "CONTAINER_AUDIT_ENROLLMENT_TOKEN",
+    [string]$ExistingProducerManifestPath = "",
+    [string]$ExistingCredentialPath = "",
+    [string]$ExistingRegistrationReportPath = ""
 )
 
 function ConvertTo-ElevationArgument([string]$Value) {
@@ -178,9 +181,32 @@ foreach ($required in @($appExe, $installExe, $runnerExe, $registrationExe)) {
 
 $eventDir = Join-Path $DataRoot "events"
 $statusDir = Join-Path $DirectSyncRoot "status"
-$manifestPath = Join-Path $DirectSyncRoot "producer_manifest.json"
-$credentialPath = Join-Path $DirectSyncRoot "credential.json"
-$registrationReportPath = Join-Path $statusDir "worker_pc_registration.json"
+$reuseExistingIdentity = (
+    -not [string]::IsNullOrWhiteSpace($ExistingProducerManifestPath) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingCredentialPath) -or
+    -not [string]::IsNullOrWhiteSpace($ExistingRegistrationReportPath)
+)
+if ($reuseExistingIdentity) {
+    if (
+        [string]::IsNullOrWhiteSpace($ExistingProducerManifestPath) -or
+        [string]::IsNullOrWhiteSpace($ExistingCredentialPath) -or
+        [string]::IsNullOrWhiteSpace($ExistingRegistrationReportPath)
+    ) {
+        throw "Existing producer manifest, credential, and registration report paths must be provided together."
+    }
+    foreach ($existingPath in @(
+        $ExistingProducerManifestPath,
+        $ExistingCredentialPath,
+        $ExistingRegistrationReportPath
+    )) {
+        if (-not (Test-Path -LiteralPath $existingPath -PathType Leaf)) {
+            throw "Existing registered identity evidence does not exist."
+        }
+    }
+}
+$manifestPath = if ($reuseExistingIdentity) { $ExistingProducerManifestPath } else { Join-Path $DirectSyncRoot "producer_manifest.json" }
+$credentialPath = if ($reuseExistingIdentity) { $ExistingCredentialPath } else { Join-Path $DirectSyncRoot "credential.json" }
+$registrationReportPath = if ($reuseExistingIdentity) { $ExistingRegistrationReportPath } else { Join-Path $statusDir "worker_pc_registration.json" }
 $installReportPath = Join-Path $statusDir "container_audit_direct_sync_install.json"
 
 if ($DryRun.IsPresent) {
@@ -216,17 +242,19 @@ New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
 # the ProgramData root.
 
 $endpointUrl = "$($ServerBaseUrl.Trim().TrimEnd('/'))/api/producer-ingest/v1/source-file"
-& $registrationExe `
-    --app-root $packageRoot `
-    --endpoint-url $endpointUrl `
-    --self-enroll `
-    --require-machine-credential-bundle `
-    --enrollment-token-env $EnrollmentTokenEnv `
-    --manifest-path $manifestPath `
-    --credential-path $credentialPath `
-    --report-path $registrationReportPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Container_Audit self-enrollment failed. Report: $registrationReportPath"
+if (-not $reuseExistingIdentity) {
+    & $registrationExe `
+        --app-root $packageRoot `
+        --endpoint-url $endpointUrl `
+        --self-enroll `
+        --require-machine-credential-bundle `
+        --enrollment-token-env $EnrollmentTokenEnv `
+        --manifest-path $manifestPath `
+        --credential-path $credentialPath `
+        --report-path $registrationReportPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Container_Audit self-enrollment failed. Report: $registrationReportPath"
+    }
 }
 $registrationReport = Read-BoundedJson $registrationReportPath "Container_Audit registration report"
 if (
@@ -240,6 +268,12 @@ if (
 $authorizedManifestHash = ([string]$registrationReport.manifest_hash).ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($authorizedManifestHash)) {
     throw "Container_Audit registration report omitted the authorized manifest hash."
+}
+if ($reuseExistingIdentity) {
+    $existingManifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($existingManifestHash -cne $authorizedManifestHash) {
+        throw "Existing producer manifest differs from its verified registration report."
+    }
 }
 
 & $installExe `
@@ -272,7 +306,9 @@ try {
 catch {
     $startFailure = $_
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Remove-NewMachineProfilesFromRegistrationReport $registrationReportPath
+    if (-not $reuseExistingIdentity) {
+        Remove-NewMachineProfilesFromRegistrationReport $registrationReportPath
+    }
     throw $startFailure
 }
 try {
