@@ -7,6 +7,7 @@ import pytest
 
 import direct_sync_operator
 import direct_sync_push
+import direct_sync_runtime
 from tools import direct_sync_relay_operator as operator_cli
 from direct_sync_operator import operator_status, pause_relay, resume_relay, retry_dead_relay_batch
 from direct_sync_push import (
@@ -42,6 +43,22 @@ def _isolate_operator_contract_tests_from_runtime_lease(monkeypatch):
         direct_sync_push,
         "client_runtime_lease_mode",
         lambda _credentials: "observe",
+    )
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **kwargs: RuntimePreparation(
+            status_code=200,
+            receipt={
+                "status": "ACTIVE",
+                "server_grant_accepted": True,
+                "producer_install_id": kwargs["producer_install_id"],
+                "lease_id": "lease-operator-test",
+                "runtime_instance_id": "runtime-operator-test",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "request_sent": False,
+            },
+        ),
     )
 
 

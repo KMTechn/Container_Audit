@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import direct_sync_push
+import direct_sync_runtime
 from direct_sync_push import ProducerCredentials, RELAY_STATUS_ACKED, manifest_hash, relay_queue_status
 from direct_sync_runtime import DirectSyncRuntimeConfig, enqueue_completed_source_file, run_relay_once
 from producer_runtime_client import RuntimePreparation
@@ -79,6 +80,22 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
         lambda **kwargs: RuntimePreparation(metadata=dict(kwargs["metadata"])),
     )
     monkeypatch.setattr(direct_sync_push, "client_runtime_lease_mode", lambda _credentials: "observe")
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **kwargs: RuntimePreparation(
+            status_code=200,
+            receipt={
+                "status": "ACTIVE",
+                "server_grant_accepted": True,
+                "producer_install_id": kwargs["producer_install_id"],
+                "lease_id": "lease-install-registration-test",
+                "runtime_instance_id": "runtime-install-registration-test",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "request_sent": False,
+            },
+        ),
+    )
 
     registration_exit = registration.main(
         [

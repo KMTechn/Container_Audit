@@ -1075,7 +1075,8 @@ def _operator_control_report(tmp_root: Path) -> dict:
     spool_path = Path(spool_row[0])
     original_spool = spool_path.read_bytes()
     spool_path.write_bytes(original_spool + b"corrupted")
-    failed_session = EchoAcceptedSession()
+    authority = RuntimeLeaseFixtureAuthority()
+    failed_session = EchoAcceptedSession(authority=authority)
     failed = run_relay_once(config, session=failed_session)
     spool_path.write_bytes(original_spool)
     retried = retry_dead_relay_batch(
@@ -1085,7 +1086,7 @@ def _operator_control_report(tmp_root: Path) -> dict:
         reason="local drill retry after permanent failure",
         audit_log_path=audit_log_path,
     )
-    ack_session = EchoAcceptedSession()
+    ack_session = EchoAcceptedSession(authority=authority)
     acked = run_relay_once(config, session=ack_session)
     status_report = operator_status(db_path=config.db_path, pause_path=config.operator_pause_path)
     audit_bytes = Path(audit_log_path).read_bytes()
@@ -1098,11 +1099,11 @@ def _operator_control_report(tmp_root: Path) -> dict:
         and resumed["status"] == "PASS"
         and failed["status"] == "failed_permanent"
         and failed["last_result"]["error_code"] == "spooled_file_digest_mismatch"
-        and not failed_session.lease_calls
+        and len(failed_session.lease_calls) == 1
         and not failed_session.calls
         and retried["status"] == "PASS"
         and acked["status"] == "acked"
-        and len(ack_session.lease_calls) == 1
+        and not ack_session.lease_calls
         and len(ack_session.calls) == 1
         and status_report["queue"]["counts"].get(RELAY_STATUS_ACKED) == 1
         and audit_redacted
