@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -343,6 +344,35 @@ def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, mon
     assert report["persisted_manifest_hash_verified"] is True
     assert report["machine_profile_mode"] == "preserved_existing"
     assert report["machine_profiles"] == {}
+
+
+def test_manifest_hash_verification_uses_canonical_json_and_fails_closed(tmp_path, capsys):
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest = {
+        "pc_identity": {"source_host_id": "sensitive-fixture-id"},
+        "apps": ["ContainerAudit"],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    canonical_hash = registration.manifest_hash(manifest)
+    assert hashlib.sha256(manifest_path.read_bytes()).hexdigest() != canonical_hash
+
+    success = registration.main(
+        ["--manifest-path", str(manifest_path), "--verify-manifest-hash", canonical_hash]
+    )
+    success_output = capsys.readouterr().out
+    failure = registration.main(
+        ["--manifest-path", str(manifest_path), "--verify-manifest-hash", "0" * 64]
+    )
+    failure_output = capsys.readouterr().out
+
+    assert success == 0
+    assert success_output.strip() == "manifest_hash_verification=PASS"
+    assert failure == 2
+    assert failure_output.strip() == "manifest_hash_verification=FAIL"
+    assert "sensitive-fixture-id" not in success_output + failure_output
 
 
 def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch):

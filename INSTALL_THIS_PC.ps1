@@ -270,12 +270,13 @@ if ([string]::IsNullOrWhiteSpace($authorizedManifestHash)) {
     throw "Container_Audit registration report omitted the authorized manifest hash."
 }
 if ($reuseExistingIdentity) {
-    $existingManifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash.ToLowerInvariant()
-    if ($existingManifestHash -cne $authorizedManifestHash) {
+    & $registrationExe `
+        --manifest-path $manifestPath `
+        --verify-manifest-hash $authorizedManifestHash
+    if ($LASTEXITCODE -ne 0) {
         throw "Existing producer manifest differs from its verified registration report."
     }
 }
-
 & $installExe `
     --apply `
     --confirm-production-install `

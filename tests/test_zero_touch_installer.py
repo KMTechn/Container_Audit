@@ -84,7 +84,9 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "ExistingProducerManifestPath" in text
     assert "ExistingCredentialPath" in text
     assert "ExistingRegistrationReportPath" in text
+    assert "--verify-manifest-hash" in text
     assert "Existing producer manifest differs from its verified registration report." in text
+    assert "Get-FileHash" not in text
     assert "--enrollment-token `" not in text
     assert "machine-scope DPAPI" in text
     assert "system_service_account" in text

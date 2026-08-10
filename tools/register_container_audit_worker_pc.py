@@ -601,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enrollment-token", default="")
     parser.add_argument("--enrollment-token-env", default=DEFAULT_ENROLLMENT_TOKEN_ENV)
     parser.add_argument("--enrollment-timeout-seconds", type=int, default=30)
+    parser.add_argument("--verify-manifest-hash", default="")
     parser.add_argument("--manifest-path", default="")
     parser.add_argument("--credential-path", default="")
     parser.add_argument("--report-path", default="")
@@ -623,6 +624,23 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
         return 2
+
+    if args.verify_manifest_hash:
+        try:
+            manifest_path = Path(args.manifest_path).expanduser()
+            if not args.manifest_path or not manifest_path.is_file():
+                raise DirectSyncPushError("producer manifest is absent")
+            if manifest_path.stat().st_size <= 0 or manifest_path.stat().st_size > 1024 * 1024:
+                raise DirectSyncPushError("producer manifest size is invalid")
+            current_hash = manifest_hash(load_json_no_duplicate_keys(manifest_path.read_bytes()))
+        except Exception:
+            print("manifest_hash_verification=FAIL")
+            return 2
+        if current_hash != str(args.verify_manifest_hash).strip().lower():
+            print("manifest_hash_verification=FAIL")
+            return 2
+        print("manifest_hash_verification=PASS")
+        return 0
 
     try:
         manifest, credential, report = build_registration_payloads(args)
