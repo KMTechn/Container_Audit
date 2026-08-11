@@ -109,6 +109,15 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "lease.expires_at" in text
     assert "Wait-CleanAcceptedReceipt" not in text
     assert "APPLIED_UNPROVEN" in text
+    assert '"C:\\KMTech\\Apps\\Container_Audit\\current"' in text
+    assert '"C:\\ProgramData\\KMTech\\DirectSync\\container_audit"' in text
+    assert '"bin\\direct-sync-relay-container-audit.vbs"' in text
+    assert '"queue\\direct_sync_relay.sqlite3"' in text
+    assert "field_layout_contract" in text
+    assert "production_layout_matches" in text
+    assert "AllowNoncanonicalLayoutForTest" in text
+    assert "--allow-noncanonical-layout-for-test" in text
+    assert "KMTECH_FACTORY_INSTALL_TEST_MODE" in text
 
 
 def test_release_stages_common_installer_entrypoint():

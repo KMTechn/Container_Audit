@@ -17,6 +17,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_PACK_SCRIPT = REPO_ROOT / "tools" / "direct_sync_relay_install_pack.py"
 
 
+@pytest.fixture(autouse=True)
+def _factory_install_test_mode(monkeypatch):
+    monkeypatch.setenv("KMTECH_FACTORY_INSTALL_TEST_MODE", "1")
+
+
 def decode_encoded_powershell_command(command):
     assert command[:5] == ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand"]
     return base64.b64decode(command[5]).decode("utf-16le")
@@ -51,14 +56,14 @@ def test_install_pack_report_write_uses_unique_atomic_temp_paths(tmp_path, monke
     assert list(tmp_path.glob("install-report.json.tmp.*")) == []
 
 
-def test_install_pack_frozen_default_app_root_uses_executable_directory(tmp_path, monkeypatch):
+def test_install_pack_default_app_root_is_canonical_even_when_frozen(tmp_path, monkeypatch):
     frozen_exe = tmp_path / "release" / "Container_Audit_DirectSync_Install.exe"
     frozen_exe.parent.mkdir()
     frozen_exe.write_bytes(b"exe")
     monkeypatch.setattr(install_pack.sys, "frozen", True, raising=False)
     monkeypatch.setattr(install_pack.sys, "executable", str(frozen_exe))
 
-    assert install_pack._default_app_root() == str(frozen_exe.parent.resolve())
+    assert install_pack._default_app_root() == r"C:\KMTech\Apps\Container_Audit\current"
 
 
 def make_manifest_and_credential(tmp_path):
@@ -100,6 +105,27 @@ def make_manifest_and_credential(tmp_path):
     return manifest_path, credential_path
 
 
+def test_canonical_field_layout_contract_matches_release_resources():
+    contract = install_pack._field_layout_contract(
+        argparse.Namespace(
+            app_root=install_pack.CANONICAL_INSTALL_ROOT,
+            program_data_root=install_pack.CANONICAL_DIRECT_SYNC_ROOT,
+            task_name=install_pack.DEFAULT_TASK_NAME,
+            allow_noncanonical_layout_for_test=False,
+        )
+    )
+
+    assert contract["status"] == "PASS"
+    assert contract["production_layout_matches"] is True
+    assert contract["production_apply_allowed"] is True
+    assert contract["actual_task_launcher_path"].endswith(
+        r"bin\direct-sync-relay-container-audit.vbs"
+    )
+    assert contract["actual_state_db_path"].endswith(
+        r"queue\direct_sync_relay.sqlite3"
+    )
+
+
 def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkeypatch):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     local_app_data = tmp_path / "LocalAppData"
@@ -124,6 +150,21 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert report["status"] == "DRY_RUN"
+    assert report["field_layout_contract"]["expected_install_root"] == (
+        r"C:\KMTech\Apps\Container_Audit\current"
+    )
+    assert report["field_layout_contract"]["expected_direct_sync_root"] == (
+        r"C:\ProgramData\KMTech\DirectSync\container_audit"
+    )
+    assert report["field_layout_contract"]["expected_task_name"] == (
+        "direct-sync-relay-container-audit"
+    )
+    assert report["field_layout_contract"]["expected_task_launcher_path"].endswith(
+        r"bin\direct-sync-relay-container-audit.vbs"
+    )
+    assert report["field_layout_contract"]["expected_state_db_path"].endswith(
+        r"queue\direct_sync_relay.sqlite3"
+    )
     assert report["container_audit_storage"]["defaulted_program_data_root"] is True
     assert report["container_audit_storage"]["defaulted_scan_source_dir"] is True
     assert report["container_audit_storage"]["defaulted_source_glob"] is True
@@ -364,6 +405,7 @@ def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, m
             str(report_path),
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
             "--allow-interactive-task-for-local-test",
         ]
     )
@@ -378,6 +420,84 @@ def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, m
     assert report["credential"]["raw_secret_forbidden"] is True
     assert "raw credential secret is disabled for production apply" in report["blocked_reason"]
     assert "install-pack-secret" not in report_text
+
+
+def test_install_pack_apply_blocks_noncanonical_field_layout_before_mutation(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "noncanonical-layout-blocked.json"
+    commands = []
+    monkeypatch.setattr(
+        install_pack,
+        "_run_command",
+        lambda command: commands.append(command) or {"returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    exit_code = install_pack.main(
+        [
+            "--app-root",
+            str(tmp_path / "staging" / "Container_Audit"),
+            "--program-data-root",
+            str(tmp_path / "ProgramData" / "DirectSync" / "container_audit"),
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--confirm-production-install",
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 2
+    assert commands == []
+    assert report["status"] == "BLOCKED"
+    assert report["field_layout_contract"]["install_root_matches"] is False
+    assert report["field_layout_contract"]["direct_sync_root_matches"] is False
+    assert report["field_layout_contract"]["production_layout_matches"] is False
+    assert report["field_layout_contract"]["local_test_override_enabled"] is False
+    assert "canonical Container_Audit field layout" in report["blocked_reason"]
+
+
+def test_noncanonical_layout_flag_requires_dedicated_test_marker(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    report_path = tmp_path / "noncanonical-layout-flag-alone.json"
+    commands = []
+    monkeypatch.delenv("KMTECH_FACTORY_INSTALL_TEST_MODE", raising=False)
+    monkeypatch.setattr(
+        install_pack,
+        "_run_command",
+        lambda command: commands.append(command) or {"returncode": 0, "stdout": "", "stderr": ""},
+    )
+
+    exit_code = install_pack.main(
+        [
+            "--app-root",
+            str(tmp_path / "staging" / "Container_Audit"),
+            "--program-data-root",
+            str(tmp_path / "ProgramData" / "DirectSync" / "container_audit"),
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert exit_code == 2
+    assert commands == []
+    assert report["field_layout_contract"]["local_test_override_requested"] is True
+    assert report["field_layout_contract"]["local_test_override_enabled"] is False
+    assert report["field_layout_contract"]["production_apply_allowed"] is False
+    assert report["blocked_reason"] == (
+        "noncanonical layout override requires KMTECH_FACTORY_INSTALL_TEST_MODE=1"
+    )
 
 
 def test_install_pack_prefers_bundled_relay_executable_without_python_dependency(tmp_path, monkeypatch):
@@ -486,6 +606,7 @@ def test_install_pack_blocks_invalid_scheduled_task_name_before_apply(tmp_path, 
             str(report_path),
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
             "--allow-interactive-task-for-local-test",
         ]
     )
@@ -512,6 +633,7 @@ def test_install_pack_blocks_invalid_scheduled_task_name_for_uninstall_before_de
             "--uninstall",
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
             "--task-name",
             "other/task",
             "--report-path",
@@ -1293,6 +1415,7 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
             str(report_path),
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
             "--allow-interactive-task-for-local-test",
         ]
     )
@@ -1301,6 +1424,8 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
     assert observed_statuses == ["APPLYING"]
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     assert report["status"] == "PASS"
+    assert report["field_layout_contract"]["local_test_override_enabled"] is True
+    assert report["field_layout_contract"]["production_apply_allowed"] is False
     assert report["command_result"]["returncode"] == 0
     wrapper_path = Path(report["scheduled_task_wrapper_path"])
     assert wrapper_path.is_file()
@@ -1348,6 +1473,7 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
             "TASK_PASSWORD_FOR_TEST",
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
         ]
     )
 
@@ -1411,6 +1537,7 @@ def test_install_pack_apply_supports_password_file_without_leaking_password(tmp_
             str(password_file),
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
         ]
     )
 
@@ -1487,6 +1614,7 @@ def test_install_pack_apply_defaults_to_system_task_without_password(tmp_path, m
             str(report_path),
             "--apply",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
         ]
     )
 
@@ -1595,6 +1723,7 @@ def test_install_pack_uninstall_skips_create_only_preflight_without_manifest_or_
             "--apply",
             "--uninstall",
             "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
         ]
     )
 

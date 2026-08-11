@@ -115,6 +115,29 @@ def test_install_command_can_carry_production_task_principal(tmp_path):
     assert command[command.index("--task-run-password-file") + 1] == str(tmp_path / "task-password.txt")
 
 
+def test_install_command_requires_explicit_noncanonical_test_override(tmp_path):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    (app_root / "Container_Audit_DirectSync_Install.exe").write_bytes(b"exe")
+
+    ordinary = bootstrap.build_install_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "direct-sync",
+        scan_source_dir=tmp_path / "events",
+        allow_interactive_task_for_local_test=True,
+    )
+    explicit = bootstrap.build_install_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "direct-sync",
+        scan_source_dir=tmp_path / "events",
+        allow_noncanonical_layout_for_test=True,
+    )
+
+    assert "--allow-interactive-task-for-local-test" in ordinary
+    assert "--allow-noncanonical-layout-for-test" not in ordinary
+    assert "--allow-noncanonical-layout-for-test" in explicit
+
+
 def test_install_ready_requires_current_scan_source_dir(tmp_path):
     direct_sync_root = tmp_path / "data" / "direct_sync"
     events_dir = tmp_path / "data" / "events"
@@ -128,6 +151,7 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
                 "status": "PASS",
                 "program_data_root": str(direct_sync_root),
                 "task_name": "direct-sync-relay-container-audit",
+                "field_layout_contract": {"production_layout_matches": True},
                 "source_scan": {
                     "scan_source_dir": str(events_dir),
                 },
@@ -141,6 +165,17 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
         "direct-sync-relay-container-audit",
         events_dir,
     )
+
+    payload = json.loads(report_path.read_text(encoding="utf-8"))
+    payload["field_layout_contract"]["production_layout_matches"] = False
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
+    assert not bootstrap._install_ready(
+        direct_sync_root,
+        "direct-sync-relay-container-audit",
+        events_dir,
+    )
+    payload["field_layout_contract"]["production_layout_matches"] = True
+    report_path.write_text(json.dumps(payload), encoding="utf-8")
 
     stale_events_dir = tmp_path / "Users" / "kmtech-remote-admin" / "AppData" / "Local" / "KMTech" / "ContainerAudit" / "events"
     payload = json.loads(report_path.read_text(encoding="utf-8"))

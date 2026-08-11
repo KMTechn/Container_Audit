@@ -2,6 +2,7 @@
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
+    [switch]$AllowNoncanonicalLayoutForTest,
     [string]$ServerBaseUrl = "https://worker.kmtecherp.com",
     [string]$DataRoot = "",
     [string]$DirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit",
@@ -124,6 +125,22 @@ function Read-BoundedJson([string]$Path, [string]$Purpose) {
     return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
+function Write-Utf8JsonFile([string]$Path, $Payload) {
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+    $json = $Payload | ConvertTo-Json -Depth 20
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json + [System.Environment]::NewLine, $utf8NoBom)
+}
+
+function Test-SamePath([string]$Left, [string]$Right) {
+    $leftFull = [System.IO.Path]::GetFullPath($Left).TrimEnd('\')
+    $rightFull = [System.IO.Path]::GetFullPath($Right).TrimEnd('\')
+    return $leftFull.Equals($rightFull, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, [string]$AuthorizedManifestHash) {
     $runtimePath = Join-Path $ProgramDataRoot "status\direct_sync_relay_status.json"
     $deadline = (Get-Date).AddSeconds(120)
@@ -208,13 +225,80 @@ $manifestPath = if ($reuseExistingIdentity) { $ExistingProducerManifestPath } el
 $credentialPath = if ($reuseExistingIdentity) { $ExistingCredentialPath } else { Join-Path $DirectSyncRoot "credential.json" }
 $registrationReportPath = if ($reuseExistingIdentity) { $ExistingRegistrationReportPath } else { Join-Path $statusDir "worker_pc_registration.json" }
 $installReportPath = Join-Path $statusDir "container_audit_direct_sync_install.json"
+$expectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
+$expectedDirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit"
+$expectedTaskName = "direct-sync-relay-container-audit"
+$expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.vbs"
+$expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
+$actualInstallRoot = [System.IO.Path]::GetFullPath($packageRoot)
+$actualDirectSyncRoot = [System.IO.Path]::GetFullPath($DirectSyncRoot)
+$actualTaskLauncherPath = Join-Path $actualDirectSyncRoot ("bin\{0}.vbs" -f $TaskName)
+$actualStateDbPath = Join-Path $actualDirectSyncRoot "queue\direct_sync_relay.sqlite3"
+$installRootMatches = Test-SamePath $actualInstallRoot $expectedInstallRoot
+$directSyncRootMatches = Test-SamePath $actualDirectSyncRoot $expectedDirectSyncRoot
+$taskNameMatches = $TaskName -ceq $expectedTaskName
+$taskLauncherPathMatches = Test-SamePath $actualTaskLauncherPath $expectedTaskLauncherPath
+$stateDbPathMatches = Test-SamePath $actualStateDbPath $expectedStateDbPath
+$localTestOverrideEnabled = (
+    $AllowNoncanonicalLayoutForTest.IsPresent -and
+    [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq "1"
+)
+$productionLayoutMatches = (
+    $installRootMatches -and
+    $directSyncRootMatches -and
+    $taskNameMatches -and
+    $taskLauncherPathMatches -and
+    $stateDbPathMatches
+)
+$fieldLayoutContract = [ordered]@{
+    status = if ($productionLayoutMatches) { "PASS" } else { "MISMATCH" }
+    expected_install_root = $expectedInstallRoot
+    actual_install_root = $actualInstallRoot
+    expected_direct_sync_root = $expectedDirectSyncRoot
+    actual_direct_sync_root = $actualDirectSyncRoot
+    expected_task_name = $expectedTaskName
+    actual_task_name = $TaskName
+    expected_task_launcher_path = $expectedTaskLauncherPath
+    actual_task_launcher_path = $actualTaskLauncherPath
+    expected_state_db_path = $expectedStateDbPath
+    actual_state_db_path = $actualStateDbPath
+    install_root_matches = $installRootMatches
+    direct_sync_root_matches = $directSyncRootMatches
+    task_name_matches = $taskNameMatches
+    task_launcher_path_matches = $taskLauncherPathMatches
+    state_db_path_matches = $stateDbPathMatches
+    production_layout_matches = $productionLayoutMatches
+    local_test_override_requested = $AllowNoncanonicalLayoutForTest.IsPresent
+    local_test_override_enabled = $localTestOverrideEnabled
+    production_apply_allowed = $productionLayoutMatches
+}
 
 if ($DryRun.IsPresent) {
+    Write-Utf8JsonFile $installReportPath ([ordered]@{
+        report_version = "container-audit-one-step-field-layout-plan-v1"
+        status = "DRY_RUN"
+        apply = $false
+        uninstall = $false
+        field_layout_contract = $fieldLayoutContract
+    })
     Write-Output "install_status=DRY_RUN"
     Write-Output "package_root=$packageRoot"
     Write-Output "data_root=$DataRoot"
     Write-Output "direct_sync_root=$DirectSyncRoot"
+    Write-Output "install_report=$installReportPath"
     exit 0
+}
+
+if (-not $Uninstall.IsPresent -and -not $productionLayoutMatches -and -not $localTestOverrideEnabled) {
+    Write-Utf8JsonFile $installReportPath ([ordered]@{
+        report_version = "container-audit-one-step-field-layout-plan-v1"
+        status = "BLOCKED"
+        blocked_reason = if ($AllowNoncanonicalLayoutForTest.IsPresent) { "noncanonical layout override requires KMTECH_FACTORY_INSTALL_TEST_MODE=1" } else { "production install requires the canonical Container_Audit field layout" }
+        apply = $true
+        uninstall = $false
+        field_layout_contract = $fieldLayoutContract
+    })
+    throw "Production install requires C:\KMTech\Apps\Container_Audit\current and the fixed Container_Audit DirectSync layout. Report: $installReportPath"
 }
 
 if ($Uninstall.IsPresent) {
@@ -277,17 +361,22 @@ if ($reuseExistingIdentity) {
         throw "Existing producer manifest differs from its verified registration report."
     }
 }
-& $installExe `
-    --apply `
-    --confirm-production-install `
-    --app-root $packageRoot `
-    --program-data-root $DirectSyncRoot `
-    --producer-manifest-path $manifestPath `
-    --credential-path $credentialPath `
-    --scan-source-dir $eventDir `
-    --source-glob "*.csv" `
-    --task-name $TaskName `
-    --report-path $installReportPath
+$installArguments = @(
+    "--apply",
+    "--confirm-production-install",
+    "--app-root", $packageRoot,
+    "--program-data-root", $DirectSyncRoot,
+    "--producer-manifest-path", $manifestPath,
+    "--credential-path", $credentialPath,
+    "--scan-source-dir", $eventDir,
+    "--source-glob", "*.csv",
+    "--task-name", $TaskName,
+    "--report-path", $installReportPath
+)
+if ($AllowNoncanonicalLayoutForTest.IsPresent) {
+    $installArguments += "--allow-noncanonical-layout-for-test"
+}
+& $installExe @installArguments
 if ($LASTEXITCODE -ne 0) {
     throw "Container_Audit direct-sync installation failed. Report: $installReportPath"
 }
@@ -296,9 +385,16 @@ $report = Get-Content -LiteralPath $installReportPath -Raw -Encoding UTF8 | Conv
 if (
     [string]$report.status -cne "PASS" -or
     [string]$report.task_principal.mode -cne "system_service_account" -or
-    [string]$report.task_principal.run_user -cne "SYSTEM"
+    [string]$report.task_principal.run_user -cne "SYSTEM" -or
+    (
+        -not $localTestOverrideEnabled -and
+        (
+            $report.field_layout_contract.production_layout_matches -isnot [bool] -or
+            -not [bool]$report.field_layout_contract.production_layout_matches
+        )
+    )
 ) {
-    throw "Container_Audit install report did not prove the SYSTEM task contract."
+    throw "Container_Audit install report did not prove the SYSTEM task and canonical field-layout contract."
 }
 try {
     $relayStarted = (Get-Date).ToUniversalTime()

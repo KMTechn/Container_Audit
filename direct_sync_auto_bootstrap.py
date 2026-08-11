@@ -15,6 +15,9 @@ from typing import Any
 DEFAULT_SERVER_BASE_URL = "https://worker.kmtecherp.com"
 DEFAULT_ENDPOINT_PATH = "/api/producer-ingest/v1/source-file"
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
+CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
+CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
+NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
 RUNNER_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
@@ -200,6 +203,7 @@ def build_install_command(
     task_run_password_env: str = "",
     task_run_password_file: str = "",
     allow_interactive_task_for_local_test: bool = False,
+    allow_noncanonical_layout_for_test: bool = False,
 ) -> list[str]:
     root = Path(direct_sync_root).expanduser().resolve()
     selected_app_root = Path(app_root).expanduser().resolve()
@@ -242,6 +246,8 @@ def build_install_command(
         command.extend(["--task-run-password-file", task_run_password_file])
     if allow_interactive_task_for_local_test:
         command.append("--allow-interactive-task-for-local-test")
+    if allow_noncanonical_layout_for_test:
+        command.append("--allow-noncanonical-layout-for-test")
     return command
 
 
@@ -278,6 +284,12 @@ def _task_exists(task_name: str) -> bool:
 def _install_ready(root: Path, task_name: str, scan_source_dir: str | os.PathLike[str]) -> bool:
     report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
     if report.get("status") != "PASS":
+        return False
+    field_layout = report.get("field_layout_contract") or {}
+    if not (
+        field_layout.get("production_layout_matches") is True
+        or field_layout.get("local_test_override_enabled") is True
+    ):
         return False
     try:
         expected_root = str(root.resolve())
@@ -416,6 +428,7 @@ def run_direct_sync_auto_bootstrap(
     task_run_password_env: str = "",
     task_run_password_file: str = "",
     allow_interactive_task_for_local_test: bool = False,
+    allow_noncanonical_layout_for_test: bool = False,
 ) -> dict[str, Any]:
     root = Path(direct_sync_root).expanduser().resolve()
     status_path = root / "status" / "container_audit_direct_sync_auto_bootstrap.json"
@@ -429,6 +442,58 @@ def run_direct_sync_auto_bootstrap(
     }
     if os.name != "nt":
         report.update({"status": "SKIPPED", "reason": "direct-sync scheduled task install is Windows-only"})
+        _write_json(status_path, report)
+        return report
+
+    selected_app_root = Path(app_root).expanduser().resolve()
+    expected_launcher = Path(CANONICAL_DIRECT_SYNC_ROOT) / "bin" / f"{DEFAULT_TASK_NAME}.vbs"
+    actual_launcher = root / "bin" / f"{task_name}.vbs"
+    expected_state_db = Path(CANONICAL_DIRECT_SYNC_ROOT) / "queue" / "direct_sync_relay.sqlite3"
+    actual_state_db = root / "queue" / "direct_sync_relay.sqlite3"
+    same_path = lambda left, right: os.path.normcase(str(Path(left).resolve())) == os.path.normcase(
+        str(Path(right).resolve())
+    )
+    matches = {
+        "install_root_matches": same_path(selected_app_root, CANONICAL_INSTALL_ROOT),
+        "direct_sync_root_matches": same_path(root, CANONICAL_DIRECT_SYNC_ROOT),
+        "task_name_matches": task_name == DEFAULT_TASK_NAME,
+        "task_launcher_path_matches": same_path(actual_launcher, expected_launcher),
+        "state_db_path_matches": same_path(actual_state_db, expected_state_db),
+    }
+    production_layout_matches = all(matches.values())
+    local_test_override_enabled = (
+        allow_noncanonical_layout_for_test
+        and os.environ.get(NONCANONICAL_LAYOUT_TEST_MODE_ENV, "").strip() == "1"
+    )
+    report["field_layout_contract"] = {
+        "status": "PASS" if production_layout_matches else "MISMATCH",
+        "expected_install_root": CANONICAL_INSTALL_ROOT,
+        "actual_install_root": str(selected_app_root),
+        "expected_direct_sync_root": CANONICAL_DIRECT_SYNC_ROOT,
+        "actual_direct_sync_root": str(root),
+        "expected_task_name": DEFAULT_TASK_NAME,
+        "actual_task_name": task_name,
+        "expected_task_launcher_path": str(expected_launcher),
+        "actual_task_launcher_path": str(actual_launcher),
+        "expected_state_db_path": str(expected_state_db),
+        "actual_state_db_path": str(actual_state_db),
+        **matches,
+        "production_layout_matches": production_layout_matches,
+        "local_test_override_requested": allow_noncanonical_layout_for_test,
+        "local_test_override_enabled": local_test_override_enabled,
+        "production_apply_allowed": production_layout_matches,
+    }
+    if not production_layout_matches and not local_test_override_enabled:
+        report.update(
+            {
+                "status": "BLOCKED",
+                "reason": (
+                    f"noncanonical layout override requires {NONCANONICAL_LAYOUT_TEST_MODE_ENV}=1"
+                    if allow_noncanonical_layout_for_test
+                    else "production bootstrap requires the canonical Container_Audit field layout"
+                ),
+            }
+        )
         _write_json(status_path, report)
         return report
 
@@ -465,6 +530,7 @@ def run_direct_sync_auto_bootstrap(
         task_run_password_env=task_run_password_env,
         task_run_password_file=task_run_password_file,
         allow_interactive_task_for_local_test=allow_interactive_task_for_local_test,
+        allow_noncanonical_layout_for_test=allow_noncanonical_layout_for_test,
     )
     report["install_command_redacted"] = install_command
     if not install_command:
@@ -503,6 +569,10 @@ def start_direct_sync_auto_bootstrap(
         "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_INTERACTIVE_TASK_FOR_LOCAL_TEST",
         "",
     ).strip().lower() in {"1", "true", "yes", "on"}
+    allow_noncanonical_layout_for_test = os.environ.get(
+        "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_NONCANONICAL_LAYOUT_FOR_TEST",
+        "",
+    ).strip().lower() in {"1", "true", "yes", "on"}
     task_run_user = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_USER", "").strip()
     task_run_password_env = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_ENV", "").strip()
     task_run_password_file = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_FILE", "").strip()
@@ -523,6 +593,7 @@ def start_direct_sync_auto_bootstrap(
             "task_run_password_env": task_run_password_env,
             "task_run_password_file": task_run_password_file,
             "allow_interactive_task_for_local_test": allow_interactive_task_for_local_test,
+            "allow_noncanonical_layout_for_test": allow_noncanonical_layout_for_test,
         },
         name="direct-sync-bootstrap-container-audit",
         daemon=True,
