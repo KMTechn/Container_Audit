@@ -78,6 +78,9 @@ DENIED_UPDATE_ARCHIVE_BASENAME_PATTERNS = (
 REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
     {
         "Container_Audit/Container_Audit.exe",
+        "Container_Audit/KMTechActiveWorkProbe.exe",
+        "Container_Audit/KMTechActiveWorkProbe.independent.build-identity.json",
+        "Container_Audit/KMTechActiveWorkProbe.integrated.build-identity.json",
         "Container_Audit/assets/Item.csv",
         "Container_Audit/assets/logo.ico",
         "Container_Audit/assets/logo.png",
