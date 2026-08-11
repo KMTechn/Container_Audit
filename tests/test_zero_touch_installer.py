@@ -95,6 +95,7 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "TaskRunPassword" not in text
     assert "Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop" in text
     assert "Remove-NewMachineProfilesFromRegistrationReport" in text
+    assert r'KMTech\Logistics\profiles\Container_Audit' in text
     assert "created_paths" in text
     assert "Unregister-ScheduledTask -TaskName $TaskName" in text
     assert "persisted_manifest_hash_verified" in text

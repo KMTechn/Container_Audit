@@ -26,7 +26,13 @@ TEST1_ISOLATED_LEGACY_OVERRIDE_ENV = (
 DPAPI_REFERENCE_PREFIX = "dpapi:"
 DEFAULT_TOKEN_REF = "dpapi:secrets/bearer-token.dpapi"
 DPAPI_ENTROPY = b"KMTech Logistics Runtime Profile v1"
-DEFAULT_PROFILE_RELATIVE_PATH = Path("KMTech") / "Logistics" / "runtime-profile.json"
+DEFAULT_PROFILE_RELATIVE_PATH = (
+    Path("KMTech")
+    / "Logistics"
+    / "profiles"
+    / "Container_Audit"
+    / "runtime-profile.json"
+)
 SUPPORTED_LEDGER_PLANES = frozenset({"AUTHORITATIVE", "SHADOW_CANDIDATE"})
 MAX_PROFILE_BYTES = 64 * 1024
 MAX_SECRET_BYTES = 64 * 1024
@@ -340,6 +346,12 @@ def _runtime_environment(
         return os.environ
     machine_path = _machine_environment_value(PROFILE_PATH_ENV)
     machine_required = _machine_environment_value(REQUIRED_ENV)
+    canonical_path = _canonical_machine_profile_path()
+    if canonical_path.is_file():
+        # Corrective Factory Contract releases use an app-scoped profile.  A
+        # pre-1.0.3 machine-wide path remains a supported read-only fallback
+        # only until the scoped enrollment profile has been installed.
+        machine_path = str(canonical_path)
     if machine_path or machine_required:
         # Machine values are an authoritative group. Never borrow a process
         # override to complete or replace a partial machine configuration.
@@ -349,6 +361,10 @@ def _runtime_environment(
             "PROGRAMDATA": r"C:\ProgramData",
         }
     return os.environ
+
+
+def _canonical_machine_profile_path() -> Path:
+    return Path(r"C:\ProgramData") / DEFAULT_PROFILE_RELATIVE_PATH
 
 
 def default_logistics_profile_path(

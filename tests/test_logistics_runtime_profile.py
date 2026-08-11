@@ -70,9 +70,14 @@ def _env(monkeypatch, profile_path):
     monkeypatch.setenv("KM_LOGISTICS_PROFILE_PATH", str(profile_path))
 
 
-def test_default_profile_path_matches_shared_four_app_contract(tmp_path):
+def test_default_profile_path_is_container_audit_scoped(tmp_path):
     assert default_logistics_profile_path({"PROGRAMDATA": str(tmp_path)}) == (
-        tmp_path / "KMTech" / "Logistics" / "runtime-profile.json"
+        tmp_path
+        / "KMTech"
+        / "Logistics"
+        / "profiles"
+        / "Container_Audit"
+        / "runtime-profile.json"
     )
 
 
@@ -525,6 +530,27 @@ def test_hklm_machine_profile_ignores_process_path_override(tmp_path, monkeypatc
     assert resolved is not None
     assert resolved.base_url == "https://logistics.example.invalid"
     assert resolved.required is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Machine environment trust boundary")
+def test_scoped_profile_supersedes_legacy_machine_profile_path(tmp_path, monkeypatch):
+    scoped = _profile(tmp_path / "scoped-profile")
+    legacy = _profile(tmp_path / "legacy-profile", base_url="https://legacy.invalid")
+    monkeypatch.setattr(runtime_module, "_canonical_machine_profile_path", lambda: scoped)
+    monkeypatch.setattr(
+        runtime_module,
+        "_machine_environment_value",
+        lambda name: {
+            "KM_LOGISTICS_PROFILE_PATH": str(legacy),
+            "KM_LOGISTICS_REQUIRED": "1",
+        }.get(name, ""),
+    )
+
+    resolved = load_logistics_runtime_profile(decryptor=lambda _value: "scoped-secret")
+
+    assert resolved is not None
+    assert resolved.profile_path == str(scoped.resolve())
+    assert resolved.base_url == "https://logistics.example.invalid"
 
 
 def test_required_startup_performs_authenticated_capability_probe(tmp_path, monkeypatch):

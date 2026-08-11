@@ -96,7 +96,7 @@ function Remove-NewMachineProfilesFromRegistrationReport([string]$RegistrationRe
         return
     }
     $programData = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonApplicationData)
-    $profileRoot = Join-Path $programData "KMTech\Logistics"
+    $profileRoot = Join-Path $programData "KMTech\Logistics\profiles\Container_Audit"
     $allowed = @(
         [System.IO.Path]::GetFullPath((Join-Path $profileRoot "runtime-profile.json")),
         [System.IO.Path]::GetFullPath((Join-Path $profileRoot "secrets\bearer-token.dpapi"))
