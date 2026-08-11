@@ -97,7 +97,7 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
         def json(self):
             return {
                 "status": "enrolled",
-                "producer_id": "producer-pc-02",
+                "producer_id": "server-producer-pc-02",
                 "key_id": "server-key-pc-02",
                 "secret": "server-issued-secret-pc-02",
                 "secret_fingerprint_sha256": "f" * 64,
@@ -105,8 +105,8 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
                     registration.manifest_hash(captured["json"]["manifest"])
                 ],
                 "server_binding": {
-                    "producer_manifest_path": "/var/lib/worker-analysis/producers/producer-pc-02/producer_manifest.json",
-                    "registry_path": "/var/lib/worker-analysis/producers/producer-pc-02/source_registry.json",
+                    "producer_manifest_path": "/var/lib/worker-analysis/producers/server-producer-pc-02/producer_manifest.json",
+                    "registry_path": "/var/lib/worker-analysis/producers/server-producer-pc-02/source_registry.json",
                 },
             }
 
@@ -153,12 +153,16 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     assert report["manifest_hash"] == registration.manifest_hash(captured["json"]["manifest"])
     assert report["secret_bootstrap_verified"] is True
     assert report["raw_secret_written"] is False
-    assert credential["producer_id"] == "producer-pc-02"
+    assert report["producer_id"] == "server-producer-pc-02"
+    assert report["key_id"] == "server-key-pc-02"
+    assert credential["producer_id"] == "server-producer-pc-02"
     assert credential["key_id"] == "server-key-pc-02"
     assert "secret" not in credential
     assert captured["url"] == "https://worker.example.invalid/api/producer-ingest/v1/enroll"
     assert captured["headers"]["X-Producer-Enrollment-Token"] == "install-token"
     assert captured["json"]["contract_version"] == "producer-self-enrollment-v1"
+    assert captured["json"]["producer_id"] == "container-audit-pc-02"
+    assert captured["json"]["key_id"] == "install-request-key-pc-02"
     assert captured["json"]["manifest"]["schema_version"] == "producer-onboarding-manifest-v1"
     assert captured["wincred_target"] == "KMTech.DirectSync.ContainerAudit.PC-02"
     assert captured["wincred_secret"] == "server-issued-secret-pc-02"

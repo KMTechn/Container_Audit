@@ -9,7 +9,6 @@ import ctypes
 import datetime as _dt
 import json
 import os
-import secrets
 import socket
 import sys
 import uuid
@@ -578,6 +577,8 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
             secret_ref_target,
         )
         report.update(enrollment_report)
+        report["producer_id"] = credential["producer_id"]
+        report["key_id"] = credential["key_id"]
         report["status"] = "SELF_ENROLLMENT_REGISTERED"
         report["next_required_external_step"] = "Run direct-sync relay and verify upload receipt."
     return manifest, credential, report
