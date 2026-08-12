@@ -681,18 +681,22 @@ def _normalized_archive_path(member_name: str) -> str:
 
 
 def _validate_archive_path_collisions(file_names: list[str]) -> None:
-    normalized_seen: set[str] = set()
+    normalized_kinds: dict[str, bool] = {}
     normalized_files: set[str] = set()
     normalized_entries: set[str] = set()
     for name in file_names:
         normalized = _normalized_archive_path(name)
         if not normalized:
             continue
-        if normalized in normalized_seen:
+        is_directory = name.endswith("/")
+        prior_kind = normalized_kinds.get(normalized)
+        if prior_kind is not None and prior_kind != is_directory:
+            raise ValueError("업데이트 ZIP에 파일/폴더 경로 충돌이 포함되어 있습니다.")
+        if prior_kind is not None:
             raise ValueError("업데이트 ZIP에 중복 경로가 포함되어 있습니다.")
-        normalized_seen.add(normalized)
+        normalized_kinds[normalized] = is_directory
         normalized_entries.add(normalized)
-        if not name.endswith("/"):
+        if not is_directory:
             normalized_files.add(normalized)
 
     for file_path in normalized_files:

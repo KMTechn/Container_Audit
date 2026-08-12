@@ -61,19 +61,17 @@ def test_authoritative_pyinstaller_paths_include_factory_contract_data():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
+    verifier = (ROOT / "tools" / "verify_frozen_release_artifact.py").read_text(
+        encoding="utf-8"
+    )
 
     assert (
         "('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle')"
         in spec
     )
     assert "('contract.lock.json', '.')" in spec
-    assert (
-        '--add-data "kmtech_factory_contracts/bundle;kmtech_factory_contracts/bundle"'
-        in workflow
-    )
-    assert '--add-data "contract.lock.json;."' in workflow
-    assert "kmtech_factory_contracts.build_cli prepare" in workflow
-    assert '--add-data "build/factory_contract_identity/build-identity.json;."' in workflow
-    assert '--add-data "build/factory_contract_identity/build-compatibility.json;."' in workflow
-    assert "kmtech_factory_contracts.build_cli manifest" in workflow
-    assert "kmtech_factory_contracts.build_cli verify" in workflow
+    assert "PyInstaller" not in workflow
+    assert "build_cli prepare" not in workflow
+    assert "build_cli manifest" not in workflow
+    assert "verify_staged_package" in verifier
+    assert "expected_contract_sha256=expected_contract_sha256" in verifier

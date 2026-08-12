@@ -686,6 +686,20 @@ def test_update_service_rejects_file_directory_archive_collisions(tmp_path):
     assert not (tmp_path / "extracted" / "Container_Audit").exists()
 
 
+def test_update_service_rejects_explicit_directory_file_collision(tmp_path):
+    zip_path = tmp_path / "explicit-directory-file-collision.zip"
+    directory = zipfile.ZipInfo("Container_Audit/tools/")
+    directory.external_attr = (stat.S_IFDIR | 0o755) << 16
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        zip_ref.writestr(directory, b"")
+        zip_ref.writestr("Container_Audit/tools", b"not-a-directory")
+
+    with pytest.raises(ValueError, match="파일/폴더 경로 충돌"):
+        update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+    assert not (tmp_path / "extracted" / "Container_Audit").exists()
+
+
 def test_update_service_rejects_zip_symlink_members(tmp_path):
     zip_path = tmp_path / "symlink.zip"
     link = zipfile.ZipInfo("Container_Audit/link")
@@ -694,6 +708,21 @@ def test_update_service_rejects_zip_symlink_members(tmp_path):
         zip_ref.writestr("Container_Audit/Container_Audit.exe", b"exe")
         zip_ref.writestr("Container_Audit/tools/direct_sync_relay_runner.py", b"runner")
         zip_ref.writestr(link, "target")
+
+    with pytest.raises(ValueError, match="링크 항목"):
+        update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+    assert not (tmp_path / "extracted" / "Container_Audit").exists()
+
+
+def test_update_service_rejects_zip_symlink_directory_members(tmp_path):
+    zip_path = tmp_path / "symlink-directory.zip"
+    link = zipfile.ZipInfo("Container_Audit/link/")
+    link.create_system = 3
+    link.external_attr = (stat.S_IFLNK | 0o777) << 16
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        _write_required_update_members(zip_ref)
+        zip_ref.writestr(link, b"")
 
     with pytest.raises(ValueError, match="링크 항목"):
         update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
@@ -718,6 +747,32 @@ def test_update_service_rejects_windows_unsafe_archive_members(tmp_path, member_
         zip_ref.writestr("Container_Audit/Container_Audit.exe", b"exe")
         zip_ref.writestr("Container_Audit/tools/direct_sync_relay_runner.py", b"runner")
         zip_ref.writestr(member_name, b"unsafe")
+
+    with pytest.raises(ValueError, match="Windows 파일명|안전하지 않은 경로"):
+        update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+    assert not (tmp_path / "extracted" / "Container_Audit").exists()
+
+
+@pytest.mark.parametrize(
+    "member_name",
+    [
+        "Container_Audit/CON/",
+        "Container_Audit/tools/bad:name/",
+        "Container_Audit/tools/trailing-dot./",
+        "Container_Audit/tools/trailing-space /",
+        "Container_Audit/tools/control-\x01/",
+    ],
+)
+def test_update_service_rejects_windows_unsafe_archive_directories(
+    tmp_path, member_name
+):
+    zip_path = tmp_path / "windows-unsafe-directory.zip"
+    directory = zipfile.ZipInfo(member_name)
+    directory.external_attr = (stat.S_IFDIR | 0o755) << 16
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        _write_required_update_members(zip_ref)
+        zip_ref.writestr(directory, b"")
 
     with pytest.raises(ValueError, match="Windows 파일명|안전하지 않은 경로"):
         update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
@@ -777,3 +832,17 @@ def test_update_service_rejects_unsafe_zip_members(tmp_path, member_name):
         update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
 
     assert not (tmp_path / "evil.txt").exists()
+
+
+@pytest.mark.parametrize("member_name", ["../evil/", "Container_Audit/../../evil/"])
+def test_update_service_rejects_unsafe_zip_directories(tmp_path, member_name):
+    zip_path = tmp_path / "unsafe-directory.zip"
+    directory = zipfile.ZipInfo(member_name)
+    directory.external_attr = (stat.S_IFDIR | 0o755) << 16
+    with zipfile.ZipFile(zip_path, "w") as zip_ref:
+        zip_ref.writestr(directory, b"")
+
+    with pytest.raises(ValueError, match="안전하지 않은 경로"):
+        update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+    assert not (tmp_path / "evil").exists()

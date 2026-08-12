@@ -25,31 +25,30 @@ def test_release_contract_contains_source_free_protected_admin_bundle() -> None:
         ROOT / ".github" / "workflows" / "release.yml"
     ).read_text(encoding="utf-8")
 
-    # Full CI owns regression signals only. Rebuilding the release bundle here
-    # would duplicate the exact-SHA release gate without adding a unique signal.
+    # Full CI owns regression observation only. Rebuilding the release bundle
+    # there would duplicate the locally qualified artifact without a unique signal.
     assert "python -m pytest" in ci_workflow
     assert "PyInstaller" not in ci_workflow
     assert "tools/install_protected_admin.py" not in ci_workflow
 
-    # The source-free installer and its runtime checks are release-artifact
-    # contracts, so they run once after the exact-SHA Full CI succeeds.
-    assert "Require successful exact-SHA main Full CI" in release_workflow
-    assert "-f status=completed" in release_workflow
-    assert "-f status=success" not in release_workflow
-    assert "if ($matches.Count -ne 1)" in release_workflow
-    assert "$run.run_attempt -ne 1" in release_workflow
-    assert '$run.conclusion -cne "success"' in release_workflow
+    # The tag workflow observes hosted CI without gating, then verifies the
+    # already qualified source-free package without rebuilding its payloads.
+    hosted_step_name = "- name: Record hosted CI status without release gating"
+    assert hosted_step_name in release_workflow
+    hosted_step = release_workflow[
+        release_workflow.index(hosted_step_name) :
+        release_workflow.index("- name: Check release version")
+    ]
+    assert "-f status=completed" not in hosted_step
+    assert "WAIVED_NOT_TESTED" in hosted_step
+    assert "hosted_ci_observation=" in hosted_step
+    assert "run_attempt" in hosted_step
+    assert "conclusion" in hosted_step
+    assert "throw" not in hosted_step.lower()
     assert "python -m pytest" not in release_workflow
-    assert (
-        f'--name "{INSTALLER_NAME.removesuffix(".exe")}" --onefile --console'
-        in release_workflow
-    )
-    assert "tools/install_protected_admin.py" in release_workflow
-    assert f"dist/Container_Audit/{INSTALLER_NAME} --help" in release_workflow
-    assert f"dist/Container_Audit/{INSTALLER_NAME} --dry-run" in release_workflow
-    assert f"dist/Container_Audit/{ACL_SCRIPT_NAME} -DryRun" in release_workflow
-    assert "tools/provision_protected_admin_acl.ps1" in release_workflow
-    assert "docs/PROTECTED_ADMIN_PROVISIONING.md" in release_workflow
+    assert "PyInstaller" not in release_workflow
+    assert "tools/install_protected_admin.py" not in release_workflow
+    assert "tools/verify_frozen_release_artifact.py" in release_workflow
 
 
 def test_acl_wrapper_never_accepts_or_transports_the_protected_code() -> None:

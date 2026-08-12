@@ -121,16 +121,16 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "KMTECH_FACTORY_INSTALL_TEST_MODE" in text
 
 
-def test_release_stages_common_installer_entrypoint():
+def test_frozen_release_requires_common_installer_entrypoint():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
     )
+    verifier = (ROOT / "tools" / "verify_frozen_release_artifact.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert (
-        "Copy-Item -LiteralPath INSTALL_THIS_PC.ps1 "
-        "-Destination dist/Container_Audit/INSTALL_THIS_PC.ps1"
-    ) in workflow
-    assert '"Container_Audit/INSTALL_THIS_PC.ps1"' in workflow
+    assert "PyInstaller" not in workflow
+    assert "safe_extract_update_zip" in verifier
     assert "Container_Audit/INSTALL_THIS_PC.ps1" in update_service.REQUIRED_UPDATE_ARCHIVE_FILES
 
 
