@@ -120,10 +120,12 @@ def test_pyinstaller_spec_includes_runtime_client_data_boundary():
             datas = set(ast.literal_eval(datas_keyword.value))
             break
     assert datas is not None
-    workflow_datas = {
-        tuple(value.split(";", 1))
-        for value in re.findall(r'--add-data "([^"]+)"', release_text)
-    }
+    workflow_datas = set()
+    for value in re.findall(r'--add-data "([^"]+)"', release_text):
+        source, destination = value.split(";", 1)
+        if source == "$probeBundleSource":
+            source = "kmtech_factory_contracts/bundle"
+        workflow_datas.add((source, destination))
     assert datas == workflow_datas
     assert "name='Container_Audit'" in spec_text
     assert "console=False" in spec_text

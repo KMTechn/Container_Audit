@@ -222,6 +222,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $probeBundleSource = (Resolve-Path -LiteralPath "kmtech_factory_contracts/bundle").Path
           python -m PyInstaller `
             --paths . `
             --name "KMTechActiveWorkProbe" `
@@ -230,7 +231,7 @@ jobs:
             --distpath dist/Container_Audit `
             --workpath build/active_work_probe_pyinstaller `
             --specpath build/active_work_probe_pyinstaller `
-            --add-data "kmtech_factory_contracts/bundle;kmtech_factory_contracts/bundle" `
+            --add-data "$probeBundleSource;kmtech_factory_contracts/bundle" `
             --collect-submodules kmtech_factory_contracts.active_work_probe `
             --clean `
             --noupx `
