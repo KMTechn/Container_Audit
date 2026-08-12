@@ -86,3 +86,10 @@ def test_frozen_candidate_builder_powershell_parses():
         capture_output=True,
         text=True,
     )
+
+
+def test_git_output_helpers_accept_a_clean_status_with_no_stdout():
+    script = BUILDER.read_text(encoding="utf-8")
+
+    assert script.count('return (([string[]]$value) -join "`n").Trim()') == 2
+    assert "return ([string]$value).Trim()" not in script

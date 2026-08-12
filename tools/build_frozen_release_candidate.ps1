@@ -46,7 +46,10 @@ function Get-GitValue {
     if ($LASTEXITCODE -ne 0) {
         throw "Git command failed: git $($Arguments -join ' ')"
     }
-    return ([string]$value).Trim()
+    # Native commands with no stdout produce $null under PowerShell 7.  Cast to
+    # a string array before joining so a clean `git status --porcelain` is the
+    # exact empty string instead of a null-method failure.
+    return (([string[]]$value) -join "`n").Trim()
 }
 
 function Get-GitValueAt {
@@ -58,7 +61,7 @@ function Get-GitValueAt {
     if ($LASTEXITCODE -ne 0) {
         throw "Git command failed in $Repository`: git $($Arguments -join ' ')"
     }
-    return ([string]$value).Trim()
+    return (([string[]]$value) -join "`n").Trim()
 }
 
 function Get-NormalizedLocalOriginPath {
