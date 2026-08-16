@@ -1433,10 +1433,16 @@ def test_runtime_lost_ack_retry_reuses_same_batch_and_idempotency_after_stale_le
     assert retry["stale_leases_reset"] == 1
     first_metadata = json.loads(committed_but_unacked.calls[0]["metadata"])
     retry_metadata = json.loads(retry_session.calls[0]["metadata"])
+    assert retry_metadata == first_metadata
     assert first_metadata["client_batch_id"] == retry_metadata["client_batch_id"] == claimed.relay_id
     assert first_metadata["idempotency_key"] == retry_metadata["idempotency_key"]
     assert first_metadata["content_sha256"] == retry_metadata["content_sha256"]
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+    with sqlite3.connect(config.db_path) as conn:
+        persisted = conn.execute(
+            "SELECT relay_id, spooled_file_path, attempt_count FROM direct_sync_relay_batches"
+        ).fetchone()
+    assert persisted == (claimed.relay_id, claimed.spooled_file_path, 2)
 
 
 def test_runtime_twenty_container_audit_pcs_same_korean_filename_lost_ack_replay_preserves_https_identity_scope(tmp_path):

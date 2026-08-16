@@ -7,13 +7,18 @@ from pathlib import Path
 
 import pytest
 
+import direct_sync_push as direct_sync_push_module
+import direct_sync_runtime
 from direct_sync_push import (
     RELAY_STATUS_ACKED,
     RELAY_STATUS_FAILED_PERMANENT,
+    RELAY_STATUS_LEASED,
     RELAY_STATUS_OPERATOR_REVIEW,
     RELAY_STATUS_PENDING,
+    claim_next_relay_batch,
     relay_queue_status,
 )
+from producer_runtime_client import RuntimePreparation
 import tools.direct_sync_relay_runner as runner_module
 from tools.direct_sync_relay_runner import main
 
@@ -117,6 +122,63 @@ def source_scan_state(db_path, source_file):
         conn.close()
 
 
+class AcceptedReceiptResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class AcceptedReceiptSession:
+    def __init__(self):
+        self.calls = []
+
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
+        metadata = json.loads(data["metadata"])
+        _file_name, file_handle, _content_type = files["file"]
+        self.calls.append({"metadata": metadata, "file_bytes": file_handle.read()})
+        request_id = f"request-{metadata['client_batch_id']}"
+        return AcceptedReceiptResponse(
+            {
+                "request_id": request_id,
+                "upload_id": request_id,
+                "client_batch_id": metadata["client_batch_id"],
+                "server_source_file_id": (
+                    f"{metadata['source_host_id']}/{metadata['producer_role']}/"
+                    f"{metadata['stream_name']}/{metadata['relative_path']}"
+                ),
+                "committed": True,
+                "status": "accepted",
+                "retryable": False,
+                "next_retry_after": None,
+                "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
+            }
+        )
+
+
+def install_receipt_test_runtime(monkeypatch, session):
+    monkeypatch.setattr(
+        direct_sync_push_module,
+        "prepare_runtime_metadata",
+        lambda **kwargs: RuntimePreparation(metadata=dict(kwargs["metadata"])),
+    )
+    monkeypatch.setattr(direct_sync_push_module, "client_runtime_lease_mode", lambda _credentials: "observe")
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **_kwargs: RuntimePreparation(),
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "run_relay_once",
+        lambda config, **kwargs: direct_sync_runtime.run_relay_once(config, session=session, **kwargs),
+    )
+
+
 def test_runner_scan_source_dir_enqueues_matching_csv_idempotently(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
@@ -178,6 +240,204 @@ def test_runner_scan_source_defers_lock_younger_than_writer_stale_threshold(tmp_
     assert "direct_sync_relay_status=scan_no_new_rows" in output
     assert "direct_sync_scan_enqueued_count=0" in output
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
+
+
+def test_runner_enqueue_commit_acknowledgement_loss_preserves_exact_row_and_spool(
+    tmp_path, capsys, monkeypatch
+):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    original_size = csv_path.stat().st_size
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+    original_connect = direct_sync_push_module._connect_relay_db
+    loss = {"armed": True}
+
+    class CommitAcknowledgementLossConnection:
+        def __init__(self, inner):
+            self._inner = inner
+            self._inserted_relay = False
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+        def execute(self, statement, parameters=()):
+            if "insert into direct_sync_relay_batches" in " ".join(statement.lower().split()):
+                self._inserted_relay = True
+            return self._inner.execute(statement, parameters)
+
+        def commit(self):
+            self._inner.commit()
+            if self._inserted_relay and loss["armed"]:
+                loss["armed"] = False
+                raise sqlite3.OperationalError("simulated enqueue commit acknowledgement loss")
+
+    monkeypatch.setattr(
+        direct_sync_push_module,
+        "_connect_relay_db",
+        lambda db_path: CommitAcknowledgementLossConnection(original_connect(db_path)),
+    )
+
+    assert main(args) == 0
+    assert "direct_sync_relay_status=enqueued" in capsys.readouterr().out
+    committed_rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(committed_rows) == 1
+    relay_id = committed_rows[0]["relay_id"]
+    assert committed_rows[0]["status"] == RELAY_STATUS_PENDING
+    committed_spool = Path(committed_rows[0]["spooled_file_path"])
+    committed_payload = committed_spool.read_bytes()
+    assert hashlib.sha256(committed_payload).hexdigest() == committed_rows[0]["content_sha256"]
+    assert len(committed_payload) == committed_rows[0]["byte_length"]
+    original_hash = hashlib.sha256(csv_path.read_bytes()).hexdigest()
+    assert committed_rows[0]["relative_path"].replace("\\", "/").endswith(
+        f"/bytes-0-{original_size}-sha256-{original_hash[:16]}.csv"
+    )
+
+    with csv_path.open("a", encoding="utf-8") as file:
+        file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
+    appended_size = csv_path.stat().st_size
+
+    monkeypatch.setattr(direct_sync_push_module, "_connect_relay_db", original_connect)
+    session = AcceptedReceiptSession()
+    install_receipt_test_runtime(monkeypatch, session)
+    credentials = direct_sync_runtime.load_credentials_from_json(tmp_path / "credential.json")
+
+    result = direct_sync_push_module.drain_one_relay_batch(
+        db_path=tmp_path / "relay.sqlite3",
+        credentials=credentials,
+        session=session,
+        status_dir=tmp_path / "status",
+        target_relay_id=relay_id,
+    )
+
+    assert result is not None
+    assert result.success is True
+    assert len(session.calls) == 1
+    assert session.calls[0]["metadata"]["client_batch_id"] == relay_id
+    assert session.calls[0]["file_bytes"] == committed_payload
+    drained_rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(drained_rows) == 1
+    assert drained_rows[0]["relay_id"] == relay_id
+    assert drained_rows[0]["status"] == RELAY_STATUS_ACKED
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+    assert "direct_sync_relay_status=enqueued" in output
+    recovered_rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(recovered_rows) == 2
+    assert recovered_rows[0]["relay_id"] == relay_id
+    assert recovered_rows[0]["status"] == RELAY_STATUS_ACKED
+    assert recovered_rows[1]["status"] == RELAY_STATUS_PENDING
+    assert f"/bytes-{original_size}-{appended_size}-" in recovered_rows[1][
+        "relative_path"
+    ].replace("\\", "/")
+    appended_payload = Path(recovered_rows[1]["spooled_file_path"]).read_text(
+        encoding="utf-8"
+    )
+    assert "BC-2" in appended_payload
+    assert "BC-1" not in appended_payload
+    assert len(session.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("lease_expires_at", "damage", "expect_repaired"),
+    [
+        ("2000-01-01T00:00:00Z", "missing", True),
+        ("2000-01-01T00:00:00Z", "corrupt", True),
+        ("2999-01-01T00:00:00Z", "missing", False),
+        ("2999-01-01T00:00:00Z", "corrupt", False),
+    ],
+    ids=["stale-missing", "stale-corrupt", "active-missing", "active-corrupt"],
+)
+def test_runner_repairs_damaged_leased_delta_before_scanning_appended_rows(
+    tmp_path, capsys, monkeypatch, lease_expires_at, damage, expect_repaired
+):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    original_size = csv_path.stat().st_size
+    args = runner_args(tmp_path, scan_dir=sync_dir)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    first = relay_rows(tmp_path / "relay.sqlite3")[0]
+    relay_id = first["relay_id"]
+    original_spool = Path(first["spooled_file_path"])
+    original_payload = original_spool.read_bytes()
+    claimed = claim_next_relay_batch(
+        db_path=tmp_path / "relay.sqlite3",
+        worker_id="active-worker",
+        lease_seconds=60,
+        now="2099-01-01T00:00:00Z",
+    )
+    assert claimed is not None
+    with sqlite3.connect(tmp_path / "relay.sqlite3") as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET lease_expires_at = ? WHERE relay_id = ?",
+            (lease_expires_at, relay_id),
+        )
+        conn.commit()
+        before = dict(
+            conn.execute(
+                "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+                (relay_id,),
+            ).fetchone()
+        )
+    if damage == "missing":
+        original_spool.unlink()
+        damaged_payload = None
+    else:
+        damaged_payload = b"X" * len(original_payload)
+        original_spool.write_bytes(damaged_payload)
+    with csv_path.open("a", encoding="utf-8") as file:
+        file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
+    appended_size = csv_path.stat().st_size
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+    rows = relay_rows(tmp_path / "relay.sqlite3")
+    after = dict(next(row for row in rows if row["relay_id"] == relay_id))
+
+    if expect_repaired:
+        assert "direct_sync_relay_status=enqueued" in output
+        assert "direct_sync_scan_enqueued_count=1" in output
+        assert len(rows) == 2
+        assert after["status"] == RELAY_STATUS_PENDING
+        assert after["lease_owner"] is None
+        assert after["lease_expires_at"] is None
+        assert after["attempt_count"] == 1
+        assert after["metadata_json"] == before["metadata_json"]
+        assert original_spool.read_bytes() == original_payload
+        appended = next(row for row in rows if row["relay_id"] != relay_id)
+        assert appended["status"] == RELAY_STATUS_PENDING
+        assert f"/bytes-{original_size}-{appended_size}-" in appended[
+            "relative_path"
+        ].replace("\\", "/")
+
+        session = AcceptedReceiptSession()
+        install_receipt_test_runtime(monkeypatch, session)
+        credentials = direct_sync_runtime.load_credentials_from_json(tmp_path / "credential.json")
+        result = direct_sync_push_module.drain_one_relay_batch(
+            db_path=tmp_path / "relay.sqlite3",
+            credentials=credentials,
+            session=session,
+            status_dir=tmp_path / "status",
+            target_relay_id=relay_id,
+        )
+        assert result is not None
+        assert result.success is True
+        assert session.calls[0]["metadata"]["client_batch_id"] == relay_id
+        assert session.calls[0]["file_bytes"] == original_payload
+    else:
+        assert "direct_sync_relay_status=scan_no_new_rows" in output
+        assert "direct_sync_scan_enqueued_count=0" in output
+        assert len(rows) == 1
+        assert after == before
+        assert after["status"] == RELAY_STATUS_LEASED
+        if damage == "missing":
+            assert not original_spool.exists()
+        else:
+            assert original_spool.read_bytes() == damaged_payload
+        assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
 
 
 def test_runner_scan_source_deleted_after_eligibility_defers_without_crash(tmp_path, capsys, monkeypatch):
@@ -566,7 +826,7 @@ def test_runner_scan_source_complete_prefix_uses_completed_end_byte(tmp_path, ca
     assert "BC-PART" not in payload
 
 
-def test_runner_scan_source_committed_operator_review_delta_allows_later_append(tmp_path, capsys):
+def test_runner_scan_source_committed_operator_review_delta_blocks_progress(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
     args = runner_args(tmp_path, scan_dir=sync_dir)
@@ -601,26 +861,21 @@ def test_runner_scan_source_committed_operator_review_delta_allows_later_append(
     with csv_path.open("a", encoding="utf-8") as file:
         file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
 
-    assert main(args) == 0
+    assert main(args) == 2
     output = capsys.readouterr().out
 
-    assert "direct_sync_relay_status=enqueued" in output
-    assert "direct_sync_scan_enqueued_count=1" in output
+    assert "direct_sync_relay_status=existing_terminal_blocked" in output
+    assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert "direct_sync_scan_failed_source_file=" not in output
-    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {
-        RELAY_STATUS_OPERATOR_REVIEW: 1,
-        RELAY_STATUS_PENDING: 1,
-    }
+    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {RELAY_STATUS_OPERATOR_REVIEW: 1}
     rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(rows) == 1
     assert "/bytes-0-" in rows[0]["relative_path"].replace("\\", "/")
-    assert "/bytes-0-" not in rows[1]["relative_path"].replace("\\", "/")
-    second_payload = Path(rows[1]["spooled_file_path"]).read_text(encoding="utf-8")
-    assert "BC-2" in second_payload
-    assert "BC-1" not in second_payload
+    assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
 
 
-def test_runner_scan_source_uncommitted_operator_review_delta_allows_later_append(tmp_path, capsys):
+def test_runner_scan_source_uncommitted_operator_review_delta_blocks_progress(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
     args = runner_args(tmp_path, scan_dir=sync_dir)
@@ -648,23 +903,18 @@ def test_runner_scan_source_uncommitted_operator_review_delta_allows_later_appen
     with csv_path.open("a", encoding="utf-8") as file:
         file.write("2026-06-22T00:01:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"BC-2\"\" }\"\n")
 
-    assert main(args) == 0
+    assert main(args) == 2
     output = capsys.readouterr().out
 
-    assert "direct_sync_relay_status=enqueued" in output
-    assert "direct_sync_scan_enqueued_count=1" in output
+    assert "direct_sync_relay_status=existing_terminal_blocked" in output
+    assert "direct_sync_scan_enqueued_count=0" in output
     assert "direct_sync_scan_attempted_count=1" in output
-    assert "direct_sync_scan_failed_source_file=" not in output
-    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {
-        RELAY_STATUS_OPERATOR_REVIEW: 1,
-        RELAY_STATUS_PENDING: 1,
-    }
+    assert f"direct_sync_scan_failed_source_file={csv_path}" in output
+    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {RELAY_STATUS_OPERATOR_REVIEW: 1}
     rows = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(rows) == 1
     assert "/bytes-0-" in rows[0]["relative_path"].replace("\\", "/")
-    assert "/bytes-0-" not in rows[1]["relative_path"].replace("\\", "/")
-    second_payload = Path(rows[1]["spooled_file_path"]).read_text(encoding="utf-8")
-    assert "BC-2" in second_payload
-    assert "BC-1" not in second_payload
+    assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
 
 
 def test_runner_scan_source_records_watermark_after_durable_ack(tmp_path, capsys, monkeypatch):
@@ -691,6 +941,53 @@ def test_runner_scan_source_records_watermark_after_durable_ack(tmp_path, capsys
     assert state is not None
     assert state["sent_byte_count"] == csv_path.stat().st_size
     assert state["sent_prefix_sha256"] == runner_module._file_prefix_sha256(csv_path, csv_path.stat().st_size)
+
+
+def test_runner_restart_rebuilds_watermark_after_ack_write_acknowledgement_loss(
+    tmp_path, capsys, monkeypatch
+):
+    sync_dir = tmp_path / "sync"
+    csv_path = write_container_csv(sync_dir)
+    args = runner_args(tmp_path, scan_dir=sync_dir) + ["--drain-after-scan"]
+    session = AcceptedReceiptSession()
+    install_receipt_test_runtime(monkeypatch, session)
+    original_set_relay_status = direct_sync_push_module._set_relay_status
+    loss = {"armed": True}
+
+    def commit_ack_then_lose_acknowledgement(**kwargs):
+        updated = original_set_relay_status(**kwargs)
+        if kwargs.get("status") == RELAY_STATUS_ACKED and loss["armed"]:
+            loss["armed"] = False
+            raise OSError("simulated ACK write acknowledgement loss")
+        return updated
+
+    monkeypatch.setattr(
+        direct_sync_push_module,
+        "_set_relay_status",
+        commit_ack_then_lose_acknowledgement,
+    )
+
+    assert main(args) == 1
+    assert "direct_sync_relay_status=runtime_error" in capsys.readouterr().out
+    rows_after_loss = relay_rows(tmp_path / "relay.sqlite3")
+    assert len(rows_after_loss) == 1
+    assert rows_after_loss[0]["status"] == RELAY_STATUS_ACKED
+    assert Path(rows_after_loss[0]["spooled_file_path"]).is_file()
+    assert source_scan_state(tmp_path / "relay.sqlite3", csv_path) is None
+    assert len(session.calls) == 1
+
+    monkeypatch.setattr(direct_sync_push_module, "_set_relay_status", original_set_relay_status)
+
+    assert main(args) == 0
+    capsys.readouterr()
+    rebuilt = source_scan_state(tmp_path / "relay.sqlite3", csv_path)
+    assert rebuilt is not None
+    assert rebuilt["sent_byte_count"] == csv_path.stat().st_size
+    assert rebuilt["sent_prefix_sha256"] == runner_module._file_prefix_sha256(
+        csv_path, csv_path.stat().st_size
+    )
+    assert len(relay_rows(tmp_path / "relay.sqlite3")) == 1
+    assert len(session.calls) == 1
 
 
 def test_runner_scan_source_ack_records_spooled_prefix_hash_not_replaced_source(

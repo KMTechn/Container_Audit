@@ -1137,6 +1137,39 @@ def test_relay_enqueue_dedupes_same_completed_file_and_blocks_changed_content(tm
     assert len(list(spool_dir.iterdir())) == 1
 
 
+def test_relay_enqueue_blocks_changed_metadata_fingerprint_for_same_source_content(tmp_path):
+    manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    spool_dir = tmp_path / "spool"
+
+    first = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=spool_dir,
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+        dedupe_existing=True,
+    )
+    manifest["pc_identity"]["pc_id"] = "CONTAINER-PC02"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    with pytest.raises(DirectSyncPushError, match="metadata fingerprint conflict"):
+        enqueue_source_file_for_relay(
+            db_path=db_path,
+            spool_dir=spool_dir,
+            source_file_path=csv_path,
+            producer_manifest_path=manifest_path,
+            credentials=credentials,
+            dedupe_existing=True,
+        )
+
+    assert relay_queue_status(db_path)["counts"] == {RELAY_STATUS_PENDING: 1}
+    assert list(spool_dir.iterdir()) == [Path(first.spooled_file_path)]
+    assert Path(first.spooled_file_path).read_bytes() == csv_path.read_bytes()
+
+
 def test_relay_enqueue_does_not_dedupe_when_manifest_identity_changes(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1308,6 +1341,97 @@ def test_relay_enqueue_repairs_invalid_existing_spool_for_deduped_pending_batch(
     assert result is not None
     assert result.success is True
     assert relay_queue_status(db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
+
+@pytest.mark.parametrize(
+    ("lease_expires_at", "damage", "expect_repaired"),
+    [
+        ("2000-01-01T00:00:00Z", "missing", True),
+        ("2000-01-01T00:00:00Z", "corrupt", True),
+        ("2999-01-01T00:00:00Z", "missing", False),
+        ("2999-01-01T00:00:00Z", "corrupt", False),
+    ],
+    ids=["stale-missing", "stale-corrupt", "active-missing", "active-corrupt"],
+)
+def test_relay_enqueue_repairs_damaged_leased_spool_only_after_expiry(
+    tmp_path, lease_expires_at, damage, expect_repaired
+):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    spool_dir = tmp_path / "spool"
+    first = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=spool_dir,
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+        dedupe_existing=True,
+    )
+    claimed = claim_next_relay_batch(
+        db_path=db_path,
+        worker_id="lease-owner",
+        lease_seconds=60,
+        now="2099-01-01T00:00:00Z",
+    )
+    assert claimed is not None
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        conn.execute(
+            "UPDATE direct_sync_relay_batches SET lease_expires_at = ? WHERE relay_id = ?",
+            (lease_expires_at, first.relay_id),
+        )
+        conn.commit()
+        before = dict(
+            conn.execute(
+                "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+                (first.relay_id,),
+            ).fetchone()
+        )
+    spool_path = Path(first.spooled_file_path)
+    if damage == "missing":
+        spool_path.unlink()
+        damaged_bytes = None
+    else:
+        damaged_bytes = b"X" * spool_path.stat().st_size
+        spool_path.write_bytes(damaged_bytes)
+
+    duplicate = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=spool_dir,
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+        dedupe_existing=True,
+    )
+
+    assert duplicate.relay_id == first.relay_id
+    assert duplicate.deduped_existing is True
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        after = dict(
+            conn.execute(
+                "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+                (first.relay_id,),
+            ).fetchone()
+        )
+        assert conn.execute("SELECT COUNT(*) FROM direct_sync_relay_batches").fetchone()[0] == 1
+    if expect_repaired:
+        assert duplicate.status == RELAY_STATUS_PENDING
+        assert after["status"] == RELAY_STATUS_PENDING
+        assert after["lease_owner"] is None
+        assert after["lease_expires_at"] is None
+        assert after["attempt_count"] == 1
+        assert after["metadata_json"] == before["metadata_json"]
+        assert spool_path.read_bytes() == csv_path.read_bytes()
+    else:
+        assert duplicate.status == RELAY_STATUS_LEASED
+        assert after == before
+        if damage == "missing":
+            assert not spool_path.exists()
+        else:
+            assert spool_path.read_bytes() == damaged_bytes
 
 
 def test_relay_enqueue_dedupes_concurrent_same_completed_file(tmp_path):

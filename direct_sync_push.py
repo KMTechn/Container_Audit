@@ -87,6 +87,24 @@ RELAY_METADATA_IDENTITY_FIELDS = (
     "source_transport",
     "relative_path",
 )
+RELAY_SOURCE_FINGERPRINT_FIELDS = (
+    "contract_version",
+    "producer_install_id",
+    "idempotency_key",
+    "source_host_id",
+    "producer_role",
+    "manifest_hash",
+    "stream_name",
+    "source_system",
+    "source_transport",
+    "relative_path",
+    "batch_kind",
+    "row_count",
+    "first_row_number",
+    "last_row_number",
+    "content_sha256",
+    "byte_length",
+)
 AUTHORIZATION_HEADER_RE = re.compile(r"(?i)authorization\s*:\s*[^\r\n\t ]+(?:[ \t]+[^\r\n\t ]+)?")
 CONTROL_TEXT_RE = re.compile(r"[\x00-\x1f\x7f]+")
 SOURCE_FILE_STABLE_KEY_PREFIX = "source-file:"
@@ -1433,11 +1451,28 @@ def _relay_metadata_identity_matches(existing_metadata: Mapping[str, Any], plann
     )
 
 
+def _relay_metadata_fingerprint_matches(
+    existing_metadata: Mapping[str, Any],
+    planned_metadata: Mapping[str, Any],
+) -> bool:
+    return all(
+        existing_metadata.get(field) == planned_metadata.get(field)
+        for field in RELAY_SOURCE_FINGERPRINT_FIELDS
+    )
+
+
 def _relay_row_metadata_identity_matches(row: sqlite3.Row, plan: SourceFilePlan) -> bool:
     metadata, metadata_error = _relay_metadata(row)
     if metadata_error:
         return False
     return _relay_metadata_identity_matches(metadata, plan.metadata)
+
+
+def _relay_row_metadata_fingerprint_matches(row: sqlite3.Row, plan: SourceFilePlan) -> bool:
+    metadata, metadata_error = _relay_metadata(row)
+    if metadata_error:
+        return False
+    return _relay_metadata_fingerprint_matches(metadata, plan.metadata)
 
 
 def _relay_row(row: sqlite3.Row, *, deduped_existing: bool = False) -> RelayQueueRow:
@@ -1759,7 +1794,7 @@ def _find_existing_relay_batch(
         ),
     ).fetchall()
     for row in rows:
-        if _relay_row_metadata_identity_matches(row, plan):
+        if _relay_row_metadata_fingerprint_matches(row, plan):
             return row
     return None
 
@@ -1775,17 +1810,15 @@ def _find_conflicting_relay_batch(
         SELECT *
         FROM direct_sync_relay_batches
         WHERE relative_path = ?
-          AND (content_sha256 != ? OR byte_length != ?)
         ORDER BY created_at, relay_id
         """,
-        (
-            plan.metadata["relative_path"],
-            plan.content_sha256,
-            plan.byte_length,
-        ),
+        (plan.metadata["relative_path"],),
     ).fetchall()
     for row in rows:
-        if _relay_row_metadata_identity_matches(row, plan):
+        if (
+            _relay_row_metadata_identity_matches(row, plan)
+            and not _relay_row_metadata_fingerprint_matches(row, plan)
+        ):
             return row
     return None
 
@@ -1855,8 +1888,11 @@ def enqueue_source_file_for_relay(
         relative_path=relative_path,
         client_batch_id=relay_id,
     )
+    if dedupe_existing:
+        reset_stale_relay_leases(db_path=db_path, now=utc_now_text())
     conn = _connect_relay_db(db_path)
     spool_path: Path | None = None
+    insert_completed = False
     try:
         conn.execute("BEGIN IMMEDIATE")
         conflicting = _find_conflicting_relay_batch(
@@ -1865,7 +1901,9 @@ def enqueue_source_file_for_relay(
             plan=plan,
         )
         if conflicting is not None:
-            raise DirectSyncPushError("source file content conflict for existing relay identity")
+            raise DirectSyncPushError(
+                "source file content conflict or metadata fingerprint conflict for existing relay identity"
+            )
         if dedupe_existing:
             existing = _find_existing_relay_batch(
                 conn,
@@ -1918,6 +1956,7 @@ def enqueue_source_file_for_relay(
                 now,
             ),
         )
+        insert_completed = True
         conn.commit()
         row = conn.execute(
             "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
@@ -1925,8 +1964,53 @@ def enqueue_source_file_for_relay(
         ).fetchone()
         return _relay_row(row)
     except Exception:
-        conn.rollback()
-        if spool_path is not None and spool_path.exists():
+        try:
+            if conn.in_transaction:
+                conn.rollback()
+        except sqlite3.Error:
+            pass
+
+        committed_row = None
+        enqueue_outcome_known = not insert_completed
+        if insert_completed:
+            recovery_conn = None
+            try:
+                recovery_conn = _connect_relay_db_readonly(db_path)
+                if recovery_conn is not None and _relay_batches_table_exists(recovery_conn):
+                    committed_row = recovery_conn.execute(
+                        "SELECT * FROM direct_sync_relay_batches WHERE relay_id = ?",
+                        (relay_id,),
+                    ).fetchone()
+                    enqueue_outcome_known = True
+            except (OSError, sqlite3.Error):
+                enqueue_outcome_known = False
+            finally:
+                if recovery_conn is not None:
+                    recovery_conn.close()
+
+            committed_metadata, metadata_error = (
+                _relay_metadata(committed_row)
+                if committed_row is not None
+                else ({}, "relay row is missing")
+            )
+            if (
+                committed_row is not None
+                and not metadata_error
+                and committed_metadata.get("client_batch_id") == relay_id
+                and _relay_row_metadata_fingerprint_matches(committed_row, plan)
+                and str(committed_row["source_file_path"]) == str(source_path)
+                and str(committed_row["spooled_file_path"]) == str(spool_path)
+                and str(committed_row["producer_manifest_path"]) == str(manifest_path)
+                and str(committed_row["producer_id"] or "") == credentials.producer_id
+                and str(committed_row["key_id"] or "") == credentials.key_id
+                and str(committed_row["endpoint_url"] or "") == credentials.endpoint_url
+                and _spooled_file_matches_relay_row(committed_row)
+            ):
+                return _relay_row(committed_row)
+            if committed_row is not None:
+                enqueue_outcome_known = False
+
+        if enqueue_outcome_known and spool_path is not None and spool_path.exists():
             try:
                 spool_path.unlink()
             except OSError:

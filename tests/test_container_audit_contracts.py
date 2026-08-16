@@ -2031,6 +2031,7 @@ def test_synchronous_log_event_writes_durable_csv_entry(tmp_path):
 
 def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_write(tmp_path, monkeypatch):
     calls = []
+    sequence = []
     app = _headless_app()
     app.worker_name = "홍길동"
     app.log_file_path = str(tmp_path / "events.csv")
@@ -2038,15 +2039,24 @@ def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_wr
     app.direct_sync_program_data_root = str(tmp_path / "direct-sync")
     app.direct_sync_scan_source_dir = str(tmp_path)
 
-    monkeypatch.setattr(
-        container_audit_module,
-        "start_session_direct_sync",
-        lambda **kwargs: calls.append(kwargs),
-    )
+    original_fsync = event_log_store.os.fsync
+
+    def tracked_fsync(fd):
+        original_fsync(fd)
+        sequence.append("fsync")
+
+    def tracked_session_direct_sync(**kwargs):
+        assert Path(app.log_file_path).is_file()
+        sequence.append("direct_sync_trigger")
+        calls.append(kwargs)
+
+    monkeypatch.setattr(event_log_store.os, "fsync", tracked_fsync)
+    monkeypatch.setattr(container_audit_module, "start_session_direct_sync", tracked_session_direct_sync)
 
     assert app._log_event("TRAY_COMPLETE", {"scan_count": 1}, synchronous=True) is True
 
     assert Path(app.log_file_path).exists()
+    assert sequence == ["fsync", "direct_sync_trigger"]
     assert calls == [
         {
             "app_root": app.application_path,
@@ -2055,6 +2065,30 @@ def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_wr
             "reason": "TRAY_COMPLETE",
         }
     ]
+
+
+def test_synchronous_tray_complete_fsync_failure_never_triggers_direct_sync(tmp_path, monkeypatch):
+    calls = []
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.application_path = str(tmp_path / "app")
+    app.direct_sync_program_data_root = str(tmp_path / "direct-sync")
+    app.direct_sync_scan_source_dir = str(tmp_path)
+
+    monkeypatch.setattr(
+        event_log_store.os,
+        "fsync",
+        lambda _fd: (_ for _ in ()).throw(OSError("simulated fsync failure")),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "start_session_direct_sync",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    assert app._log_event("TRAY_COMPLETE", {"scan_count": 1}, synchronous=True) is False
+    assert calls == []
 
 
 def test_synchronous_log_event_reports_failure_without_log_path():

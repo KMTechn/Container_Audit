@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import sqlite3
 import sys
 import time
@@ -17,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from event_log_store import LOCK_STALE_SECONDS as EVENT_LOG_LOCK_STALE_SECONDS  # noqa: E402
+from direct_sync_push import reset_stale_relay_leases  # noqa: E402
 from direct_sync_runtime import (  # noqa: E402
     DirectSyncRuntimeConfig,
     enqueue_completed_source_file,
@@ -174,15 +174,11 @@ def _read_delta_progress(
     ).fetchone()
     if not has_relay_table:
         return 0, ""
-    relay_columns = {
-        row["name"]
-        for row in conn.execute("PRAGMA table_info(direct_sync_relay_batches)").fetchall()
-    }
-    receipt_select = "receipt_json" if "receipt_json" in relay_columns else "'' AS receipt_json"
     source_delta_key = _source_delta_key(source_file)
     rows = conn.execute(
-        f"""
-        SELECT source_file_path, relative_path, content_sha256, status, {receipt_select}
+        """
+        SELECT source_file_path, spooled_file_path, relative_path,
+               content_sha256, byte_length, status
         FROM direct_sync_relay_batches
         WHERE relative_path LIKE 'legacy_csv_deltas/%'
            OR relative_path LIKE 'd/%'
@@ -200,7 +196,10 @@ def _read_delta_progress(
         start_byte, end_byte = parsed_range
         delta_hash = _delta_content_sha256_for_range(source_file, start_byte, end_byte)
         if delta_hash and delta_hash == str(row["content_sha256"] or ""):
-            if _delta_relay_row_counts_as_progress(row, include_inflight=include_inflight):
+            if (
+                _delta_relay_row_counts_as_progress(row, include_inflight=include_inflight)
+                and _delta_relay_row_has_usable_spool(row)
+            ):
                 matching_ranges[start_byte] = max(matching_ranges.get(start_byte, 0), end_byte)
             elif include_blocked and _delta_relay_row_blocks_progress(row):
                 blocked_ranges[start_byte] = max(blocked_ranges.get(start_byte, 0), end_byte)
@@ -214,13 +213,7 @@ def _read_delta_progress(
         blocked_end_byte = blocked_ranges[best_end_byte]
         if blocked_end_byte <= best_end_byte:
             raise ExistingTerminalDeltaBlocked(str(source_file))
-        try:
-            source_size = source_file.stat().st_size
-        except OSError:
-            raise ExistingTerminalDeltaBlocked(str(source_file)) from None
-        if source_size <= blocked_end_byte:
-            raise ExistingTerminalDeltaBlocked(str(source_file))
-        return blocked_end_byte, _file_prefix_sha256(source_file, blocked_end_byte)
+        raise ExistingTerminalDeltaBlocked(str(source_file))
     if best_end_byte <= 0:
         return 0, ""
     return best_end_byte, _file_prefix_sha256(source_file, best_end_byte)
@@ -240,32 +233,122 @@ def _delta_relay_row_counts_as_progress(row: sqlite3.Row, *, include_inflight: b
         return True
     if include_inflight and status in DELTA_PROGRESS_STATUSES:
         return True
-    if status != "operator_review":
-        return False
+    return False
+
+
+def _delta_relay_row_has_usable_spool(row: sqlite3.Row) -> bool:
+    status = str(row["status"] or "")
+    if status not in {"pending", "leased", "retry_wait"}:
+        return True
     try:
-        receipt = json.loads(str(row["receipt_json"] or "{}"))
-    except (TypeError, json.JSONDecodeError):
+        expected_byte_length = int(row["byte_length"])
+        spool_path = Path(str(row["spooled_file_path"] or ""))
+        if spool_path.stat().st_size != expected_byte_length:
+            return False
+        return _file_prefix_sha256(spool_path, expected_byte_length) == str(
+            row["content_sha256"] or ""
+        )
+    except (OSError, TypeError, ValueError):
         return False
-    if not isinstance(receipt, dict):
-        return False
-    return receipt.get("committed") is True or receipt.get("_local_upload_result_committed") is True
+
+
+def _repair_recoverable_delta_spools_before_scan(
+    config: DirectSyncRuntimeConfig,
+    source_file: Path,
+) -> bool:
+    reset_stale_relay_leases(db_path=config.db_path)
+    conn = _scan_state_connect(config.db_path)
+    try:
+        has_relay_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'direct_sync_relay_batches'"
+        ).fetchone()
+        if not has_relay_table:
+            return True
+        rows = conn.execute(
+            """
+            SELECT relay_id, source_file_path, spooled_file_path, relative_path,
+                   content_sha256, byte_length, status
+            FROM direct_sync_relay_batches
+            WHERE relative_path LIKE 'legacy_csv_deltas/%'
+               OR relative_path LIKE 'd/%'
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+
+    repairs: list[tuple[str, Path, str]] = []
+    source_delta_key = _source_delta_key(source_file)
+    for row in rows:
+        source_path = Path(str(row["source_file_path"] or ""))
+        if source_path.parent.name != source_delta_key:
+            continue
+        parsed_range = _parse_delta_range(str(row["relative_path"] or ""), source_file)
+        if parsed_range is None:
+            continue
+        start_byte, end_byte = parsed_range
+        delta_hash = _delta_content_sha256_for_range(source_file, start_byte, end_byte)
+        if not delta_hash or delta_hash != str(row["content_sha256"] or ""):
+            continue
+        if _delta_relay_row_has_usable_spool(row):
+            continue
+        status = str(row["status"] or "")
+        if status == "leased":
+            return False
+        if status not in {"pending", "retry_wait"}:
+            continue
+        try:
+            expected_byte_length = int(row["byte_length"])
+            if source_path.stat().st_size != expected_byte_length:
+                return False
+            if _file_prefix_sha256(source_path, expected_byte_length) != str(
+                row["content_sha256"] or ""
+            ):
+                return False
+        except (OSError, TypeError, ValueError):
+            return False
+        repairs.append(
+            (
+                str(row["relay_id"]),
+                source_path,
+                str(row["relative_path"] or ""),
+            )
+        )
+
+    for relay_id, source_path, relative_path in repairs:
+        repair_status = enqueue_completed_source_file(
+            config,
+            source_file_path=source_path,
+            relative_path=relative_path,
+        )
+        if repair_status.get("status") not in {"already_queued", "already_acked"}:
+            return False
+        conn = _scan_state_connect(config.db_path)
+        try:
+            repaired = conn.execute(
+                """
+                SELECT spooled_file_path, content_sha256, byte_length, status
+                FROM direct_sync_relay_batches
+                WHERE relay_id = ?
+                """,
+                (relay_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if repaired is None:
+            return False
+        repaired_status = str(repaired["status"] or "")
+        if repaired_status == "leased" and not _delta_relay_row_has_usable_spool(repaired):
+            return False
+        if repaired_status in {"pending", "retry_wait"} and not _delta_relay_row_has_usable_spool(
+            repaired
+        ):
+            return False
+    return True
 
 
 def _delta_relay_row_blocks_progress(row: sqlite3.Row) -> bool:
     status = str(row["status"] or "")
-    if status == "failed_permanent":
-        return True
-    if status != "operator_review":
-        return False
-    try:
-        receipt = json.loads(str(row["receipt_json"] or "{}"))
-    except (TypeError, json.JSONDecodeError):
-        return True
-    if not isinstance(receipt, dict):
-        return True
-    committed = receipt.get("committed")
-    local_committed = receipt.get("_local_upload_result_committed")
-    return committed is not True and local_committed is not True
+    return status in {"failed_permanent", "operator_review"}
 
 
 def _read_source_scan_state(db_path: str | Path, source_file: Path) -> tuple[int, str]:
@@ -422,6 +505,8 @@ def _has_active_source_writer_lock(source_file: Path) -> bool:
 
 def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int, str] | None:
     if _has_active_source_writer_lock(source_file):
+        return None
+    if not _repair_recoverable_delta_spools_before_scan(config, source_file):
         return None
     try:
         source_stat = source_file.stat()
