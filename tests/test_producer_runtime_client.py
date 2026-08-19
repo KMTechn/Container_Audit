@@ -65,6 +65,57 @@ class _LeaseSession:
         )
 
 
+class _ExactCloneThenGrantSession(_LeaseSession):
+    def __init__(self, *, conflicts: int = 1):
+        super().__init__()
+        self.conflicts = conflicts
+
+    def post(self, url, **kwargs):
+        body = json.loads(bytes(kwargs["data"]).decode("utf-8"))
+        if len(self.calls) < self.conflicts:
+            self.calls.append((url, body, dict(kwargs["headers"])))
+            return _Response(
+                409,
+                {
+                    "ok": False,
+                    "status": "conflict",
+                    "error": {
+                        "code": "EXACT_CLONE_RUNTIME_CONFLICT",
+                        "message": (
+                            "another runtime identity already holds the active install lease"
+                        ),
+                        "details": {
+                            "producer_install_id": "install-test",
+                            "active_lease_id": "lease-active",
+                            "active_fence": 1,
+                        },
+                    },
+                    "retryable": False,
+                },
+                {},
+            )
+        return super().post(url, **kwargs)
+
+
+class _StaleTokenSession(_LeaseSession):
+    def post(self, url, **kwargs):
+        body = json.loads(bytes(kwargs["data"]).decode("utf-8"))
+        self.calls.append((url, body, dict(kwargs["headers"])))
+        return _Response(
+            409,
+            {
+                "ok": False,
+                "status": "conflict",
+                "error": {
+                    "code": "STALE_RUNTIME_REQUEST_TOKEN",
+                    "message": "stale runtime request token",
+                },
+                "retryable": False,
+            },
+            {},
+        )
+
+
 class _RelaySession(_LeaseSession):
     def __init__(self, *, source_failures: int = 0, lease_failures: int = 0):
         super().__init__(failures=lease_failures)
@@ -291,6 +342,132 @@ def test_idle_liveness_issues_once_and_renews_only_when_due_without_consuming_to
             "FROM direct_sync_runtime_authority"
         ).fetchone()
     assert row == ("B" * 43, 2, None)
+
+
+def _authority_row(db_path: Path) -> sqlite3.Row:
+    with sqlite3.connect(db_path) as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute(
+            "SELECT * FROM direct_sync_runtime_authority"
+        ).fetchone()
+    assert row is not None
+    return row
+
+
+def test_exact_clone_conflict_stays_fail_closed_inside_ttl_then_reissues(tmp_path):
+    db_path = tmp_path / "relay.sqlite3"
+    session = _ExactCloneThenGrantSession(conflicts=1)
+
+    first = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:07:27Z",
+        ttl_seconds=900,
+    )
+    assert first.operator_review is True
+    assert first.error_code == "EXACT_CLONE_RUNTIME_CONFLICT"
+    rejected = _authority_row(db_path)
+    assert rejected["status"] == "OPERATOR_REVIEW"
+    assert rejected["last_error_code"] == "EXACT_CLONE_RUNTIME_CONFLICT"
+    rejected_runtime_id = rejected["runtime_instance_id"]
+
+    still_blocked = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:08:27Z",
+        ttl_seconds=900,
+    )
+    assert still_blocked.operator_review is True
+    assert still_blocked.error_code == "EXACT_CLONE_RUNTIME_CONFLICT"
+    assert len(session.calls) == 1
+    assert _authority_row(db_path)["runtime_instance_id"] == rejected_runtime_id
+
+    recovered = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:22:27Z",
+        ttl_seconds=900,
+    )
+    assert recovered.error_code == ""
+    assert recovered.receipt["server_grant_accepted"] is True
+    assert recovered.receipt["runtime_instance_id"] != rejected_runtime_id
+    assert len(session.calls) == 2
+    assert "runtime_request_token" not in session.calls[1][1]
+    assert _authority_row(db_path)["status"] == "ACTIVE"
+
+
+def test_stale_exact_clone_operator_review_reissues_without_reuse_token(tmp_path):
+    db_path = tmp_path / "relay.sqlite3"
+    session = _ExactCloneThenGrantSession(conflicts=0)
+    primed = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:00:00Z",
+        ttl_seconds=900,
+    )
+    assert primed.receipt["server_grant_accepted"] is True
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE direct_sync_runtime_authority
+            SET status='OPERATOR_REVIEW', last_error_code=?,
+                lease_id=NULL, fence=NULL, next_request_token=NULL,
+                next_request_sequence=NULL, expires_at=NULL,
+                pending_request_json=NULL, pending_issue_idempotency_key=NULL,
+                updated_at=?
+            """,
+            ("EXACT_CLONE_RUNTIME_CONFLICT", "2026-08-19T21:11:01Z"),
+        )
+        connection.commit()
+    leftover_runtime_id = _authority_row(db_path)["runtime_instance_id"]
+
+    recovered = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-20T00:00:00Z",
+        ttl_seconds=900,
+    )
+    assert recovered.error_code == ""
+    assert recovered.receipt["server_grant_accepted"] is True
+    assert recovered.receipt["runtime_instance_id"] != leftover_runtime_id
+    assert recovered.receipt["request_sent"] is True
+
+
+def test_stale_token_operator_review_stays_fail_closed_after_ttl(tmp_path):
+    db_path = tmp_path / "relay.sqlite3"
+    session = _StaleTokenSession()
+    first = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:07:27Z",
+        ttl_seconds=900,
+    )
+    assert first.operator_review is True
+    assert first.error_code == "STALE_RUNTIME_REQUEST_TOKEN"
+
+    later = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-20T00:00:00Z",
+        ttl_seconds=900,
+    )
+    assert later.operator_review is True
+    assert later.error_code == "STALE_RUNTIME_REQUEST_TOKEN"
+    assert len(session.calls) == 1
 
 
 def _insert_claimed_row(db_path: Path, relay_id: str, *, owner: str = "worker") -> None:

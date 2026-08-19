@@ -573,6 +573,42 @@ def _replace_expired_identity(
     return row
 
 
+def _operator_review_or_recover_exact_clone(
+    conn: sqlite3.Connection,
+    state: sqlite3.Row,
+    *,
+    now_text: str,
+    now_time: datetime,
+    ttl_seconds: int,
+) -> tuple[sqlite3.Row, RuntimePreparation | None]:
+    """Fail-closed on operator review, except EXACT_CLONE after the local TTL.
+
+    The live runtime-lease API is POST-only and does not return the active
+    clone's rotating token. A rejected local identity cannot be reused. After
+    the default lease TTL the previous grant can expire, so this replaces the
+    quarantined identity and lets the next issue take over. Any other review
+    code stays fail-closed.
+    """
+
+    if str(state["status"] or "") != "OPERATOR_REVIEW":
+        return state, None
+    code = str(state["last_error_code"] or "runtime_authority_operator_review")
+    recoverable = code == "EXACT_CLONE_RUNTIME_CONFLICT" and not state["assigned_relay_id"]
+    reviewed_at = _parse_time(state["updated_at"])
+    due = (
+        recoverable
+        and reviewed_at is not None
+        and (now_time - reviewed_at) >= timedelta(seconds=int(ttl_seconds))
+    )
+    if due:
+        return _replace_expired_identity(conn, state, now_text), None
+    return state, RuntimePreparation(
+        operator_review=True,
+        error_code=code,
+        error_message="runtime authority requires operator review",
+    )
+
+
 def _lease_request_value(state: sqlite3.Row, ttl_seconds: int) -> Dict[str, Any]:
     issue_key = f"runtime-lease-{uuid.uuid4().hex}"
     value: Dict[str, Any] = {
@@ -696,14 +732,16 @@ def ensure_runtime_authority(
                         }
                     )
                 state = _replace_expired_identity(conn, state, now_text)
-            if str(state["status"] or "") == "OPERATOR_REVIEW":
-                code = str(state["last_error_code"] or "runtime_authority_operator_review")
+            state, review_error = _operator_review_or_recover_exact_clone(
+                conn,
+                state,
+                now_text=now_text,
+                now_time=now_time,
+                ttl_seconds=ttl_seconds,
+            )
+            if review_error is not None:
                 conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code=code,
-                    error_message="runtime authority requires operator review",
-                )
+                return review_error
             expires_at = _parse_time(state["expires_at"])
             if (
                 expires_at is not None
@@ -984,14 +1022,16 @@ def prepare_runtime_metadata(
                     conn.commit()
                     return RuntimePreparation(metadata=live_metadata)
                 state = _replace_expired_identity(conn, state, now_text)
-            if str(state["status"] or "") == "OPERATOR_REVIEW":
-                code = str(state["last_error_code"] or "runtime_authority_operator_review")
+            state, review_error = _operator_review_or_recover_exact_clone(
+                conn,
+                state,
+                now_text=now_text,
+                now_time=now_time,
+                ttl_seconds=ttl_seconds,
+            )
+            if review_error is not None:
                 conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code=code,
-                    error_message="runtime authority requires operator review",
-                )
+                return review_error
             expires_at = _parse_time(state["expires_at"])
             if (
                 expires_at is not None
