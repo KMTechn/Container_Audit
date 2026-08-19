@@ -1131,6 +1131,15 @@ def _run_command(command: Sequence[str]) -> dict:
     }
 
 
+def _scheduled_task_delete_already_absent(command_result: dict) -> bool:
+    if command_result.get("returncode") != 1:
+        return False
+    text = f"{command_result.get('stderr') or ''}\n{command_result.get('stdout') or ''}"
+    if "지정된 파일을 찾을 수 없습니다" in text:
+        return True
+    return "the system cannot find the file specified" in text.lower()
+
+
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay scheduled-task install pack")
@@ -1334,7 +1343,11 @@ def main(argv: list[str] | None = None) -> int:
                 plan["scheduled_task_wrapper_path"],
             )
         plan["command_result"] = _run_command(command)
-        plan["status"] = "PASS" if plan["command_result"]["returncode"] == 0 else "FAIL"
+        if args.uninstall and _scheduled_task_delete_already_absent(plan["command_result"]):
+            plan["command_result"]["already_absent"] = True
+            plan["status"] = "PASS"
+        else:
+            plan["status"] = "PASS" if plan["command_result"]["returncode"] == 0 else "FAIL"
 
     _write_json(Path(args.report_path), plan)
     print(f"install_pack_report={Path(args.report_path).resolve()}")

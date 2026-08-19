@@ -1739,6 +1739,99 @@ def test_install_pack_uninstall_skips_create_only_preflight_without_manifest_or_
     assert report["source_scan_validation"]["status"] == "SKIPPED"
 
 
+def test_install_pack_uninstall_missing_scheduled_task_is_already_absent(tmp_path, monkeypatch):
+    report_path = tmp_path / "install-pack-uninstall-missing-task.json"
+    observed_commands = []
+
+    def fake_run_command(command):
+        observed_commands.append(command)
+        return {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "오류: 지정된 파일을 찾을 수 없습니다.\n\n",
+        }
+
+    monkeypatch.setattr(install_pack, "_run_command", fake_run_command)
+
+    exit_code = install_pack.main(
+        [
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--uninstall",
+            "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert report["status"] == "PASS"
+    assert report["uninstall"] is True
+    assert report["command_result"]["returncode"] == 1
+    assert report["command_result"]["already_absent"] is True
+    assert observed_commands == [["schtasks.exe", "/Delete", "/TN", "direct-sync-relay-container-audit", "/F"]]
+
+
+def test_install_pack_uninstall_missing_scheduled_task_english_file_not_found_is_already_absent(
+    tmp_path, monkeypatch
+):
+    report_path = tmp_path / "install-pack-uninstall-missing-task-en.json"
+    observed_commands = []
+
+    def fake_run_command(command):
+        observed_commands.append(command)
+        return {
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "ERROR: The system cannot find the file specified.\n",
+        }
+
+    monkeypatch.setattr(install_pack, "_run_command", fake_run_command)
+
+    exit_code = install_pack.main(
+        [
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--uninstall",
+            "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert report["status"] == "PASS"
+    assert report["command_result"]["already_absent"] is True
+    assert observed_commands == [["schtasks.exe", "/Delete", "/TN", "direct-sync-relay-container-audit", "/F"]]
+
+
+def test_install_pack_uninstall_other_schtasks_error_still_fails(tmp_path, monkeypatch):
+    report_path = tmp_path / "install-pack-uninstall-access-denied.json"
+
+    def fake_run_command(command):
+        return {"returncode": 1, "stdout": "", "stderr": "ERROR: Access is denied.\n"}
+
+    monkeypatch.setattr(install_pack, "_run_command", fake_run_command)
+
+    exit_code = install_pack.main(
+        [
+            "--report-path",
+            str(report_path),
+            "--apply",
+            "--uninstall",
+            "--confirm-production-install",
+            "--allow-noncanonical-layout-for-test",
+        ]
+    )
+
+    assert exit_code == 1
+    report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+    assert report["status"] == "FAIL"
+    assert report["command_result"].get("already_absent") is not True
+
+
 def test_install_pack_run_command_reports_start_failure(monkeypatch):
     def fake_run(*args, **kwargs):
         raise FileNotFoundError("missing schtasks")

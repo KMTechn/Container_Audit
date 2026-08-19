@@ -49,25 +49,11 @@ SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v1"
 DEFAULT_ENROLLMENT_TOKEN_ENV = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
 CONTAINER_AUDIT_APP = "ContainerAudit"
-CONTAINER_AUDIT_RAW_EVENTS = [
-    "CONTAINER_AUDIT_OBSERVED",
-    "TRANSFER_WAITING_OBSERVED",
-    "WORK_START",
-    "MASTER_LABEL_SCANNED",
-    "MASTER_LABEL_SCANNED_NEW",
-    "MASTER_LABEL_SCANNED_OLD",
-    "SCAN_OK",
-    "SCAN_FAIL_DUPLICATE",
-    "TRAY_COMPLETE",
-    "POST_REVIEW_REQUIRED",
-    "TRAY_DISCARDED_BY_OPERATOR",
-    "TRAY_RESET",
-    "MASTER_LABEL_REPLACEMENT_APPLIED",
-    "PHS_REPLACEMENT_WAITING_MARKED",
-    "PHS_RECONCILIATION_ACTION_RESOLVED",
-    "PHS_RECONCILIATION_LABEL_EXCHANGED",
-    "WORK_END",
-]
+CANONICAL_STREAM_CATALOG_RELATIVE = (
+    Path("kmtech_factory_contracts") / "bundle" / "v1" / "catalogs" / "canonical-stream-catalog.json"
+)
+CONTAINER_AUDIT_CATALOG_APP_ID = "container_audit"
+CONTAINER_AUDIT_CATALOG_STREAM_ID = "container_audit_events"
 
 
 def _default_app_root() -> str:
@@ -152,6 +138,45 @@ def _explicit_output_path_policy_report(args: argparse.Namespace) -> dict:
     }
 
 
+def _canonical_stream_catalog_path() -> Path:
+    return Path(_default_app_root()) / CANONICAL_STREAM_CATALOG_RELATIVE
+
+
+def _container_audit_catalog_raw_event_names() -> list[str]:
+    catalog_path = _canonical_stream_catalog_path()
+    try:
+        catalog = load_json_no_duplicate_keys(catalog_path.read_text(encoding="utf-8"))
+    except DirectSyncPushError:
+        raise
+    except Exception as exc:
+        raise DirectSyncPushError("bundled canonical-stream-catalog.json could not be read") from exc
+    if not isinstance(catalog, dict):
+        raise DirectSyncPushError("bundled canonical-stream-catalog.json must be a JSON object")
+    streams = catalog.get("streams")
+    if not isinstance(streams, list):
+        raise DirectSyncPushError("canonical stream catalog streams must be a list")
+    for stream in streams:
+        if not isinstance(stream, dict):
+            continue
+        if (
+            stream.get("app_id") == CONTAINER_AUDIT_CATALOG_APP_ID
+            and stream.get("stream_id") == CONTAINER_AUDIT_CATALOG_STREAM_ID
+        ):
+            names = stream.get("raw_event_names")
+            if not isinstance(names, list) or not names:
+                raise DirectSyncPushError(
+                    "container_audit catalog raw_event_names must be a non-empty list"
+                )
+            if not all(isinstance(name, str) and name.strip() for name in names):
+                raise DirectSyncPushError("container_audit catalog raw_event_names must be names")
+            if len(set(names)) != len(names):
+                raise DirectSyncPushError("container_audit catalog raw_event_names must be unique")
+            return list(names)
+    raise DirectSyncPushError(
+        "canonical stream catalog missing container_audit / container_audit_events"
+    )
+
+
 def _build_container_audit_manifest(
     *,
     hostname: str,
@@ -171,7 +196,7 @@ def _build_container_audit_manifest(
         "stream_name": DEFAULT_STREAM_NAME,
         "source_system": DEFAULT_SOURCE_SYSTEM,
         "source_transport": DEFAULT_SOURCE_TRANSPORT,
-        "raw_event_names": CONTAINER_AUDIT_RAW_EVENTS,
+        "raw_event_names": _container_audit_catalog_raw_event_names(),
         "quantity_basis": "PRODUCT_BARCODE",
         "barcode_policy": "legacy_low_confidence_without_barcode",
         "hmac_required": False,

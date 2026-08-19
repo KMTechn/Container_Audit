@@ -6,6 +6,39 @@ from storage_policy import DATA_ROOT_ENV
 from tools import register_container_audit_worker_pc as registration
 
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CANONICAL_STREAM_CATALOG = (
+    REPO_ROOT / "kmtech_factory_contracts" / "bundle" / "v1" / "catalogs" / "canonical-stream-catalog.json"
+)
+GUI_ORDER_RAW_EVENT_NAMES = [
+    "CONTAINER_AUDIT_OBSERVED",
+    "TRANSFER_WAITING_OBSERVED",
+    "WORK_START",
+    "MASTER_LABEL_SCANNED",
+    "MASTER_LABEL_SCANNED_NEW",
+    "MASTER_LABEL_SCANNED_OLD",
+    "SCAN_OK",
+    "SCAN_FAIL_DUPLICATE",
+    "TRAY_COMPLETE",
+    "POST_REVIEW_REQUIRED",
+    "TRAY_DISCARDED_BY_OPERATOR",
+    "TRAY_RESET",
+    "MASTER_LABEL_REPLACEMENT_APPLIED",
+    "PHS_REPLACEMENT_WAITING_MARKED",
+    "PHS_RECONCILIATION_ACTION_RESOLVED",
+    "PHS_RECONCILIATION_LABEL_EXCHANGED",
+    "WORK_END",
+]
+
+
+def _catalog_container_audit_raw_event_names():
+    catalog = json.loads(CANONICAL_STREAM_CATALOG.read_text(encoding="utf-8"))
+    for stream in catalog["streams"]:
+        if stream.get("app_id") == "container_audit" and stream.get("stream_id") == "container_audit_events":
+            return list(stream["raw_event_names"])
+    raise AssertionError("canonical-stream-catalog.json missing container_audit_events")
+
+
 def test_worker_pc_registration_frozen_default_app_root_uses_executable_directory(tmp_path, monkeypatch):
     frozen_exe = tmp_path / "release" / "Container_Audit_Worker_PC_Register.exe"
     frozen_exe.parent.mkdir()
@@ -52,25 +85,9 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert manifest["schema_version"] == "producer-onboarding-manifest-v1"
     assert manifest["pc_identity"]["source_host_id"] == "container-audit-pc-01"
     raw_event_names = manifest["streams"][0]["raw_event_names"]
-    assert raw_event_names == [
-        "CONTAINER_AUDIT_OBSERVED",
-        "TRANSFER_WAITING_OBSERVED",
-        "WORK_START",
-        "MASTER_LABEL_SCANNED",
-        "MASTER_LABEL_SCANNED_NEW",
-        "MASTER_LABEL_SCANNED_OLD",
-        "SCAN_OK",
-        "SCAN_FAIL_DUPLICATE",
-        "TRAY_COMPLETE",
-        "POST_REVIEW_REQUIRED",
-        "TRAY_DISCARDED_BY_OPERATOR",
-        "TRAY_RESET",
-        "MASTER_LABEL_REPLACEMENT_APPLIED",
-        "PHS_REPLACEMENT_WAITING_MARKED",
-        "PHS_RECONCILIATION_ACTION_RESOLVED",
-        "PHS_RECONCILIATION_LABEL_EXCHANGED",
-        "WORK_END",
-    ]
+    catalog_names = _catalog_container_audit_raw_event_names()
+    assert len(catalog_names) == 17
+    assert raw_event_names == catalog_names
     assert manifest["sync"]["sync_transport"] == "http_push"
     assert manifest["sync"]["sync_dir"] == (expected_root / "events").as_posix()
     assert manifest["paths"]["data_dir"] == expected_direct_sync_root.as_posix()
@@ -80,6 +97,42 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert credential["key_id"] == "server-issued-key-01"
     assert credential["secret_ref"] == "wincred:KMTech.DirectSync.ContainerAudit.PC-01"
     assert "secret" not in credential
+
+
+def test_worker_pc_registration_emits_catalog_order_raw_event_names_not_gui_order(tmp_path, monkeypatch):
+    local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
+    report_path = tmp_path / "registration-catalog-order-report.json"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-CATALOG",
+            "--key-id",
+            "server-issued-key-catalog",
+            "--secret-ref",
+            "wincred:KMTech.DirectSync.ContainerAudit.PC-CATALOG",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest = json.loads(Path(report["producer_manifest_path"]).read_text(encoding="utf-8"))
+    catalog_names = _catalog_container_audit_raw_event_names()
+    raw_event_names = manifest["streams"][0]["raw_event_names"]
+
+    assert len(catalog_names) == 17
+    assert raw_event_names == catalog_names
+    assert raw_event_names == registration._container_audit_catalog_raw_event_names()
+    assert set(raw_event_names) == set(GUI_ORDER_RAW_EVENT_NAMES)
+    assert raw_event_names != GUI_ORDER_RAW_EVENT_NAMES
+    assert raw_event_names[1] == "MASTER_LABEL_REPLACEMENT_APPLIED"
+    assert raw_event_names[-1] == "WORK_START"
 
 
 def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, monkeypatch):
