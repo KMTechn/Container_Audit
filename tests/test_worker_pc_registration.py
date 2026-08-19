@@ -516,6 +516,356 @@ def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_the
     assert "report_path must not point at the legacy Syncthing folder" in report["blocked_reason"]
 
 
+def _self_enroll_env(tmp_path, monkeypatch):
+    local_app_data = tmp_path / "LocalAppData"
+    program_data = tmp_path / "ProgramData"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+    monkeypatch.setattr(registration.uuid, "getnode", lambda: 0xEDE662C694C5)
+    return local_app_data, program_data
+
+
+def _identity_payload(producer_id, source_host_id, producer_install_id):
+    return {
+        "schema_version": registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
+        "producer_id": producer_id,
+        "source_host_id": source_host_id,
+        "producer_install_id": producer_install_id,
+    }
+
+
+def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code=""):
+    class FakeResponse:
+        def json(self):
+            if status_code >= 400:
+                return {
+                    "status": "rejected",
+                    "committed": False,
+                    "retryable": False,
+                    "error": {"code": error_code or str(status_code), "message": error_code},
+                }
+            return {
+                "status": status,
+                "producer_id": captured["json"]["producer_id"],
+                "key_id": captured["json"]["key_id"],
+                "secret": "server-issued-secret-identity",
+                "secret_fingerprint_sha256": "b" * 64,
+                "active_manifest_hashes": [
+                    registration.manifest_hash(captured["json"]["manifest"])
+                ],
+            }
+
+        @property
+        def status_code(self):
+            return status_code
+
+    def fake_post(_url, *, json, headers=None, timeout=None):
+        captured["url"] = _url
+        captured["json"] = json
+        captured["headers"] = headers
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    return fake_post
+
+
+def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    program_data = tmp_path / "ProgramData"
+    report_path = tmp_path / "registration-identity-persist-report.json"
+    captured = {}
+    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured))
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, secret: Path(data_dir) / "secrets" / f"{target_name}.dpapi",
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-PERSIST",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    generated_install_id = f"container-audit-pc-persist-{0xEDE662C694C5:012x}"
+
+    assert exit_code == 0
+    assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
+    assert report["producer_identity_source"] == "generated"
+    assert report["producer_identity_persisted"] is True
+    assert Path(report["producer_identity_path"]) == identity_path.resolve()
+    assert identity == _identity_payload(
+        "container-audit-pc-persist",
+        "container-audit-pc-persist",
+        generated_install_id,
+    )
+    assert captured["json"]["producer_id"] == "container-audit-pc-persist"
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == generated_install_id
+    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
+        registration._container_audit_catalog_raw_event_names()
+    )
+
+
+def test_worker_pc_registration_reuses_persisted_identity_instead_of_new_node_id(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    program_data = tmp_path / "ProgramData"
+    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    identity_path.parent.mkdir(parents=True, exist_ok=True)
+    pinned = _identity_payload(
+        "container-audit-pc-reuse",
+        "container-audit-pc-reuse",
+        "container-audit-pc-reuse-aaaaaaaaaaaa",
+    )
+    identity_path.write_text(json.dumps(pinned, indent=2) + "\n", encoding="utf-8")
+    report_path = tmp_path / "registration-identity-reuse-report.json"
+    captured = {}
+    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, secret: Path(data_dir) / "secrets" / f"{target_name}.dpapi",
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-REUSE",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    persisted = json.loads(identity_path.read_text(encoding="utf-8"))
+    generated_install_id = f"container-audit-pc-reuse-{0xEDE662C694C5:012x}"
+
+    assert exit_code == 0
+    assert report["producer_identity_source"] == "identity_file"
+    assert captured["json"]["producer_id"] == "container-audit-pc-reuse"
+    assert captured["json"]["manifest"]["pc_identity"]["source_host_id"] == "container-audit-pc-reuse"
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
+        "container-audit-pc-reuse-aaaaaaaaaaaa"
+    )
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] != generated_install_id
+    assert persisted["producer_install_id"] == "container-audit-pc-reuse-aaaaaaaaaaaa"
+    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
+        registration._container_audit_catalog_raw_event_names()
+    )
+    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] != GUI_ORDER_RAW_EVENT_NAMES
+
+
+def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    report_path = tmp_path / "registration-identity-pin-report.json"
+    captured = {}
+    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, secret: Path(data_dir) / "secrets" / f"{target_name}.dpapi",
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "TEST1",
+            "--producer-id",
+            "container-audit-test1",
+            "--source-host-id",
+            "container-audit-test1",
+            "--producer-install-id",
+            "container-audit-test1-pin-fixture",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    identity_path = Path(report["producer_identity_path"])
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    generated_install_id = f"container-audit-test1-{0xEDE662C694C5:012x}"
+
+    assert exit_code == 0
+    assert report["producer_identity_source"] == "cli"
+    assert captured["json"]["producer_id"] == "container-audit-test1"
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
+        "container-audit-test1-pin-fixture"
+    )
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] != generated_install_id
+    assert identity["producer_install_id"] == "container-audit-test1-pin-fixture"
+    assert "9231ea1cf5b8" not in identity_path.read_text(encoding="utf-8")
+
+
+def test_worker_pc_registration_uses_seeded_identity_file_path(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    seed_path = tmp_path / "seed" / "producer_identity.json"
+    seed_path.parent.mkdir()
+    seed = _identity_payload(
+        "container-audit-seed-host",
+        "container-audit-seed-host",
+        "container-audit-seed-host-bbbbbbbbbbbb",
+    )
+    seed_path.write_text(json.dumps(seed, indent=2) + "\n", encoding="utf-8")
+    report_path = tmp_path / "registration-identity-seed-report.json"
+    captured = {}
+    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, secret: Path(data_dir) / "secrets" / f"{target_name}.dpapi",
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-SEED",
+            "--producer-identity-path",
+            str(seed_path),
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    persist_path = Path(report["producer_identity_path"])
+    persisted = json.loads(persist_path.read_text(encoding="utf-8"))
+
+    assert exit_code == 0
+    assert report["producer_identity_source"] == "identity_file"
+    assert report["producer_identity_loaded_from"] == str(seed_path.resolve())
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
+        "container-audit-seed-host-bbbbbbbbbbbb"
+    )
+    assert persisted == seed
+    assert persist_path != seed_path.resolve()
+
+
+def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evidence(
+    tmp_path, monkeypatch
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    program_data = tmp_path / "ProgramData"
+    report_path = tmp_path / "registration-identity-conflict-report.json"
+    captured = {}
+    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    monkeypatch.setattr(
+        registration.requests,
+        "post",
+        _fake_enroll_post(
+            captured,
+            status_code=409,
+            error_code="producer_identity_conflict",
+        ),
+    )
+    writes = []
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda *args, **kwargs: writes.append((args, kwargs)),
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "TEST1",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert report["blocked_reason"] == "self-enroll failed: producer_identity_conflict"
+    assert report["raw_secret_written"] is False
+    assert writes == []
+    assert not identity_path.exists()
+    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
+        f"container-audit-test1-{0xEDE662C694C5:012x}"
+    )
+    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
+        registration._container_audit_catalog_raw_event_names()
+    )
+
+
+def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    seed_path = tmp_path / "bad-identity.json"
+    seed_path.write_text("{}\n", encoding="utf-8")
+    report_path = tmp_path / "registration-bad-identity-report.json"
+    calls = []
+    monkeypatch.setattr(
+        registration.requests,
+        "post",
+        lambda *args, **kwargs: calls.append((args, kwargs)) or (_ for _ in ()).throw(
+            AssertionError("malformed identity must not enroll")
+        ),
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-BAD",
+            "--producer-identity-path",
+            str(seed_path),
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert calls == []
+    assert report["status"] == "BLOCKED"
+    assert "schema_version is invalid" in report["blocked_reason"]
+
+
+def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeypatch):
+    _self_enroll_env(tmp_path, monkeypatch)
+    report_path = tmp_path / "registration-identity-syncthing-report.json"
+
+    exit_code = registration.main(
+        [
+            "--producer-identity-path",
+            r"C:\Sync\producer_identity.json",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["status"] == "BLOCKED"
+    assert "producer_identity_path must not point at the legacy Syncthing folder" in report[
+        "blocked_reason"
+    ]
+
+
 def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-blocked.json"
     monkeypatch.setenv(DATA_ROOT_ENV, r"C:\Sync")

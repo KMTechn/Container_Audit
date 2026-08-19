@@ -54,6 +54,9 @@ CANONICAL_STREAM_CATALOG_RELATIVE = (
 )
 CONTAINER_AUDIT_CATALOG_APP_ID = "container_audit"
 CONTAINER_AUDIT_CATALOG_STREAM_ID = "container_audit_events"
+PRODUCER_IDENTITY_SCHEMA_VERSION = "container-audit-producer-identity-v1"
+PRODUCER_IDENTITY_FILENAME = "producer_identity.json"
+PRODUCER_IDENTITY_REQUIRED_FIELDS = ("producer_id", "source_host_id", "producer_install_id")
 
 
 def _default_app_root() -> str:
@@ -129,6 +132,7 @@ def _explicit_output_path_policy_report(args: argparse.Namespace) -> dict:
         _legacy_path_block_report("manifest_path", args.manifest_path),
         _legacy_path_block_report("credential_path", args.credential_path),
         _legacy_path_block_report("report_path", args.report_path),
+        _legacy_path_block_report("producer_identity_path", getattr(args, "producer_identity_path", "")),
     ]
     unsafe_paths = [check for check in checks if check]
     return {
@@ -175,6 +179,97 @@ def _container_audit_catalog_raw_event_names() -> list[str]:
     raise DirectSyncPushError(
         "canonical stream catalog missing container_audit / container_audit_events"
     )
+
+
+def _default_producer_identity_path(args: argparse.Namespace, storage_paths) -> Path:
+    if str(getattr(args, "manifest_path", "") or "").strip():
+        return Path(args.manifest_path).expanduser().parent / PRODUCER_IDENTITY_FILENAME
+    return storage_paths.direct_sync_root / PRODUCER_IDENTITY_FILENAME
+
+
+def _load_producer_identity_file(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        raise DirectSyncPushError("producer identity file is absent")
+    size = path.stat().st_size
+    if size <= 0 or size > 1024 * 1024:
+        raise DirectSyncPushError("producer identity file size is invalid")
+    try:
+        payload = load_json_no_duplicate_keys(path.read_bytes())
+    except DirectSyncPushError:
+        raise
+    except Exception as exc:
+        raise DirectSyncPushError("producer identity file could not be read") from exc
+    if not isinstance(payload, dict):
+        raise DirectSyncPushError("producer identity file must be a JSON object")
+    schema_version = str(payload.get("schema_version") or "").strip()
+    if schema_version != PRODUCER_IDENTITY_SCHEMA_VERSION:
+        raise DirectSyncPushError("producer identity file schema_version is invalid")
+    identity: dict[str, str] = {}
+    for field in PRODUCER_IDENTITY_REQUIRED_FIELDS:
+        value = str(payload.get(field) or "").strip()
+        if not value:
+            raise DirectSyncPushError(f"producer identity file missing {field}")
+        identity[field] = value
+    return identity
+
+
+def _persist_producer_identity_file(path: Path, *, producer_id: str, source_host_id: str, producer_install_id: str) -> None:
+    atomic_write_json(
+        str(path),
+        {
+            "schema_version": PRODUCER_IDENTITY_SCHEMA_VERSION,
+            "producer_id": producer_id,
+            "source_host_id": source_host_id,
+            "producer_install_id": producer_install_id,
+        },
+        indent=2,
+    )
+
+
+def _resolve_producer_identity(
+    args: argparse.Namespace,
+    storage_paths,
+    *,
+    hostname: str,
+    host_slug: str,
+) -> dict[str, str]:
+    generated_source_host_id = f"container-audit-{host_slug}"
+    generated_install_id = f"container-audit-{host_slug}-{uuid.getnode():012x}"
+    explicit_identity_path = str(getattr(args, "producer_identity_path", "") or "").strip()
+    default_identity_path = _default_producer_identity_path(args, storage_paths)
+    loaded: dict[str, str] | None = None
+    loaded_from = ""
+    if explicit_identity_path:
+        identity_path = Path(explicit_identity_path).expanduser()
+        loaded = _load_producer_identity_file(identity_path)
+        loaded_from = str(identity_path.resolve(strict=False))
+    elif default_identity_path.is_file():
+        loaded = _load_producer_identity_file(default_identity_path)
+        loaded_from = str(default_identity_path.expanduser().resolve(strict=False))
+
+    cli_source_host_id = str(args.source_host_id or "").strip()
+    cli_producer_install_id = str(args.producer_install_id or "").strip()
+    cli_producer_id = str(args.producer_id or "").strip()
+    source_host_id = cli_source_host_id or (loaded or {}).get("source_host_id") or generated_source_host_id
+    producer_install_id = (
+        cli_producer_install_id or (loaded or {}).get("producer_install_id") or generated_install_id
+    )
+    producer_id = cli_producer_id or (loaded or {}).get("producer_id") or source_host_id
+    if cli_source_host_id or cli_producer_install_id or cli_producer_id:
+        identity_source = "cli"
+    elif loaded is not None:
+        identity_source = "identity_file"
+    else:
+        identity_source = "generated"
+    return {
+        "hostname": hostname,
+        "source_host_id": source_host_id,
+        "producer_install_id": producer_install_id,
+        "producer_id": producer_id,
+        "identity_source": identity_source,
+        "identity_loaded_from": loaded_from,
+        "identity_persist_path": str(default_identity_path),
+    }
 
 
 def _build_container_audit_manifest(
@@ -533,18 +628,22 @@ def _self_enroll(
 def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, dict]:
     hostname = args.hostname or socket.gethostname()
     host_slug = _slug(hostname)
-    node_id = f"{uuid.getnode():012x}"
-    source_host_id = args.source_host_id or f"container-audit-{host_slug}"
-    producer_install_id = args.producer_install_id or f"container-audit-{host_slug}-{node_id}"
-    producer_id = args.producer_id or source_host_id
+    storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+    ensure_container_audit_storage_dirs(storage_paths)
+    identity = _resolve_producer_identity(
+        args,
+        storage_paths,
+        hostname=hostname,
+        host_slug=host_slug,
+    )
+    source_host_id = identity["source_host_id"]
+    producer_install_id = identity["producer_install_id"]
+    producer_id = identity["producer_id"]
     key_id = args.key_id or f"pending-server-key-{host_slug}"
     secret_ref = args.secret_ref or _default_secret_ref(hostname)
     endpoint_url = args.endpoint_url or DEFAULT_ENDPOINT_URL
     validate_endpoint_url(endpoint_url)
     secret_ref_scheme, secret_ref_target = _validate_secret_ref(secret_ref)
-
-    storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-    ensure_container_audit_storage_dirs(storage_paths)
     captured_at = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
 
     manifest = _build_container_audit_manifest(
@@ -582,6 +681,9 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "server_registration_verified": False,
         "secret_bootstrap_verified": False,
         "self_enrollment_requested": bool(getattr(args, "self_enroll", False)),
+        "producer_identity_source": identity["identity_source"],
+        "producer_identity_loaded_from": identity["identity_loaded_from"],
+        "producer_identity_path": identity["identity_persist_path"],
         "local_storage": {
             "data_root": str(storage_paths.data_root),
             "events_dir": str(storage_paths.events_dir),
@@ -606,6 +708,15 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         report["key_id"] = credential["key_id"]
         report["status"] = "SELF_ENROLLMENT_REGISTERED"
         report["next_required_external_step"] = "Run direct-sync relay and verify upload receipt."
+        persist_path = Path(identity["identity_persist_path"]).expanduser()
+        _persist_producer_identity_file(
+            persist_path,
+            producer_id=str(report["producer_id"]),
+            source_host_id=source_host_id,
+            producer_install_id=producer_install_id,
+        )
+        report["producer_identity_path"] = str(persist_path.resolve())
+        report["producer_identity_persisted"] = True
     return manifest, credential, report
 
 
@@ -616,6 +727,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hostname", default="")
     parser.add_argument("--source-host-id", default="")
     parser.add_argument("--producer-install-id", default="")
+    parser.add_argument("--producer-identity-path", default="")
     parser.add_argument("--producer-id", default="")
     parser.add_argument("--key-id", default="")
     parser.add_argument("--secret-ref", default="")

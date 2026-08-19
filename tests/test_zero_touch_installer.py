@@ -84,6 +84,13 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "ExistingProducerManifestPath" in text
     assert "ExistingCredentialPath" in text
     assert "ExistingRegistrationReportPath" in text
+    assert "ProducerIdentityPath" in text
+    assert "ProducerInstallId" in text
+    assert "--producer-identity-path" in text
+    assert "--producer-install-id" in text
+    assert "--producer-id" in text
+    assert "--source-host-id" in text
+    assert "Producer identity seed file does not exist." in text
     assert "--verify-manifest-hash" in text
     assert "Existing producer manifest differs from its verified registration report." in text
     assert "Get-FileHash" not in text

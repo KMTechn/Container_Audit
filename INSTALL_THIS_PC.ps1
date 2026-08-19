@@ -10,7 +10,11 @@ param(
     [string]$EnrollmentTokenEnv = "CONTAINER_AUDIT_ENROLLMENT_TOKEN",
     [string]$ExistingProducerManifestPath = "",
     [string]$ExistingCredentialPath = "",
-    [string]$ExistingRegistrationReportPath = ""
+    [string]$ExistingRegistrationReportPath = "",
+    [string]$ProducerIdentityPath = "",
+    [string]$ProducerInstallId = "",
+    [string]$ProducerId = "",
+    [string]$SourceHostId = ""
 )
 
 function ConvertTo-ElevationArgument([string]$Value) {
@@ -327,15 +331,35 @@ New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
 
 $endpointUrl = "$($ServerBaseUrl.Trim().TrimEnd('/'))/api/producer-ingest/v1/source-file"
 if (-not $reuseExistingIdentity) {
-    & $registrationExe `
-        --app-root $packageRoot `
-        --endpoint-url $endpointUrl `
-        --self-enroll `
-        --require-machine-credential-bundle `
-        --enrollment-token-env $EnrollmentTokenEnv `
-        --manifest-path $manifestPath `
-        --credential-path $credentialPath `
-        --report-path $registrationReportPath
+    if (
+        -not [string]::IsNullOrWhiteSpace($ProducerIdentityPath) -and
+        -not (Test-Path -LiteralPath $ProducerIdentityPath -PathType Leaf)
+    ) {
+        throw "Producer identity seed file does not exist."
+    }
+    $registrationArguments = @(
+        "--app-root", $packageRoot,
+        "--endpoint-url", $endpointUrl,
+        "--self-enroll",
+        "--require-machine-credential-bundle",
+        "--enrollment-token-env", $EnrollmentTokenEnv,
+        "--manifest-path", $manifestPath,
+        "--credential-path", $credentialPath,
+        "--report-path", $registrationReportPath
+    )
+    if (-not [string]::IsNullOrWhiteSpace($ProducerIdentityPath)) {
+        $registrationArguments += @("--producer-identity-path", $ProducerIdentityPath)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProducerInstallId)) {
+        $registrationArguments += @("--producer-install-id", $ProducerInstallId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ProducerId)) {
+        $registrationArguments += @("--producer-id", $ProducerId)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SourceHostId)) {
+        $registrationArguments += @("--source-host-id", $SourceHostId)
+    }
+    & $registrationExe @registrationArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Container_Audit self-enrollment failed. Report: $registrationReportPath"
     }

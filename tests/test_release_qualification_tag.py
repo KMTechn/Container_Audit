@@ -8,7 +8,7 @@ from tools.read_release_qualification_tag import (
 )
 
 
-TAG = "v2.0.64"
+TAG = "v2.0.65"
 COMMIT = "1" * 40
 TAG_OBJECT = "2" * 40
 
