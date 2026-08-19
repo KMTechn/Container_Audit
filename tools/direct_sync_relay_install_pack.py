@@ -40,6 +40,7 @@ from storage_policy import (  # noqa: E402
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
 CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
+SYSTEM32_WSCRIPT_EXE = r"C:\Windows\System32\wscript.exe"
 NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
@@ -226,6 +227,10 @@ def _scheduled_task_wrapper_path(program_data_root: str | os.PathLike[str], task
 
 def _scheduled_task_launcher_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
     return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.vbs"
+
+
+def _scheduled_task_action_parts(launcher_path: str | os.PathLike[str]) -> list[str]:
+    return [SYSTEM32_WSCRIPT_EXE, "//B", "//NoLogo", str(launcher_path)]
 
 
 def _vbs_string(value: str | os.PathLike[str]) -> str:
@@ -1039,7 +1044,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         wrapper_path = str(wrapper)
         launcher = _scheduled_task_launcher_path(args.program_data_root, args.task_name)
         launcher_path = str(launcher)
-        launcher_command = _quote_cmd(["wscript.exe", "//B", "//NoLogo", launcher_path])
+        launcher_command = _quote_cmd(_scheduled_task_action_parts(launcher_path))
         task_principal_args, task_principal = _task_principal_args(args, redact_password=True)
         create_command = _scheduled_task_create_command(
             task_name=args.task_name,
@@ -1307,7 +1312,7 @@ def main(argv: list[str] | None = None) -> int:
                 _write_json(Path(args.report_path), plan)
                 print(f"install_pack_report={Path(args.report_path).resolve()}")
                 return 2
-            task_action_parts = ["wscript.exe", "//B", "//NoLogo", plan["scheduled_task_launcher_path"]]
+            task_action_parts = _scheduled_task_action_parts(plan["scheduled_task_launcher_path"])
             if actual_principal["mode"] == "stored_password":
                 command = _stored_password_task_register_command(
                     task_name=args.task_name,

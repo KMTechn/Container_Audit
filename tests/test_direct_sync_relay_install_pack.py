@@ -9,7 +9,7 @@ import pytest
 
 import direct_sync_push
 from tools import direct_sync_relay_install_pack as install_pack
-from tools.direct_sync_relay_install_pack import _quote_cmd
+from tools.direct_sync_relay_install_pack import SYSTEM32_WSCRIPT_EXE, _quote_cmd
 from storage_policy import DATA_ROOT_ENV
 
 
@@ -373,10 +373,35 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     assert report["scheduled_task_wrapper_path"].endswith("direct-sync-relay-container-audit.cmd")
     assert report["scheduled_task_launcher_path"].endswith("direct-sync-relay-container-audit.vbs")
     assert report["scheduled_task_uses_hidden_launcher"] is True
-    assert "wscript.exe" in report["scheduled_task_launcher_command"]
+    expected_launcher_command = _quote_cmd(
+        [
+            SYSTEM32_WSCRIPT_EXE,
+            "//B",
+            "//NoLogo",
+            report["scheduled_task_launcher_path"],
+        ]
+    )
+    assert report["scheduled_task_launcher_command"] == expected_launcher_command
+    assert report["scheduled_task_create_command"][tr_index + 1] == expected_launcher_command
+    assert report["scheduled_task_launcher_command"].startswith(SYSTEM32_WSCRIPT_EXE)
+    assert not report["scheduled_task_launcher_command"].startswith("wscript.exe")
     assert str(credential_path.resolve()) in report["runner_command"]
     assert "install-pack-secret" not in report_text
     assert report["secret_redaction"]["raw_secret_in_report"] is False
+
+
+def test_scheduled_task_action_parts_use_system32_wscript():
+    launcher = (
+        r"C:\ProgramData\KMTech\DirectSync\container_audit\bin"
+        r"\direct-sync-relay-container-audit.vbs"
+    )
+    parts = install_pack._scheduled_task_action_parts(launcher)
+
+    assert parts == [SYSTEM32_WSCRIPT_EXE, "//B", "//NoLogo", launcher]
+    command = _quote_cmd(parts)
+    assert command.startswith(SYSTEM32_WSCRIPT_EXE)
+    assert not command.startswith("wscript.exe")
+    assert command.endswith(launcher)
 
 
 def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, monkeypatch):
@@ -1482,6 +1507,9 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
     assert "stored-task-password" not in " ".join(task_command)
     command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
+    assert f"$execute = '{SYSTEM32_WSCRIPT_EXE}'" in command_script
+    assert "New-ScheduledTaskAction -Execute $execute -Argument $arguments" in command_script
+    assert "//B //NoLogo" in command_script
     assert "TASK_PASSWORD_FOR_TEST" in command_script
     assert "stored-task-password" not in command_script
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
@@ -1546,6 +1574,9 @@ def test_install_pack_apply_supports_password_file_without_leaking_password(tmp_
     assert "file-task-password" not in " ".join(task_command)
     command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
+    assert f"$execute = '{SYSTEM32_WSCRIPT_EXE}'" in command_script
+    assert "New-ScheduledTaskAction -Execute $execute -Argument $arguments" in command_script
+    assert "//B //NoLogo" in command_script
     assert str(password_file.resolve()) in command_script
     assert "file-task-password" not in command_script
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
