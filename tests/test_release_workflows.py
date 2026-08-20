@@ -172,6 +172,16 @@ def test_release_contract_requires_final_tag_before_isolated_prepush_build():
     assert "preserved qualified local bytes" in contract
 
 
+def test_release_contract_quarantines_v2068_tag_without_an_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.68` is permanently quarantined with **no artifact**" in contract
+    assert "a28d7b57cd624f29b18356adc05c6e64c8b5d887" in contract
+    assert "5e2d7bd284a6a36f360c862dba51e4d8bba169cd" in contract
+    assert "no ZIP,\nmanifest, checksum, or qualification receipt exists" in contract
+    assert "Never delete, recreate,\nretarget, publish, or retry that tag" in contract
+
+
 def test_release_finally_revalidates_remote_tag_main_release_and_assets():
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     final = release[release.index("- name: Finally revalidate remote tag main"):]

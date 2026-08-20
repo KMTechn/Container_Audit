@@ -8,11 +8,15 @@ param(
     [string]$OutputRoot,
 
     [Parameter(Mandatory = $true)]
-    [string]$MirrorRoot
+    [string]$MirrorRoot,
+
+    [Parameter(Mandatory = $true)]
+    [string]$PythonExecutable
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+. (Join-Path $PSScriptRoot "resolve_release_python.ps1")
 
 $factoryContractSha256 = "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\/")
@@ -88,6 +92,16 @@ function Write-NewUtf8File {
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw "Use PowerShell 7 or later (pwsh) for the frozen release builder."
+}
+$discoveredPythonSources = @(
+    Get-Command python -CommandType Application -All -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.Source }
+)
+$releasePythonExecutable = Resolve-ReleasePythonApplication `
+    -DiscoveredSources $discoveredPythonSources `
+    -ExpectedPath $PythonExecutable
+if (-not (Test-Path -LiteralPath $releasePythonExecutable -PathType Leaf)) {
+    throw "The prepared release Python executable does not exist."
 }
 $mirrorRoot = [IO.Path]::GetFullPath($MirrorRoot).TrimEnd([char[]]"\/")
 if (-not (Test-Path -LiteralPath $mirrorRoot -PathType Container)) {
@@ -173,14 +187,14 @@ try {
         throw "The FINAL intended tag must peel to exact HEAD and local mirror main."
     }
 
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "tools/check_release_version.py", "--tag", $Tag
     ) -Failure "Application version does not match the requested candidate tag."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-c",
         "import importlib.metadata as m; assert m.version('pyinstaller') == '6.20.0', m.version('pyinstaller')"
     ) -Failure "The prepared builder must provide exactly PyInstaller 6.20.0."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "pip", "check"
     ) -Failure "The prepared Python environment has dependency conflicts."
 
@@ -190,7 +204,7 @@ try {
     [IO.Directory]::CreateDirectory($identityRoot) | Out-Null
     [IO.Directory]::CreateDirectory($releaseConfigRoot) | Out-Null
     [IO.Directory]::CreateDirectory($releaseToolsRoot) | Out-Null
-    $tagIdentityJson = python tools/read_release_qualification_tag.py `
+    $tagIdentityJson = & $releasePythonExecutable tools/read_release_qualification_tag.py `
         --repository . --tag-ref $tagRef --expected-tag $Tag
     if ($LASTEXITCODE -ne 0) {
         throw "Canonical FINAL intended annotated tag parsing failed before release-mode build."
@@ -218,7 +232,7 @@ try {
         -Text (($releaseIdentity | ConvertTo-Json -Depth 3) + "`n")
     $env:SOURCE_DATE_EPOCH = Get-GitValue -Arguments @("show", "-s", "--format=%ct", "HEAD")
 
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.build_cli", "prepare",
         "--repository", ".",
         "--stage-root", $identityRoot,
@@ -239,7 +253,7 @@ try {
         $settingsJson + "`n",
         [Text.UTF8Encoding]::new($false)
     )
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "tools/check_release_config.py", "--config-dir", $releaseConfigRoot
     ) -Failure "Release-visible configuration validation failed."
 
@@ -255,7 +269,7 @@ try {
             -Destination (Join-Path $releaseToolsRoot $relativeTool)
     }
 
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "PyInstaller", "--clean", "--noconfirm",
         "--distpath", $distRoot,
         "--workpath", (Join-Path $pyinstallerRoot "main"),
@@ -273,7 +287,7 @@ try {
     foreach ($tool in $oneFileTools) {
         $toolName = $tool[0]
         $toolSource = $tool[1]
-        Invoke-Checked -FilePath "python" -Arguments @(
+        Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
             "-m", "PyInstaller", "--paths", ".", "--name", $toolName,
             "--onefile", "--console", "--clean", "--noconfirm",
             "--distpath", $packageRoot,
@@ -302,7 +316,7 @@ try {
     ) -Failure "Protected administrator ACL wrapper dry-run failed."
 
     $probeBundleSource = [IO.Path]::GetFullPath((Join-Path $repositoryRoot "kmtech_factory_contracts/bundle"))
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "PyInstaller", "--paths", ".", "--name", "KMTechActiveWorkProbe",
         "--onefile", "--console", "--distpath", $packageRoot,
         "--workpath", (Join-Path $pyinstallerRoot "active_work_probe"),
@@ -316,14 +330,14 @@ try {
     $probeSha256 = (Get-FileHash -LiteralPath $probePath -Algorithm SHA256).Hash.ToLowerInvariant()
     $independentIdentity = Join-Path $packageRoot "KMTechActiveWorkProbe.independent.build-identity.json"
     $integratedIdentity = Join-Path $packageRoot "KMTechActiveWorkProbe.integrated.build-identity.json"
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.active_work_probe",
         "-Mode", "build-identity", "-OutputPath", $independentIdentity,
         "-ProbeArtifactPath", $probePath, "-ProbeSourceCommit", $sourceCommit,
         "-WorkflowMode", "independent", "-SupportedApps", "Container_Audit",
         "-ProbeName", "KMTechActiveWorkProbe", "-ProbeVersion", "v1.0.3.4"
     ) -Failure "Independent active-work probe identity generation failed."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.active_work_probe",
         "-Mode", "build-identity", "-OutputPath", $integratedIdentity,
         "-ProbeArtifactPath", $probePath, "-ProbeSourceCommit", $sourceCommit,
@@ -361,7 +375,7 @@ try {
         }
     }
 
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.build_cli", "manifest",
         "--stage-root", $packageRoot,
         "--expected-file", "Container_Audit.exe",
@@ -372,7 +386,7 @@ try {
         "--expected-file", "build-identity.json",
         "--expected-file", "build-compatibility.json"
     ) -Failure "Factory package manifest sealing failed."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.build_cli", "verify",
         "--stage-root", $packageRoot,
         "--expected-contract-sha256", $factoryContractSha256
@@ -382,19 +396,19 @@ try {
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
         throw "Frozen candidate ZIP was not created."
     }
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "tools/check_update_archive.py",
         "--zip-path", $zipPath,
         "--destination", $smokeRoot,
         "--package-root", $packageRoot
     ) -Failure "Frozen candidate archive smoke verification failed."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-I", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py"), "--help"
     ) -Failure "Staged direct-sync relay source help probe failed."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-I", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py"), "--help"
     ) -Failure "Staged direct-sync operator source help probe failed."
-    Invoke-Checked -FilePath "python" -Arguments @(
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "tools/check_release_config.py",
         "--config-dir", (Join-Path $smokeRoot "Container_Audit/config")
     ) -Failure "Extracted release configuration validation failed."

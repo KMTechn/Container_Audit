@@ -123,6 +123,16 @@ Repository immutability remains an external pre-tag-publication gate because `GE
 
 ## Frozen v2.0.62+ publication sequence
 
+### Immutable failed local candidate history
+
+`v2.0.68` is permanently quarantined with **no artifact**. Its annotated local
+tag object is `a28d7b57cd624f29b18356adc05c6e64c8b5d887`, peeling to
+`5e2d7bd284a6a36f360c862dba51e4d8bba169cd`. The authority stopped after
+creating that local tag and before invoking the official builder, so no ZIP,
+manifest, checksum, or qualification receipt exists. Never delete, recreate,
+retarget, publish, or retry that tag; every successor must use a new patch
+version and fresh absent release and candidate roots.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
@@ -140,6 +150,7 @@ $mirrorRoot = "$releaseRoot\mirror.git"
 $workClone = "$releaseRoot\work"
 $candidateRoot = "E:\KMTech\Container_Audit\v2.0.62-candidate"
 $tagMessage = "$releaseRoot\FINAL_TAG_MESSAGE.txt"
+$pythonExecutable = "E:\KMTech\Container_Audit\release-python\Scripts\python.exe"
 $candidateCommit = (git -C $sourceRepo rev-parse --verify "HEAD^{commit}").Trim().ToLowerInvariant()
 if ((Test-Path -LiteralPath $releaseRoot) -or (Test-Path -LiteralPath $candidateRoot)) {
   throw "Use fresh absent release and candidate roots."
@@ -157,10 +168,18 @@ git -C $workClone checkout -B main origin/main
 pwsh -NoProfile -File "$workClone\tools\build_frozen_release_candidate.ps1" `
   -Tag v2.0.62 `
   -MirrorRoot $mirrorRoot `
+  -PythonExecutable $pythonExecutable `
   -OutputRoot $candidateRoot
 ```
 
 The `tools/build_frozen_release_candidate.ps1` builder accepts only that prepared isolated clone. It fails closed unless the clone is clean, its absolute local `origin` is the supplied bare mirror, `HEAD`, local `main`, clone `origin/main`, and mirror `main` are identical, and the FINAL tag object/type/peel are exact in both repositories. Before `build_cli prepare`, PyInstaller, or any other release-mode generation, it parses the canonical tag and writes `FINAL_RELEASE_IDENTITY.json`. It then creates the package once, seals and verifies the manifest, checks extraction/config/probes, and writes `local-artifact-qualification-receipt.json` containing the tag object, source commit/tree, mirror refs, ZIP name/hash/size, and principal EXE hash.
+
+The authority must prepend the prepared Python environment to `PATH` and pass
+that exact executable through `-PythonExecutable`. The builder resolves all
+PATH-visible Python applications in precedence order, accepts additional
+lower-priority installations only when the first result is the exact prepared
+executable, and invokes that resolved path for every Python build step. Zero
+results or a different first result fail before release-mode generation.
 
 Never delete, recreate, or move that tag object. There is no provisional-to-final transition and no post-build tag mutation. If the tag preparation or build fails, or source/manifest bytes change, abandon that version and use a new patch version. Do not repair or overwrite a failed candidate root.
 
