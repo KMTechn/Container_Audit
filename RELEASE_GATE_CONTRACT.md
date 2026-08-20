@@ -25,6 +25,74 @@ canonical adoption.
 | release-gate | Wrong tag/SHA or rebuilt/altered package/archive/hash | Pre-push build in an isolated local bare mirror/clone under the already-created FINAL tag object, exact local qualification receipt, external immutable-policy gate, immutable release snapshots, and downloaded-vs-preserved local byte parity | Build and qualify before any push; publish `main`; wait for zero nonterminal workflows; satisfy policy gate; push the unchanged tag; publish and compare the immutable asset | Any missing, moved, recreated, rebuilt, mutable, or mismatched identity/byte fails; use a new patch version and keep rollout at 0 |
 | test1-e2e | Frozen GUI, scanner, relay, canary, or rollback failure | Exact qualified ZIP on TEST1, real UI/scanner, direct-sync receipt, update and rollback preservation | After immutable release byte parity, before stable rollout | Keep rollout at 0 and quarantine the artifact |
 
+## Installation, discoverability, and rollback contract
+
+`install_status=PASS` proves installation infrastructure only: authenticated
+self-enrollment, the SYSTEM relay task, its current server lease, and the
+all-users launcher contract. The installer must also print
+`operator_readiness_status=PENDING_FIRST_LAUNCH` and
+`first_launch_catalog_status=NOT_TESTED`. Overall installation qualification is
+therefore `UNPROVEN` until the same non-elevated operator captured before UAC
+launches the installed application and proves the authenticated central catalog
+baseline. The installer must not seed the per-user cache, copy the bundled
+catalog into it, weaken trusted-origin or authentication checks, or claim
+catalog success from an elevated install.
+
+The supported operator entry point is exactly the all-users Start Menu shortcut
+`CommonPrograms\KMTech\이적 검사 시스템.lnk`. Its target and icon are
+`C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe`, its working
+directory is `C:\KMTech\Apps\Container_Audit\current`, and it has no
+arguments. Installation must read those fields back before reporting
+infrastructure PASS. An identical shortcut is idempotent; a conflicting link
+blocks installation or removal. No desktop shortcut is part of this contract.
+
+Plain deconfiguration is deliberately non-destructive:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
+```
+
+It removes only the exact owned task and shortcut, preserves application,
+event, queue, catalog, profile, credential, and update state, and reports
+`uninstall_status=PASS_DATA_PRESERVED`. It is not pristine rollback and must
+never print `rollback_status=PASS`.
+
+Qualification-only permanent rollback requires all three explicit inputs:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 `
+  -Uninstall `
+  -PurgeContainerAuditState `
+  -ConfirmPermanentContainerAuditDataRemoval `
+  -RollbackReportPath <EXTERNAL-EVIDENCE-PATH>
+```
+
+The confirmation may be supplied only after the qualification owner has proved
+no active tray or unresolved operation, a fully ACKed relay, and no running GUI
+or packaged relay process. The report path must be a fresh absolute file
+outside every deletion target. The bounded report records only path/status
+metadata and must never contain tokens, DPAPI bytes, profile secrets, event
+payloads, or barcodes.
+
+Before any deletion, rollback must prove canonical production paths, the
+captured operator SID/LocalAppData binding, exact task action/principal, exact
+shortcut metadata, app-scoped DirectSync ownership, an allowlisted application
+parent inventory, and absence of reparse points throughout every existing
+target. A foreign task, shortcut, application-parent child, path escape,
+filesystem root, alternate stream, symlink, or junction is a blocking failure.
+`AllowNoncanonicalLayoutForTest` cannot authorize deletion.
+
+Deletion order is fixed: task; shortcut; app-scoped logistics profile;
+DirectSync root; captured operator data; captured operator catalog; update
+backup and evidence siblings; application `current` root last. Only the now
+empty `C:\KMTech\Apps\Container_Audit` parent and now-empty KMTech Start Menu
+group may then be removed; shared `Apps`, `ProgramData\KMTech`, Logistics,
+DirectSync, LocalAppData `KMTech`, profile, and filesystem roots must never be
+recursively deleted. `rollback_status=PASS` requires a final task lookup and
+existence check proving every inventory item absent. Exact-target qualification
+must compare that result with the recorded pristine prestate while proving
+unrelated parents and siblings unchanged.
+
 ## Exact commands
 
 One-time environment setup (not part of `quick-check`):

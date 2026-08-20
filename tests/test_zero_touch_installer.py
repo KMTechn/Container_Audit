@@ -128,6 +128,126 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "KMTECH_FACTORY_INSTALL_TEST_MODE" in text
 
 
+def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+
+    assert "PurgeContainerAuditState" in text
+    assert "ConfirmPermanentContainerAuditDataRemoval" in text
+    assert "RollbackReportPath" in text
+    assert "Destructive rollback requires -ConfirmPermanentContainerAuditDataRemoval." in text
+    assert "Destructive rollback requires an external -RollbackReportPath." in text
+    assert "uninstall_status=PASS_DATA_PRESERVED" in text
+    assert "data_preserved=true" in text
+    assert "install_status=UNINSTALLED" not in text
+    assert "rollback_status=PASS" in text
+    assert "Test-RollbackPostconditions" in text
+    assert 'status = if ($remaining.Count -eq 0) { "PASS" } else { "FAIL" }' in text
+    assert "contains_credential_content = $false" in text
+
+    inventory = text[text.index("$rollbackInventory = @(") : text.index("if ($DryRun.IsPresent)")]
+    ordered_markers = [
+        'order = 1; kind = "scheduled_task"',
+        'order = 2; kind = "shortcut"',
+        'order = 3; kind = "directory"; path = $expectedLogisticsProfileRoot',
+        'order = 4; kind = "directory"; path = $expectedDirectSyncRoot',
+        'order = 5; kind = "directory"; path = $expectedOperatorDataRoot',
+        'order = 6; kind = "directory"; path = $expectedOperatorCatalogRoot',
+        'order = 7; kind = "directory"; path = $expectedUpdateBackupRoot',
+        'order = 8; kind = "directory"; path = $expectedUpdateEvidenceRoot',
+        'order = 9; kind = "directory"; path = $expectedInstallRoot',
+    ]
+    positions = [inventory.index(marker) for marker in ordered_markers]
+    assert positions == sorted(positions)
+    assert "application_root_is_last" in text
+    apply_block = text[
+        text.index("[void]$rollbackResults.Add((Remove-OwnedScheduledTask") :
+        text.index("$rollbackReport.parent_cleanup")
+    ]
+    apply_markers = [
+        "Remove-OwnedScheduledTask",
+        "Remove-OwnedShortcut",
+        "Remove-ExactOwnedTree $expectedLogisticsProfileRoot",
+        "Remove-ExactOwnedTree $expectedDirectSyncRoot",
+        "Remove-ExactOwnedTree $expectedOperatorDataRoot",
+        "Remove-ExactOwnedTree $expectedOperatorCatalogRoot",
+        "Remove-ExactOwnedTree $expectedUpdateBackupRoot",
+        "Remove-ExactOwnedTree $expectedUpdateEvidenceRoot",
+        "Remove-ExactOwnedTree $expectedInstallRoot",
+    ]
+    apply_positions = [apply_block.index(marker) for marker in apply_markers]
+    assert apply_positions == sorted(apply_positions)
+
+
+def test_package_installer_guards_exact_owned_rollback_boundaries():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+
+    assert "Get-StrictFullPath" in text
+    assert "Assert-ExactCanonicalPath" in text
+    assert "Assert-NoReparsePoint" in text
+    assert "FileAttributes]::ReparsePoint" in text
+    assert "must not be a filesystem root" in text
+    assert "must not contain traversal segments" in text
+    assert "must not contain an alternate data stream" in text
+    assert "Assert-ApplicationParentInventory" in text
+    assert "contains a foreign child" in text
+    assert "Assert-DirectSyncOwnership" in text
+    assert "Assert-NoOwnedProcess" in text
+    assert "Get-OwnedScheduledTaskState" in text
+    assert "A conflicting scheduled task exists" in text
+    assert "Get-OwnedShortcutState" in text
+    assert "A conflicting Start Menu shortcut exists" in text
+    assert "Assert-ExternalRollbackReportPath" in text
+    assert "outside every deletion target" in text
+    assert "fresh absent external file" in text
+    assert 'Remove-Item -LiteralPath "C:\\ProgramData\\KMTech"' not in text
+    assert 'Remove-Item -LiteralPath "C:\\KMTech\\Apps"' not in text
+    assert 'Remove-Item -LiteralPath $OperatorLocalAppDataRoot -Recurse' not in text
+
+
+def test_package_installer_creates_owned_all_users_shortcut_and_reports_pending_launch():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+
+    assert "SpecialFolder]::CommonPrograms" in text
+    assert "Get-ContainerAuditShortcutName" in text
+    assert "[char]0xC774" in text
+    assert "[char]0xC801" in text
+    assert "[char]0xAC80" in text
+    assert "[char]0xC0AC" in text
+    assert "[char]0xC2DC" in text
+    assert "[char]0xC2A4" in text
+    assert "[char]0xD15C" in text
+    assert "Install-OwnedShortcut" in text
+    assert "Remove-OwnedShortcut" in text
+    assert '$shortcut.TargetPath = $ExpectedTarget' in text
+    assert '$shortcut.WorkingDirectory = $ExpectedWorkingDirectory' in text
+    assert '$shortcut.Arguments = ""' in text
+    assert '$shortcut.IconLocation = "$ExpectedTarget,0"' in text
+    assert "Desktop" not in text
+    assert "operator_readiness_status=PENDING_FIRST_LAUNCH" in text
+    assert "first_launch_catalog_status=NOT_TESTED" in text
+    assert "operator_catalog_cache_path=$operatorCatalogCachePath" in text
+    assert text.rindex("Wait-CurrentRuntimeLease $relayStarted") < text.rindex(
+        "Install-OwnedShortcut $expectedShortcutPath"
+    )
+
+
+def test_package_installer_captures_operator_identity_before_elevation_without_acl_change():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+
+    capture = text.index("$currentOperator = Get-CurrentOperatorContext")
+    elevation = text.index(
+        "Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args"
+    )
+    assert capture < elevation
+    assert '$PSBoundParameters["OperatorUserSid"]' in text
+    assert '$PSBoundParameters["OperatorLocalAppDataRoot"]' in text
+    assert "Assert-OperatorContext" in text
+    assert "ProfileList\\$Sid" in text
+    assert '$DataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\\ContainerAudit"' in text
+    assert "icacls" not in text.lower()
+    assert "Set-Acl" not in text
+
+
 def test_frozen_release_requires_common_installer_entrypoint():
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"

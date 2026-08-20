@@ -2,6 +2,9 @@
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
+    [switch]$PurgeContainerAuditState,
+    [switch]$ConfirmPermanentContainerAuditDataRemoval,
+    [string]$RollbackReportPath = "",
     [switch]$AllowNoncanonicalLayoutForTest,
     [string]$ServerBaseUrl = "https://worker.kmtecherp.com",
     [string]$DataRoot = "",
@@ -14,8 +17,12 @@ param(
     [string]$ProducerIdentityPath = "",
     [string]$ProducerInstallId = "",
     [string]$ProducerId = "",
-    [string]$SourceHostId = ""
+    [string]$SourceHostId = "",
+    [string]$OperatorUserSid = "",
+    [string]$OperatorLocalAppDataRoot = ""
 )
+
+$ErrorActionPreference = "Stop"
 
 function ConvertTo-ElevationArgument([string]$Value) {
     if ([string]::IsNullOrEmpty($Value)) { return '""' }
@@ -73,9 +80,53 @@ function Invoke-SelfElevated(
     exit $process.ExitCode
 }
 
-Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args
+function Get-CurrentOperatorContext {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    if ($null -eq $identity.User -or [string]::IsNullOrWhiteSpace($identity.User.Value)) {
+        throw "The invoking operator SID is unavailable."
+    }
+    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        throw "The invoking operator LOCALAPPDATA is unavailable."
+    }
+    return [ordered]@{
+        sid = $identity.User.Value
+        local_app_data_root = [System.IO.Path]::GetFullPath($env:LOCALAPPDATA)
+    }
+}
 
-$ErrorActionPreference = "Stop"
+$currentOperator = Get-CurrentOperatorContext
+$currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
+$currentIsAdministrator = $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $currentIsAdministrator) {
+    if (
+        (-not [string]::IsNullOrWhiteSpace($OperatorUserSid) -and $OperatorUserSid -cne $currentOperator.sid) -or
+        (-not [string]::IsNullOrWhiteSpace($OperatorLocalAppDataRoot) -and
+            -not ([System.IO.Path]::GetFullPath($OperatorLocalAppDataRoot)).Equals(
+                $currentOperator.local_app_data_root,
+                [System.StringComparison]::OrdinalIgnoreCase
+            ))
+    ) {
+        throw "Operator identity parameters cannot replace the invoking non-elevated operator."
+    }
+    $OperatorUserSid = $currentOperator.sid
+    $OperatorLocalAppDataRoot = $currentOperator.local_app_data_root
+    $PSBoundParameters["OperatorUserSid"] = $OperatorUserSid
+    $PSBoundParameters["OperatorLocalAppDataRoot"] = $OperatorLocalAppDataRoot
+}
+else {
+    if ([string]::IsNullOrWhiteSpace($OperatorUserSid)) {
+        $OperatorUserSid = $currentOperator.sid
+    }
+    if ([string]::IsNullOrWhiteSpace($OperatorLocalAppDataRoot)) {
+        $OperatorLocalAppDataRoot = $currentOperator.local_app_data_root
+    }
+}
+
+if (-not $DryRun.IsPresent) {
+    Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args
+}
+
 
 function Assert-HttpsServerBaseUrl([string]$Value) {
     $uri = $null
@@ -140,9 +191,429 @@ function Write-Utf8JsonFile([string]$Path, $Payload) {
 }
 
 function Test-SamePath([string]$Left, [string]$Right) {
+    if (
+        [string]::IsNullOrWhiteSpace($Left) -or
+        [string]::IsNullOrWhiteSpace($Right) -or
+        -not [System.IO.Path]::IsPathRooted($Left) -or
+        -not [System.IO.Path]::IsPathRooted($Right)
+    ) {
+        return $false
+    }
     $leftFull = [System.IO.Path]::GetFullPath($Left).TrimEnd('\')
     $rightFull = [System.IO.Path]::GetFullPath($Right).TrimEnd('\')
     return $leftFull.Equals($rightFull, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+function Get-StrictFullPath([string]$Path, [string]$Purpose) {
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw "$Purpose path is required."
+    }
+    if (-not [System.IO.Path]::IsPathRooted($Path)) {
+        throw "$Purpose path must be absolute."
+    }
+    if ($Path.StartsWith('\\?\') -or $Path.StartsWith('\\.\')) {
+        throw "$Purpose path must not use a device namespace."
+    }
+    if ($Path -match '(^|[\\/])\.\.?(?:[\\/]|$)') {
+        throw "$Purpose path must not contain traversal segments."
+    }
+    $fullPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $root = [System.IO.Path]::GetPathRoot($fullPath).TrimEnd('\')
+    if ([string]::IsNullOrWhiteSpace($fullPath) -or $fullPath.Equals($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Purpose path must not be a filesystem root."
+    }
+    $rootLength = [System.IO.Path]::GetPathRoot($fullPath).Length
+    if ($fullPath.Substring($rootLength).Contains(':')) {
+        throw "$Purpose path must not contain an alternate data stream."
+    }
+    return $fullPath
+}
+
+function Assert-ExactCanonicalPath([string]$Actual, [string]$Expected, [string]$Purpose) {
+    $actualFull = Get-StrictFullPath $Actual $Purpose
+    $expectedFull = Get-StrictFullPath $Expected "$Purpose expected"
+    if (-not $actualFull.Equals($expectedFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "$Purpose path is outside the exact owned location."
+    }
+    return $actualFull
+}
+
+function Test-PathWithin([string]$Candidate, [string]$Container) {
+    $candidateFull = (Get-StrictFullPath $Candidate "Candidate").TrimEnd('\')
+    $containerFull = (Get-StrictFullPath $Container "Container").TrimEnd('\')
+    if ($candidateFull.Equals($containerFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $true
+    }
+    return $candidateFull.StartsWith(
+        $containerFull + '\',
+        [System.StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-NoReparsePoint([string]$Path, [string]$Purpose, [switch]$IncludeDescendants) {
+    $fullPath = Get-StrictFullPath $Path $Purpose
+    $cursor = $fullPath
+    while (-not [string]::IsNullOrWhiteSpace($cursor)) {
+        if (Test-Path -LiteralPath $cursor) {
+            $item = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "$Purpose contains a reparse point: $cursor"
+            }
+        }
+        $parent = Split-Path -Parent $cursor
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $cursor) {
+            break
+        }
+        $cursor = $parent
+    }
+    if ($IncludeDescendants.IsPresent -and (Test-Path -LiteralPath $fullPath -PathType Container)) {
+        $pendingDirectories = New-Object System.Collections.Generic.Stack[string]
+        $pendingDirectories.Push($fullPath)
+        while ($pendingDirectories.Count -gt 0) {
+            $directory = $pendingDirectories.Pop()
+            foreach ($child in @(Get-ChildItem -LiteralPath $directory -Force -ErrorAction Stop)) {
+                if (($child.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw "$Purpose contains a descendant reparse point: $($child.FullName)"
+                }
+                if ($child.PSIsContainer) {
+                    $pendingDirectories.Push($child.FullName)
+                }
+            }
+        }
+    }
+}
+
+function Assert-OperatorContext([string]$Sid, [string]$LocalAppDataRoot) {
+    try {
+        $securityIdentifier = New-Object Security.Principal.SecurityIdentifier -ArgumentList $Sid
+    }
+    catch {
+        throw "OperatorUserSid is not a valid Windows SID."
+    }
+    if ($securityIdentifier.Value -cne $Sid) {
+        throw "OperatorUserSid is not canonical."
+    }
+    $localRoot = Get-StrictFullPath $LocalAppDataRoot "OperatorLocalAppDataRoot"
+    $profileKey = "Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\$Sid"
+    if (-not (Test-Path -LiteralPath $profileKey)) {
+        throw "OperatorUserSid has no local Windows profile."
+    }
+    $profilePathValue = [string](Get-ItemProperty -LiteralPath $profileKey -Name ProfileImagePath -ErrorAction Stop).ProfileImagePath
+    $profileRoot = Get-StrictFullPath ([Environment]::ExpandEnvironmentVariables($profilePathValue)) "Operator profile"
+    $expectedLocalRoot = Join-Path $profileRoot "AppData\Local"
+    [void](Assert-ExactCanonicalPath $localRoot $expectedLocalRoot "OperatorLocalAppDataRoot")
+    Assert-NoReparsePoint $localRoot "OperatorLocalAppDataRoot"
+    return $localRoot
+}
+
+function Get-ContainerAuditShortcutName {
+    return -join @(
+        [char]0xC774,
+        [char]0xC801,
+        [char]0x20,
+        [char]0xAC80,
+        [char]0xC0AC,
+        [char]0x20,
+        [char]0xC2DC,
+        [char]0xC2A4,
+        [char]0xD15C
+    )
+}
+
+function Get-OwnedShortcutState(
+    [string]$ShortcutPath,
+    [string]$ExpectedTarget,
+    [string]$ExpectedWorkingDirectory
+) {
+    Assert-NoReparsePoint $ShortcutPath "Container_Audit Start Menu shortcut"
+    if (-not (Test-Path -LiteralPath $ShortcutPath)) {
+        return [ordered]@{ status = "ABSENT"; path = $ShortcutPath }
+    }
+    if (-not (Test-Path -LiteralPath $ShortcutPath -PathType Leaf)) {
+        throw "The Container_Audit Start Menu shortcut path is not a file."
+    }
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $targetPath = [string]$shortcut.TargetPath
+        $workingDirectory = [string]$shortcut.WorkingDirectory
+        $arguments = [string]$shortcut.Arguments
+        $iconLocation = [string]$shortcut.IconLocation
+    }
+    finally {
+        if ($null -ne $shortcut) {
+            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)
+        }
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+    }
+    $iconPath = $iconLocation
+    $iconIndex = ""
+    if ($iconLocation -match '^(.*),\s*(-?\d+)$') {
+        $iconPath = $Matches[1].Trim().Trim('"')
+        $iconIndex = $Matches[2]
+    }
+    if (
+        -not (Test-SamePath $targetPath $ExpectedTarget) -or
+        -not (Test-SamePath $workingDirectory $ExpectedWorkingDirectory) -or
+        $arguments -cne "" -or
+        -not (Test-SamePath $iconPath $ExpectedTarget) -or
+        ($iconIndex -ne "" -and $iconIndex -cne "0")
+    ) {
+        throw "A conflicting Start Menu shortcut exists; refusing to overwrite or remove it."
+    }
+    return [ordered]@{
+        status = "OWNED"
+        path = $ShortcutPath
+        target = $targetPath
+        working_directory = $workingDirectory
+        arguments = $arguments
+        icon = $iconLocation
+    }
+}
+
+function Install-OwnedShortcut(
+    [string]$ShortcutPath,
+    [string]$ExpectedTarget,
+    [string]$ExpectedWorkingDirectory
+) {
+    $existing = Get-OwnedShortcutState $ShortcutPath $ExpectedTarget $ExpectedWorkingDirectory
+    if ($existing.status -ceq "OWNED") {
+        return $existing
+    }
+    $shortcutDirectory = Split-Path -Parent $ShortcutPath
+    Assert-NoReparsePoint $shortcutDirectory "KMTech Start Menu group"
+    New-Item -ItemType Directory -Path $shortcutDirectory -Force -ErrorAction Stop | Out-Null
+    $shell = New-Object -ComObject WScript.Shell
+    try {
+        $shortcut = $shell.CreateShortcut($ShortcutPath)
+        $shortcut.TargetPath = $ExpectedTarget
+        $shortcut.WorkingDirectory = $ExpectedWorkingDirectory
+        $shortcut.Arguments = ""
+        $shortcut.IconLocation = "$ExpectedTarget,0"
+        $shortcut.Save()
+    }
+    finally {
+        if ($null -ne $shortcut) {
+            [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut)
+        }
+        [void][System.Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell)
+    }
+    return Get-OwnedShortcutState $ShortcutPath $ExpectedTarget $ExpectedWorkingDirectory
+}
+
+function Remove-OwnedShortcut(
+    [string]$ShortcutPath,
+    [string]$ExpectedTarget,
+    [string]$ExpectedWorkingDirectory
+) {
+    $existing = Get-OwnedShortcutState $ShortcutPath $ExpectedTarget $ExpectedWorkingDirectory
+    if ($existing.status -ceq "OWNED") {
+        Remove-Item -LiteralPath $ShortcutPath -Force -ErrorAction Stop
+    }
+    if (Test-Path -LiteralPath $ShortcutPath) {
+        throw "Container_Audit Start Menu shortcut removal postcondition failed."
+    }
+    return [ordered]@{ status = "ABSENT"; path = $ShortcutPath }
+}
+
+function Get-OwnedScheduledTaskState([string]$Name, [string]$ExpectedLauncherPath) {
+    $tasks = @(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) {
+        return [ordered]@{ status = "ABSENT"; task_name = $Name }
+    }
+    if ($tasks.Count -ne 1) {
+        throw "Multiple scheduled tasks use the Container_Audit task name."
+    }
+    $task = $tasks[0]
+    if ([string]$task.TaskPath -cne "\") {
+        throw "The Container_Audit scheduled task exists outside the owned root task path."
+    }
+    $actions = @($task.Actions)
+    if ($actions.Count -ne 1) {
+        throw "The Container_Audit scheduled task action is not owned."
+    }
+    $expectedWscript = Join-Path ([Environment]::SystemDirectory) "wscript.exe"
+    $actualExecute = [string]$actions[0].Execute
+    $actualArguments = ([string]$actions[0].Arguments).Trim()
+    $expectedArguments = @(
+        "//B //NoLogo $ExpectedLauncherPath",
+        "//B //NoLogo `"$ExpectedLauncherPath`""
+    )
+    $argumentMatches = $false
+    foreach ($candidate in $expectedArguments) {
+        if ($actualArguments.Equals($candidate, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $argumentMatches = $true
+            break
+        }
+    }
+    $principal = [string]$task.Principal.UserId
+    $principalMatches = @("SYSTEM", "NT AUTHORITY\SYSTEM", "S-1-5-18") -contains $principal
+    if (
+        -not (Test-SamePath $actualExecute $expectedWscript) -or
+        -not $argumentMatches -or
+        -not $principalMatches
+    ) {
+        throw "A conflicting scheduled task exists; refusing to stop or remove it."
+    }
+    return [ordered]@{
+        status = "OWNED"
+        task_name = $Name
+        task_path = [string]$task.TaskPath
+        execute = $actualExecute
+        arguments = $actualArguments
+        principal = $principal
+    }
+}
+
+function Remove-OwnedScheduledTask(
+    [string]$Name,
+    [string]$ExpectedLauncherPath,
+    [string]$InstallExecutable,
+    [string]$ApplicationRoot,
+    [string]$ProgramDataRoot,
+    [string]$ReportPath
+) {
+    $state = Get-OwnedScheduledTaskState $Name $ExpectedLauncherPath
+    if ($state.status -ceq "OWNED") {
+        Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        & $InstallExecutable `
+            --apply `
+            --uninstall `
+            --confirm-production-install `
+            --app-root $ApplicationRoot `
+            --program-data-root $ProgramDataRoot `
+            --task-name $Name `
+            --report-path $ReportPath | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Container_Audit exact scheduled-task uninstall failed. Report: $ReportPath"
+        }
+    }
+    if (@(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw "Container_Audit scheduled-task removal postcondition failed."
+    }
+    return [ordered]@{ status = "ABSENT"; task_name = $Name }
+}
+
+function Assert-OwnedTree([string]$Path, [string]$ExpectedPath, [string]$Purpose) {
+    $fullPath = Assert-ExactCanonicalPath $Path $ExpectedPath $Purpose
+    Assert-NoReparsePoint $fullPath $Purpose -IncludeDescendants
+    if ((Test-Path -LiteralPath $fullPath) -and -not (Test-Path -LiteralPath $fullPath -PathType Container)) {
+        throw "$Purpose exists but is not a directory."
+    }
+    return $fullPath
+}
+
+function Assert-ApplicationParentInventory([string]$ApplicationParent) {
+    Assert-NoReparsePoint $ApplicationParent "Container_Audit application parent" -IncludeDescendants
+    if (-not (Test-Path -LiteralPath $ApplicationParent)) {
+        return
+    }
+    if (-not (Test-Path -LiteralPath $ApplicationParent -PathType Container)) {
+        throw "Container_Audit application parent is not a directory."
+    }
+    $allowedNames = @("current", ".current.update-backups", ".current.update-evidence")
+    foreach ($child in @(Get-ChildItem -LiteralPath $ApplicationParent -Force -ErrorAction Stop)) {
+        if ($allowedNames -notcontains $child.Name) {
+            throw "Container_Audit application parent contains a foreign child: $($child.Name)"
+        }
+    }
+}
+
+function Assert-DirectSyncOwnership([string]$Root, [string]$InstallReport, [string]$ExpectedName) {
+    if (-not (Test-Path -LiteralPath $Root)) {
+        return
+    }
+    $report = Read-BoundedJson $InstallReport "Container_Audit DirectSync install report"
+    if (
+        [string]$report.task_name -cne $ExpectedName -or
+        -not (Test-SamePath ([string]$report.program_data_root) $Root)
+    ) {
+        throw "Container_Audit DirectSync ownership metadata does not match the exact app scope."
+    }
+}
+
+function Assert-NoOwnedProcess([string[]]$ProcessNames) {
+    foreach ($processName in $ProcessNames) {
+        if (@(Get-Process -Name $processName -ErrorAction SilentlyContinue).Count -gt 0) {
+            throw "Destructive rollback is blocked while the owned process is running: $processName"
+        }
+    }
+}
+
+function Assert-ExternalRollbackReportPath([string]$Path, [object[]]$DeletionTargets) {
+    $fullPath = Get-StrictFullPath $Path "RollbackReportPath"
+    if (Test-Path -LiteralPath $fullPath) {
+        throw "RollbackReportPath must be a fresh absent external file."
+    }
+    $parent = Split-Path -Parent $fullPath
+    if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+        throw "RollbackReportPath parent must already exist."
+    }
+    Assert-NoReparsePoint $parent "RollbackReportPath parent"
+    foreach ($target in $DeletionTargets) {
+        if ($target.kind -ceq "scheduled_task") {
+            continue
+        }
+        if (Test-PathWithin $fullPath ([string]$target.path)) {
+            throw "RollbackReportPath must be outside every deletion target."
+        }
+    }
+    return $fullPath
+}
+
+function Remove-ExactOwnedTree([string]$Path, [string]$Purpose) {
+    Assert-NoReparsePoint $Path $Purpose -IncludeDescendants
+    if (Test-Path -LiteralPath $Path) {
+        if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+            throw "$Purpose is not a directory."
+        }
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+    }
+    if (Test-Path -LiteralPath $Path) {
+        throw "$Purpose deletion postcondition failed."
+    }
+    return [ordered]@{ status = "ABSENT"; path = $Path }
+}
+
+function Remove-EmptyOwnedParent([string]$Path, [string]$Purpose, [switch]$RequireEmpty) {
+    Assert-NoReparsePoint $Path $Purpose
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [ordered]@{ status = "ABSENT"; path = $Path }
+    }
+    if (-not (Test-Path -LiteralPath $Path -PathType Container)) {
+        throw "$Purpose is not a directory."
+    }
+    $firstChild = Get-ChildItem -LiteralPath $Path -Force -ErrorAction Stop | Select-Object -First 1
+    if ($null -ne $firstChild) {
+        if ($RequireEmpty.IsPresent) {
+            throw "$Purpose contains unexpected state after owned-child deletion."
+        }
+        return [ordered]@{ status = "PRESERVED_NONEMPTY"; path = $Path }
+    }
+    Remove-Item -LiteralPath $Path -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $Path) {
+        throw "$Purpose empty-parent cleanup postcondition failed."
+    }
+    return [ordered]@{ status = "ABSENT"; path = $Path }
+}
+
+function Test-RollbackPostconditions([object[]]$Inventory, [string]$Name) {
+    $remaining = New-Object System.Collections.Generic.List[string]
+    if (@(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).Count -gt 0) {
+        [void]$remaining.Add("scheduled_task:$Name")
+    }
+    foreach ($target in $Inventory) {
+        if ($target.kind -ceq "scheduled_task") {
+            continue
+        }
+        if (Test-Path -LiteralPath ([string]$target.path)) {
+            [void]$remaining.Add([string]$target.path)
+        }
+    }
+    return [ordered]@{
+        status = if ($remaining.Count -eq 0) { "PASS" } else { "FAIL" }
+        remaining = @($remaining)
+    }
 }
 
 function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, [string]$AuthorizedManifestHash) {
@@ -177,18 +648,40 @@ function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, 
     throw "Relay did not prove a current server runtime lease within 120 seconds."
 }
 
-
-Assert-HttpsServerBaseUrl $ServerBaseUrl
-if ($DryRun.IsPresent -and $Uninstall.IsPresent) {
-    throw "Use either -DryRun or -Uninstall, not both."
+$OperatorLocalAppDataRoot = Assert-OperatorContext $OperatorUserSid $OperatorLocalAppDataRoot
+if (-not $Uninstall.IsPresent) {
+    Assert-HttpsServerBaseUrl $ServerBaseUrl
+}
+if (-not $Uninstall.IsPresent -and (
+    $PurgeContainerAuditState.IsPresent -or
+    $ConfirmPermanentContainerAuditDataRemoval.IsPresent -or
+    -not [string]::IsNullOrWhiteSpace($RollbackReportPath)
+)) {
+    throw "Rollback-only parameters require -Uninstall."
+}
+if ($Uninstall.IsPresent) {
+    if ($PurgeContainerAuditState.IsPresent) {
+        if (-not $ConfirmPermanentContainerAuditDataRemoval.IsPresent) {
+            throw "Destructive rollback requires -ConfirmPermanentContainerAuditDataRemoval."
+        }
+        if ([string]::IsNullOrWhiteSpace($RollbackReportPath)) {
+            throw "Destructive rollback requires an external -RollbackReportPath."
+        }
+    }
+    elseif (
+        $ConfirmPermanentContainerAuditDataRemoval.IsPresent -or
+        -not [string]::IsNullOrWhiteSpace($RollbackReportPath)
+    ) {
+        throw "Permanent-removal confirmation and RollbackReportPath require -PurgeContainerAuditState."
+    }
+    if ($AllowNoncanonicalLayoutForTest.IsPresent -and -not $DryRun.IsPresent) {
+        throw "AllowNoncanonicalLayoutForTest cannot authorize uninstall or destructive deletion."
+    }
 }
 
 $packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($DataRoot)) {
-    if ([string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        throw "LOCALAPPDATA is unavailable; pass -DataRoot explicitly."
-    }
-    $DataRoot = Join-Path $env:LOCALAPPDATA "KMTech\ContainerAudit"
+    $DataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
 }
 $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
@@ -230,10 +723,21 @@ $credentialPath = if ($reuseExistingIdentity) { $ExistingCredentialPath } else {
 $registrationReportPath = if ($reuseExistingIdentity) { $ExistingRegistrationReportPath } else { Join-Path $statusDir "worker_pc_registration.json" }
 $installReportPath = Join-Path $statusDir "container_audit_direct_sync_install.json"
 $expectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
+$expectedApplicationParent = "C:\KMTech\Apps\Container_Audit"
+$expectedUpdateBackupRoot = "C:\KMTech\Apps\Container_Audit\.current.update-backups"
+$expectedUpdateEvidenceRoot = "C:\KMTech\Apps\Container_Audit\.current.update-evidence"
 $expectedDirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit"
+$expectedLogisticsProfileRoot = "C:\ProgramData\KMTech\Logistics\profiles\Container_Audit"
 $expectedTaskName = "direct-sync-relay-container-audit"
 $expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.vbs"
 $expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
+$expectedOperatorDataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
+$expectedOperatorCatalogRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ItemCatalog\Container_Audit"
+$operatorCatalogCachePath = Join-Path $expectedOperatorCatalogRoot "Item.csv"
+$commonProgramsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
+$shortcutGroupPath = Join-Path $commonProgramsRoot "KMTech"
+$shortcutName = Get-ContainerAuditShortcutName
+$expectedShortcutPath = Join-Path $shortcutGroupPath ($shortcutName + ".lnk")
 $actualInstallRoot = [System.IO.Path]::GetFullPath($packageRoot)
 $actualDirectSyncRoot = [System.IO.Path]::GetFullPath($DirectSyncRoot)
 $actualTaskLauncherPath = Join-Path $actualDirectSyncRoot ("bin\{0}.vbs" -f $TaskName)
@@ -277,7 +781,50 @@ $fieldLayoutContract = [ordered]@{
     production_apply_allowed = $productionLayoutMatches
 }
 
+$rollbackInventory = @(
+    [ordered]@{ order = 1; kind = "scheduled_task"; name = $expectedTaskName },
+    [ordered]@{ order = 2; kind = "shortcut"; path = $expectedShortcutPath },
+    [ordered]@{ order = 3; kind = "directory"; path = $expectedLogisticsProfileRoot; purpose = "Container_Audit logistics profile" },
+    [ordered]@{ order = 4; kind = "directory"; path = $expectedDirectSyncRoot; purpose = "Container_Audit DirectSync root" },
+    [ordered]@{ order = 5; kind = "directory"; path = $expectedOperatorDataRoot; purpose = "Container_Audit operator data" },
+    [ordered]@{ order = 6; kind = "directory"; path = $expectedOperatorCatalogRoot; purpose = "Container_Audit operator catalog" },
+    [ordered]@{ order = 7; kind = "directory"; path = $expectedUpdateBackupRoot; purpose = "Container_Audit update backups" },
+    [ordered]@{ order = 8; kind = "directory"; path = $expectedUpdateEvidenceRoot; purpose = "Container_Audit update evidence" },
+    [ordered]@{ order = 9; kind = "directory"; path = $expectedInstallRoot; purpose = "Container_Audit application root" }
+)
+
 if ($DryRun.IsPresent) {
+    if ($Uninstall.IsPresent) {
+        if (-not $productionLayoutMatches) {
+            throw "Rollback planning requires the canonical Container_Audit production layout."
+        }
+        if (-not (Test-SamePath $DataRoot $expectedOperatorDataRoot)) {
+            throw "Rollback planning requires the captured operator's canonical Container_Audit data root."
+        }
+        if ($PurgeContainerAuditState.IsPresent) {
+            $externalReportPath = Assert-ExternalRollbackReportPath $RollbackReportPath $rollbackInventory
+            $dryRunReport = [ordered]@{
+                report_version = "container-audit-pristine-rollback-v1"
+                status = "DRY_RUN"
+                apply = $false
+                destructive = $true
+                operator_user_sid = $OperatorUserSid
+                operator_local_app_data_root = $OperatorLocalAppDataRoot
+                deletion_inventory = $rollbackInventory
+                application_root_is_last = ($rollbackInventory[-1].path -ceq $expectedInstallRoot)
+                report_path = $externalReportPath
+                contains_credential_content = $false
+            }
+            Write-Utf8JsonFile $externalReportPath $dryRunReport
+            Write-Output "rollback_status=DRY_RUN"
+            Write-Output "rollback_report=$externalReportPath"
+        }
+        else {
+            Write-Output "uninstall_status=DRY_RUN_DATA_PRESERVED"
+            Write-Output "data_preserved=true"
+        }
+        exit 0
+    }
     Write-Utf8JsonFile $installReportPath ([ordered]@{
         report_version = "container-audit-one-step-field-layout-plan-v1"
         status = "DRY_RUN"
@@ -306,21 +853,117 @@ if (-not $Uninstall.IsPresent -and -not $productionLayoutMatches -and -not $loca
 }
 
 if ($Uninstall.IsPresent) {
-    & $installExe `
-        --apply `
-        --uninstall `
-        --confirm-production-install `
-        --app-root $packageRoot `
-        --program-data-root $DirectSyncRoot `
-        --task-name $TaskName `
-        --report-path $installReportPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Container_Audit direct-sync uninstall failed. Report: $installReportPath"
+    if (-not $productionLayoutMatches) {
+        throw "Uninstall requires the exact canonical Container_Audit production layout."
     }
-    Write-Output "install_status=UNINSTALLED"
-    Write-Output "install_report=$installReportPath"
-    exit 0
+    if (-not (Test-SamePath $DataRoot $expectedOperatorDataRoot)) {
+        throw "Uninstall requires the captured operator's canonical Container_Audit data root."
+    }
+    [void](Assert-ExactCanonicalPath $actualInstallRoot $expectedInstallRoot "Container_Audit application root")
+    [void](Assert-ExactCanonicalPath $actualDirectSyncRoot $expectedDirectSyncRoot "Container_Audit DirectSync root")
+    Assert-NoReparsePoint $installExe "Container_Audit DirectSync installer"
+    Assert-NoReparsePoint $installReportPath "Container_Audit DirectSync install report"
+    [void](Get-OwnedScheduledTaskState $TaskName $expectedTaskLauncherPath)
+    [void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
+
+    if (-not $PurgeContainerAuditState.IsPresent) {
+        [void](Remove-OwnedScheduledTask `
+            $TaskName `
+            $expectedTaskLauncherPath `
+            $installExe `
+            $packageRoot `
+            $DirectSyncRoot `
+            $installReportPath)
+        [void](Remove-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot)
+        Write-Output "uninstall_status=PASS_DATA_PRESERVED"
+        Write-Output "scheduled_task_status=ABSENT"
+        Write-Output "start_menu_shortcut_status=ABSENT"
+        Write-Output "data_preserved=true"
+        if (Test-Path -LiteralPath $installReportPath -PathType Leaf) {
+            Write-Output "install_report=$installReportPath"
+        }
+        exit 0
+    }
+
+    $externalReportPath = Assert-ExternalRollbackReportPath $RollbackReportPath $rollbackInventory
+    $rollbackResults = New-Object System.Collections.Generic.List[object]
+    $rollbackReport = [ordered]@{
+        report_version = "container-audit-pristine-rollback-v1"
+        status = "PREFLIGHT"
+        apply = $true
+        destructive = $true
+        purge_container_audit_state = $PurgeContainerAuditState.IsPresent
+        permanent_removal_confirmed = $ConfirmPermanentContainerAuditDataRemoval.IsPresent
+        operator_user_sid = $OperatorUserSid
+        operator_local_app_data_root = $OperatorLocalAppDataRoot
+        report_path = $externalReportPath
+        deletion_inventory = $rollbackInventory
+        application_root_is_last = ($rollbackInventory[-1].path -ceq $expectedInstallRoot)
+        results = $rollbackResults
+        parent_cleanup = @()
+        postconditions = [ordered]@{ status = "NOT_TESTED"; remaining = @() }
+        contains_credential_content = $false
+        failure = ""
+    }
+    Write-Utf8JsonFile $externalReportPath $rollbackReport
+    try {
+        Assert-NoOwnedProcess @("Container_Audit", "Container_Audit_DirectSync_Relay")
+        [void](Assert-OwnedTree $expectedApplicationParent $expectedApplicationParent "Container_Audit application parent")
+        Assert-ApplicationParentInventory $expectedApplicationParent
+        [void](Assert-OwnedTree $expectedLogisticsProfileRoot $expectedLogisticsProfileRoot "Container_Audit logistics profile")
+        [void](Assert-OwnedTree $expectedDirectSyncRoot $expectedDirectSyncRoot "Container_Audit DirectSync root")
+        [void](Assert-OwnedTree $expectedOperatorDataRoot $expectedOperatorDataRoot "Container_Audit operator data")
+        [void](Assert-OwnedTree $expectedOperatorCatalogRoot $expectedOperatorCatalogRoot "Container_Audit operator catalog")
+        [void](Assert-OwnedTree $expectedUpdateBackupRoot $expectedUpdateBackupRoot "Container_Audit update backups")
+        [void](Assert-OwnedTree $expectedUpdateEvidenceRoot $expectedUpdateEvidenceRoot "Container_Audit update evidence")
+        Assert-DirectSyncOwnership $expectedDirectSyncRoot $installReportPath $expectedTaskName
+        [void](Get-OwnedScheduledTaskState $TaskName $expectedTaskLauncherPath)
+        [void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
+
+        $rollbackReport.status = "APPLYING"
+        Write-Utf8JsonFile $externalReportPath $rollbackReport
+
+        [void]$rollbackResults.Add((Remove-OwnedScheduledTask `
+            $TaskName `
+            $expectedTaskLauncherPath `
+            $installExe `
+            $packageRoot `
+            $DirectSyncRoot `
+            $installReportPath))
+        [void]$rollbackResults.Add((Remove-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedLogisticsProfileRoot "Container_Audit logistics profile"))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedDirectSyncRoot "Container_Audit DirectSync root"))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedOperatorDataRoot "Container_Audit operator data"))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedOperatorCatalogRoot "Container_Audit operator catalog"))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedUpdateBackupRoot "Container_Audit update backups"))
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedUpdateEvidenceRoot "Container_Audit update evidence"))
+        Set-Location -LiteralPath ([Environment]::SystemDirectory)
+        [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedInstallRoot "Container_Audit application root"))
+
+        $rollbackReport.parent_cleanup = @(
+            (Remove-EmptyOwnedParent $expectedApplicationParent "Container_Audit application parent" -RequireEmpty),
+            (Remove-EmptyOwnedParent $shortcutGroupPath "KMTech Start Menu group")
+        )
+        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory $TaskName
+        if ($rollbackReport.postconditions.status -cne "PASS") {
+            throw "Destructive rollback postconditions did not prove every exact owned resource absent."
+        }
+        $rollbackReport.status = "PASS"
+        Write-Utf8JsonFile $externalReportPath $rollbackReport
+        Write-Output "rollback_status=PASS"
+        Write-Output "rollback_report=$externalReportPath"
+        exit 0
+    }
+    catch {
+        $rollbackReport.status = "FAIL"
+        $rollbackReport.failure = $_.Exception.Message
+        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory $TaskName
+        Write-Utf8JsonFile $externalReportPath $rollbackReport
+        throw "Container_Audit destructive rollback failed. Report: $externalReportPath. $($_.Exception.Message)"
+    }
 }
+
+[void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
 
 New-Item -ItemType Directory -Path $eventDir -Force | Out-Null
 New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
@@ -440,6 +1083,15 @@ catch {
     throw "APPLIED_UNPROVEN: relay task was installed but current runtime liveness was not proven: $($_.Exception.Message)"
 }
 
+$installedShortcut = Install-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot
+if ($installedShortcut.status -cne "OWNED") {
+    throw "Container_Audit Start Menu shortcut readback did not prove the owned shortcut contract."
+}
+
 Write-Output "install_status=PASS"
+Write-Output "operator_readiness_status=PENDING_FIRST_LAUNCH"
+Write-Output "first_launch_catalog_status=NOT_TESTED"
+Write-Output "start_menu_shortcut=$expectedShortcutPath"
+Write-Output "operator_catalog_cache_path=$operatorCatalogCachePath"
 Write-Output "registration_report=$registrationReportPath"
 Write-Output "install_report=$installReportPath"

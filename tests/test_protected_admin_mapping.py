@@ -730,6 +730,10 @@ def test_cli_dry_run_ignores_credential_environment_and_does_not_prompt(
     reason="GitHub Actions is not the trusted Windows ACL integration target",
 )
 def test_windows_empty_temp_file_acl_readback_is_exact(tmp_path: Path) -> None:
+    import ctypes
+
+    if not bool(ctypes.windll.shell32.IsUserAnAdmin()):
+        pytest.skip("Windows ACL integration requires an elevated test process")
     identity = subprocess.run(
         ["whoami.exe"],
         check=False,
