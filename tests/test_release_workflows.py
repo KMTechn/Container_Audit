@@ -244,6 +244,32 @@ def test_release_contract_quarantines_v2073_postbuild_failure_and_exact_artifact
     assert "the successor is `v2.0.74`" in contract
 
 
+def test_release_contract_quarantines_v2074_builder_bootstrap_failure_without_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.74` is permanently quarantined with **no artifact**" in contract
+    assert "4e7b960e4a6f1fba59772a8645d9cfa0e65d03cc" in contract
+    assert "935014a0fbca214390815392d71193f30796d622" in contract
+    assert "stopped before source-builder entry" in contract
+    assert "standard current-user and all-users module directories" in contract
+    assert "No ZIP, manifest, checksum, qualification receipt,\ncandidate root, or success marker exists" in contract
+    assert "Never delete, recreate, retarget,\nrepair, publish, or retry that tag" in contract
+    assert "the successor is `v2.0.75`" in contract
+
+
+def test_release_contract_requires_exact_builder_child_module_path_closure():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "sealed two-entry prelaunch module path and its SHA-256 token" in contract
+    assert "`PSModuleAnalysisCachePath`, `TEMP`, and `TMP` below the\nreviewed E:-owned roots" in contract
+    assert "`tools/enter_release_powershell_module_fence.ps1`" in contract
+    assert "whose load path\nperforms no module resolution" in contract
+    assert "accept only the exact four-entry\nPowerShell startup closure" in contract
+    assert "collapse the live path to those\nsealed two entries" in contract
+    assert "before any module\nresolution or source-builder invocation" in contract
+    assert "additional, reordered,\nduplicate, noncanonical, ambient, or hostile module path fails closed" in contract
+
+
 def test_release_contract_requires_builder_owned_python_authority():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

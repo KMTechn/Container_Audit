@@ -211,6 +211,16 @@ totaling 295120 bytes after the extracted-source help probes, so its final
 inventory did not match the sealed package. Never clean, alter, rebuild, retag,
 publish, retry, or reuse those bytes; the successor is `v2.0.74`.
 
+`v2.0.74` is permanently quarantined with **no artifact**. Its annotated local
+tag object is `4e7b960e4a6f1fba59772a8645d9cfa0e65d03cc`, peeling to
+`935014a0fbca214390815392d71193f30796d622`. The one authorized builder child
+stopped before source-builder entry because PowerShell 7 deterministically
+prepended its standard current-user and all-users module directories to the
+sealed two-entry parent `PSModulePath`, while the frozen bootstrap accepted
+only the unexpanded value. No ZIP, manifest, checksum, qualification receipt,
+candidate root, or success marker exists. Never delete, recreate, retarget,
+repair, publish, or retry that tag; the successor is `v2.0.75`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
@@ -266,6 +276,19 @@ directory; zero, mismatched-first, duplicate, or ambiguous results fail closed.
 Every Python build step uses the resolved absolute path, and the builder
 revalidates the complete interpreter identity after packaging before issuing a
 qualification receipt. The release interpreter must be CPython 3.12, 64-bit.
+
+Every successor authority that creates a new PowerShell builder child must set
+the sealed two-entry prelaunch module path and its SHA-256 token before process
+creation, while keeping `PSModuleAnalysisCachePath`, `TEMP`, and `TMP` below the
+reviewed E:-owned roots. After rehashing the exact candidate source input, the
+child uses `tools/enter_release_powershell_module_fence.ps1`, whose load path
+performs no module resolution. It must accept only the exact four-entry
+PowerShell startup closure: the pinned standard current-user and all-users
+module directories followed by the exact sealed PowerShell 7 and Windows
+PowerShell directories. The child must then collapse the live path to those
+sealed two entries and remove both prelaunch tokens before any module
+resolution or source-builder invocation. Any missing, additional, reordered,
+duplicate, noncanonical, ambient, or hostile module path fails closed.
 
 Never delete, recreate, or move that tag object. There is no provisional-to-final transition and no post-build tag mutation. If the tag preparation or build fails, or source/manifest bytes change, abandon that version and use a new patch version. Do not repair or overwrite a failed candidate root.
 
