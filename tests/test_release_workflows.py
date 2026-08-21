@@ -231,6 +231,19 @@ def test_release_contract_quarantines_v2072_sandbox_failure_and_exact_artifact()
     assert "the successor is `v2.0.73`" in contract
 
 
+def test_release_contract_quarantines_v2073_postbuild_failure_and_exact_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.73` is permanently quarantined as an unpublished local candidate" in contract
+    assert "1dee7f93a2c98e07ae2a9381c575d451b05a6a96" in contract
+    assert "83fc636def457b8a34af929a00b1f8f5c7443b6a" in contract
+    assert "126456593 bytes" in contract
+    assert "f1f7e6ad385d06918abbe6021fbfa3929129d5986201e51da563dba94b73c233" in contract
+    assert "six unsealed `__pycache__/*.pyc` files" in contract
+    assert "totaling 295120 bytes" in contract
+    assert "the successor is `v2.0.74`" in contract
+
+
 def test_release_contract_requires_builder_owned_python_authority():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

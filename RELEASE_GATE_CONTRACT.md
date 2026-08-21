@@ -200,6 +200,17 @@ public destructive rollback also left the application root locked when invoked
 from a shell whose working directory was that root. Never alter, rebuild,
 retag, publish, or reuse those bytes; the successor is `v2.0.73`.
 
+`v2.0.73` is permanently quarantined as an unpublished local candidate after
+independent post-build review classified it `FAIL`. Its annotated tag object is
+`1dee7f93a2c98e07ae2a9381c575d451b05a6a96`, peeling to
+`83fc636def457b8a34af929a00b1f8f5c7443b6a`; its one preserved ZIP is exactly
+126456593 bytes with SHA-256
+`f1f7e6ad385d06918abbe6021fbfa3929129d5986201e51da563dba94b73c233`.
+The retained smoke extraction contained six unsealed `__pycache__/*.pyc` files
+totaling 295120 bytes after the extracted-source help probes, so its final
+inventory did not match the sealed package. Never clean, alter, rebuild, retag,
+publish, retry, or reuse those bytes; the successor is `v2.0.74`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:

@@ -89,6 +89,52 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
     assert "PRIVATE_UPDATE_MANIFEST" not in script
 
 
+def test_post_seal_python_smokes_cannot_write_bytecode_and_reverify_inventory():
+    script = BUILDER.read_text(encoding="utf-8")
+    post_seal = script[script.index("Compress-Archive") : script.index("$zipInfo")]
+
+    for marker in (
+        '"-B", "tools/check_update_archive.py"',
+        '"-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py")',
+        '"-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py")',
+        '"-B", "tools/check_release_config.py"',
+        '"-B", "-m", "kmtech_factory_contracts.build_cli", "verify"',
+    ):
+        assert marker in post_seal
+
+    assert script.count('"kmtech_factory_contracts.build_cli", "verify"') == 2
+    assert post_seal.index('"tools/check_release_config.py"') < post_seal.index(
+        '"kmtech_factory_contracts.build_cli", "verify"'
+    )
+    assert "Remove-Item" not in post_seal
+    assert "post_probe_smoke_inventory=PASS" in script
+
+
+@pytest.mark.parametrize(
+    "relative_script",
+    (
+        "tools/direct_sync_relay_runner.py",
+        "tools/direct_sync_relay_operator.py",
+    ),
+)
+def test_supported_source_help_probe_writes_no_bytecode(tmp_path, relative_script):
+    cache_prefix = tmp_path / "bytecode"
+    environment = os.environ.copy()
+    environment.pop("PYTHONDONTWRITEBYTECODE", None)
+    environment["PYTHONPYCACHEPREFIX"] = str(cache_prefix)
+
+    completed = subprocess.run(
+        [sys.executable, "-I", "-B", str(ROOT / relative_script), "--help"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert not cache_prefix.exists()
+
+
 def test_frozen_candidate_builder_powershell_parses():
     for script_path in (BUILDER, PYTHON_RESOLVER):
         escaped = str(script_path).replace("'", "''")

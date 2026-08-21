@@ -416,21 +416,30 @@ try {
         throw "Frozen candidate ZIP was not created."
     }
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "tools/check_update_archive.py",
+        "-B", "tools/check_update_archive.py",
         "--zip-path", $zipPath,
         "--destination", $smokeRoot,
         "--package-root", $packageRoot
     ) -Failure "Frozen candidate archive smoke verification failed."
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "-I", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py"), "--help"
+        "-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py"), "--help"
     ) -Failure "Staged direct-sync relay source help probe failed."
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "-I", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py"), "--help"
+        "-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py"), "--help"
     ) -Failure "Staged direct-sync operator source help probe failed."
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "tools/check_release_config.py",
+        "-B", "tools/check_release_config.py",
         "--config-dir", (Join-Path $smokeRoot "Container_Audit/config")
     ) -Failure "Extracted release configuration validation failed."
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
+        "-B", "-m", "kmtech_factory_contracts.build_cli", "verify",
+        "--stage-root", (Join-Path $smokeRoot "Container_Audit"),
+        "--expected-contract-sha256", $factoryContractSha256
+    ) -Failure "Post-probe smoke payload differs from the sealed manifest."
+    $smokeManifest = Get-Content -Raw -Encoding UTF8 `
+        -LiteralPath (Join-Path $smokeRoot "Container_Audit/build-manifest.json") | ConvertFrom-Json
+    $smokePayloadInventorySha256 = [string]$smokeManifest.payload_inventory_sha256
+    $smokePayloadFileCount = @($smokeManifest.payload_inventory).Count
 
     $zipInfo = Get-Item -LiteralPath $zipPath
     $zipSha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
@@ -488,6 +497,7 @@ try {
     Write-Output "candidate_root=$candidateRoot"
     Write-Output "final_intended_tag=$Tag object=$tagObject peel=$sourceCommit"
     Write-Output "zip_sha256=$zipSha256 zip_size=$($zipInfo.Length) main_exe_sha256=$mainExeSha256"
+    Write-Output "post_probe_smoke_inventory=PASS payload_files=$smokePayloadFileCount sha256=$smokePayloadInventorySha256"
     Write-Output "NEXT: preserve these exact bytes and receipt, complete installation qualification, then push main and satisfy the external immutable-policy and zero-nonterminal-workflow gates before publishing this unchanged tag object; hosted CI is WAIVED_NOT_TESTED as a release gate."
 }
 catch {
