@@ -271,6 +271,19 @@ def test_release_contract_quarantines_v2075_sandbox_system_relay_lease_failure()
     assert "the successor is `v2.0.76`" in contract
 
 
+def test_release_contract_quarantines_v2076_spawn_wrapper_deadlock_without_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.76` is permanently quarantined with **no artifact**" in contract
+    assert "14e431f78dc42d64217014e4f8c6ca933dcf3e33" in contract
+    assert "5e6e1c239918844c55534d5bc09f3952d565773e" in contract
+    assert "redirected both stdout and stderr and called\n`ReadToEnd()` on stdout before stderr" in contract
+    assert "redirected-pipe deadlock is not\na product-source defect" in contract
+    assert "No ZIP, checksum, or qualification receipt exists" in contract
+    assert "Never delete, recreate, retarget, repair, publish, or retry that tag" in contract
+    assert "the\nsuccessor is `v2.0.77`" in contract
+
+
 def test_release_contract_requires_exact_builder_child_module_path_closure():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

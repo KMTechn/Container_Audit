@@ -233,6 +233,17 @@ runtime evidence, and the isolated authority received zero runtime-lease
 requests. Never clean, alter, rebuild, retag, publish, retry, or reuse those
 bytes; the successor is `v2.0.76`.
 
+`v2.0.76` is permanently quarantined with **no artifact**. Its annotated local
+tag object is `14e431f78dc42d64217014e4f8c6ca933dcf3e33`, peeling to
+`5e6e1c239918844c55534d5bc09f3952d565773e`. The one authorized official
+builder invocation started, wrote the candidate identity, and entered the
+first PyInstaller of `Container_Audit.spec`, then stalled because the
+external spawn wrapper redirected both stdout and stderr and called
+`ReadToEnd()` on stdout before stderr. That redirected-pipe deadlock is not
+a product-source defect. No ZIP, checksum, or qualification receipt exists.
+Never delete, recreate, retarget, repair, publish, or retry that tag; the
+successor is `v2.0.77`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
