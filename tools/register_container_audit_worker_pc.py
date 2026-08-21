@@ -100,8 +100,20 @@ def _default_enrollment_url(endpoint_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}/api/producer-ingest/v1/enroll"
 
 
-def _validate_enrollment_url(enrollment_url: str, endpoint_url: str) -> str:
-    validate_endpoint_url(endpoint_url)
+def _validate_enrollment_url(
+    enrollment_url: str,
+    endpoint_url: str,
+    *,
+    isolated_qualification_context: object | None = None,
+) -> str:
+    if isolated_qualification_context is None:
+        validate_endpoint_url(endpoint_url)
+    elif endpoint_url != str(
+        getattr(isolated_qualification_context, "endpoint_url", "") or ""
+    ):
+        raise DirectSyncPushError(
+            "isolated qualification endpoint differs from its client context"
+        )
     parsed_endpoint = urlparse(endpoint_url)
     parsed_enrollment = urlparse(str(enrollment_url or "").strip())
     if (
@@ -535,6 +547,9 @@ def _self_enroll(
     enrollment_url = _validate_enrollment_url(
         args.enrollment_url or _default_enrollment_url(credential["endpoint_url"]),
         credential["endpoint_url"],
+        isolated_qualification_context=getattr(
+            args, "_isolated_qualification_context", None
+        ),
     )
     payload = {
         "contract_version": SELF_ENROLLMENT_CONTRACT_VERSION,
@@ -546,12 +561,25 @@ def _self_enroll(
     headers = {}
     if token:
         headers["X-Producer-Enrollment-Token"] = token
-    response = requests.post(
-        enrollment_url,
-        json=payload,
-        headers=headers,
-        timeout=max(1, int(args.enrollment_timeout_seconds)),
-    )
+    isolated_context = getattr(args, "_isolated_qualification_context", None)
+    if isolated_context is None:
+        response = requests.post(
+            enrollment_url,
+            json=payload,
+            headers=headers,
+            timeout=max(1, int(args.enrollment_timeout_seconds)),
+        )
+    else:
+        with requests.Session() as session:
+            session.trust_env = False
+            response = session.post(
+                enrollment_url,
+                json=payload,
+                headers=headers,
+                timeout=max(1, int(args.enrollment_timeout_seconds)),
+                allow_redirects=False,
+                verify=str(getattr(isolated_context, "ca_bundle_path")),
+            )
     try:
         response_payload = response.json()
     except ValueError as exc:
@@ -642,7 +670,25 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     key_id = args.key_id or f"pending-server-key-{host_slug}"
     secret_ref = args.secret_ref or _default_secret_ref(hostname)
     endpoint_url = args.endpoint_url or DEFAULT_ENDPOINT_URL
-    validate_endpoint_url(endpoint_url)
+    isolated_context = None
+    isolated_context_path = str(
+        getattr(args, "isolated_qualification_context", "") or ""
+    ).strip()
+    if isolated_context_path:
+        try:
+            from isolated_qualification import load_isolated_qualification_context
+
+            isolated_context = load_isolated_qualification_context(
+                isolated_context_path,
+                expected_endpoint_url=endpoint_url,
+            )
+        except Exception as exc:
+            raise DirectSyncPushError(
+                f"isolated qualification context is invalid: {exc}"
+            ) from exc
+    else:
+        validate_endpoint_url(endpoint_url)
+    args._isolated_qualification_context = isolated_context
     secret_ref_scheme, secret_ref_target = _validate_secret_ref(secret_ref)
     captured_at = _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
 
@@ -665,6 +711,10 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     }
     if secret_ref_scheme == "dpapi":
         credential["secret_data_dir"] = str(storage_paths.direct_sync_root)
+    if isolated_context is not None:
+        credential["isolated_qualification_context_path"] = str(
+            Path(isolated_context_path).expanduser().resolve()
+        )
     report = {
         "report_version": "container-audit-worker-pc-registration-v1",
         "status": "LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET",
@@ -681,6 +731,10 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "server_registration_verified": False,
         "secret_bootstrap_verified": False,
         "self_enrollment_requested": bool(getattr(args, "self_enroll", False)),
+        "isolated_qualification_mode": isolated_context is not None,
+        "isolated_qualification_authority_id": (
+            str(isolated_context.authority_instance_id) if isolated_context is not None else ""
+        ),
         "producer_identity_source": identity["identity_source"],
         "producer_identity_loaded_from": identity["identity_loaded_from"],
         "producer_identity_path": identity["identity_persist_path"],
@@ -739,6 +793,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--enrollment-token", default="")
     parser.add_argument("--enrollment-token-env", default=DEFAULT_ENROLLMENT_TOKEN_ENV)
     parser.add_argument("--enrollment-timeout-seconds", type=int, default=30)
+    parser.add_argument("--isolated-qualification-context", default="")
     parser.add_argument("--verify-manifest-hash", default="")
     parser.add_argument("--manifest-path", default="")
     parser.add_argument("--credential-path", default="")

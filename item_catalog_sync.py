@@ -122,10 +122,10 @@ def _load_item_catalog_logistics_profile() -> Any | None:
     return profile
 
 
-def _is_trusted_authenticated_catalog_url(url: str) -> bool:
+def _is_trusted_authenticated_catalog_url(url: str, profile: Any | None = None) -> bool:
     try:
         parsed = urlsplit(url)
-        return (
+        production_trusted = (
             parsed.scheme == "https"
             and parsed.netloc in AUTHENTICATED_CATALOG_AUTHORITIES
             and parsed.hostname == AUTHENTICATED_CATALOG_HOST
@@ -136,6 +136,21 @@ def _is_trusted_authenticated_catalog_url(url: str) -> bool:
             and not parsed.query
             and not parsed.fragment
         )
+        if production_trusted:
+            return True
+        if (
+            profile is not None
+            and bool(
+                str(
+                    getattr(
+                        profile, "isolated_qualification_authority_id", ""
+                    )
+                    or ""
+                ).strip()
+            )
+        ):
+            return url == f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
+        return False
     except ValueError:
         return False
 
@@ -459,8 +474,18 @@ def refresh_item_catalog(
         _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.update(
             {_catalog_snapshot_key(cache), _catalog_snapshot_key(last_good)}
         )
-    effective_url = url or resolve_catalog_url()
-    if central_enrolled and not _is_trusted_authenticated_catalog_url(effective_url):
+    if (
+        profile is not None
+        and str(
+            getattr(profile, "isolated_qualification_authority_id", "") or ""
+        ).strip()
+    ):
+        effective_url = f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
+    else:
+        effective_url = url or resolve_catalog_url()
+    if central_enrolled and not _is_trusted_authenticated_catalog_url(
+        effective_url, profile
+    ):
         raise ItemCatalogSyncError("central item catalog URL is not trusted")
     try:
         request_kwargs: dict[str, object] = {
@@ -474,6 +499,11 @@ def refresh_item_catalog(
                 "X-Logistics-Device-Id": profile.device_id,
                 "X-Logistics-Program": LOGISTICS_PROGRAM,
             }
+            tls_ca_bundle_path = str(
+                getattr(profile, "tls_ca_bundle_path", "") or ""
+            ).strip()
+            if tls_ca_bundle_path:
+                request_kwargs["verify"] = tls_ca_bundle_path
         transport = get or (_hardened_get if central_enrolled else requests.get)
         response = transport(effective_url, **request_kwargs)
         status_code = getattr(response, "status_code", None)

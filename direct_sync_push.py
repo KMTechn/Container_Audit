@@ -129,6 +129,8 @@ class ProducerCredentials:
     secret: str | bytes
     endpoint_url: str
     runtime_lease_mode: str = "enforce"
+    isolated_qualification_context_path: str = ""
+    tls_ca_bundle_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -415,7 +417,7 @@ def signed_headers(
     timestamp: str = "",
     nonce: str = "",
 ) -> Dict[str, str]:
-    validate_endpoint_url(credentials.endpoint_url)
+    validate_credentials_endpoint(credentials)
     parsed = urlparse(credentials.endpoint_url)
     timestamp = timestamp or utc_now_text()
     nonce = nonce or uuid.uuid4().hex
@@ -473,6 +475,39 @@ def validate_endpoint_url(endpoint_url: str) -> None:
             return
     for address in addresses:
         _reject_unsafe_endpoint_address(address)
+
+
+def validate_credentials_endpoint(credentials: ProducerCredentials) -> None:
+    context_path = str(
+        getattr(credentials, "isolated_qualification_context_path", "") or ""
+    ).strip()
+    ca_bundle_path = str(
+        getattr(credentials, "tls_ca_bundle_path", "") or ""
+    ).strip()
+    if not context_path and not ca_bundle_path:
+        validate_endpoint_url(credentials.endpoint_url)
+        return
+    if not context_path or not ca_bundle_path:
+        raise DirectSyncPushError(
+            "isolated qualification credential context is incomplete"
+        )
+    try:
+        from isolated_qualification import load_isolated_qualification_context
+
+        context = load_isolated_qualification_context(
+            context_path,
+            expected_endpoint_url=credentials.endpoint_url,
+        )
+    except Exception as exc:
+        raise DirectSyncPushError(
+            f"isolated qualification credential context is invalid: {exc}"
+        ) from exc
+    if os.path.normcase(os.path.abspath(ca_bundle_path)) != os.path.normcase(
+        os.path.abspath(context.ca_bundle_path)
+    ):
+        raise DirectSyncPushError(
+            "isolated qualification credential CA bundle differs from its context"
+        )
 
 
 def _reject_unsafe_endpoint_address(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> None:
@@ -594,7 +629,7 @@ def restore_signed_headers(
         content_sha256=str(restore_metadata["content_sha256"]),
         byte_length=int(restore_metadata["byte_length"]),
     )
-    validate_endpoint_url(credentials.endpoint_url)
+    validate_credentials_endpoint(credentials)
     credential_endpoint = urlparse(credentials.endpoint_url)
     parsed = urlparse(restore_url)
     if credential_endpoint.scheme.lower() != parsed.scheme.lower() or credential_endpoint.netloc.lower() != parsed.netloc.lower():
@@ -731,6 +766,9 @@ def restore_raw_artifact_to_file(
         import requests
 
         session = requests.Session()
+        if credentials.tls_ca_bundle_path:
+            session.trust_env = False
+            session.verify = credentials.tls_ca_bundle_path
     temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
         response = session.get(restore_url, headers=headers, timeout=timeout, stream=True, allow_redirects=False)
@@ -1267,6 +1305,9 @@ def upload_source_file(
         import requests
 
         session = requests.Session()
+        if credentials.tls_ca_bundle_path:
+            session.trust_env = False
+            session.verify = credentials.tls_ca_bundle_path
     source_path = Path(plan.source_file_path)
     try:
         handle = source_path.open("rb")

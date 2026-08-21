@@ -411,6 +411,10 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
     secret = raw_secret if isinstance(raw_secret, str) and raw_secret.strip() else ""
     secret_ref = str(payload.get("secret_ref") or "").strip()
     endpoint_url = str(payload.get("endpoint_url") or "").strip()
+    isolated_context_path = str(
+        payload.get("isolated_qualification_context_path") or ""
+    ).strip()
+    tls_ca_bundle_path = ""
     runtime_lease_mode = str(payload.get("runtime_lease_mode") or "enforce").strip().lower()
     if runtime_lease_mode not in {"observe", "enforce"}:
         raise DirectSyncPushError("runtime_lease_mode must be observe or enforce")
@@ -426,13 +430,29 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
         )
     if not producer_id or not key_id or not secret or not endpoint_url:
         raise DirectSyncPushError("credential file is missing producer_id, key_id, secret/secret_ref, or endpoint_url")
-    validate_endpoint_url(endpoint_url)
+    if isolated_context_path:
+        try:
+            from isolated_qualification import load_isolated_qualification_context
+
+            isolated_context = load_isolated_qualification_context(
+                isolated_context_path,
+                expected_endpoint_url=endpoint_url,
+            )
+        except Exception as exc:
+            raise DirectSyncPushError(
+                f"isolated qualification credential context is invalid: {exc}"
+            ) from exc
+        tls_ca_bundle_path = isolated_context.ca_bundle_path
+    else:
+        validate_endpoint_url(endpoint_url)
     return ProducerCredentials(
         producer_id=producer_id,
         key_id=key_id,
         secret=secret,
         endpoint_url=endpoint_url,
         runtime_lease_mode=runtime_lease_mode,
+        isolated_qualification_context_path=isolated_context_path,
+        tls_ca_bundle_path=tls_ca_bundle_path,
     )
 
 

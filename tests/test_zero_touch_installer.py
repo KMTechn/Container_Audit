@@ -146,24 +146,26 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
 
     inventory = text[text.index("$rollbackInventory = @(") : text.index("if ($DryRun.IsPresent)")]
     ordered_markers = [
-        'order = 1; kind = "scheduled_task"',
-        'order = 2; kind = "shortcut"',
-        'order = 3; kind = "directory"; path = $expectedLogisticsProfileRoot',
-        'order = 4; kind = "directory"; path = $expectedDirectSyncRoot',
-        'order = 5; kind = "directory"; path = $expectedOperatorDataRoot',
-        'order = 6; kind = "directory"; path = $expectedOperatorCatalogRoot',
-        'order = 7; kind = "directory"; path = $expectedUpdateBackupRoot',
-        'order = 8; kind = "directory"; path = $expectedUpdateEvidenceRoot',
-        'order = 9; kind = "directory"; path = $expectedInstallRoot',
+        'order = 1; kind = "scheduled_task"; name = $qualificationAuthorityTaskName',
+        'order = 2; kind = "scheduled_task"; name = $expectedTaskName',
+        'order = 3; kind = "shortcut"',
+        'order = 4; kind = "directory"; path = $expectedLogisticsProfileRoot',
+        'order = 5; kind = "directory"; path = $expectedDirectSyncRoot',
+        'order = 6; kind = "directory"; path = $expectedOperatorDataRoot',
+        'order = 7; kind = "directory"; path = $expectedOperatorCatalogRoot',
+        'order = 8; kind = "directory"; path = $expectedUpdateBackupRoot',
+        'order = 9; kind = "directory"; path = $expectedUpdateEvidenceRoot',
+        'order = 10; kind = "directory"; path = $expectedInstallRoot',
     ]
     positions = [inventory.index(marker) for marker in ordered_markers]
     assert positions == sorted(positions)
     assert "application_root_is_last" in text
     apply_block = text[
-        text.index("[void]$rollbackResults.Add((Remove-OwnedScheduledTask") :
+        text.index("[void]$rollbackResults.Add((Remove-OwnedQualificationAuthorityTask") :
         text.index("$rollbackReport.parent_cleanup")
     ]
     apply_markers = [
+        "Remove-OwnedQualificationAuthorityTask",
         "Remove-OwnedScheduledTask",
         "Remove-OwnedShortcut",
         "Remove-ExactOwnedTree $expectedLogisticsProfileRoot",
@@ -244,7 +246,7 @@ def test_package_installer_captures_operator_identity_before_elevation_without_a
     assert "Assert-OperatorContext" in text
     assert "ProfileList\\$Sid" in text
     assert '$DataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\\ContainerAudit"' in text
-    assert "icacls" not in text.lower()
+    assert "icacls" not in text[:elevation].lower()
     assert "Set-Acl" not in text
 
 

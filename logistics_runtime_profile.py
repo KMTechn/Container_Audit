@@ -68,6 +68,8 @@ class LogisticsRuntimeProfile:
     timeout_seconds: float = 10.0
     profile_path: str = ""
     required: bool = False
+    isolated_qualification_authority_id: str = ""
+    tls_ca_bundle_path: str = field(default="", repr=False)
 
     def redacted_summary(self) -> dict[str, Any]:
         return {
@@ -84,6 +86,11 @@ class LogisticsRuntimeProfile:
             "profile_path": self.profile_path,
             "bearer_token_present": bool(self.bearer_token),
             "required": self.required,
+            "isolated_qualification": bool(
+                self.isolated_qualification_authority_id
+            ),
+            "isolated_qualification_authority_id": self.isolated_qualification_authority_id,
+            "tls_private_ca_configured": bool(self.tls_ca_bundle_path),
         }
 
 
@@ -416,6 +423,31 @@ def _selected_ledger_plane(
     return ledger_plane
 
 
+def _isolated_qualification_context_for_base_url(url: str) -> Any | None:
+    parsed = urlsplit(url)
+    hostname = str(parsed.hostname or "").rstrip(".").lower()
+    is_loopback = hostname == "localhost"
+    try:
+        is_loopback = is_loopback or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        pass
+    if not is_loopback:
+        return None
+    try:
+        from isolated_qualification import load_isolated_qualification_context
+
+        context = load_isolated_qualification_context()
+    except Exception as exc:
+        raise LogisticsRuntimeConfigurationError(
+            f"machine logistics loopback origin lacks a valid isolated qualification context: {exc}"
+        ) from exc
+    if context.server_base_url != url:
+        raise LogisticsRuntimeConfigurationError(
+            "machine logistics loopback origin differs from the isolated qualification context"
+        )
+    return context
+
+
 def _https_base_url(value: Any) -> str:
     url = _safe_text(value, "base_url").rstrip("/")
     if any(character.isspace() for character in url) or "\\" in url:
@@ -445,9 +477,9 @@ def _https_base_url(value: Any) -> str:
     except ValueError:
         pass
     if is_loopback:
-        raise LogisticsRuntimeConfigurationError(
-            "machine logistics base_url must not use a loopback origin"
-        )
+        normalized = urlunsplit(("https", parsed.netloc, "", "", ""))
+        _isolated_qualification_context_for_base_url(normalized)
+        return normalized
     return urlunsplit(("https", parsed.netloc, "", "", ""))
 
 
@@ -591,8 +623,10 @@ def load_logistics_runtime_profile(
         raise LogisticsRuntimeConfigurationError("timeout_seconds is invalid") from exc
     if not math.isfinite(timeout) or not 0.1 <= timeout <= 60.0:
         raise LogisticsRuntimeConfigurationError("timeout_seconds must be between 0.1 and 60")
+    base_url = _https_base_url(profile.get("base_url"))
+    isolated_context = _isolated_qualification_context_for_base_url(base_url)
     return LogisticsRuntimeProfile(
-        base_url=_https_base_url(profile.get("base_url")),
+        base_url=base_url,
         authority_scope=_safe_text(profile.get("authority_scope"), "authority_scope"),
         authority_epoch=_positive_int(profile.get("authority_epoch"), "authority_epoch"),
         authority_plane=authority_plane,
@@ -604,6 +638,10 @@ def load_logistics_runtime_profile(
         timeout_seconds=timeout,
         profile_path=str(path.resolve()),
         required=required_value,
+        isolated_qualification_authority_id=(
+            isolated_context.authority_instance_id if isolated_context else ""
+        ),
+        tls_ca_bundle_path=(isolated_context.ca_bundle_path if isolated_context else ""),
     )
 
 
@@ -637,8 +675,10 @@ def profile_from_values(
         raise LogisticsRuntimeConfigurationError("timeout_seconds is invalid") from exc
     if not math.isfinite(timeout) or not 0.1 <= timeout <= 60.0:
         raise LogisticsRuntimeConfigurationError("timeout_seconds must be between 0.1 and 60")
+    base_url = _https_base_url(values.get("base_url"))
+    isolated_context = _isolated_qualification_context_for_base_url(base_url)
     return LogisticsRuntimeProfile(
-        base_url=_https_base_url(values.get("base_url")),
+        base_url=base_url,
         authority_scope=_safe_text(values.get("authority_scope"), "authority_scope"),
         authority_epoch=_positive_int(values.get("authority_epoch"), "authority_epoch"),
         authority_plane=authority_plane,
@@ -654,6 +694,10 @@ def profile_from_values(
             ).resolve()
         ),
         required=bool(required),
+        isolated_qualification_authority_id=(
+            isolated_context.authority_instance_id if isolated_context else ""
+        ),
+        tls_ca_bundle_path=(isolated_context.ca_bundle_path if isolated_context else ""),
     )
 
 

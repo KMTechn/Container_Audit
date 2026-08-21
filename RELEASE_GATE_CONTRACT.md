@@ -46,13 +46,36 @@ arguments. Installation must read those fields back before reporting
 infrastructure PASS. An identical shortcut is idempotent; a conflicting link
 blocks installation or removal. No desktop shortcut is part of this contract.
 
+The package-integrated isolated qualification route is enabled only by the
+explicit `-EnableWindowsSandboxQualification` installer switch. The switch is
+fail-closed unless the captured non-elevated operator is the canonical Windows
+Sandbox `WDAGUtilityAccount` profile with its RID-504 SID, the install uses the
+canonical application and ProgramData roots, and `ServerBaseUrl` remains the
+unaltered production default. The packaged authority then generates a new
+private CA, TLS key, producer secret, logistics token, and operation-lease key
+inside that disposable guest; binds HTTPS only to `127.0.0.1`; and exposes only
+the enrollment, runtime-lease, ingest, authenticated item-catalog, PHS=2 lookup,
+and signed operation-lease boundaries needed for representative qualification.
+It retains no uploaded payloads and cannot write to production. Production URL,
+private-address, authentication, and credential guards remain unchanged when
+that exact package-owned context is absent.
+
+The qualification authority is an owned SYSTEM startup task named
+`container-audit-isolated-qualification-authority`. Its runtime-generated state
+is under the app-scoped DirectSync root, its private files are readable only by
+SYSTEM and Administrators, and the operator receives read access only to the
+public client context, CA certificate, and sanitized operator fixture. Plain
+uninstall removes the owned task and process while preserving this data;
+explicit pristine rollback removes the task first and then removes the entire
+app-owned DirectSync tree under the same strict guards as production state.
+
 Plain deconfiguration is deliberately non-destructive:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
 ```
 
-It removes only the exact owned task and shortcut, preserves application,
+It removes only the exact owned tasks and shortcut, preserves application,
 event, queue, catalog, profile, credential, and update state, and reports
 `uninstall_status=PASS_DATA_PRESERVED`. It is not pristine rollback and must
 never print `rollback_status=PASS`.
@@ -82,8 +105,9 @@ target. A foreign task, shortcut, application-parent child, path escape,
 filesystem root, alternate stream, symlink, or junction is a blocking failure.
 `AllowNoncanonicalLayoutForTest` cannot authorize deletion.
 
-Deletion order is fixed: task; shortcut; app-scoped logistics profile;
-DirectSync root; captured operator data; captured operator catalog; update
+Deletion order is fixed: qualification-authority task; relay task; shortcut;
+app-scoped logistics profile; DirectSync root; captured operator data; captured
+operator catalog; update
 backup and evidence siblings; application `current` root last. Only the now
 empty `C:\KMTech\Apps\Container_Audit` parent and now-empty KMTech Start Menu
 group may then be removed; shared `Apps`, `ProgramData\KMTech`, Logistics,
@@ -132,6 +156,17 @@ creating that local tag and before invoking the official builder, so no ZIP,
 manifest, checksum, or qualification receipt exists. Never delete, recreate,
 retarget, publish, or retry that tag; every successor must use a new patch
 version and fresh absent release and candidate roots.
+
+`v2.0.69` is permanently quarantined as an unpublished local candidate after
+Windows Sandbox qualification classified it `INCONCLUSIVE`. Its annotated tag
+object is `9f0c76bbd26f0dd56d6c6e396c30c2d3ede01a72`, peeling to
+`3c126160560620694bbbcd0378f53f343340c5b6`; its one preserved ZIP is exactly
+110970957 bytes with SHA-256
+`da86ead0067cd2196681be18221faf301db67633bbf41e6a7ac9304a6a0259f6`.
+The artifact lacked a product-supported isolated enrollment/relay-lease route,
+so it could not complete fresh-target installation qualification without
+external guest preconditioning. Never alter, rebuild, retag, publish, or reuse
+those bytes; the successor is `v2.0.70`.
 
 ### Supported pre-push isolated candidate build
 

@@ -408,6 +408,12 @@ def _post_lease_request(
         import requests
 
         session = requests.Session()
+        ca_bundle_path = str(
+            getattr(credentials, "tls_ca_bundle_path", "") or ""
+        ).strip()
+        if ca_bundle_path:
+            session.trust_env = False
+            session.verify = ca_bundle_path
     body = canonical_json(request_value).encode("utf-8")
     timestamp = _utc_now_text()
     nonce = uuid.uuid4().hex

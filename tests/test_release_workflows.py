@@ -182,6 +182,17 @@ def test_release_contract_quarantines_v2068_tag_without_an_artifact():
     assert "Never delete, recreate,\nretarget, publish, or retry that tag" in contract
 
 
+def test_release_contract_quarantines_v2069_inconclusive_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.69` is permanently quarantined as an unpublished local candidate" in contract
+    assert "9f0c76bbd26f0dd56d6c6e396c30c2d3ede01a72" in contract
+    assert "3c126160560620694bbbcd0378f53f343340c5b6" in contract
+    assert "110970957 bytes" in contract
+    assert "da86ead0067cd2196681be18221faf301db67633bbf41e6a7ac9304a6a0259f6" in contract
+    assert "the successor is `v2.0.70`" in contract
+
+
 def test_release_finally_revalidates_remote_tag_main_release_and_assets():
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     final = release[release.index("- name: Finally revalidate remote tag main"):]

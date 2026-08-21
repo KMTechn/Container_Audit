@@ -17,7 +17,7 @@ from transfer_seal import (
     _sha256,
     membership_hash,
 )
-from operation_lease_fixtures import signed_transfer_artifact
+from tests.operation_lease_fixtures import signed_transfer_artifact
 
 
 ITEM = "AAA2270730100"

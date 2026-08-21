@@ -1682,6 +1682,8 @@ class LogisticsTransferClient:
         ledger_plane: str = "",
         plane_epoch: int = 0,
         authoritative_required: bool = False,
+        isolated_qualification_authority_id: str = "",
+        tls_ca_bundle_path: str = "",
     ) -> None:
         self.base_url = str(base_url or "").rstrip("/")
         self.token = str(token or "").strip()
@@ -1694,6 +1696,10 @@ class LogisticsTransferClient:
         self.ledger_plane = str(ledger_plane or authority_plane or "").strip().upper()
         self.plane_epoch = int(plane_epoch or 0)
         self.authoritative_required = bool(authoritative_required)
+        self.isolated_qualification_authority_id = str(
+            isolated_qualification_authority_id or ""
+        ).strip()
+        self.tls_ca_bundle_path = str(tls_ca_bundle_path or "").strip()
         if not self.base_url or not self.token or not self.source_host_id:
             raise ValueError("base_url, token, and source_host_id are required")
         parsed = urlsplit(self.base_url)
@@ -1718,6 +1724,9 @@ class LogisticsTransferClient:
             import requests
 
             session = requests.Session()
+            if self.tls_ca_bundle_path:
+                session.trust_env = False
+                session.verify = self.tls_ca_bundle_path
         self.session = session
 
     def assert_authority(
@@ -4978,6 +4987,10 @@ def logistics_transfer_client_from_env(
             ledger_plane=profile.ledger_plane,
             plane_epoch=profile.plane_epoch,
             authoritative_required=required,
+            isolated_qualification_authority_id=(
+                profile.isolated_qualification_authority_id
+            ),
+            tls_ca_bundle_path=profile.tls_ca_bundle_path,
         )
     else:
         legacy_fields = {

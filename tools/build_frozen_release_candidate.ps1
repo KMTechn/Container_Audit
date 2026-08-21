@@ -262,6 +262,7 @@ try {
         "direct_sync_relay_install_pack.py",
         "direct_sync_relay_operator.py",
         "register_container_audit_worker_pc.py",
+        "isolated_qualification_authority.py",
         "install_logistics_runtime_profile.py",
         "check_logistics_runtime_profile.py"
     )) {
@@ -280,6 +281,7 @@ try {
         @("Container_Audit_DirectSync_Relay", "tools/direct_sync_relay_runner.py"),
         @("Container_Audit_DirectSync_Install", "tools/direct_sync_relay_install_pack.py"),
         @("Container_Audit_Worker_PC_Register", "tools/register_container_audit_worker_pc.py"),
+        @("Container_Audit_Qualification_Authority", "tools/isolated_qualification_authority.py"),
         @("Container_Audit_Protected_Admin_Install", "tools/install_protected_admin.py"),
         @("KMTech_Logistics_Profile_Install", "tools/install_logistics_runtime_profile.py"),
         @("KMTech_Logistics_Profile_Check", "tools/check_logistics_runtime_profile.py")
@@ -310,6 +312,8 @@ try {
         -Arguments @("--help") -Failure "Protected administrator installer help probe failed."
     Invoke-Checked -FilePath (Join-Path $packageRoot "Container_Audit_Protected_Admin_Install.exe") `
         -Arguments @("--dry-run") -Failure "Protected administrator installer dry-run failed."
+    Invoke-Checked -FilePath (Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe") `
+        -Arguments @("--help") -Failure "Isolated qualification authority help probe failed."
     Invoke-Checked -FilePath "powershell.exe" -Arguments @(
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $packageRoot "PROVISION_PROTECTED_ADMIN_ACL.ps1"), "-DryRun"

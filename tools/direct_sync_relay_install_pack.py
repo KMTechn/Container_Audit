@@ -819,11 +819,24 @@ def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool 
             if secret_ref_scheme == "env" and production_profile_enabled:
                 failures.append("env secret_ref is disabled in production")
     endpoint_valid = False
+    isolated_context_path = str(
+        payload.get("isolated_qualification_context_path") or ""
+    ).strip()
+    isolated_qualification = False
     if not required_missing:
         try:
-            validate_endpoint_url(str(payload.get("endpoint_url") or ""))
+            if isolated_context_path:
+                from isolated_qualification import load_isolated_qualification_context
+
+                load_isolated_qualification_context(
+                    isolated_context_path,
+                    expected_endpoint_url=str(payload.get("endpoint_url") or ""),
+                )
+                isolated_qualification = True
+            else:
+                validate_endpoint_url(str(payload.get("endpoint_url") or ""))
             endpoint_valid = True
-        except DirectSyncPushError as exc:
+        except Exception as exc:
             failures.append(str(exc))
     report.update(
         {
@@ -835,6 +848,10 @@ def _credential_report(path: str | os.PathLike[str], *, forbid_raw_secret: bool 
             "production_profile_enabled": production_profile_enabled,
             "raw_secret_forbidden": forbid_raw_secret,
             "endpoint_url_valid": endpoint_valid,
+            "isolated_qualification": isolated_qualification,
+            "isolated_qualification_context_configured": bool(
+                isolated_context_path
+            ),
         }
     )
     if failures:

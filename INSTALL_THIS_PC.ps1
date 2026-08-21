@@ -6,6 +6,7 @@ param(
     [switch]$ConfirmPermanentContainerAuditDataRemoval,
     [string]$RollbackReportPath = "",
     [switch]$AllowNoncanonicalLayoutForTest,
+    [switch]$EnableWindowsSandboxQualification,
     [string]$ServerBaseUrl = "https://worker.kmtecherp.com",
     [string]$DataRoot = "",
     [string]$DirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit",
@@ -494,6 +495,110 @@ function Remove-OwnedScheduledTask(
     return [ordered]@{ status = "ABSENT"; task_name = $Name }
 }
 
+function Get-OwnedQualificationAuthorityTaskState(
+    [string]$Name,
+    [string]$ExpectedExecutable,
+    [string]$ExpectedStateRoot
+) {
+    $tasks = @(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)
+    if ($tasks.Count -eq 0) {
+        return [ordered]@{ status = "ABSENT"; task_name = $Name }
+    }
+    if ($tasks.Count -ne 1) {
+        throw "Multiple scheduled tasks use the Container_Audit qualification authority task name."
+    }
+    $task = $tasks[0]
+    if ([string]$task.TaskPath -cne "\") {
+        throw "The Container_Audit qualification authority task exists outside the owned root task path."
+    }
+    $actions = @($task.Actions)
+    if ($actions.Count -ne 1) {
+        throw "The Container_Audit qualification authority task action is not owned."
+    }
+    $expectedArguments = "serve --state-root `"$ExpectedStateRoot`""
+    $actualExecute = [string]$actions[0].Execute
+    $actualArguments = ([string]$actions[0].Arguments).Trim()
+    $principal = [string]$task.Principal.UserId
+    $principalMatches = @("SYSTEM", "NT AUTHORITY\SYSTEM", "S-1-5-18") -contains $principal
+    if (
+        -not (Test-SamePath $actualExecute $ExpectedExecutable) -or
+        -not $actualArguments.Equals($expectedArguments, [System.StringComparison]::Ordinal) -or
+        -not $principalMatches
+    ) {
+        throw "A conflicting qualification authority task exists; refusing to start, stop, or remove it."
+    }
+    return [ordered]@{
+        status = "OWNED"
+        task_name = $Name
+        task_path = [string]$task.TaskPath
+        execute = $actualExecute
+        arguments = $actualArguments
+        principal = $principal
+    }
+}
+
+function Install-OwnedQualificationAuthorityTask(
+    [string]$Name,
+    [string]$Executable,
+    [string]$StateRoot
+) {
+    $state = Get-OwnedQualificationAuthorityTaskState $Name $Executable $StateRoot
+    if ($state.status -ceq "ABSENT") {
+        $action = New-ScheduledTaskAction `
+            -Execute $Executable `
+            -Argument "serve --state-root `"$StateRoot`""
+        $trigger = New-ScheduledTaskTrigger -AtStartup
+        $principal = New-ScheduledTaskPrincipal `
+            -UserId "SYSTEM" `
+            -LogonType ServiceAccount `
+            -RunLevel Highest
+        $settings = New-ScheduledTaskSettingsSet `
+            -AllowStartIfOnBatteries `
+            -DontStopIfGoingOnBatteries `
+            -StartWhenAvailable `
+            -ExecutionTimeLimit ([TimeSpan]::Zero)
+        Register-ScheduledTask `
+            -TaskName $Name `
+            -Action $action `
+            -Trigger $trigger `
+            -Principal $principal `
+            -Settings $settings `
+            -Force | Out-Null
+    }
+    return (Get-OwnedQualificationAuthorityTaskState $Name $Executable $StateRoot)
+}
+
+function Remove-OwnedQualificationAuthorityTask(
+    [string]$Name,
+    [string]$Executable,
+    [string]$StateRoot
+) {
+    $state = Get-OwnedQualificationAuthorityTaskState $Name $Executable $StateRoot
+    if ($state.status -ceq "OWNED") {
+        Stop-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue
+        Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction Stop
+    }
+    if (@(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).Count -ne 0) {
+        throw "Container_Audit qualification authority task removal postcondition failed."
+    }
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $owned = @(
+            Get-CimInstance Win32_Process -Filter "Name='Container_Audit_Qualification_Authority.exe'" -ErrorAction SilentlyContinue |
+                Where-Object {
+                    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
+                    (Test-SamePath ([string]$_.ExecutablePath) $Executable)
+                }
+        )
+        if ($owned.Count -eq 0) { break }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    if ($owned.Count -ne 0) {
+        throw "Container_Audit qualification authority process did not stop with its owned task."
+    }
+    return [ordered]@{ status = "ABSENT"; task_name = $Name }
+}
+
 function Assert-OwnedTree([string]$Path, [string]$ExpectedPath, [string]$Purpose) {
     $fullPath = Assert-ExactCanonicalPath $Path $ExpectedPath $Purpose
     Assert-NoReparsePoint $fullPath $Purpose -IncludeDescendants
@@ -597,13 +702,13 @@ function Remove-EmptyOwnedParent([string]$Path, [string]$Purpose, [switch]$Requi
     return [ordered]@{ status = "ABSENT"; path = $Path }
 }
 
-function Test-RollbackPostconditions([object[]]$Inventory, [string]$Name) {
+function Test-RollbackPostconditions([object[]]$Inventory) {
     $remaining = New-Object System.Collections.Generic.List[string]
-    if (@(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).Count -gt 0) {
-        [void]$remaining.Add("scheduled_task:$Name")
-    }
     foreach ($target in $Inventory) {
         if ($target.kind -ceq "scheduled_task") {
+            if (@(Get-ScheduledTask -TaskName ([string]$target.name) -ErrorAction SilentlyContinue).Count -gt 0) {
+                [void]$remaining.Add("scheduled_task:$([string]$target.name)")
+            }
             continue
         }
         if (Test-Path -LiteralPath ([string]$target.path)) {
@@ -652,6 +757,9 @@ $OperatorLocalAppDataRoot = Assert-OperatorContext $OperatorUserSid $OperatorLoc
 if (-not $Uninstall.IsPresent) {
     Assert-HttpsServerBaseUrl $ServerBaseUrl
 }
+if ($Uninstall.IsPresent -and $EnableWindowsSandboxQualification.IsPresent) {
+    throw "EnableWindowsSandboxQualification is an installation-only switch."
+}
 if (-not $Uninstall.IsPresent -and (
     $PurgeContainerAuditState.IsPresent -or
     $ConfirmPermanentContainerAuditDataRemoval.IsPresent -or
@@ -687,7 +795,8 @@ $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
 $runnerExe = Join-Path $packageRoot "Container_Audit_DirectSync_Relay.exe"
 $registrationExe = Join-Path $packageRoot "Container_Audit_Worker_PC_Register.exe"
-foreach ($required in @($appExe, $installExe, $runnerExe, $registrationExe)) {
+$qualificationAuthorityExe = Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe"
+foreach ($required in @($appExe, $installExe, $runnerExe, $registrationExe, $qualificationAuthorityExe)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Release package is incomplete. Missing: $required"
     }
@@ -729,6 +838,12 @@ $expectedUpdateEvidenceRoot = "C:\KMTech\Apps\Container_Audit\.current.update-ev
 $expectedDirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit"
 $expectedLogisticsProfileRoot = "C:\ProgramData\KMTech\Logistics\profiles\Container_Audit"
 $expectedTaskName = "direct-sync-relay-container-audit"
+$qualificationAuthorityTaskName = "container-audit-isolated-qualification-authority"
+$qualificationStateRoot = Join-Path $expectedDirectSyncRoot "qualification-authority"
+$qualificationContextPath = Join-Path $qualificationStateRoot "client-context.json"
+$qualificationFixturePath = Join-Path $qualificationStateRoot "operator-fixture.json"
+$qualificationInitializeReportPath = Join-Path $statusDir "isolated_qualification_initialize.json"
+$qualificationProbeReportPath = Join-Path $statusDir "isolated_qualification_probe.json"
 $expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.vbs"
 $expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
 $expectedOperatorDataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
@@ -782,15 +897,16 @@ $fieldLayoutContract = [ordered]@{
 }
 
 $rollbackInventory = @(
-    [ordered]@{ order = 1; kind = "scheduled_task"; name = $expectedTaskName },
-    [ordered]@{ order = 2; kind = "shortcut"; path = $expectedShortcutPath },
-    [ordered]@{ order = 3; kind = "directory"; path = $expectedLogisticsProfileRoot; purpose = "Container_Audit logistics profile" },
-    [ordered]@{ order = 4; kind = "directory"; path = $expectedDirectSyncRoot; purpose = "Container_Audit DirectSync root" },
-    [ordered]@{ order = 5; kind = "directory"; path = $expectedOperatorDataRoot; purpose = "Container_Audit operator data" },
-    [ordered]@{ order = 6; kind = "directory"; path = $expectedOperatorCatalogRoot; purpose = "Container_Audit operator catalog" },
-    [ordered]@{ order = 7; kind = "directory"; path = $expectedUpdateBackupRoot; purpose = "Container_Audit update backups" },
-    [ordered]@{ order = 8; kind = "directory"; path = $expectedUpdateEvidenceRoot; purpose = "Container_Audit update evidence" },
-    [ordered]@{ order = 9; kind = "directory"; path = $expectedInstallRoot; purpose = "Container_Audit application root" }
+    [ordered]@{ order = 1; kind = "scheduled_task"; name = $qualificationAuthorityTaskName },
+    [ordered]@{ order = 2; kind = "scheduled_task"; name = $expectedTaskName },
+    [ordered]@{ order = 3; kind = "shortcut"; path = $expectedShortcutPath },
+    [ordered]@{ order = 4; kind = "directory"; path = $expectedLogisticsProfileRoot; purpose = "Container_Audit logistics profile" },
+    [ordered]@{ order = 5; kind = "directory"; path = $expectedDirectSyncRoot; purpose = "Container_Audit DirectSync root" },
+    [ordered]@{ order = 6; kind = "directory"; path = $expectedOperatorDataRoot; purpose = "Container_Audit operator data" },
+    [ordered]@{ order = 7; kind = "directory"; path = $expectedOperatorCatalogRoot; purpose = "Container_Audit operator catalog" },
+    [ordered]@{ order = 8; kind = "directory"; path = $expectedUpdateBackupRoot; purpose = "Container_Audit update backups" },
+    [ordered]@{ order = 9; kind = "directory"; path = $expectedUpdateEvidenceRoot; purpose = "Container_Audit update evidence" },
+    [ordered]@{ order = 10; kind = "directory"; path = $expectedInstallRoot; purpose = "Container_Audit application root" }
 )
 
 if ($DryRun.IsPresent) {
@@ -864,9 +980,17 @@ if ($Uninstall.IsPresent) {
     Assert-NoReparsePoint $installExe "Container_Audit DirectSync installer"
     Assert-NoReparsePoint $installReportPath "Container_Audit DirectSync install report"
     [void](Get-OwnedScheduledTaskState $TaskName $expectedTaskLauncherPath)
+    [void](Get-OwnedQualificationAuthorityTaskState `
+        $qualificationAuthorityTaskName `
+        $qualificationAuthorityExe `
+        $qualificationStateRoot)
     [void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
 
     if (-not $PurgeContainerAuditState.IsPresent) {
+        [void](Remove-OwnedQualificationAuthorityTask `
+            $qualificationAuthorityTaskName `
+            $qualificationAuthorityExe `
+            $qualificationStateRoot)
         [void](Remove-OwnedScheduledTask `
             $TaskName `
             $expectedTaskLauncherPath `
@@ -877,6 +1001,8 @@ if ($Uninstall.IsPresent) {
         [void](Remove-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot)
         Write-Output "uninstall_status=PASS_DATA_PRESERVED"
         Write-Output "scheduled_task_status=ABSENT"
+        Write-Output "qualification_authority_task_status=ABSENT"
+        Write-Output "qualification_authority_process_status=ABSENT"
         Write-Output "start_menu_shortcut_status=ABSENT"
         Write-Output "data_preserved=true"
         if (Test-Path -LiteralPath $installReportPath -PathType Leaf) {
@@ -918,11 +1044,20 @@ if ($Uninstall.IsPresent) {
         [void](Assert-OwnedTree $expectedUpdateEvidenceRoot $expectedUpdateEvidenceRoot "Container_Audit update evidence")
         Assert-DirectSyncOwnership $expectedDirectSyncRoot $installReportPath $expectedTaskName
         [void](Get-OwnedScheduledTaskState $TaskName $expectedTaskLauncherPath)
+        [void](Get-OwnedQualificationAuthorityTaskState `
+            $qualificationAuthorityTaskName `
+            $qualificationAuthorityExe `
+            $qualificationStateRoot)
         [void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
 
         $rollbackReport.status = "APPLYING"
         Write-Utf8JsonFile $externalReportPath $rollbackReport
 
+        [void]$rollbackResults.Add((Remove-OwnedQualificationAuthorityTask `
+            $qualificationAuthorityTaskName `
+            $qualificationAuthorityExe `
+            $qualificationStateRoot))
+        Assert-NoOwnedProcess @("Container_Audit_Qualification_Authority")
         [void]$rollbackResults.Add((Remove-OwnedScheduledTask `
             $TaskName `
             $expectedTaskLauncherPath `
@@ -944,7 +1079,7 @@ if ($Uninstall.IsPresent) {
             (Remove-EmptyOwnedParent $expectedApplicationParent "Container_Audit application parent" -RequireEmpty),
             (Remove-EmptyOwnedParent $shortcutGroupPath "KMTech Start Menu group")
         )
-        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory $TaskName
+        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory
         if ($rollbackReport.postconditions.status -cne "PASS") {
             throw "Destructive rollback postconditions did not prove every exact owned resource absent."
         }
@@ -957,7 +1092,7 @@ if ($Uninstall.IsPresent) {
     catch {
         $rollbackReport.status = "FAIL"
         $rollbackReport.failure = $_.Exception.Message
-        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory $TaskName
+        $rollbackReport.postconditions = Test-RollbackPostconditions $rollbackInventory
         Write-Utf8JsonFile $externalReportPath $rollbackReport
         throw "Container_Audit destructive rollback failed. Report: $externalReportPath. $($_.Exception.Message)"
     }
@@ -967,6 +1102,114 @@ if ($Uninstall.IsPresent) {
 
 New-Item -ItemType Directory -Path $eventDir -Force | Out-Null
 New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
+
+$qualificationAuthorityEnabled = $false
+if ($EnableWindowsSandboxQualification.IsPresent) {
+    if ($ServerBaseUrl.Trim().TrimEnd('/') -cne "https://worker.kmtecherp.com") {
+        throw "Windows Sandbox qualification cannot be combined with a ServerBaseUrl override."
+    }
+    [void](Assert-ExactCanonicalPath $qualificationStateRoot (Join-Path $DirectSyncRoot "qualification-authority") "Qualification authority state")
+    if (-not (Test-Path -LiteralPath $qualificationStateRoot)) {
+        New-Item -ItemType Directory -Path $qualificationStateRoot -Force | Out-Null
+    }
+    Assert-NoReparsePoint $qualificationStateRoot "Qualification authority state" -IncludeDescendants
+    & icacls.exe $qualificationStateRoot `
+        "/inheritance:r" `
+        "/grant:r" `
+        "*S-1-5-18:(OI)(CI)F" `
+        "*S-1-5-32-544:(OI)(CI)F" `
+        "*S-1-5-32-545:RX" | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "Qualification authority state ACL installation failed."
+    }
+    & $qualificationAuthorityExe `
+        initialize `
+        --state-root $qualificationStateRoot `
+        --operator-user-sid $OperatorUserSid `
+        --operator-local-app-data-root $OperatorLocalAppDataRoot `
+        --report-path $qualificationInitializeReportPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Windows Sandbox qualification authority initialization failed."
+    }
+    foreach ($publicName in @(
+        "client-context.json",
+        "qualification-ca.pem",
+        "operator-fixture.json"
+    )) {
+        $publicPath = Join-Path $qualificationStateRoot $publicName
+        & icacls.exe $publicPath `
+            "/inheritance:r" `
+            "/grant:r" `
+            "*S-1-5-18:F" `
+            "*S-1-5-32-544:F" `
+            "*S-1-5-32-545:R" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Qualification authority public-state ACL installation failed."
+        }
+    }
+    foreach ($privateName in @(
+        "private-state.json",
+        "qualification-server-key.pem",
+        "qualification-operation-lease-key.pem"
+    )) {
+        $privatePath = Join-Path $qualificationStateRoot $privateName
+        & icacls.exe $privatePath `
+            "/inheritance:r" `
+            "/grant:r" `
+            "*S-1-5-18:F" `
+            "*S-1-5-32-544:F" | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Qualification authority private-state ACL installation failed."
+        }
+    }
+    $qualificationInitialize = Read-BoundedJson `
+        $qualificationInitializeReportPath `
+        "Qualification authority initialization report"
+    if (
+        @("INITIALIZED", "REUSED") -notcontains [string]$qualificationInitialize.status -or
+        [string]$qualificationInitialize.activation_mode -cne "windows_sandbox_qualification" -or
+        $qualificationInitialize.loopback_only -isnot [bool] -or -not [bool]$qualificationInitialize.loopback_only -or
+        $qualificationInitialize.production_write_enabled -isnot [bool] -or [bool]$qualificationInitialize.production_write_enabled -or
+        -not (Test-SamePath ([string]$qualificationInitialize.context_path) $qualificationContextPath) -or
+        -not (Test-SamePath ([string]$qualificationInitialize.fixture_path) $qualificationFixturePath)
+    ) {
+        throw "Qualification authority initialization report did not prove the isolated route."
+    }
+    $ServerBaseUrl = [string]$qualificationInitialize.server_base_url
+    Assert-HttpsServerBaseUrl $ServerBaseUrl
+    [void](Install-OwnedQualificationAuthorityTask `
+        $qualificationAuthorityTaskName `
+        $qualificationAuthorityExe `
+        $qualificationStateRoot)
+    Start-ScheduledTask -TaskName $qualificationAuthorityTaskName -ErrorAction Stop
+    $qualificationProbePassed = $false
+    $qualificationDeadline = (Get-Date).AddSeconds(30)
+    do {
+        & $qualificationAuthorityExe `
+            probe `
+            --state-root $qualificationStateRoot `
+            --report-path $qualificationProbeReportPath | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            $qualificationProbePassed = $true
+            break
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $qualificationDeadline)
+    if (-not $qualificationProbePassed) {
+        throw "APPLIED_UNPROVEN: the owned qualification authority task did not prove HTTPS readiness."
+    }
+    $qualificationProbe = Read-BoundedJson `
+        $qualificationProbeReportPath `
+        "Qualification authority probe report"
+    if (
+        [string]$qualificationProbe.status -cne "PASS" -or
+        $qualificationProbe.loopback_only -isnot [bool] -or -not [bool]$qualificationProbe.loopback_only -or
+        $qualificationProbe.production_write_enabled -isnot [bool] -or [bool]$qualificationProbe.production_write_enabled
+    ) {
+        throw "Qualification authority probe did not prove the isolated HTTPS route."
+    }
+    $qualificationAuthorityEnabled = $true
+}
 
 # Preserve the app's established per-user data root. SYSTEM can read that
 # source, while the machine-scope DPAPI credential and relay state stay under
@@ -990,6 +1233,11 @@ if (-not $reuseExistingIdentity) {
         "--credential-path", $credentialPath,
         "--report-path", $registrationReportPath
     )
+    if ($qualificationAuthorityEnabled) {
+        $registrationArguments += @(
+            "--isolated-qualification-context", $qualificationContextPath
+        )
+    }
     if (-not [string]::IsNullOrWhiteSpace($ProducerIdentityPath)) {
         $registrationArguments += @("--producer-identity-path", $ProducerIdentityPath)
     }
@@ -1015,6 +1263,16 @@ if (
     $registrationReport.persisted_manifest_hash_verified -isnot [bool] -or -not [bool]$registrationReport.persisted_manifest_hash_verified
 ) {
     throw "Container_Audit registration report did not prove the persisted server-authorized manifest."
+}
+if (
+    $qualificationAuthorityEnabled -and
+    (
+        $registrationReport.isolated_qualification_mode -isnot [bool] -or
+        -not [bool]$registrationReport.isolated_qualification_mode -or
+        [string]$registrationReport.isolated_qualification_authority_id -cne [string]$qualificationInitialize.authority_instance_id
+    )
+) {
+    throw "Container_Audit registration report did not prove the isolated qualification authority binding."
 }
 $authorizedManifestHash = ([string]$registrationReport.manifest_hash).ToLowerInvariant()
 if ([string]::IsNullOrWhiteSpace($authorizedManifestHash)) {
@@ -1063,6 +1321,15 @@ if (
 ) {
     throw "Container_Audit install report did not prove the SYSTEM task and canonical field-layout contract."
 }
+if (
+    $qualificationAuthorityEnabled -and
+    (
+        $report.credential.isolated_qualification -isnot [bool] -or
+        -not [bool]$report.credential.isolated_qualification
+    )
+) {
+    throw "Container_Audit install report did not prove the isolated qualification credential boundary."
+}
 try {
     $relayStarted = (Get-Date).ToUniversalTime()
     Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
@@ -1095,3 +1362,8 @@ Write-Output "start_menu_shortcut=$expectedShortcutPath"
 Write-Output "operator_catalog_cache_path=$operatorCatalogCachePath"
 Write-Output "registration_report=$registrationReportPath"
 Write-Output "install_report=$installReportPath"
+if ($qualificationAuthorityEnabled) {
+    Write-Output "qualification_authority_status=PASS"
+    Write-Output "qualification_authority_context=$qualificationContextPath"
+    Write-Output "qualification_operator_fixture=$qualificationFixturePath"
+}

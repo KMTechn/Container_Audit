@@ -7,7 +7,7 @@ from copy import deepcopy
 import pytest
 
 from Container_Audit import ContainerAudit, TraySession
-from operation_lease_fixtures import signed_transfer_artifact
+from tests.operation_lease_fixtures import signed_transfer_artifact
 from terminal_operation_lease import (
     OperationLeaseError,
     OperationLeaseManager,
@@ -18,7 +18,7 @@ from terminal_operation_lease import (
     TRANSFER_OPERATION,
     utc_text,
 )
-from test_transfer_seal import (
+from tests.test_transfer_seal import (
     ITEM,
     SCOPE,
     _fields_from_compact_qr,
