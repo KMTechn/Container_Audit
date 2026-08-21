@@ -218,6 +218,19 @@ def test_release_contract_quarantines_v2071_sandbox_failure_and_exact_artifact()
     assert "the\nsuccessor is `v2.0.72`" in contract
 
 
+def test_release_contract_quarantines_v2072_sandbox_failure_and_exact_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.72` is permanently quarantined as an unpublished local candidate" in contract
+    assert "abc9b958833b6b6a9264a075a5473e9bb41224af" in contract
+    assert "fdc4cb3ef934c25b9087ccf68b958dfd5730f989" in contract
+    assert "126455428 bytes" in contract
+    assert "6423e829eebd551dfd5d23e8294c353cc2fef37f70cabe718a2f87e9a99dbc5e" in contract
+    assert "SYSTEM relay exited `1` without a status, log, or runtime-lease request" in contract
+    assert "shell whose working directory was that root" in contract
+    assert "the successor is `v2.0.73`" in contract
+
+
 def test_release_contract_requires_builder_owned_python_authority():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

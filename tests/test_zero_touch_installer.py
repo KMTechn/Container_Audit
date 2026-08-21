@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 import subprocess
 
 import pytest
@@ -24,7 +25,7 @@ def _assert_powershell_ast(path: Path) -> None:
     )
 
 
-def _run_installer_functions(function_names, body):
+def _run_installer_functions(function_names, body, *, cwd=None, env=None):
     installer = str(ROOT / "INSTALL_THIS_PC.ps1").replace("'", "''")
     names = ",".join(f"'{name}'" for name in function_names)
     command = (
@@ -44,6 +45,8 @@ def _run_installer_functions(function_names, body):
         check=False,
         capture_output=True,
         text=True,
+        cwd=cwd,
+        env=env,
     )
 
 
@@ -166,6 +169,7 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
     assert "Test-RollbackPostconditions" in text
     assert 'status = if ($remaining.Count -eq 0) { "PASS" } else { "FAIL" }' in text
     assert "contains_credential_content = $false" in text
+    assert "[Environment]::CurrentDirectory = $safePath" in text
 
     inventory = text[text.index("$rollbackInventory = @(") : text.index("if ($DryRun.IsPresent)")]
     ordered_markers = [
@@ -197,10 +201,48 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
         "Remove-ExactOwnedTree $expectedOperatorCatalogRoot",
         "Remove-ExactOwnedTree $expectedUpdateBackupRoot",
         "Remove-ExactOwnedTree $expectedUpdateEvidenceRoot",
+        "Set-ProcessWorkingDirectoryOutsideOwnedTree $expectedInstallRoot",
         "Remove-ExactOwnedTree $expectedInstallRoot",
     ]
     apply_positions = [apply_block.index(marker) for marker in apply_markers]
     assert apply_positions == sorted(apply_positions)
+
+
+def test_destructive_rollback_releases_process_cwd_before_application_root_delete(tmp_path):
+    application_root = tmp_path / "application" / "current"
+    application_root.mkdir(parents=True)
+    marker = application_root / "packaged-config.json"
+    marker.write_text("{}\n", encoding="utf-8")
+    escaped_root = str(application_root).replace("'", "''")
+    environment = os.environ.copy()
+    environment["TEMP"] = str(tmp_path / "temp")
+    environment["TMP"] = environment["TEMP"]
+    body = (
+        f"$owned='{escaped_root}';"
+        "if(-not (Test-SamePath ([Environment]::CurrentDirectory) $owned)){"
+        "Write-Error 'process did not start inside owned root';exit 31};"
+        "$result=Set-ProcessWorkingDirectoryOutsideOwnedTree $owned;"
+        "if($result.status -cne 'PASS' -or -not $result.outside_application_root){"
+        "Write-Error 'working directory relocation did not pass';exit 32};"
+        "Remove-Item -LiteralPath $owned -Recurse -Force -ErrorAction Stop;"
+        "if(Test-Path -LiteralPath $owned){Write-Error 'owned root survived';exit 33};"
+        "exit 0"
+    )
+
+    result = _run_installer_functions(
+        [
+            "Test-SamePath",
+            "Get-StrictFullPath",
+            "Test-PathWithin",
+            "Set-ProcessWorkingDirectoryOutsideOwnedTree",
+        ],
+        body,
+        cwd=application_root,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert not application_root.exists()
 
 
 def test_qualification_authority_shutdown_is_exact_and_precedes_owned_tree_removal():

@@ -251,6 +251,27 @@ function Test-PathWithin([string]$Candidate, [string]$Container) {
     )
 }
 
+function Set-ProcessWorkingDirectoryOutsideOwnedTree([string]$OwnedRoot) {
+    $ownedFull = Get-StrictFullPath $OwnedRoot "Owned application root"
+    $safePath = Get-StrictFullPath ([Environment]::SystemDirectory) "Rollback working directory"
+    if (Test-PathWithin $safePath $ownedFull) {
+        throw "Rollback working directory must be outside the owned application root."
+    }
+    Set-Location -LiteralPath $safePath -ErrorAction Stop
+    [Environment]::CurrentDirectory = $safePath
+    $providerPath = [string](Get-Location).Path
+    $processPath = [string][Environment]::CurrentDirectory
+    if (-not (Test-SamePath $providerPath $safePath) -or -not (Test-SamePath $processPath $safePath)) {
+        throw "Rollback could not relocate both PowerShell and process working directories."
+    }
+    return [ordered]@{
+        status = "PASS"
+        provider_location = $providerPath
+        process_working_directory = $processPath
+        outside_application_root = $true
+    }
+}
+
 function Assert-NoReparsePoint([string]$Path, [string]$Purpose, [switch]$IncludeDescendants) {
     $fullPath = Get-StrictFullPath $Path $Purpose
     $cursor = $fullPath
@@ -1064,6 +1085,7 @@ if ($Uninstall.IsPresent) {
         report_path = $externalReportPath
         deletion_inventory = $rollbackInventory
         application_root_is_last = ($rollbackInventory[-1].path -ceq $expectedInstallRoot)
+        working_directory_relocation = [ordered]@{ status = "NOT_TESTED"; outside_application_root = $false }
         results = $rollbackResults
         parent_cleanup = @()
         postconditions = [ordered]@{ status = "NOT_TESTED"; remaining = @() }
@@ -1111,7 +1133,7 @@ if ($Uninstall.IsPresent) {
         [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedOperatorCatalogRoot "Container_Audit operator catalog"))
         [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedUpdateBackupRoot "Container_Audit update backups"))
         [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedUpdateEvidenceRoot "Container_Audit update evidence"))
-        Set-Location -LiteralPath ([Environment]::SystemDirectory)
+        $rollbackReport.working_directory_relocation = Set-ProcessWorkingDirectoryOutsideOwnedTree $expectedInstallRoot
         [void]$rollbackResults.Add((Remove-ExactOwnedTree $expectedInstallRoot "Container_Audit application root"))
 
         $rollbackReport.parent_cleanup = @(

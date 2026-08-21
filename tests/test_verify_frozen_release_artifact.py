@@ -20,7 +20,7 @@ from tools.verify_frozen_release_artifact import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TAG = "v2.0.72"
+TAG = "v2.0.73"
 CONTRACT_SHA256 = "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
 
 

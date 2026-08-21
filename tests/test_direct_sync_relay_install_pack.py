@@ -1,6 +1,7 @@
 import argparse
 import json
 import base64
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -11,7 +12,11 @@ import direct_sync_push
 import isolated_qualification
 from tools import direct_sync_relay_install_pack as install_pack
 from tools import isolated_qualification_authority as qualification_authority
-from tools.direct_sync_relay_install_pack import SYSTEM32_WSCRIPT_EXE, _quote_cmd
+from tools.direct_sync_relay_install_pack import (
+    SYSTEM32_CMD_EXE,
+    SYSTEM32_WSCRIPT_EXE,
+    _quote_cmd,
+)
 from storage_policy import DATA_ROOT_ENV
 
 
@@ -401,6 +406,7 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     assert report["scheduled_task_wrapper_path"].endswith("direct-sync-relay-container-audit.cmd")
     assert report["scheduled_task_launcher_path"].endswith("direct-sync-relay-container-audit.vbs")
     assert report["scheduled_task_uses_hidden_launcher"] is True
+    assert report["scheduled_task_launcher_uses_absolute_system32_cmd"] is True
     expected_launcher_command = _quote_cmd(
         [
             SYSTEM32_WSCRIPT_EXE,
@@ -430,6 +436,57 @@ def test_scheduled_task_action_parts_use_system32_wscript():
     assert command.startswith(SYSTEM32_WSCRIPT_EXE)
     assert not command.startswith("wscript.exe")
     assert command.endswith(launcher)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="requires the Windows task launcher")
+def test_system_task_launcher_pins_environment_without_comspec_and_records_sanitized_exit(
+    tmp_path,
+):
+    runtime_root = tmp_path / "runtime"
+    wrapper_path = runtime_root / "bin" / "direct-sync-relay-container-audit.cmd"
+    launcher_path = runtime_root / "bin" / "direct-sync-relay-container-audit.vbs"
+    launcher_status_path = runtime_root / "status" / "direct_sync_relay_launcher.log"
+    runtime_temp_dir = runtime_root / "temp"
+    runner_code = (
+        "import os,sys;"
+        "assert os.environ['TEMP'] == sys.argv[1];"
+        "assert os.environ['TMP'] == sys.argv[1];"
+        "raise SystemExit(23)"
+    )
+    install_pack._write_scheduled_task_wrapper(
+        wrapper_path,
+        [sys.executable, "-c", runner_code, str(runtime_temp_dir.resolve())],
+        working_directory=wrapper_path.parent,
+        runtime_temp_dir=runtime_temp_dir,
+        launcher_status_path=launcher_status_path,
+    )
+    install_pack._write_scheduled_task_launcher(
+        launcher_path,
+        wrapper_path,
+        launcher_status_path,
+    )
+    environment = os.environ.copy()
+    environment.pop("ComSpec", None)
+    environment.pop("COMSPEC", None)
+
+    completed = subprocess.run(
+        install_pack._scheduled_task_action_parts(launcher_path),
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 23
+    status_text = launcher_status_path.read_text(encoding="utf-8")
+    assert "launcher_status=WRAPPER_STARTED" in status_text
+    assert "launcher_status=RUNNER_EXITED" in status_text
+    assert "launcher_exit_code=23" in status_text
+    assert "secret" not in status_text.lower()
+    launcher_text = launcher_path.read_text(encoding="ascii")
+    assert SYSTEM32_CMD_EXE in launcher_text
+    assert "%ComSpec%" not in launcher_text
 
 
 def test_isolated_qualification_system_task_preflights_runtime_lease_before_scan(
@@ -1412,10 +1469,13 @@ def test_install_pack_writes_utf8_wrapper_script_for_long_runner_command(tmp_pat
     install_pack._write_scheduled_task_wrapper(wrapper_path, runner_parts)
 
     text = wrapper_path.read_text(encoding="utf-8")
-    assert text.startswith("@echo off\nchcp 65001 >nul\n")
+    assert text.startswith("@echo off\nsetlocal\nchcp 65001 >nul\n")
+    assert 'set "TEMP=' in text
+    assert 'set "TMP=' in text
+    assert "launcher_status=WRAPPER_STARTED" in text
     assert "direct_sync_relay_runner.py" in text
     assert "이적작업이벤트로그_*.csv" in text
-    assert text.rstrip().endswith("exit /b %ERRORLEVEL%")
+    assert text.rstrip().endswith("exit /b %relayExit%")
 
 
 def test_local_test_task_wrapper_persists_only_allowlisted_transport_environment(tmp_path, monkeypatch):
@@ -1534,7 +1594,10 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
     assert not launcher_path.read_bytes().startswith(b"\xef\xbb\xbf")
     launcher_text = launcher_path.read_text(encoding="ascii")
     assert "WScript.Shell" in launcher_text
+    assert SYSTEM32_CMD_EXE in launcher_text
+    assert "%ComSpec%" not in launcher_text
     assert str(wrapper_path.resolve()) in launcher_text
+    assert str(Path(report["scheduled_task_launcher_status_path"]).resolve()) in launcher_text
     tr_index = report["scheduled_task_create_command"].index("/TR")
     assert report["scheduled_task_create_command"][tr_index + 1] == report["scheduled_task_launcher_command"]
     assert len(report["scheduled_task_create_command"][tr_index + 1]) <= 261

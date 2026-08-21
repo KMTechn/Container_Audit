@@ -188,6 +188,18 @@ owned qualification authority process survived official uninstall and
 rollback. Never alter, rebuild, retag, publish, or reuse those bytes; the
 successor is `v2.0.72`.
 
+`v2.0.72` is permanently quarantined as an unpublished local candidate after
+fresh Windows Sandbox qualification classified it `FAIL`. Its annotated tag
+object is `abc9b958833b6b6a9264a075a5473e9bb41224af`, peeling to
+`fdc4cb3ef934c25b9087ccf68b958dfd5730f989`; its one preserved ZIP is exactly
+126455428 bytes with SHA-256
+`6423e829eebd551dfd5d23e8294c353cc2fef37f70cabe718a2f87e9a99dbc5e`.
+The isolated authority initialized, probed, and enrolled successfully, but the
+SYSTEM relay exited `1` without a status, log, or runtime-lease request. The
+public destructive rollback also left the application root locked when invoked
+from a shell whose working directory was that root. Never alter, rebuild,
+retag, publish, or reuse those bytes; the successor is `v2.0.73`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:

@@ -41,6 +41,7 @@ DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
 CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
 SYSTEM32_WSCRIPT_EXE = r"C:\Windows\System32\wscript.exe"
+SYSTEM32_CMD_EXE = r"C:\Windows\System32\cmd.exe"
 NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
@@ -262,15 +263,49 @@ def _write_scheduled_task_wrapper(
     runner_parts: Sequence[str],
     *,
     environment: dict[str, str] | None = None,
+    working_directory: str | os.PathLike[str] | None = None,
+    runtime_temp_dir: str | os.PathLike[str] | None = None,
+    launcher_status_path: str | os.PathLike[str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    working_path = Path(working_directory or path.parent).expanduser().resolve()
+    temp_dir = Path(runtime_temp_dir or (path.parent / "temp")).expanduser().resolve()
+    status_path = Path(
+        launcher_status_path or path.with_name(f"{path.stem}.launcher.log")
+    ).expanduser().resolve()
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    status_path.parent.mkdir(parents=True, exist_ok=True)
     command = _quote_cmd(runner_parts)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    task_environment = {
+        "TEMP": str(temp_dir),
+        "TMP": str(temp_dir),
+        **(environment or {}),
+    }
     environment_lines = [
         f'set "{env_name}={value}"'
-        for env_name, value in (environment or {}).items()
+        for env_name, value in task_environment.items()
     ]
-    content_lines = ["@echo off", "chcp 65001 >nul", *environment_lines, command, "exit /b %ERRORLEVEL%", ""]
+    quoted_working_path = _quote_cmd([str(working_path)])
+    quoted_status_path = _quote_cmd([str(status_path)])
+    content_lines = [
+        "@echo off",
+        "setlocal",
+        "chcp 65001 >nul",
+        *environment_lines,
+        f">{quoted_status_path} echo launcher_status=WRAPPER_STARTED",
+        f"cd /d {quoted_working_path}",
+        "if errorlevel 1 (",
+        f"  >>{quoted_status_path} echo launcher_status=WORKING_DIRECTORY_FAILED",
+        "  exit /b 125",
+        ")",
+        f"{command} >nul 2>&1",
+        'set "relayExit=%ERRORLEVEL%"',
+        f">>{quoted_status_path} echo launcher_status=RUNNER_EXITED",
+        f">>{quoted_status_path} echo launcher_exit_code=%relayExit%",
+        "exit /b %relayExit%",
+        "",
+    ]
     content = "\n".join(content_lines)
     try:
         temp_path.write_text(content, encoding="utf-8", newline="\r\n")
@@ -283,25 +318,56 @@ def _write_scheduled_task_wrapper(
         raise
 
 
-def _scheduled_task_launcher_content(wrapper_path: str | os.PathLike[str]) -> str:
+def _scheduled_task_launcher_content(
+    wrapper_path: str | os.PathLike[str],
+    launcher_status_path: str | os.PathLike[str],
+) -> str:
     return "\r\n".join(
         [
+            "On Error Resume Next",
             'Set shell = CreateObject("WScript.Shell")',
-            'comspec = shell.ExpandEnvironmentStrings("%ComSpec%")',
+            'Set fileSystem = CreateObject("Scripting.FileSystemObject")',
             f"runner = {_vbs_string(Path(wrapper_path).expanduser().resolve())}",
-            'command = """" & comspec & """ /d /c """ & runner & """"',
+            f"launcherStatus = {_vbs_string(Path(launcher_status_path).expanduser().resolve())}",
+            f"cmdExe = {_vbs_string(SYSTEM32_CMD_EXE)}",
+            "Set statusFile = fileSystem.OpenTextFile(launcherStatus, 2, True)",
+            "If Err.Number = 0 Then",
+            '    statusFile.WriteLine "launcher_status=WSCRIPT_STARTED"',
+            "    statusFile.Close",
+            "End If",
+            "Err.Clear",
+            'command = """" & cmdExe & """ /d /q /c """ & runner & """"',
             "exitCode = shell.Run(command, 0, True)",
+            "If Err.Number <> 0 Then",
+            "    launcherError = Err.Number",
+            "    Err.Clear",
+            "    Set statusFile = fileSystem.OpenTextFile(launcherStatus, 8, True)",
+            "    If Err.Number = 0 Then",
+            '        statusFile.WriteLine "launcher_status=WSCRIPT_RUN_FAILED"',
+            '        statusFile.WriteLine "launcher_error_code=" & launcherError',
+            "        statusFile.Close",
+            "    End If",
+            "    WScript.Quit 124",
+            "End If",
             "WScript.Quit exitCode",
             "",
         ]
     )
 
 
-def _write_scheduled_task_launcher(path: Path, wrapper_path: str | os.PathLike[str]) -> None:
+def _write_scheduled_task_launcher(
+    path: Path,
+    wrapper_path: str | os.PathLike[str],
+    launcher_status_path: str | os.PathLike[str],
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
     try:
-        temp_path.write_text(_scheduled_task_launcher_content(wrapper_path), encoding="ascii", newline="\r\n")
+        temp_path.write_text(
+            _scheduled_task_launcher_content(wrapper_path, launcher_status_path),
+            encoding="ascii",
+            newline="\r\n",
+        )
         os.replace(temp_path, path)
     except Exception:
         try:
@@ -393,8 +459,10 @@ def _runtime_paths(program_data_root: str | os.PathLike[str]) -> dict[str, str]:
         "spool_dir": str(root / "spool"),
         "upload_status_dir": str(root / "upload_status"),
         "runtime_status_path": str(root / "status" / "direct_sync_relay_status.json"),
+        "launcher_status_path": str(root / "status" / "direct_sync_relay_launcher.log"),
         "log_path": str(root / "logs" / "direct_sync_relay.jsonl"),
         "operator_pause_path": str(root / "control" / "pause.json"),
+        "runtime_temp_dir": str(root / "temp"),
     }
 
 
@@ -1115,6 +1183,8 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "scheduled_task_launcher_path": launcher_path,
         "scheduled_task_launcher_command": launcher_command,
         "scheduled_task_uses_hidden_launcher": True,
+        "scheduled_task_launcher_uses_absolute_system32_cmd": True,
+        "scheduled_task_launcher_status_path": paths["launcher_status_path"],
         "local_test_task_environment_names": list(local_test_task_environment),
         "local_test_task_environment_persisted": bool(local_test_task_environment),
         "task_principal": task_principal,
@@ -1361,10 +1431,14 @@ def main(argv: list[str] | None = None) -> int:
                 Path(plan["scheduled_task_wrapper_path"]),
                 plan["runner_command"],
                 environment=_local_test_task_environment(args),
+                working_directory=Path(plan["scheduled_task_wrapper_path"]).parent,
+                runtime_temp_dir=plan["runtime_paths"]["runtime_temp_dir"],
+                launcher_status_path=plan["scheduled_task_launcher_status_path"],
             )
             _write_scheduled_task_launcher(
                 Path(plan["scheduled_task_launcher_path"]),
                 plan["scheduled_task_wrapper_path"],
+                plan["scheduled_task_launcher_status_path"],
             )
         plan["command_result"] = _run_command(command)
         if args.uninstall and _scheduled_task_delete_already_absent(plan["command_result"]):
