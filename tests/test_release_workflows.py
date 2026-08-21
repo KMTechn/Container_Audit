@@ -257,6 +257,20 @@ def test_release_contract_quarantines_v2074_builder_bootstrap_failure_without_ar
     assert "the successor is `v2.0.75`" in contract
 
 
+def test_release_contract_quarantines_v2075_sandbox_system_relay_lease_failure():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.75` is permanently quarantined as an unpublished local candidate after" in contract
+    assert "exclusive Windows Sandbox qualification classified it `FAIL`" in contract
+    assert "17531bc92faddf1c769447ac0cf1909fd559bbc6" in contract
+    assert "b4a7acdf83c0cac37dbcf59bd518fd3171f61d96" in contract
+    assert "126456582 bytes" in contract
+    assert "da142199a3f4017f3984324b34aa9b69fb4a4bbb1fe0c2b3b243f35a5452499b" in contract
+    assert "LastTaskResult `1`" in contract
+    assert "zero runtime-lease" in contract
+    assert "the successor is `v2.0.76`" in contract
+
+
 def test_release_contract_requires_exact_builder_child_module_path_closure():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

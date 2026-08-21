@@ -40,7 +40,6 @@ from storage_policy import (  # noqa: E402
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
 CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
-SYSTEM32_WSCRIPT_EXE = r"C:\Windows\System32\wscript.exe"
 SYSTEM32_CMD_EXE = r"C:\Windows\System32\cmd.exe"
 NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
@@ -222,20 +221,44 @@ def _stored_password_task_register_command(
     return _encoded_powershell_command(script)
 
 
+def _system_service_task_register_command(
+    *,
+    task_name: str,
+    minute_interval: int,
+    task_action_parts: Sequence[str],
+    working_directory: str | os.PathLike[str],
+) -> list[str]:
+    task_args = _quote_cmd([str(part) for part in task_action_parts[1:]])
+    script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$taskName = {_ps_single_quote(task_name)}",
+            f"$execute = {_ps_single_quote(str(task_action_parts[0]))}",
+            f"$arguments = {_ps_single_quote(task_args)}",
+            f"$workingDirectory = {_ps_single_quote(Path(working_directory).expanduser().resolve())}",
+            "$action = New-ScheduledTaskAction -Execute $execute -Argument $arguments -WorkingDirectory $workingDirectory",
+            "$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).Date -RepetitionInterval (New-TimeSpan -Minutes "
+            + str(max(1, int(minute_interval)))
+            + ") -RepetitionDuration (New-TimeSpan -Days 3650)",
+            "$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest",
+            "$settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)",
+            "Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null",
+            "",
+        ]
+    )
+    return _encoded_powershell_command(script)
+
+
 def _scheduled_task_wrapper_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
     return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.cmd"
 
 
 def _scheduled_task_launcher_path(program_data_root: str | os.PathLike[str], task_name: str) -> Path:
-    return Path(program_data_root).expanduser().resolve() / "bin" / f"{task_name}.vbs"
+    return _scheduled_task_wrapper_path(program_data_root, task_name)
 
 
 def _scheduled_task_action_parts(launcher_path: str | os.PathLike[str]) -> list[str]:
-    return [SYSTEM32_WSCRIPT_EXE, "//B", "//NoLogo", str(launcher_path)]
-
-
-def _vbs_string(value: str | os.PathLike[str]) -> str:
-    return '"' + str(value).replace('"', '""') + '"'
+    return [SYSTEM32_CMD_EXE, "/d", "/q", "/c", str(launcher_path)]
 
 
 def _local_test_task_environment(args: argparse.Namespace) -> dict[str, str]:
@@ -291,7 +314,6 @@ def _write_scheduled_task_wrapper(
     content_lines = [
         "@echo off",
         "setlocal",
-        "chcp 65001 >nul",
         *environment_lines,
         f">{quoted_status_path} echo launcher_status=WRAPPER_STARTED",
         f"cd /d {quoted_working_path}",
@@ -309,65 +331,6 @@ def _write_scheduled_task_wrapper(
     content = "\n".join(content_lines)
     try:
         temp_path.write_text(content, encoding="utf-8", newline="\r\n")
-        os.replace(temp_path, path)
-    except Exception:
-        try:
-            temp_path.unlink()
-        except OSError:
-            pass
-        raise
-
-
-def _scheduled_task_launcher_content(
-    wrapper_path: str | os.PathLike[str],
-    launcher_status_path: str | os.PathLike[str],
-) -> str:
-    return "\r\n".join(
-        [
-            "On Error Resume Next",
-            'Set shell = CreateObject("WScript.Shell")',
-            'Set fileSystem = CreateObject("Scripting.FileSystemObject")',
-            f"runner = {_vbs_string(Path(wrapper_path).expanduser().resolve())}",
-            f"launcherStatus = {_vbs_string(Path(launcher_status_path).expanduser().resolve())}",
-            f"cmdExe = {_vbs_string(SYSTEM32_CMD_EXE)}",
-            "Set statusFile = fileSystem.OpenTextFile(launcherStatus, 2, True)",
-            "If Err.Number = 0 Then",
-            '    statusFile.WriteLine "launcher_status=WSCRIPT_STARTED"',
-            "    statusFile.Close",
-            "End If",
-            "Err.Clear",
-            'command = """" & cmdExe & """ /d /q /c """ & runner & """"',
-            "exitCode = shell.Run(command, 0, True)",
-            "If Err.Number <> 0 Then",
-            "    launcherError = Err.Number",
-            "    Err.Clear",
-            "    Set statusFile = fileSystem.OpenTextFile(launcherStatus, 8, True)",
-            "    If Err.Number = 0 Then",
-            '        statusFile.WriteLine "launcher_status=WSCRIPT_RUN_FAILED"',
-            '        statusFile.WriteLine "launcher_error_code=" & launcherError',
-            "        statusFile.Close",
-            "    End If",
-            "    WScript.Quit 124",
-            "End If",
-            "WScript.Quit exitCode",
-            "",
-        ]
-    )
-
-
-def _write_scheduled_task_launcher(
-    path: Path,
-    wrapper_path: str | os.PathLike[str],
-    launcher_status_path: str | os.PathLike[str],
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
-    try:
-        temp_path.write_text(
-            _scheduled_task_launcher_content(wrapper_path, launcher_status_path),
-            encoding="ascii",
-            newline="\r\n",
-        )
         os.replace(temp_path, path)
     except Exception:
         try:
@@ -477,7 +440,7 @@ def _field_layout_contract(args: argparse.Namespace) -> dict:
     actual_install_root = Path(args.app_root).expanduser().resolve()
     expected_direct_sync_root = Path(CANONICAL_DIRECT_SYNC_ROOT)
     actual_direct_sync_root = Path(args.program_data_root).expanduser().resolve()
-    expected_task_launcher_path = expected_direct_sync_root / "bin" / f"{DEFAULT_TASK_NAME}.vbs"
+    expected_task_launcher_path = expected_direct_sync_root / "bin" / f"{DEFAULT_TASK_NAME}.cmd"
     actual_task_launcher_path = _scheduled_task_launcher_path(actual_direct_sync_root, args.task_name)
     expected_state_db_path = expected_direct_sync_root / "queue" / "direct_sync_relay.sqlite3"
     actual_state_db_path = Path(_runtime_paths(actual_direct_sync_root)["db_path"])
@@ -1131,14 +1094,23 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         wrapper_path = str(wrapper)
         launcher = _scheduled_task_launcher_path(args.program_data_root, args.task_name)
         launcher_path = str(launcher)
-        launcher_command = _quote_cmd(_scheduled_task_action_parts(launcher_path))
+        task_action_parts = _scheduled_task_action_parts(launcher_path)
+        launcher_command = _quote_cmd(task_action_parts)
         task_principal_args, task_principal = _task_principal_args(args, redact_password=True)
-        create_command = _scheduled_task_create_command(
-            task_name=args.task_name,
-            minute_interval=args.minute_interval,
-            task_action=launcher_command,
-            task_principal_args=task_principal_args,
-        )
+        if task_principal["mode"] == "system_service_account":
+            create_command = _system_service_task_register_command(
+                task_name=args.task_name,
+                minute_interval=args.minute_interval,
+                task_action_parts=task_action_parts,
+                working_directory=str(Path(wrapper_path).parent),
+            )
+        else:
+            create_command = _scheduled_task_create_command(
+                task_name=args.task_name,
+                minute_interval=args.minute_interval,
+                task_action=launcher_command,
+                task_principal_args=task_principal_args,
+            )
     else:
         task_principal = {
             "status": "SKIPPED",
@@ -1409,6 +1381,13 @@ def main(argv: list[str] | None = None) -> int:
                     task_action_parts=task_action_parts,
                     args=args,
                 )
+            elif actual_principal["mode"] == "system_service_account":
+                command = _system_service_task_register_command(
+                    task_name=args.task_name,
+                    minute_interval=args.minute_interval,
+                    task_action_parts=task_action_parts,
+                    working_directory=Path(plan["scheduled_task_wrapper_path"]).parent,
+                )
             else:
                 command = _scheduled_task_create_command(
                     task_name=args.task_name,
@@ -1434,11 +1413,6 @@ def main(argv: list[str] | None = None) -> int:
                 working_directory=Path(plan["scheduled_task_wrapper_path"]).parent,
                 runtime_temp_dir=plan["runtime_paths"]["runtime_temp_dir"],
                 launcher_status_path=plan["scheduled_task_launcher_status_path"],
-            )
-            _write_scheduled_task_launcher(
-                Path(plan["scheduled_task_launcher_path"]),
-                plan["scheduled_task_wrapper_path"],
-                plan["scheduled_task_launcher_status_path"],
             )
         plan["command_result"] = _run_command(command)
         if args.uninstall and _scheduled_task_delete_already_absent(plan["command_result"]):

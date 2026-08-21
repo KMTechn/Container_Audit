@@ -454,12 +454,12 @@ function Get-OwnedScheduledTaskState([string]$Name, [string]$ExpectedLauncherPat
     if ($actions.Count -ne 1) {
         throw "The Container_Audit scheduled task action is not owned."
     }
-    $expectedWscript = Join-Path ([Environment]::SystemDirectory) "wscript.exe"
+    $expectedCmd = Join-Path ([Environment]::SystemDirectory) "cmd.exe"
     $actualExecute = [string]$actions[0].Execute
     $actualArguments = ([string]$actions[0].Arguments).Trim()
     $expectedArguments = @(
-        "//B //NoLogo $ExpectedLauncherPath",
-        "//B //NoLogo `"$ExpectedLauncherPath`""
+        "/d /q /c $ExpectedLauncherPath",
+        "/d /q /c `"$ExpectedLauncherPath`""
     )
     $argumentMatches = $false
     foreach ($candidate in $expectedArguments) {
@@ -471,7 +471,7 @@ function Get-OwnedScheduledTaskState([string]$Name, [string]$ExpectedLauncherPat
     $principal = [string]$task.Principal.UserId
     $principalMatches = @("SYSTEM", "NT AUTHORITY\SYSTEM", "S-1-5-18") -contains $principal
     if (
-        -not (Test-SamePath $actualExecute $expectedWscript) -or
+        -not (Test-SamePath $actualExecute $expectedCmd) -or
         -not $argumentMatches -or
         -not $principalMatches
     ) {
@@ -904,7 +904,7 @@ $qualificationContextPath = Join-Path $qualificationStateRoot "client-context.js
 $qualificationFixturePath = Join-Path $qualificationStateRoot "operator-fixture.json"
 $qualificationInitializeReportPath = Join-Path $statusDir "isolated_qualification_initialize.json"
 $qualificationProbeReportPath = Join-Path $statusDir "isolated_qualification_probe.json"
-$expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.vbs"
+$expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.cmd"
 $expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
 $expectedOperatorDataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
 $expectedOperatorCatalogRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ItemCatalog\Container_Audit"
@@ -915,7 +915,7 @@ $shortcutName = Get-ContainerAuditShortcutName
 $expectedShortcutPath = Join-Path $shortcutGroupPath ($shortcutName + ".lnk")
 $actualInstallRoot = [System.IO.Path]::GetFullPath($packageRoot)
 $actualDirectSyncRoot = [System.IO.Path]::GetFullPath($DirectSyncRoot)
-$actualTaskLauncherPath = Join-Path $actualDirectSyncRoot ("bin\{0}.vbs" -f $TaskName)
+$actualTaskLauncherPath = Join-Path $actualDirectSyncRoot ("bin\{0}.cmd" -f $TaskName)
 $actualStateDbPath = Join-Path $actualDirectSyncRoot "queue\direct_sync_relay.sqlite3"
 $installRootMatches = Test-SamePath $actualInstallRoot $expectedInstallRoot
 $directSyncRootMatches = Test-SamePath $actualDirectSyncRoot $expectedDirectSyncRoot

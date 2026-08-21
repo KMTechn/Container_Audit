@@ -14,7 +14,6 @@ from tools import direct_sync_relay_install_pack as install_pack
 from tools import isolated_qualification_authority as qualification_authority
 from tools.direct_sync_relay_install_pack import (
     SYSTEM32_CMD_EXE,
-    SYSTEM32_WSCRIPT_EXE,
     _quote_cmd,
 )
 from storage_policy import DATA_ROOT_ENV
@@ -118,7 +117,7 @@ def make_isolated_manifest_and_credential(tmp_path, monkeypatch):
     operator_root.mkdir()
     monkeypatch.setenv(isolated_qualification.SOURCE_TEST_MODE_ENV, "1")
     monkeypatch.setenv("COMPUTERNAME", "QUALIFICATION-SYSTEM-TEST")
-    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "qualification-program-data"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "pd"))
     state_root = isolated_qualification.default_state_root()
     qualification_authority.initialize_authority(
         state_root=state_root,
@@ -152,7 +151,7 @@ def test_canonical_field_layout_contract_matches_release_resources():
     assert contract["production_layout_matches"] is True
     assert contract["production_apply_allowed"] is True
     assert contract["actual_task_launcher_path"].endswith(
-        r"bin\direct-sync-relay-container-audit.vbs"
+        r"bin\direct-sync-relay-container-audit.cmd"
     )
     assert contract["actual_state_db_path"].endswith(
         r"queue\direct_sync_relay.sqlite3"
@@ -193,7 +192,7 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
         "direct-sync-relay-container-audit"
     )
     assert report["field_layout_contract"]["expected_task_launcher_path"].endswith(
-        r"bin\direct-sync-relay-container-audit.vbs"
+        r"bin\direct-sync-relay-container-audit.cmd"
     )
     assert report["field_layout_contract"]["expected_state_db_path"].endswith(
         r"queue\direct_sync_relay.sqlite3"
@@ -207,8 +206,11 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["source_scan"]["source_globs"] == ["*.csv"]
     assert report["task_principal"]["mode"] == "system_service_account"
     assert report["task_principal"]["run_user"] == "SYSTEM"
-    assert "/RU" in report["scheduled_task_create_command"]
-    assert report["scheduled_task_create_command"][report["scheduled_task_create_command"].index("/RU") + 1] == "SYSTEM"
+    system_script = decode_encoded_powershell_command(report["scheduled_task_create_command"])
+    assert "Register-ScheduledTask" in system_script
+    assert "New-ScheduledTaskPrincipal -UserId 'SYSTEM'" in system_script
+    assert "LogonType ServiceAccount" in system_script
+    assert "RunLevel Highest" in system_script
     assert report["source_scan_validation"]["status"] == "PASS"
     assert str(expected_root / "events") in report["runner_command"]
     assert str(expected_direct_sync_root) in report["runtime_paths"]["db_path"]
@@ -399,42 +401,57 @@ def test_install_pack_dry_run_writes_redacted_scheduled_task_plan(tmp_path):
     assert "--min-source-file-age-seconds" in report["runner_command"]
     assert "--drain-after-scan" in report["runner_command"]
     assert "30" in report["runner_command"]
-    assert "schtasks.exe" == report["scheduled_task_create_command"][0]
-    tr_index = report["scheduled_task_create_command"].index("/TR")
-    assert report["scheduled_task_create_command"][tr_index + 1] == report["scheduled_task_launcher_command"]
-    assert len(report["scheduled_task_create_command"][tr_index + 1]) <= 261
+    assert report["scheduled_task_create_command"][:5] == [
+        "powershell.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+    ]
     assert report["scheduled_task_wrapper_path"].endswith("direct-sync-relay-container-audit.cmd")
-    assert report["scheduled_task_launcher_path"].endswith("direct-sync-relay-container-audit.vbs")
+    assert report["scheduled_task_launcher_path"].endswith("direct-sync-relay-container-audit.cmd")
+    assert report["scheduled_task_wrapper_path"] == report["scheduled_task_launcher_path"]
     assert report["scheduled_task_uses_hidden_launcher"] is True
     assert report["scheduled_task_launcher_uses_absolute_system32_cmd"] is True
     expected_launcher_command = _quote_cmd(
         [
-            SYSTEM32_WSCRIPT_EXE,
-            "//B",
-            "//NoLogo",
+            SYSTEM32_CMD_EXE,
+            "/d",
+            "/q",
+            "/c",
             report["scheduled_task_launcher_path"],
         ]
     )
     assert report["scheduled_task_launcher_command"] == expected_launcher_command
-    assert report["scheduled_task_create_command"][tr_index + 1] == expected_launcher_command
-    assert report["scheduled_task_launcher_command"].startswith(SYSTEM32_WSCRIPT_EXE)
-    assert not report["scheduled_task_launcher_command"].startswith("wscript.exe")
+    assert report["scheduled_task_launcher_command"].startswith(SYSTEM32_CMD_EXE)
+    assert "wscript.exe" not in report["scheduled_task_launcher_command"].lower()
+    system_script = decode_encoded_powershell_command(report["scheduled_task_create_command"])
+    assert f"$execute = '{SYSTEM32_CMD_EXE}'" in system_script
+    assert "/d /q /c" in system_script
+    assert report["scheduled_task_launcher_path"] in system_script
+    assert "AllowStartIfOnBatteries" in system_script
+    assert "DontStopIfGoingOnBatteries" in system_script
+    assert "StartWhenAvailable" in system_script
+    assert "-Hidden" in system_script
+    assert "ExecutionTimeLimit ([TimeSpan]::Zero)" in system_script
+    assert "New-ScheduledTaskPrincipal -UserId 'SYSTEM'" in system_script
+    assert "wscript" not in system_script.lower()
     assert str(credential_path.resolve()) in report["runner_command"]
     assert "install-pack-secret" not in report_text
     assert report["secret_redaction"]["raw_secret_in_report"] is False
 
 
-def test_scheduled_task_action_parts_use_system32_wscript():
+def test_scheduled_task_action_parts_use_system32_cmd():
     launcher = (
         r"C:\ProgramData\KMTech\DirectSync\container_audit\bin"
-        r"\direct-sync-relay-container-audit.vbs"
+        r"\direct-sync-relay-container-audit.cmd"
     )
     parts = install_pack._scheduled_task_action_parts(launcher)
 
-    assert parts == [SYSTEM32_WSCRIPT_EXE, "//B", "//NoLogo", launcher]
+    assert parts == [SYSTEM32_CMD_EXE, "/d", "/q", "/c", launcher]
     command = _quote_cmd(parts)
-    assert command.startswith(SYSTEM32_WSCRIPT_EXE)
-    assert not command.startswith("wscript.exe")
+    assert command.startswith(SYSTEM32_CMD_EXE)
+    assert "wscript.exe" not in command.lower()
     assert command.endswith(launcher)
 
 
@@ -444,7 +461,6 @@ def test_system_task_launcher_pins_environment_without_comspec_and_records_sanit
 ):
     runtime_root = tmp_path / "runtime"
     wrapper_path = runtime_root / "bin" / "direct-sync-relay-container-audit.cmd"
-    launcher_path = runtime_root / "bin" / "direct-sync-relay-container-audit.vbs"
     launcher_status_path = runtime_root / "status" / "direct_sync_relay_launcher.log"
     runtime_temp_dir = runtime_root / "temp"
     runner_code = (
@@ -460,17 +476,12 @@ def test_system_task_launcher_pins_environment_without_comspec_and_records_sanit
         runtime_temp_dir=runtime_temp_dir,
         launcher_status_path=launcher_status_path,
     )
-    install_pack._write_scheduled_task_launcher(
-        launcher_path,
-        wrapper_path,
-        launcher_status_path,
-    )
     environment = os.environ.copy()
     environment.pop("ComSpec", None)
     environment.pop("COMSPEC", None)
 
     completed = subprocess.run(
-        install_pack._scheduled_task_action_parts(launcher_path),
+        install_pack._scheduled_task_action_parts(wrapper_path),
         cwd=tmp_path,
         env=environment,
         check=False,
@@ -484,9 +495,10 @@ def test_system_task_launcher_pins_environment_without_comspec_and_records_sanit
     assert "launcher_status=RUNNER_EXITED" in status_text
     assert "launcher_exit_code=23" in status_text
     assert "secret" not in status_text.lower()
-    launcher_text = launcher_path.read_text(encoding="ascii")
-    assert SYSTEM32_CMD_EXE in launcher_text
-    assert "%ComSpec%" not in launcher_text
+    wrapper_text = wrapper_path.read_text(encoding="utf-8")
+    assert "%ComSpec%" not in wrapper_text
+    assert "chcp" not in wrapper_text
+    assert list(runtime_root.glob("**/*.vbs")) == []
 
 
 def test_isolated_qualification_system_task_preflights_runtime_lease_before_scan(
@@ -532,6 +544,15 @@ def test_isolated_qualification_system_task_preflights_runtime_lease_before_scan
     assert command.index("--require-runtime-lease-before-scan") < command.index(
         "--scan-source-dir"
     )
+    assert report["scheduled_task_launcher_path"].endswith(".cmd")
+    assert report["scheduled_task_launcher_command"].startswith(SYSTEM32_CMD_EXE)
+    assert "wscript" not in report["scheduled_task_launcher_command"].lower()
+    system_script = decode_encoded_powershell_command(report["scheduled_task_create_command"])
+    assert "New-ScheduledTaskPrincipal -UserId 'SYSTEM'" in system_script
+    assert f"$execute = '{SYSTEM32_CMD_EXE}'" in system_script
+    assert "AllowStartIfOnBatteries" in system_script
+    assert "StartWhenAvailable" in system_script
+    assert "wscript" not in system_script.lower()
 
 
 def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, monkeypatch):
@@ -1469,7 +1490,8 @@ def test_install_pack_writes_utf8_wrapper_script_for_long_runner_command(tmp_pat
     install_pack._write_scheduled_task_wrapper(wrapper_path, runner_parts)
 
     text = wrapper_path.read_text(encoding="utf-8")
-    assert text.startswith("@echo off\nsetlocal\nchcp 65001 >nul\n")
+    assert text.startswith("@echo off\nsetlocal\n")
+    assert "chcp" not in text
     assert 'set "TEMP=' in text
     assert 'set "TMP=' in text
     assert "launcher_status=WRAPPER_STARTED" in text
@@ -1589,15 +1611,14 @@ def test_install_pack_apply_writes_applying_report_before_running_command(tmp_pa
     assert wrapper_path.is_file()
     wrapper_text = wrapper_path.read_text(encoding="utf-8")
     assert "direct_sync_relay_runner.py" in wrapper_text
+    assert "chcp" not in wrapper_text
     launcher_path = Path(report["scheduled_task_launcher_path"])
-    assert launcher_path.is_file()
+    assert launcher_path == wrapper_path
     assert not launcher_path.read_bytes().startswith(b"\xef\xbb\xbf")
-    launcher_text = launcher_path.read_text(encoding="ascii")
-    assert "WScript.Shell" in launcher_text
-    assert SYSTEM32_CMD_EXE in launcher_text
-    assert "%ComSpec%" not in launcher_text
-    assert str(wrapper_path.resolve()) in launcher_text
-    assert str(Path(report["scheduled_task_launcher_status_path"]).resolve()) in launcher_text
+    assert SYSTEM32_CMD_EXE in report["scheduled_task_launcher_command"]
+    assert "/d /q /c" in report["scheduled_task_launcher_command"]
+    assert str(wrapper_path.resolve()) in report["scheduled_task_launcher_command"]
+    assert "%ComSpec%" not in wrapper_text
     tr_index = report["scheduled_task_create_command"].index("/TR")
     assert report["scheduled_task_create_command"][tr_index + 1] == report["scheduled_task_launcher_command"]
     assert len(report["scheduled_task_create_command"][tr_index + 1]) <= 261
@@ -1643,9 +1664,10 @@ def test_install_pack_apply_supports_stored_password_task_without_leaking_passwo
     assert "stored-task-password" not in " ".join(task_command)
     command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
-    assert f"$execute = '{SYSTEM32_WSCRIPT_EXE}'" in command_script
+    assert f"$execute = '{SYSTEM32_CMD_EXE}'" in command_script
     assert "New-ScheduledTaskAction -Execute $execute -Argument $arguments" in command_script
-    assert "//B //NoLogo" in command_script
+    assert "/d /q /c" in command_script
+    assert "wscript" not in command_script.lower()
     assert "TASK_PASSWORD_FOR_TEST" in command_script
     assert "stored-task-password" not in command_script
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
@@ -1710,9 +1732,10 @@ def test_install_pack_apply_supports_password_file_without_leaking_password(tmp_
     assert "file-task-password" not in " ".join(task_command)
     command_script = decode_encoded_powershell_command(task_command)
     assert "Register-ScheduledTask" in command_script
-    assert f"$execute = '{SYSTEM32_WSCRIPT_EXE}'" in command_script
+    assert f"$execute = '{SYSTEM32_CMD_EXE}'" in command_script
     assert "New-ScheduledTaskAction -Execute $execute -Argument $arguments" in command_script
-    assert "//B //NoLogo" in command_script
+    assert "/d /q /c" in command_script
+    assert "wscript" not in command_script.lower()
     assert str(password_file.resolve()) in command_script
     assert "file-task-password" not in command_script
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
@@ -1791,8 +1814,29 @@ def test_install_pack_apply_defaults_to_system_task_without_password(tmp_path, m
     assert report["task_principal"]["status"] == "PASS"
     assert report["task_principal"]["mode"] == "system_service_account"
     assert report["task_principal"]["run_user"] == "SYSTEM"
-    create_command = find_command(commands, "schtasks.exe")
-    assert create_command[create_command.index("/RU") + 1] == "SYSTEM"
+    create_command = find_command(commands, "powershell.exe")
+    system_script = decode_encoded_powershell_command(create_command)
+    wrapper_path = Path(report["scheduled_task_wrapper_path"])
+    assert wrapper_path.is_file()
+    assert wrapper_path.suffix == ".cmd"
+    assert Path(report["scheduled_task_launcher_path"]) == wrapper_path
+    assert list(wrapper_path.parent.glob("*.vbs")) == []
+    assert f"$execute = '{SYSTEM32_CMD_EXE}'" in system_script
+    assert "/d /q /c" in system_script
+    assert str(wrapper_path.resolve()) in system_script
+    assert "New-ScheduledTaskPrincipal -UserId 'SYSTEM'" in system_script
+    assert "-LogonType ServiceAccount" in system_script
+    assert "-RunLevel Highest" in system_script
+    assert "AllowStartIfOnBatteries" in system_script
+    assert "DontStopIfGoingOnBatteries" in system_script
+    assert "StartWhenAvailable" in system_script
+    assert "-Hidden" in system_script
+    assert "ExecutionTimeLimit ([TimeSpan]::Zero)" in system_script
+    assert "wscript" not in system_script.lower()
+    assert report["scheduled_task_create_command"] == create_command
+    wrapper_text = wrapper_path.read_text(encoding="utf-8")
+    assert "launcher_status=WRAPPER_STARTED" in wrapper_text
+    assert "chcp" not in wrapper_text
 
 
 def test_install_pack_local_test_flag_keeps_interactive_task_mode(tmp_path):

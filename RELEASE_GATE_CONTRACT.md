@@ -221,6 +221,18 @@ only the unexpanded value. No ZIP, manifest, checksum, qualification receipt,
 candidate root, or success marker exists. Never delete, recreate, retarget,
 repair, publish, or retry that tag; the successor is `v2.0.75`.
 
+`v2.0.75` is permanently quarantined as an unpublished local candidate after
+exclusive Windows Sandbox qualification classified it `FAIL`. Its annotated tag
+object is `17531bc92faddf1c769447ac0cf1909fd559bbc6`, peeling to
+`b4a7acdf83c0cac37dbcf59bd518fd3171f61d96`; its one preserved ZIP is exactly
+126456582 bytes with SHA-256
+`da142199a3f4017f3984324b34aa9b69fb4a4bbb1fe0c2b3b243f35a5452499b`.
+The public install exited `1` after 130.739 seconds because the package-owned
+isolated SYSTEM relay returned LastTaskResult `1`, produced no launcher or
+runtime evidence, and the isolated authority received zero runtime-lease
+requests. Never clean, alter, rebuild, retag, publish, retry, or reuse those
+bytes; the successor is `v2.0.76`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:

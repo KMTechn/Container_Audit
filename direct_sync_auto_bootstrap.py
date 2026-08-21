@@ -446,8 +446,8 @@ def run_direct_sync_auto_bootstrap(
         return report
 
     selected_app_root = Path(app_root).expanduser().resolve()
-    expected_launcher = Path(CANONICAL_DIRECT_SYNC_ROOT) / "bin" / f"{DEFAULT_TASK_NAME}.vbs"
-    actual_launcher = root / "bin" / f"{task_name}.vbs"
+    expected_launcher = Path(CANONICAL_DIRECT_SYNC_ROOT) / "bin" / f"{DEFAULT_TASK_NAME}.cmd"
+    actual_launcher = root / "bin" / f"{task_name}.cmd"
     expected_state_db = Path(CANONICAL_DIRECT_SYNC_ROOT) / "queue" / "direct_sync_relay.sqlite3"
     actual_state_db = root / "queue" / "direct_sync_relay.sqlite3"
     same_path = lambda left, right: os.path.normcase(str(Path(left).resolve())) == os.path.normcase(
