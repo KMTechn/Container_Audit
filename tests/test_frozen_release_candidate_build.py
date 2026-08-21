@@ -1,6 +1,8 @@
+import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "tools" / "build_frozen_release_candidate.ps1"
 PYTHON_RESOLVER = ROOT / "tools" / "resolve_release_python.ps1"
+PWSH = "pwsh"
 
 
 def test_frozen_candidate_builder_requires_prepared_isolated_mirror_and_final_tag():
@@ -30,7 +33,10 @@ def test_frozen_candidate_builder_requires_prepared_isolated_mirror_and_final_ta
     assert "OutputRoot must be a fresh absent path" in script
     assert "Isolated release work clone must be clean" in script
     assert "[string]$PythonExecutable" in script
-    assert 'Resolve-ReleasePythonApplication' in script
+    assert 'Initialize-ReleasePythonAuthority' in script
+    assert 'Assert-ReleasePythonIdentity' in script
+    assert 'release_python_authority=PASS' in script
+    assert 'release_python = [ordered]@{' in script
     assert 'Invoke-Checked -FilePath "python"' not in script
     assert '= python tools/read_release_qualification_tag.py' not in script
 
@@ -107,13 +113,40 @@ def test_git_output_helpers_accept_a_clean_status_with_no_stdout():
 
 
 @pytest.mark.parametrize(
-    ("discovered_sources", "should_pass"),
+    ("discovered_sources", "should_pass", "error"),
     [
-        ([r"E:\ReleasePython\python.exe"], True),
-        ([r"E:\RELEASEPYTHON\PYTHON.EXE", r"C:\OtherPython\python.exe"], True),
-        ([], False),
-        ([r"C:\OtherPython\python.exe"], False),
-        ([r"C:\OtherPython\python.exe", r"E:\ReleasePython\python.exe"], False),
+        ([r"E:\ReleasePython\python.exe"], True, ""),
+        (
+            [r"E:\RELEASEPYTHON\PYTHON.EXE", r"C:\OtherPython\python.exe"],
+            True,
+            "",
+        ),
+        ([], False, "No Python application"),
+        ([r"C:\OtherPython\python.exe"], False, "first PATH-discovered"),
+        (
+            [r"C:\OtherPython\python.exe", r"E:\ReleasePython\python.exe"],
+            False,
+            "first PATH-discovered",
+        ),
+        (
+            [r"E:\ReleasePython\python.exe", r"E:\RELEASEPYTHON\PYTHON.EXE"],
+            False,
+            "duplicate or ambiguous",
+        ),
+        (
+            [r"E:\ReleasePython\python.exe", r"E:\ReleasePython\python.cmd"],
+            False,
+            "directory has ambiguous",
+        ),
+        (
+            [
+                r"E:\ReleasePython\python.exe",
+                r"C:\OtherPython\python.exe",
+                r"C:\OTHERPYTHON\PYTHON.EXE",
+            ],
+            False,
+            "duplicate or ambiguous",
+        ),
     ],
     ids=(
         "scalar_expected",
@@ -121,11 +154,15 @@ def test_git_output_helpers_accept_a_clean_status_with_no_stdout():
         "zero",
         "scalar_wrong",
         "multiple_expected_later",
+        "duplicate_expected",
+        "ambiguous_same_directory",
+        "duplicate_lower_priority",
     ),
 )
 def test_release_python_resolver_uses_only_the_first_path_ordered_application(
     discovered_sources,
     should_pass,
+    error,
 ):
     expected = r"E:\ReleasePython\python.exe"
     environment = os.environ.copy()
@@ -133,6 +170,7 @@ def test_release_python_resolver_uses_only_the_first_path_ordered_application(
     environment["KMTECH_TEST_DISCOVERED_JSON"] = json.dumps(discovered_sources)
     environment["KMTECH_TEST_EXPECTED_PYTHON"] = expected
     command = r"""
+Set-StrictMode -Version Latest
 . $env:KMTECH_TEST_RESOLVER_PATH
 $decoded = ConvertFrom-Json -InputObject $env:KMTECH_TEST_DISCOVERED_JSON
 $discovered = if ($null -eq $decoded) { @() } else { @($decoded) }
@@ -147,7 +185,7 @@ try {
 }
 """
     completed = subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
         text=True,
@@ -160,3 +198,311 @@ try {
     else:
         assert completed.returncode == 3
         assert completed.stdout == ""
+        assert error in completed.stderr
+
+
+@pytest.mark.parametrize(
+    "discovered_source",
+    [r"C:", r"C:relative\python.exe", r"\rooted-without-drive\python.exe", "python.exe"],
+    ids=("drive_relative_root", "drive_relative_child", "rooted_without_drive", "relative"),
+)
+def test_release_python_resolver_rejects_non_fully_qualified_discovery(discovered_source):
+    environment = os.environ.copy()
+    environment["KMTECH_TEST_RESOLVER_PATH"] = str(PYTHON_RESOLVER)
+    environment["KMTECH_TEST_DISCOVERED"] = discovered_source
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+try {
+    Resolve-ReleasePythonApplication `
+        -DiscoveredSources @($env:KMTECH_TEST_DISCOVERED) `
+        -ExpectedPath "E:\ReleasePython\python.exe" | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 4
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 4
+    assert "fully qualified path" in completed.stderr
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+def test_release_python_authority_precedes_hostile_path_and_pathext(tmp_path):
+    hostile = tmp_path / "hostile"
+    hostile.mkdir()
+    (hostile / "python.cmd").write_text("@exit /b 91\r\n", encoding="ascii")
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_RESOLVER_PATH": str(PYTHON_RESOLVER),
+            "KMTECH_TEST_EXPECTED_PYTHON": sys.executable,
+            "KMTECH_TEST_APPROVED_ROOT": Path(sys.executable).anchor,
+            "KMTECH_TEST_HOSTILE_PATH": str(hostile),
+            "KMTECH_TEST_VERSION_MAJOR": str(sys.version_info.major),
+            "KMTECH_TEST_VERSION_MINOR": str(sys.version_info.minor),
+            "KMTECH_TEST_ARCH_BITS": str(8 * __import__("struct").calcsize("P")),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+$pythonDirectory = [IO.Path]::GetDirectoryName($env:KMTECH_TEST_EXPECTED_PYTHON)
+$env:PATH = "$env:KMTECH_TEST_HOSTILE_PATH;$pythonDirectory;$env:KMTECH_TEST_HOSTILE_PATH"
+$env:PATHEXT = ".CMD;.EXE"
+$identity = Initialize-ReleasePythonAuthority `
+    -ExpectedPath $env:KMTECH_TEST_EXPECTED_PYTHON `
+    -ApprovedRoot $env:KMTECH_TEST_APPROVED_ROOT `
+    -ExpectedVersionMajor ([int]$env:KMTECH_TEST_VERSION_MAJOR) `
+    -ExpectedVersionMinor ([int]$env:KMTECH_TEST_VERSION_MINOR) `
+    -ExpectedArchitectureBits ([int]$env:KMTECH_TEST_ARCH_BITS)
+$discovered = @(Get-Command python -CommandType Application -All).Source
+[ordered]@{
+    identity = $identity
+    first_path = ([string]$env:PATH).Split(';')[0]
+    path_entry_count = ([string]$env:PATH).Split(';').Count
+    first_discovered = $discovered[0]
+    discovered_count = $discovered.Count
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    expected = str(Path(sys.executable).resolve())
+    assert result["identity"]["executable"].casefold() == expected.casefold()
+    assert result["identity"]["sha256"] == _file_sha256(sys.executable)
+    assert result["identity"]["python_version"] == ".".join(map(str, sys.version_info[:3]))
+    assert result["identity"]["architecture_bits"] == 8 * __import__("struct").calcsize("P")
+    assert result["first_path"].casefold() == str(Path(sys.executable).parent).casefold()
+    assert result["path_entry_count"] == 2
+    assert result["first_discovered"].casefold() == expected.casefold()
+    assert result["discovered_count"] == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+def test_release_python_authority_preserves_c_and_e_drive_roots():
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_RESOLVER_PATH": str(PYTHON_RESOLVER),
+            "KMTECH_TEST_EXPECTED_PYTHON": sys.executable,
+            "KMTECH_TEST_APPROVED_ROOT": Path(sys.executable).anchor,
+            "KMTECH_TEST_VERSION_MAJOR": str(sys.version_info.major),
+            "KMTECH_TEST_VERSION_MINOR": str(sys.version_info.minor),
+            "KMTECH_TEST_ARCH_BITS": str(8 * __import__("struct").calcsize("P")),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+$env:PATH = "C:\;E:\"
+$env:PATHEXT = ".EXE"
+$identity = Initialize-ReleasePythonAuthority `
+    -ExpectedPath $env:KMTECH_TEST_EXPECTED_PYTHON `
+    -ApprovedRoot $env:KMTECH_TEST_APPROVED_ROOT `
+    -ExpectedVersionMajor ([int]$env:KMTECH_TEST_VERSION_MAJOR) `
+    -ExpectedVersionMinor ([int]$env:KMTECH_TEST_VERSION_MINOR) `
+    -ExpectedArchitectureBits ([int]$env:KMTECH_TEST_ARCH_BITS)
+$entries = @(([string]$env:PATH).Split(';'))
+[ordered]@{
+    executable = $identity.executable
+    entries = $entries
+    all_fully_qualified = (@($entries | Where-Object {
+        -not [IO.Path]::IsPathFullyQualified($_)
+    }).Count -eq 0)
+} | ConvertTo-Json -Depth 3 -Compress
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    assert result["executable"].casefold() == str(Path(sys.executable).resolve()).casefold()
+    assert "C:\\" in result["entries"]
+    assert "E:\\" in result["entries"]
+    assert "C:" not in result["entries"]
+    assert "E:" not in result["entries"]
+    assert result["all_fully_qualified"] is True
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+@pytest.mark.parametrize(
+    "path_entry",
+    ["C:", r"C:relative", r"\rooted-without-drive", "relative"],
+    ids=("drive_relative_root", "drive_relative_child", "rooted_without_drive", "relative"),
+)
+def test_release_python_authority_rejects_non_fully_qualified_path_entries(path_entry):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_RESOLVER_PATH": str(PYTHON_RESOLVER),
+            "KMTECH_TEST_EXPECTED_PYTHON": sys.executable,
+            "KMTECH_TEST_APPROVED_ROOT": Path(sys.executable).anchor,
+            "KMTECH_TEST_HOSTILE_PATH": path_entry,
+            "KMTECH_TEST_VERSION_MAJOR": str(sys.version_info.major),
+            "KMTECH_TEST_VERSION_MINOR": str(sys.version_info.minor),
+            "KMTECH_TEST_ARCH_BITS": str(8 * __import__("struct").calcsize("P")),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+$env:PATH = $env:KMTECH_TEST_HOSTILE_PATH
+$env:PATHEXT = ".EXE"
+try {
+    Initialize-ReleasePythonAuthority `
+        -ExpectedPath $env:KMTECH_TEST_EXPECTED_PYTHON `
+        -ApprovedRoot $env:KMTECH_TEST_APPROVED_ROOT `
+        -ExpectedVersionMajor ([int]$env:KMTECH_TEST_VERSION_MAJOR) `
+        -ExpectedVersionMinor ([int]$env:KMTECH_TEST_VERSION_MINOR) `
+        -ExpectedArchitectureBits ([int]$env:KMTECH_TEST_ARCH_BITS) | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 6
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 6
+    assert "fully qualified directories" in completed.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+@pytest.mark.parametrize(
+    ("pathext", "error"),
+    [
+        (".CMD", "contain .EXE exactly once"),
+        (".EXE;.exe;.CMD", "duplicate application extensions"),
+    ],
+    ids=("missing_exe", "duplicate_exe"),
+)
+def test_release_python_authority_rejects_hostile_pathext(tmp_path, pathext, error):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_RESOLVER_PATH": str(PYTHON_RESOLVER),
+            "KMTECH_TEST_EXPECTED_PYTHON": sys.executable,
+            "KMTECH_TEST_APPROVED_ROOT": Path(sys.executable).anchor,
+            "KMTECH_TEST_PATH": str(Path(sys.executable).parent),
+            "KMTECH_TEST_PATHEXT": pathext,
+            "KMTECH_TEST_VERSION_MAJOR": str(sys.version_info.major),
+            "KMTECH_TEST_VERSION_MINOR": str(sys.version_info.minor),
+            "KMTECH_TEST_ARCH_BITS": str(8 * __import__("struct").calcsize("P")),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+$env:PATH = $env:KMTECH_TEST_PATH
+$env:PATHEXT = $env:KMTECH_TEST_PATHEXT
+try {
+    Initialize-ReleasePythonAuthority `
+        -ExpectedPath $env:KMTECH_TEST_EXPECTED_PYTHON `
+        -ApprovedRoot $env:KMTECH_TEST_APPROVED_ROOT `
+        -ExpectedVersionMajor ([int]$env:KMTECH_TEST_VERSION_MAJOR) `
+        -ExpectedVersionMinor ([int]$env:KMTECH_TEST_VERSION_MINOR) `
+        -ExpectedArchitectureBits ([int]$env:KMTECH_TEST_ARCH_BITS) | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 7
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 7
+    assert error in completed.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+@pytest.mark.parametrize(
+    ("field", "replacement", "error"),
+    [
+        ("sha256", "0" * 64, "sha256 identity changed"),
+        ("python_version", "0.0.0", "python_version identity changed"),
+        ("architecture_bits", "32", "wrong architecture"),
+    ],
+    ids=("hash", "version", "architecture"),
+)
+def test_release_python_authority_rejects_changed_identity(field, replacement, error):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_RESOLVER_PATH": str(PYTHON_RESOLVER),
+            "KMTECH_TEST_EXPECTED_PYTHON": sys.executable,
+            "KMTECH_TEST_APPROVED_ROOT": Path(sys.executable).anchor,
+            "KMTECH_TEST_PATH": str(Path(sys.executable).parent),
+            "KMTECH_TEST_VERSION_MAJOR": str(sys.version_info.major),
+            "KMTECH_TEST_VERSION_MINOR": str(sys.version_info.minor),
+            "KMTECH_TEST_ARCH_BITS": str(8 * __import__("struct").calcsize("P")),
+            "KMTECH_TEST_FIELD": field,
+            "KMTECH_TEST_REPLACEMENT": replacement,
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_RESOLVER_PATH
+$env:PATH = $env:KMTECH_TEST_PATH
+$env:PATHEXT = ".EXE"
+$identity = Initialize-ReleasePythonAuthority `
+    -ExpectedPath $env:KMTECH_TEST_EXPECTED_PYTHON `
+    -ApprovedRoot $env:KMTECH_TEST_APPROVED_ROOT `
+    -ExpectedVersionMajor ([int]$env:KMTECH_TEST_VERSION_MAJOR) `
+    -ExpectedVersionMinor ([int]$env:KMTECH_TEST_VERSION_MINOR) `
+    -ExpectedArchitectureBits ([int]$env:KMTECH_TEST_ARCH_BITS)
+$identity.($env:KMTECH_TEST_FIELD) = $env:KMTECH_TEST_REPLACEMENT
+try {
+    Assert-ReleasePythonIdentity -ExpectedIdentity $identity | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 9
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 9
+    assert error in completed.stderr

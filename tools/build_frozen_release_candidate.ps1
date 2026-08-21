@@ -31,6 +31,9 @@ $smokeRoot = Join-Path $candidateRoot "smoke"
 $identityRoot = Join-Path $repositoryRoot "build/factory_contract_identity"
 $releaseConfigRoot = Join-Path $repositoryRoot "build/release_config"
 $releaseToolsRoot = Join-Path $repositoryRoot "build/release_tools"
+$releasePythonVersionMajor = 3
+$releasePythonVersionMinor = 12
+$releasePythonArchitectureBits = 64
 
 function Invoke-Checked {
     param(
@@ -93,16 +96,18 @@ function Write-NewUtf8File {
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     throw "Use PowerShell 7 or later (pwsh) for the frozen release builder."
 }
-$discoveredPythonSources = @(
-    Get-Command python -CommandType Application -All -ErrorAction SilentlyContinue |
-        ForEach-Object { $_.Source }
+$releasePythonIdentity = Initialize-ReleasePythonAuthority `
+    -ExpectedPath $PythonExecutable `
+    -ApprovedRoot $approvedStorageRoot `
+    -ExpectedVersionMajor $releasePythonVersionMajor `
+    -ExpectedVersionMinor $releasePythonVersionMinor `
+    -ExpectedArchitectureBits $releasePythonArchitectureBits
+$releasePythonExecutable = $releasePythonIdentity.executable
+Write-Output (
+    "release_python_authority=PASS path=$releasePythonExecutable " +
+    "sha256=$($releasePythonIdentity.sha256) version=$($releasePythonIdentity.python_version) " +
+    "architecture_bits=$($releasePythonIdentity.architecture_bits) machine=$($releasePythonIdentity.machine)"
 )
-$releasePythonExecutable = Resolve-ReleasePythonApplication `
-    -DiscoveredSources $discoveredPythonSources `
-    -ExpectedPath $PythonExecutable
-if (-not (Test-Path -LiteralPath $releasePythonExecutable -PathType Leaf)) {
-    throw "The prepared release Python executable does not exist."
-}
 $mirrorRoot = [IO.Path]::GetFullPath($MirrorRoot).TrimEnd([char[]]"\/")
 if (-not (Test-Path -LiteralPath $mirrorRoot -PathType Container)) {
     throw "MirrorRoot must be an existing prepared local bare mirror."
@@ -226,6 +231,16 @@ try {
         local_main = $localMain
         clone_origin_main = $mirrorTrackingMain
         local_mirror_main = $mirrorMain
+        release_python = [ordered]@{
+            executable = $releasePythonIdentity.executable
+            sha256 = $releasePythonIdentity.sha256
+            size = $releasePythonIdentity.size
+            python_version = $releasePythonIdentity.python_version
+            architecture_bits = $releasePythonIdentity.architecture_bits
+            machine = $releasePythonIdentity.machine
+            implementation = $releasePythonIdentity.implementation
+            file_product_version = $releasePythonIdentity.file_product_version
+        }
     }
     Write-NewUtf8File `
         -Path (Join-Path $candidateRoot "FINAL_RELEASE_IDENTITY.json") `
@@ -428,6 +443,11 @@ try {
     $postBuildStatus = Get-GitValue -Arguments @("status", "--porcelain=v1", "--untracked-files=all")
     if (-not [string]::IsNullOrEmpty($postBuildStatus)) {
         throw "Isolated release work clone changed during the one-shot candidate build."
+    }
+    $confirmedReleasePythonIdentity = Assert-ReleasePythonIdentity `
+        -ExpectedIdentity $releasePythonIdentity
+    if ($confirmedReleasePythonIdentity.sha256 -cne $releasePythonIdentity.sha256) {
+        throw "The prepared release Python executable changed during the candidate build."
     }
     if (
         (Get-GitValue -Arguments @("rev-parse", "--verify", "HEAD^{commit}")).ToLowerInvariant() -cne $sourceCommit -or

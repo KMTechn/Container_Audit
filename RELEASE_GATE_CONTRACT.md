@@ -168,6 +168,15 @@ so it could not complete fresh-target installation qualification without
 external guest preconditioning. Never alter, rebuild, retag, publish, or reuse
 those bytes; the successor is `v2.0.70`.
 
+`v2.0.70` is permanently quarantined with **no artifact**. Its annotated local
+tag object is `2ae5f677447a1e2db4cfcc53c71a4aceef5f4e9a`, peeling to
+`848b3fed38190cb26d643dd50697f5d3a0c24d94`. The isolated qualification route
+and exact frozen-tree tests passed, but the one authorized official-builder
+invocation stopped before creating the candidate root because ambient Python
+preceded the explicitly supplied prepared interpreter. No ZIP, manifest,
+checksum, or qualification receipt exists. Never delete, recreate, retarget,
+publish, or retry that tag; the successor is `v2.0.71`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
@@ -209,12 +218,20 @@ pwsh -NoProfile -File "$workClone\tools\build_frozen_release_candidate.ps1" `
 
 The `tools/build_frozen_release_candidate.ps1` builder accepts only that prepared isolated clone. It fails closed unless the clone is clean, its absolute local `origin` is the supplied bare mirror, `HEAD`, local `main`, clone `origin/main`, and mirror `main` are identical, and the FINAL tag object/type/peel are exact in both repositories. Before `build_cli prepare`, PyInstaller, or any other release-mode generation, it parses the canonical tag and writes `FINAL_RELEASE_IDENTITY.json`. It then creates the package once, seals and verifies the manifest, checks extraction/config/probes, and writes `local-artifact-qualification-receipt.json` containing the tag object, source commit/tree, mirror refs, ZIP name/hash/size, and principal EXE hash.
 
-The authority must prepend the prepared Python environment to `PATH` and pass
-that exact executable through `-PythonExecutable`. The builder resolves all
-PATH-visible Python applications in precedence order, accepts additional
-lower-priority installations only when the first result is the exact prepared
-executable, and invokes that resolved path for every Python build step. Zero
-results or a different first result fail before release-mode generation.
+The authority passes the exact prepared E:-resident executable through
+`-PythonExecutable`; the builder itself then establishes and verifies that
+authority before release-mode generation. It requires an absolute non-reparse
+`.exe` below `E:\KMTech`, snapshots its path, size, SHA-256, file/runtime
+version, CPython implementation, machine, and 64-bit architecture, prepends its
+directory once to a de-duplicated absolute-only process `PATH`, and requires a
+nonempty, unique `PATHEXT` containing `.EXE` exactly once. It then resolves all
+PATH-visible Python applications in precedence order. Additional distinct
+lower-priority installations are allowed only when the first result is the
+exact prepared executable and no second `python` application exists in its
+directory; zero, mismatched-first, duplicate, or ambiguous results fail closed.
+Every Python build step uses the resolved absolute path, and the builder
+revalidates the complete interpreter identity after packaging before issuing a
+qualification receipt. The release interpreter must be CPython 3.12, 64-bit.
 
 Never delete, recreate, or move that tag object. There is no provisional-to-final transition and no post-build tag mutation. If the tag preparation or build fails, or source/manifest bytes change, abandon that version and use a new patch version. Do not repair or overwrite a failed candidate root.
 

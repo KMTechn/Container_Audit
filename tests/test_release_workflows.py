@@ -193,6 +193,31 @@ def test_release_contract_quarantines_v2069_inconclusive_artifact():
     assert "the successor is `v2.0.70`" in contract
 
 
+def test_release_contract_quarantines_v2070_builder_failure_without_an_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.70` is permanently quarantined with **no artifact**" in contract
+    assert "2ae5f677447a1e2db4cfcc53c71a4aceef5f4e9a" in contract
+    assert "848b3fed38190cb26d643dd50697f5d3a0c24d94" in contract
+    assert "ambient Python\npreceded the explicitly supplied prepared interpreter" in contract
+    assert "No ZIP, manifest,\nchecksum, or qualification receipt exists" in contract
+    assert "Never delete, recreate, retarget,\npublish, or retry that tag" in contract
+    assert "the successor is `v2.0.71`" in contract
+
+
+def test_release_contract_requires_builder_owned_python_authority():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "builder itself then establishes and verifies that\nauthority" in contract
+    assert "absolute non-reparse\n`.exe` below `E:\\KMTech`" in contract
+    assert "size, SHA-256, file/runtime\nversion" in contract
+    assert "de-duplicated absolute-only process `PATH`" in contract
+    assert "unique `PATHEXT` containing `.EXE` exactly once" in contract
+    assert "zero, mismatched-first, duplicate, or ambiguous results fail closed" in contract
+    assert "revalidates the complete interpreter identity after packaging" in contract
+    assert "CPython 3.12, 64-bit" in contract
+
+
 def test_release_finally_revalidates_remote_tag_main_release_and_assets():
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     final = release[release.index("- name: Finally revalidate remote tag main"):]
