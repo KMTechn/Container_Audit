@@ -244,6 +244,16 @@ a product-source defect. No ZIP, checksum, or qualification receipt exists.
 Never delete, recreate, retarget, repair, publish, or retry that tag; the
 successor is `v2.0.77`.
 
+`v2.0.77` is permanently quarantined with **no artifact**. Its annotated tag
+object `4a27455be3fd21cc0236505931fb5372082b5b50`, preserved only in the isolated
+release-preparation mirror and work clone, peels to
+`ba8eca5b37e60457f2282e6513f2dc0d4e8d311f`. The create-once `git tag -m`
+operation materialized its message as the 15 bytes `Release v2.0.77`, without
+the required terminal LF. The canonical parser rejected it before the official
+builder was invoked. No candidate root, ZIP, checksum, qualification receipt,
+or official builder log exists. Never delete, recreate, retarget, repair,
+publish, retry, or reuse that tag; the successor is `v2.0.78`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:

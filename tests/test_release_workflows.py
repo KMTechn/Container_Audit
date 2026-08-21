@@ -284,6 +284,20 @@ def test_release_contract_quarantines_v2076_spawn_wrapper_deadlock_without_artif
     assert "the\nsuccessor is `v2.0.77`" in contract
 
 
+def test_release_contract_quarantines_v2077_noncanonical_tag_without_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.77` is permanently quarantined with **no artifact**" in contract
+    assert "4a27455be3fd21cc0236505931fb5372082b5b50" in contract
+    assert "ba8eca5b37e60457f2282e6513f2dc0d4e8d311f" in contract
+    assert "materialized its message as the 15 bytes `Release v2.0.77`" in contract
+    assert "without\nthe required terminal LF" in contract
+    assert "canonical parser rejected it before the official\nbuilder was invoked" in contract
+    assert "No candidate root, ZIP, checksum, qualification receipt,\nor official builder log exists" in contract
+    assert "Never delete, recreate, retarget, repair,\npublish, retry, or reuse that tag" in contract
+    assert "the successor is `v2.0.78`" in contract
+
+
 def test_release_contract_requires_exact_builder_child_module_path_closure():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 
