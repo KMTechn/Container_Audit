@@ -177,6 +177,17 @@ preceded the explicitly supplied prepared interpreter. No ZIP, manifest,
 checksum, or qualification receipt exists. Never delete, recreate, retarget,
 publish, or retry that tag; the successor is `v2.0.71`.
 
+`v2.0.71` is permanently quarantined as an unpublished local candidate after
+fresh Windows Sandbox qualification classified it `FAIL`. Its annotated tag
+object is `6c46d0e078f77a6c395e94c441c949f7abd79244`, peeling to
+`46dee4e55e134b37cab31fda4db0509d3c658cfe`; its one preserved ZIP is exactly
+126453345 bytes with SHA-256
+`c557a7899bf990b414552dc7a4355e07e65a9a26c0425bae25dda024b8a419e1`.
+The installed SYSTEM relay made no isolated runtime-lease request, and the
+owned qualification authority process survived official uninstall and
+rollback. Never alter, rebuild, retag, publish, or reuse those bytes; the
+successor is `v2.0.72`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:

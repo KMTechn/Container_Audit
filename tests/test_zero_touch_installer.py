@@ -24,6 +24,29 @@ def _assert_powershell_ast(path: Path) -> None:
     )
 
 
+def _run_installer_functions(function_names, body):
+    installer = str(ROOT / "INSTALL_THIS_PC.ps1").replace("'", "''")
+    names = ",".join(f"'{name}'" for name in function_names)
+    command = (
+        "$tokens=$null;$errors=$null;"
+        f"$ast=[System.Management.Automation.Language.Parser]::ParseFile('{installer}',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count){throw 'installer parse failed'};"
+        f"foreach($name in @({names})){{"
+        "$definition=$ast.Find({param($node) "
+        "$node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and "
+        "$node.Name -ceq $name},$true);"
+        "if($null -eq $definition){throw \"missing function: $name\"};"
+        "Invoke-Expression $definition.Extent.Text};"
+        + body
+    )
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def _machine_bundle():
     return {
         "key_id": "container-producer-key-1",
@@ -178,6 +201,98 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
     ]
     apply_positions = [apply_block.index(marker) for marker in apply_markers]
     assert apply_positions == sorted(apply_positions)
+
+
+def test_qualification_authority_shutdown_is_exact_and_precedes_owned_tree_removal():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    shutdown = text[
+        text.index("function Get-OwnedQualificationAuthorityProcesses") :
+        text.index("function Assert-OwnedTree")
+    ]
+
+    assert "Name='Container_Audit_Qualification_Authority.exe'" in shutdown
+    assert "Test-SamePath ([string]$_.ExecutablePath) $Executable" in shutdown
+    assert (
+        "Get-CimInstance Win32_Process -Filter "
+        '"Name=\'Container_Audit_Qualification_Authority.exe\'" '
+        "-ErrorAction SilentlyContinue"
+    ) not in shutdown
+    assert "process identity could not be proven" in shutdown
+    assert "ProcessId=$processId AND Name='Container_Audit_Qualification_Authority.exe'" in shutdown
+    assert "Stop-Process -Id $processId -Force -ErrorAction Stop" in shutdown
+    assert "Stop-OwnedQualificationAuthorityProcesses $Executable" in shutdown
+    assert shutdown.index("Unregister-ScheduledTask") < shutdown.index(
+        "Stop-OwnedQualificationAuthorityProcesses $Executable"
+    )
+    assert "process removal postcondition failed" in shutdown
+
+    rollback = text[
+        text.index("[void]$rollbackResults.Add((Remove-OwnedQualificationAuthorityTask") :
+        text.index("$rollbackReport.parent_cleanup")
+    ]
+    assert rollback.index("Remove-OwnedQualificationAuthorityTask") < rollback.index(
+        "Remove-ExactOwnedTree $expectedDirectSyncRoot"
+    )
+
+
+@pytest.mark.parametrize(
+    ("cim_body", "expected_error"),
+    [
+        ("throw 'synthetic CIM failure'", "synthetic CIM failure"),
+        (
+            "[pscustomobject]@{Name='Container_Audit_Qualification_Authority.exe';"
+            "ExecutablePath=$null;ProcessId=4242}",
+            "process identity could not be proven",
+        ),
+    ],
+)
+def test_qualification_authority_enumeration_fails_closed_on_uncertainty(
+    cim_body, expected_error
+):
+    body = (
+        "function Get-CimInstance{[CmdletBinding()]param([string]$ClassName,[string]$Filter)"
+        + cim_body
+        + "};"
+        "function Test-SamePath{param($Actual,$Expected)return $Actual -ceq $Expected};"
+        "try{[void](Get-OwnedQualificationAuthorityProcesses 'C:\\owned\\authority.exe');"
+        "Write-Error 'enumeration failed open';exit 11}"
+        f"catch{{if($_.Exception.Message -notlike '*{expected_error}*'){{Write-Error $_;exit 12}};exit 0}}"
+    )
+
+    result = _run_installer_functions(
+        ["Get-OwnedQualificationAuthorityProcesses"], body
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_qualification_authority_shutdown_never_reports_a_live_orphan_absent():
+    body = (
+        "$script:clock=[datetime]'2026-08-21T00:00:00Z';$script:stopCalls=0;"
+        "function Get-CimInstance{[CmdletBinding()]param([string]$ClassName,[string]$Filter)"
+        "[pscustomobject]@{Name='Container_Audit_Qualification_Authority.exe';"
+        "ExecutablePath='C:\\owned\\authority.exe';ProcessId=4242}};"
+        "function Test-SamePath{param($Actual,$Expected)return $Actual -ceq $Expected};"
+        "function Get-Date{return $script:clock};"
+        "function Start-Sleep{[CmdletBinding()]param([int]$Milliseconds)"
+        "$script:clock=$script:clock.AddSeconds(20)};"
+        "function Stop-Process{[CmdletBinding()]param([uint32]$Id,[switch]$Force)"
+        "$script:stopCalls+=1};"
+        "try{Stop-OwnedQualificationAuthorityProcesses 'C:\\owned\\authority.exe';"
+        "Write-Error 'live orphan was reported absent';exit 21}"
+        "catch{if($_.Exception.Message -notlike '*removal postcondition failed*'){Write-Error $_;exit 22};"
+        "if($script:stopCalls -lt 1){Write-Error 'owned PID was never stopped';exit 23};exit 0}"
+    )
+
+    result = _run_installer_functions(
+        [
+            "Get-OwnedQualificationAuthorityProcesses",
+            "Stop-OwnedQualificationAuthorityProcesses",
+        ],
+        body,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
 
 
 def test_package_installer_guards_exact_owned_rollback_boundaries():

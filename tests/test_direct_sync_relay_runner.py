@@ -609,6 +609,70 @@ def test_runner_scan_source_dir_can_drain_after_scan(tmp_path, capsys, monkeypat
     assert status["last_result"]["scan_status"] == "enqueued"
 
 
+def test_isolated_system_runner_acquires_runtime_lease_before_source_scan(
+    tmp_path, capsys, monkeypatch
+):
+    sync_dir = tmp_path / "operator-events"
+    sync_dir.mkdir()
+    args = runner_args(tmp_path, scan_dir=sync_dir) + [
+        "--drain-after-scan",
+        "--require-runtime-lease-before-scan",
+    ]
+    calls = []
+    original_scan = runner_module._scan_source_files
+
+    def fake_run_relay_once(config, **kwargs):
+        calls.append((config, kwargs))
+        return {
+            "status": "idle",
+            "runtime_lease": {
+                "status": "ACTIVE",
+                "server_grant_accepted": True,
+            },
+            "last_result": {"status": "idle"},
+        }
+
+    def observed_scan(*scan_args, **scan_kwargs):
+        assert len(calls) == 1
+        return original_scan(*scan_args, **scan_kwargs)
+
+    monkeypatch.setattr(runner_module, "run_relay_once", fake_run_relay_once)
+    monkeypatch.setattr(runner_module, "_scan_source_files", observed_scan)
+
+    assert main(args) == 0
+    output = capsys.readouterr().out
+
+    assert "direct_sync_relay_status=idle" in output
+    assert len(calls) == 2
+    assert calls[0][1] == {}
+
+
+def test_isolated_system_runner_fails_closed_before_scan_without_runtime_lease(
+    tmp_path, capsys, monkeypatch
+):
+    sync_dir = tmp_path / "operator-events"
+    sync_dir.mkdir()
+    args = runner_args(tmp_path, scan_dir=sync_dir) + [
+        "--drain-after-scan",
+        "--require-runtime-lease-before-scan",
+    ]
+    monkeypatch.setattr(
+        runner_module,
+        "run_relay_once",
+        lambda config: {"status": "runtime_error", "runtime_lease": {}},
+    )
+    monkeypatch.setattr(
+        runner_module,
+        "_scan_source_files",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("source scan must not run before isolated runtime readiness")
+        ),
+    )
+
+    assert main(args) == 1
+    assert "direct_sync_relay_status=runtime_error" in capsys.readouterr().out
+
+
 def test_runner_scan_source_dir_targets_new_delta_when_old_pending_exists(tmp_path, capsys, monkeypatch):
     sync_dir = tmp_path / "sync"
     old_csv = write_container_csv(sync_dir)

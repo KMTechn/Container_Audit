@@ -568,6 +568,59 @@ function Install-OwnedQualificationAuthorityTask(
     return (Get-OwnedQualificationAuthorityTaskState $Name $Executable $StateRoot)
 }
 
+function Get-OwnedQualificationAuthorityProcesses([string]$Executable) {
+    $processes = @(
+        Get-CimInstance Win32_Process -Filter "Name='Container_Audit_Qualification_Authority.exe'" -ErrorAction Stop
+    )
+    foreach ($process in $processes) {
+        if ([string]::IsNullOrWhiteSpace([string]$process.ExecutablePath)) {
+            throw "Container_Audit qualification authority process identity could not be proven."
+        }
+    }
+    return @($processes | Where-Object {
+        Test-SamePath ([string]$_.ExecutablePath) $Executable
+    })
+}
+
+function Stop-OwnedQualificationAuthorityProcesses([string]$Executable) {
+    $graceDeadline = (Get-Date).AddSeconds(3)
+    do {
+        $owned = @(Get-OwnedQualificationAuthorityProcesses $Executable)
+        if ($owned.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $graceDeadline)
+
+    $deadline = (Get-Date).AddSeconds(12)
+    do {
+        $owned = @(Get-OwnedQualificationAuthorityProcesses $Executable)
+        if ($owned.Count -eq 0) { return }
+        foreach ($process in $owned) {
+            $processId = [uint32]$process.ProcessId
+            $current = @(
+                Get-CimInstance Win32_Process `
+                    -Filter "ProcessId=$processId AND Name='Container_Audit_Qualification_Authority.exe'" `
+                    -ErrorAction Stop
+            )
+            if ($current.Count -gt 1) {
+                throw "Container_Audit qualification authority PID identity is ambiguous."
+            }
+            if ($current.Count -eq 1) {
+                if (
+                    [string]::IsNullOrWhiteSpace([string]$current[0].ExecutablePath) -or
+                    -not (Test-SamePath ([string]$current[0].ExecutablePath) $Executable)
+                ) {
+                    throw "Container_Audit qualification authority PID identity could not be proven."
+                }
+                Stop-Process -Id $processId -Force -ErrorAction Stop
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+    $owned = @(Get-OwnedQualificationAuthorityProcesses $Executable)
+    if ($owned.Count -eq 0) { return }
+    throw "Container_Audit qualification authority process removal postcondition failed."
+}
+
 function Remove-OwnedQualificationAuthorityTask(
     [string]$Name,
     [string]$Executable,
@@ -581,21 +634,7 @@ function Remove-OwnedQualificationAuthorityTask(
     if (@(Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue).Count -ne 0) {
         throw "Container_Audit qualification authority task removal postcondition failed."
     }
-    $deadline = (Get-Date).AddSeconds(15)
-    do {
-        $owned = @(
-            Get-CimInstance Win32_Process -Filter "Name='Container_Audit_Qualification_Authority.exe'" -ErrorAction SilentlyContinue |
-                Where-Object {
-                    -not [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath) -and
-                    (Test-SamePath ([string]$_.ExecutablePath) $Executable)
-                }
-        )
-        if ($owned.Count -eq 0) { break }
-        Start-Sleep -Milliseconds 250
-    } while ((Get-Date) -lt $deadline)
-    if ($owned.Count -ne 0) {
-        throw "Container_Audit qualification authority process did not stop with its owned task."
-    }
+    Stop-OwnedQualificationAuthorityProcesses $Executable
     return [ordered]@{ status = "ABSENT"; task_name = $Name }
 }
 

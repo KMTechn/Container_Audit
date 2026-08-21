@@ -684,11 +684,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-enqueue-files", type=int, default=100)
     parser.add_argument("--min-source-file-age-seconds", type=int, default=DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS)
     parser.add_argument("--drain-after-scan", action="store_true")
+    parser.add_argument("--require-runtime-lease-before-scan", action="store_true")
     args = parser.parse_args(argv)
     if args.enqueue_source_file and args.scan_source_dir:
         parser.error("--enqueue-source-file and --scan-source-dir are mutually exclusive")
 
     config = _build_config(args)
+    if args.require_runtime_lease_before_scan:
+        preflight_status = run_relay_once(config)
+        preflight_lease = preflight_status.get("runtime_lease")
+        if not (
+            isinstance(preflight_lease, dict)
+            and preflight_lease.get("status") == "ACTIVE"
+            and preflight_lease.get("server_grant_accepted") is True
+        ):
+            print(f"direct_sync_relay_status={preflight_status['status']}")
+            return 1
     if args.enqueue_source_file:
         status = enqueue_completed_source_file(
             config,

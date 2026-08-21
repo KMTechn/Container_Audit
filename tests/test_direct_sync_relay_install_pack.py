@@ -8,7 +8,9 @@ from pathlib import Path
 import pytest
 
 import direct_sync_push
+import isolated_qualification
 from tools import direct_sync_relay_install_pack as install_pack
+from tools import isolated_qualification_authority as qualification_authority
 from tools.direct_sync_relay_install_pack import SYSTEM32_WSCRIPT_EXE, _quote_cmd
 from storage_policy import DATA_ROOT_ENV
 
@@ -102,6 +104,32 @@ def make_manifest_and_credential(tmp_path):
         ),
         encoding="utf-8",
     )
+    return manifest_path, credential_path
+
+
+def make_isolated_manifest_and_credential(tmp_path, monkeypatch):
+    manifest_path, credential_path = make_manifest_and_credential(tmp_path)
+    operator_root = tmp_path / "operator-local-app-data"
+    operator_root.mkdir()
+    monkeypatch.setenv(isolated_qualification.SOURCE_TEST_MODE_ENV, "1")
+    monkeypatch.setenv("COMPUTERNAME", "QUALIFICATION-SYSTEM-TEST")
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "qualification-program-data"))
+    state_root = isolated_qualification.default_state_root()
+    qualification_authority.initialize_authority(
+        state_root=state_root,
+        operator_user_sid="S-1-5-21-100-200-300-504",
+        operator_local_app_data_root=str(operator_root),
+        port=18470,
+        report_path=tmp_path / "qualification-initialize.json",
+    )
+    credential = json.loads(credential_path.read_text(encoding="utf-8"))
+    credential["endpoint_url"] = (
+        "https://127.0.0.1:18470/api/producer-ingest/v1/source-file"
+    )
+    credential["isolated_qualification_context_path"] = str(
+        state_root / isolated_qualification.CONTEXT_FILENAME
+    )
+    credential_path.write_text(json.dumps(credential), encoding="utf-8")
     return manifest_path, credential_path
 
 
@@ -402,6 +430,51 @@ def test_scheduled_task_action_parts_use_system32_wscript():
     assert command.startswith(SYSTEM32_WSCRIPT_EXE)
     assert not command.startswith("wscript.exe")
     assert command.endswith(launcher)
+
+
+def test_isolated_qualification_system_task_preflights_runtime_lease_before_scan(
+    tmp_path, monkeypatch
+):
+    manifest_path, credential_path = make_isolated_manifest_and_credential(
+        tmp_path, monkeypatch
+    )
+    scan_source_dir = tmp_path / "operator-events"
+    scan_source_dir.mkdir()
+    report_path = tmp_path / "isolated-system-task-plan.json"
+
+    assert install_pack.main(
+        [
+            "--producer-manifest-path",
+            str(manifest_path),
+            "--credential-path",
+            str(credential_path),
+            "--program-data-root",
+            str(tmp_path / "runtime"),
+            "--scan-source-dir",
+            str(scan_source_dir),
+            "--source-glob",
+            "*.csv",
+            "--report-path",
+            str(report_path),
+        ]
+    ) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    command = report["runner_command"]
+    assert report["credential"]["isolated_qualification"] is True
+    assert report["task_principal"] == {
+        "status": "PASS",
+        "mode": "system_service_account",
+        "run_user": "SYSTEM",
+        "password_source": "",
+        "password_supplied": False,
+        "password_in_report": False,
+        "blocked_reason": "",
+    }
+    assert "--require-runtime-lease-before-scan" in command
+    assert command.index("--require-runtime-lease-before-scan") < command.index(
+        "--scan-source-dir"
+    )
 
 
 def test_install_pack_apply_blocks_raw_secret_without_production_env(tmp_path, monkeypatch):

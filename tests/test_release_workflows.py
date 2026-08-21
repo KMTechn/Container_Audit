@@ -205,6 +205,19 @@ def test_release_contract_quarantines_v2070_builder_failure_without_an_artifact(
     assert "the successor is `v2.0.71`" in contract
 
 
+def test_release_contract_quarantines_v2071_sandbox_failure_and_exact_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.71` is permanently quarantined as an unpublished local candidate" in contract
+    assert "6c46d0e078f77a6c395e94c441c949f7abd79244" in contract
+    assert "46dee4e55e134b37cab31fda4db0509d3c658cfe" in contract
+    assert "126453345 bytes" in contract
+    assert "c557a7899bf990b414552dc7a4355e07e65a9a26c0425bae25dda024b8a419e1" in contract
+    assert "SYSTEM relay made no isolated runtime-lease request" in contract
+    assert "qualification authority process survived official uninstall" in contract
+    assert "the\nsuccessor is `v2.0.72`" in contract
+
+
 def test_release_contract_requires_builder_owned_python_authority():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 

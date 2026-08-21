@@ -1056,6 +1056,8 @@ def build_install_plan(args: argparse.Namespace) -> dict:
                 str(backpressure["max_active_queue_age_seconds"]),
             ]
         )
+        if source_scan["enabled"] and credential.get("isolated_qualification") is True:
+            runner_parts.append("--require-runtime-lease-before-scan")
         _append_source_scan_args(runner_parts, source_scan)
         wrapper = _scheduled_task_wrapper_path(args.program_data_root, args.task_name)
         wrapper_path = str(wrapper)
