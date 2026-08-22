@@ -293,7 +293,7 @@ function Assert-NoReparsePoint([string]$Path, [string]$Purpose, [switch]$Include
         $cursor = $parent
     }
     if ($IncludeDescendants.IsPresent -and (Test-Path -LiteralPath $fullPath -PathType Container)) {
-        $pendingDirectories = New-Object System.Collections.Generic.Stack[string]
+        $pendingDirectories = [System.Collections.Generic.Stack[string]]::new()
         $pendingDirectories.Push($fullPath)
         while ($pendingDirectories.Count -gt 0) {
             $directory = $pendingDirectories.Pop()

@@ -266,6 +266,7 @@ def test_public_installer_materializes_fresh_canonical_payload_and_preserves_own
     escaped_target = str(target).replace("'", "''")
     escaped_parent = str(target_parent).replace("'", "''")
     body = (
+        "Set-StrictMode -Version Latest;"
         f"$source='{escaped_source}';$target='{escaped_target}';$parent='{escaped_parent}';"
         "$result=Initialize-CanonicalApplicationRoot $source $target $parent;"
         "if(-not (Test-SamePath $result $target)){Write-Error 'canonical result mismatch';exit 51};"
@@ -282,6 +283,7 @@ def test_public_installer_materializes_fresh_canonical_payload_and_preserves_own
         "exit 0"
     )
 
+    assert not target_parent.exists()
     completed = _run_installer_functions(
         [
             "Test-SamePath",
@@ -299,6 +301,45 @@ def test_public_installer_materializes_fresh_canonical_payload_and_preserves_own
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
     assert (target / "INSTALL_THIS_PC.ps1").read_bytes() == b"public installer\r\n"
+
+
+def test_canonical_bootstrap_stack_survives_strict_mode_and_rejects_descendant_reparse(
+    tmp_path,
+):
+    installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    start = installer.index("function Assert-NoReparsePoint")
+    end = installer.index("function Assert-OperatorContext", start)
+    traversal = installer[start:end]
+    assert (
+        "$pendingDirectories = [System.Collections.Generic.Stack[string]]::new()"
+        in traversal
+    )
+    assert "New-Object System.Collections.Generic.Stack[string]" not in traversal
+
+    root = tmp_path / "ordinary-extraction"
+    outside = tmp_path / "outside"
+    escaped_root = str(root).replace("'", "''")
+    escaped_outside = str(outside).replace("'", "''")
+    body = (
+        "Set-StrictMode -Version Latest;"
+        f"$root='{escaped_root}';$outside='{escaped_outside}';"
+        "[void](New-Item -ItemType Directory -Path $root -Force);"
+        "[void](New-Item -ItemType Directory -Path $outside -Force);"
+        "$link=Join-Path $root 'linked';"
+        "[void](New-Item -ItemType Junction -Path $link -Target $outside);"
+        "$blocked=$false;"
+        "try{Assert-NoReparsePoint $root 'ordinary extraction' -IncludeDescendants}"
+        "catch{$blocked=$_.Exception.Message -like '*descendant reparse point*'};"
+        "if(-not $blocked){Write-Error 'descendant reparse point was not rejected';exit 61};"
+        "exit 0"
+    )
+
+    completed = _run_installer_functions(
+        ["Get-StrictFullPath", "Assert-NoReparsePoint"],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_public_installer_continues_from_canonical_bytes_without_qualification_layout_bypass():
