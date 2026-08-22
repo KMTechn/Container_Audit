@@ -201,7 +201,33 @@ def test_nonproduction_server_and_test_identity_override_is_documented():
     assert 'os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL"' in bootstrap
 
 
-def test_public_installer_accepts_exact_explicit_http_override_through_url_gate():
+def test_public_installer_accepts_http_override_with_windows_sandbox_qualification():
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "INSTALL_THIS_PC.ps1"),
+            "-DryRun",
+            "-EnableWindowsSandboxQualification",
+            "-ServerBaseUrl",
+            "http://192.168.45.98:18089",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert "ServerBaseUrl must be" not in output
+    assert "Release package is incomplete. Missing:" in output
+
+
+def test_public_installer_rejects_http_override_without_windows_sandbox_qualification():
     completed = subprocess.run(
         [
             "powershell",
@@ -222,17 +248,23 @@ def test_public_installer_accepts_exact_explicit_http_override_through_url_gate(
     output = completed.stdout + completed.stderr
 
     assert completed.returncode != 0
-    assert "ServerBaseUrl must be" not in output
-    assert "Release package is incomplete. Missing:" in output
+    assert "ServerBaseUrl must be" in output
+    assert "Release package is incomplete. Missing:" not in output
 
 
-def test_http_server_override_is_explicit_and_other_schemes_stay_blocked():
+def test_http_server_override_requires_qualification_and_other_inputs_stay_blocked():
     installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
-    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' in installer
+    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' not in installer
+    assert (
+        "$allowExplicitHttpServerBaseUrl = "
+        "$EnableWindowsSandboxQualification.IsPresent"
+    ) in installer
     assert (
         "Assert-HttpsServerBaseUrl $ServerBaseUrl "
         "-AllowExplicitHttp:$allowExplicitHttpServerBaseUrl"
     ) in installer
+    assert "$qualificationServerBaseUri = [System.Uri]$ServerBaseUrl" in installer
+    assert '$qualificationServerBaseUri.Scheme -cne "http"' in installer
 
     body = (
         "Assert-HttpsServerBaseUrl 'https://worker.kmtecherp.com';"

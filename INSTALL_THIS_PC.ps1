@@ -144,7 +144,7 @@ function Assert-HttpsServerBaseUrl([string]$Value, [switch]$AllowExplicitHttp) {
         -not [string]::IsNullOrWhiteSpace($uri.Query) -or
         -not [string]::IsNullOrWhiteSpace($uri.Fragment)
     ) {
-        throw "ServerBaseUrl must be an HTTPS origin, or an explicitly supplied HTTP origin, without userinfo, query, or fragment."
+        throw "ServerBaseUrl must be an HTTPS origin, or an HTTP origin authorized by Windows Sandbox qualification, without userinfo, query, or fragment."
     }
 }
 function Remove-NewMachineProfilesFromRegistrationReport([string]$RegistrationReportPath) {
@@ -819,7 +819,7 @@ function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, 
 
 $OperatorLocalAppDataRoot = Assert-OperatorContext $OperatorUserSid $OperatorLocalAppDataRoot
 if (-not $Uninstall.IsPresent) {
-    $allowExplicitHttpServerBaseUrl = $PSBoundParameters.ContainsKey("ServerBaseUrl")
+    $allowExplicitHttpServerBaseUrl = $EnableWindowsSandboxQualification.IsPresent
     Assert-HttpsServerBaseUrl $ServerBaseUrl -AllowExplicitHttp:$allowExplicitHttpServerBaseUrl
 }
 if ($Uninstall.IsPresent -and $EnableWindowsSandboxQualification.IsPresent) {
@@ -1171,8 +1171,12 @@ New-Item -ItemType Directory -Path $statusDir -Force | Out-Null
 
 $qualificationAuthorityEnabled = $false
 if ($EnableWindowsSandboxQualification.IsPresent) {
-    if ($ServerBaseUrl.Trim().TrimEnd('/') -cne "https://worker.kmtecherp.com") {
-        throw "Windows Sandbox qualification cannot be combined with a ServerBaseUrl override."
+    $qualificationServerBaseUri = [System.Uri]$ServerBaseUrl
+    if (
+        $ServerBaseUrl.Trim().TrimEnd('/') -cne "https://worker.kmtecherp.com" -and
+        $qualificationServerBaseUri.Scheme -cne "http"
+    ) {
+        throw "Windows Sandbox qualification ServerBaseUrl override must be an HTTP origin."
     }
     [void](Assert-ExactCanonicalPath $qualificationStateRoot (Join-Path $DirectSyncRoot "qualification-authority") "Qualification authority state")
     if (-not (Test-Path -LiteralPath $qualificationStateRoot)) {
