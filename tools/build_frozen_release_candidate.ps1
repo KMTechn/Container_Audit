@@ -17,6 +17,7 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "resolve_release_python.ps1")
+. (Join-Path $PSScriptRoot "resolve_windows_powershell.ps1")
 
 $factoryContractSha256 = "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\/")
@@ -34,6 +35,10 @@ $releaseToolsRoot = Join-Path $repositoryRoot "build/release_tools"
 $releasePythonVersionMajor = 3
 $releasePythonVersionMinor = 12
 $releasePythonArchitectureBits = 64
+$windowsPowerShellSystemDirectory = [Environment]::SystemDirectory
+$windowsPowerShellExpectedPath = Join-Path `
+    $windowsPowerShellSystemDirectory `
+    "WindowsPowerShell\v1.0\powershell.exe"
 
 function Invoke-Checked {
     param(
@@ -107,6 +112,16 @@ Write-Output (
     "release_python_authority=PASS path=$releasePythonExecutable " +
     "sha256=$($releasePythonIdentity.sha256) version=$($releasePythonIdentity.python_version) " +
     "architecture_bits=$($releasePythonIdentity.architecture_bits) machine=$($releasePythonIdentity.machine)"
+)
+$windowsPowerShellIdentity = Initialize-WindowsPowerShellAuthority `
+    -ExpectedPath $windowsPowerShellExpectedPath `
+    -ExpectedSystemDirectory $windowsPowerShellSystemDirectory
+$windowsPowerShellExecutable = $windowsPowerShellIdentity.executable
+Write-Output (
+    "windows_powershell_authority=PASS path=$windowsPowerShellExecutable " +
+    "sha256=$($windowsPowerShellIdentity.sha256) " +
+    "psedition=$($windowsPowerShellIdentity.psedition) " +
+    "version=$($windowsPowerShellIdentity.powershell_version)"
 )
 $mirrorRoot = [IO.Path]::GetFullPath($MirrorRoot).TrimEnd([char[]]"\/")
 if (-not (Test-Path -LiteralPath $mirrorRoot -PathType Container)) {
@@ -223,7 +238,7 @@ try {
         throw "Canonical tag parser disagrees with the prebound FINAL intended identity."
     }
     $releaseIdentity = [ordered]@{
-        schema_version = "container-audit-final-release-identity-v1"
+        schema_version = "container-audit-final-release-identity-v2"
         tag = $Tag
         tag_object_sha = $tagObject
         peeled_commit_sha = $sourceCommit
@@ -241,10 +256,27 @@ try {
             implementation = $releasePythonIdentity.implementation
             file_product_version = $releasePythonIdentity.file_product_version
         }
+        windows_powershell = [ordered]@{
+            executable = $windowsPowerShellIdentity.executable
+            system_directory = $windowsPowerShellIdentity.system_directory
+            file_type = $windowsPowerShellIdentity.file_type
+            is_reparse_point = $windowsPowerShellIdentity.is_reparse_point
+            sha256 = $windowsPowerShellIdentity.sha256
+            size = $windowsPowerShellIdentity.size
+            psedition = $windowsPowerShellIdentity.psedition
+            powershell_version = $windowsPowerShellIdentity.powershell_version
+            version_major = $windowsPowerShellIdentity.version_major
+            version_minor = $windowsPowerShellIdentity.version_minor
+            file_product_version = $windowsPowerShellIdentity.file_product_version
+        }
     }
+    $finalReleaseIdentityPath = Join-Path $candidateRoot "FINAL_RELEASE_IDENTITY.json"
     Write-NewUtf8File `
-        -Path (Join-Path $candidateRoot "FINAL_RELEASE_IDENTITY.json") `
+        -Path $finalReleaseIdentityPath `
         -Text (($releaseIdentity | ConvertTo-Json -Depth 3) + "`n")
+    $finalReleaseIdentitySha256 = (
+        Get-FileHash -LiteralPath $finalReleaseIdentityPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
     $env:SOURCE_DATE_EPOCH = Get-GitValue -Arguments @("show", "-s", "--format=%ct", "HEAD")
 
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
@@ -329,7 +361,8 @@ try {
         -Arguments @("--dry-run") -Failure "Protected administrator installer dry-run failed."
     Invoke-Checked -FilePath (Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe") `
         -Arguments @("--help") -Failure "Isolated qualification authority help probe failed."
-    Invoke-Checked -FilePath "powershell.exe" -Arguments @(
+    [void](Assert-WindowsPowerShellIdentity -ExpectedIdentity $windowsPowerShellIdentity)
+    Invoke-Checked -FilePath $windowsPowerShellExecutable -Arguments @(
         "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", (Join-Path $packageRoot "PROVISION_PROTECTED_ADMIN_ACL.ps1"), "-DryRun"
     ) -Failure "Protected administrator ACL wrapper dry-run failed."
@@ -458,6 +491,37 @@ try {
     if ($confirmedReleasePythonIdentity.sha256 -cne $releasePythonIdentity.sha256) {
         throw "The prepared release Python executable changed during the candidate build."
     }
+    $confirmedWindowsPowerShellIdentity = Assert-WindowsPowerShellIdentity `
+        -ExpectedIdentity $windowsPowerShellIdentity
+    if (
+        $confirmedWindowsPowerShellIdentity.sha256 -cne $windowsPowerShellIdentity.sha256 -or
+        $confirmedWindowsPowerShellIdentity.psedition -cne "Desktop" -or
+        $confirmedWindowsPowerShellIdentity.version_major -ne 5 -or
+        $confirmedWindowsPowerShellIdentity.version_minor -ne 1
+    ) {
+        throw "The sealed Windows PowerShell Desktop 5.1 identity changed during the candidate build."
+    }
+    $currentFinalReleaseIdentitySha256 = (
+        Get-FileHash -LiteralPath $finalReleaseIdentityPath -Algorithm SHA256
+    ).Hash.ToLowerInvariant()
+    if ($currentFinalReleaseIdentitySha256 -cne $finalReleaseIdentitySha256) {
+        throw "FINAL_RELEASE_IDENTITY.json changed during the candidate build."
+    }
+    $sealedFinalReleaseIdentity = Get-Content -Raw -Encoding UTF8 `
+        -LiteralPath $finalReleaseIdentityPath | ConvertFrom-Json
+    $sealedWindowsPowerShellIdentity = $sealedFinalReleaseIdentity.windows_powershell
+    foreach ($field in @(
+        "executable", "system_directory", "file_type", "is_reparse_point",
+        "sha256", "size", "psedition", "powershell_version",
+        "version_major", "version_minor", "file_product_version"
+    )) {
+        if (
+            [string]$sealedWindowsPowerShellIdentity.$field -cne
+            [string]$confirmedWindowsPowerShellIdentity.$field
+        ) {
+            throw "FINAL_RELEASE_IDENTITY.json Windows PowerShell $field differs after revalidation."
+        }
+    }
     if (
         (Get-GitValue -Arguments @("rev-parse", "--verify", "HEAD^{commit}")).ToLowerInvariant() -cne $sourceCommit -or
         (Get-GitValue -Arguments @("rev-parse", "--verify", "HEAD^{tree}")).ToLowerInvariant() -cne $sourceTree -or
@@ -474,7 +538,7 @@ try {
         throw "FINAL tag object/type/peel, HEAD, tree, or local mirror main changed during the candidate build."
     }
     $receipt = [ordered]@{
-        schema_version = "container-audit-local-artifact-qualification-v1"
+        schema_version = "container-audit-local-artifact-qualification-v2"
         status = "LOCAL_ARTIFACT_QUALIFICATION_PASS"
         tag = $Tag
         tag_object_sha = $tagObject
@@ -488,6 +552,8 @@ try {
         zip_size = $zipInfo.Length
         main_exe_sha256 = $mainExeSha256
         probe_sha256 = $probeSha256
+        final_release_identity_sha256 = $finalReleaseIdentitySha256
+        windows_powershell = $sealedWindowsPowerShellIdentity
     }
     $receiptJson = $receipt | ConvertTo-Json -Depth 5
     Write-NewUtf8File `

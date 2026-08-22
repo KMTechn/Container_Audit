@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import ntpath
 import re
 import sys
 import tempfile
@@ -56,7 +57,49 @@ REQUIRED_MANIFEST_EXPECTED_FILES = frozenset(
         "build-compatibility.json",
     }
 )
-LOCAL_QUALIFICATION_SCHEMA = "container-audit-local-artifact-qualification-v1"
+FINAL_RELEASE_IDENTITY_SCHEMA = "container-audit-final-release-identity-v2"
+FINAL_RELEASE_IDENTITY_FIELDS = frozenset(
+    {
+        "schema_version",
+        "tag",
+        "tag_object_sha",
+        "peeled_commit_sha",
+        "source_tree",
+        "local_main",
+        "clone_origin_main",
+        "local_mirror_main",
+        "release_python",
+        "windows_powershell",
+    }
+)
+RELEASE_PYTHON_IDENTITY_FIELDS = frozenset(
+    {
+        "executable",
+        "sha256",
+        "size",
+        "python_version",
+        "architecture_bits",
+        "machine",
+        "implementation",
+        "file_product_version",
+    }
+)
+WINDOWS_POWERSHELL_IDENTITY_FIELDS = frozenset(
+    {
+        "executable",
+        "system_directory",
+        "file_type",
+        "is_reparse_point",
+        "sha256",
+        "size",
+        "psedition",
+        "powershell_version",
+        "version_major",
+        "version_minor",
+        "file_product_version",
+    }
+)
+LOCAL_QUALIFICATION_SCHEMA = "container-audit-local-artifact-qualification-v2"
 LOCAL_QUALIFICATION_STATUS = "LOCAL_ARTIFACT_QUALIFICATION_PASS"
 LOCAL_QUALIFICATION_FIELDS = frozenset(
     {
@@ -74,6 +117,8 @@ LOCAL_QUALIFICATION_FIELDS = frozenset(
         "zip_size",
         "main_exe_sha256",
         "probe_sha256",
+        "final_release_identity_sha256",
+        "windows_powershell",
     }
 )
 
@@ -84,6 +129,109 @@ def _require_lower_hex(value: str, length: int, *, label: str) -> str:
     if not pattern.fullmatch(normalized):
         raise ValueError(f"{label} must be exact lowercase {length}-character hex")
     return normalized
+
+
+def _require_positive_int(value: object, *, label: str) -> int:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or value <= 0
+        or value > (2**63 - 1)
+    ):
+        raise ValueError(f"{label} must be a positive signed 64-bit integer")
+    return value
+
+
+def _verify_windows_powershell_identity(
+    value: object, *, label: str
+) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != WINDOWS_POWERSHELL_IDENTITY_FIELDS:
+        raise ValueError(f"{label} has invalid fields")
+    string_fields = (
+        "executable",
+        "system_directory",
+        "file_type",
+        "sha256",
+        "psedition",
+        "powershell_version",
+        "file_product_version",
+    )
+    if any(type(value.get(field)) is not str for field in string_fields):
+        raise ValueError(f"{label} has invalid field types")
+
+    executable = value["executable"]
+    system_directory = value["system_directory"]
+    if (
+        not ntpath.isabs(executable)
+        or not ntpath.isabs(system_directory)
+        or "/" in executable
+        or "/" in system_directory
+        or ntpath.normpath(executable) != executable
+        or ntpath.normpath(system_directory) != system_directory
+    ):
+        raise ValueError(f"{label} paths must be canonical absolute Windows paths")
+    expected_executable = ntpath.join(
+        system_directory, "WindowsPowerShell", "v1.0", "powershell.exe"
+    )
+    if executable != expected_executable:
+        raise ValueError(f"{label} executable differs from its canonical system path")
+    if value["file_type"] != "ordinary-file" or value["is_reparse_point"] is not False:
+        raise ValueError(f"{label} must attest an ordinary non-reparse file")
+    _require_lower_hex(value["sha256"], 64, label=f"{label} SHA-256")
+    _require_positive_int(value["size"], label=f"{label} size")
+    if value["psedition"] != "Desktop":
+        raise ValueError(f"{label} PSEdition must be exactly Desktop")
+    if not re.fullmatch(r"5\.1(?:\.\d+){0,2}", value["powershell_version"]):
+        raise ValueError(f"{label} runtime version must be Windows PowerShell 5.1")
+    if (
+        type(value.get("version_major")) is not int
+        or type(value.get("version_minor")) is not int
+        or value["version_major"] != 5
+        or value["version_minor"] != 1
+    ):
+        raise ValueError(f"{label} version components must be exact integers 5 and 1")
+    if not value["file_product_version"].strip():
+        raise ValueError(f"{label} file product version must be nonempty")
+    return dict(value)
+
+
+def _read_final_release_identity(
+    identity_path: Path,
+    *,
+    expected_tag: str,
+    expected_tag_object: str,
+    expected_commit: str,
+    expected_tree: str,
+) -> tuple[dict[str, Any], str]:
+    if identity_path.stat().st_size > 64 * 1024:
+        raise ValueError("FINAL_RELEASE_IDENTITY.json is too large")
+    initial_hash = file_sha256(identity_path)
+    identity = load_json_strict(identity_path)
+    if not isinstance(identity, Mapping) or set(identity) != FINAL_RELEASE_IDENTITY_FIELDS:
+        raise ValueError("FINAL_RELEASE_IDENTITY.json has invalid fields")
+    expected = {
+        "schema_version": FINAL_RELEASE_IDENTITY_SCHEMA,
+        "tag": expected_tag,
+        "tag_object_sha": expected_tag_object,
+        "peeled_commit_sha": expected_commit,
+        "source_tree": expected_tree,
+        "local_main": expected_commit,
+        "clone_origin_main": expected_commit,
+        "local_mirror_main": expected_commit,
+    }
+    for key, expected_value in expected.items():
+        if identity.get(key) != expected_value:
+            raise ValueError(f"FINAL_RELEASE_IDENTITY.json {key} differs")
+    release_python = identity.get("release_python")
+    if not isinstance(release_python, Mapping) or set(release_python) != RELEASE_PYTHON_IDENTITY_FIELDS:
+        raise ValueError("FINAL_RELEASE_IDENTITY.json release_python has invalid fields")
+    windows_powershell = _verify_windows_powershell_identity(
+        identity.get("windows_powershell"),
+        label="FINAL_RELEASE_IDENTITY.json windows_powershell",
+    )
+    result = dict(identity)
+    result["windows_powershell"] = windows_powershell
+    return result, initial_hash
 
 
 def read_checksum(checksum_path: Path, *, expected_filename: str) -> str:
@@ -126,6 +274,7 @@ def _files_equal(left: Path, right: Path) -> bool:
 def _verify_preserved_local_qualification(
     downloaded_zip: Path,
     preserved_zip: Path,
+    final_release_identity_path: Path,
     receipt_path: Path,
     *,
     expected_tag: str,
@@ -141,6 +290,15 @@ def _verify_preserved_local_qualification(
         raise ValueError("preserved local ZIP must be distinct from the downloaded ZIP path")
     if preserved_zip.name != downloaded_zip.name:
         raise ValueError("preserved local ZIP name differs from the downloaded release ZIP")
+    if final_release_identity_path.resolve() == receipt_path.resolve():
+        raise ValueError("FINAL_RELEASE_IDENTITY.json and qualification receipt must be distinct")
+    final_release_identity, initial_final_identity_hash = _read_final_release_identity(
+        final_release_identity_path,
+        expected_tag=expected_tag,
+        expected_tag_object=expected_tag_object,
+        expected_commit=expected_commit,
+        expected_tree=expected_tree,
+    )
     if receipt_path.stat().st_size > 64 * 1024:
         raise ValueError("local artifact qualification receipt is too large")
     initial_receipt_hash = file_sha256(receipt_path)
@@ -161,11 +319,21 @@ def _verify_preserved_local_qualification(
         "zip_sha256": expected_zip_sha256,
         "zip_size": expected_zip_size,
         "main_exe_sha256": expected_main_exe_sha256,
+        "final_release_identity_sha256": initial_final_identity_hash,
     }
     for key, expected_value in expected_receipt.items():
         if receipt.get(key) != expected_value:
             raise ValueError(f"local artifact qualification receipt {key} differs")
     _require_lower_hex(str(receipt.get("probe_sha256") or ""), 64, label="receipt probe SHA-256")
+    receipt_windows_powershell = _verify_windows_powershell_identity(
+        receipt.get("windows_powershell"),
+        label="local artifact qualification receipt windows_powershell",
+    )
+    if receipt_windows_powershell != final_release_identity["windows_powershell"]:
+        raise ValueError(
+            "local artifact qualification receipt windows_powershell differs from "
+            "FINAL_RELEASE_IDENTITY.json"
+        )
 
     initial_local_size = preserved_zip.stat().st_size
     initial_local_hash = file_sha256(preserved_zip)
@@ -180,12 +348,16 @@ def _verify_preserved_local_qualification(
         raise ValueError("preserved local ZIP changed during byte-parity verification")
     if file_sha256(receipt_path) != initial_receipt_hash:
         raise ValueError("local artifact qualification receipt changed during verification")
+    if file_sha256(final_release_identity_path) != initial_final_identity_hash:
+        raise ValueError("FINAL_RELEASE_IDENTITY.json changed during verification")
     return {
         "status": "PASS",
         "comparison": "streamed-byte-for-byte",
         "qualified_zip_sha256": initial_local_hash,
         "qualified_zip_size": initial_local_size,
         "receipt_sha256": initial_receipt_hash,
+        "final_release_identity_sha256": initial_final_identity_hash,
+        "windows_powershell": receipt_windows_powershell,
     }
 
 
@@ -245,6 +417,7 @@ def verify_frozen_release(
     expected_zip_size: int,
     expected_main_exe_sha256: str,
     qualified_local_zip_path: Path | None = None,
+    final_release_identity: Path | None = None,
     local_qualification_receipt: Path | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"v\d+\.\d+\.\d+", expected_tag):
@@ -270,9 +443,17 @@ def verify_frozen_release(
         or expected_zip_size > (2**63 - 1)
     ):
         raise ValueError("release-body ZIP size must be a positive signed 64-bit integer")
-    if (qualified_local_zip_path is None) != (local_qualification_receipt is None):
+    local_qualification_inputs = (
+        qualified_local_zip_path,
+        final_release_identity,
+        local_qualification_receipt,
+    )
+    if any(value is None for value in local_qualification_inputs) and any(
+        value is not None for value in local_qualification_inputs
+    ):
         raise ValueError(
-            "preserved local ZIP and local qualification receipt must be supplied together"
+            "preserved local ZIP, FINAL_RELEASE_IDENTITY.json, and local qualification "
+            "receipt must be supplied together"
         )
     expected_zip_name = f"Container_Audit-{expected_tag}.zip"
     if zip_path.name != expected_zip_name:
@@ -350,10 +531,12 @@ def verify_frozen_release(
             "reason": "preserved qualified local bytes are unavailable on the hosted runner",
         }
     else:
+        assert final_release_identity is not None
         assert local_qualification_receipt is not None
         local_byte_parity = _verify_preserved_local_qualification(
             zip_path,
             qualified_local_zip_path,
+            final_release_identity,
             local_qualification_receipt,
             expected_tag=expected_tag,
             expected_tag_object=expected_tag_object,
@@ -414,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-zip-size", required=True, type=int)
     parser.add_argument("--expected-main-exe-sha256", required=True)
     parser.add_argument("--qualified-local-zip-path", type=Path)
+    parser.add_argument("--final-release-identity", type=Path)
     parser.add_argument("--local-qualification-receipt", type=Path)
     parser.add_argument("--report-path", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -433,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_zip_size=args.expected_zip_size,
             expected_main_exe_sha256=args.expected_main_exe_sha256,
             qualified_local_zip_path=args.qualified_local_zip_path,
+            final_release_identity=args.final_release_identity,
             local_qualification_receipt=args.local_qualification_receipt,
         )
         args.report_path.parent.mkdir(parents=True, exist_ok=True)

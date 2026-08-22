@@ -254,6 +254,18 @@ builder was invoked. No candidate root, ZIP, checksum, qualification receipt,
 or official builder log exists. Never delete, recreate, retarget, repair,
 publish, retry, or reuse that tag; the successor is `v2.0.78`.
 
+`v2.0.78` is permanently quarantined with **no artifact**. Its annotated tag
+object `8c72cb1be12841b3338f4fb60cad9e5f602b27d3`, preserved only in the isolated
+release-preparation mirror and work clone, peels to
+`a0821534944dea5315101f4e0493803a9a7b70b2`. The one authorized official
+builder invocation passed source, tag, Python, configuration, and the first
+eight PyInstaller target gates, then failed at the protected-administrator ACL
+wrapper dry-run because line 332 invoked bare `powershell.exe` while the sealed
+`PATH` omitted `WindowsPowerShell\v1.0`. No ZIP, checksum, or qualification
+receipt exists; the partial candidate is not qualified. Never delete, recreate,
+retarget, repair, publish, retry, or reuse that tag or candidate; the successor
+is `v2.0.79`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
@@ -293,7 +305,7 @@ pwsh -NoProfile -File "$workClone\tools\build_frozen_release_candidate.ps1" `
   -OutputRoot $candidateRoot
 ```
 
-The `tools/build_frozen_release_candidate.ps1` builder accepts only that prepared isolated clone. It fails closed unless the clone is clean, its absolute local `origin` is the supplied bare mirror, `HEAD`, local `main`, clone `origin/main`, and mirror `main` are identical, and the FINAL tag object/type/peel are exact in both repositories. Before `build_cli prepare`, PyInstaller, or any other release-mode generation, it parses the canonical tag and writes `FINAL_RELEASE_IDENTITY.json`. It then creates the package once, seals and verifies the manifest, checks extraction/config/probes, and writes `local-artifact-qualification-receipt.json` containing the tag object, source commit/tree, mirror refs, ZIP name/hash/size, and principal EXE hash.
+The `tools/build_frozen_release_candidate.ps1` builder accepts only that prepared isolated clone. It fails closed unless the clone is clean, its absolute local `origin` is the supplied bare mirror, `HEAD`, local `main`, clone `origin/main`, and mirror `main` are identical, and the FINAL tag object/type/peel are exact in both repositories. Before `build_cli prepare`, PyInstaller, or any other release-mode generation, it parses the canonical tag and writes schema-v2 `FINAL_RELEASE_IDENTITY.json`. It then creates the package once, seals and verifies the manifest, checks extraction/config/probes, and writes schema-v2 `local-artifact-qualification-receipt.json` containing the tag object, source commit/tree, mirror refs, ZIP name/hash/size, principal EXE hash, final-release-identity file hash, and exact nested Windows PowerShell identity.
 
 The authority passes the exact prepared E:-resident executable through
 `-PythonExecutable`; the builder itself then establishes and verifies that
@@ -310,6 +322,21 @@ Every Python build step uses the resolved absolute path, and the builder
 revalidates the complete interpreter identity after packaging before issuing a
 qualification receipt. The release interpreter must be CPython 3.12, 64-bit.
 
+Before release-mode generation, the builder derives the canonical Windows
+PowerShell 5.1 executable from `[Environment]::SystemDirectory`, requires its
+fully qualified `WindowsPowerShell\v1.0\powershell.exe` path to exist as a
+ordinary non-reparse file, snapshots its size and SHA-256, and proves through
+an actual structured-JSON subprocess that `PSEdition` is exactly `Desktop` and
+the runtime version is 5.1. The ACL wrapper revalidates that complete identity
+and invokes only the sealed absolute executable path with the reviewed
+arguments. After packaging, the builder revalidates the identity again and
+requires `FINAL_RELEASE_IDENTITY.json` to remain byte-identical before copying
+the exact nested identity and its file hash into the final qualification
+receipt. The strict verifier requires both files, exact schemas and field
+types, and exact cross-receipt equality. Resolution through process `PATH`,
+including ambient or launcher-supplied Windows PowerShell directories, is
+forbidden.
+
 Every successor authority that creates a new PowerShell builder child must set
 the sealed two-entry prelaunch module path and its SHA-256 token before process
 creation, while keeping `PSModuleAnalysisCachePath`, `TEMP`, and `TMP` below the
@@ -325,7 +352,7 @@ duplicate, noncanonical, ambient, or hostile module path fails closed.
 
 Never delete, recreate, or move that tag object. There is no provisional-to-final transition and no post-build tag mutation. If the tag preparation or build fails, or source/manifest bytes change, abandon that version and use a new patch version. Do not repair or overwrite a failed candidate root.
 
-Run the complete installation qualification on a fresh unmodified target using the exact candidate and supported commands, including end-to-end checks and rollback verification. Preserve the qualified local ZIP, checksum, qualification receipt, and target evidence unchanged.
+Run the complete installation qualification on a fresh unmodified target using the exact candidate and supported commands, including end-to-end checks and rollback verification. Preserve the qualified local ZIP, `FINAL_RELEASE_IDENTITY.json`, checksum, qualification receipt, and target evidence unchanged.
 
 ### Main push and pre-tag-publication gates
 
@@ -336,7 +363,7 @@ Only after every local gate and artifact qualification is `PROVEN` may the exact
 3. Require zero nonterminal workflows before any release mutation. Terminal failure/absence is recorded but is not by itself an artifact rejection.
 4. With an authorized Administration-read credential, query `GET /repos/KMTechn/Container_Audit/immutable-releases` using API version `2026-03-10` and require `enabled=true`.
 5. Prove the remote tag, release, and same-name assets are absent.
-6. Re-read the mirror tag object/type/peel and require exact equality with `FINAL_RELEASE_IDENTITY.json` and `local-artifact-qualification-receipt.json`.
+6. Re-read the mirror tag object/type/peel and require exact equality with `FINAL_RELEASE_IDENTITY.json` and `local-artifact-qualification-receipt.json`; require the receipt's final-identity SHA-256 and complete Windows PowerShell object to equal the preserved final-identity file exactly.
 
 The read-only 2026-08-12 policy preflight reported `enabled=false`; tag publication remains BLOCKED until an authorized repository administrator enables it. Candidate building itself does not query or change that setting. This contract does not authorize changing repository policy.
 
@@ -363,6 +390,7 @@ python tools/verify_frozen_release_artifact.py `
   --expected-zip-size <RELEASE_BODY_ZIP_SIZE> `
   --expected-main-exe-sha256 <RELEASE_BODY_MAIN_EXE_SHA256> `
   --qualified-local-zip-path <PRESERVED_QUALIFIED_LOCAL_ZIP> `
+  --final-release-identity <PRESERVED_FINAL_RELEASE_IDENTITY_JSON> `
   --local-qualification-receipt <PRESERVED_LOCAL_RECEIPT> `
   --report-path <FRESH_LOCAL_PARITY_REPORT>
 ```

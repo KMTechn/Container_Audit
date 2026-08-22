@@ -298,6 +298,20 @@ def test_release_contract_quarantines_v2077_noncanonical_tag_without_artifact():
     assert "the successor is `v2.0.78`" in contract
 
 
+def test_release_contract_quarantines_v2078_bare_powershell_failure_without_artifact():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "`v2.0.78` is permanently quarantined with **no artifact**" in contract
+    assert "8c72cb1be12841b3338f4fb60cad9e5f602b27d3" in contract
+    assert "a0821534944dea5315101f4e0493803a9a7b70b2" in contract
+    assert "one authorized official\nbuilder invocation" in contract
+    assert "line 332 invoked bare `powershell.exe`" in contract
+    assert "sealed\n`PATH` omitted `WindowsPowerShell\\v1.0`" in contract
+    assert "No ZIP, checksum, or qualification\nreceipt exists" in contract
+    assert "partial candidate is not qualified" in contract
+    assert "the successor\nis `v2.0.79`" in contract
+
+
 def test_release_contract_requires_exact_builder_child_module_path_closure():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
 
@@ -322,6 +336,33 @@ def test_release_contract_requires_builder_owned_python_authority():
     assert "zero, mismatched-first, duplicate, or ambiguous results fail closed" in contract
     assert "revalidates the complete interpreter identity after packaging" in contract
     assert "CPython 3.12, 64-bit" in contract
+
+
+def test_release_contract_requires_absolute_windows_powershell_authority():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "derives the canonical Windows\nPowerShell 5.1 executable" in contract
+    assert "`[Environment]::SystemDirectory`" in contract
+    assert "fully qualified `WindowsPowerShell\\v1.0\\powershell.exe` path" in contract
+    assert "ordinary non-reparse file" in contract
+    assert "structured-JSON subprocess that `PSEdition` is exactly `Desktop`" in contract
+    assert "runtime version is 5.1" in contract
+    assert "invokes only the sealed absolute executable path" in contract
+    assert "revalidates the identity again" in contract
+    assert "`FINAL_RELEASE_IDENTITY.json` to remain byte-identical" in contract
+    assert "exact nested identity and its file hash" in contract
+    assert "exact cross-receipt equality" in contract
+    assert "Resolution through process `PATH`" in contract
+
+
+def test_release_contract_requires_v2_receipt_and_final_identity_parity_input():
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+
+    assert "schema-v2 `FINAL_RELEASE_IDENTITY.json`" in contract
+    assert "schema-v2 `local-artifact-qualification-receipt.json`" in contract
+    assert "final-release-identity file hash" in contract
+    assert "exact nested Windows PowerShell identity" in contract
+    assert "--final-release-identity <PRESERVED_FINAL_RELEASE_IDENTITY_JSON>" in contract
 
 
 def test_release_finally_revalidates_remote_tag_main_release_and_assets():

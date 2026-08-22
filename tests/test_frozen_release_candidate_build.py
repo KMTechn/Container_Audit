@@ -11,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "tools" / "build_frozen_release_candidate.ps1"
 PYTHON_RESOLVER = ROOT / "tools" / "resolve_release_python.ps1"
+WINDOWS_POWERSHELL_RESOLVER = ROOT / "tools" / "resolve_windows_powershell.ps1"
 PWSH = "pwsh"
 
 
@@ -53,6 +54,62 @@ def test_frozen_candidate_builder_requires_prepared_isolated_mirror_and_final_ta
         "ls-remote",
     ):
         assert forbidden not in script
+
+
+def test_frozen_candidate_builder_uses_preflighted_absolute_windows_powershell():
+    script = BUILDER.read_text(encoding="utf-8")
+
+    authority = script.index("Initialize-WindowsPowerShellAuthority")
+    generation = script.index('"kmtech_factory_contracts.build_cli", "prepare"')
+    assertion = script.index("Assert-WindowsPowerShellIdentity")
+    wrapper = script.index(
+        "Invoke-Checked -FilePath $windowsPowerShellExecutable -Arguments @("
+    )
+
+    assert '. (Join-Path $PSScriptRoot "resolve_windows_powershell.ps1")' in script
+    assert "$windowsPowerShellSystemDirectory = [Environment]::SystemDirectory" in script
+    assert '"WindowsPowerShell\\v1.0\\powershell.exe"' in script
+    assert "windows_powershell = [ordered]@{" in script
+    assert 'schema_version = "container-audit-final-release-identity-v2"' in script
+    assert script.count("Assert-WindowsPowerShellIdentity") == 2
+    assert authority < generation
+    assert generation < assertion < wrapper
+    assert 'Invoke-Checked -FilePath "powershell.exe"' not in script
+    assert '"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"' in script
+    assert (
+        '"-File", (Join-Path $packageRoot "PROVISION_PROTECTED_ADMIN_ACL.ps1"), "-DryRun"'
+        in script
+    )
+
+    final_identity = script[
+        script.index("$releaseIdentity = [ordered]@{") : script.index(
+            "$finalReleaseIdentityPath ="
+        )
+    ]
+    for field in (
+        "executable",
+        "system_directory",
+        "file_type",
+        "is_reparse_point",
+        "sha256",
+        "size",
+        "psedition",
+        "powershell_version",
+        "version_major",
+        "version_minor",
+        "file_product_version",
+    ):
+        assert f"{field} = $windowsPowerShellIdentity.{field}" in final_identity
+
+    receipt = script[script.index("$receipt = [ordered]@{") :]
+    assert 'schema_version = "container-audit-local-artifact-qualification-v2"' in receipt
+    assert "final_release_identity_sha256 = $finalReleaseIdentitySha256" in receipt
+    assert "windows_powershell = $sealedWindowsPowerShellIdentity" in receipt
+    assert "$sealedFinalReleaseIdentity.windows_powershell" in script
+    assert "$currentFinalReleaseIdentitySha256 -cne $finalReleaseIdentitySha256" in script
+    assert script.rindex("Assert-WindowsPowerShellIdentity") < script.index(
+        "$receipt = [ordered]@{"
+    )
 
 
 def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package():
@@ -136,7 +193,7 @@ def test_supported_source_help_probe_writes_no_bytecode(tmp_path, relative_scrip
 
 
 def test_frozen_candidate_builder_powershell_parses():
-    for script_path in (BUILDER, PYTHON_RESOLVER):
+    for script_path in (BUILDER, PYTHON_RESOLVER, WINDOWS_POWERSHELL_RESOLVER):
         escaped = str(script_path).replace("'", "''")
         command = (
             "$tokens=$null;$errors=$null;"
@@ -149,6 +206,240 @@ def test_frozen_candidate_builder_powershell_parses():
             capture_output=True,
             text=True,
         )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+def test_windows_powershell_preflight_and_acl_arguments_ignore_sealed_path(tmp_path):
+    argument_probe = tmp_path / "acl_argument_probe.ps1"
+    argument_probe.write_text(
+        """param(
+    [switch]$DryRun,
+    [Parameter(Mandatory = $true)][string]$Sentinel
+)
+[ordered]@{
+    dry_run = $DryRun.IsPresent
+    sentinel = $Sentinel
+    bound_parameter_count = $PSBoundParameters.Count
+} | ConvertTo-Json -Compress
+""",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER": str(WINDOWS_POWERSHELL_RESOLVER),
+            "KMTECH_TEST_ARGUMENT_PROBE": str(argument_probe),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER
+$systemDirectory = [Environment]::SystemDirectory
+$expectedPath = Join-Path $systemDirectory "WindowsPowerShell\v1.0\powershell.exe"
+$windowsPowerShellDirectory = [IO.Path]::GetDirectoryName($expectedPath)
+$env:PATH = $systemDirectory
+if (@(([string]$env:PATH).Split(';') | Where-Object {
+    $_.Equals($windowsPowerShellDirectory, [StringComparison]::OrdinalIgnoreCase)
+}).Count -ne 0) {
+    throw "Test PATH unexpectedly contains the Windows PowerShell directory."
+}
+$identity = Initialize-WindowsPowerShellAuthority `
+    -ExpectedPath $expectedPath `
+    -ExpectedSystemDirectory $systemDirectory
+$asserted = Assert-WindowsPowerShellIdentity -ExpectedIdentity $identity
+$sentinel = "spaces and = signs remain exact"
+$wrapperOutput = @(
+    & $identity.executable `
+        -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+        -File $env:KMTECH_TEST_ARGUMENT_PROBE -DryRun -Sentinel $sentinel
+)
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows PowerShell ACL argument probe failed."
+}
+if ($wrapperOutput.Count -ne 1) {
+    throw "Windows PowerShell ACL argument probe was ambiguous."
+}
+[ordered]@{
+    identity = $identity
+    asserted_executable = $asserted.executable
+    sealed_path = $env:PATH
+    excluded_directory = $windowsPowerShellDirectory
+    wrapper = ConvertFrom-Json -InputObject ([string]$wrapperOutput[0])
+} | ConvertTo-Json -Depth 4 -Compress
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(completed.stdout)
+    expected = str(Path(os.environ["SystemRoot"]) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+    assert result["identity"]["executable"].casefold() == expected.casefold()
+    assert result["identity"]["file_type"] == "ordinary-file"
+    assert result["identity"]["is_reparse_point"] is False
+    assert result["identity"]["psedition"] == "Desktop"
+    assert result["identity"]["powershell_version"].startswith("5.1.")
+    assert result["asserted_executable"].casefold() == expected.casefold()
+    assert result["sealed_path"].casefold() == str(Path(expected).parents[2]).casefold()
+    assert result["excluded_directory"].casefold() != result["sealed_path"].casefold()
+    assert result["wrapper"] == {
+        "dry_run": True,
+        "sentinel": "spaces and = signs remain exact",
+        "bound_parameter_count": 2,
+    }
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+def test_windows_powershell_authority_rejects_missing_executable(tmp_path):
+    system_directory = tmp_path / "System32"
+    (system_directory / "WindowsPowerShell" / "v1.0").mkdir(parents=True)
+    expected = system_directory / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER": str(WINDOWS_POWERSHELL_RESOLVER),
+            "KMTECH_TEST_SYSTEM_DIRECTORY": str(system_directory),
+            "KMTECH_TEST_EXPECTED_POWERSHELL": str(expected),
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER
+try {
+    Initialize-WindowsPowerShellAuthority `
+        -ExpectedPath $env:KMTECH_TEST_EXPECTED_POWERSHELL `
+        -ExpectedSystemDirectory $env:KMTECH_TEST_SYSTEM_DIRECTORY | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 21
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 21
+    assert completed.stdout == ""
+    assert "executable does not exist" in completed.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+def test_windows_powershell_authority_rejects_wrong_executable_path():
+    environment = os.environ.copy()
+    environment["KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER"] = str(
+        WINDOWS_POWERSHELL_RESOLVER
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER
+$systemDirectory = [Environment]::SystemDirectory
+try {
+    Initialize-WindowsPowerShellAuthority `
+        -ExpectedPath (Join-Path $systemDirectory "cmd.exe") `
+        -ExpectedSystemDirectory $systemDirectory | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 22
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 22
+    assert completed.stdout == ""
+    assert "exact canonical Windows PowerShell 5.1 executable path" in completed.stderr
+
+
+@pytest.mark.skipif(os.name != "nt", reason="release builder is Windows-only")
+@pytest.mark.parametrize(
+    ("payload", "error"),
+    [
+        (
+            '{"psedition":"Core","powershell_version":"5.1.26100.1"}',
+            "PSEdition is not exactly Desktop",
+        ),
+        (
+            '{"psedition":"Desktop","powershell_version":"7.4.0"}',
+            "not Windows PowerShell 5.1",
+        ),
+        ('{"powershell_version":"5.1.26100.1"}', "invalid fields"),
+        ("not-json", "invalid identity JSON"),
+        (
+            '{"psedition":1,"powershell_version":"5.1.26100.1"}',
+            "invalid field types",
+        ),
+        (
+            '{"psedition":"Desktop","powershell_version":5.1}',
+            "invalid field types",
+        ),
+        (
+            '{"psedition":"desktop","powershell_version":"5.1.26100.1"}',
+            "PSEdition is not exactly Desktop",
+        ),
+        (
+            '{"PSEdition":"Desktop","powershell_version":"5.1.26100.1"}',
+            "invalid fields",
+        ),
+        (
+            '{"psedition":"Desktop","powershell_version":"5.1.26100.1","extra":true}',
+            "invalid fields",
+        ),
+    ],
+    ids=(
+        "core_edition",
+        "fake_core_runtime",
+        "missing_edition",
+        "wrong_json",
+        "edition_type",
+        "version_type",
+        "edition_value_case",
+        "edition_field_case",
+        "extra_field",
+    ),
+)
+def test_windows_powershell_probe_rejects_hostile_identity_payload(payload, error):
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER": str(WINDOWS_POWERSHELL_RESOLVER),
+            "KMTECH_TEST_PROBE_PAYLOAD": payload,
+        }
+    )
+    command = r"""
+Set-StrictMode -Version Latest
+. $env:KMTECH_TEST_WINDOWS_POWERSHELL_RESOLVER
+try {
+    ConvertFrom-WindowsPowerShellProbe `
+        -ProbeOutput @($env:KMTECH_TEST_PROBE_PAYLOAD) | Out-Null
+} catch {
+    [Console]::Error.Write($_.Exception.Message)
+    exit 23
+}
+"""
+    completed = subprocess.run(
+        [PWSH, "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 23
+    assert completed.stdout == ""
+    assert error in completed.stderr
 
 
 def test_git_output_helpers_accept_a_clean_status_with_no_stdout():
