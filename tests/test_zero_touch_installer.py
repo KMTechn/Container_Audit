@@ -157,6 +157,50 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "KMTECH_FACTORY_INSTALL_TEST_MODE" in text
 
 
+def test_nonproduction_server_and_test_identity_override_is_documented():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    bootstrap = (ROOT / "direct_sync_auto_bootstrap.py").read_text(encoding="utf-8")
+    heading = "### 격리 비프로덕션 서버 설치/실행 오버라이드"
+
+    assert heading in readme
+    section = readme[readme.index(heading) :]
+    next_heading = section.find("\n## ", 1)
+    if next_heading >= 0:
+        section = section[:next_heading]
+
+    for marker in (
+        "$NonProductionServerBaseUrl",
+        "$TestProducerIdentityPath",
+        "-ServerBaseUrl",
+        "-ProducerIdentityPath",
+        "-SourceHostId",
+        "-ProducerInstallId",
+        "-ProducerId",
+        "CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP",
+        "CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL",
+        "producer_manifest.json",
+        "credential.json",
+    ):
+        assert marker in section
+    assert "https://worker.kmtecherp.com" not in section
+
+    for marker in (
+        "[string]$ServerBaseUrl",
+        "[string]$ProducerIdentityPath",
+        "[string]$ProducerInstallId",
+        "[string]$ProducerId",
+        "[string]$SourceHostId",
+        '"--endpoint-url", $endpointUrl',
+        '"--producer-identity-path", $ProducerIdentityPath',
+        '"--producer-install-id", $ProducerInstallId',
+        '"--producer-id", $ProducerId',
+        '"--source-host-id", $SourceHostId',
+    ):
+        assert marker in installer
+    assert 'os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL"' in bootstrap
+
+
 def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback():
     text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
 

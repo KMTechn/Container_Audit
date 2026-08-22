@@ -82,6 +82,57 @@ python -m pytest -q -p no:cacheprovider <changed-test-node>
 일부 entrypoint만 다시 `py_compile`하지 않는다. 최종 전체 회귀는 `main` push의
 Full CI가 exact SHA에서 한 번 실행한다.
 
+### 격리 비프로덕션 서버 설치/실행 오버라이드
+
+Sandbox 또는 사전 운영 검증에서는 자격시험 컨트롤러가 제공한 격리 HTTPS
+origin과 테스트 전용 producer identity만 사용한다. 실제 서버 URL, identity,
+enrollment token 또는 secret을 저장소나 명령 예시에 기록하지 않는다.
+`-ServerBaseUrl`에는 `/api/...` 경로가 아닌 HTTPS origin만 전달한다.
+
+패키지의 공개 설치 명령은 다음과 같다. identity seed 파일은
+`container-audit-producer-identity-v1` 형식의 `producer_id`, `source_host_id`,
+`producer_install_id`만 포함하며 secret을 포함하지 않는다.
+
+```powershell
+# 자격시험 컨트롤러가 이 프로세스 환경에 실제 값을 주입한다.
+$NonProductionServerBaseUrl = $env:CONTAINER_AUDIT_QUALIFICATION_SERVER_BASE_URL
+$TestProducerIdentityPath = $env:CONTAINER_AUDIT_QUALIFICATION_IDENTITY_PATH
+
+.\INSTALL_THIS_PC.ps1 `
+  -ServerBaseUrl $NonProductionServerBaseUrl `
+  -ProducerIdentityPath $TestProducerIdentityPath
+```
+
+seed 파일 대신 컨트롤러가 세 identity 필드를 따로 제공하는 경우에도 같은
+설치 entrypoint를 사용한다.
+
+```powershell
+.\INSTALL_THIS_PC.ps1 `
+  -ServerBaseUrl $NonProductionServerBaseUrl `
+  -SourceHostId $env:CONTAINER_AUDIT_QUALIFICATION_SOURCE_HOST_ID `
+  -ProducerInstallId $env:CONTAINER_AUDIT_QUALIFICATION_PRODUCER_INSTALL_ID `
+  -ProducerId $env:CONTAINER_AUDIT_QUALIFICATION_PRODUCER_ID
+```
+
+설치가 성공하면 endpoint와 identity는
+`producer_manifest.json` 및 보호된 `credential.json`에 고정된다. 이후 Start
+Menu 바로가기로 평소처럼 실행하면 앱과 예약 relay가 그 설치 결과를 그대로
+사용하므로 launch 명령에 URL이나 identity를 다시 넣지 않는다. 재시작 후에도
+같은 테스트 identity가 유지되어야 한다. 외부 비프로덕션 서버를 사용할 때는
+내장 loopback authority를 선택하는 `-EnableWindowsSandboxQualification`을 함께
+사용하지 않는다.
+
+설치 전 source/debug 실행에서만 process-scoped bootstrap override를 사용할 수
+있다. 이 경우에도 격리된 `CONTAINER_AUDIT_DATA_ROOT`와 테스트 identity를
+사용하며, 패키지 자격시험은 위 설치 명령을 사용한다.
+
+```powershell
+$env:CONTAINER_AUDIT_DATA_ROOT = $env:CONTAINER_AUDIT_QUALIFICATION_DATA_ROOT
+$env:CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP = "1"
+$env:CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL = $NonProductionServerBaseUrl
+python .\Container_Audit.py
+```
+
 ## 🎯 핵심 기능 상세
 
 ### ⚙️ 간편한 작업 플로우
