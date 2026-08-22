@@ -252,6 +252,72 @@ def test_public_installer_rejects_http_override_without_windows_sandbox_qualific
     assert "Release package is incomplete. Missing:" not in output
 
 
+def test_public_installer_materializes_fresh_canonical_payload_and_preserves_owned_update_boundary(
+    tmp_path,
+):
+    source = tmp_path / "ordinary-extraction" / "Container_Audit"
+    target_parent = tmp_path / "canonical" / "Container_Audit"
+    target = target_parent / "current"
+    (source / "assets").mkdir(parents=True)
+    (source / "INSTALL_THIS_PC.ps1").write_bytes(b"public installer\r\n")
+    (source / "Container_Audit.exe").write_bytes(b"frozen application bytes")
+    (source / "assets" / "Item.csv").write_bytes(b"item,quantity\r\nA,60\r\n")
+    escaped_source = str(source).replace("'", "''")
+    escaped_target = str(target).replace("'", "''")
+    escaped_parent = str(target_parent).replace("'", "''")
+    body = (
+        f"$source='{escaped_source}';$target='{escaped_target}';$parent='{escaped_parent}';"
+        "$result=Initialize-CanonicalApplicationRoot $source $target $parent;"
+        "if(-not (Test-SamePath $result $target)){Write-Error 'canonical result mismatch';exit 51};"
+        "if([System.IO.File]::ReadAllText((Join-Path $target 'Container_Audit.exe')) "
+        "-cne 'frozen application bytes'){Write-Error 'application bytes mismatch';exit 52};"
+        "if([System.IO.File]::ReadAllText((Join-Path $target 'assets\\Item.csv')) "
+        "-cne \"item,quantity`r`nA,60`r`n\"){Write-Error 'nested payload mismatch';exit 53};"
+        "[System.IO.File]::WriteAllText((Join-Path $source 'Container_Audit.exe'),'replacement bytes');"
+        "$blocked=$false;try{[void](Initialize-CanonicalApplicationRoot $source $target $parent)}"
+        "catch{$blocked=$_.Exception.Message -like '*owned update flow*'};"
+        "if(-not $blocked){Write-Error 'existing canonical target was not blocked';exit 54};"
+        "if([System.IO.File]::ReadAllText((Join-Path $target 'Container_Audit.exe')) "
+        "-cne 'frozen application bytes'){Write-Error 'owned target was overwritten';exit 55};"
+        "exit 0"
+    )
+
+    completed = _run_installer_functions(
+        [
+            "Test-SamePath",
+            "Get-StrictFullPath",
+            "Assert-ExactCanonicalPath",
+            "Test-PathWithin",
+            "Assert-NoReparsePoint",
+            "Assert-OwnedTree",
+            "Assert-ApplicationParentInventory",
+            "Remove-ExactOwnedTree",
+            "Initialize-CanonicalApplicationRoot",
+        ],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert (target / "INSTALL_THIS_PC.ps1").read_bytes() == b"public installer\r\n"
+
+
+def test_public_installer_continues_from_canonical_bytes_without_qualification_layout_bypass():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    start = text.index("$packageRoot = $releaseSourceRoot")
+    end = text.index("$reuseExistingIdentity = (", start)
+    canonical_bootstrap = text[start:end]
+
+    assert "Initialize-CanonicalApplicationRoot" in canonical_bootstrap
+    assert "$expectedInstallRoot" in canonical_bootstrap
+    assert "$expectedApplicationParent" in canonical_bootstrap
+    assert "EnableWindowsSandboxQualification" not in canonical_bootstrap
+    assert canonical_bootstrap.index("Initialize-CanonicalApplicationRoot") < canonical_bootstrap.index(
+        '$appExe = Join-Path $packageRoot "Container_Audit.exe"'
+    )
+    assert '$actualInstallRoot = [System.IO.Path]::GetFullPath($packageRoot)' in text
+    assert "production_apply_allowed = $productionLayoutMatches" in text
+
+
 def test_http_server_override_requires_qualification_and_other_inputs_stay_blocked():
     installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
     assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' not in installer

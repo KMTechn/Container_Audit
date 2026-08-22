@@ -744,6 +744,58 @@ function Remove-ExactOwnedTree([string]$Path, [string]$Purpose) {
     return [ordered]@{ status = "ABSENT"; path = $Path }
 }
 
+function Initialize-CanonicalApplicationRoot(
+    [string]$SourceRoot,
+    [string]$InstallRoot,
+    [string]$ApplicationParent
+) {
+    $sourceFull = Get-StrictFullPath $SourceRoot "Container_Audit release source"
+    $parentFull = Get-StrictFullPath $ApplicationParent "Container_Audit application parent"
+    $targetFull = Assert-ExactCanonicalPath `
+        $InstallRoot `
+        (Join-Path $parentFull "current") `
+        "Container_Audit application root"
+    if (Test-SamePath $sourceFull $targetFull) {
+        return $targetFull
+    }
+    if (-not (Test-Path -LiteralPath $sourceFull -PathType Container)) {
+        throw "Container_Audit release source is not a directory."
+    }
+    if ((Test-PathWithin $targetFull $sourceFull) -or (Test-PathWithin $sourceFull $targetFull)) {
+        throw "Container_Audit release source and canonical target must be separate trees."
+    }
+    Assert-NoReparsePoint $sourceFull "Container_Audit release source" -IncludeDescendants
+    Assert-NoReparsePoint $parentFull "Container_Audit application parent" -IncludeDescendants
+    Assert-ApplicationParentInventory $parentFull
+    if (Test-Path -LiteralPath $targetFull) {
+        [void](Assert-OwnedTree $targetFull $targetFull "Container_Audit application root")
+        throw "The canonical Container_Audit application root already exists; use the installed application's owned update flow."
+    }
+
+    if (-not (Test-Path -LiteralPath $parentFull)) {
+        New-Item -ItemType Directory -Path $parentFull -Force -ErrorAction Stop | Out-Null
+    }
+    Assert-NoReparsePoint $parentFull "Container_Audit application parent" -IncludeDescendants
+    New-Item -ItemType Directory -Path $targetFull -ErrorAction Stop | Out-Null
+    try {
+        foreach ($child in @(Get-ChildItem -LiteralPath $sourceFull -Force -ErrorAction Stop)) {
+            Copy-Item `
+                -LiteralPath $child.FullName `
+                -Destination $targetFull `
+                -Recurse `
+                -Force `
+                -ErrorAction Stop
+        }
+        Assert-NoReparsePoint $targetFull "Container_Audit application root" -IncludeDescendants
+        return $targetFull
+    }
+    catch {
+        $copyFailure = $_
+        [void](Remove-ExactOwnedTree $targetFull "Container_Audit incomplete application root")
+        throw $copyFailure
+    }
+}
+
 function Remove-EmptyOwnedParent([string]$Path, [string]$Purpose, [switch]$RequireEmpty) {
     Assert-NoReparsePoint $Path $Purpose
     if (-not (Test-Path -LiteralPath $Path)) {
@@ -852,9 +904,59 @@ if ($Uninstall.IsPresent) {
     }
 }
 
-$packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$releaseSourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 if ([string]::IsNullOrWhiteSpace($DataRoot)) {
     $DataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
+}
+$eventDir = Join-Path $DataRoot "events"
+$statusDir = Join-Path $DirectSyncRoot "status"
+$requiredReleaseNames = @(
+    "Container_Audit.exe",
+    "Container_Audit_DirectSync_Install.exe",
+    "Container_Audit_DirectSync_Relay.exe",
+    "Container_Audit_Worker_PC_Register.exe",
+    "Container_Audit_Qualification_Authority.exe"
+)
+foreach ($requiredName in $requiredReleaseNames) {
+    $required = Join-Path $releaseSourceRoot $requiredName
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+        throw "Release package is incomplete. Missing: $required"
+    }
+}
+
+$expectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
+$expectedApplicationParent = "C:\KMTech\Apps\Container_Audit"
+$expectedUpdateBackupRoot = "C:\KMTech\Apps\Container_Audit\.current.update-backups"
+$expectedUpdateEvidenceRoot = "C:\KMTech\Apps\Container_Audit\.current.update-evidence"
+$expectedDirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit"
+$expectedLogisticsProfileRoot = "C:\ProgramData\KMTech\Logistics\profiles\Container_Audit"
+$expectedTaskName = "direct-sync-relay-container-audit"
+$qualificationAuthorityTaskName = "container-audit-isolated-qualification-authority"
+$qualificationStateRoot = Join-Path $expectedDirectSyncRoot "qualification-authority"
+$qualificationContextPath = Join-Path $qualificationStateRoot "client-context.json"
+$qualificationFixturePath = Join-Path $qualificationStateRoot "operator-fixture.json"
+$qualificationInitializeReportPath = Join-Path $statusDir "isolated_qualification_initialize.json"
+$qualificationProbeReportPath = Join-Path $statusDir "isolated_qualification_probe.json"
+$expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.cmd"
+$expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
+$expectedOperatorDataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
+$expectedOperatorCatalogRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ItemCatalog\Container_Audit"
+$operatorCatalogCachePath = Join-Path $expectedOperatorCatalogRoot "Item.csv"
+$localTestOverrideEnabled = (
+    $AllowNoncanonicalLayoutForTest.IsPresent -and
+    [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq "1"
+)
+$packageRoot = $releaseSourceRoot
+if (
+    -not $DryRun.IsPresent -and
+    -not $Uninstall.IsPresent -and
+    -not $localTestOverrideEnabled -and
+    -not (Test-SamePath $releaseSourceRoot $expectedInstallRoot)
+) {
+    $packageRoot = Initialize-CanonicalApplicationRoot `
+        $releaseSourceRoot `
+        $expectedInstallRoot `
+        $expectedApplicationParent
 }
 $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
@@ -867,8 +969,6 @@ foreach ($required in @($appExe, $installExe, $runnerExe, $registrationExe, $qua
     }
 }
 
-$eventDir = Join-Path $DataRoot "events"
-$statusDir = Join-Path $DirectSyncRoot "status"
 $reuseExistingIdentity = (
     -not [string]::IsNullOrWhiteSpace($ExistingProducerManifestPath) -or
     -not [string]::IsNullOrWhiteSpace($ExistingCredentialPath) -or
@@ -896,24 +996,6 @@ $manifestPath = if ($reuseExistingIdentity) { $ExistingProducerManifestPath } el
 $credentialPath = if ($reuseExistingIdentity) { $ExistingCredentialPath } else { Join-Path $DirectSyncRoot "credential.json" }
 $registrationReportPath = if ($reuseExistingIdentity) { $ExistingRegistrationReportPath } else { Join-Path $statusDir "worker_pc_registration.json" }
 $installReportPath = Join-Path $statusDir "container_audit_direct_sync_install.json"
-$expectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
-$expectedApplicationParent = "C:\KMTech\Apps\Container_Audit"
-$expectedUpdateBackupRoot = "C:\KMTech\Apps\Container_Audit\.current.update-backups"
-$expectedUpdateEvidenceRoot = "C:\KMTech\Apps\Container_Audit\.current.update-evidence"
-$expectedDirectSyncRoot = "C:\ProgramData\KMTech\DirectSync\container_audit"
-$expectedLogisticsProfileRoot = "C:\ProgramData\KMTech\Logistics\profiles\Container_Audit"
-$expectedTaskName = "direct-sync-relay-container-audit"
-$qualificationAuthorityTaskName = "container-audit-isolated-qualification-authority"
-$qualificationStateRoot = Join-Path $expectedDirectSyncRoot "qualification-authority"
-$qualificationContextPath = Join-Path $qualificationStateRoot "client-context.json"
-$qualificationFixturePath = Join-Path $qualificationStateRoot "operator-fixture.json"
-$qualificationInitializeReportPath = Join-Path $statusDir "isolated_qualification_initialize.json"
-$qualificationProbeReportPath = Join-Path $statusDir "isolated_qualification_probe.json"
-$expectedTaskLauncherPath = Join-Path $expectedDirectSyncRoot "bin\direct-sync-relay-container-audit.cmd"
-$expectedStateDbPath = Join-Path $expectedDirectSyncRoot "queue\direct_sync_relay.sqlite3"
-$expectedOperatorDataRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ContainerAudit"
-$expectedOperatorCatalogRoot = Join-Path $OperatorLocalAppDataRoot "KMTech\ItemCatalog\Container_Audit"
-$operatorCatalogCachePath = Join-Path $expectedOperatorCatalogRoot "Item.csv"
 $commonProgramsRoot = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
 $shortcutGroupPath = Join-Path $commonProgramsRoot "KMTech"
 $shortcutName = Get-ContainerAuditShortcutName
@@ -927,10 +1009,6 @@ $directSyncRootMatches = Test-SamePath $actualDirectSyncRoot $expectedDirectSync
 $taskNameMatches = $TaskName -ceq $expectedTaskName
 $taskLauncherPathMatches = Test-SamePath $actualTaskLauncherPath $expectedTaskLauncherPath
 $stateDbPathMatches = Test-SamePath $actualStateDbPath $expectedStateDbPath
-$localTestOverrideEnabled = (
-    $AllowNoncanonicalLayoutForTest.IsPresent -and
-    [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq "1"
-)
 $productionLayoutMatches = (
     $installRootMatches -and
     $directSyncRootMatches -and
