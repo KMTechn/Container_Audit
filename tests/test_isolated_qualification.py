@@ -239,7 +239,15 @@ def test_release_package_and_installer_own_qualification_authority():
     assert '"Container_Audit_Qualification_Authority"' in builder
     assert '"tools/isolated_qualification_authority.py"' in builder
     assert "EnableWindowsSandboxQualification" in installer
-    assert "Windows Sandbox qualification cannot be combined with a ServerBaseUrl override." in installer
+    assert (
+        "$allowExplicitHttpServerBaseUrl = "
+        "$EnableWindowsSandboxQualification.IsPresent"
+    ) in installer
+    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' not in installer
+    assert (
+        "Windows Sandbox qualification ServerBaseUrl override must be an HTTP origin."
+        in installer
+    )
     assert "container-audit-isolated-qualification-authority" in installer
     assert "qualification_authority_process_status=ABSENT" in installer
     assert "qualification_authority_task_status=ABSENT" in installer
