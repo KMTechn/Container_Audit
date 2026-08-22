@@ -147,6 +147,19 @@ function Assert-HttpsServerBaseUrl([string]$Value, [switch]$AllowExplicitHttp) {
         throw "ServerBaseUrl must be an HTTPS origin, or an HTTP origin authorized by Windows Sandbox qualification, without userinfo, query, or fragment."
     }
 }
+function Resolve-ProducerSubmissionBaseUrl(
+    [string]$RequestedServerBaseUrl,
+    [bool]$RequestedServerBaseUrlIsExplicit,
+    [string]$QualificationAuthorityServerBaseUrl
+) {
+    # The qualification authority keeps its loopback origin for its own bounded
+    # duties. An explicitly supplied origin stays the product's receipt/projection
+    # submission target instead of being replaced by it, production default included.
+    if ($RequestedServerBaseUrlIsExplicit) {
+        return $RequestedServerBaseUrl.Trim().TrimEnd('/')
+    }
+    return $QualificationAuthorityServerBaseUrl.Trim().TrimEnd('/')
+}
 function Remove-NewMachineProfilesFromRegistrationReport([string]$RegistrationReportPath) {
     if (-not (Test-Path -LiteralPath $RegistrationReportPath -PathType Leaf)) {
         return
@@ -870,6 +883,7 @@ function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, 
 }
 
 $OperatorLocalAppDataRoot = Assert-OperatorContext $OperatorUserSid $OperatorLocalAppDataRoot
+$explicitServerBaseUrl = $PSBoundParameters.ContainsKey("ServerBaseUrl")
 if (-not $Uninstall.IsPresent) {
     $allowExplicitHttpServerBaseUrl = $EnableWindowsSandboxQualification.IsPresent
     Assert-HttpsServerBaseUrl $ServerBaseUrl -AllowExplicitHttp:$allowExplicitHttpServerBaseUrl
@@ -1323,8 +1337,15 @@ if ($EnableWindowsSandboxQualification.IsPresent) {
     ) {
         throw "Qualification authority initialization report did not prove the isolated route."
     }
-    $ServerBaseUrl = [string]$qualificationInitialize.server_base_url
-    Assert-HttpsServerBaseUrl $ServerBaseUrl
+    $qualificationAuthorityServerBaseUrl = [string]$qualificationInitialize.server_base_url
+    Assert-HttpsServerBaseUrl $qualificationAuthorityServerBaseUrl
+    $ServerBaseUrl = Resolve-ProducerSubmissionBaseUrl `
+        $ServerBaseUrl `
+        $explicitServerBaseUrl `
+        $qualificationAuthorityServerBaseUrl
+    Assert-HttpsServerBaseUrl `
+        $ServerBaseUrl `
+        -AllowExplicitHttp:$explicitServerBaseUrl
     [void](Install-OwnedQualificationAuthorityTask `
         $qualificationAuthorityTaskName `
         $qualificationAuthorityExe `

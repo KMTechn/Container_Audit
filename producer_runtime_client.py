@@ -192,9 +192,27 @@ def _scope_key(values: Mapping[str, str]) -> str:
     return hashlib.sha256(canonical_json(values).encode("utf-8")).hexdigest()
 
 
-def _runtime_endpoint(endpoint_url: str) -> str:
+def _bound_qualification_origin(credentials: Any) -> bool:
+    """Whether these credentials were issued for a bound qualification origin."""
+
+    return bool(
+        str(getattr(credentials, "isolated_qualification_context_path", "") or "").strip()
+    )
+
+
+def _runtime_endpoint(
+    endpoint_url: str, *, bound_qualification_origin: bool = False
+) -> str:
     parsed = urlparse(str(endpoint_url or ""))
-    if parsed.scheme.lower() != "https" or not parsed.netloc or parsed.username or parsed.password:
+    # Liveness has to reach the same origin the receipts do, so a qualification
+    # run bound to an explicit origin leases there instead of demanding HTTPS.
+    allowed_schemes = ("https", "http") if bound_qualification_origin else ("https",)
+    if (
+        parsed.scheme.lower() not in allowed_schemes
+        or not parsed.netloc
+        or parsed.username
+        or parsed.password
+    ):
         raise ValueError("runtime lease endpoint must use credential-free HTTPS")
     return urlunparse((parsed.scheme, parsed.netloc, ENDPOINT_PATH, "", "", ""))
 
@@ -437,7 +455,10 @@ def _post_lease_request(
     }
     try:
         response = session.post(
-            _runtime_endpoint(str(credentials.endpoint_url)),
+            _runtime_endpoint(
+                str(credentials.endpoint_url),
+                bound_qualification_origin=_bound_qualification_origin(credentials),
+            ),
             data=body,
             headers=headers,
             timeout=timeout,
@@ -691,7 +712,10 @@ def ensure_runtime_authority(
     try:
         runtime_mode = client_runtime_lease_mode(credentials)
         scope = _scope_values(credentials, str(producer_install_id or "").strip())
-        _runtime_endpoint(scope["endpoint_url"])
+        _runtime_endpoint(
+            scope["endpoint_url"],
+            bound_qualification_origin=_bound_qualification_origin(credentials),
+        )
     except (TypeError, ValueError) as exc:
         return RuntimePreparation(
             operator_review=True,
@@ -973,7 +997,10 @@ def prepare_runtime_metadata(
         return RuntimePreparation(metadata=dict(metadata))
     try:
         scope = _scope_values(credentials, str(metadata.get("producer_install_id") or ""))
-        _runtime_endpoint(scope["endpoint_url"])
+        _runtime_endpoint(
+            scope["endpoint_url"],
+            bound_qualification_origin=_bound_qualification_origin(credentials),
+        )
     except (TypeError, ValueError) as exc:
         return RuntimePreparation(
             operator_review=True,

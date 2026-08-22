@@ -108,16 +108,15 @@ def _validate_enrollment_url(
 ) -> str:
     if isolated_qualification_context is None:
         validate_endpoint_url(endpoint_url)
-    elif endpoint_url != str(
-        getattr(isolated_qualification_context, "endpoint_url", "") or ""
-    ):
-        raise DirectSyncPushError(
-            "isolated qualification endpoint differs from its client context"
-        )
     parsed_endpoint = urlparse(endpoint_url)
     parsed_enrollment = urlparse(str(enrollment_url or "").strip())
+    # A qualification run enrolls at the origin it will submit to, so the
+    # credential it receives is issued by the server that must validate it.
+    expected_scheme = (
+        "https" if isolated_qualification_context is None else parsed_endpoint.scheme
+    )
     if (
-        parsed_enrollment.scheme != "https"
+        parsed_enrollment.scheme != expected_scheme
         or parsed_enrollment.netloc != parsed_endpoint.netloc
         or parsed_enrollment.username
         or parsed_enrollment.password
@@ -562,6 +561,15 @@ def _self_enroll(
     if token:
         headers["X-Producer-Enrollment-Token"] = token
     isolated_context = getattr(args, "_isolated_qualification_context", None)
+    # The qualification CA signs the loopback authority alone, so enrolling at a
+    # bound external origin keeps ordinary trust instead of that private root.
+    authority_ca_bundle_path = (
+        str(getattr(isolated_context, "ca_bundle_path", "") or "")
+        if isolated_context is not None
+        and credential["endpoint_url"]
+        == str(getattr(isolated_context, "endpoint_url", "") or "")
+        else ""
+    )
     if isolated_context is None:
         response = requests.post(
             enrollment_url,
@@ -578,7 +586,7 @@ def _self_enroll(
                 headers=headers,
                 timeout=max(1, int(args.enrollment_timeout_seconds)),
                 allow_redirects=False,
-                verify=str(getattr(isolated_context, "ca_bundle_path")),
+                **({"verify": authority_ca_bundle_path} if authority_ca_bundle_path else {}),
             )
     try:
         response_payload = response.json()

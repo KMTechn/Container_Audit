@@ -243,7 +243,10 @@ def test_release_package_and_installer_own_qualification_authority():
         "$allowExplicitHttpServerBaseUrl = "
         "$EnableWindowsSandboxQualification.IsPresent"
     ) in installer
-    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' not in installer
+    assert (
+        "$allowExplicitHttpServerBaseUrl = "
+        '$PSBoundParameters.ContainsKey("ServerBaseUrl")'
+    ) not in installer
     assert (
         "Windows Sandbox qualification ServerBaseUrl override must be an HTTP origin."
         in installer

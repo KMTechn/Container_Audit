@@ -487,7 +487,7 @@ def validate_credentials_endpoint(credentials: ProducerCredentials) -> None:
     if not context_path and not ca_bundle_path:
         validate_endpoint_url(credentials.endpoint_url)
         return
-    if not context_path or not ca_bundle_path:
+    if not context_path:
         raise DirectSyncPushError(
             "isolated qualification credential context is incomplete"
         )
@@ -502,6 +502,18 @@ def validate_credentials_endpoint(credentials: ProducerCredentials) -> None:
         raise DirectSyncPushError(
             f"isolated qualification credential context is invalid: {exc}"
         ) from exc
+    if credentials.endpoint_url != context.endpoint_url:
+        # Bound to an external qualification origin: the loopback CA must not
+        # be presented as trust material for it.
+        if ca_bundle_path:
+            raise DirectSyncPushError(
+                "isolated qualification CA bundle must not be used off the authority origin"
+            )
+        return
+    if not ca_bundle_path:
+        raise DirectSyncPushError(
+            "isolated qualification credential context is incomplete"
+        )
     if os.path.normcase(os.path.abspath(ca_bundle_path)) != os.path.normcase(
         os.path.abspath(context.ca_bundle_path)
     ):

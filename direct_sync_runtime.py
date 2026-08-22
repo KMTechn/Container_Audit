@@ -442,7 +442,10 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
             raise DirectSyncPushError(
                 f"isolated qualification credential context is invalid: {exc}"
             ) from exc
-        tls_ca_bundle_path = isolated_context.ca_bundle_path
+        # The qualification CA signs the loopback authority alone, so a bound
+        # external origin keeps ordinary trust instead of that private root.
+        if endpoint_url == isolated_context.endpoint_url:
+            tls_ca_bundle_path = isolated_context.ca_bundle_path
     else:
         validate_endpoint_url(endpoint_url)
     return ProducerCredentials(

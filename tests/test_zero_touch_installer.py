@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import os
 import subprocess
 
@@ -361,7 +362,10 @@ def test_public_installer_continues_from_canonical_bytes_without_qualification_l
 
 def test_http_server_override_requires_qualification_and_other_inputs_stay_blocked():
     installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
-    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' not in installer
+    assert (
+        "$allowExplicitHttpServerBaseUrl = "
+        '$PSBoundParameters.ContainsKey("ServerBaseUrl")'
+    ) not in installer
     assert (
         "$allowExplicitHttpServerBaseUrl = "
         "$EnableWindowsSandboxQualification.IsPresent"
@@ -753,3 +757,323 @@ def test_enrollment_bundle_rejects_nonfinal_server_shapes(
             expected_device_id="CONTAINER-PC-1",
             profile_path=tmp_path / f"{case}.json",
         )
+
+
+class _RecordingLeaseSession:
+    """Records the runtime-lease origin without granting a lease."""
+
+    def __init__(self):
+        self.urls = []
+
+    def post(self, url, **kwargs):
+        self.urls.append(url)
+        return _LeaseUnavailable()
+
+
+class _LeaseUnavailable:
+    status_code = 503
+    headers = {}
+
+    def json(self):
+        return {"error": {"code": "runtime_lease_unavailable"}, "retryable": True}
+
+
+class _AcceptedReceipt:
+    """Minimal accepted producer-ingest receipt for the posted metadata."""
+
+    status_code = 200
+    headers = {}
+
+    def __init__(self, metadata):
+        request_id = "request-qualification-1"
+        self._payload = {
+            "status": "accepted",
+            "committed": True,
+            "client_batch_id": metadata["client_batch_id"],
+            "server_source_file_id": (
+                f"{metadata['source_host_id']}/{metadata['producer_role']}/"
+                f"{metadata['stream_name']}/{metadata['relative_path']}"
+            ),
+            "request_id": request_id,
+            "upload_id": request_id,
+            "retryable": False,
+            "next_retry_after": None,
+            "error": None,
+            "totals": {
+                "inserted": metadata["row_count"],
+                "replayed": 0,
+                "errors": 0,
+                "quarantined": 0,
+            },
+        }
+
+    def json(self):
+        return self._payload
+
+
+class _AcceptingIngestSession:
+    """Records the exact origin the product actually submits to."""
+
+    def __init__(self):
+        self.urls = []
+
+    def post(self, url, *, data, **kwargs):
+        self.urls.append(url)
+        return _AcceptedReceipt(json.loads(data["metadata"]))
+
+
+def test_qualification_switch_keeps_the_explicitly_bound_submission_origin(
+    monkeypatch, tmp_path
+):
+    """DIRECTION seq 21 D21-1(ii): the authority must not capture the submission route.
+
+    Both branches run the whole executed route: the installer's routing decision,
+    the producer manifest/credential it writes, the runtime-lease target the relay
+    derives, and the actual upload POST the product performs.
+    """
+
+    import dataclasses
+    import sqlite3
+
+    import direct_sync_push
+    import direct_sync_runtime
+    import isolated_qualification
+    import producer_runtime_client
+    from tools import isolated_qualification_authority as authority
+    from tools import register_container_audit_worker_pc as register
+
+    production_origin = "https://worker.kmtecherp.com"
+    authority_origin = "https://127.0.0.1:18473"
+    explicit_origin = "http://192.168.45.98:18089"
+    ingest_path = "/api/producer-ingest/v1/source-file"
+    lease_path = "/api/producer-ingest/v1/runtime-lease"
+
+    # 1. Installer routing. The explicit-parameter presence bit decides, so an
+    #    explicitly supplied production default is honoured too.
+    body = (
+        "Set-StrictMode -Version Latest;"
+        f"$production='{production_origin}';$authority='{authority_origin}';"
+        f"$explicit='{explicit_origin}';"
+        "Write-Output (Resolve-ProducerSubmissionBaseUrl $explicit $true $authority);"
+        "Write-Output (Resolve-ProducerSubmissionBaseUrl $production $true $authority);"
+        "Write-Output (Resolve-ProducerSubmissionBaseUrl $production $false $authority);"
+        "$rejected=$false;"
+        "try{Assert-HttpsServerBaseUrl $explicit}catch{$rejected=$true};"
+        "if(-not $rejected){Write-Error 'switch-off HTTP override was accepted';exit 71};"
+        "exit 0"
+    )
+    completed = _run_installer_functions(
+        ["Assert-HttpsServerBaseUrl", "Resolve-ProducerSubmissionBaseUrl"],
+        body,
+    )
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.split() == [
+        explicit_origin,
+        production_origin,
+        authority_origin,
+    ]
+
+    operator_root = tmp_path / "operator-local-app-data"
+    operator_root.mkdir()
+    monkeypatch.setenv(isolated_qualification.SOURCE_TEST_MODE_ENV, "1")
+    monkeypatch.setenv("COMPUTERNAME", "QUALIFICATION-ROUTING-HOST")
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "program-data"))
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "data-root"))
+    state_root = isolated_qualification.default_state_root()
+    authority.initialize_authority(
+        state_root=state_root,
+        operator_user_sid="S-1-5-21-100-200-300-504",
+        operator_local_app_data_root=str(operator_root),
+        port=18473,
+        report_path=tmp_path / "initialize-report.json",
+    )
+    context_path = state_root / isolated_qualification.CONTEXT_FILENAME
+    assert isolated_qualification.load_isolated_qualification_context(
+        context_path
+    ).endpoint_url == f"{authority_origin}{ingest_path}"
+
+    source_csv = tmp_path / "qualification-event-log.csv"
+    source_csv.write_text(
+        "timestamp,worker_name,event,details\n"
+        '2026-08-23T00:00:00,worker,SCAN_OK,"{ ""product_barcode"": ""BC-1"" }"\n',
+        encoding="utf-8",
+    )
+
+    def _register(case, extra):
+        paths = {
+            name: tmp_path / f"{case}-{name}.json"
+            for name in ("manifest", "credential", "report")
+        }
+        code = register.main(
+            [
+                "--app-root",
+                str(ROOT),
+                "--manifest-path",
+                str(paths["manifest"]),
+                "--credential-path",
+                str(paths["credential"]),
+                "--report-path",
+                str(paths["report"]),
+                *extra,
+            ]
+        )
+        return code, paths
+
+    def _submitted_urls(case, endpoint_url, *, expect_authority_ca):
+        """Run the real credential load, lease derivation, and upload POST."""
+
+        credential_path = tmp_path / f"{case}-credential.json"
+        credential = json.loads(credential_path.read_text(encoding="utf-8"))
+        credential.pop("secret_ref", None)
+        credential.pop("secret_data_dir", None)
+        credential["secret"] = "qualification-only-test-secret"
+        credential["runtime_lease_mode"] = "observe"
+        credential_path.write_text(
+            json.dumps(credential, ensure_ascii=False), encoding="utf-8"
+        )
+        credentials = direct_sync_runtime.load_credentials_from_json(credential_path)
+        assert credentials.endpoint_url == endpoint_url
+        # The loopback qualification CA follows the authority origin only.
+        expected_ca = (
+            str(
+                isolated_qualification.load_isolated_qualification_context(
+                    context_path
+                ).ca_bundle_path
+            )
+            if expect_authority_ca
+            else ""
+        )
+        assert credentials.tls_ca_bundle_path == expected_ca
+        direct_sync_push.validate_credentials_endpoint(credentials)
+        lease_session = _RecordingLeaseSession()
+        lease_db = tmp_path / f"{case}-runtime.sqlite3"
+        with sqlite3.connect(lease_db) as conn:
+            producer_runtime_client.init_runtime_schema(conn)
+        preparation = producer_runtime_client.ensure_runtime_authority(
+            db_path=lease_db,
+            credentials=credentials,
+            producer_install_id="container-audit-qualification-install",
+            session=lease_session,
+        )
+        assert preparation.error_code != "runtime_authority_scope_invalid", preparation
+        plan = direct_sync_push.build_source_file_plan(
+            source_file_path=source_csv,
+            producer_manifest_path=tmp_path / f"{case}-manifest.json",
+            credentials=credentials,
+        )
+        session = _AcceptingIngestSession()
+        result = direct_sync_push.upload_source_file(
+            plan, credentials, session=session, status_dir=tmp_path / f"{case}-status"
+        )
+        assert result.success, result
+        return lease_session.urls, session.urls
+
+    # Switch ON + explicit origin: the bound origin survives all the way to the
+    # runtime lease and the receipt POST the product actually issues.
+    code, paths = _register(
+        "bound-origin",
+        [
+            "--endpoint-url",
+            f"{explicit_origin}{ingest_path}",
+            "--isolated-qualification-context",
+            str(context_path),
+        ],
+    )
+    assert code == 0, paths["report"].read_text(encoding="utf-8")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    report = json.loads(paths["report"].read_text(encoding="utf-8"))
+    assert manifest["sync"]["server_ingest_target"] == f"{explicit_origin}{ingest_path}"
+    assert report["isolated_qualification_mode"] is True
+    assert authority_origin not in json.dumps(manifest)
+    lease_urls, submitted = _submitted_urls(
+        "bound-origin",
+        f"{explicit_origin}{ingest_path}",
+        expect_authority_ca=False,
+    )
+    assert lease_urls == [f"{explicit_origin}{lease_path}"]
+    assert submitted == [f"{explicit_origin}{ingest_path}"]
+
+    # Switch ON without an explicit origin: the prior loopback authority route.
+    code, paths = _register(
+        "authority-origin",
+        [
+            "--endpoint-url",
+            f"{authority_origin}{ingest_path}",
+            "--isolated-qualification-context",
+            str(context_path),
+        ],
+    )
+    assert code == 0, paths["report"].read_text(encoding="utf-8")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["sync"]["server_ingest_target"] == f"{authority_origin}{ingest_path}"
+    lease_urls, submitted = _submitted_urls(
+        "authority-origin",
+        f"{authority_origin}{ingest_path}",
+        expect_authority_ca=True,
+    )
+    assert lease_urls == [f"{authority_origin}{lease_path}"]
+    assert submitted == [f"{authority_origin}{ingest_path}"]
+
+    # Switch ON + an explicitly supplied production default: still the bound
+    # origin, and still without the loopback authority's private CA.
+    code, paths = _register(
+        "bound-production",
+        [
+            "--endpoint-url",
+            f"{production_origin}{ingest_path}",
+            "--isolated-qualification-context",
+            str(context_path),
+        ],
+    )
+    assert code == 0, paths["report"].read_text(encoding="utf-8")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["sync"]["server_ingest_target"] == f"{production_origin}{ingest_path}"
+    lease_urls, submitted = _submitted_urls(
+        "bound-production",
+        f"{production_origin}{ingest_path}",
+        expect_authority_ca=False,
+    )
+    assert lease_urls == [f"{production_origin}{lease_path}"]
+    assert submitted == [f"{production_origin}{ingest_path}"]
+
+    # Switch OFF: the production default stands and explicit HTTP stays rejected.
+    code, paths = _register("default", [])
+    assert code == 0, paths["report"].read_text(encoding="utf-8")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["sync"]["server_ingest_target"] == register.DEFAULT_ENDPOINT_URL
+    assert manifest["sync"]["server_ingest_target"] == f"{production_origin}{ingest_path}"
+    lease_urls, submitted = _submitted_urls(
+        "default", register.DEFAULT_ENDPOINT_URL, expect_authority_ca=False
+    )
+    assert lease_urls == [f"{production_origin}{lease_path}"]
+    assert submitted == [register.DEFAULT_ENDPOINT_URL]
+
+    code, paths = _register(
+        "unqualified-http",
+        ["--endpoint-url", f"{explicit_origin}{ingest_path}"],
+    )
+    assert code == 2
+    blocked = json.loads(paths["report"].read_text(encoding="utf-8"))["blocked_reason"]
+    assert "https" in blocked
+
+    bound_credentials = direct_sync_runtime.load_credentials_from_json(
+        tmp_path / "bound-origin-credential.json"
+    )
+    with pytest.raises(
+        direct_sync_push.DirectSyncPushError, match="must not be used off the authority"
+    ):
+        direct_sync_push.validate_credentials_endpoint(
+            dataclasses.replace(
+                bound_credentials,
+                tls_ca_bundle_path=str(
+                    isolated_qualification.load_isolated_qualification_context(
+                        context_path
+                    ).ca_bundle_path
+                ),
+            )
+        )
+
+    # A production credential without a qualification context still refuses an
+    # HTTP runtime-lease origin.
+    with pytest.raises(ValueError, match="credential-free HTTPS"):
+        producer_runtime_client._runtime_endpoint(f"{explicit_origin}{ingest_path}")

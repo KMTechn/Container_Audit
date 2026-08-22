@@ -8,6 +8,7 @@ Sandbox, or while an unfrozen source-only integration test explicitly opts in.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -22,6 +23,7 @@ ACTIVATION_MODE = "windows_sandbox_qualification"
 SOURCE_TEST_MODE_ENV = "KMTECH_ISOLATED_QUALIFICATION_SOURCE_TEST_MODE"
 STATE_DIRECTORY_NAME = "qualification-authority"
 CONTEXT_FILENAME = "client-context.json"
+PRODUCER_INGEST_PATH = "/api/producer-ingest/v1/source-file"
 MAX_CONTEXT_BYTES = 64 * 1024
 EXPECTED_CONTEXT_FIELDS = frozenset(
     {
@@ -155,6 +157,43 @@ def assert_windows_sandbox_operator_context(
     return False
 
 
+def _assert_bound_submission_endpoint(endpoint_url: str) -> None:
+    """Accept an explicitly bound qualification submission endpoint.
+
+    The authority keeps its own loopback endpoint for its bounded duties, so a
+    qualification run that binds an external origin must keep submitting there.
+    Another loopback origin is still rejected: it would only move the isolated
+    route, not leave it.
+    """
+
+    parsed = urlsplit(endpoint_url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise IsolatedQualificationError(
+            "isolated qualification endpoint differs from the requested credential endpoint"
+        ) from exc
+    hostname = str(parsed.hostname or "").rstrip(".").lower()
+    is_loopback = hostname in ("", "localhost") or hostname.endswith(".localhost")
+    try:
+        is_loopback = is_loopback or ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        pass
+    if (
+        parsed.scheme not in ("http", "https")
+        or is_loopback
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != PRODUCER_INGEST_PATH
+        or (port is not None and not 1 <= port <= 65535)
+    ):
+        raise IsolatedQualificationError(
+            "isolated qualification endpoint differs from the requested credential endpoint"
+        )
+
+
 def _load_json_object(path: Path) -> dict:
     try:
         stat = path.stat()
@@ -234,13 +273,12 @@ def load_isolated_qualification_context(
         raise IsolatedQualificationError(
             "isolated qualification server must be an exact HTTPS loopback origin"
         )
-    expected_endpoint = f"{server_base_url}/api/producer-ingest/v1/source-file"
+    expected_endpoint = f"{server_base_url}{PRODUCER_INGEST_PATH}"
     if endpoint_url != expected_endpoint:
         raise IsolatedQualificationError("isolated qualification producer endpoint is invalid")
-    if expected_endpoint_url and endpoint_url != str(expected_endpoint_url).strip():
-        raise IsolatedQualificationError(
-            "isolated qualification endpoint differs from the requested credential endpoint"
-        )
+    requested_endpoint_url = str(expected_endpoint_url or "").strip()
+    if requested_endpoint_url and requested_endpoint_url != endpoint_url:
+        _assert_bound_submission_endpoint(requested_endpoint_url)
     ca_bundle = Path(str(payload.get("ca_bundle_path") or ""))
     if not _path_is_within(ca_bundle, state_root) or not ca_bundle.is_file():
         raise IsolatedQualificationError("isolated qualification CA bundle is unavailable")
@@ -272,6 +310,7 @@ __all__ = [
     "CONTRACT_VERSION",
     "IsolatedQualificationContext",
     "IsolatedQualificationError",
+    "PRODUCER_INGEST_PATH",
     "SOURCE_TEST_MODE_ENV",
     "STATE_DIRECTORY_NAME",
     "assert_windows_sandbox_operator_context",
