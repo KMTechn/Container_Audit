@@ -129,18 +129,22 @@ if (-not $DryRun.IsPresent) {
 }
 
 
-function Assert-HttpsServerBaseUrl([string]$Value) {
+function Assert-HttpsServerBaseUrl([string]$Value, [switch]$AllowExplicitHttp) {
     $uri = $null
     if (-not [System.Uri]::TryCreate($Value, [System.UriKind]::Absolute, [ref]$uri)) {
-        throw "ServerBaseUrl must be an absolute HTTPS origin."
+        throw "ServerBaseUrl must be an absolute HTTP or HTTPS origin."
     }
+    $schemeAllowed = (
+        $uri.Scheme -ceq "https" -or
+        ($AllowExplicitHttp.IsPresent -and $uri.Scheme -ceq "http")
+    )
     if (
-        $uri.Scheme -cne "https" -or
+        -not $schemeAllowed -or
         -not [string]::IsNullOrWhiteSpace($uri.UserInfo) -or
         -not [string]::IsNullOrWhiteSpace($uri.Query) -or
         -not [string]::IsNullOrWhiteSpace($uri.Fragment)
     ) {
-        throw "ServerBaseUrl must be an HTTPS origin without userinfo, query, or fragment."
+        throw "ServerBaseUrl must be an HTTPS origin, or an explicitly supplied HTTP origin, without userinfo, query, or fragment."
     }
 }
 function Remove-NewMachineProfilesFromRegistrationReport([string]$RegistrationReportPath) {
@@ -815,7 +819,8 @@ function Wait-CurrentRuntimeLease([datetime]$Started, [string]$ProgramDataRoot, 
 
 $OperatorLocalAppDataRoot = Assert-OperatorContext $OperatorUserSid $OperatorLocalAppDataRoot
 if (-not $Uninstall.IsPresent) {
-    Assert-HttpsServerBaseUrl $ServerBaseUrl
+    $allowExplicitHttpServerBaseUrl = $PSBoundParameters.ContainsKey("ServerBaseUrl")
+    Assert-HttpsServerBaseUrl $ServerBaseUrl -AllowExplicitHttp:$allowExplicitHttpServerBaseUrl
 }
 if ($Uninstall.IsPresent -and $EnableWindowsSandboxQualification.IsPresent) {
     throw "EnableWindowsSandboxQualification is an installation-only switch."

@@ -201,6 +201,61 @@ def test_nonproduction_server_and_test_identity_override_is_documented():
     assert 'os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL"' in bootstrap
 
 
+def test_public_installer_accepts_exact_explicit_http_override_through_url_gate():
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "INSTALL_THIS_PC.ps1"),
+            "-DryRun",
+            "-ServerBaseUrl",
+            "http://192.168.45.98:18089",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = completed.stdout + completed.stderr
+
+    assert completed.returncode != 0
+    assert "ServerBaseUrl must be" not in output
+    assert "Release package is incomplete. Missing:" in output
+
+
+def test_http_server_override_is_explicit_and_other_schemes_stay_blocked():
+    installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    assert '$PSBoundParameters.ContainsKey("ServerBaseUrl")' in installer
+    assert (
+        "Assert-HttpsServerBaseUrl $ServerBaseUrl "
+        "-AllowExplicitHttp:$allowExplicitHttpServerBaseUrl"
+    ) in installer
+
+    body = (
+        "Assert-HttpsServerBaseUrl 'https://worker.kmtecherp.com';"
+        "Assert-HttpsServerBaseUrl 'http://192.168.45.98:18089' -AllowExplicitHttp;"
+        "$blocked=@("
+        "@{value='http://192.168.45.98:18089';allow=$false},"
+        "@{value='ftp://192.168.45.98:18089';allow=$true},"
+        "@{value='http://user@192.168.45.98:18089';allow=$true},"
+        "@{value='http://192.168.45.98:18089?query=1';allow=$true},"
+        "@{value='http://192.168.45.98:18089#fragment';allow=$true}"
+        ");"
+        "foreach($case in $blocked){"
+        "$rejected=$false;"
+        "try{Assert-HttpsServerBaseUrl $case.value -AllowExplicitHttp:$case.allow}"
+        "catch{$rejected=$true};"
+        "if(-not $rejected){Write-Error ('URL unexpectedly accepted: '+$case.value);exit 41}"
+        "};exit 0"
+    )
+    completed = _run_installer_functions(["Assert-HttpsServerBaseUrl"], body)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback():
     text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
 

@@ -84,10 +84,11 @@ Full CI가 exact SHA에서 한 번 실행한다.
 
 ### 격리 비프로덕션 서버 설치/실행 오버라이드
 
-Sandbox 또는 사전 운영 검증에서는 자격시험 컨트롤러가 제공한 격리 HTTPS
-origin과 테스트 전용 producer identity만 사용한다. 실제 서버 URL, identity,
-enrollment token 또는 secret을 저장소나 명령 예시에 기록하지 않는다.
-`-ServerBaseUrl`에는 `/api/...` 경로가 아닌 HTTPS origin만 전달한다.
+Sandbox 또는 사전 운영 검증에서는 자격시험 컨트롤러가 제공한 격리 origin과
+테스트 전용 producer identity만 사용한다. 실제 서버 URL, identity, enrollment
+token 또는 secret을 저장소나 명령 예시에 기록하지 않는다. 기본 서버와 내부
+qualification authority는 HTTPS 전용이다. 명시적인 `-ServerBaseUrl` override에는
+`/api/...` 경로가 아닌 절대 HTTP 또는 HTTPS origin만 전달한다.
 
 패키지의 공개 설치 명령은 다음과 같다. identity seed 파일은
 `container-audit-producer-identity-v1` 형식의 `producer_id`, `source_host_id`,
