@@ -1148,7 +1148,8 @@ def _install_pack_dry_run_report(tmp_root: Path) -> dict:
     serialized = json.dumps(plan, ensure_ascii=False, sort_keys=True)
     ok = (
         plan["status"] == "DRY_RUN"
-        and plan["scheduled_task_create_command"][0] == "schtasks.exe"
+        and plan["task_principal"]["mode"] == "system_service_account"
+        and plan["scheduled_task_create_command"][0] == "powershell.exe"
         and "direct_sync_relay_runner.py" in " ".join(plan["runner_command"])
         and "--scan-source-dir" in plan["runner_command"]
         and "--operator-pause-path" in plan["runner_command"]
