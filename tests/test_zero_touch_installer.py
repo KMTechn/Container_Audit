@@ -1,10 +1,12 @@
 from pathlib import Path
 import json
 import os
+import re
 import subprocess
 
 import pytest
 import update_service
+from direct_sync_push import manifest_hash
 from tools import install_logistics_runtime_profile as machine_profiles
 
 
@@ -105,22 +107,19 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "-Verb RunAs" in text
     assert "-Wait -PassThru" in text
     _assert_powershell_ast(ROOT / "INSTALL_THIS_PC.ps1")
-    assert "--self-enroll" in text
-    assert "--enrollment-token-env" in text
+    assert "Invoke-ContainerAuditWorkerPcRegistration" in text
+    assert "SELF_ENROLLMENT_REGISTERED" in text
+    assert "GetEnvironmentVariable($EnrollmentTokenEnv, 'Process')" in text
     assert "Read-Host" not in text
     assert "ExistingProducerManifestPath" in text
     assert "ExistingCredentialPath" in text
     assert "ExistingRegistrationReportPath" in text
     assert "ProducerIdentityPath" in text
     assert "ProducerInstallId" in text
-    assert "--producer-identity-path" in text
-    assert "--producer-install-id" in text
-    assert "--producer-id" in text
-    assert "--source-host-id" in text
     assert "Producer identity seed file does not exist." in text
-    assert "--verify-manifest-hash" in text
+    assert "Assert-ContainerAuditManifestHash" in text
     assert "Existing producer manifest differs from its verified registration report." in text
-    assert text.count("& $installExe --register-worker-pc") == 2
+    assert not re.search(r"(?mi)^\s*&\s+\$(?:installExe|InstallExecutable)\b", text)
     assert "$registrationExe" not in text
     assert "Container_Audit_Worker_PC_Register.exe" not in text
     assert "Get-FileHash" not in text
@@ -157,8 +156,173 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "field_layout_contract" in text
     assert "production_layout_matches" in text
     assert "AllowNoncanonicalLayoutForTest" in text
-    assert "--allow-noncanonical-layout-for-test" in text
+    assert "local_test_override_enabled" in text
     assert "KMTECH_FACTORY_INSTALL_TEST_MODE" in text
+
+
+def test_public_installer_has_no_direct_packaged_boundary_a_helper_invocations():
+    installer_path = ROOT / "INSTALL_THIS_PC.ps1"
+    escaped = str(installer_path).replace("'", "''")
+    command = (
+        "$tokens=$null;$errors=$null;"
+        f"$ast=[System.Management.Automation.Language.Parser]::ParseFile('{escaped}',[ref]$tokens,[ref]$errors);"
+        "if($errors.Count){$errors|ForEach-Object{$_.Message}|Write-Error;exit 1};"
+        "$direct=@($ast.FindAll({param($node) "
+        "$node -is [System.Management.Automation.Language.CommandAst] -and "
+        "$node.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and "
+        "$node.CommandElements.Count -gt 0 -and "
+        "$node.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst] -and "
+        "@('installExe','InstallExecutable') -ccontains $node.CommandElements[0].VariablePath.UserPath"
+        "},$true));"
+        "if($direct.Count){$direct|ForEach-Object{$_.Extent.Text}|Write-Error;exit 2};exit 0"
+    )
+    completed = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    text = installer_path.read_text(encoding="utf-8")
+    assert "Invoke-ContainerAuditWorkerPcRegistration" in text
+    assert "Assert-ContainerAuditManifestHash" in text
+    assert "Install-ContainerAuditDirectSyncTask" in text
+    assert "Unregister-ScheduledTask -TaskName $Name -Confirm:$false -ErrorAction Stop" in text
+    assert "Register-ScheduledTask `" in text
+    assert "-LogonType ServiceAccount" in text
+    assert "-RunLevel Highest" in text
+    assert "-MultipleInstances IgnoreNew" in text
+    assert "-RepetitionInterval (New-TimeSpan -Minutes 1)" in text
+
+    native_apply = text[
+        text.index("function Install-ContainerAuditDirectSyncTask") :
+        text.index("function Test-SamePath")
+    ]
+    for required in (
+        "--db-path",
+        "--spool-dir",
+        "--producer-manifest-path",
+        "--credential-path",
+        "--upload-status-dir",
+        "--runtime-status-path",
+        "--log-path",
+        "--operator-pause-path",
+        "--min-free-bytes",
+        "--max-active-queue-count",
+        "--max-active-queue-age-seconds",
+        "--require-runtime-lease-before-scan",
+        "--scan-source-dir",
+        "--source-glob",
+        "--min-source-file-age-seconds",
+        "--drain-after-scan",
+    ):
+        assert required in native_apply
+    assert "Container_Audit_DirectSync_Relay.exe" in native_apply
+    assert "Write-AtomicUtf8JsonFile $ReportPath $report" in native_apply
+    assert native_apply.index("$report.status = 'APPLYING'") < native_apply.index(
+        "Write-AtomicFileBytes $launcherPath $wrapperBytes"
+    ) < native_apply.index("Register-ScheduledTask `")
+    assert "Start-ScheduledTask" not in native_apply
+    assert "execution_mode = 'in_process_native_powershell'" in native_apply
+
+    boundary_b = text[text.index("$relayStarted = (Get-Date).ToUniversalTime()") :]
+    assert "Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop" in boundary_b
+    assert "Wait-CurrentRuntimeLease $relayStarted $DirectSyncRoot $authorizedManifestHash" in boundary_b
+    assert 'lease.status -ceq "ACTIVE"' in text
+    assert "lease.server_grant_accepted" in text
+    assert "lease.runtime_instance_id" in text
+    assert "lease.lease_id" in text
+
+
+def test_native_manifest_hash_matches_python_and_rejects_duplicate_keys(tmp_path):
+    payload = {
+        "z": [True, None, 7, "quote=\" slash=\\ newline=\n"],
+        "a": {
+            "format": "<source_host_id>/<producer_role>",
+            "unicode": "e\u0301 한글 😀",
+        },
+    }
+    source = tmp_path / "manifest.json"
+    source.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    duplicate = tmp_path / "duplicate.json"
+    duplicate.write_text('{"a":1,"\\u0061":2}\n', encoding="utf-8")
+    source_ps = str(source).replace("'", "''")
+    duplicate_ps = str(duplicate).replace("'", "''")
+    body = (
+        f"try{{[void](Read-BoundedJson '{duplicate_ps}' 'duplicate fixture');"
+        "Write-Error 'duplicate key was accepted';exit 61}"
+        "catch{if($_.Exception.Message -notlike '*duplicate JSON key*'){Write-Error $_;exit 62}};"
+        f"$payload=Read-BoundedJson '{source_ps}' 'canonical fixture';"
+        "$hash=Get-CanonicalJsonSha256 $payload;[Console]::Out.Write($hash);exit 0"
+    )
+    completed = _run_installer_functions(
+        [
+            "Read-BoundedJson",
+            "ConvertTo-PythonJsonString",
+            "ConvertTo-PythonCanonicalJson",
+            "Assert-JsonHasNoDuplicateObjectKeys",
+            "Get-CanonicalJsonSha256",
+        ],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.strip() == manifest_hash(payload)
+
+
+def test_native_public_endpoint_policy_rejects_local_and_private_addresses():
+    body = (
+        "$blocked=@("
+        "'https://127.0.0.1/api/producer-ingest/v1/source-file',"
+        "'https://10.0.0.7/api/producer-ingest/v1/source-file',"
+        "'https://[::1]/api/producer-ingest/v1/source-file');"
+        "foreach($endpoint in $blocked){try{Assert-ContainerAuditPublicEndpoint $endpoint;exit 81}catch{}};"
+        "Assert-ContainerAuditPublicEndpoint 'https://8.8.8.8/api/producer-ingest/v1/source-file';exit 0"
+    )
+    completed = _run_installer_functions(
+        [
+            "Test-ContainerAuditUnsafeEndpointAddress",
+            "Assert-ContainerAuditPublicEndpoint",
+        ],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_shared_owned_task_removal_executes_in_process_and_reports_transitions(tmp_path):
+    report_path = tmp_path / "install-report.json"
+    report_ps = str(report_path).replace("'", "''")
+    body = (
+        "$script:removed=$false;$script:stopCalls=0;$script:statuses=@();"
+        "function Get-OwnedScheduledTaskState{param($Name,$ExpectedLauncherPath)"
+        "[ordered]@{status='OWNED';task_name=$Name}};"
+        "function Stop-ScheduledTask{[CmdletBinding()]param([string]$TaskName)"
+        "$script:stopCalls+=1};"
+        "function Unregister-ScheduledTask{[CmdletBinding(SupportsShouldProcess=$true)]param([string]$TaskName)"
+        "$script:removed=$true};"
+        "function Get-ScheduledTask{[CmdletBinding()]param([string]$TaskName)"
+        "if($script:removed){return @()};return [pscustomobject]@{TaskName=$TaskName}};"
+        "function Write-AtomicUtf8JsonFile{param($Path,$Payload)"
+        "$script:statuses+=@([string]$Payload.status);"
+        "$json=$Payload|ConvertTo-Json -Depth 20;"
+        "[IO.File]::WriteAllText($Path,$json,(New-Object System.Text.UTF8Encoding($false)))};"
+        f"$result=Remove-OwnedScheduledTask 'direct-sync-relay-container-audit' "
+        f"'C:\\ProgramData\\KMTech\\DirectSync\\container_audit\\bin\\direct-sync-relay-container-audit.cmd' "
+        f"'C:\\KMTech\\Apps\\Container_Audit\\current' "
+        f"'C:\\ProgramData\\KMTech\\DirectSync\\container_audit' '{report_ps}';"
+        "if($result.status -cne 'ABSENT' -or -not $script:removed -or $script:stopCalls -ne 1){exit 71};"
+        "if(($script:statuses -join ',') -cne 'APPLYING,PASS'){exit 72};exit 0"
+    )
+    completed = _run_installer_functions(["Remove-OwnedScheduledTask"], body)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "PASS"
+    assert report["scheduled_task_delete"]["postcondition"] == "ABSENT"
+    assert report["execution_mode"] == "in_process_native_powershell"
+    assert report["installer_process_id"] > 0
 
 
 def test_nonproduction_server_and_test_identity_override_is_documented():
