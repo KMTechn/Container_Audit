@@ -21,7 +21,9 @@ from tools.verify_frozen_release_artifact import (
 
 ROOT = Path(__file__).resolve().parents[1]
 TAG = "v2.0.79"
-CONTRACT_SHA256 = "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
+CONTRACT_SHA256 = json.loads(
+    (ROOT / "contract.lock.json").read_text(encoding="utf-8")
+)["contract_bundle_sha256"]
 WINDOWS_POWERSHELL_IDENTITY = {
     "executable": r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
     "system_directory": r"C:\Windows\System32",

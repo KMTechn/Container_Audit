@@ -266,6 +266,17 @@ receipt exists; the partial candidate is not qualified. Never delete, recreate,
 retarget, repair, publish, retry, or reuse that tag or candidate; the successor
 is `v2.0.79`.
 
+`v2.0.84` is permanently quarantined with **no artifact**. Its annotated tag
+object `e13b9b84559abb977e752c343670f0d1388e9abb`, preserved only in the
+BUILD-10 isolated bare mirror and clones, peels to
+`653736a5b22ea90d200d562d8227554fd6e5af35`. The one exact-SHA full-CI run
+failed 15 verifier-fixture cases because the fixture copied the regenerated
+contract lock while retaining its prior digest expectation. The official
+builder and frozen-artifact verifier were not invoked, and no candidate root,
+ZIP, checksum, identity, or qualification receipt exists. Never delete,
+recreate, move, retarget, publish, retry, or reuse that tag or version; the
+successor is `v2.0.85`.
+
 ### Supported pre-push isolated candidate build
 
 Phase 8.3 requires the FINAL intended annotated tag object before any release-mode identity or build. Artifact hashes therefore do not belong in the tag message. Prepare an isolated local bare mirror, make the exact candidate commit its `refs/heads/main`, create the intended tag there exactly once, then clone that mirror for the build. The canonical LF-terminated tag message is only:
