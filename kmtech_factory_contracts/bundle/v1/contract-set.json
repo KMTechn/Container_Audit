@@ -15,13 +15,13 @@
     },
     {
       "path": "compatibility/installer-field-layout.json",
-      "sha256": "206ef11c3bd3bb8acc019a389f371b9a902ac47d49e8587ce6e197267a189b0c",
-      "size": 2928
+      "sha256": "3047594b7bc7a016f2055edd2e92c046b549f99d91dfbe578123c17ba18bc713",
+      "size": 2940
     },
     {
       "path": "compatibility/resource-namespaces.json",
-      "sha256": "55b63494d860aa9c0ececfa39bce03b1a65ddb3d9b67f3534f348e8d6783aa79",
-      "size": 5691
+      "sha256": "b3d8cca5383f128bdd20bb065c0156cf35a52de12b535d2596b86e5600651c29",
+      "size": 5703
     },
     {
       "path": "python/bootstrap-central-ng-hold.json",
@@ -100,8 +100,8 @@
     },
     {
       "path": "schemas/installer-field-layout.schema.json",
-      "sha256": "8a1cb87888e641ade6c0ea9ad504679817a0fd65081aca82efa923fa6e68e4ac",
-      "size": 1649
+      "sha256": "58da6949a133ff3672a7463d225bf5dc9b9c976a3500fe2922e133a53e1687c5",
+      "size": 1870
     },
     {
       "path": "schemas/installer-plan.schema.json",

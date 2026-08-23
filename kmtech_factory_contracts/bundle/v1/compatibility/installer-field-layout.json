@@ -12,7 +12,7 @@
       "install_root": "C:/KMTech/Apps/Container_Audit/current",
       "state_db": "C:/ProgramData/KMTech/DirectSync/container_audit/queue/direct_sync_relay.sqlite3",
       "task_name": "direct-sync-relay-container-audit",
-      "task_action": "wscript.exe //B //NoLogo C:/ProgramData/KMTech/DirectSync/container_audit/bin/direct-sync-relay-container-audit.vbs"
+      "task_action": "C:/Windows/System32/cmd.exe /d /q /c C:/ProgramData/KMTech/DirectSync/container_audit/bin/direct-sync-relay-container-audit.cmd"
     },
     {
       "app_id": "defect_inspection",

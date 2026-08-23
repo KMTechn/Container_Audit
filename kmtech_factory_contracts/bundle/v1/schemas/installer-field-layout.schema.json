@@ -25,7 +25,12 @@
           "install_root": {"type": "string", "pattern": "^C:/KMTech/Apps/.+/current$"},
           "state_db": {"type": "string", "pattern": "^C:/ProgramData/"},
           "task_name": {"type": "string", "minLength": 1},
-          "task_action": {"type": "string", "pattern": "^wscript\\.exe //B //NoLogo .+\\.vbs$"}
+          "task_action": {
+            "oneOf": [
+              {"const": "C:/Windows/System32/cmd.exe /d /q /c C:/ProgramData/KMTech/DirectSync/container_audit/bin/direct-sync-relay-container-audit.cmd"},
+              {"type": "string", "pattern": "^wscript\\.exe //B //NoLogo .+\\.vbs$"}
+            ]
+          }
         }
       }
     }
