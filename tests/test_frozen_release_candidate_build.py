@@ -121,7 +121,6 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         '"Container_Audit.spec"',
         '"Container_Audit_DirectSync_Relay"',
         '"Container_Audit_DirectSync_Install"',
-        '"Container_Audit_Worker_PC_Register"',
         '"Container_Audit_Qualification_Authority"',
         '"Container_Audit_Protected_Admin_Install"',
         '"KMTech_Logistics_Profile_Install"',
@@ -140,6 +139,7 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         "main_exe_sha256 = $mainExeSha256",
     ):
         assert marker in script
+    assert '"Container_Audit_Worker_PC_Register"' not in script
     assert "gh release create" not in script
     assert "gh release upload" not in script
     assert "git push" not in script

@@ -327,7 +327,6 @@ try {
     $oneFileTools = @(
         @("Container_Audit_DirectSync_Relay", "tools/direct_sync_relay_runner.py"),
         @("Container_Audit_DirectSync_Install", "tools/direct_sync_relay_install_pack.py"),
-        @("Container_Audit_Worker_PC_Register", "tools/register_container_audit_worker_pc.py"),
         @("Container_Audit_Qualification_Authority", "tools/isolated_qualification_authority.py"),
         @("Container_Audit_Protected_Admin_Install", "tools/install_protected_admin.py"),
         @("KMTech_Logistics_Profile_Install", "tools/install_logistics_runtime_profile.py"),

@@ -604,7 +604,6 @@ def test_update_service_rejects_archive_missing_required_files(tmp_path):
         "Container_Audit/tools/register_container_audit_worker_pc.py",
         "Container_Audit/Container_Audit_DirectSync_Install.exe",
         "Container_Audit/Container_Audit_DirectSync_Relay.exe",
-        "Container_Audit/Container_Audit_Worker_PC_Register.exe",
         "Container_Audit/direct_sync_runtime.py",
         "Container_Audit/storage_policy.py",
         "Container_Audit/storage_utils.py",
@@ -617,6 +616,13 @@ def test_update_service_rejects_archive_missing_runtime_assets_or_modules(tmp_pa
 
     with pytest.raises(ValueError, match="필수 파일"):
         update_service.safe_extract_update_zip(zip_path, tmp_path / "extracted")
+
+
+def test_update_archive_contract_does_not_require_registration_child_executable():
+    assert (
+        "Container_Audit/Container_Audit_Worker_PC_Register.exe"
+        not in update_service.REQUIRED_UPDATE_ARCHIVE_FILES
+    )
 
 
 @pytest.mark.parametrize(

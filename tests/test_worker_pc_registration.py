@@ -40,7 +40,7 @@ def _catalog_container_audit_raw_event_names():
 
 
 def test_worker_pc_registration_frozen_default_app_root_uses_executable_directory(tmp_path, monkeypatch):
-    frozen_exe = tmp_path / "release" / "Container_Audit_Worker_PC_Register.exe"
+    frozen_exe = tmp_path / "release" / "Container_Audit_DirectSync_Install.exe"
     frozen_exe.parent.mkdir()
     frozen_exe.write_bytes(b"exe")
     monkeypatch.setattr(registration.sys, "frozen", True, raising=False)

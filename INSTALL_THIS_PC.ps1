@@ -757,6 +757,19 @@ function Remove-ExactOwnedTree([string]$Path, [string]$Purpose) {
     return [ordered]@{ status = "ABSENT"; path = $Path }
 }
 
+function Remove-OwnedCurrentApplicationFootprint(
+    [string]$InstallRoot,
+    [string]$ExpectedInstallRoot
+) {
+    $ownedInstallRoot = Assert-OwnedTree `
+        $InstallRoot `
+        $ExpectedInstallRoot `
+        "Container_Audit application root"
+    Assert-NoOwnedProcess @("Container_Audit", "Container_Audit_DirectSync_Relay")
+    [void](Set-ProcessWorkingDirectoryOutsideOwnedTree $ownedInstallRoot)
+    return Remove-ExactOwnedTree $ownedInstallRoot "Container_Audit application root"
+}
+
 function Initialize-CanonicalApplicationRoot(
     [string]$SourceRoot,
     [string]$InstallRoot,
@@ -928,7 +941,6 @@ $requiredReleaseNames = @(
     "Container_Audit.exe",
     "Container_Audit_DirectSync_Install.exe",
     "Container_Audit_DirectSync_Relay.exe",
-    "Container_Audit_Worker_PC_Register.exe",
     "Container_Audit_Qualification_Authority.exe"
 )
 foreach ($requiredName in $requiredReleaseNames) {
@@ -975,9 +987,8 @@ if (
 $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
 $runnerExe = Join-Path $packageRoot "Container_Audit_DirectSync_Relay.exe"
-$registrationExe = Join-Path $packageRoot "Container_Audit_Worker_PC_Register.exe"
 $qualificationAuthorityExe = Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe"
-foreach ($required in @($appExe, $installExe, $runnerExe, $registrationExe, $qualificationAuthorityExe)) {
+foreach ($required in @($appExe, $installExe, $runnerExe, $qualificationAuthorityExe)) {
     if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
         throw "Release package is incomplete. Missing: $required"
     }
@@ -1156,7 +1167,9 @@ if ($Uninstall.IsPresent) {
             $DirectSyncRoot `
             $installReportPath)
         [void](Remove-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot)
+        [void](Remove-OwnedCurrentApplicationFootprint $actualInstallRoot $expectedInstallRoot)
         Write-Output "uninstall_status=PASS_DATA_PRESERVED"
+        Write-Output "application_root_status=ABSENT"
         Write-Output "scheduled_task_status=ABSENT"
         Write-Output "qualification_authority_task_status=ABSENT"
         Write-Output "qualification_authority_process_status=ABSENT"
@@ -1419,7 +1432,7 @@ if (-not $reuseExistingIdentity) {
     if (-not [string]::IsNullOrWhiteSpace($SourceHostId)) {
         $registrationArguments += @("--source-host-id", $SourceHostId)
     }
-    & $registrationExe @registrationArguments
+    & $installExe --register-worker-pc @registrationArguments
     if ($LASTEXITCODE -ne 0) {
         throw "Container_Audit self-enrollment failed. Report: $registrationReportPath"
     }
@@ -1448,7 +1461,7 @@ if ([string]::IsNullOrWhiteSpace($authorizedManifestHash)) {
     throw "Container_Audit registration report omitted the authorized manifest hash."
 }
 if ($reuseExistingIdentity) {
-    & $registrationExe `
+    & $installExe --register-worker-pc `
         --manifest-path $manifestPath `
         --verify-manifest-hash $authorizedManifestHash
     if ($LASTEXITCODE -ne 0) {

@@ -99,7 +99,6 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/tools/check_logistics_runtime_profile.py",
         "Container_Audit/Container_Audit_DirectSync_Install.exe",
         "Container_Audit/Container_Audit_DirectSync_Relay.exe",
-        "Container_Audit/Container_Audit_Worker_PC_Register.exe",
         "Container_Audit/Container_Audit_Qualification_Authority.exe",
         "Container_Audit/Container_Audit_Protected_Admin_Install.exe",
         "Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1",

@@ -38,6 +38,14 @@ baseline. The installer must not seed the per-user cache, copy the bundled
 catalog into it, weaken trusted-origin or authentication checks, or claim
 catalog success from an elevated install.
 
+Worker-PC registration on the public install path is hosted by the already
+required `Container_Audit_DirectSync_Install.exe` entrypoint. Its
+`--register-worker-pc` dispatch calls the registration module in-process and
+forwards the existing registration arguments unchanged; a standalone
+`Container_Audit_Worker_PC_Register.exe` must not be built, shipped, required,
+or launched. The server authorization, machine credential, TLS, routing,
+manifest-hash, and registration-report gates remain unchanged.
+
 The supported operator entry point is exactly the all-users Start Menu shortcut
 `CommonPrograms\KMTech\이적 검사 시스템.lnk`. Its target and icon are
 `C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe`, its working
@@ -69,16 +77,19 @@ uninstall removes the owned task and process while preserving this data;
 explicit pristine rollback removes the task first and then removes the entire
 app-owned DirectSync tree under the same strict guards as production state.
 
-Plain deconfiguration is deliberately non-destructive:
+Plain uninstall removes the replaceable application footprint while preserving
+runtime and business state:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
 ```
 
-It removes only the exact owned tasks and shortcut, preserves application,
-event, queue, catalog, profile, credential, and update state, and reports
-`uninstall_status=PASS_DATA_PRESERVED`. It is not pristine rollback and must
-never print `rollback_status=PASS`.
+It removes the exact owned tasks, shortcut, and
+`C:\KMTech\Apps\Container_Audit\current` tree. It preserves event, queue,
+catalog, profile, credential, update-backup, update-evidence, and unrelated
+sibling state, and reports `uninstall_status=PASS_DATA_PRESERVED` plus
+`application_root_status=ABSENT`. It is not pristine rollback and must never
+print `rollback_status=PASS`.
 
 Qualification-only permanent rollback requires all three explicit inputs:
 
@@ -276,6 +287,18 @@ builder and frozen-artifact verifier were not invoked, and no candidate root,
 ZIP, checksum, identity, or qualification receipt exists. Never delete,
 recreate, move, retarget, publish, retry, or reuse that tag or version; the
 successor is `v2.0.85`.
+
+`v2.0.85` is permanently quarantined. Commit
+`39ddc2500234d24b1924819673eb6e195a37fa30` has tree
+`af2a231739f9779b3d1239c7f45a76361d2bd8a8`; its exact candidate ZIP is
+126468142 bytes with SHA-256
+`fe70c4bcc868e1fd56b832ef8c6e73a2e4a7769601c6ff813a3f7b51480a902c`.
+The charged Sandbox-13 run failed as PRODUCT: Windows Application Control
+blocked the public installer's packaged
+`Container_Audit_Worker_PC_Register.exe`, and the exact public uninstall then
+returned while leaving `C:\KMTech\Apps\Container_Audit\current` present. Never
+alter, rebuild, retag, publish, retry, or reuse those bytes; the successor is
+`v2.0.86`.
 
 ### Supported pre-push isolated candidate build
 

@@ -120,6 +120,9 @@ def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     assert "Producer identity seed file does not exist." in text
     assert "--verify-manifest-hash" in text
     assert "Existing producer manifest differs from its verified registration report." in text
+    assert text.count("& $installExe --register-worker-pc") == 2
+    assert "$registrationExe" not in text
+    assert "Container_Audit_Worker_PC_Register.exe" not in text
     assert "Get-FileHash" not in text
     assert "--enrollment-token `" not in text
     assert "machine-scope DPAPI" in text
@@ -408,6 +411,7 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
     assert "Destructive rollback requires -ConfirmPermanentContainerAuditDataRemoval." in text
     assert "Destructive rollback requires an external -RollbackReportPath." in text
     assert "uninstall_status=PASS_DATA_PRESERVED" in text
+    assert "application_root_status=ABSENT" in text
     assert "data_preserved=true" in text
     assert "install_status=UNINSTALLED" not in text
     assert "rollback_status=PASS" in text
@@ -415,6 +419,11 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
     assert 'status = if ($remaining.Count -eq 0) { "PASS" } else { "FAIL" }' in text
     assert "contains_credential_content = $false" in text
     assert "[Environment]::CurrentDirectory = $safePath" in text
+    uninstall_start = text.index("if ($Uninstall.IsPresent)")
+    plain_start = text.index("if (-not $PurgeContainerAuditState.IsPresent)", uninstall_start)
+    plain_end = text.index("$externalReportPath = Assert-ExternalRollbackReportPath", plain_start)
+    plain_uninstall = text[plain_start:plain_end]
+    assert "Remove-OwnedCurrentApplicationFootprint $actualInstallRoot $expectedInstallRoot" in plain_uninstall
 
     inventory = text[text.index("$rollbackInventory = @(") : text.index("if ($DryRun.IsPresent)")]
     ordered_markers = [
@@ -451,6 +460,56 @@ def test_package_installer_has_honest_uninstall_and_confirmed_pristine_rollback(
     ]
     apply_positions = [apply_block.index(marker) for marker in apply_markers]
     assert apply_positions == sorted(apply_positions)
+
+
+def test_plain_uninstall_removes_only_current_application_footprint(tmp_path):
+    application_parent = tmp_path / "application" / "Container_Audit"
+    application_root = application_parent / "current"
+    update_backups = application_parent / ".current.update-backups"
+    unrelated_sibling = application_parent / "unrelated-sibling"
+    application_root.mkdir(parents=True)
+    update_backups.mkdir()
+    unrelated_sibling.mkdir()
+    (application_root / "Container_Audit.exe").write_bytes(b"owned application bytes")
+    backup_marker = update_backups / "backup.bin"
+    sibling_marker = unrelated_sibling / "keep.bin"
+    backup_marker.write_bytes(b"preserved update backup")
+    sibling_marker.write_bytes(b"unrelated sibling")
+    escaped_root = str(application_root).replace("'", "''")
+    environment = os.environ.copy()
+    environment["TEMP"] = str(tmp_path / "temp")
+    environment["TMP"] = environment["TEMP"]
+    body = (
+        f"$owned='{escaped_root}';"
+        "if(-not (Test-SamePath ([Environment]::CurrentDirectory) $owned)){"
+        "Write-Error 'process did not start inside owned root';exit 41};"
+        "$result=Remove-OwnedCurrentApplicationFootprint $owned $owned;"
+        "if($result.status -cne 'ABSENT'){Write-Error 'owned root was not removed';exit 42};"
+        "exit 0"
+    )
+
+    result = _run_installer_functions(
+        [
+            "Test-SamePath",
+            "Get-StrictFullPath",
+            "Assert-ExactCanonicalPath",
+            "Test-PathWithin",
+            "Set-ProcessWorkingDirectoryOutsideOwnedTree",
+            "Assert-NoReparsePoint",
+            "Assert-OwnedTree",
+            "Assert-NoOwnedProcess",
+            "Remove-ExactOwnedTree",
+            "Remove-OwnedCurrentApplicationFootprint",
+        ],
+        body,
+        cwd=application_root,
+        env=environment,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert not application_root.exists()
+    assert backup_marker.read_bytes() == b"preserved update backup"
+    assert sibling_marker.read_bytes() == b"unrelated sibling"
 
 
 def test_destructive_rollback_releases_process_cwd_before_application_root_delete(tmp_path):

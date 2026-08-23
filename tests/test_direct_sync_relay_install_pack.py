@@ -40,6 +40,54 @@ def find_command(commands, executable):
     raise AssertionError(f"command not found: {executable}")
 
 
+def test_install_host_dispatches_registration_in_process_with_exact_argv(monkeypatch):
+    registration_argv = [
+        "--self-enroll",
+        "--require-machine-credential-bundle",
+        "--manifest-path",
+        "producer-manifest.json",
+    ]
+    observed = {}
+
+    def fake_registration_main(argv):
+        observed["pid"] = os.getpid()
+        observed["argv"] = argv
+        return 23
+
+    monkeypatch.setattr(install_pack.worker_pc_registration, "main", fake_registration_main)
+
+    result = install_pack.main(["--register-worker-pc", *registration_argv])
+
+    assert result == 23
+    assert observed == {"pid": os.getpid(), "argv": registration_argv}
+
+
+def test_install_host_executes_registration_manifest_verification(tmp_path, capsys):
+    manifest_path = tmp_path / "producer_manifest.json"
+    manifest = {
+        "pc_identity": {"source_host_id": "hosted-registration-fixture"},
+        "apps": ["ContainerAudit"],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    canonical_hash = direct_sync_push.manifest_hash(manifest)
+
+    result = install_pack.main(
+        [
+            "--register-worker-pc",
+            "--manifest-path",
+            str(manifest_path),
+            "--verify-manifest-hash",
+            canonical_hash,
+        ]
+    )
+
+    assert result == 0
+    assert capsys.readouterr().out.strip() == "manifest_hash_verification=PASS"
+
+
 def test_install_pack_report_write_uses_unique_atomic_temp_paths(tmp_path, monkeypatch):
     target = tmp_path / "install-report.json"
     observed = []

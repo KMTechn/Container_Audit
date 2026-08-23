@@ -4,11 +4,11 @@ from pathlib import Path
 import direct_sync_auto_bootstrap as bootstrap
 
 
-def test_registration_command_prefers_bundled_register_exe(tmp_path):
+def test_registration_command_uses_bundled_install_host(tmp_path):
     app_root = tmp_path / "app"
     app_root.mkdir()
-    register_exe = app_root / "Container_Audit_Worker_PC_Register.exe"
-    register_exe.write_bytes(b"exe")
+    install_exe = app_root / "Container_Audit_DirectSync_Install.exe"
+    install_exe.write_bytes(b"exe")
     direct_sync_root = tmp_path / "data" / "direct_sync"
 
     command = bootstrap.build_registration_command(
@@ -17,11 +17,28 @@ def test_registration_command_prefers_bundled_register_exe(tmp_path):
         server_base_url="https://worker.example.invalid",
     )
 
-    assert command[0] == str(register_exe.resolve())
+    assert command[0] == str(install_exe.resolve())
+    assert command[1] == "--register-worker-pc"
     assert "--self-enroll" in command
     assert command[command.index("--endpoint-url") + 1] == "https://worker.example.invalid/api/producer-ingest/v1/source-file"
     assert command[command.index("--manifest-path") + 1] == str((direct_sync_root / "producer_manifest.json").resolve())
     assert command[command.index("--credential-path") + 1] == str((direct_sync_root / "credential.json").resolve())
+
+
+def test_registration_command_falls_back_to_install_host_script(tmp_path):
+    app_root = tmp_path / "app"
+    tools_dir = app_root / "tools"
+    tools_dir.mkdir(parents=True)
+    install_script = tools_dir / "direct_sync_relay_install_pack.py"
+    install_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
+
+    command = bootstrap.build_registration_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "data" / "direct_sync",
+    )
+
+    assert Path(command[1]) == install_script.resolve()
+    assert command[2] == "--register-worker-pc"
 
 
 def test_install_command_prefers_bundled_install_exe(tmp_path):

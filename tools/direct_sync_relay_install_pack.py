@@ -35,6 +35,7 @@ from storage_policy import (  # noqa: E402
     ensure_container_audit_storage_dirs,
     is_legacy_syncthing_path,
 )
+from tools import register_container_audit_worker_pc as worker_pc_registration  # noqa: E402
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
@@ -1208,6 +1209,8 @@ def _scheduled_task_delete_already_absent(command_result: dict) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv[:1] == ["--register-worker-pc"]:
+        return worker_pc_registration.main(raw_argv[1:])
     parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay scheduled-task install pack")
     parser.add_argument("--app-root", default=_default_app_root())
     parser.add_argument("--python-exe", default=sys.executable)

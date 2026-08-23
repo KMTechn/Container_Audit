@@ -21,7 +21,6 @@ NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
 RUNNER_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
-REGISTER_EXE_NAME = "Container_Audit_Worker_PC_Register.exe"
 
 _STARTED_ROOTS: set[str] = set()
 
@@ -168,11 +167,12 @@ def build_registration_command(
     selected_report = Path(report_path).expanduser().resolve() if report_path else root / "status" / "worker_pc_registration.json"
     command = _tool_command(
         selected_app_root,
-        REGISTER_EXE_NAME,
-        "register_container_audit_worker_pc.py",
+        INSTALL_EXE_NAME,
+        "direct_sync_relay_install_pack.py",
     )
     if not command:
         return []
+    command.append("--register-worker-pc")
     command.extend(
         [
             "--app-root",
