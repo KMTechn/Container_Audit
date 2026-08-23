@@ -19,7 +19,7 @@ Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "resolve_release_python.ps1")
 . (Join-Path $PSScriptRoot "resolve_windows_powershell.ps1")
 
-$factoryContractSha256 = "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
+$factoryContractSha256 = "a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\/")
 $candidateRoot = [IO.Path]::GetFullPath($OutputRoot)
 $approvedStorageRoot = [IO.Path]::GetFullPath("E:\KMTech").TrimEnd('\') + '\'

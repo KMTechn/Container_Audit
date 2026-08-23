@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -88,6 +89,15 @@ def test_release_requires_exact_title_body_identity_and_quarantined_status():
 
 def test_release_verifier_is_bound_to_tag_source_and_factory_contract():
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
+    builder = FROZEN_BUILDER.read_text(encoding="utf-8")
+    expected_contract_sha256 = (
+        "a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046"
+    )
+    contract_lock = json.loads((ROOT / "contract.lock.json").read_text(encoding="utf-8"))
+    bundle_sha256 = (
+        ROOT / "kmtech_factory_contracts" / "bundle" / "v1" / "bundle.sha256"
+    ).read_text(encoding="ascii").strip()
 
     assert "RELEASE_TAG_OBJECT_SHA" in release
     assert "RELEASE_TAG_COMMIT_SHA" in release
@@ -99,13 +109,21 @@ def test_release_verifier_is_bound_to_tag_source_and_factory_contract():
     assert "--expected-zip-size $env:RELEASE_BODY_ZIP_SIZE" in release
     assert "--expected-main-exe-sha256 $env:RELEASE_BODY_MAIN_EXE_SHA256" in release
     assert "QUALIFIED_ZIP" not in release
-    assert (
-        "FACTORY_CONTRACT_SHA256: "
-        "adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a"
-    ) in release
+    assert f"FACTORY_CONTRACT_SHA256: {expected_contract_sha256}" in release
+    assert release.count(expected_contract_sha256) == 2
+    assert contract.count(expected_contract_sha256) == 2
     assert "--expected-contract-sha256 $env:FACTORY_CONTRACT_SHA256" in release
     assert "frozen-release-verification.json" in release
     assert "GITHUB_STEP_SUMMARY" in release
+
+    assert contract_lock["contract_bundle_sha256"] == expected_contract_sha256
+    assert bundle_sha256 == expected_contract_sha256
+    assert builder.count(
+        f'$factoryContractSha256 = "{expected_contract_sha256}"'
+    ) == 1
+    assert builder.count(
+        '"--expected-contract-sha256", $factoryContractSha256'
+    ) == 2
 
 
 def test_release_records_hosted_ci_factually_without_making_it_a_gate():

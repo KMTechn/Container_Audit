@@ -385,7 +385,7 @@ python tools/verify_frozen_release_artifact.py `
   --expected-tag-object <FINAL_TAG_OBJECT_SHA> `
   --expected-commit <TAG_COMMIT> `
   --expected-tree <TAG_TREE> `
-  --expected-contract-sha256 adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a `
+  --expected-contract-sha256 a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046 `
   --expected-zip-sha256 <RELEASE_BODY_ZIP_SHA256> `
   --expected-zip-size <RELEASE_BODY_ZIP_SIZE> `
   --expected-main-exe-sha256 <RELEASE_BODY_MAIN_EXE_SHA256> `
@@ -408,7 +408,7 @@ Artifact: Container_Audit-v2.0.62.zip
 Artifact-SHA256: <qualified 64 lowercase hex>
 Artifact-Size: <qualified positive decimal bytes>
 Main-EXE-SHA256: <qualified 64 lowercase hex>
-Factory-Contract-SHA256: adaa08684ebb291837327f63f967a4f22650dff72c4c1dc56ce1a9bee6b5404a
+Factory-Contract-SHA256: a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046
 Hosted-CI-Release-Gate: WAIVED_NOT_TESTED
 Status: QUARANTINED_PENDING_FACTORY_QUALIFICATION
 ```
