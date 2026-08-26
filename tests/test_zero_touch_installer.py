@@ -98,6 +98,26 @@ def _machine_bundle():
     }
 
 
+def test_machine_secret_dpapi_loads_dependency_in_clean_powershell():
+    body = (
+        "$loadedBefore=@([AppDomain]::CurrentDomain.GetAssemblies() | "
+        "Where-Object {$_.GetName().Name -ceq 'System.Security'}).Count;"
+        "if($loadedBefore -ne 0){throw 'System.Security was loaded ambiently'};"
+        "$protected=Protect-MachineSecret 'seq174-clean-target';"
+        "if(-not (Test-MachineSecret $protected 'seq174-clean-target')){"
+        "throw 'DPAPI round trip failed'};"
+        "$loadedAfter=@([AppDomain]::CurrentDomain.GetAssemblies() | "
+        "Where-Object {$_.GetName().Name -ceq 'System.Security'}).Count;"
+        "if($loadedAfter -ne 1){throw 'System.Security dependency was not loaded'}"
+    )
+
+    completed = _run_installer_functions(
+        ["Protect-MachineSecret", "Test-MachineSecret"], body
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
 

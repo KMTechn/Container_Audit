@@ -539,6 +539,7 @@ function Get-SafeSecretReferenceName([string]$Value) {
 }
 
 function Protect-MachineSecret([string]$Value, [byte[]]$Entropy = $null) {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
     if ([string]::IsNullOrWhiteSpace($Value)) {
         throw "Machine secret is empty."
     }
@@ -551,6 +552,7 @@ function Protect-MachineSecret([string]$Value, [byte[]]$Entropy = $null) {
 }
 
 function Test-MachineSecret([byte[]]$Protected, [string]$Expected, [byte[]]$Entropy = $null) {
+    Add-Type -AssemblyName System.Security -ErrorAction Stop
     $clear = [System.Security.Cryptography.ProtectedData]::Unprotect(
         $Protected,
         $Entropy,
