@@ -118,6 +118,40 @@ def test_machine_secret_dpapi_loads_dependency_in_clean_powershell():
     assert completed.returncode == 0, completed.stderr
 
 
+def test_atomic_json_profile_roundtrip_preserves_integral_double_hash(tmp_path):
+    profile_path = tmp_path / "container-audit-profile.json"
+    profile_ps = str(profile_path).replace("'", "''")
+    body = (
+        "$values=[ordered]@{"
+        "contract_version='km-logistics-runtime-profile-v1';"
+        "timeout_seconds=[double]10};"
+        f"Write-AtomicUtf8JsonFile '{profile_ps}' $values;"
+        f"$readback=Read-BoundedJson '{profile_ps}' 'machine logistics profile fixture';"
+        "$expected=Get-CanonicalJsonSha256 $values;"
+        "$actual=Get-CanonicalJsonSha256 $readback;"
+        "if($actual -cne $expected){throw 'profile canonical readback differs'};"
+        f"$stored=[IO.File]::ReadAllText('{profile_ps}').Trim();"
+        "if(-not $stored.Contains('\"timeout_seconds\":10.0')){"
+        "throw 'integral double JSON representation was not preserved'}"
+    )
+
+    completed = _run_installer_functions(
+        [
+            "Read-BoundedJson",
+            "ConvertTo-CanonicalJsonValue",
+            "ConvertTo-PythonJsonString",
+            "ConvertTo-PythonCanonicalJson",
+            "Assert-JsonHasNoDuplicateObjectKeys",
+            "Get-CanonicalJsonSha256",
+            "Write-AtomicFileBytes",
+            "Write-AtomicUtf8JsonFile",
+        ],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
     text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
 

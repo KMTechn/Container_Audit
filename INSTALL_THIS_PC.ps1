@@ -503,7 +503,7 @@ function Write-AtomicFileBytes([string]$Path, [byte[]]$Bytes) {
 
 function Write-AtomicUtf8JsonFile([string]$Path, $Payload) {
     $canonical = ConvertTo-CanonicalJsonValue $Payload
-    $json = $canonical | ConvertTo-Json -Depth 100
+    $json = ConvertTo-PythonCanonicalJson $canonical
     $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($json + [System.Environment]::NewLine)
     Write-AtomicFileBytes $Path $bytes
 }
