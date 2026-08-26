@@ -2699,6 +2699,62 @@ function Stop-OwnedQualificationAuthorityProcesses([string]$Executable) {
     throw "Container_Audit qualification authority process removal postcondition failed."
 }
 
+function Get-OwnedApplicationProcesses([string]$InstallRoot) {
+    $ownedRoot = Get-StrictFullPath $InstallRoot "Container_Audit application root"
+    $owned = @()
+    foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+        $executablePath = [string]$process.ExecutablePath
+        if (
+            [string]::IsNullOrWhiteSpace($executablePath) -or
+            -not [System.IO.Path]::IsPathRooted($executablePath)
+        ) {
+            continue
+        }
+        try {
+            $canonicalExecutablePath = [System.IO.Path]::GetFullPath($executablePath)
+            $insideOwnedRoot = Test-PathWithin $canonicalExecutablePath $ownedRoot
+        }
+        catch {
+            continue
+        }
+        if ($insideOwnedRoot) {
+            $owned += $process
+        }
+    }
+    return @($owned)
+}
+
+function Stop-OwnedApplicationProcesses([string]$InstallRoot) {
+    $ownedRoot = Get-StrictFullPath $InstallRoot "Container_Audit application root"
+    foreach ($process in @(Get-OwnedApplicationProcesses $ownedRoot)) {
+        $processId = [uint32]$process.ProcessId
+        $current = @(
+            Get-CimInstance Win32_Process `
+                -Filter "ProcessId=$processId" `
+                -ErrorAction Stop
+        )
+        if ($current.Count -gt 1) {
+            throw "Container_Audit application PID identity is ambiguous."
+        }
+        if ($current.Count -eq 0) {
+            continue
+        }
+        $currentExecutablePath = [string]$current[0].ExecutablePath
+        if (
+            [string]::IsNullOrWhiteSpace($currentExecutablePath) -or
+            -not [System.IO.Path]::IsPathRooted($currentExecutablePath) -or
+            -not (Test-PathWithin $currentExecutablePath $ownedRoot)
+        ) {
+            continue
+        }
+        Stop-Process -Id $processId -Force -ErrorAction Stop
+    }
+    if (@(Get-OwnedApplicationProcesses $ownedRoot).Count -ne 0) {
+        throw "Container_Audit application process removal postcondition failed."
+    }
+    return [ordered]@{ status = "ABSENT"; application_root = $ownedRoot }
+}
+
 function Remove-OwnedQualificationAuthorityTask(
     [string]$Name,
     [string]$Executable,
@@ -2805,7 +2861,7 @@ function Remove-OwnedCurrentApplicationFootprint(
         $InstallRoot `
         $ExpectedInstallRoot `
         "Container_Audit application root"
-    Assert-NoOwnedProcess @("Container_Audit", "Container_Audit_DirectSync_Relay")
+    [void](Stop-OwnedApplicationProcesses $ownedInstallRoot)
     [void](Set-ProcessWorkingDirectoryOutsideOwnedTree $ownedInstallRoot)
     return Remove-ExactOwnedTree $ownedInstallRoot "Container_Audit application root"
 }
@@ -2983,10 +3039,12 @@ $requiredReleaseNames = @(
     "Container_Audit_DirectSync_Relay.exe",
     "Container_Audit_Qualification_Authority.exe"
 )
-foreach ($requiredName in $requiredReleaseNames) {
-    $required = Join-Path $releaseSourceRoot $requiredName
-    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-        throw "Release package is incomplete. Missing: $required"
+if (-not $Uninstall.IsPresent) {
+    foreach ($requiredName in $requiredReleaseNames) {
+        $required = Join-Path $releaseSourceRoot $requiredName
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "Release package is incomplete. Missing: $required"
+        }
     }
 }
 
@@ -3013,9 +3071,11 @@ $localTestOverrideEnabled = (
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq "1"
 )
 $packageRoot = $releaseSourceRoot
-if (
+if ($Uninstall.IsPresent) {
+    $packageRoot = $expectedInstallRoot
+}
+elseif (
     -not $DryRun.IsPresent -and
-    -not $Uninstall.IsPresent -and
     -not $localTestOverrideEnabled -and
     -not (Test-SamePath $releaseSourceRoot $expectedInstallRoot)
 ) {
@@ -3028,9 +3088,11 @@ $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
 $runnerExe = Join-Path $packageRoot "Container_Audit_DirectSync_Relay.exe"
 $qualificationAuthorityExe = Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe"
-foreach ($required in @($appExe, $installExe, $runnerExe, $qualificationAuthorityExe)) {
-    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
-        throw "Release package is incomplete. Missing: $required"
+if (-not $Uninstall.IsPresent) {
+    foreach ($required in @($appExe, $installExe, $runnerExe, $qualificationAuthorityExe)) {
+        if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
+            throw "Release package is incomplete. Missing: $required"
+        }
     }
 }
 
@@ -3195,6 +3257,17 @@ if ($Uninstall.IsPresent) {
     [void](Get-OwnedShortcutState $expectedShortcutPath $appExe $expectedInstallRoot)
 
     if (-not $PurgeContainerAuditState.IsPresent) {
+        $preservedDataPaths = @(
+            $expectedDirectSyncRoot,
+            $expectedLogisticsProfileRoot,
+            $expectedOperatorDataRoot,
+            $expectedOperatorCatalogRoot,
+            $expectedUpdateBackupRoot,
+            $expectedUpdateEvidenceRoot
+        )
+        $preservedDataPathsPresentBeforeUninstall = @(
+            $preservedDataPaths | Where-Object { Test-Path -LiteralPath $_ }
+        )
         [void](Remove-OwnedQualificationAuthorityTask `
             $qualificationAuthorityTaskName `
             $qualificationAuthorityExe `
@@ -3207,8 +3280,13 @@ if ($Uninstall.IsPresent) {
             $installReportPath)
         [void](Remove-OwnedShortcut $expectedShortcutPath $appExe $expectedInstallRoot)
         [void](Remove-OwnedCurrentApplicationFootprint $actualInstallRoot $expectedInstallRoot)
-        Write-Output "uninstall_status=PASS_DATA_PRESERVED"
+        foreach ($preservedDataPath in $preservedDataPathsPresentBeforeUninstall) {
+            if (-not (Test-Path -LiteralPath $preservedDataPath)) {
+                throw "Container_Audit uninstall data-preservation postcondition failed: $preservedDataPath"
+            }
+        }
         Write-Output "application_root_status=ABSENT"
+        Write-Output "application_process_status=ABSENT"
         Write-Output "scheduled_task_status=ABSENT"
         Write-Output "qualification_authority_task_status=ABSENT"
         Write-Output "qualification_authority_process_status=ABSENT"
@@ -3217,6 +3295,7 @@ if ($Uninstall.IsPresent) {
         if (Test-Path -LiteralPath $installReportPath -PathType Leaf) {
             Write-Output "install_report=$installReportPath"
         }
+        Write-Output "uninstall_status=PASS_DATA_PRESERVED"
         exit 0
     }
 

@@ -936,6 +936,8 @@ def test_plain_uninstall_removes_only_current_application_footprint(tmp_path):
         "Write-Error 'process did not start inside owned root';exit 41};"
         "$result=Remove-OwnedCurrentApplicationFootprint $owned $owned;"
         "if($result.status -cne 'ABSENT'){Write-Error 'owned root was not removed';exit 42};"
+        "$repeat=Remove-OwnedCurrentApplicationFootprint $owned $owned;"
+        "if($repeat.status -cne 'ABSENT'){Write-Error 'absent owned root was not idempotent';exit 43};"
         "exit 0"
     )
 
@@ -948,7 +950,8 @@ def test_plain_uninstall_removes_only_current_application_footprint(tmp_path):
             "Set-ProcessWorkingDirectoryOutsideOwnedTree",
             "Assert-NoReparsePoint",
             "Assert-OwnedTree",
-            "Assert-NoOwnedProcess",
+            "Get-OwnedApplicationProcesses",
+            "Stop-OwnedApplicationProcesses",
             "Remove-ExactOwnedTree",
             "Remove-OwnedCurrentApplicationFootprint",
         ],
@@ -961,6 +964,95 @@ def test_plain_uninstall_removes_only_current_application_footprint(tmp_path):
     assert not application_root.exists()
     assert backup_marker.read_bytes() == b"preserved update backup"
     assert sibling_marker.read_bytes() == b"unrelated sibling"
+
+
+def test_plain_uninstall_stops_only_processes_owned_by_current_application_root():
+    body = (
+        "$script:stopped=@();$script:ownedStopped=$false;"
+        "function Get-CimInstance{[CmdletBinding()]param([string]$ClassName,[string]$Filter)"
+        "$owned=[pscustomobject]@{ExecutablePath="
+        "'C:\\KMTech\\Apps\\Container_Audit\\current\\Container_Audit.exe';ProcessId=101};"
+        "$foreign=[pscustomobject]@{ExecutablePath="
+        "'C:\\Unrelated\\Container_Audit.exe';ProcessId=202};"
+        "if($Filter -eq 'ProcessId=101'){if(-not $script:ownedStopped){return $owned};return @()};"
+        "if($Filter -eq 'ProcessId=202'){return $foreign};"
+        "if($script:ownedStopped){return @($foreign)};return @($owned,$foreign)};"
+        "function Stop-Process{[CmdletBinding()]param([uint32]$Id,[switch]$Force)"
+        "$script:stopped+=@($Id);if($Id -eq 101){$script:ownedStopped=$true}};"
+        "$root='C:\\KMTech\\Apps\\Container_Audit\\current';"
+        "$result=Stop-OwnedApplicationProcesses $root;"
+        "if($result.status -cne 'ABSENT'){Write-Error 'owned process postcondition failed';exit 61};"
+        "if(($script:stopped -join ',') -cne '101'){Write-Error 'foreign process was stopped';exit 62};"
+        "exit 0"
+    )
+
+    result = _run_installer_functions(
+        [
+            "Get-StrictFullPath",
+            "Test-PathWithin",
+            "Get-OwnedApplicationProcesses",
+            "Stop-OwnedApplicationProcesses",
+        ],
+        body,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def test_public_plain_uninstall_matches_common_source_contract():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    required_release_start = text.index("$requiredReleaseNames = @(")
+    expected_root_start = text.index('$expectedInstallRoot = "C:\\KMTech\\Apps\\Container_Audit\\current"')
+    required_release_block = text[required_release_start:expected_root_start]
+    package_root_start = text.index("$packageRoot = $releaseSourceRoot")
+    package_root_end = text.index("$reuseExistingIdentity = (", package_root_start)
+    package_root_block = text[package_root_start:package_root_end]
+    uninstall_start = text.index("if ($Uninstall.IsPresent)", text.index("if ($DryRun.IsPresent)"))
+    plain_start = text.index("if (-not $PurgeContainerAuditState.IsPresent)", uninstall_start)
+    plain_end = text.index("$externalReportPath = Assert-ExternalRollbackReportPath", plain_start)
+    plain_uninstall = text[plain_start:plain_end]
+
+    assert "Invoke-SelfElevated $MyInvocation.MyCommand.Path $PSBoundParameters $args" in text
+    assert "if (-not $Uninstall.IsPresent)" in required_release_block
+    assert "if ($Uninstall.IsPresent)" in package_root_block
+    assert "$packageRoot = $expectedInstallRoot" in package_root_block
+    assert "Stop-OwnedApplicationProcesses $ownedInstallRoot" in text
+    assert "Test-PathWithin $currentExecutablePath $ownedRoot" in text
+    assert "Remove-OwnedQualificationAuthorityTask" in plain_uninstall
+    assert "Remove-OwnedScheduledTask" in plain_uninstall
+    assert "Remove-OwnedShortcut" in plain_uninstall
+    assert "Remove-OwnedCurrentApplicationFootprint" in plain_uninstall
+    assert "$preservedDataPathsPresentBeforeUninstall" in plain_uninstall
+    assert "uninstall data-preservation postcondition failed" in plain_uninstall
+    assert 'Write-Output "application_process_status=ABSENT"' in plain_uninstall
+    assert plain_uninstall.rindex('Write-Output "uninstall_status=PASS_DATA_PRESERVED"') > plain_uninstall.rindex(
+        'Write-Output "install_report=$installReportPath"'
+    )
+
+
+def test_public_plain_uninstall_dry_run_is_source_independent():
+    completed = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ROOT / "INSTALL_THIS_PC.ps1"),
+            "-DryRun",
+            "-Uninstall",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert completed.stdout.splitlines() == [
+        "uninstall_status=DRY_RUN_DATA_PRESERVED",
+        "data_preserved=true",
+    ]
 
 
 def test_destructive_rollback_releases_process_cwd_before_application_root_delete(tmp_path):
