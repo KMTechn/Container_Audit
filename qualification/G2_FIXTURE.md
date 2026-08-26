@@ -97,10 +97,10 @@ g2의 로컬 성공 표시는 **ACKED 전용 완료 notice**로 고정한다.
 | `data.atomic` | `true` |
 | `data.receipt_contract_version` | `PHS_WORK_GROUP_TRANSFER_V1` |
 | `data.source_resolution_basis` | `PHS_WORK_GROUP_EXACT_MEMBERSHIP` |
-| `data.item_id`, `data.uom` | `AAA2270730100`, `EA` |
+| `data.item_id`, `data.uom` | `AAA2270730100`, `Pcs` |
 | `data.member_count`, `data.scanned_barcode_count` | `2`, `2` |
 | `data.scanned_barcodes` | 위 두 제품 바코드의 exact set |
-| `data.members`, `data.sealed_members` | `qual-unit-001` ↔ `AAA2270730100-QUAL-SERIAL-001`, `qual-unit-002` ↔ `AAA2270730100-QUAL-SERIAL-002`의 exact mapping |
+| `data.members`, `data.sealed_members` | 두 stage 응답의 런타임 unit ID로 계산한 exact mapping이며, session/group/bundle/input projection 네 면의 unit ID 집합과 membership hash가 모두 일치 |
 | `data.source_bundle_ids`, `data.source_session_ids` | `['QUAL-PHS-SOURCE-001']`, `['QUAL-ITAG-001']` |
 | `data.phs_work_group.group_id`, `.label_id` | `QUAL-PHS-WORK-GROUP-001`, `QUAL-WORK-LABEL-001` |
 | `data.post_seal_exchange_policy` | `BLOCKED_REQUIRES_TWO_BUNDLE_CAS` |
