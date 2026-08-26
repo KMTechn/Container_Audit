@@ -471,6 +471,57 @@ def test_public_installer_has_no_direct_packaged_boundary_a_helper_invocations()
     assert "lease.lease_id" in text
 
 
+def test_native_system_task_persists_only_ca_transport_environment_under_windows_powershell(
+    tmp_path,
+):
+    ca_path = tmp_path / "qualification-ca.pem"
+    ca_path.write_text("qualification-ca-fixture\n", encoding="utf-8")
+    env = os.environ.copy()
+    env["REQUESTS_CA_BUNDLE"] = str(ca_path)
+    env["SSL_CERT_FILE"] = str(ca_path)
+    env["CONTAINER_AUDIT_ENROLLMENT_TOKEN"] = "must-not-be-persisted"
+
+    completed = _run_installer_functions(
+        [
+            "Get-StrictFullPath",
+            "Assert-NoReparsePoint",
+            "Get-ContainerAuditTaskTransportEnvironment",
+        ],
+        "$result=Get-ContainerAuditTaskTransportEnvironment;"
+        "[pscustomobject]@{"
+        "powershell_version=$PSVersionTable.PSVersion.ToString();"
+        "names=@($result.names);"
+        "lines=@($result.lines)"
+        "}|ConvertTo-Json -Compress",
+        env=env,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    result = json.loads(completed.stdout)
+    assert result["powershell_version"].startswith("5.1.")
+    assert result["names"] == ["REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"]
+    assert result["lines"] == [
+        f'set "REQUESTS_CA_BUNDLE={ca_path.resolve()}"',
+        f'set "SSL_CERT_FILE={ca_path.resolve()}"',
+    ]
+    assert "CONTAINER_AUDIT_ENROLLMENT_TOKEN" not in completed.stdout
+    assert "must-not-be-persisted" not in completed.stdout
+
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+    native_apply = text[
+        text.index("function Install-ContainerAuditDirectSyncTask") :
+        text.index("function Test-SamePath")
+    ]
+    capture = native_apply.index(
+        "$taskTransportEnvironment = Get-ContainerAuditTaskTransportEnvironment"
+    )
+    wrapper = native_apply.index("@($taskTransportEnvironment.lines)")
+    runner = native_apply.index("($runnerLine + ' >nul 2>&1')")
+    assert capture < wrapper < runner
+    assert "$report.local_test_task_environment_names" in native_apply
+    assert "$report.local_test_task_environment_persisted" in native_apply
+
+
 def test_native_manifest_hash_matches_python_and_rejects_duplicate_keys(tmp_path):
     payload = {
         "z": [True, None, 7, "quote=\" slash=\\ newline=\n"],

@@ -1636,6 +1636,41 @@ function ConvertTo-ContainerAuditCommandLine([string[]]$Arguments) {
     return (@($Arguments | ForEach-Object { ConvertTo-ElevationArgument ([string]$_) }) -join ' ')
 }
 
+function Get-ContainerAuditTaskTransportEnvironment {
+    $names = New-Object System.Collections.Generic.List[string]
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($environmentName in @('REQUESTS_CA_BUNDLE', 'SSL_CERT_FILE')) {
+        $value = [Environment]::GetEnvironmentVariable($environmentName, 'Process')
+        if ([string]::IsNullOrEmpty($value)) {
+            continue
+        }
+        if (
+            $value.IndexOf([char]0) -ge 0 -or
+            $value.Contains("`r") -or
+            $value.Contains("`n") -or
+            $value.Contains('"') -or
+            $value.Contains('%')
+        ) {
+            throw "$environmentName contains characters unsafe for the scheduled-task wrapper."
+        }
+        $fullPath = Get-StrictFullPath $value "$environmentName certificate bundle"
+        if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
+            throw "$environmentName certificate bundle does not exist."
+        }
+        $item = Get-Item -LiteralPath $fullPath -Force -ErrorAction Stop
+        if ($item.Length -le 0 -or $item.Length -gt 1048576) {
+            throw "$environmentName certificate bundle size is invalid."
+        }
+        Assert-NoReparsePoint $fullPath "$environmentName certificate bundle"
+        [void]$names.Add($environmentName)
+        [void]$lines.Add(('set "{0}={1}"' -f $environmentName, $fullPath))
+    }
+    return [ordered]@{
+        names = $names.ToArray()
+        lines = $lines.ToArray()
+    }
+}
+
 function Install-ContainerAuditDirectSyncTask(
     [string]$AppRoot,
     [string]$ProgramDataRoot,
@@ -1852,6 +1887,9 @@ function Install-ContainerAuditDirectSyncTask(
             isolated_qualification = $isolatedQualification
             isolated_qualification_context_configured = $isolatedQualification
         }
+        $taskTransportEnvironment = Get-ContainerAuditTaskTransportEnvironment
+        $report.local_test_task_environment_names = @($taskTransportEnvironment.names)
+        $report.local_test_task_environment_persisted = ($taskTransportEnvironment.names.Count -gt 0)
 
         $paths = [ordered]@{
             db_path = Join-Path $programDataRootFull 'queue\direct_sync_relay.sqlite3'
@@ -1962,7 +2000,8 @@ function Install-ContainerAuditDirectSyncTask(
             '@echo off',
             'setlocal',
             ('set "TEMP={0}"' -f $paths.runtime_temp_dir),
-            ('set "TMP={0}"' -f $paths.runtime_temp_dir),
+            ('set "TMP={0}"' -f $paths.runtime_temp_dir)
+        ) + @($taskTransportEnvironment.lines) + @(
             ('>{0} echo launcher_status=WRAPPER_STARTED' -f $quotedStatus),
             ('cd /d {0}' -f $quotedWorking),
             'if errorlevel 1 (',
