@@ -28,7 +28,9 @@ def _assert_powershell_ast(path: Path) -> None:
     )
 
 
-def _run_installer_functions(function_names, body, *, cwd=None, env=None):
+def _run_installer_functions(
+    function_names, body, *, cwd=None, env=None, powershell_executable="powershell"
+):
     installer = str(ROOT / "INSTALL_THIS_PC.ps1").replace("'", "''")
     names = ",".join(f"'{name}'" for name in function_names)
     command = (
@@ -44,7 +46,13 @@ def _run_installer_functions(function_names, body, *, cwd=None, env=None):
         + body
     )
     return subprocess.run(
-        ["powershell", "-NoProfile", "-NonInteractive", "-Command", command],
+        [
+            str(powershell_executable),
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
         check=False,
         capture_output=True,
         text=True,
@@ -253,6 +261,77 @@ def test_atomic_json_profile_roundtrip_preserves_integral_double_hash(tmp_path):
     )
 
     assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_atomic_file_bytes_replaces_and_preserves_under_windows_powershell_51(
+    tmp_path,
+):
+    windows_powershell = (
+        Path(os.environ["SystemRoot"])
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    assert windows_powershell.is_file()
+    root = tmp_path / "atomic-file-bytes"
+    root.mkdir()
+    root_ps = str(root).replace("'", "''")
+    body = (
+        "if($PSVersionTable.PSEdition -cne 'Desktop' -or "
+        "$PSVersionTable.PSVersion.Major -ne 5 -or "
+        "$PSVersionTable.PSVersion.Minor -ne 1){"
+        "throw 'focused atomic-file test requires Windows PowerShell 5.1'};"
+        f"$root='{root_ps}';"
+        "function Assert-ExactBytes{param([string]$Path,[string]$Expected)"
+        "$actual=[BitConverter]::ToString([IO.File]::ReadAllBytes($Path));"
+        "if($actual -cne $Expected){throw \"unexpected bytes at ${Path}: $actual\"}};"
+        "$absent=Join-Path $root 'absent.bin';"
+        "Write-AtomicFileBytes $absent ([byte[]](0,1,127,128,255));"
+        "Assert-ExactBytes $absent '00-01-7F-80-FF';"
+        "$existing=Join-Path $root 'existing.bin';"
+        "[IO.File]::WriteAllBytes($existing,[byte[]](16,32,48,64));"
+        "Write-AtomicFileBytes $existing ([byte[]](170,187,204));"
+        "Assert-ExactBytes $existing 'AA-BB-CC';"
+        "$locked=Join-Path $root 'locked.bin';"
+        "[IO.File]::WriteAllBytes($locked,[byte[]](9,8,7,6));"
+        "$handle=[IO.File]::Open($locked,[IO.FileMode]::Open,"
+        "[IO.FileAccess]::ReadWrite,[IO.FileShare]::None);"
+        "$replacementFailed=$false;"
+        "try{try{Write-AtomicFileBytes $locked ([byte[]](1,2,3))}"
+        "catch{$replacementFailed=$true}}finally{$handle.Dispose()};"
+        "if(-not $replacementFailed){throw 'locked destination replacement succeeded'};"
+        "Assert-ExactBytes $locked '09-08-07-06';"
+        "$residue=@(Get-ChildItem -LiteralPath $root -Force | Where-Object {"
+        "$_.Name -like '.*.tmp' -or $_.Name -like '*.bak' -or "
+        "$_.Name -like '*.backup'});"
+        "if($residue.Count -ne 0){"
+        "throw ('atomic-file residue: '+(($residue|ForEach-Object{$_.Name}) -join ','))};"
+        "[ordered]@{psedition=$PSVersionTable.PSEdition;"
+        "powershell_version=$PSVersionTable.PSVersion.ToString();"
+        "absent='00-01-7F-80-FF';existing='AA-BB-CC';"
+        "failed_destination='09-08-07-06';residue_count=$residue.Count}"
+        "|ConvertTo-Json -Compress"
+    )
+
+    completed = _run_installer_functions(
+        ["Write-AtomicFileBytes"],
+        body,
+        cwd=root,
+        powershell_executable=windows_powershell,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    result = json.loads(completed.stdout)
+    assert result == {
+        "psedition": "Desktop",
+        "powershell_version": result["powershell_version"],
+        "absent": "00-01-7F-80-FF",
+        "existing": "AA-BB-CC",
+        "failed_destination": "09-08-07-06",
+        "residue_count": 0,
+    }
+    assert result["powershell_version"].startswith("5.1.")
 
 
 def test_package_installer_uses_tokenless_self_enrollment_and_system_task():

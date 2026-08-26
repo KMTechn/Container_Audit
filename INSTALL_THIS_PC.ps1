@@ -488,7 +488,13 @@ function Write-AtomicFileBytes([string]$Path, [byte[]]$Bytes) {
     try {
         [System.IO.File]::WriteAllBytes($temporary, $Bytes)
         if (Test-Path -LiteralPath $fullPath -PathType Leaf) {
-            [System.IO.File]::Replace($temporary, $fullPath, $null, $true)
+            # Windows PowerShell 5.1 converts a bare $null string argument to String.Empty.
+            [System.IO.File]::Replace(
+                $temporary,
+                $fullPath,
+                [System.Management.Automation.Language.NullString]::Value,
+                $true
+            )
         }
         else {
             [System.IO.File]::Move($temporary, $fullPath)
