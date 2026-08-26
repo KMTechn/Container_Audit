@@ -646,11 +646,18 @@ def test_nonproduction_server_and_test_identity_override_is_documented():
         "[string]$ProducerInstallId",
         "[string]$ProducerId",
         "[string]$SourceHostId",
-        '"--endpoint-url", $endpointUrl',
-        '"--producer-identity-path", $ProducerIdentityPath',
-        '"--producer-install-id", $ProducerInstallId',
-        '"--producer-id", $ProducerId',
-        '"--source-host-id", $SourceHostId',
+        "[void](Invoke-ContainerAuditWorkerPcRegistration `",
+        "$endpointUrl `",
+        "$EnrollmentTokenEnv `",
+        "$ProducerIdentityPath `",
+        "$ProducerInstallId `",
+        "$ProducerId `",
+        "$SourceHostId)",
+        "self_enrollment_requested = $true",
+        "GetEnvironmentVariable($EnrollmentTokenEnv, 'Process')",
+        "Self-enrollment response missing machine credential bundle.",
+        "$report.status = 'SELF_ENROLLMENT_REGISTERED'",
+        "Write-AtomicUtf8JsonFile $ManifestPath $manifest",
     ):
         assert marker in installer
     assert 'os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL"' in bootstrap
