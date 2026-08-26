@@ -116,10 +116,20 @@ def _load_item_catalog_logistics_profile() -> Any | None:
             str(profile.bearer_token or "").strip(),
             str(profile.source_host_id or "").strip(),
             str(profile.device_id or "").strip(),
+            str(profile.base_url or "").strip(),
         )
     ):
         raise ItemCatalogSyncError("central item catalog profile is incomplete")
     return profile
+
+
+def _profile_bound_catalog_urls(base_url: str) -> frozenset[str]:
+    origin = str(base_url or "").rstrip("/")
+    approved = {origin + CATALOG_PATH}
+    parsed = urlsplit(origin)
+    if parsed.scheme == "https" and parsed.port is None and parsed.hostname:
+        approved.add(f"https://{parsed.netloc}:443{CATALOG_PATH}")
+    return frozenset(approved)
 
 
 def _is_trusted_authenticated_catalog_url(url: str, profile: Any | None = None) -> bool:
@@ -136,21 +146,9 @@ def _is_trusted_authenticated_catalog_url(url: str, profile: Any | None = None) 
             and not parsed.query
             and not parsed.fragment
         )
-        if production_trusted:
-            return True
-        if (
-            profile is not None
-            and bool(
-                str(
-                    getattr(
-                        profile, "isolated_qualification_authority_id", ""
-                    )
-                    or ""
-                ).strip()
-            )
-        ):
-            return url == f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
-        return False
+        if profile is not None:
+            return url in _profile_bound_catalog_urls(str(profile.base_url))
+        return production_trusted
     except ValueError:
         return False
 
@@ -474,15 +472,12 @@ def refresh_item_catalog(
         _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.update(
             {_catalog_snapshot_key(cache), _catalog_snapshot_key(last_good)}
         )
-    if (
-        profile is not None
-        and str(
-            getattr(profile, "isolated_qualification_authority_id", "") or ""
-        ).strip()
-    ):
-        effective_url = f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
-    else:
-        effective_url = url or resolve_catalog_url()
+    profile_catalog_url = (
+        f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
+        if profile is not None
+        else ""
+    )
+    effective_url = url or profile_catalog_url or resolve_catalog_url()
     if central_enrolled and not _is_trusted_authenticated_catalog_url(
         effective_url, profile
     ):
