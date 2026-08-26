@@ -53,6 +53,24 @@ def _run_installer_functions(function_names, body, *, cwd=None, env=None):
     )
 
 
+def _scheduled_task_contract_body(settings_expression: str, assertion: str) -> str:
+    return (
+        "function Test-SamePath{param($Left,$Right)"
+        "return ([string]$Left -ceq [string]$Right)};"
+        "function Get-OwnedScheduledTaskState{param($Name,$ExpectedLauncherPath)"
+        "return [ordered]@{status='OWNED';task_name=$Name}};"
+        f"$script:fixtureSettings={settings_expression};"
+        "function Get-ScheduledTask{[CmdletBinding()]param([string]$TaskName)"
+        "return [pscustomobject]@{"
+        "Actions=@([pscustomobject]@{WorkingDirectory='C:\\seq185\\state'});"
+        "Triggers=@([pscustomobject]@{Repetition=[pscustomobject]@{"
+        "Interval='PT1M';Duration='P3650D'}});"
+        "Principal=[pscustomobject]@{LogonType='ServiceAccount';RunLevel='Highest'};"
+        "Settings=$script:fixtureSettings}};"
+        + assertion
+    )
+
+
 def _machine_bundle():
     return {
         "key_id": "container-producer-key-1",
@@ -116,6 +134,91 @@ def test_machine_secret_dpapi_loads_dependency_in_clean_powershell():
     )
 
     assert completed.returncode == 0, completed.stderr
+
+
+def test_scheduled_task_settings_exact_readback_uses_cim_representation():
+    settings = (
+        "New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew "
+        "-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries "
+        "-StartWhenAvailable -Hidden -ExecutionTimeLimit ([TimeSpan]::Zero)"
+    )
+    assertion = (
+        "$result=Assert-ContainerAuditScheduledTaskContract "
+        "'KMTech-ContainerAudit-Seq185-Fixture' 'C:\\seq185\\state\\relay.cmd';"
+        "[Console]::Out.Write(($result|ConvertTo-Json -Compress));exit 0"
+    )
+
+    completed = _run_installer_functions(
+        ["Assert-ContainerAuditScheduledTaskContract"],
+        _scheduled_task_contract_body(settings, assertion),
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    readback = json.loads(completed.stdout)
+    assert readback["status"] == "OWNED_EXACT"
+    assert readback["multiple_instances"] == "IgnoreNew"
+    assert readback["disallow_start_if_on_batteries"] is False
+    assert readback["stop_if_going_on_batteries"] is False
+    assert readback["start_when_available"] is True
+    assert readback["hidden"] is True
+    assert readback["execution_time_limit"] == "PT0S"
+
+
+def test_scheduled_task_settings_failure_names_all_six_mismatches():
+    settings = (
+        "[pscustomobject]@{MultipleInstances='Queue';"
+        "DisallowStartIfOnBatteries=$true;StopIfGoingOnBatteries=$true;"
+        "StartWhenAvailable=$false;Hidden=$false;ExecutionTimeLimit='PT1H'}"
+    )
+    assertion = (
+        "$failure=$null;try{[void](Assert-ContainerAuditScheduledTaskContract "
+        "'KMTech-ContainerAudit-Seq185-Fixture' 'C:\\seq185\\state\\relay.cmd')}"
+        "catch{$failure=$_.Exception.Message};"
+        "if($null -eq $failure){exit 81};[Console]::Out.Write($failure);exit 0"
+    )
+
+    completed = _run_installer_functions(
+        ["Assert-ContainerAuditScheduledTaskContract"],
+        _scheduled_task_contract_body(settings, assertion),
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    message = completed.stdout
+    for detail in (
+        "MultipleInstances expected=IgnoreNew actual=Queue",
+        "DisallowStartIfOnBatteries expected=false actual=true",
+        "StopIfGoingOnBatteries expected=false actual=true",
+        "StartWhenAvailable expected=true actual=false",
+        "Hidden expected=true actual=false",
+        "ExecutionTimeLimit expected=PT0S actual=PT1H",
+    ):
+        assert detail in message
+    assert len(message) <= 1024
+
+
+def test_scheduled_task_settings_failure_value_is_bounded_and_log_safe():
+    settings = (
+        "[pscustomobject]@{MultipleInstances=('Queue'+('X'*200)+\"`nTAIL\");"
+        "DisallowStartIfOnBatteries=$false;StopIfGoingOnBatteries=$false;"
+        "StartWhenAvailable=$true;Hidden=$true;ExecutionTimeLimit='PT0S'}"
+    )
+    assertion = (
+        "$failure=$null;try{[void](Assert-ContainerAuditScheduledTaskContract "
+        "'KMTech-ContainerAudit-Seq185-Fixture' 'C:\\seq185\\state\\relay.cmd')}"
+        "catch{$failure=$_.Exception.Message};"
+        "if($null -eq $failure){exit 82};[Console]::Out.Write($failure);exit 0"
+    )
+
+    completed = _run_installer_functions(
+        ["Assert-ContainerAuditScheduledTaskContract"],
+        _scheduled_task_contract_body(settings, assertion),
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "MultipleInstances expected=IgnoreNew actual=Queue" in completed.stdout
+    assert "TAIL" not in completed.stdout
+    assert "\n" not in completed.stdout
+    assert len(completed.stdout) <= 300
 
 
 def test_atomic_json_profile_roundtrip_preserves_integral_double_hash(tmp_path):

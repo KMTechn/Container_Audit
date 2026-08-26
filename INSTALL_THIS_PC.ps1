@@ -2345,17 +2345,110 @@ function Assert-ContainerAuditScheduledTaskContract([string]$Name, [string]$Expe
         throw "Container_Audit scheduled-task principal differs from the SYSTEM service-account contract."
     }
     $settings = $task.Settings
-    $multipleInstances = [string]$settings.MultipleInstances
-    $executionLimit = [System.Xml.XmlConvert]::ToTimeSpan([string]$settings.ExecutionTimeLimit)
+    $mismatches = New-Object System.Collections.Generic.List[string]
+    $formatSettingValue = {
+        param($Value)
+        if ($null -eq $Value) { return '<absent>' }
+        if ($Value -is [bool]) { return $Value.ToString().ToLowerInvariant() }
+        $text = [regex]::Replace([string]$Value, '[^A-Za-z0-9_.:+-]', '?')
+        if ($text.Length -gt 80) { return $text.Substring(0, 77) + '...' }
+        return $text
+    }
+
+    $multipleInstancesProperty = $settings.PSObject.Properties['MultipleInstances']
+    $multipleInstances = if ($null -eq $multipleInstancesProperty) {
+        $null
+    }
+    else {
+        [string]$multipleInstancesProperty.Value
+    }
     if (
-        @('IgnoreNew', '2') -notcontains $multipleInstances -or
-        -not [bool]$settings.AllowStartIfOnBatteries -or
-        [bool]$settings.StopIfGoingOnBatteries -or
-        -not [bool]$settings.StartWhenAvailable -or
-        -not [bool]$settings.Hidden -or
-        $executionLimit -ne [TimeSpan]::Zero
+        $null -eq $multipleInstancesProperty -or
+        @('IgnoreNew', '2') -notcontains $multipleInstances
     ) {
-        throw "Container_Audit scheduled-task settings differ from the install contract."
+        [void]$mismatches.Add(
+            'MultipleInstances expected=IgnoreNew actual=' + (& $formatSettingValue $multipleInstances)
+        )
+    }
+
+    # New-ScheduledTaskSettingsSet exposes -AllowStartIfOnBatteries, but the
+    # registered task's CIM settings model stores the inverse property.
+    $disallowBatteryStartProperty = $settings.PSObject.Properties['DisallowStartIfOnBatteries']
+    $disallowBatteryStart = if ($null -eq $disallowBatteryStartProperty) {
+        $null
+    }
+    else {
+        [bool]$disallowBatteryStartProperty.Value
+    }
+    if ($null -eq $disallowBatteryStartProperty -or [bool]$disallowBatteryStart) {
+        [void]$mismatches.Add(
+            'DisallowStartIfOnBatteries expected=false actual=' +
+            (& $formatSettingValue $disallowBatteryStart)
+        )
+    }
+
+    $stopOnBatteryProperty = $settings.PSObject.Properties['StopIfGoingOnBatteries']
+    $stopOnBattery = if ($null -eq $stopOnBatteryProperty) {
+        $null
+    }
+    else {
+        [bool]$stopOnBatteryProperty.Value
+    }
+    if ($null -eq $stopOnBatteryProperty -or [bool]$stopOnBattery) {
+        [void]$mismatches.Add(
+            'StopIfGoingOnBatteries expected=false actual=' + (& $formatSettingValue $stopOnBattery)
+        )
+    }
+
+    $startWhenAvailableProperty = $settings.PSObject.Properties['StartWhenAvailable']
+    $startWhenAvailable = if ($null -eq $startWhenAvailableProperty) {
+        $null
+    }
+    else {
+        [bool]$startWhenAvailableProperty.Value
+    }
+    if ($null -eq $startWhenAvailableProperty -or -not [bool]$startWhenAvailable) {
+        [void]$mismatches.Add(
+            'StartWhenAvailable expected=true actual=' + (& $formatSettingValue $startWhenAvailable)
+        )
+    }
+
+    $hiddenProperty = $settings.PSObject.Properties['Hidden']
+    $hidden = if ($null -eq $hiddenProperty) { $null } else { [bool]$hiddenProperty.Value }
+    if ($null -eq $hiddenProperty -or -not [bool]$hidden) {
+        [void]$mismatches.Add(
+            'Hidden expected=true actual=' + (& $formatSettingValue $hidden)
+        )
+    }
+
+    $executionLimitProperty = $settings.PSObject.Properties['ExecutionTimeLimit']
+    $executionLimitText = if ($null -eq $executionLimitProperty) {
+        $null
+    }
+    else {
+        [string]$executionLimitProperty.Value
+    }
+    $executionLimitMatches = $false
+    if ($null -ne $executionLimitProperty) {
+        try {
+            $executionLimit = [System.Xml.XmlConvert]::ToTimeSpan($executionLimitText)
+            $executionLimitMatches = $executionLimit -eq [TimeSpan]::Zero
+        }
+        catch {
+            $executionLimitMatches = $false
+        }
+    }
+    if (-not $executionLimitMatches) {
+        [void]$mismatches.Add(
+            'ExecutionTimeLimit expected=PT0S actual=' + (& $formatSettingValue $executionLimitText)
+        )
+    }
+
+    if ($mismatches.Count -gt 0) {
+        throw (
+            'Container_Audit scheduled-task settings differ from the install contract: ' +
+            ($mismatches -join '; ') + '.'
+        )
     }
     return [ordered]@{
         status = 'OWNED_EXACT'
@@ -2366,9 +2459,11 @@ function Assert-ContainerAuditScheduledTaskContract([string]$Name, [string]$Expe
         logon_type = $logonType
         run_level = $runLevel
         multiple_instances = $multipleInstances
-        start_when_available = [bool]$settings.StartWhenAvailable
-        hidden = [bool]$settings.Hidden
-        execution_time_limit = [string]$settings.ExecutionTimeLimit
+        disallow_start_if_on_batteries = [bool]$disallowBatteryStart
+        stop_if_going_on_batteries = [bool]$stopOnBattery
+        start_when_available = [bool]$startWhenAvailable
+        hidden = [bool]$hidden
+        execution_time_limit = $executionLimitText
     }
 }
 
