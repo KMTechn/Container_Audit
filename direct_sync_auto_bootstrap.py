@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
@@ -266,6 +267,86 @@ def _registration_ready(root: Path) -> bool:
     return False
 
 
+def _install_report_relay_topology(report: dict[str, Any]) -> str:
+    runner_command = report.get("runner_command")
+    bundled = report.get("bundled_relay_executable")
+    if not isinstance(runner_command, list) or not runner_command:
+        return "invalid"
+    bundled = bundled if isinstance(bundled, dict) else {}
+    runner_executable = Path(str(runner_command[0] or "")).name.casefold()
+    bundled_executable = Path(str(bundled.get("path") or "")).name.casefold()
+    mode = str(report.get("relay_execution_mode") or "")
+    if (
+        report.get("use_bundled_relay_executable") is True
+        and mode == "in_process_main_executable"
+        and runner_executable == APPLICATION_EXE_NAME.casefold()
+        and bundled_executable == APPLICATION_EXE_NAME.casefold()
+        and len(runner_command) >= 2
+        and str(runner_command[1]) == DIRECT_SYNC_RELAY_MODE
+        and str(bundled.get("mode") or "") == DIRECT_SYNC_RELAY_MODE
+    ):
+        return "current"
+    retired_name = "Container_Audit_DirectSync_Relay.exe".casefold()
+    if runner_executable == retired_name or bundled_executable == retired_name:
+        return "legacy_helper"
+    return "invalid"
+
+
+def _install_launcher_relay_topology(
+    root: Path,
+    task_name: str,
+    report: dict[str, Any],
+) -> str:
+    expected_launcher = root / "bin" / f"{task_name}.cmd"
+    report_launcher = str(report.get("scheduled_task_launcher_path") or "")
+    report_wrapper = str(report.get("scheduled_task_wrapper_path") or "")
+    try:
+        expected_resolved = expected_launcher.resolve()
+        if not report_launcher or Path(report_launcher).expanduser().resolve() != expected_resolved:
+            return "invalid"
+        if report_wrapper and Path(report_wrapper).expanduser().resolve() != expected_resolved:
+            return "invalid"
+        if not expected_resolved.is_file() or expected_resolved.stat().st_size > 256 * 1024:
+            return "invalid"
+        launcher_text = expected_resolved.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError, ValueError):
+        return "invalid"
+    if "container_audit_directsync_relay.exe" in launcher_text.casefold():
+        return "legacy_helper"
+    runner_command = report.get("runner_command")
+    bundled = report.get("bundled_relay_executable")
+    if not isinstance(runner_command, list) or len(runner_command) < 2:
+        return "invalid"
+    if not isinstance(bundled, dict):
+        return "invalid"
+    try:
+        runner_executable = str(Path(str(runner_command[0])).expanduser().resolve())
+        bundled_executable = str(Path(str(bundled.get("path") or "")).expanduser().resolve())
+    except (OSError, ValueError):
+        return "invalid"
+    folded_launcher = launcher_text.casefold()
+    if (
+        os.path.normcase(runner_executable) == os.path.normcase(bundled_executable)
+        and runner_executable.casefold() in folded_launcher
+        and DIRECT_SYNC_RELAY_MODE in launcher_text
+    ):
+        return "current"
+    return "invalid"
+
+
+def _legacy_install_repair_required(root: Path) -> bool:
+    report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
+    if not report or report.get("status") != "PASS":
+        return False
+    report_topology = _install_report_relay_topology(report)
+    if report_topology == "legacy_helper":
+        return True
+    return bool(
+        report_topology == "current"
+        and _install_launcher_relay_topology(root, DEFAULT_TASK_NAME, report) == "legacy_helper"
+    )
+
+
 def _task_exists(task_name: str) -> bool:
     if os.name != "nt":
         return False
@@ -284,7 +365,12 @@ def _task_exists(task_name: str) -> bool:
 
 def _install_ready(root: Path, task_name: str, scan_source_dir: str | os.PathLike[str]) -> bool:
     report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
-    if report.get("status") != "PASS":
+    if (
+        not report
+        or report.get("status") != "PASS"
+        or _install_report_relay_topology(report) != "current"
+        or _install_launcher_relay_topology(root, task_name, report) != "current"
+    ):
         return False
     field_layout = report.get("field_layout_contract") or {}
     if not (
@@ -416,6 +502,70 @@ def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     }
 
 
+def _ps_single_quote(value: str) -> str:
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def _run_elevated_task_repair(
+    command: list[str],
+    *,
+    task_name: str,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    """Stop the legacy SYSTEM task and re-register it through the current installer."""
+
+    if not command:
+        return {"status": "FAIL", "error_type": "MissingInstallCommand"}
+    argument_line = subprocess.list2cmdline([str(part) for part in command[1:]])
+    elevated_script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            f"$taskName = {_ps_single_quote(task_name)}",
+            "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+            "if ($null -ne $task) {",
+            "    Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null",
+            "    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
+            "}",
+            f"$process = Start-Process -FilePath {_ps_single_quote(command[0])} "
+            f"-ArgumentList {_ps_single_quote(argument_line)} -Wait -PassThru",
+            "if ($process.ExitCode -ne 0) { exit $process.ExitCode }",
+            "Start-ScheduledTask -TaskName $taskName -ErrorAction Stop",
+            "exit 0",
+        ]
+    )
+    elevated_encoded = base64.b64encode(elevated_script.encode("utf-16le")).decode("ascii")
+    outer_script = "\n".join(
+        [
+            "$ErrorActionPreference = 'Stop'",
+            "$powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
+            "$arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', "
+            f"'-EncodedCommand', {_ps_single_quote(elevated_encoded)})",
+            "$process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arguments -Wait -PassThru",
+            "exit $process.ExitCode",
+        ]
+    )
+    outer_encoded = base64.b64encode(outer_script.encode("utf-16le")).decode("ascii")
+    powershell = str(
+        Path(os.environ.get("SystemRoot", r"C:\Windows"))
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    )
+    return _run_command(
+        [
+            powershell,
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            outer_encoded,
+        ],
+        timeout_seconds,
+    )
+
+
 def run_direct_sync_auto_bootstrap(
     *,
     app_root: str | os.PathLike[str],
@@ -430,6 +580,7 @@ def run_direct_sync_auto_bootstrap(
     task_run_password_file: str = "",
     allow_interactive_task_for_local_test: bool = False,
     allow_noncanonical_layout_for_test: bool = False,
+    force_install_repair: bool = False,
 ) -> dict[str, Any]:
     root = Path(direct_sync_root).expanduser().resolve()
     status_path = root / "status" / "container_audit_direct_sync_auto_bootstrap.json"
@@ -499,27 +650,34 @@ def run_direct_sync_auto_bootstrap(
         return report
 
     root.mkdir(parents=True, exist_ok=True)
-    if _registration_ready(root) and _install_ready(root, task_name, scan_source_dir) and _task_exists(task_name):
+    registration_ready = _registration_ready(root)
+    if registration_ready and _install_ready(root, task_name, scan_source_dir) and _task_exists(task_name):
         report.update({"status": "READY", "task_start": _start_task(task_name)})
         _write_json(status_path, report)
         return report
 
-    registration_command = build_registration_command(
-        app_root=app_root,
-        direct_sync_root=root,
-        server_base_url=server_base_url,
-    )
-    report["registration_command_redacted"] = registration_command
-    if not registration_command:
-        report.update({"status": "FAIL", "reason": "direct-sync registration helper is missing"})
-        _write_json(status_path, report)
-        return report
-    registration_result = _run_command(registration_command, max(30, timeout_seconds))
-    report["registration_result"] = registration_result
-    if registration_result["status"] != "PASS":
-        report["status"] = "FAIL"
-        _write_json(status_path, report)
-        return report
+    if registration_ready:
+        report["registration_result"] = {
+            "status": "SKIPPED",
+            "reason": "existing registration evidence is ready",
+        }
+    else:
+        registration_command = build_registration_command(
+            app_root=app_root,
+            direct_sync_root=root,
+            server_base_url=server_base_url,
+        )
+        report["registration_command_redacted"] = registration_command
+        if not registration_command:
+            report.update({"status": "FAIL", "reason": "direct-sync registration helper is missing"})
+            _write_json(status_path, report)
+            return report
+        registration_result = _run_command(registration_command, max(30, timeout_seconds))
+        report["registration_result"] = registration_result
+        if registration_result["status"] != "PASS":
+            report["status"] = "FAIL"
+            _write_json(status_path, report)
+            return report
 
     install_command = build_install_command(
         app_root=app_root,
@@ -538,10 +696,26 @@ def run_direct_sync_auto_bootstrap(
         report.update({"status": "FAIL", "reason": "direct-sync install helper is missing"})
         _write_json(status_path, report)
         return report
-    install_result = _run_command(install_command, max(30, timeout_seconds))
+    if force_install_repair and os.name == "nt" and getattr(sys, "frozen", False):
+        install_result = _run_elevated_task_repair(
+            install_command,
+            task_name=task_name,
+            timeout_seconds=max(30, timeout_seconds),
+        )
+    else:
+        install_result = _run_command(install_command, max(30, timeout_seconds))
     report["install_result"] = install_result
     report["status"] = "PASS" if install_result["status"] == "PASS" else "FAIL"
-    if report["status"] == "PASS":
+    if report["status"] == "PASS" and force_install_repair:
+        if not _install_ready(root, task_name, scan_source_dir) or not _task_exists(task_name):
+            report["status"] = "FAIL"
+            report["reason"] = "legacy relay topology repair did not produce a current scheduled-task install"
+        else:
+            report["task_start"] = {
+                "status": "PASS",
+                "reason": "elevated repair re-registered and started the scheduled task",
+            }
+    elif report["status"] == "PASS":
         report["task_start"] = _start_task(task_name)
     _write_json(status_path, report)
     return report
@@ -553,9 +727,14 @@ def start_direct_sync_auto_bootstrap(
     direct_sync_root: str | os.PathLike[str],
     scan_source_dir: str | os.PathLike[str],
 ) -> threading.Thread | None:
-    if not _enabled():
-        return None
     root = Path(direct_sync_root).expanduser().resolve()
+    force_install_repair = bool(
+        os.name == "nt"
+        and getattr(sys, "frozen", False)
+        and _legacy_install_repair_required(root)
+    )
+    if not _enabled() and not force_install_repair:
+        return None
     key = str(root)
     if key in _STARTED_ROOTS:
         return None
@@ -595,6 +774,7 @@ def start_direct_sync_auto_bootstrap(
             "task_run_password_file": task_run_password_file,
             "allow_interactive_task_for_local_test": allow_interactive_task_for_local_test,
             "allow_noncanonical_layout_for_test": allow_noncanonical_layout_for_test,
+            "force_install_repair": force_install_repair,
         },
         name="direct-sync-bootstrap-container-audit",
         daemon=True,

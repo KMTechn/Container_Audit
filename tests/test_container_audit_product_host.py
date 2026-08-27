@@ -1,4 +1,7 @@
+import json
 import sys
+
+import pytest
 
 import container_audit_product_host as product_host
 from tools import direct_sync_relay_runner
@@ -41,3 +44,53 @@ def test_windowed_host_supplies_and_restores_output_streams(monkeypatch):
     assert observed == [(True, True, [])]
     assert sys.stdout is None
     assert sys.stderr is None
+
+
+def test_relay_mode_converts_unhandled_exception_to_bounded_durable_diagnostics(
+    monkeypatch, tmp_path
+):
+    runtime_status_path = tmp_path / "status" / "runtime.json"
+    log_path = tmp_path / "logs" / "runtime.jsonl"
+    secret_text = "secret=must-not-be-persisted"
+
+    def fail(_arguments):
+        raise RuntimeError(secret_text)
+
+    monkeypatch.setattr(direct_sync_relay_runner, "main", fail)
+
+    result = product_host.dispatch_product_mode(
+        [
+            product_host.DIRECT_SYNC_RELAY_MODE,
+            "--runtime-status-path",
+            str(runtime_status_path),
+            "--log-path",
+            str(log_path),
+            "--worker-id",
+            "relay-worker",
+        ]
+    )
+
+    assert result == product_host.HOSTED_RELAY_FAILURE_EXIT_CODE
+    status = json.loads(runtime_status_path.read_text(encoding="utf-8"))
+    event = json.loads(log_path.read_text(encoding="utf-8"))
+    assert status["status"] == "runtime_error"
+    assert status["error_code"] == "hosted_relay_unhandled_exception"
+    assert status["worker_id"] == "relay-worker"
+    assert event["event"] == "hosted_relay_unhandled_exception"
+    assert event["error_type"] == "RuntimeError"
+    assert secret_text not in runtime_status_path.read_text(encoding="utf-8")
+    assert secret_text not in log_path.read_text(encoding="utf-8")
+    assert runtime_status_path.stat().st_size < 16 * 1024
+    assert log_path.stat().st_size < 16 * 1024
+
+
+def test_relay_mode_preserves_system_exit_semantics(monkeypatch):
+    def exit_runner(_arguments):
+        raise SystemExit(7)
+
+    monkeypatch.setattr(direct_sync_relay_runner, "main", exit_runner)
+
+    with pytest.raises(SystemExit) as caught:
+        product_host.dispatch_product_mode([product_host.DIRECT_SYNC_RELAY_MODE])
+
+    assert caught.value.code == 7

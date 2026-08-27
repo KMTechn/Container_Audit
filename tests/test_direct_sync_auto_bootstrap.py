@@ -176,6 +176,13 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
     events_dir = tmp_path / "data" / "events"
     status_dir = direct_sync_root / "status"
     status_dir.mkdir(parents=True)
+    application_exe = tmp_path / "app" / "Container_Audit.exe"
+    launcher_path = direct_sync_root / "bin" / "direct-sync-relay-container-audit.cmd"
+    launcher_path.parent.mkdir(parents=True)
+    launcher_path.write_text(
+        f'"{application_exe}" {bootstrap.DIRECT_SYNC_RELAY_MODE}\n',
+        encoding="utf-8",
+    )
 
     report_path = status_dir / "container_audit_direct_sync_install.json"
     report_path.write_text(
@@ -185,6 +192,18 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
                 "program_data_root": str(direct_sync_root),
                 "task_name": "direct-sync-relay-container-audit",
                 "field_layout_contract": {"production_layout_matches": True},
+                "use_bundled_relay_executable": True,
+                "relay_execution_mode": "in_process_main_executable",
+                "bundled_relay_executable": {
+                    "path": str(application_exe),
+                    "mode": bootstrap.DIRECT_SYNC_RELAY_MODE,
+                },
+                "runner_command": [
+                    str(application_exe),
+                    bootstrap.DIRECT_SYNC_RELAY_MODE,
+                ],
+                "scheduled_task_launcher_path": str(launcher_path),
+                "scheduled_task_wrapper_path": str(launcher_path),
                 "source_scan": {
                     "scan_source_dir": str(events_dir),
                 },
@@ -197,6 +216,22 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
         direct_sync_root,
         "direct-sync-relay-container-audit",
         events_dir,
+    )
+
+    launcher_path.write_text(
+        '"C:\\KMTech\\Apps\\Container_Audit\\current\\'
+        'Container_Audit_DirectSync_Relay.exe" --db-path queue.sqlite3\n',
+        encoding="utf-8",
+    )
+    assert not bootstrap._install_ready(
+        direct_sync_root,
+        "direct-sync-relay-container-audit",
+        events_dir,
+    )
+    assert bootstrap._legacy_install_repair_required(direct_sync_root)
+    launcher_path.write_text(
+        f'"{application_exe}" {bootstrap.DIRECT_SYNC_RELAY_MODE}\n',
+        encoding="utf-8",
     )
 
     payload = json.loads(report_path.read_text(encoding="utf-8"))
@@ -220,3 +255,102 @@ def test_install_ready_requires_current_scan_source_dir(tmp_path):
         "direct-sync-relay-container-audit",
         events_dir,
     )
+
+
+def test_install_ready_rejects_retired_helper_topology(tmp_path):
+    direct_sync_root = tmp_path / "data" / "direct_sync"
+    events_dir = tmp_path / "data" / "events"
+    status_dir = direct_sync_root / "status"
+    status_dir.mkdir(parents=True)
+    retired_helper = tmp_path / "app" / "Container_Audit_DirectSync_Relay.exe"
+    (status_dir / "container_audit_direct_sync_install.json").write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "program_data_root": str(direct_sync_root),
+                "task_name": "direct-sync-relay-container-audit",
+                "field_layout_contract": {"production_layout_matches": True},
+                "use_bundled_relay_executable": True,
+                "bundled_relay_executable": {"path": str(retired_helper)},
+                "runner_command": [str(retired_helper), "--db-path", "queue.sqlite3"],
+                "source_scan": {"scan_source_dir": str(events_dir)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert not bootstrap._install_ready(
+        direct_sync_root,
+        "direct-sync-relay-container-audit",
+        events_dir,
+    )
+
+
+def test_startup_forces_legacy_topology_repair_even_when_bootstrap_is_disabled(
+    tmp_path, monkeypatch
+):
+    observed = {}
+
+    class FakeThread:
+        def __init__(self, **kwargs):
+            observed.update(kwargs)
+
+        def start(self):
+            observed["started"] = True
+
+    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bootstrap, "_enabled", lambda: False)
+    monkeypatch.setattr(bootstrap, "_legacy_install_repair_required", lambda _root: True)
+    monkeypatch.setattr(bootstrap.threading, "Thread", FakeThread)
+    bootstrap._STARTED_ROOTS.clear()
+
+    thread = bootstrap.start_direct_sync_auto_bootstrap(
+        app_root=tmp_path / "app",
+        direct_sync_root=tmp_path / "direct-sync",
+        scan_source_dir=tmp_path / "events",
+    )
+
+    assert thread is not None
+    assert observed["started"] is True
+    assert observed["kwargs"]["force_install_repair"] is True
+    assert observed["kwargs"]["confirm_production_install"] is True
+    bootstrap._STARTED_ROOTS.clear()
+
+
+def test_forced_legacy_repair_requires_current_install_postcondition(tmp_path, monkeypatch):
+    app_root = tmp_path / "app"
+    direct_sync_root = tmp_path / "direct-sync"
+    events_dir = tmp_path / "events"
+    app_root.mkdir()
+    (app_root / bootstrap.INSTALL_EXE_NAME).write_bytes(b"exe")
+    monkeypatch.setattr(bootstrap, "CANONICAL_INSTALL_ROOT", str(app_root))
+    monkeypatch.setattr(bootstrap, "CANONICAL_DIRECT_SYNC_ROOT", str(direct_sync_root))
+    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
+    monkeypatch.setattr(bootstrap, "_registration_ready", lambda _root: True)
+    install_ready_results = iter((False, True))
+    monkeypatch.setattr(bootstrap, "_install_ready", lambda *_args: next(install_ready_results))
+    monkeypatch.setattr(bootstrap, "_task_exists", lambda _task: True)
+    elevated_calls = []
+    monkeypatch.setattr(
+        bootstrap,
+        "_run_elevated_task_repair",
+        lambda command, **kwargs: elevated_calls.append((command, kwargs))
+        or {"status": "PASS", "returncode": 0},
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "_start_task",
+        lambda _task: (_ for _ in ()).throw(AssertionError("repair starts the task itself")),
+    )
+
+    report = bootstrap.run_direct_sync_auto_bootstrap(
+        app_root=app_root,
+        direct_sync_root=direct_sync_root,
+        scan_source_dir=events_dir,
+        confirm_production_install=True,
+        force_install_repair=True,
+    )
+
+    assert report["status"] == "PASS"
+    assert report["task_start"]["status"] == "PASS"
+    assert len(elevated_calls) == 1

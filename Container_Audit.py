@@ -29,7 +29,14 @@ from container_audit_product_host import dispatch_product_mode
 from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
-from direct_sync_auto_bootstrap import start_direct_sync_auto_bootstrap, start_session_direct_sync
+from direct_sync_auto_bootstrap import (
+    CANONICAL_DIRECT_SYNC_ROOT,
+    CANONICAL_INSTALL_ROOT,
+    DEFAULT_TASK_NAME as DIRECT_SYNC_TASK_NAME,
+    _install_report_relay_topology,
+    start_direct_sync_auto_bootstrap,
+    start_session_direct_sync,
+)
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import (
     append_event_log_entry,
@@ -730,6 +737,242 @@ if ($null -ne (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue)) 
 '''
 
 
+def _same_update_path(left: str, right: str) -> bool:
+    try:
+        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _direct_sync_update_coordination_plan(application_path: str) -> Dict[str, Any]:
+    """Describe the canonical SYSTEM relay task that must be quiet during an update."""
+
+    if not _same_update_path(application_path, CANONICAL_INSTALL_ROOT):
+        return {"enabled": False, "reason": "noncanonical application layout"}
+
+    direct_sync_root = os.path.abspath(CANONICAL_DIRECT_SYNC_ROOT)
+    expected_launcher = os.path.join(direct_sync_root, "bin", f"{DIRECT_SYNC_TASK_NAME}.cmd")
+    expected_executable = os.path.join(os.path.abspath(application_path), "Container_Audit.exe")
+    report_path = os.path.join(
+        direct_sync_root,
+        "status",
+        "container_audit_direct_sync_install.json",
+    )
+    plan: Dict[str, Any] = {
+        "enabled": True,
+        "task_name": DIRECT_SYNC_TASK_NAME,
+        "launcher_path": expected_launcher,
+        "application_root": os.path.abspath(application_path),
+        "application_executable": expected_executable,
+        "retired_helper_executable": os.path.join(
+            os.path.abspath(application_path),
+            "Container_Audit_DirectSync_Relay.exe",
+        ),
+        "install_report_path": report_path,
+    }
+    if not os.path.isfile(report_path):
+        plan["report_state"] = "MISSING"
+        return plan
+    try:
+        if os.path.getsize(report_path) > 256 * 1024:
+            raise ValueError("DirectSync install report is unexpectedly large")
+        with open(report_path, "r", encoding="utf-8-sig") as report_file:
+            report = json.load(report_file)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError("DirectSync install report cannot be validated before update") from exc
+    if not isinstance(report, dict) or report.get("status") != "PASS":
+        raise ValueError("DirectSync install report is not a passing current-topology report")
+    topology = _install_report_relay_topology(report)
+    if topology == "legacy_helper":
+        raise ValueError(
+            "retired DirectSync helper topology requires INSTALL_THIS_PC.ps1 repair before automatic update"
+        )
+    if topology != "current":
+        raise ValueError("DirectSync install report has an unsupported relay topology")
+
+    runner_command = report.get("runner_command") or []
+    bundled = report.get("bundled_relay_executable") or {}
+    report_paths_match = all(
+        (
+            _same_update_path(str(report.get("program_data_root") or ""), direct_sync_root),
+            str(report.get("task_name") or "") == DIRECT_SYNC_TASK_NAME,
+            _same_update_path(str(report.get("scheduled_task_launcher_path") or ""), expected_launcher),
+            bool(runner_command) and _same_update_path(str(runner_command[0]), expected_executable),
+            isinstance(bundled, dict)
+            and _same_update_path(str(bundled.get("path") or ""), expected_executable),
+        )
+    )
+    if not report_paths_match:
+        raise ValueError("DirectSync install report paths do not match the canonical update topology")
+    plan["report_state"] = "CURRENT"
+    return plan
+
+
+def _direct_sync_update_coordinator_source() -> str:
+    return r'''param(
+    [Parameter(Mandatory=$true)][ValidateSet("Prepare", "Resume")][string]$Mode,
+    [Parameter(Mandatory=$true)][string]$TaskName,
+    [Parameter(Mandatory=$true)][string]$ExpectedLauncherPath,
+    [Parameter(Mandatory=$true)][string]$ExpectedApplicationRoot,
+    [Parameter(Mandatory=$true)][string]$StatePath,
+    [Parameter(Mandatory=$true)][string]$EvidencePath
+)
+$ErrorActionPreference = "Stop"
+
+function Add-Evidence([string]$Value) {
+    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value $Value
+}
+
+function Test-SamePath([string]$Left, [string]$Right) {
+    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
+        return $false
+    }
+    return [string]::Equals(
+        [IO.Path]::GetFullPath($Left),
+        [IO.Path]::GetFullPath($Right),
+        [StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Get-OwnedRelayProcesses([string]$ApplicationRoot) {
+    $mainExecutable = Join-Path $ApplicationRoot "Container_Audit.exe"
+    $retiredHelper = Join-Path $ApplicationRoot "Container_Audit_DirectSync_Relay.exe"
+    $owned = @()
+    foreach ($process in Get-CimInstance Win32_Process -Filter "Name='Container_Audit.exe' OR Name='Container_Audit_DirectSync_Relay.exe'") {
+        $isRetiredHelper = Test-SamePath $process.ExecutablePath $retiredHelper
+        $isHostedRelay = (
+            (Test-SamePath $process.ExecutablePath $mainExecutable) -and
+            [regex]::IsMatch(
+                [string]$process.CommandLine,
+                '(?i)(?:^|[\s"])--container-audit-direct-sync-relay(?:$|[\s"])'
+            )
+        )
+        if ($isRetiredHelper -or $isHostedRelay) {
+            $owned += $process
+        }
+    }
+    return ,$owned
+}
+
+function Write-State([hashtable]$State) {
+    $temporary = "$StatePath.tmp.$PID"
+    $State | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 -LiteralPath $temporary
+    Move-Item -Force -LiteralPath $temporary -Destination $StatePath
+}
+
+if ($Mode -eq "Resume") {
+    if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
+        throw "DirectSync update coordination state is missing"
+    }
+    $state = Get-Content -Raw -Encoding UTF8 -LiteralPath $StatePath | ConvertFrom-Json
+    if ($state.schema -ne "container-audit-direct-sync-update-state-v1") {
+        throw "DirectSync update coordination state schema is invalid"
+    }
+    if ($state.task_present -eq $true) {
+        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if ($state.task_was_enabled -eq $true) {
+            Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+            Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        } else {
+            Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+        }
+    }
+    Add-Evidence "direct_sync_task_resume=PASS"
+    exit 0
+}
+
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($null -eq $task) {
+    Write-State @{
+        schema = "container-audit-direct-sync-update-state-v1"
+        task_present = $false
+        task_was_enabled = $false
+    }
+    Add-Evidence "direct_sync_task_present=false"
+    exit 0
+}
+
+$actions = @($task.Actions)
+if ($actions.Count -ne 1) {
+    throw "DirectSync task must have exactly one action"
+}
+$expectedCmd = Join-Path ([Environment]::SystemDirectory) "cmd.exe"
+if (-not (Test-SamePath ([string]$actions[0].Execute) $expectedCmd)) {
+    throw "DirectSync task executable is not the absolute System32 cmd.exe"
+}
+$expectedArguments = "/d /q /c $([IO.Path]::GetFullPath($ExpectedLauncherPath))"
+if (-not [string]::Equals(
+    ([string]$actions[0].Arguments).Trim(),
+    $expectedArguments,
+    [StringComparison]::OrdinalIgnoreCase
+)) {
+    throw "DirectSync task arguments do not match the owned launcher"
+}
+$principal = ([string]$task.Principal.UserId).Trim()
+if ($principal -notin @("SYSTEM", "S-1-5-18")) {
+    throw "DirectSync task principal is not SYSTEM"
+}
+if (-not (Test-Path -LiteralPath $ExpectedLauncherPath -PathType Leaf)) {
+    throw "DirectSync task launcher is missing"
+}
+$launcherText = Get-Content -Raw -Encoding UTF8 -LiteralPath $ExpectedLauncherPath
+$expectedMain = Join-Path $ExpectedApplicationRoot "Container_Audit.exe"
+if ($launcherText.IndexOf($expectedMain, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
+    $launcherText.IndexOf("--container-audit-direct-sync-relay", [StringComparison]::Ordinal) -lt 0 -or
+    $launcherText.IndexOf("Container_Audit_DirectSync_Relay.exe", [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+    throw "DirectSync task launcher does not use the in-process main executable topology"
+}
+
+$wasEnabled = $task.Settings.Enabled -eq $true
+$disabled = $false
+try {
+    Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
+    $disabled = $true
+    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        $currentTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if ($currentTask.State -ne "Running") { break }
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    if ($currentTask.State -eq "Running") {
+        throw "DirectSync task did not stop"
+    }
+    foreach ($process in @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)) {
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+    }
+    Start-Sleep -Milliseconds 200
+    if (@(Get-OwnedRelayProcesses $ExpectedApplicationRoot).Count -ne 0) {
+        throw "owned DirectSync relay process remained alive"
+    }
+    Write-State @{
+        schema = "container-audit-direct-sync-update-state-v1"
+        task_present = $true
+        task_was_enabled = $wasEnabled
+    }
+    Add-Evidence "direct_sync_task_present=true"
+    Add-Evidence "direct_sync_task_was_enabled=$($wasEnabled.ToString().ToLowerInvariant())"
+} catch {
+    if ($disabled -and $wasEnabled) {
+        Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
+        Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+    throw
+}
+'''
+
+
+def _elevated_update_launcher_source() -> str:
+    return r'''param(
+    [Parameter(Mandatory=$true)][string]$UpdaterPath
+)
+$ErrorActionPreference = "Stop"
+$cmd = Join-Path ([Environment]::SystemDirectory) "cmd.exe"
+$quotedUpdater = '"' + $UpdaterPath + '"'
+Start-Process -FilePath $cmd -Verb RunAs -ArgumentList @('/d', '/c', $quotedUpdater) | Out-Null
+'''
+
+
 def _preserve_exclusion_paths(
     source_path: str,
     application_path: str,
@@ -829,6 +1072,12 @@ def download_and_apply_update(
         validated_install_policy = automatic_install_policy_from_manifest(install_policy)
         if not allow_source_mode and not _release_runtime_mode():
             raise ValueError("소스 실행 모드에서는 자동 업데이트를 적용하지 않습니다.")
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        application_path = os.path.abspath(application_path)
+        direct_sync_coordination = _direct_sync_update_coordination_plan(application_path)
         download_url = assert_https_update_url(url, require_zip=True) if expected_sha256 else validate_release_asset_url(url)
         verified_checksum_url = validate_release_asset_url(checksum_url) if checksum_url else ""
         update_temp_root = tempfile.mkdtemp(prefix="container_audit_update_", dir=os.environ.get("TEMP", "C:\\Temp"))
@@ -850,10 +1099,6 @@ def download_and_apply_update(
         temp_update_folder = os.path.join(update_temp_root, "extracted")
         safe_extract_update_zip(zip_path, temp_update_folder, archive_policy=archive_policy)
         os.remove(zip_path)
-        if getattr(sys, 'frozen', False):
-            application_path = os.path.dirname(sys.executable)
-        else:
-            application_path = os.path.dirname(os.path.abspath(__file__))
         updater_script_path = os.path.join(update_temp_root, "updater.bat")
         extracted_content = os.listdir(temp_update_folder)
         if len(extracted_content) == 1 and os.path.isdir(os.path.join(temp_update_folder, extracted_content[0])):
@@ -868,7 +1113,6 @@ def download_and_apply_update(
         if not os.path.isfile(payload_executable):
             raise ValueError(f"업데이트 ZIP에 {restart_executable} 파일이 없습니다.")
 
-        application_path = os.path.abspath(application_path)
         app_parent = os.path.dirname(application_path)
         app_name = os.path.basename(application_path)
         backup_root = os.path.join(app_parent, f".{app_name}.update-backups")
@@ -890,12 +1134,26 @@ def download_and_apply_update(
         preserve_json_path = os.path.join(update_temp_root, "preserve-paths.json")
         preserve_verifier_path = os.path.join(update_temp_root, "verify-preserved-paths.ps1")
         process_stop_guard_path = os.path.join(update_temp_root, "stop-update-process.ps1")
+        direct_sync_coordinator_path = ""
+        direct_sync_state_path = ""
+        elevated_launcher_path = ""
         with open(preserve_json_path, "w", encoding="utf-8") as preserve_file:
             json.dump(validated_install_policy["preserve_paths"], preserve_file, ensure_ascii=True)
         with open(preserve_verifier_path, "w", encoding="utf-8") as verifier_file:
             verifier_file.write(_preserve_verifier_source())
         with open(process_stop_guard_path, "w", encoding="utf-8") as guard_file:
             guard_file.write(_process_stop_guard_source())
+        if direct_sync_coordination["enabled"]:
+            direct_sync_coordinator_path = os.path.join(
+                update_temp_root,
+                "coordinate-direct-sync-update.ps1",
+            )
+            direct_sync_state_path = os.path.join(update_temp_root, "direct-sync-update-state.json")
+            elevated_launcher_path = os.path.join(update_temp_root, "launch-updater-elevated.ps1")
+            with open(direct_sync_coordinator_path, "w", encoding="utf-8") as coordinator_file:
+                coordinator_file.write(_direct_sync_update_coordinator_source())
+            with open(elevated_launcher_path, "w", encoding="utf-8") as launcher_file:
+                launcher_file.write(_elevated_update_launcher_source())
         with open(evidence_path, "x", encoding="utf-8") as evidence_file:
             evidence_file.write(f"schema={UPDATE_EVIDENCE_SCHEMA}\n")
             evidence_file.write("state=PREPARED\n")
@@ -905,6 +1163,11 @@ def download_and_apply_update(
             evidence_file.write(
                 "preserve_paths="
                 + ";".join(validated_install_policy["preserve_paths"])
+                + "\n"
+            )
+            evidence_file.write(
+                "direct_sync_coordination="
+                + ("ENABLED" if direct_sync_coordination["enabled"] else "NOT_REQUIRED")
                 + "\n"
             )
 
@@ -924,9 +1187,37 @@ def download_and_apply_update(
                     preserve_verifier_path=preserve_verifier_path,
                     process_stop_guard_path=process_stop_guard_path,
                     target_version=str(target_version),
+                    direct_sync_coordinator_path=direct_sync_coordinator_path,
+                    direct_sync_state_path=direct_sync_state_path,
+                    direct_sync_task_name=str(direct_sync_coordination.get("task_name") or ""),
+                    direct_sync_launcher_path=str(direct_sync_coordination.get("launcher_path") or ""),
                 )
             )
-        subprocess.Popen([updater_script_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
+        if direct_sync_coordination["enabled"]:
+            powershell = os.path.join(
+                os.environ.get("SystemRoot", r"C:\Windows"),
+                "System32",
+                "WindowsPowerShell",
+                "v1.0",
+                "powershell.exe",
+            )
+            subprocess.Popen(
+                [
+                    powershell,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    elevated_launcher_path,
+                    "-UpdaterPath",
+                    updater_script_path,
+                ],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        else:
+            subprocess.Popen([updater_script_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
         updater_launched = True
         sys.exit(0)
     except Exception as e:
@@ -966,6 +1257,10 @@ def _build_updater_script(
     preserve_verifier_path: str,
     process_stop_guard_path: str,
     target_version: str,
+    direct_sync_coordinator_path: str = "",
+    direct_sync_state_path: str = "",
+    direct_sync_task_name: str = "",
+    direct_sync_launcher_path: str = "",
 ) -> str:
     safe_source = _windows_quote(source_path)
     safe_application = _windows_quote(application_path)
@@ -977,6 +1272,42 @@ def _build_updater_script(
     safe_preserve_json = _windows_quote(preserve_json_path)
     safe_preserve_verifier = _windows_quote(preserve_verifier_path)
     safe_process_stop_guard = _windows_quote(process_stop_guard_path)
+
+    coordination_enabled = bool(direct_sync_coordinator_path)
+    if coordination_enabled and not all(
+        (direct_sync_state_path, direct_sync_task_name, direct_sync_launcher_path)
+    ):
+        raise ValueError("DirectSync update coordination parameters are incomplete")
+    if coordination_enabled:
+        safe_direct_sync_coordinator = _windows_quote(direct_sync_coordinator_path)
+        safe_direct_sync_state = _windows_quote(direct_sync_state_path)
+        safe_direct_sync_task_name = _windows_quote(direct_sync_task_name)
+        safe_direct_sync_launcher = _windows_quote(direct_sync_launcher_path)
+        safe_direct_sync_application = safe_application
+        direct_sync_prepare = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Prepare -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
+if errorlevel 1 (
+    >> {safe_evidence} echo state=DIRECT_SYNC_QUIESCE_FAILED
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 25
+)
+>> {safe_evidence} echo state=DIRECT_SYNC_QUIESCED'''
+        direct_sync_resume = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Resume -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
+if errorlevel 1 (
+    set "APPLY_EXIT=26"
+    goto ROLLBACK
+)
+>> {safe_evidence} echo state=DIRECT_SYNC_RESUMED'''
+        direct_sync_rollback_resume = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Resume -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
+if errorlevel 1 (
+    >> {safe_evidence} echo state=DIRECT_SYNC_ROLLBACK_RESUME_FAILED
+    >> {safe_evidence} echo restart=BLOCKED
+    exit /b 30
+)
+>> {safe_evidence} echo state=DIRECT_SYNC_ROLLBACK_RESUMED'''
+    else:
+        direct_sync_prepare = f">> {safe_evidence} echo state=DIRECT_SYNC_COORDINATION_NOT_REQUIRED"
+        direct_sync_resume = ""
+        direct_sync_rollback_resume = ""
 
     exclusions = _preserve_exclusion_paths(source_path, application_path, preserve_paths)
     quoted_exclusions = " ".join(_windows_quote(path) for path in exclusions)
@@ -1034,6 +1365,8 @@ if errorlevel 1 (
 )
 >> {safe_evidence} echo state=BACKUP_COMPLETED
 
+{direct_sync_prepare}
+
 robocopy {safe_source} {safe_application} /MIR /IS /IT /IM /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
 set "APPLY_EXIT=%ERRORLEVEL%"
 if %APPLY_EXIT% GEQ 8 goto ROLLBACK
@@ -1044,6 +1377,8 @@ if not %PRESERVE_EXIT% EQU 0 (
     set "APPLY_EXIT=%PRESERVE_EXIT%"
     goto ROLLBACK
 )
+
+{direct_sync_resume}
 
 >> {safe_evidence} echo state=UPDATE_COMPLETED
 >> {safe_evidence} echo target_version={target_version}
@@ -1070,6 +1405,7 @@ if %ROLLBACK_EXIT% GEQ 8 (
 )
 >> {safe_evidence} echo state=ROLLBACK_COMPLETED
 >> {safe_evidence} echo rollback_exit=%ROLLBACK_EXIT%
+{direct_sync_rollback_resume}
 >> {safe_evidence} echo restart=BLOCKED
 exit /b 31
 """

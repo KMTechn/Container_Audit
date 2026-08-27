@@ -3,13 +3,96 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from datetime import datetime, timezone
 import io
+import json
+import os
+from pathlib import Path
 import sys
 from typing import Iterator, Sequence
+import uuid
 
 
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 PRODUCT_MODES = frozenset({DIRECT_SYNC_RELAY_MODE})
+HOSTED_RELAY_FAILURE_EXIT_CODE = 1
+
+
+def _option_value(arguments: Sequence[str], option: str) -> str:
+    for index, argument in enumerate(arguments):
+        if argument == option and index + 1 < len(arguments):
+            return str(arguments[index + 1])
+        prefix = f"{option}="
+        if argument.startswith(prefix):
+            return argument[len(prefix) :]
+    return ""
+
+
+def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        try:
+            temp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as handle:
+        handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> None:
+    """Best-effort bounded evidence for a failure outside the relay runtime boundary."""
+
+    captured_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    error_type = error.__class__.__name__[:128]
+    worker_id = _option_value(arguments, "--worker-id")[:256]
+    diagnostic = {
+        "status": "runtime_error",
+        "app": "Container_Audit",
+        "worker_id": worker_id,
+        "error_code": "hosted_relay_unhandled_exception",
+        # Do not persist the exception text; it can contain credentials or payload data.
+        "error_message": f"hosted DirectSync relay failed unexpectedly: {error_type}",
+        "runtime_status_write_status": "PASS",
+        "updated_at": captured_at,
+    }
+    status_path = _option_value(arguments, "--runtime-status-path")
+    if status_path:
+        try:
+            _write_json_atomic(Path(status_path), diagnostic)
+        except Exception:
+            pass
+    log_path = _option_value(arguments, "--log-path")
+    if log_path:
+        try:
+            _append_jsonl(
+                Path(log_path),
+                {
+                    "event": "hosted_relay_unhandled_exception",
+                    "app": "Container_Audit",
+                    "worker_id": worker_id,
+                    "error_code": diagnostic["error_code"],
+                    "error_type": error_type,
+                    "generated_at": captured_at,
+                },
+            )
+        except Exception:
+            pass
 
 
 @contextmanager
@@ -39,7 +122,11 @@ def dispatch_product_mode(argv: Sequence[str]) -> int | None:
 
     with _usable_output_streams():
         if mode == DIRECT_SYNC_RELAY_MODE:
-            from tools import direct_sync_relay_runner
+            try:
+                from tools import direct_sync_relay_runner
 
-            return int(direct_sync_relay_runner.main(arguments))
+                return int(direct_sync_relay_runner.main(arguments))
+            except Exception as exc:
+                _record_hosted_relay_failure(arguments, exc)
+                return HOSTED_RELAY_FAILURE_EXIT_CODE
     raise AssertionError(f"unhandled Container_Audit product mode: {mode}")

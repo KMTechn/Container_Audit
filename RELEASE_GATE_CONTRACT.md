@@ -105,6 +105,14 @@ The confirmation may be supplied only after the qualification owner has proved
 no active tray or unresolved operation, a fully ACKed relay, and no running GUI
 or packaged relay process. The packaged relay is a separate SYSTEM process that
 hosts relay mode in `Container_Audit.exe`; it is not a distinct relay helper PE.
+The one-time `v2.0.96` to `v2.0.97` automatic-update bridge remains **UNKNOWN**
+when the retired helper process is active: the `v2.0.96` updater cannot be
+retroactively taught to quiesce that process before mirroring. Migrate that
+topology only with the public `INSTALL_THIS_PC.ps1` installer after proving the
+GUI and relay idle. Do not retain or redistribute the retired helper as a
+compatibility workaround. Updates launched by `v2.0.97` and later must disable
+and stop the owned SYSTEM relay task, verify the owned relay process is absent,
+and restore the task only after a successful mirror or completed rollback.
 The report path must be a fresh absolute file
 outside every deletion target. The bounded report records only path/status
 metadata and must never contain tokens, DPAPI bytes, profile secrets, event

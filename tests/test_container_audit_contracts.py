@@ -1016,6 +1016,123 @@ def test_updater_script_backs_up_before_copy_and_rolls_back_on_failure():
     assert script.index("state=BACKUP_COMPLETED") < script.index('set "APPLY_EXIT=')
 
 
+def test_updater_script_quiesces_direct_sync_between_backup_and_mirror():
+    kwargs = _updater_script_kwargs()
+    kwargs.update(
+        {
+            "direct_sync_coordinator_path": r"C:\Temp\update\coordinate-direct-sync-update.ps1",
+            "direct_sync_state_path": r"C:\Temp\update\direct-sync-update-state.json",
+            "direct_sync_task_name": "direct-sync-relay-container-audit",
+            "direct_sync_launcher_path": (
+                "C:\\ProgramData\\KMTech\\DirectSync\\container_audit\\bin\\"
+                "direct-sync-relay-container-audit.cmd"
+            ),
+        }
+    )
+
+    script = container_audit_module._build_updater_script(**kwargs)
+
+    apply_copy = (
+        'robocopy "C:\\Temp\\update\\extracted\\Container_Audit" '
+        '"C:\\KMTech\\Apps\\Container_Audit\\current"'
+    )
+    assert script.index("state=BACKUP_COMPLETED") < script.index("-Mode Prepare")
+    assert script.index("-Mode Prepare") < script.index(apply_copy)
+    assert script.index("-Mode Resume") < script.index("state=UPDATE_COMPLETED")
+    rollback = script.split(":ROLLBACK", 1)[1]
+    assert "-Mode Resume" in rollback
+    assert "state=DIRECT_SYNC_ROLLBACK_RESUMED" in rollback
+
+
+def test_direct_sync_update_plan_rejects_legacy_report_and_accepts_current_report(
+    tmp_path, monkeypatch
+):
+    application = tmp_path / "apps" / "current"
+    direct_sync_root = tmp_path / "program-data" / "direct-sync"
+    report_path = direct_sync_root / "status" / "container_audit_direct_sync_install.json"
+    report_path.parent.mkdir(parents=True)
+    launcher = direct_sync_root / "bin" / "direct-sync-relay-container-audit.cmd"
+    main_executable = application / "Container_Audit.exe"
+    retired_helper = application / "Container_Audit_DirectSync_Relay.exe"
+    monkeypatch.setattr(container_audit_module, "CANONICAL_INSTALL_ROOT", str(application))
+    monkeypatch.setattr(container_audit_module, "CANONICAL_DIRECT_SYNC_ROOT", str(direct_sync_root))
+
+    report_path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "program_data_root": str(direct_sync_root),
+                "task_name": "direct-sync-relay-container-audit",
+                "use_bundled_relay_executable": True,
+                "bundled_relay_executable": {"path": str(retired_helper)},
+                "runner_command": [str(retired_helper)],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="retired DirectSync helper"):
+        container_audit_module._direct_sync_update_coordination_plan(str(application))
+
+    report_path.write_text(
+        json.dumps(
+            {
+                "status": "PASS",
+                "program_data_root": str(direct_sync_root),
+                "task_name": "direct-sync-relay-container-audit",
+                "use_bundled_relay_executable": True,
+                "relay_execution_mode": "in_process_main_executable",
+                "bundled_relay_executable": {
+                    "path": str(main_executable),
+                    "mode": "--container-audit-direct-sync-relay",
+                },
+                "runner_command": [
+                    str(main_executable),
+                    "--container-audit-direct-sync-relay",
+                ],
+                "scheduled_task_launcher_path": str(launcher),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    plan = container_audit_module._direct_sync_update_coordination_plan(str(application))
+
+    assert plan["enabled"] is True
+    assert plan["report_state"] == "CURRENT"
+    assert plan["launcher_path"] == str(launcher)
+
+
+def test_direct_sync_update_coordinator_is_parseable_and_validates_owned_topology(tmp_path):
+    source = container_audit_module._direct_sync_update_coordinator_source()
+    assert source.index("Disable-ScheduledTask") < source.index("Stop-ScheduledTask")
+    assert "Get-OwnedRelayProcesses" in source
+    assert "Container_Audit_DirectSync_Relay.exe" in source
+    assert "--container-audit-direct-sync-relay" in source
+    assert "process.CommandLine" in source
+    assert "isHostedRelay" in source
+    assert "task_was_enabled" in source
+    assert "Start-ScheduledTask" in source
+
+    powershell = shutil.which("powershell.exe")
+    if not powershell:
+        pytest.skip("Windows PowerShell is required for coordinator syntax validation")
+    completed = subprocess.run(
+        [
+            powershell,
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$source = [Console]::In.ReadToEnd(); [void][scriptblock]::Create($source)",
+        ],
+        input=source,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
