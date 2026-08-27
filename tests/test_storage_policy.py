@@ -14,7 +14,7 @@ from storage_policy import (
 )
 
 
-def test_default_storage_paths_use_local_appdata_and_programdata_direct_sync(monkeypatch, tmp_path):
+def test_default_storage_paths_keep_business_and_direct_sync_in_current_user_scope(monkeypatch, tmp_path):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
@@ -25,7 +25,7 @@ def test_default_storage_paths_use_local_appdata_and_programdata_direct_sync(mon
 
     assert paths.data_root == (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert paths.events_dir == paths.data_root / "events"
-    assert paths.direct_sync_root == (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
+    assert paths.direct_sync_root == (local_app_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert paths.queue_dir == paths.direct_sync_root / "queue"
     assert (
         paths.item_catalog_diagnostic_path
@@ -68,7 +68,7 @@ def test_container_audit_setup_uses_local_events_folder(monkeypatch, tmp_path):
     assert Path(app.data_root) == expected_root
     assert Path(app.save_folder) == expected_events
     assert Path(app.direct_sync_scan_source_dir) == expected_events
-    assert Path(app.direct_sync_program_data_root) == (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
+    assert Path(app.direct_sync_program_data_root) == (local_app_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert expected_events.is_dir()
     assert Path(app.config_folder).is_dir()
     assert Path(app.parked_trays_dir).is_dir()

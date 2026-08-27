@@ -14,7 +14,9 @@ from logistics_runtime_profile import (
     TEST1_ISOLATED_LEGACY_OVERRIDE_ENV,
     default_logistics_profile_path,
     load_logistics_runtime_profile,
+    protect_current_user_secret,
     protect_machine_secret,
+    unprotect_current_user_secret,
     unprotect_machine_secret,
 )
 from transfer_seal import TransferSealError, logistics_transfer_client_from_env
@@ -22,6 +24,7 @@ from tools.install_logistics_runtime_profile import (
     install_runtime_profile,
     main as install_main,
 )
+from tools import install_logistics_runtime_profile as installer_module
 from tools.check_logistics_runtime_profile import main as readiness_main
 
 
@@ -718,3 +721,56 @@ def test_installer_requires_reader_principal_before_any_write(tmp_path):
         )
 
     assert not target.parent.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="CurrentUser DPAPI is Windows-only")
+def test_current_user_dpapi_roundtrip():
+    token = "CURRENT-USER-DPAPI-TEST-TOKEN"
+
+    protected = protect_current_user_secret(token)
+
+    assert protected != token.encode("utf-8")
+    assert unprotect_current_user_secret(protected) == token
+
+
+def test_current_user_profile_install_needs_no_machine_acl_and_reads_back(
+    tmp_path, monkeypatch
+):
+    target = tmp_path / "profiles" / "Container_Audit" / "runtime-profile.json"
+    token = "CURRENT-USER-PROFILE-TOKEN"
+    monkeypatch.setattr(
+        installer_module,
+        "_secure_profile_directory",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("current-user profile must not apply a machine ACL")
+        ),
+    )
+    monkeypatch.setattr(
+        installer_module,
+        "protect_current_user_secret",
+        lambda value: b"protected:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        installer_module,
+        "unprotect_current_user_secret",
+        lambda value: value.removeprefix(b"protected:").decode("utf-8"),
+    )
+
+    report = install_runtime_profile(
+        profile_path=target,
+        base_url="https://logistics.example.invalid",
+        authority_scope="scope-current-user",
+        authority_epoch=7,
+        authority_plane="AUTHORITATIVE",
+        plane_epoch=3,
+        device_id="container-pc-user",
+        source_host_id="container-host-user",
+        bearer_token=token,
+        credential_scope="current_user",
+    )
+
+    profile = json.loads(target.read_text(encoding="utf-8"))
+    secret_path = target.parent / "secrets" / "bearer-token.dpapi"
+    assert report["credential_scope"] == "current_user"
+    assert profile["credential_scope"] == "current_user"
+    assert secret_path.read_bytes() == b"protected:" + token.encode("utf-8")

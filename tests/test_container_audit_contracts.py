@@ -742,6 +742,57 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
     assert calls == ["init", ("after", 500), "run", "release"]
 
 
+def test_main_completes_current_user_onboarding_before_catalog_and_client(
+    monkeypatch, tmp_path
+):
+    calls = []
+
+    class Lease:
+        def release(self):
+            calls.append("release")
+
+    class FakeRoot:
+        def after(self, _delay_ms, _callback):
+            calls.append("update-scheduled")
+
+    class FakeApp:
+        def __init__(self):
+            calls.append("client-created")
+            self.root = FakeRoot()
+
+        def run(self):
+            calls.append("run")
+
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
+    monkeypatch.setattr(container_audit_module, "_first_run_onboarding_enabled", lambda: True)
+    monkeypatch.setattr(
+        container_audit_module,
+        "onboard_current_user",
+        lambda *_args, **_kwargs: calls.append("onboarded") or {"status": "READY"},
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "prepare_startup_item_catalog",
+        lambda: calls.append("catalog"),
+    )
+    monkeypatch.setattr(container_audit_module, "ContainerAudit", FakeApp)
+    monkeypatch.setattr(
+        container_audit_module,
+        "acquire_runtime_instance",
+        lambda _data_root: Lease(),
+    )
+
+    assert container_audit_module.main([]) == 0
+    assert calls == [
+        "onboarded",
+        "catalog",
+        "client-created",
+        "update-scheduled",
+        "run",
+        "release",
+    ]
+
+
 def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch):
     calls = []
     monkeypatch.setattr(container_audit_module, "acquire_runtime_instance", lambda _data_root: None)
@@ -773,8 +824,8 @@ def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_detai
 ):
     sensitive_marker = "profile-token-must-not-leak"
     calls = []
-    program_data = tmp_path / "ProgramData"
-    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    local_app_data = tmp_path / "LocalAppData"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
 
     class Lease:
@@ -840,7 +891,7 @@ def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_detai
     assert sensitive_marker not in dialogs[0][0]
     assert sensitive_marker not in dialogs[0][1]
     diagnostic_path = (
-        program_data
+        local_app_data
         / "KMTech"
         / "DirectSync"
         / "container_audit"
@@ -1022,10 +1073,10 @@ def test_updater_script_quiesces_direct_sync_between_backup_and_mirror():
         {
             "direct_sync_coordinator_path": r"C:\Temp\update\coordinate-direct-sync-update.ps1",
             "direct_sync_state_path": r"C:\Temp\update\direct-sync-update-state.json",
-            "direct_sync_task_name": "direct-sync-relay-container-audit",
+            "direct_sync_task_name": "KMTech.ContainerAudit.UserRelay",
             "direct_sync_launcher_path": (
-                "C:\\ProgramData\\KMTech\\DirectSync\\container_audit\\bin\\"
-                "direct-sync-relay-container-audit.cmd"
+                "C:\\Users\\operator\\AppData\\Local\\KMTech\\DirectSync\\"
+                "container_audit"
             ),
         }
     )
@@ -1044,74 +1095,37 @@ def test_updater_script_quiesces_direct_sync_between_backup_and_mirror():
     assert "state=DIRECT_SYNC_ROLLBACK_RESUMED" in rollback
 
 
-def test_direct_sync_update_plan_rejects_legacy_report_and_accepts_current_report(
+def test_direct_sync_update_plan_uses_current_user_relay_without_task(
     tmp_path, monkeypatch
 ):
     application = tmp_path / "apps" / "current"
-    direct_sync_root = tmp_path / "program-data" / "direct-sync"
-    report_path = direct_sync_root / "status" / "container_audit_direct_sync_install.json"
-    report_path.parent.mkdir(parents=True)
-    launcher = direct_sync_root / "bin" / "direct-sync-relay-container-audit.cmd"
-    main_executable = application / "Container_Audit.exe"
-    retired_helper = application / "Container_Audit_DirectSync_Relay.exe"
+    local_app_data = tmp_path / "LocalAppData"
+    direct_sync_root = local_app_data / "KMTech" / "DirectSync" / "container_audit"
     monkeypatch.setattr(container_audit_module, "CANONICAL_INSTALL_ROOT", str(application))
-    monkeypatch.setattr(container_audit_module, "CANONICAL_DIRECT_SYNC_ROOT", str(direct_sync_root))
-
-    report_path.write_text(
-        json.dumps(
-            {
-                "status": "PASS",
-                "program_data_root": str(direct_sync_root),
-                "task_name": "direct-sync-relay-container-audit",
-                "use_bundled_relay_executable": True,
-                "bundled_relay_executable": {"path": str(retired_helper)},
-                "runner_command": [str(retired_helper)],
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(ValueError, match="retired DirectSync helper"):
-        container_audit_module._direct_sync_update_coordination_plan(str(application))
-
-    report_path.write_text(
-        json.dumps(
-            {
-                "status": "PASS",
-                "program_data_root": str(direct_sync_root),
-                "task_name": "direct-sync-relay-container-audit",
-                "use_bundled_relay_executable": True,
-                "relay_execution_mode": "in_process_main_executable",
-                "bundled_relay_executable": {
-                    "path": str(main_executable),
-                    "mode": "--container-audit-direct-sync-relay",
-                },
-                "runner_command": [
-                    str(main_executable),
-                    "--container-audit-direct-sync-relay",
-                ],
-                "scheduled_task_launcher_path": str(launcher),
-            }
-        ),
-        encoding="utf-8",
-    )
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
 
     plan = container_audit_module._direct_sync_update_coordination_plan(str(application))
 
     assert plan["enabled"] is True
-    assert plan["report_state"] == "CURRENT"
-    assert plan["launcher_path"] == str(launcher)
+    assert plan["report_state"] == "CURRENT_USER_RELAY"
+    assert plan["launcher_path"] == str(direct_sync_root.resolve())
+    assert plan["relay_principal"] == "current_user"
+    assert plan["system_scheduled_task"] is False
 
 
 def test_direct_sync_update_coordinator_is_parseable_and_validates_owned_topology(tmp_path):
     source = container_audit_module._direct_sync_update_coordinator_source()
-    assert source.index("Disable-ScheduledTask") < source.index("Stop-ScheduledTask")
     assert "Get-OwnedRelayProcesses" in source
     assert "Container_Audit_DirectSync_Relay.exe" in source
     assert "--container-audit-direct-sync-relay" in source
+    assert "--container-audit-user-relay" in source
     assert "process.CommandLine" in source
     assert "isHostedRelay" in source
-    assert "task_was_enabled" in source
-    assert "Start-ScheduledTask" in source
+    assert "container-audit-user-relay-update-state-v1" in source
+    assert "Get-ScheduledTask" not in source
+    assert "Register-ScheduledTask" not in source
+    assert "Start-ScheduledTask" not in source
 
     powershell = shutil.which("powershell.exe")
     if not powershell:

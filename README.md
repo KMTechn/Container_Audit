@@ -82,56 +82,40 @@ python -m pytest -q -p no:cacheprovider <changed-test-node>
 일부 entrypoint만 다시 `py_compile`하지 않는다. 최종 전체 회귀는 `main` push의
 Full CI가 exact SHA에서 한 번 실행한다.
 
-### 격리 비프로덕션 서버 설치/실행 오버라이드
+### 설치와 최초 실행
 
-Sandbox 또는 사전 운영 검증에서는 자격시험 컨트롤러가 제공한 격리 origin과
-테스트 전용 producer identity만 사용한다. 실제 서버 URL, identity, enrollment
-token 또는 secret을 저장소나 명령 예시에 기록하지 않는다. 기본 서버와 내부
-qualification authority는 HTTPS 전용이다. 명시적인 `-ServerBaseUrl` override에는
-`/api/...` 경로가 아닌 절대 HTTP 또는 HTTPS origin만 전달한다.
-
-패키지의 공개 설치 명령은 다음과 같다. identity seed 파일은
-`container-audit-producer-identity-v1` 형식의 `producer_id`, `source_host_id`,
-`producer_install_id`만 포함하며 secret을 포함하지 않는다.
+`INSTALL_THIS_PC.ps1`은 관리자 쓰기 전용 경로에 동결 코드와 무결성 기록을
+배치하는 최소 부트스트랩이다. 이 단계는 identity, profile, ledger, queue 또는
+relay persistence를 만들지 않는다.
 
 ```powershell
-# 자격시험 컨트롤러가 이 프로세스 환경에 실제 값을 주입한다.
-$NonProductionServerBaseUrl = $env:CONTAINER_AUDIT_QUALIFICATION_SERVER_BASE_URL
-$TestProducerIdentityPath = $env:CONTAINER_AUDIT_QUALIFICATION_IDENTITY_PATH
-
-.\INSTALL_THIS_PC.ps1 `
-  -ServerBaseUrl $NonProductionServerBaseUrl `
-  -ProducerIdentityPath $TestProducerIdentityPath
+powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1
 ```
 
-seed 파일 대신 컨트롤러가 세 identity 필드를 따로 제공하는 경우에도 같은
-설치 entrypoint를 사용한다.
+배치 후 일반 작업자 계정으로 `Container_Audit.exe`를 실행한다. 앱은 첫 실행에서
+서버 승인된 producer identity/manifest/credential, CurrentUser DPAPI logistics
+profile, business ledger와 durable queue를 사용자 범위에 만들고 즉시 readback한
+뒤 같은 프로세스에서 사용한다. 기존의 완전하고 일치하는 상태는 다시 만들지
+않고 재사용하며, 일부만 남거나 값을 확인할 수 없으면 오류 창과 redacted report를
+남기고 시작을 중단한다.
+
+- business state: `%LOCALAPPDATA%\KMTech\ContainerAudit`
+- DirectSync state: `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`
+- logistics profile: `%LOCALAPPDATA%\KMTech\Logistics\profiles\Container_Audit`
+- persistent relay: 현재 사용자 권한의
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\KMTech.ContainerAudit.Relay`
+
+relay는 hardened `Container_Audit.exe --container-audit-user-relay`를 현재 사용자로
+실행하고 최대 60초 간격으로 durable queue를 다시 확인한다. SYSTEM AtStartup
+task는 설치/실행 계약에 포함되지 않는다.
+
+g5 공개 제거는 먼저 현재 사용자 persistence와 relay를 제거하면서 데이터를
+보존하고, 별도의 승격된 inverse가 hardened code와 소유가 확인된 구형 task만
+제거한다. 데이터 파기는 이 명령들의 일부가 아니다.
 
 ```powershell
-.\INSTALL_THIS_PC.ps1 `
-  -ServerBaseUrl $NonProductionServerBaseUrl `
-  -SourceHostId $env:CONTAINER_AUDIT_QUALIFICATION_SOURCE_HOST_ID `
-  -ProducerInstallId $env:CONTAINER_AUDIT_QUALIFICATION_PRODUCER_INSTALL_ID `
-  -ProducerId $env:CONTAINER_AUDIT_QUALIFICATION_PRODUCER_ID
-```
-
-설치가 성공하면 endpoint와 identity는
-`producer_manifest.json` 및 보호된 `credential.json`에 고정된다. 이후 Start
-Menu 바로가기로 평소처럼 실행하면 앱과 예약 relay가 그 설치 결과를 그대로
-사용하므로 launch 명령에 URL이나 identity를 다시 넣지 않는다. 재시작 후에도
-같은 테스트 identity가 유지되어야 한다. 외부 비프로덕션 서버를 사용할 때는
-내장 loopback authority를 선택하는 `-EnableWindowsSandboxQualification`을 함께
-사용하지 않는다.
-
-설치 전 source/debug 실행에서만 process-scoped bootstrap override를 사용할 수
-있다. 이 경우에도 격리된 `CONTAINER_AUDIT_DATA_ROOT`와 테스트 identity를
-사용하며, 패키지 자격시험은 위 설치 명령을 사용한다.
-
-```powershell
-$env:CONTAINER_AUDIT_DATA_ROOT = $env:CONTAINER_AUDIT_QUALIFICATION_DATA_ROOT
-$env:CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP = "1"
-$env:CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL = $NonProductionServerBaseUrl
-python .\Container_Audit.py
+C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe --remove-current-user-setup
+powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
 ```
 
 ## 🎯 핵심 기능 상세
@@ -410,7 +394,7 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 * **배포 저장 원칙**: 배포 버전은 Syncthing 폴더가 없는 것을 전제로 합니다. `CONTAINER_AUDIT_DATA_ROOT`로 데이터 루트를 바꿀 수 있지만, `C:\Sync` 계열 경로는 기본적으로 거부됩니다.
 
-* **작업자 PC 자동 등록**: HTTPS direct-sync 배포에서는 설치 시 `register_container_audit_worker_pc.py --self-enroll`이 PC별 `source_host_id`, `producer_install_id`, `producer_id`, `key_id`를 자동 생성/등록합니다. 서버가 설치 PC의 IP 대역을 허용하거나 배포용 enrollment token을 허용하면 PC별 수동 승인 없이 바로 WinCred에 HMAC secret을 저장하고 업로드 준비 상태가 됩니다. 설치 후 토큰을 새로 주입하는 후처리는 필요하지 않습니다. raw secret은 manifest, credential JSON, report 파일에 저장하지 않습니다.
+* **작업자 PC 최초 등록**: 일반 사용자로 실행된 앱의 first-run onboarding이 PC별 `source_host_id`, `producer_install_id`, `producer_id`, `key_id`를 자동 생성·등록하고 CurrentUser DPAPI로 secret을 보호합니다. raw secret은 manifest, credential JSON, report 파일에 저장하지 않습니다.
 
 * **데이터 중요성**: 이 로그 파일들은 모든 작업의 증거 자료이므로 **절대로 임의로 수정하거나 삭제하지 마세요.**
 

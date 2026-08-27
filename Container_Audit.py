@@ -29,11 +29,15 @@ from container_audit_product_host import dispatch_product_mode
 from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
+from current_user_onboarding import (
+    CurrentUserOnboardingError,
+    LOGISTICS_PROFILE_PATH_ENV,
+    ONBOARDING_EXIT_CODE,
+    onboard_current_user,
+    resolve_current_user_onboarding_paths,
+)
 from direct_sync_auto_bootstrap import (
-    CANONICAL_DIRECT_SYNC_ROOT,
     CANONICAL_INSTALL_ROOT,
-    DEFAULT_TASK_NAME as DIRECT_SYNC_TASK_NAME,
-    _install_report_relay_topology,
     start_direct_sync_auto_bootstrap,
     start_session_direct_sync,
 )
@@ -59,6 +63,11 @@ from item_catalog_sync import (
     refresh_item_catalog,
     requires_verified_catalog_snapshot,
     write_item_catalog_failure_diagnostic,
+)
+from logistics_runtime_profile import (
+    PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
+    REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
+    unprotect_current_user_secret,
 )
 from label_qr import (
     canonical_master_label_key,
@@ -299,7 +308,30 @@ def apply_startup_geometry(
 
 
 def container_startup_logistics_client():
-    """Load local credentials without making GUI startup depend on the server."""
+    """Load current-user credentials without making startup depend on the server."""
+
+    explicit_user_profile = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+    if not explicit_user_profile and not os.environ.get("PYTEST_CURRENT_TEST"):
+        try:
+            app_root = (
+                Path(sys.executable).resolve().parent
+                if getattr(sys, "frozen", False)
+                else Path(__file__).resolve().parent
+            )
+            candidate = resolve_current_user_onboarding_paths(app_root)
+            if candidate.logistics_profile_path.is_file():
+                explicit_user_profile = str(candidate.logistics_profile_path)
+        except Exception:
+            explicit_user_profile = ""
+    if explicit_user_profile:
+        values = dict(os.environ)
+        values[LOGISTICS_RUNTIME_PROFILE_PATH_ENV] = explicit_user_profile
+        values[LOGISTICS_RUNTIME_REQUIRED_ENV] = "1"
+        return logistics_transfer_client_from_env(
+            probe_required=False,
+            environ=values,
+            profile_decryptor=unprotect_current_user_secret,
+        )
     return logistics_transfer_client_from_env(probe_required=False)
 
 # ####################################################################
@@ -745,67 +777,27 @@ def _same_update_path(left: str, right: str) -> bool:
 
 
 def _direct_sync_update_coordination_plan(application_path: str) -> Dict[str, Any]:
-    """Describe the canonical SYSTEM relay task that must be quiet during an update."""
+    """Describe current-user relay processes that must be quiet during an update."""
 
     if not _same_update_path(application_path, CANONICAL_INSTALL_ROOT):
         return {"enabled": False, "reason": "noncanonical application layout"}
-
-    direct_sync_root = os.path.abspath(CANONICAL_DIRECT_SYNC_ROOT)
-    expected_launcher = os.path.join(direct_sync_root, "bin", f"{DIRECT_SYNC_TASK_NAME}.cmd")
-    expected_executable = os.path.join(os.path.abspath(application_path), "Container_Audit.exe")
-    report_path = os.path.join(
-        direct_sync_root,
-        "status",
-        "container_audit_direct_sync_install.json",
+    user_paths = resolve_current_user_onboarding_paths(application_path)
+    expected_executable = os.path.join(
+        os.path.abspath(application_path), "Container_Audit.exe"
     )
-    plan: Dict[str, Any] = {
+    return {
         "enabled": True,
-        "task_name": DIRECT_SYNC_TASK_NAME,
-        "launcher_path": expected_launcher,
+        # These compatibility field names are consumed by the transactional
+        # updater builder. They now identify the user relay and its state root;
+        # no scheduled task is created, queried, disabled, or resumed.
+        "task_name": "KMTech.ContainerAudit.UserRelay",
+        "launcher_path": str(user_paths.direct_sync_root),
         "application_root": os.path.abspath(application_path),
         "application_executable": expected_executable,
-        "retired_helper_executable": os.path.join(
-            os.path.abspath(application_path),
-            "Container_Audit_DirectSync_Relay.exe",
-        ),
-        "install_report_path": report_path,
+        "relay_principal": "current_user",
+        "system_scheduled_task": False,
+        "report_state": "CURRENT_USER_RELAY",
     }
-    if not os.path.isfile(report_path):
-        plan["report_state"] = "MISSING"
-        return plan
-    try:
-        if os.path.getsize(report_path) > 256 * 1024:
-            raise ValueError("DirectSync install report is unexpectedly large")
-        with open(report_path, "r", encoding="utf-8-sig") as report_file:
-            report = json.load(report_file)
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise ValueError("DirectSync install report cannot be validated before update") from exc
-    if not isinstance(report, dict) or report.get("status") != "PASS":
-        raise ValueError("DirectSync install report is not a passing current-topology report")
-    topology = _install_report_relay_topology(report)
-    if topology == "legacy_helper":
-        raise ValueError(
-            "retired DirectSync helper topology requires INSTALL_THIS_PC.ps1 repair before automatic update"
-        )
-    if topology != "current":
-        raise ValueError("DirectSync install report has an unsupported relay topology")
-
-    runner_command = report.get("runner_command") or []
-    bundled = report.get("bundled_relay_executable") or {}
-    report_paths_match = all(
-        (
-            _same_update_path(str(report.get("program_data_root") or ""), direct_sync_root),
-            str(report.get("task_name") or "") == DIRECT_SYNC_TASK_NAME,
-            _same_update_path(str(report.get("scheduled_task_launcher_path") or ""), expected_launcher),
-            bool(runner_command) and _same_update_path(str(runner_command[0]), expected_executable),
-            isinstance(bundled, dict)
-            and _same_update_path(str(bundled.get("path") or ""), expected_executable),
-        )
-    )
-    if not report_paths_match:
-        raise ValueError("DirectSync install report paths do not match the canonical update topology")
-    plan["report_state"] = "CURRENT"
-    return plan
 
 
 def _direct_sync_update_coordinator_source() -> str:
@@ -844,7 +836,7 @@ function Get-OwnedRelayProcesses([string]$ApplicationRoot) {
             (Test-SamePath $process.ExecutablePath $mainExecutable) -and
             [regex]::IsMatch(
                 [string]$process.CommandLine,
-                '(?i)(?:^|[\s"])--container-audit-direct-sync-relay(?:$|[\s"])'
+                '(?i)(?:^|[\s"])(?:--container-audit-direct-sync-relay|--container-audit-user-relay)(?:$|[\s"])'
             )
         )
         if ($isRetiredHelper -or $isHostedRelay) {
@@ -865,100 +857,34 @@ if ($Mode -eq "Resume") {
         throw "DirectSync update coordination state is missing"
     }
     $state = Get-Content -Raw -Encoding UTF8 -LiteralPath $StatePath | ConvertFrom-Json
-    if ($state.schema -ne "container-audit-direct-sync-update-state-v1") {
+    if ($state.schema -ne "container-audit-user-relay-update-state-v1") {
         throw "DirectSync update coordination state schema is invalid"
     }
-    if ($state.task_present -eq $true) {
-        $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-        if ($state.task_was_enabled -eq $true) {
-            Enable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
-            Start-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-        } else {
-            Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
-        }
-    }
-    Add-Evidence "direct_sync_task_resume=PASS"
+    Add-Evidence "direct_sync_user_relay_resume=DEFERRED_TO_APP_RESTART"
     exit 0
 }
 
-$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-if ($null -eq $task) {
-    Write-State @{
-        schema = "container-audit-direct-sync-update-state-v1"
-        task_present = $false
-        task_was_enabled = $false
-    }
-    Add-Evidence "direct_sync_task_present=false"
-    exit 0
+$ownedBefore = @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)
+foreach ($process in $ownedBefore) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
 }
-
-$actions = @($task.Actions)
-if ($actions.Count -ne 1) {
-    throw "DirectSync task must have exactly one action"
-}
-$expectedCmd = Join-Path ([Environment]::SystemDirectory) "cmd.exe"
-if (-not (Test-SamePath ([string]$actions[0].Execute) $expectedCmd)) {
-    throw "DirectSync task executable is not the absolute System32 cmd.exe"
-}
-$expectedArguments = "/d /q /c $([IO.Path]::GetFullPath($ExpectedLauncherPath))"
-if (-not [string]::Equals(
-    ([string]$actions[0].Arguments).Trim(),
-    $expectedArguments,
-    [StringComparison]::OrdinalIgnoreCase
-)) {
-    throw "DirectSync task arguments do not match the owned launcher"
-}
-$principal = ([string]$task.Principal.UserId).Trim()
-if ($principal -notin @("SYSTEM", "S-1-5-18")) {
-    throw "DirectSync task principal is not SYSTEM"
-}
-if (-not (Test-Path -LiteralPath $ExpectedLauncherPath -PathType Leaf)) {
-    throw "DirectSync task launcher is missing"
-}
-$launcherText = Get-Content -Raw -Encoding UTF8 -LiteralPath $ExpectedLauncherPath
-$expectedMain = Join-Path $ExpectedApplicationRoot "Container_Audit.exe"
-if ($launcherText.IndexOf($expectedMain, [StringComparison]::OrdinalIgnoreCase) -lt 0 -or
-    $launcherText.IndexOf("--container-audit-direct-sync-relay", [StringComparison]::Ordinal) -lt 0 -or
-    $launcherText.IndexOf("Container_Audit_DirectSync_Relay.exe", [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-    throw "DirectSync task launcher does not use the in-process main executable topology"
-}
-
-$wasEnabled = $task.Settings.Enabled -eq $true
-$disabled = $false
-try {
-    Disable-ScheduledTask -TaskName $TaskName -ErrorAction Stop | Out-Null
-    $disabled = $true
-    Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    $deadline = (Get-Date).AddSeconds(15)
-    do {
-        $currentTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
-        if ($currentTask.State -ne "Running") { break }
-        Start-Sleep -Milliseconds 200
-    } while ((Get-Date) -lt $deadline)
-    if ($currentTask.State -eq "Running") {
-        throw "DirectSync task did not stop"
-    }
-    foreach ($process in @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)) {
-        Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-    }
+$deadline = (Get-Date).AddSeconds(15)
+do {
+    $remaining = @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)
+    if ($remaining.Count -eq 0) { break }
     Start-Sleep -Milliseconds 200
-    if (@(Get-OwnedRelayProcesses $ExpectedApplicationRoot).Count -ne 0) {
-        throw "owned DirectSync relay process remained alive"
-    }
-    Write-State @{
-        schema = "container-audit-direct-sync-update-state-v1"
-        task_present = $true
-        task_was_enabled = $wasEnabled
-    }
-    Add-Evidence "direct_sync_task_present=true"
-    Add-Evidence "direct_sync_task_was_enabled=$($wasEnabled.ToString().ToLowerInvariant())"
-} catch {
-    if ($disabled -and $wasEnabled) {
-        Enable-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue | Out-Null
-        Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    }
-    throw
+} while ((Get-Date) -lt $deadline)
+if ($remaining.Count -ne 0) {
+    throw "owned current-user DirectSync relay process remained alive"
 }
+Write-State @{
+    schema = "container-audit-user-relay-update-state-v1"
+    relay_was_running = ($ownedBefore.Count -gt 0)
+    principal = "current_user"
+    system_scheduled_task = $false
+}
+Add-Evidence "direct_sync_user_relay_quiesced=true"
+Add-Evidence "direct_sync_system_task=false"
 '''
 
 
@@ -11608,6 +11534,31 @@ ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
     "네트워크 연결과 이 PC의 중앙 물류 설정을 확인한 뒤 다시 실행하세요. "
     "계속 실패하면 IT 담당자에게 문의하세요."
 )
+FIRST_RUN_ONBOARDING_ERROR_TITLE = "초기 설정 실패"
+FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
+    "이 사용자 계정의 이적 검사 초기 설정을 완료하지 못했습니다.\n\n"
+    "네트워크 연결을 확인한 뒤 다시 실행하세요. 계속 실패하면 오류 보고서 경로를 "
+    "IT 담당자에게 전달하세요."
+)
+
+
+def _first_run_onboarding_enabled() -> bool:
+    if getattr(sys, "frozen", False) and os.name == "nt":
+        return True
+    value = os.getenv("CONTAINER_AUDIT_ENABLE_FIRST_RUN_ONBOARDING", "").strip().lower()
+    return value in {"1", "true", "yes", "on", "enabled"}
+
+
+def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> None:
+    report_path = str(failure.report_path)
+    operator_message = f"{FIRST_RUN_ONBOARDING_ERROR_MESSAGE}\n보고서: {report_path}"
+    try:
+        messagebox.showerror(
+            FIRST_RUN_ONBOARDING_ERROR_TITLE,
+            operator_message,
+        )
+    except Exception:
+        pass
 
 
 def _show_item_catalog_startup_error(cause_code: str) -> None:
@@ -11651,6 +11602,15 @@ def main(argv: list[str] | None = None):
         )
         return
     try:
+        if _first_run_onboarding_enabled():
+            try:
+                onboard_current_user(
+                    application_path,
+                    require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+                )
+            except CurrentUserOnboardingError as exc:
+                _show_first_run_onboarding_error(exc)
+                return ONBOARDING_EXIT_CODE
         try:
             prepare_startup_item_catalog()
             app = ContainerAudit()

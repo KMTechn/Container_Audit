@@ -1,6 +1,9 @@
 import hashlib
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from storage_policy import DATA_ROOT_ENV
 from tools import register_container_audit_worker_pc as registration
@@ -77,7 +80,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     credential = json.loads(credential_path.read_text(encoding="utf-8"))
     expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
-    expected_direct_sync_root = (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
+    expected_direct_sync_root = (local_app_data / "KMTech" / "DirectSync" / "container_audit").resolve()
 
     assert report["status"] == "LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET"
     assert report["raw_secret_written"] is False
@@ -288,12 +291,101 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert credential["producer_id"] == "producer-pc-ip"
     assert credential["key_id"] == "server-key-pc-ip"
     assert credential["secret_ref"] == "dpapi:KMTech.DirectSync.ContainerAudit.pc-ip"
-    expected_direct_sync_root = program_data / "KMTech" / "DirectSync" / "container_audit"
+    expected_direct_sync_root = local_app_data / "KMTech" / "DirectSync" / "container_audit"
     assert credential["secret_data_dir"] == str(expected_direct_sync_root)
     assert "secret" not in credential
     assert captured["dpapi_data_dir"] == str(expected_direct_sync_root)
     assert captured["dpapi_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
     assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
+
+
+def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
+    tmp_path, monkeypatch
+):
+    local_app_data = tmp_path / "LocalAppData"
+    report_path = tmp_path / "registration-current-user.json"
+    profile_path = tmp_path / "profiles" / "Container_Audit" / "runtime-profile.json"
+    captured = {}
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "status": "enrolled",
+                "producer_id": "producer-current-user",
+                "key_id": "key-current-user",
+                "secret": "secret-current-user",
+                "active_manifest_hashes": [
+                    registration.manifest_hash(captured["manifest"])
+                ],
+                "machine_credential_bundle": {"fixture": True},
+            }
+
+    def fake_post(_url, *, json, **_kwargs):
+        captured["manifest"] = json["manifest"]
+        return FakeResponse()
+
+    def fake_profile(_bundle, **kwargs):
+        captured["profile_kwargs"] = kwargs
+        return {"status": "installed", "created_paths": []}
+
+    def fake_dpapi(data_dir, target_name, secret, *, credential_scope):
+        captured["dpapi"] = {
+            "data_dir": str(data_dir),
+            "target_name": target_name,
+            "secret": secret,
+            "credential_scope": credential_scope,
+        }
+        path = Path(data_dir) / "secrets" / f"{target_name}.dpapi"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"protected")
+        return path
+
+    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(
+        registration,
+        "ensure_runtime_profile_from_enrollment_bundle",
+        fake_profile,
+    )
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_dpapi)
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-CURRENT-USER",
+            "--self-enroll",
+            "--require-machine-credential-bundle",
+            "--credential-scope",
+            "current_user",
+            "--logistics-profile-path",
+            str(profile_path),
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert exit_code == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    credential = json.loads(Path(report["credential_path"]).read_text(encoding="utf-8"))
+    assert credential["dpapi_scope"] == "current_user"
+    assert captured["dpapi"]["credential_scope"] == "current_user"
+    assert captured["profile_kwargs"]["credential_scope"] == "current_user"
+    assert captured["profile_kwargs"]["profile_path"] == str(profile_path)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="CurrentUser DPAPI is Windows-only")
+def test_worker_pc_registration_current_user_dpapi_roundtrip():
+    protected = registration._dpapi_protect_current_user("PRODUCER-USER-SECRET")
+
+    assert protected != b"PRODUCER-USER-SECRET"
+    assert registration._dpapi_unprotect_current_user(protected) == (
+        "PRODUCER-USER-SECRET"
+    )
 
 
 def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_write(tmp_path, monkeypatch):
@@ -571,8 +663,7 @@ def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code="
 
 
 def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_path, monkeypatch):
-    _self_enroll_env(tmp_path, monkeypatch)
-    program_data = tmp_path / "ProgramData"
+    local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-persist-report.json"
     captured = {}
     monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured))
@@ -595,7 +686,7 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
     generated_install_id = f"container-audit-pc-persist-{0xEDE662C694C5:012x}"
 
@@ -617,9 +708,8 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
 
 
 def test_worker_pc_registration_reuses_persisted_identity_instead_of_new_node_id(tmp_path, monkeypatch):
-    _self_enroll_env(tmp_path, monkeypatch)
-    program_data = tmp_path / "ProgramData"
-    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
+    identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
     pinned = _identity_payload(
         "container-audit-pc-reuse",
@@ -762,11 +852,10 @@ def test_worker_pc_registration_uses_seeded_identity_file_path(tmp_path, monkeyp
 def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evidence(
     tmp_path, monkeypatch
 ):
-    _self_enroll_env(tmp_path, monkeypatch)
-    program_data = tmp_path / "ProgramData"
+    local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-conflict-report.json"
     captured = {}
-    identity_path = program_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
+    identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     monkeypatch.setattr(
         registration.requests,
         "post",

@@ -206,7 +206,9 @@ def test_canonical_field_layout_contract_matches_release_resources():
     )
 
 
-def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkeypatch):
+def test_retired_install_pack_defaults_to_current_user_storage_and_not_field_layout(
+    tmp_path, monkeypatch
+):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
@@ -248,8 +250,11 @@ def test_install_pack_defaults_to_container_audit_local_storage(tmp_path, monkey
     assert report["container_audit_storage"]["defaulted_program_data_root"] is True
     assert report["container_audit_storage"]["defaulted_scan_source_dir"] is True
     assert report["container_audit_storage"]["defaulted_source_glob"] is True
-    expected_direct_sync_root = (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
+    expected_direct_sync_root = (
+        local_app_data / "KMTech" / "DirectSync" / "container_audit"
+    ).resolve()
     assert report["program_data_root"] == str(expected_direct_sync_root)
+    assert report["field_layout_contract"]["production_layout_matches"] is False
     assert report["source_scan"]["scan_source_dir"] == str(expected_root / "events")
     assert report["source_scan"]["source_globs"] == ["*.csv"]
     assert report["task_principal"]["mode"] == "system_service_account"

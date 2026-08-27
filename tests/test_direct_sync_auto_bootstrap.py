@@ -1,356 +1,140 @@
 import json
 from pathlib import Path
-
 import direct_sync_auto_bootstrap as bootstrap
 
 
-def test_registration_command_uses_bundled_install_host(tmp_path):
+def _source_app(tmp_path: Path) -> Path:
     app_root = tmp_path / "app"
-    app_root.mkdir()
-    install_exe = app_root / "Container_Audit_DirectSync_Install.exe"
-    install_exe.write_bytes(b"exe")
-    direct_sync_root = tmp_path / "data" / "direct_sync"
-
-    command = bootstrap.build_registration_command(
-        app_root=app_root,
-        direct_sync_root=direct_sync_root,
-        server_base_url="https://worker.example.invalid",
-    )
-
-    assert command[0] == str(install_exe.resolve())
-    assert command[1] == "--register-worker-pc"
-    assert "--self-enroll" in command
-    assert command[command.index("--endpoint-url") + 1] == "https://worker.example.invalid/api/producer-ingest/v1/source-file"
-    assert command[command.index("--manifest-path") + 1] == str((direct_sync_root / "producer_manifest.json").resolve())
-    assert command[command.index("--credential-path") + 1] == str((direct_sync_root / "credential.json").resolve())
+    runner = app_root / "tools" / "direct_sync_relay_runner.py"
+    runner.parent.mkdir(parents=True)
+    runner.write_text("# runner\n", encoding="utf-8")
+    return app_root
 
 
-def test_registration_command_falls_back_to_install_host_script(tmp_path):
-    app_root = tmp_path / "app"
-    tools_dir = app_root / "tools"
-    tools_dir.mkdir(parents=True)
-    install_script = tools_dir / "direct_sync_relay_install_pack.py"
-    install_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
-
-    command = bootstrap.build_registration_command(
-        app_root=app_root,
-        direct_sync_root=tmp_path / "data" / "direct_sync",
-    )
-
-    assert Path(command[1]) == install_script.resolve()
-    assert command[2] == "--register-worker-pc"
-
-
-def test_install_command_prefers_bundled_install_exe(tmp_path):
-    app_root = tmp_path / "app"
-    app_root.mkdir()
-    install_exe = app_root / "Container_Audit_DirectSync_Install.exe"
-    install_exe.write_bytes(b"exe")
-    direct_sync_root = tmp_path / "data" / "direct_sync"
-    events_dir = tmp_path / "data" / "events"
-
-    command = bootstrap.build_install_command(
-        app_root=app_root,
-        direct_sync_root=direct_sync_root,
-        scan_source_dir=events_dir,
-    )
-
-    assert command[0] == str(install_exe.resolve())
-    assert "--apply" in command
-    assert "--confirm-production-install" not in command
-    assert command[command.index("--program-data-root") + 1] == str(direct_sync_root.resolve())
-    assert command[command.index("--scan-source-dir") + 1] == str(events_dir.resolve())
-    assert bootstrap.DEFAULT_SOURCE_GLOB in command
-
-
-def test_builtin_bootstrap_requires_explicit_enable(monkeypatch):
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", raising=False)
-    assert bootstrap._enabled() is False
-
-    monkeypatch.setenv("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", "true")
-    assert bootstrap._enabled() is True
-
-
-def test_session_direct_sync_command_forces_zero_age_scan_and_drain(tmp_path):
-    app_root = tmp_path / "app"
-    tools_dir = app_root / "tools"
-    tools_dir.mkdir(parents=True)
-    runner_script = tools_dir / "direct_sync_relay_runner.py"
-    runner_script.write_text("raise SystemExit(0)\n", encoding="utf-8")
-    direct_sync_root = tmp_path / "data" / "direct_sync"
-    events_dir = tmp_path / "data" / "events"
+def test_session_command_hosts_relay_without_scheduled_task(tmp_path):
+    app_root = _source_app(tmp_path)
+    direct_root = tmp_path / "state"
+    events = tmp_path / "events"
 
     command = bootstrap.build_session_direct_sync_command(
         app_root=app_root,
-        direct_sync_root=direct_sync_root,
-        scan_source_dir=events_dir,
+        direct_sync_root=direct_root,
+        scan_source_dir=events,
     )
 
-    assert command
-    assert Path(command[1]) == runner_script.resolve()
-    assert command[command.index("--scan-source-dir") + 1] == str(events_dir.resolve())
-    assert command[command.index("--producer-manifest-path") + 1] == str((direct_sync_root / "producer_manifest.json").resolve())
-    assert command[command.index("--credential-path") + 1] == str((direct_sync_root / "credential.json").resolve())
-    assert command[command.index("--min-source-file-age-seconds") + 1] == "0"
+    assert command[0] == bootstrap.sys.executable
+    assert command[1] == str(app_root / "tools" / "direct_sync_relay_runner.py")
     assert "--drain-after-scan" in command
+    assert "--scan-source-dir" in command
+    assert str(events.resolve()) in command
+    assert "schtasks.exe" not in " ".join(command).lower()
 
 
-def test_session_direct_sync_command_prefers_main_executable_relay_mode(tmp_path):
-    app_root = tmp_path / "app"
+def test_frozen_command_uses_hardened_main_in_process_mode(tmp_path):
+    app_root = tmp_path / "hardened"
     app_root.mkdir()
-    application_exe = app_root / "Container_Audit.exe"
-    application_exe.write_bytes(b"exe")
+    executable = app_root / "Container_Audit.exe"
+    executable.write_bytes(b"exe")
 
     command = bootstrap.build_session_direct_sync_command(
         app_root=app_root,
-        direct_sync_root=tmp_path / "data" / "direct_sync",
-        scan_source_dir=tmp_path / "data" / "events",
-    )
-
-    assert command[:2] == [str(application_exe.resolve()), bootstrap.DIRECT_SYNC_RELAY_MODE]
-    assert "Container_Audit_DirectSync_Relay.exe" not in " ".join(command)
-
-
-def test_install_command_falls_back_to_python_script(tmp_path):
-    app_root = tmp_path / "app"
-    tools_dir = app_root / "tools"
-    tools_dir.mkdir(parents=True)
-    script_path = tools_dir / "direct_sync_relay_install_pack.py"
-    script_path.write_text("raise SystemExit(0)\n", encoding="utf-8")
-
-    command = bootstrap.build_install_command(
-        app_root=app_root,
-        direct_sync_root=tmp_path / "data" / "direct_sync",
-        scan_source_dir=tmp_path / "data" / "events",
-    )
-
-    assert Path(command[1]) == script_path.resolve()
-
-
-def test_install_command_can_carry_production_task_principal(tmp_path):
-    app_root = tmp_path / "app"
-    app_root.mkdir()
-    install_exe = app_root / "Container_Audit_DirectSync_Install.exe"
-    install_exe.write_bytes(b"exe")
-
-    command = bootstrap.build_install_command(
-        app_root=app_root,
-        direct_sync_root=tmp_path / "data" / "direct_sync",
-        scan_source_dir=tmp_path / "data" / "events",
-        confirm_production_install=True,
-        task_run_user=r"TEST1\kmtech-dsync",
-        task_run_password_file=str(tmp_path / "task-password.txt"),
-    )
-
-    assert "--confirm-production-install" in command
-    assert command[command.index("--task-run-user") + 1] == r"TEST1\kmtech-dsync"
-    assert command[command.index("--task-run-password-file") + 1] == str(tmp_path / "task-password.txt")
-
-
-def test_install_command_requires_explicit_noncanonical_test_override(tmp_path):
-    app_root = tmp_path / "app"
-    app_root.mkdir()
-    (app_root / "Container_Audit_DirectSync_Install.exe").write_bytes(b"exe")
-
-    ordinary = bootstrap.build_install_command(
-        app_root=app_root,
-        direct_sync_root=tmp_path / "direct-sync",
+        direct_sync_root=tmp_path / "state",
         scan_source_dir=tmp_path / "events",
-        allow_interactive_task_for_local_test=True,
     )
-    explicit = bootstrap.build_install_command(
-        app_root=app_root,
-        direct_sync_root=tmp_path / "direct-sync",
+
+    assert command[:2] == [
+        str(executable.resolve()),
+        "--container-audit-direct-sync-relay",
+    ]
+
+
+def test_missing_runner_is_fail_closed(tmp_path):
+    result = bootstrap.run_session_direct_sync_once(
+        app_root=tmp_path / "missing",
+        direct_sync_root=tmp_path / "state",
         scan_source_dir=tmp_path / "events",
-        allow_noncanonical_layout_for_test=True,
     )
 
-    assert "--allow-interactive-task-for-local-test" in ordinary
-    assert "--allow-noncanonical-layout-for-test" not in ordinary
-    assert "--allow-noncanonical-layout-for-test" in explicit
+    assert result["status"] == "FAIL"
+    assert result["reason"] == "direct-sync relay runner is missing"
 
 
-def test_install_ready_requires_current_scan_source_dir(tmp_path):
-    direct_sync_root = tmp_path / "data" / "direct_sync"
-    events_dir = tmp_path / "data" / "events"
-    status_dir = direct_sync_root / "status"
-    status_dir.mkdir(parents=True)
-    application_exe = tmp_path / "app" / "Container_Audit.exe"
-    launcher_path = direct_sync_root / "bin" / "direct-sync-relay-container-audit.cmd"
-    launcher_path.parent.mkdir(parents=True)
-    launcher_path.write_text(
-        f'"{application_exe}" {bootstrap.DIRECT_SYNC_RELAY_MODE}\n',
-        encoding="utf-8",
+def test_lost_process_exit_code_is_unknown(monkeypatch):
+    def raise_timeout(*_args, **_kwargs):
+        raise TimeoutError("no process result")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", raise_timeout)
+
+    result = bootstrap._run_command(["relay"], 10)
+
+    assert result["status"] == "UNKNOWN"
+    assert result["reason"] == "relay process did not return an exit code"
+    assert result["error_type"] == "TimeoutError"
+
+
+def test_app_start_wake_records_current_user_topology(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        bootstrap,
+        "run_session_direct_sync_once",
+        lambda **_kwargs: {"status": "PASS", "returncode": 0},
+    )
+    state = tmp_path / "state"
+
+    report = bootstrap.run_direct_sync_auto_bootstrap(
+        app_root=tmp_path / "app",
+        direct_sync_root=state,
+        scan_source_dir=tmp_path / "events",
     )
 
-    report_path = status_dir / "container_audit_direct_sync_install.json"
-    report_path.write_text(
-        json.dumps(
-            {
-                "status": "PASS",
-                "program_data_root": str(direct_sync_root),
-                "task_name": "direct-sync-relay-container-audit",
-                "field_layout_contract": {"production_layout_matches": True},
-                "use_bundled_relay_executable": True,
-                "relay_execution_mode": "in_process_main_executable",
-                "bundled_relay_executable": {
-                    "path": str(application_exe),
-                    "mode": bootstrap.DIRECT_SYNC_RELAY_MODE,
-                },
-                "runner_command": [
-                    str(application_exe),
-                    bootstrap.DIRECT_SYNC_RELAY_MODE,
-                ],
-                "scheduled_task_launcher_path": str(launcher_path),
-                "scheduled_task_wrapper_path": str(launcher_path),
-                "source_scan": {
-                    "scan_source_dir": str(events_dir),
-                },
-            }
-        ),
-        encoding="utf-8",
+    persisted = json.loads(
+        (
+            state
+            / "status"
+            / "container_audit_direct_sync_auto_bootstrap.json"
+        ).read_text(encoding="utf-8")
     )
-
-    assert bootstrap._install_ready(
-        direct_sync_root,
-        "direct-sync-relay-container-audit",
-        events_dir,
-    )
-
-    launcher_path.write_text(
-        '"C:\\KMTech\\Apps\\Container_Audit\\current\\'
-        'Container_Audit_DirectSync_Relay.exe" --db-path queue.sqlite3\n',
-        encoding="utf-8",
-    )
-    assert not bootstrap._install_ready(
-        direct_sync_root,
-        "direct-sync-relay-container-audit",
-        events_dir,
-    )
-    assert bootstrap._legacy_install_repair_required(direct_sync_root)
-    launcher_path.write_text(
-        f'"{application_exe}" {bootstrap.DIRECT_SYNC_RELAY_MODE}\n',
-        encoding="utf-8",
-    )
-
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    payload["field_layout_contract"]["production_layout_matches"] = False
-    report_path.write_text(json.dumps(payload), encoding="utf-8")
-    assert not bootstrap._install_ready(
-        direct_sync_root,
-        "direct-sync-relay-container-audit",
-        events_dir,
-    )
-    payload["field_layout_contract"]["production_layout_matches"] = True
-    report_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    stale_events_dir = tmp_path / "Users" / "kmtech-remote-admin" / "AppData" / "Local" / "KMTech" / "ContainerAudit" / "events"
-    payload = json.loads(report_path.read_text(encoding="utf-8"))
-    payload["source_scan"]["scan_source_dir"] = str(stale_events_dir)
-    report_path.write_text(json.dumps(payload), encoding="utf-8")
-
-    assert not bootstrap._install_ready(
-        direct_sync_root,
-        "direct-sync-relay-container-audit",
-        events_dir,
-    )
+    assert report == persisted
+    assert report["status"] == "PASS"
+    assert report["principal"] == "current_user"
+    assert report["system_scheduled_task"] is False
+    assert report["persistent_retry"] == "HKCU_RUN_USER_RELAY"
 
 
-def test_install_ready_rejects_retired_helper_topology(tmp_path):
-    direct_sync_root = tmp_path / "data" / "direct_sync"
-    events_dir = tmp_path / "data" / "events"
-    status_dir = direct_sync_root / "status"
-    status_dir.mkdir(parents=True)
-    retired_helper = tmp_path / "app" / "Container_Audit_DirectSync_Relay.exe"
-    (status_dir / "container_audit_direct_sync_install.json").write_text(
-        json.dumps(
-            {
-                "status": "PASS",
-                "program_data_root": str(direct_sync_root),
-                "task_name": "direct-sync-relay-container-audit",
-                "field_layout_contract": {"production_layout_matches": True},
-                "use_bundled_relay_executable": True,
-                "bundled_relay_executable": {"path": str(retired_helper)},
-                "runner_command": [str(retired_helper), "--db-path", "queue.sqlite3"],
-                "source_scan": {"scan_source_dir": str(events_dir)},
-            }
-        ),
-        encoding="utf-8",
-    )
+def test_background_wake_is_single_per_root_and_releases_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONTAINER_AUDIT_SESSION_SYNC_TRIGGER", "1")
+    observed = []
 
-    assert not bootstrap._install_ready(
-        direct_sync_root,
-        "direct-sync-relay-container-audit",
-        events_dir,
-    )
+    def fake_run(**kwargs):
+        observed.append(kwargs)
+        return {"status": "PASS"}
 
-
-def test_startup_forces_legacy_topology_repair_even_when_bootstrap_is_disabled(
-    tmp_path, monkeypatch
-):
-    observed = {}
-
-    class FakeThread:
-        def __init__(self, **kwargs):
-            observed.update(kwargs)
-
-        def start(self):
-            observed["started"] = True
-
-    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap, "_enabled", lambda: False)
-    monkeypatch.setattr(bootstrap, "_legacy_install_repair_required", lambda _root: True)
-    monkeypatch.setattr(bootstrap.threading, "Thread", FakeThread)
-    bootstrap._STARTED_ROOTS.clear()
+    monkeypatch.setattr(bootstrap, "run_direct_sync_auto_bootstrap", fake_run)
+    state = tmp_path / "state"
 
     thread = bootstrap.start_direct_sync_auto_bootstrap(
         app_root=tmp_path / "app",
-        direct_sync_root=tmp_path / "direct-sync",
+        direct_sync_root=state,
         scan_source_dir=tmp_path / "events",
     )
-
     assert thread is not None
-    assert observed["started"] is True
-    assert observed["kwargs"]["force_install_repair"] is True
-    assert observed["kwargs"]["confirm_production_install"] is True
-    bootstrap._STARTED_ROOTS.clear()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert observed
+    assert bootstrap._STARTED_ROOTS == set()
 
 
-def test_forced_legacy_repair_requires_current_install_postcondition(tmp_path, monkeypatch):
-    app_root = tmp_path / "app"
-    direct_sync_root = tmp_path / "direct-sync"
-    events_dir = tmp_path / "events"
-    app_root.mkdir()
-    (app_root / bootstrap.INSTALL_EXE_NAME).write_bytes(b"exe")
-    monkeypatch.setattr(bootstrap, "CANONICAL_INSTALL_ROOT", str(app_root))
-    monkeypatch.setattr(bootstrap, "CANONICAL_DIRECT_SYNC_ROOT", str(direct_sync_root))
-    monkeypatch.setattr(bootstrap.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(bootstrap, "_registration_ready", lambda _root: True)
-    install_ready_results = iter((False, True))
-    monkeypatch.setattr(bootstrap, "_install_ready", lambda *_args: next(install_ready_results))
-    monkeypatch.setattr(bootstrap, "_task_exists", lambda _task: True)
-    elevated_calls = []
-    monkeypatch.setattr(
-        bootstrap,
-        "_run_elevated_task_repair",
-        lambda command, **kwargs: elevated_calls.append((command, kwargs))
-        or {"status": "PASS", "returncode": 0},
+def test_module_contains_no_task_install_or_elevation_path():
+    text = Path(bootstrap.__file__).read_text(encoding="utf-8")
+
+    for forbidden in (
+        "Register-ScheduledTask",
+        "New-ScheduledTask",
+        "Start-ScheduledTask",
+        "schtasks.exe",
+        "runas",
+        "Verb RunAs",
+    ):
+        assert forbidden not in text
+    assert bootstrap._install_report_relay_topology({}) == (
+        "retired_scheduled_task_contract"
     )
-    monkeypatch.setattr(
-        bootstrap,
-        "_start_task",
-        lambda _task: (_ for _ in ()).throw(AssertionError("repair starts the task itself")),
-    )
-
-    report = bootstrap.run_direct_sync_auto_bootstrap(
-        app_root=app_root,
-        direct_sync_root=direct_sync_root,
-        scan_source_dir=events_dir,
-        confirm_production_install=True,
-        force_install_repair=True,
-    )
-
-    assert report["status"] == "PASS"
-    assert report["task_start"]["status"] == "PASS"
-    assert len(elevated_calls) == 1

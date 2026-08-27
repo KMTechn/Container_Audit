@@ -48,6 +48,7 @@ DEFAULT_ENDPOINT_URL = "https://worker.kmtecherp.com/api/producer-ingest/v1/sour
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v1"
 DEFAULT_ENROLLMENT_TOKEN_ENV = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
+CRYPTPROTECT_UI_FORBIDDEN = 0x1
 CONTAINER_AUDIT_APP = "ContainerAudit"
 CANONICAL_STREAM_CATALOG_RELATIVE = (
     Path("kmtech_factory_contracts") / "bundle" / "v1" / "catalogs" / "canonical-stream-catalog.json"
@@ -472,7 +473,32 @@ def _dpapi_protect_machine(secret: str) -> bytes:
         None,
         None,
         None,
-        CRYPTPROTECT_LOCAL_MACHINE,
+        CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+        byref(output_blob),
+    ):
+        raise DirectSyncPushError("dpapi secret bootstrap failed")
+    try:
+        return ctypes.string_at(output_blob.pbData, output_blob.cbData)
+    finally:
+        ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output_blob.pbData))
+
+
+def _dpapi_protect_current_user(secret: str) -> bytes:
+    if sys.platform != "win32":
+        raise DirectSyncPushError("dpapi secret bootstrap requires Windows")
+    from ctypes import byref
+
+    secret_bytes = secret.encode("utf-8")
+    input_buffer = ctypes.create_string_buffer(secret_bytes, len(secret_bytes))
+    input_blob = _DataBlob(len(secret_bytes), ctypes.cast(input_buffer, ctypes.c_void_p))
+    output_blob = _DataBlob()
+    if not ctypes.windll.crypt32.CryptProtectData(
+        byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN,
         byref(output_blob),
     ):
         raise DirectSyncPushError("dpapi secret bootstrap failed")
@@ -490,7 +516,15 @@ def _dpapi_unprotect_current_user(protected: bytes) -> str:
     input_buffer = ctypes.create_string_buffer(protected, len(protected))
     input_blob = _DataBlob(len(protected), ctypes.cast(input_buffer, ctypes.c_void_p))
     output_blob = _DataBlob()
-    if not ctypes.windll.crypt32.CryptUnprotectData(byref(input_blob), None, None, None, None, 0, byref(output_blob)):
+    if not ctypes.windll.crypt32.CryptUnprotectData(
+        byref(input_blob),
+        None,
+        None,
+        None,
+        None,
+        CRYPTPROTECT_UI_FORBIDDEN,
+        byref(output_blob),
+    ):
         raise DirectSyncPushError("dpapi secret verify failed")
     try:
         return ctypes.string_at(output_blob.pbData, output_blob.cbData).decode("utf-8")
@@ -498,14 +532,27 @@ def _dpapi_unprotect_current_user(protected: bytes) -> str:
         ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output_blob.pbData))
 
 
-def _write_dpapi_secret(data_dir: str | os.PathLike[str], target_name: str, secret: str) -> Path:
+def _write_dpapi_secret(
+    data_dir: str | os.PathLike[str],
+    target_name: str,
+    secret: str,
+    *,
+    credential_scope: str = "machine",
+) -> Path:
     safe_name = _safe_secret_ref_name(target_name)
     base_dir = Path(data_dir).expanduser().resolve()
     if is_legacy_syncthing_path(base_dir):
         raise DirectSyncPushError("secret_data_dir must not point at the legacy Syncthing folder")
     secret_path = base_dir / "secrets" / f"{safe_name}.dpapi"
     secret_path.parent.mkdir(parents=True, exist_ok=True)
-    secret_path.write_bytes(_dpapi_protect_machine(secret))
+    selected_scope = str(credential_scope or "").strip().lower()
+    if selected_scope == "current_user":
+        protected = _dpapi_protect_current_user(secret)
+    elif selected_scope == "machine":
+        protected = _dpapi_protect_machine(secret)
+    else:
+        raise DirectSyncPushError("credential_scope must be machine or current_user")
+    secret_path.write_bytes(protected)
     if _dpapi_unprotect_current_user(secret_path.read_bytes()) != secret:
         raise DirectSyncPushError("dpapi secret verify failed")
     return secret_path
@@ -517,6 +564,7 @@ def _bootstrap_secret_ref(
     secret_ref_target: str,
     credential: dict,
     secret: str,
+    credential_scope: str = "machine",
 ) -> dict:
     if secret_ref_scheme == "wincred":
         _write_wincred_secret(_wincred_target_name(secret_ref_target), secret)
@@ -525,11 +573,26 @@ def _bootstrap_secret_ref(
         secret_data_dir = str(credential.get("secret_data_dir") or "").strip()
         if not secret_data_dir:
             raise DirectSyncPushError("dpapi secret bootstrap requires secret_data_dir")
-        secret_path = _write_dpapi_secret(secret_data_dir, secret_ref_target, secret)
+        if credential_scope == "current_user":
+            secret_path = _write_dpapi_secret(
+                secret_data_dir,
+                secret_ref_target,
+                secret,
+                credential_scope=credential_scope,
+            )
+        else:
+            # Preserve the historical callable seam used by machine-scope
+            # qualification fixtures; only the new user path needs the option.
+            secret_path = _write_dpapi_secret(
+                secret_data_dir,
+                secret_ref_target,
+                secret,
+            )
         return {
             "secret_ref_scheme": "dpapi",
             "secret_data_dir": str(Path(secret_data_dir).expanduser().resolve()),
             "secret_artifact_path": str(secret_path),
+            "credential_scope": credential_scope,
         }
     raise DirectSyncPushError("self-enroll secret bootstrap requires dpapi: or wincred: secret_ref")
 
@@ -626,6 +689,13 @@ def _self_enroll(
             expected_program="Container_Audit",
             expected_source_host_id=str(identity["source_host_id"]),
             expected_device_id=str(identity["pc_id"]),
+            profile_path=(
+                str(getattr(args, "logistics_profile_path", "") or "").strip()
+                or None
+            ),
+            credential_scope=str(
+                getattr(args, "credential_scope", "machine") or "machine"
+            ),
         )
     if machine_profile is None and bool(getattr(args, "require_machine_credential_bundle", False)):
         raise DirectSyncPushError("self-enroll response missing machine credential bundle")
@@ -635,6 +705,9 @@ def _self_enroll(
             secret_ref_target=secret_ref_target,
             credential=credential,
             secret=secret,
+            credential_scope=str(
+                getattr(args, "credential_scope", "machine") or "machine"
+            ),
         )
     except Exception:
         for created_path in (machine_profile or {}).get("created_paths", []):
@@ -719,6 +792,9 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     }
     if secret_ref_scheme == "dpapi":
         credential["secret_data_dir"] = str(storage_paths.direct_sync_root)
+        credential["dpapi_scope"] = str(
+            getattr(args, "credential_scope", "machine") or "machine"
+        )
     if isolated_context is not None:
         credential["isolated_qualification_context_path"] = str(
             Path(isolated_context_path).expanduser().resolve()
@@ -793,6 +869,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--producer-id", default="")
     parser.add_argument("--key-id", default="")
     parser.add_argument("--secret-ref", default="")
+    parser.add_argument(
+        "--credential-scope",
+        choices=("machine", "current_user"),
+        default="machine",
+    )
+    parser.add_argument("--logistics-profile-path", default="")
     parser.add_argument("--self-enroll", action="store_true")
     machine_profile_group = parser.add_mutually_exclusive_group()
     machine_profile_group.add_argument("--require-machine-credential-bundle", action="store_true")

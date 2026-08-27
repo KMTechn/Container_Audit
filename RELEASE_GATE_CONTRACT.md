@@ -27,116 +27,75 @@ canonical adoption.
 
 ## Installation, discoverability, and rollback contract
 
-`install_status=PASS` proves installation infrastructure only: authenticated
-self-enrollment, the SYSTEM relay task, its current server lease, and the
-all-users launcher contract. The installer must also print
-`operator_readiness_status=PENDING_FIRST_LAUNCH` and
-`first_launch_catalog_status=NOT_TESTED`. Overall installation qualification is
-therefore `UNPROVEN` until the same non-elevated operator captured before UAC
-launches the installed application and proves the authenticated central catalog
-baseline. The installer must not seed the per-user cache, copy the bundled
-catalog into it, weaken trusted-origin or authentication checks, or claim
-catalog success from an elevated install.
+The public bootstrap is `INSTALL_THIS_PC.ps1`. It has one privileged boundary:
+copy the frozen release code into
+`C:\KMTech\Apps\Container_Audit\current`, make that tree administrator-writable
+and user-readable/executable, and write `bootstrap-integrity.json` for the exact
+placement. It must not enroll a producer, create identity/profile/ledger/queue,
+write HKCU persistence, create shortcuts, or register any scheduled task.
 
-Worker-PC registration on the public install path is hosted by the already
-required `Container_Audit_DirectSync_Install.exe` entrypoint. Its
-`--register-worker-pc` dispatch calls the registration module in-process and
-forwards the existing registration arguments unchanged; a standalone
-`Container_Audit_Worker_PC_Register.exe` must not be built, shipped, required,
-or launched. The server authorization, machine credential, TLS, routing,
-manifest-hash, and registration-report gates remain unchanged.
+The non-elevated operator then launches the hardened `Container_Audit.exe`.
+Before constructing the application client, first-run onboarding creates and
+readbacks the server-authorized producer bundle, CurrentUser-DPAPI logistics
+profile, business ledger, durable queue, and current-user relay persistence.
+An existing complete and matching state is reused. Partial, conflicting, or
+unreadable state is `RECOVERY_REQUIRED`; a missing result or exit code is
+`UNKNOWN` and must never be converted to success.
 
-The supported operator entry point is exactly the all-users Start Menu shortcut
-`CommonPrograms\KMTech\이적 검사 시스템.lnk`. Its target and icon are
-`C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe`, its working
-directory is `C:\KMTech\Apps\Container_Audit\current`, and it has no
-arguments. Installation must read those fields back before reporting
-infrastructure PASS. An identical shortcut is idempotent; a conflicting link
-blocks installation or removal. No desktop shortcut is part of this contract.
+The current-user state roots are:
 
-The package-integrated isolated qualification route is enabled only by the
-explicit `-EnableWindowsSandboxQualification` installer switch. The switch is
-fail-closed unless the captured non-elevated operator is the canonical Windows
-Sandbox `WDAGUtilityAccount` profile with its RID-504 SID, the install uses the
-canonical application and ProgramData roots, and `ServerBaseUrl` remains the
-unaltered production default. The packaged authority then generates a new
-private CA, TLS key, producer secret, logistics token, and operation-lease key
-inside that disposable guest; binds HTTPS only to `127.0.0.1`; and exposes only
-the enrollment, runtime-lease, ingest, authenticated item-catalog, PHS=2 lookup,
-and signed operation-lease boundaries needed for representative qualification.
-It retains no uploaded payloads and cannot write to production. Production URL,
-private-address, authentication, and credential guards remain unchanged when
-that exact package-owned context is absent.
+- `%LOCALAPPDATA%\KMTech\ContainerAudit` for business state and the ledger;
+- `%LOCALAPPDATA%\KMTech\DirectSync\container_audit` for identity, manifest,
+  credential, queue, spool, status, logs, and relay control;
+- `%LOCALAPPDATA%\KMTech\Logistics\profiles\Container_Audit` for the
+  CurrentUser-DPAPI logistics profile and token.
 
-The qualification authority is an owned SYSTEM startup task named
-`container-audit-isolated-qualification-authority`. Its runtime-generated state
-is under the app-scoped DirectSync root, its private files are readable only by
-SYSTEM and Administrators, and the operator receives read access only to the
-public client context, CA certificate, and sanitized operator fixture. Plain
-uninstall removes the owned task and process while preserving this data;
-explicit pristine rollback removes the task first and then removes the entire
-app-owned DirectSync tree under the same strict guards as production state.
+Persistence is the exact HKCU Run value
+`Software\Microsoft\Windows\CurrentVersion\Run\KMTech.ContainerAudit.Relay`.
+It starts the hardened main executable with
+`--container-audit-user-relay` as the logged-in user. A single-instance relay
+per user drains the durable queue at login, app start, and a bounded interval
+of at most 60 seconds, so an offline item is retried after connectivity returns.
+No SYSTEM or AtStartup scheduled task is part of the current topology. The old
+qualification-only authority and field relay tasks are removal-only legacy
+objects and must never be re-created by this bootstrap or first-run path.
 
-Plain uninstall removes the replaceable application footprint while preserving
-runtime and business state:
+Bootstrap PASS proves only code placement and its integrity record. Overall
+installation remains `UNPROVEN` until the same non-elevated operator completes
+first-run onboarding, launches the GUI, proves the authenticated catalog and a
+representative transaction, and demonstrates restart/persistence plus one
+offline-to-online queue flush.
+
+g5 removal is intentionally split across trust boundaries. First, the current
+user runs:
+
+```powershell
+C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe --remove-current-user-setup
+```
+
+This removes the exact HKCU Run value, requests graceful termination of the
+single owned user relay, and proves its instance lock is absent. It writes a
+redacted current-user removal report and preserves identity, profile, ledger,
+events, queue, spool, status, and logs. A missing relay-absence result is
+`UNKNOWN` and fails removal; it is never treated as zero.
+
+Second, an administrator runs the code-placement inverse:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
 ```
 
-It removes the exact owned tasks, shortcut, and
-`C:\KMTech\Apps\Container_Audit\current` tree. It preserves event, queue,
-catalog, profile, credential, update-backup, update-evidence, and unrelated
-sibling state, and reports `uninstall_status=PASS_DATA_PRESERVED` plus
-`application_root_status=ABSENT`. It is not pristine rollback and must never
-print `rollback_status=PASS`.
+The inverse removes only `C:\KMTech\Apps\Container_Audit\current` after strict
+path and reparse-point checks. It also removes the two known legacy scheduled
+tasks only when their single action proves Container ownership, then reads back
+their absence. User data remains preserved. Foreign tasks, foreign paths,
+filesystem roots, junctions, or ambiguous actions block removal.
 
-Qualification-only permanent rollback requires all three explicit inputs:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 `
-  -Uninstall `
-  -PurgeContainerAuditState `
-  -ConfirmPermanentContainerAuditDataRemoval `
-  -RollbackReportPath <EXTERNAL-EVIDENCE-PATH>
-```
-
-The confirmation may be supplied only after the qualification owner has proved
-no active tray or unresolved operation, a fully ACKed relay, and no running GUI
-or packaged relay process. The packaged relay is a separate SYSTEM process that
-hosts relay mode in `Container_Audit.exe`; it is not a distinct relay helper PE.
-The one-time `v2.0.96` to `v2.0.97` automatic-update bridge remains **UNKNOWN**
-when the retired helper process is active: the `v2.0.96` updater cannot be
-retroactively taught to quiesce that process before mirroring. Migrate that
-topology only with the public `INSTALL_THIS_PC.ps1` installer after proving the
-GUI and relay idle. Do not retain or redistribute the retired helper as a
-compatibility workaround. Updates launched by `v2.0.97` and later must disable
-and stop the owned SYSTEM relay task, verify the owned relay process is absent,
-and restore the task only after a successful mirror or completed rollback.
-The report path must be a fresh absolute file
-outside every deletion target. The bounded report records only path/status
-metadata and must never contain tokens, DPAPI bytes, profile secrets, event
-payloads, or barcodes.
-
-Before any deletion, rollback must prove canonical production paths, the
-captured operator SID/LocalAppData binding, exact task action/principal, exact
-shortcut metadata, app-scoped DirectSync ownership, an allowlisted application
-parent inventory, and absence of reparse points throughout every existing
-target. A foreign task, shortcut, application-parent child, path escape,
-filesystem root, alternate stream, symlink, or junction is a blocking failure.
-`AllowNoncanonicalLayoutForTest` cannot authorize deletion.
-
-Deletion order is fixed: qualification-authority task; relay task; shortcut;
-app-scoped logistics profile; DirectSync root; captured operator data; captured
-operator catalog; update
-backup and evidence siblings; application `current` root last. Only the now
-empty `C:\KMTech\Apps\Container_Audit` parent and now-empty KMTech Start Menu
-group may then be removed; shared `Apps`, `ProgramData\KMTech`, Logistics,
-DirectSync, LocalAppData `KMTech`, profile, and filesystem roots must never be
-recursively deleted. `rollback_status=PASS` requires a final task lookup and
-existence check proving every inventory item absent. Exact-target qualification
-must compare that result with the recorded pristine prestate while proving
-unrelated parents and siblings unchanged.
+Neither public command performs destructive data purge. Any future purge needs
+a separately reviewed command and explicit approval after proving no active
+work and a fully ACKed queue. Rollback during development is the inverse of the
+source changes plus removal of test-only E-drive evidence; deployment rollback
+uses the two commands above in that order.
 
 ## Exact commands
 

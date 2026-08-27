@@ -14,7 +14,17 @@ import uuid
 
 
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
-PRODUCT_MODES = frozenset({DIRECT_SYNC_RELAY_MODE})
+USER_RELAY_MODE = "--container-audit-user-relay"
+ONBOARD_CURRENT_USER_MODE = "--onboard-current-user"
+REMOVE_CURRENT_USER_MODE = "--remove-current-user-setup"
+PRODUCT_MODES = frozenset(
+    {
+        DIRECT_SYNC_RELAY_MODE,
+        USER_RELAY_MODE,
+        ONBOARD_CURRENT_USER_MODE,
+        REMOVE_CURRENT_USER_MODE,
+    }
+)
 HOSTED_RELAY_FAILURE_EXIT_CODE = 1
 
 
@@ -72,6 +82,23 @@ def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> 
         "updated_at": captured_at,
     }
     status_path = _option_value(arguments, "--runtime-status-path")
+    if not status_path and USER_RELAY_MODE in arguments:
+        try:
+            from storage_policy import build_container_audit_storage_paths
+
+            app_root = (
+                Path(sys.executable).resolve().parent
+                if getattr(sys, "frozen", False)
+                else Path(__file__).resolve().parent
+            )
+            status_path = str(
+                build_container_audit_storage_paths(
+                    application_path=str(app_root)
+                ).status_dir
+                / "container_audit_user_relay.json"
+            )
+        except Exception:
+            status_path = ""
     if status_path:
         try:
             _write_json_atomic(Path(status_path), diagnostic)
@@ -129,4 +156,20 @@ def dispatch_product_mode(argv: Sequence[str]) -> int | None:
             except Exception as exc:
                 _record_hosted_relay_failure(arguments, exc)
                 return HOSTED_RELAY_FAILURE_EXIT_CODE
+        if mode == USER_RELAY_MODE:
+            try:
+                from user_relay import main as user_relay_main
+
+                return int(user_relay_main(arguments))
+            except Exception as exc:
+                _record_hosted_relay_failure([USER_RELAY_MODE, *arguments], exc)
+                return HOSTED_RELAY_FAILURE_EXIT_CODE
+        if mode == ONBOARD_CURRENT_USER_MODE:
+            from current_user_onboarding import onboarding_main
+
+            return int(onboarding_main(arguments))
+        if mode == REMOVE_CURRENT_USER_MODE:
+            from current_user_onboarding import removal_main
+
+            return int(removal_main(arguments))
     raise AssertionError(f"unhandled Container_Audit product mode: {mode}")

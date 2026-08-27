@@ -69,9 +69,14 @@ def _default_direct_sync_root(data_root: Path, application_path: Optional[str] =
     if os.getenv(DATA_ROOT_ENV):
         return data_root / DIRECT_SYNC_DIR_NAME
 
-    program_data = os.getenv("PROGRAMDATA")
-    if program_data:
-        return _resolve_path(Path(program_data) / DEFAULT_VENDOR_DIR / "DirectSync" / DEFAULT_DIRECT_SYNC_APP_DIR)
+    local_app_data = os.getenv("LOCALAPPDATA")
+    if local_app_data:
+        return _resolve_path(
+            Path(local_app_data)
+            / DEFAULT_VENDOR_DIR
+            / "DirectSync"
+            / DEFAULT_DIRECT_SYNC_APP_DIR
+        )
 
     if application_path:
         return _resolve_path(Path(application_path) / "runtime_data" / DIRECT_SYNC_DIR_NAME)

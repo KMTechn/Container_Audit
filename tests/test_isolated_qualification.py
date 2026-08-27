@@ -224,7 +224,7 @@ def test_packaged_operator_fixture_and_signed_lease_pass_real_client_validation(
     assert claims["item_id"] == authority.QUALIFICATION_ITEM_CODE
 
 
-def test_release_package_and_installer_own_qualification_authority():
+def test_release_keeps_diagnostic_authority_but_bootstrap_never_starts_it():
     required = __import__("update_service").REQUIRED_UPDATE_ARCHIVE_FILES
     assert {
         "Container_Audit/Container_Audit_Qualification_Authority.exe",
@@ -238,25 +238,16 @@ def test_release_package_and_installer_own_qualification_authority():
     installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
     assert '"Container_Audit_Qualification_Authority"' in builder
     assert '"tools/isolated_qualification_authority.py"' in builder
-    assert "EnableWindowsSandboxQualification" in installer
+    assert "EnableWindowsSandboxQualification" not in installer
+    assert "ServerBaseUrl" not in installer
+    assert "Register-ScheduledTask" not in installer
+    assert "New-ScheduledTask" not in installer
+    assert "Start-ScheduledTask" not in installer
     assert (
-        "$allowExplicitHttpServerBaseUrl = "
-        "$EnableWindowsSandboxQualification.IsPresent"
+        '$LegacyQualificationTaskName = '
+        '"container-audit-isolated-qualification-authority"'
     ) in installer
-    assert (
-        "$allowExplicitHttpServerBaseUrl = "
-        '$PSBoundParameters.ContainsKey("ServerBaseUrl")'
-    ) not in installer
-    assert (
-        "Windows Sandbox qualification ServerBaseUrl override must be an HTTP origin."
-        in installer
-    )
-    assert "container-audit-isolated-qualification-authority" in installer
-    assert "qualification_authority_process_status=ABSENT" in installer
-    assert "qualification_authority_task_status=ABSENT" in installer
-    assert '"*S-1-5-32-545:RX"' in installer
-    assert '"*S-1-5-32-545:(OI)(CI)RX"' not in installer
-    assert '"*S-1-5-32-545:R"' in installer
+    assert "*S-1-5-32-545:(OI)(CI)RX" in installer
 
 
 def test_untrusted_profile_marker_cannot_broaden_catalog_origin():

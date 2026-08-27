@@ -1,26 +1,22 @@
-"""Auto-install Container_Audit direct-sync relay when the app starts."""
+"""Current-user DirectSync wake paths for Container_Audit."""
 
 from __future__ import annotations
 
-import base64
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
+import uuid
 
 
-DEFAULT_SERVER_BASE_URL = "https://worker.kmtecherp.com"
-DEFAULT_ENDPOINT_PATH = "/api/producer-ingest/v1/source-file"
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
-CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
-NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
+CANONICAL_DIRECT_SYNC_ROOT = r"%LOCALAPPDATA%\KMTech\DirectSync\container_audit"
 DEFAULT_SOURCE_GLOB = "*.csv"
-INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
 APPLICATION_EXE_NAME = "Container_Audit.exe"
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 
@@ -31,41 +27,18 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def _join_url(base_url: str, path: str) -> str:
-    base = str(base_url or "").strip().rstrip("/")
-    return f"{base}{path if path.startswith('/') else '/' + path}"
-
-
-def _enabled() -> bool:
-    if os.environ.get("PYTEST_CURRENT_TEST"):
-        return False
-    value = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP", "").strip().lower()
-    return value in {"1", "true", "yes", "on", "enabled"}
-
-
-def _session_sync_trigger_enabled() -> bool:
-    value = os.environ.get("CONTAINER_AUDIT_SESSION_SYNC_TRIGGER", "").strip().lower()
-    if value in {"0", "false", "no", "off", "disabled"}:
-        return False
-    if value in {"1", "true", "yes", "on", "enabled"}:
-        return True
-    return not bool(os.environ.get("PYTEST_CURRENT_TEST"))
-
-
-def _read_json(path: Path) -> dict[str, Any] | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def _existing_file(*paths: Path) -> Path | None:
@@ -77,18 +50,6 @@ def _existing_file(*paths: Path) -> Path | None:
         if resolved.is_file():
             return resolved
     return None
-
-
-def _tool_command(app_root: Path, exe_name: str, script_name: str) -> list[str]:
-    exe = _existing_file(app_root / exe_name, app_root / "tools" / exe_name)
-    if exe is not None:
-        return [str(exe)]
-    script = app_root / "tools" / script_name
-    if not script.is_file():
-        return []
-    if getattr(sys, "frozen", False):
-        return []
-    return [sys.executable, str(script)]
 
 
 def _runtime_paths(direct_sync_root: str | os.PathLike[str]) -> dict[str, str]:
@@ -120,7 +81,6 @@ def build_session_direct_sync_command(
         command = [sys.executable, str(runner_script)]
     else:
         return []
-
     root = Path(direct_sync_root).expanduser().resolve()
     paths = _runtime_paths(root)
     command.extend(
@@ -142,7 +102,7 @@ def build_session_direct_sync_command(
             "--operator-pause-path",
             paths["operator_pause_path"],
             "--worker-id",
-            f"{task_name}-session-sync",
+            f"{task_name}-current-user",
             "--scan-source-dir",
             str(Path(scan_source_dir).expanduser().resolve()),
             "--source-glob",
@@ -157,263 +117,27 @@ def build_session_direct_sync_command(
     return command
 
 
-def build_registration_command(
-    *,
-    app_root: str | os.PathLike[str],
-    direct_sync_root: str | os.PathLike[str],
-    server_base_url: str = DEFAULT_SERVER_BASE_URL,
-    report_path: str | os.PathLike[str] | None = None,
-) -> list[str]:
-    root = Path(direct_sync_root).expanduser().resolve()
-    selected_app_root = Path(app_root).expanduser().resolve()
-    selected_report = Path(report_path).expanduser().resolve() if report_path else root / "status" / "worker_pc_registration.json"
-    command = _tool_command(
-        selected_app_root,
-        INSTALL_EXE_NAME,
-        "direct_sync_relay_install_pack.py",
-    )
-    if not command:
-        return []
-    command.append("--register-worker-pc")
-    command.extend(
-        [
-            "--app-root",
-            str(selected_app_root),
-            "--endpoint-url",
-            _join_url(server_base_url, DEFAULT_ENDPOINT_PATH),
-            "--self-enroll",
-            "--manifest-path",
-            str(root / "producer_manifest.json"),
-            "--credential-path",
-            str(root / "credential.json"),
-            "--report-path",
-            str(selected_report),
-        ]
-    )
-    return command
-
-
-def build_install_command(
-    *,
-    app_root: str | os.PathLike[str],
-    direct_sync_root: str | os.PathLike[str],
-    scan_source_dir: str | os.PathLike[str],
-    task_name: str = DEFAULT_TASK_NAME,
-    report_path: str | os.PathLike[str] | None = None,
-    confirm_production_install: bool = False,
-    task_run_user: str = "",
-    task_run_password_env: str = "",
-    task_run_password_file: str = "",
-    allow_interactive_task_for_local_test: bool = False,
-    allow_noncanonical_layout_for_test: bool = False,
-) -> list[str]:
-    root = Path(direct_sync_root).expanduser().resolve()
-    selected_app_root = Path(app_root).expanduser().resolve()
-    selected_report = Path(report_path).expanduser().resolve() if report_path else root / "status" / "container_audit_direct_sync_install.json"
-    command = _tool_command(
-        selected_app_root,
-        INSTALL_EXE_NAME,
-        "direct_sync_relay_install_pack.py",
-    )
-    if not command:
-        return []
-    command.extend(
-        [
-            "--apply",
-            "--app-root",
-            str(selected_app_root),
-            "--program-data-root",
-            str(root),
-            "--producer-manifest-path",
-            str(root / "producer_manifest.json"),
-            "--credential-path",
-            str(root / "credential.json"),
-            "--scan-source-dir",
-            str(Path(scan_source_dir).expanduser().resolve()),
-            "--source-glob",
-            DEFAULT_SOURCE_GLOB,
-            "--task-name",
-            task_name,
-            "--report-path",
-            str(selected_report),
-        ]
-    )
-    if confirm_production_install:
-        command.append("--confirm-production-install")
-    if task_run_user:
-        command.extend(["--task-run-user", task_run_user])
-    if task_run_password_env:
-        command.extend(["--task-run-password-env", task_run_password_env])
-    if task_run_password_file:
-        command.extend(["--task-run-password-file", task_run_password_file])
-    if allow_interactive_task_for_local_test:
-        command.append("--allow-interactive-task-for-local-test")
-    if allow_noncanonical_layout_for_test:
-        command.append("--allow-noncanonical-layout-for-test")
-    return command
-
-
-def _registration_ready(root: Path) -> bool:
-    if not (root / "producer_manifest.json").is_file() or not (root / "credential.json").is_file():
-        return False
-    for report_path in sorted((root / "status").glob("*registration*.json")):
-        report = _read_json(report_path)
-        if not report:
-            continue
-        if report.get("server_registration_verified") is True:
-            return True
-        if str(report.get("status") or "") == "SELF_ENROLLMENT_REGISTERED":
-            return True
-    return False
-
-
-def _install_report_relay_topology(report: dict[str, Any]) -> str:
-    runner_command = report.get("runner_command")
-    bundled = report.get("bundled_relay_executable")
-    if not isinstance(runner_command, list) or not runner_command:
-        return "invalid"
-    bundled = bundled if isinstance(bundled, dict) else {}
-    runner_executable = Path(str(runner_command[0] or "")).name.casefold()
-    bundled_executable = Path(str(bundled.get("path") or "")).name.casefold()
-    mode = str(report.get("relay_execution_mode") or "")
-    if (
-        report.get("use_bundled_relay_executable") is True
-        and mode == "in_process_main_executable"
-        and runner_executable == APPLICATION_EXE_NAME.casefold()
-        and bundled_executable == APPLICATION_EXE_NAME.casefold()
-        and len(runner_command) >= 2
-        and str(runner_command[1]) == DIRECT_SYNC_RELAY_MODE
-        and str(bundled.get("mode") or "") == DIRECT_SYNC_RELAY_MODE
-    ):
-        return "current"
-    retired_name = "Container_Audit_DirectSync_Relay.exe".casefold()
-    if runner_executable == retired_name or bundled_executable == retired_name:
-        return "legacy_helper"
-    return "invalid"
-
-
-def _install_launcher_relay_topology(
-    root: Path,
-    task_name: str,
-    report: dict[str, Any],
-) -> str:
-    expected_launcher = root / "bin" / f"{task_name}.cmd"
-    report_launcher = str(report.get("scheduled_task_launcher_path") or "")
-    report_wrapper = str(report.get("scheduled_task_wrapper_path") or "")
-    try:
-        expected_resolved = expected_launcher.resolve()
-        if not report_launcher or Path(report_launcher).expanduser().resolve() != expected_resolved:
-            return "invalid"
-        if report_wrapper and Path(report_wrapper).expanduser().resolve() != expected_resolved:
-            return "invalid"
-        if not expected_resolved.is_file() or expected_resolved.stat().st_size > 256 * 1024:
-            return "invalid"
-        launcher_text = expected_resolved.read_text(encoding="utf-8-sig")
-    except (OSError, UnicodeError, ValueError):
-        return "invalid"
-    if "container_audit_directsync_relay.exe" in launcher_text.casefold():
-        return "legacy_helper"
-    runner_command = report.get("runner_command")
-    bundled = report.get("bundled_relay_executable")
-    if not isinstance(runner_command, list) or len(runner_command) < 2:
-        return "invalid"
-    if not isinstance(bundled, dict):
-        return "invalid"
-    try:
-        runner_executable = str(Path(str(runner_command[0])).expanduser().resolve())
-        bundled_executable = str(Path(str(bundled.get("path") or "")).expanduser().resolve())
-    except (OSError, ValueError):
-        return "invalid"
-    folded_launcher = launcher_text.casefold()
-    if (
-        os.path.normcase(runner_executable) == os.path.normcase(bundled_executable)
-        and runner_executable.casefold() in folded_launcher
-        and DIRECT_SYNC_RELAY_MODE in launcher_text
-    ):
-        return "current"
-    return "invalid"
-
-
-def _legacy_install_repair_required(root: Path) -> bool:
-    report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
-    if not report or report.get("status") != "PASS":
-        return False
-    report_topology = _install_report_relay_topology(report)
-    if report_topology == "legacy_helper":
-        return True
-    return bool(
-        report_topology == "current"
-        and _install_launcher_relay_topology(root, DEFAULT_TASK_NAME, report) == "legacy_helper"
-    )
-
-
-def _task_exists(task_name: str) -> bool:
-    if os.name != "nt":
-        return False
+def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     try:
         completed = subprocess.run(
-            ["schtasks.exe", "/Query", "/TN", task_name],
+            command,
             check=False,
             capture_output=True,
             text=True,
-            timeout=10,
-        )
-    except Exception:
-        return False
-    return completed.returncode == 0
-
-
-def _install_ready(root: Path, task_name: str, scan_source_dir: str | os.PathLike[str]) -> bool:
-    report = _read_json(root / "status" / "container_audit_direct_sync_install.json")
-    if (
-        not report
-        or report.get("status") != "PASS"
-        or _install_report_relay_topology(report) != "current"
-        or _install_launcher_relay_topology(root, task_name, report) != "current"
-    ):
-        return False
-    field_layout = report.get("field_layout_contract") or {}
-    if not (
-        field_layout.get("production_layout_matches") is True
-        or field_layout.get("local_test_override_enabled") is True
-    ):
-        return False
-    try:
-        expected_root = str(root.resolve())
-        report_root = str(Path(str(report.get("program_data_root") or "")).expanduser().resolve())
-        if os.path.normcase(report_root) != os.path.normcase(expected_root):
-            return False
-        source_scan = report.get("source_scan") or {}
-        expected_scan_dir = str(Path(scan_source_dir).expanduser().resolve())
-        report_scan_dir = str(Path(str(source_scan.get("scan_source_dir") or "")).expanduser().resolve())
-        if os.path.normcase(report_scan_dir) != os.path.normcase(expected_scan_dir):
-            return False
-        if task_name and str(report.get("task_name") or "") != task_name:
-            return False
-    except Exception:
-        return False
-    return True
-
-
-def _start_task(task_name: str) -> dict[str, Any]:
-    if os.name != "nt":
-        return {"status": "SKIPPED", "reason": "scheduled tasks are Windows-only"}
-    try:
-        completed = subprocess.run(
-            ["schtasks.exe", "/Run", "/TN", task_name],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
+            timeout=timeout_seconds,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except Exception as exc:
-        return {"status": "FAIL", "error_type": exc.__class__.__name__, "error_message": str(exc)}
+        return {
+            "status": "UNKNOWN",
+            "reason": "relay process did not return an exit code",
+            "error_type": exc.__class__.__name__,
+        }
     return {
         "status": "PASS" if completed.returncode == 0 else "FAIL",
         "returncode": completed.returncode,
-        "stdout_tail": completed.stdout[-1000:],
-        "stderr_tail": completed.stderr[-1000:],
+        "stdout_tail": completed.stdout[-2000:],
+        "stderr_tail": completed.stderr[-2000:],
     }
 
 
@@ -434,10 +158,19 @@ def run_session_direct_sync_once(
         min_source_file_age_seconds=0,
     )
     if not command:
-        return {"status": "SKIPPED", "reason": "direct-sync relay runner is missing"}
-    result = _run_command(command, max(10, timeout_seconds))
+        return {"status": "FAIL", "reason": "direct-sync relay runner is missing"}
+    result = _run_command(command, max(10, int(timeout_seconds)))
     result["reason"] = reason
     return result
+
+
+def _session_sync_trigger_enabled() -> bool:
+    value = os.environ.get("CONTAINER_AUDIT_SESSION_SYNC_TRIGGER", "").strip().lower()
+    if value in {"0", "false", "no", "off", "disabled"}:
+        return False
+    if value in {"1", "true", "yes", "on", "enabled"}:
+        return True
+    return not bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
 def start_session_direct_sync(
@@ -450,7 +183,7 @@ def start_session_direct_sync(
 ) -> threading.Thread | None:
     if not _session_sync_trigger_enabled():
         return None
-    selected_task_name = task_name or os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_NAME", "").strip() or DEFAULT_TASK_NAME
+    selected_task_name = task_name or DEFAULT_TASK_NAME
     root = Path(direct_sync_root).expanduser().resolve()
 
     def worker() -> None:
@@ -464,11 +197,14 @@ def start_session_direct_sync(
         _write_json(
             root / "status" / "container_audit_session_direct_sync_trigger.json",
             {
-                "report_version": "container-audit-session-direct-sync-trigger-v1",
+                "report_version": "container-audit-session-direct-sync-trigger-v2",
                 "captured_at": _now(),
                 "reason": reason,
-                "task_name": selected_task_name,
-                "scan_source_dir": str(Path(scan_source_dir).expanduser().resolve()),
+                "principal": "current_user",
+                "system_scheduled_task": False,
+                "scan_source_dir": str(
+                    Path(scan_source_dir).expanduser().resolve()
+                ),
                 "result": result,
             },
         )
@@ -482,242 +218,36 @@ def start_session_direct_sync(
     return thread
 
 
-def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-    except Exception as exc:
-        return {"status": "FAIL", "error_type": exc.__class__.__name__, "error_message": str(exc)}
-    return {
-        "status": "PASS" if completed.returncode == 0 else "FAIL",
-        "returncode": completed.returncode,
-        "stdout_tail": completed.stdout[-2000:],
-        "stderr_tail": completed.stderr[-2000:],
-    }
-
-
-def _ps_single_quote(value: str) -> str:
-    return "'" + str(value).replace("'", "''") + "'"
-
-
-def _run_elevated_task_repair(
-    command: list[str],
-    *,
-    task_name: str,
-    timeout_seconds: int,
-) -> dict[str, Any]:
-    """Stop the legacy SYSTEM task and re-register it through the current installer."""
-
-    if not command:
-        return {"status": "FAIL", "error_type": "MissingInstallCommand"}
-    argument_line = subprocess.list2cmdline([str(part) for part in command[1:]])
-    elevated_script = "\n".join(
-        [
-            "$ErrorActionPreference = 'Stop'",
-            f"$taskName = {_ps_single_quote(task_name)}",
-            "$task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
-            "if ($null -ne $task) {",
-            "    Disable-ScheduledTask -TaskName $taskName -ErrorAction Stop | Out-Null",
-            "    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue",
-            "}",
-            f"$process = Start-Process -FilePath {_ps_single_quote(command[0])} "
-            f"-ArgumentList {_ps_single_quote(argument_line)} -Wait -PassThru",
-            "if ($process.ExitCode -ne 0) { exit $process.ExitCode }",
-            "Start-ScheduledTask -TaskName $taskName -ErrorAction Stop",
-            "exit 0",
-        ]
-    )
-    elevated_encoded = base64.b64encode(elevated_script.encode("utf-16le")).decode("ascii")
-    outer_script = "\n".join(
-        [
-            "$ErrorActionPreference = 'Stop'",
-            "$powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\\v1.0\\powershell.exe'",
-            "$arguments = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', "
-            f"'-EncodedCommand', {_ps_single_quote(elevated_encoded)})",
-            "$process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $arguments -Wait -PassThru",
-            "exit $process.ExitCode",
-        ]
-    )
-    outer_encoded = base64.b64encode(outer_script.encode("utf-16le")).decode("ascii")
-    powershell = str(
-        Path(os.environ.get("SystemRoot", r"C:\Windows"))
-        / "System32"
-        / "WindowsPowerShell"
-        / "v1.0"
-        / "powershell.exe"
-    )
-    return _run_command(
-        [
-            powershell,
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-EncodedCommand",
-            outer_encoded,
-        ],
-        timeout_seconds,
-    )
-
-
 def run_direct_sync_auto_bootstrap(
     *,
     app_root: str | os.PathLike[str],
     direct_sync_root: str | os.PathLike[str],
     scan_source_dir: str | os.PathLike[str],
-    task_name: str = DEFAULT_TASK_NAME,
-    server_base_url: str = DEFAULT_SERVER_BASE_URL,
-    timeout_seconds: int = 180,
-    confirm_production_install: bool = False,
-    task_run_user: str = "",
-    task_run_password_env: str = "",
-    task_run_password_file: str = "",
-    allow_interactive_task_for_local_test: bool = False,
-    allow_noncanonical_layout_for_test: bool = False,
-    force_install_repair: bool = False,
+    **_retired_task_options: Any,
 ) -> dict[str, Any]:
-    root = Path(direct_sync_root).expanduser().resolve()
-    status_path = root / "status" / "container_audit_direct_sync_auto_bootstrap.json"
-    report: dict[str, Any] = {
-        "report_version": "container-audit-direct-sync-auto-bootstrap-v1",
-        "captured_at": _now(),
-        "program_data_root": str(root),
-        "scan_source_dir": str(Path(scan_source_dir).expanduser().resolve()),
-        "task_name": task_name,
-        "server_base_url": server_base_url,
-    }
-    if os.name != "nt":
-        report.update({"status": "SKIPPED", "reason": "direct-sync scheduled task install is Windows-only"})
-        _write_json(status_path, report)
-        return report
+    """Wake one current-user relay cycle; never install or start a SYSTEM task."""
 
-    selected_app_root = Path(app_root).expanduser().resolve()
-    expected_launcher = Path(CANONICAL_DIRECT_SYNC_ROOT) / "bin" / f"{DEFAULT_TASK_NAME}.cmd"
-    actual_launcher = root / "bin" / f"{task_name}.cmd"
-    expected_state_db = Path(CANONICAL_DIRECT_SYNC_ROOT) / "queue" / "direct_sync_relay.sqlite3"
-    actual_state_db = root / "queue" / "direct_sync_relay.sqlite3"
-    same_path = lambda left, right: os.path.normcase(str(Path(left).resolve())) == os.path.normcase(
-        str(Path(right).resolve())
-    )
-    matches = {
-        "install_root_matches": same_path(selected_app_root, CANONICAL_INSTALL_ROOT),
-        "direct_sync_root_matches": same_path(root, CANONICAL_DIRECT_SYNC_ROOT),
-        "task_name_matches": task_name == DEFAULT_TASK_NAME,
-        "task_launcher_path_matches": same_path(actual_launcher, expected_launcher),
-        "state_db_path_matches": same_path(actual_state_db, expected_state_db),
-    }
-    production_layout_matches = all(matches.values())
-    local_test_override_enabled = (
-        allow_noncanonical_layout_for_test
-        and os.environ.get(NONCANONICAL_LAYOUT_TEST_MODE_ENV, "").strip() == "1"
-    )
-    report["field_layout_contract"] = {
-        "status": "PASS" if production_layout_matches else "MISMATCH",
-        "expected_install_root": CANONICAL_INSTALL_ROOT,
-        "actual_install_root": str(selected_app_root),
-        "expected_direct_sync_root": CANONICAL_DIRECT_SYNC_ROOT,
-        "actual_direct_sync_root": str(root),
-        "expected_task_name": DEFAULT_TASK_NAME,
-        "actual_task_name": task_name,
-        "expected_task_launcher_path": str(expected_launcher),
-        "actual_task_launcher_path": str(actual_launcher),
-        "expected_state_db_path": str(expected_state_db),
-        "actual_state_db_path": str(actual_state_db),
-        **matches,
-        "production_layout_matches": production_layout_matches,
-        "local_test_override_requested": allow_noncanonical_layout_for_test,
-        "local_test_override_enabled": local_test_override_enabled,
-        "production_apply_allowed": production_layout_matches,
-    }
-    if not production_layout_matches and not local_test_override_enabled:
-        report.update(
-            {
-                "status": "BLOCKED",
-                "reason": (
-                    f"noncanonical layout override requires {NONCANONICAL_LAYOUT_TEST_MODE_ENV}=1"
-                    if allow_noncanonical_layout_for_test
-                    else "production bootstrap requires the canonical Container_Audit field layout"
-                ),
-            }
-        )
-        _write_json(status_path, report)
-        return report
-
-    root.mkdir(parents=True, exist_ok=True)
-    registration_ready = _registration_ready(root)
-    if registration_ready and _install_ready(root, task_name, scan_source_dir) and _task_exists(task_name):
-        report.update({"status": "READY", "task_start": _start_task(task_name)})
-        _write_json(status_path, report)
-        return report
-
-    if registration_ready:
-        report["registration_result"] = {
-            "status": "SKIPPED",
-            "reason": "existing registration evidence is ready",
-        }
-    else:
-        registration_command = build_registration_command(
-            app_root=app_root,
-            direct_sync_root=root,
-            server_base_url=server_base_url,
-        )
-        report["registration_command_redacted"] = registration_command
-        if not registration_command:
-            report.update({"status": "FAIL", "reason": "direct-sync registration helper is missing"})
-            _write_json(status_path, report)
-            return report
-        registration_result = _run_command(registration_command, max(30, timeout_seconds))
-        report["registration_result"] = registration_result
-        if registration_result["status"] != "PASS":
-            report["status"] = "FAIL"
-            _write_json(status_path, report)
-            return report
-
-    install_command = build_install_command(
+    result = run_session_direct_sync_once(
         app_root=app_root,
-        direct_sync_root=root,
+        direct_sync_root=direct_sync_root,
         scan_source_dir=scan_source_dir,
-        task_name=task_name,
-        confirm_production_install=confirm_production_install,
-        task_run_user=task_run_user,
-        task_run_password_env=task_run_password_env,
-        task_run_password_file=task_run_password_file,
-        allow_interactive_task_for_local_test=allow_interactive_task_for_local_test,
-        allow_noncanonical_layout_for_test=allow_noncanonical_layout_for_test,
+        reason="APP_START",
     )
-    report["install_command_redacted"] = install_command
-    if not install_command:
-        report.update({"status": "FAIL", "reason": "direct-sync install helper is missing"})
-        _write_json(status_path, report)
-        return report
-    if force_install_repair and os.name == "nt" and getattr(sys, "frozen", False):
-        install_result = _run_elevated_task_repair(
-            install_command,
-            task_name=task_name,
-            timeout_seconds=max(30, timeout_seconds),
-        )
-    else:
-        install_result = _run_command(install_command, max(30, timeout_seconds))
-    report["install_result"] = install_result
-    report["status"] = "PASS" if install_result["status"] == "PASS" else "FAIL"
-    if report["status"] == "PASS" and force_install_repair:
-        if not _install_ready(root, task_name, scan_source_dir) or not _task_exists(task_name):
-            report["status"] = "FAIL"
-            report["reason"] = "legacy relay topology repair did not produce a current scheduled-task install"
-        else:
-            report["task_start"] = {
-                "status": "PASS",
-                "reason": "elevated repair re-registered and started the scheduled task",
-            }
-    elif report["status"] == "PASS":
-        report["task_start"] = _start_task(task_name)
-    _write_json(status_path, report)
+    report = {
+        "report_version": "container-audit-direct-sync-auto-bootstrap-v2",
+        "captured_at": _now(),
+        "status": result.get("status", "UNKNOWN"),
+        "principal": "current_user",
+        "system_scheduled_task": False,
+        "persistent_retry": "HKCU_RUN_USER_RELAY",
+        "result": result,
+    }
+    _write_json(
+        Path(direct_sync_root).expanduser().resolve()
+        / "status"
+        / "container_audit_direct_sync_auto_bootstrap.json",
+        report,
+    )
     return report
 
 
@@ -727,57 +257,34 @@ def start_direct_sync_auto_bootstrap(
     direct_sync_root: str | os.PathLike[str],
     scan_source_dir: str | os.PathLike[str],
 ) -> threading.Thread | None:
-    root = Path(direct_sync_root).expanduser().resolve()
-    force_install_repair = bool(
-        os.name == "nt"
-        and getattr(sys, "frozen", False)
-        and _legacy_install_repair_required(root)
-    )
-    if not _enabled() and not force_install_repair:
+    if not _session_sync_trigger_enabled():
         return None
-    key = str(root)
+    root = Path(direct_sync_root).expanduser().resolve()
+    key = os.path.normcase(str(root))
     if key in _STARTED_ROOTS:
         return None
     _STARTED_ROOTS.add(key)
-    try:
-        timeout_seconds = int(os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_BOOTSTRAP_TIMEOUT_SECONDS", "").strip() or "180")
-    except ValueError:
-        timeout_seconds = 180
-    server_base_url = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_SERVER_BASE_URL", "").strip() or DEFAULT_SERVER_BASE_URL
-    task_name = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_NAME", "").strip() or DEFAULT_TASK_NAME
-    allow_interactive_task_for_local_test = os.environ.get(
-        "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_INTERACTIVE_TASK_FOR_LOCAL_TEST",
-        "",
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    allow_noncanonical_layout_for_test = os.environ.get(
-        "CONTAINER_AUDIT_DIRECT_SYNC_ALLOW_NONCANONICAL_LAYOUT_FOR_TEST",
-        "",
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    task_run_user = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_USER", "").strip()
-    task_run_password_env = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_ENV", "").strip()
-    task_run_password_file = os.environ.get("CONTAINER_AUDIT_DIRECT_SYNC_TASK_RUN_PASSWORD_FILE", "").strip()
+
+    def worker() -> None:
+        try:
+            run_direct_sync_auto_bootstrap(
+                app_root=app_root,
+                direct_sync_root=root,
+                scan_source_dir=scan_source_dir,
+            )
+        finally:
+            _STARTED_ROOTS.discard(key)
+
     thread = threading.Thread(
-        target=run_direct_sync_auto_bootstrap,
-        kwargs={
-            "app_root": app_root,
-            "direct_sync_root": root,
-            "scan_source_dir": scan_source_dir,
-            "task_name": task_name,
-            "server_base_url": server_base_url,
-            "timeout_seconds": timeout_seconds,
-            # An explicitly enabled built-in bootstrap is the install
-            # boundary. Ordinary app startup remains mutation-free; the
-            # packaged INSTALL_THIS_PC.ps1 is the normal first-install path.
-            "confirm_production_install": True,
-            "task_run_user": task_run_user,
-            "task_run_password_env": task_run_password_env,
-            "task_run_password_file": task_run_password_file,
-            "allow_interactive_task_for_local_test": allow_interactive_task_for_local_test,
-            "allow_noncanonical_layout_for_test": allow_noncanonical_layout_for_test,
-            "force_install_repair": force_install_repair,
-        },
+        target=worker,
         name="direct-sync-bootstrap-container-audit",
         daemon=True,
     )
     thread.start()
     return thread
+
+
+def _install_report_relay_topology(_report: dict[str, Any]) -> str:
+    """Retired compatibility hook retained for old diagnostics only."""
+
+    return "retired_scheduled_task_contract"

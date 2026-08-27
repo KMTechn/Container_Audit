@@ -4,7 +4,9 @@ import sys
 import pytest
 
 import container_audit_product_host as product_host
+import current_user_onboarding
 from tools import direct_sync_relay_runner
+import user_relay
 
 
 def test_non_product_arguments_continue_to_gui_startup():
@@ -94,3 +96,44 @@ def test_relay_mode_preserves_system_exit_semantics(monkeypatch):
         product_host.dispatch_product_mode([product_host.DIRECT_SYNC_RELAY_MODE])
 
     assert caught.value.code == 7
+
+
+def test_user_relay_mode_reuses_main_process(monkeypatch):
+    observed = []
+    monkeypatch.setattr(
+        user_relay,
+        "main",
+        lambda arguments: observed.append(list(arguments)) or 0,
+    )
+
+    result = product_host.dispatch_product_mode(
+        [product_host.USER_RELAY_MODE, "--once"]
+    )
+
+    assert result == 0
+    assert observed == [["--once"]]
+
+
+def test_onboarding_and_public_removal_modes_dispatch_in_process(monkeypatch):
+    observed = []
+    monkeypatch.setattr(
+        current_user_onboarding,
+        "onboarding_main",
+        lambda arguments: observed.append(("onboard", list(arguments))) or 0,
+    )
+    monkeypatch.setattr(
+        current_user_onboarding,
+        "removal_main",
+        lambda arguments: observed.append(("remove", list(arguments))) or 0,
+    )
+
+    assert product_host.dispatch_product_mode(
+        [product_host.ONBOARD_CURRENT_USER_MODE, "--app-root", "app"]
+    ) == 0
+    assert product_host.dispatch_product_mode(
+        [product_host.REMOVE_CURRENT_USER_MODE, "--app-root", "app"]
+    ) == 0
+    assert observed == [
+        ("onboard", ["--app-root", "app"]),
+        ("remove", ["--app-root", "app"]),
+    ]

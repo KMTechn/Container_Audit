@@ -1,4 +1,4 @@
-"""Install one non-secret logistics profile and machine-scope DPAPI token."""
+"""Install one non-secret logistics profile and its DPAPI token."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ from logistics_runtime_profile import (  # noqa: E402
     load_logistics_runtime_profile,
     profile_from_values,
     protect_bearer_token,
+    protect_current_user_secret,
+    unprotect_current_user_secret,
 )
 
 
@@ -107,7 +109,11 @@ def install_runtime_profile(
     dry_run: bool = False,
     replace: bool = False,
     reader_principal: str = "",
+    credential_scope: str = "machine",
 ) -> dict[str, Any]:
+    selected_scope = str(credential_scope or "").strip().lower()
+    if selected_scope not in {"machine", "current_user"}:
+        raise ValueError("credential_scope must be machine or current_user")
     target = assert_path_has_no_reparse_components(
         profile_path, label="runtime profile"
     )
@@ -125,6 +131,8 @@ def install_runtime_profile(
         "bearer_token_ref": DEFAULT_TOKEN_REF,
         "timeout_seconds": timeout_seconds,
     }
+    if selected_scope == "current_user":
+        values["credential_scope"] = "current_user"
     validated = profile_from_values(
         values,
         profile_path=target,
@@ -133,14 +141,21 @@ def install_runtime_profile(
     )
     summary = validated.redacted_summary()
     summary["status"] = "dry-run" if dry_run else "installed"
+    summary["credential_scope"] = selected_scope
     if dry_run:
         return summary
     if target.exists() and not replace:
         raise FileExistsError(
             "runtime profile already exists; use --replace for an intentional rotation"
         )
-    _secure_profile_directory(target.parent, reader_principal)
-    protected = protect_bearer_token(bearer_token)
+    if selected_scope == "machine":
+        _secure_profile_directory(target.parent, reader_principal)
+        protected = protect_bearer_token(bearer_token)
+        decryptor = None
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        protected = protect_current_user_secret(bearer_token)
+        decryptor = unprotect_current_user_secret
     secret_relative = DEFAULT_TOKEN_REF.split(":", 1)[1].replace("/", os.sep)
     secret_path = (target.parent / secret_relative).resolve()
     secret_path.relative_to(target.parent.resolve())
@@ -155,7 +170,11 @@ def install_runtime_profile(
             ),
         )
         created.append(target)
-        readback = load_logistics_runtime_profile(required=True, profile_path=target)
+        readback = load_logistics_runtime_profile(
+            required=True,
+            profile_path=target,
+            decryptor=decryptor,
+        )
         if readback is None or readback != validated:
             raise RuntimeError("runtime profile exact readback failed")
     except Exception:
@@ -176,6 +195,7 @@ def ensure_runtime_profile_from_enrollment_bundle(
     expected_device_id: str,
     reader_principal: str = "*S-1-5-32-545",
     profile_path: str | os.PathLike[str] | None = None,
+    credential_scope: str = "machine",
 ) -> dict[str, Any] | None:
     """Install the server-issued logistics profile without rotating local state."""
 
@@ -262,12 +282,30 @@ def ensure_runtime_profile_from_enrollment_bundle(
         bearer_token=token,
         required=True,
     )
+    selected_scope = str(credential_scope or "").strip().lower()
+    if selected_scope not in {"machine", "current_user"}:
+        raise ValueError("credential_scope must be machine or current_user")
     if target.exists():
-        existing = load_logistics_runtime_profile(required=True, profile_path=target)
+        existing = load_logistics_runtime_profile(
+            required=True,
+            profile_path=target,
+            decryptor=(
+                unprotect_current_user_secret
+                if selected_scope == "current_user"
+                else None
+            ),
+        )
         if existing != candidate:
             raise FileExistsError("existing machine logistics profile conflicts with enrollment")
         summary = existing.redacted_summary()
-        summary.update({"status": "reused", "profile_path": str(target), "created_paths": []})
+        summary.update(
+            {
+                "status": "reused",
+                "profile_path": str(target),
+                "created_paths": [],
+                "credential_scope": selected_scope,
+            }
+        )
         return summary
     secret_path = target.parent / DEFAULT_TOKEN_REF.split(":", 1)[1].replace("/", os.sep)
     if secret_path.exists():
@@ -285,6 +323,7 @@ def ensure_runtime_profile_from_enrollment_bundle(
         bearer_token=token,
         timeout_seconds=float(profile["timeout_seconds"]),
         reader_principal=reader_principal,
+        credential_scope=selected_scope,
     )
 
 
@@ -304,6 +343,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--reader-principal", help="Windows account allowed to read the DPAPI blob")
+    parser.add_argument(
+        "--credential-scope",
+        choices=("machine", "current_user"),
+        default="machine",
+    )
     return parser
 
 
@@ -329,6 +373,7 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             replace=args.replace,
             reader_principal=args.reader_principal or "",
+            credential_scope=args.credential_scope,
         )
     except Exception as exc:
         print(f"BLOCKED: {exc.__class__.__name__}: {exc}", file=sys.stderr)
