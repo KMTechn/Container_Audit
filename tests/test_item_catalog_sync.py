@@ -243,6 +243,61 @@ def test_refresh_uses_provisioned_logistics_profile_headers(
     ]
 
 
+def test_refresh_passes_profile_tls_ca_bundle_to_requests_verify(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "bundle.csv"
+    cache = tmp_path / "cache" / "Item.csv"
+    ca_bundle = tmp_path / "profile" / "tls" / "ca-bundle.pem"
+    bundle.write_bytes(CATALOG)
+    monkeypatch.setattr(
+        logistics_runtime_profile,
+        "load_logistics_runtime_profile",
+        lambda required=None: _profile(
+            base_url=PROFILE_CATALOG_ORIGIN,
+            tls_ca_bundle_path=str(ca_bundle),
+        ),
+    )
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse(CATALOG)
+
+    assert refresh_item_catalog(bundle, cache_path=cache, get=fake_get) == cache
+    assert len(calls) == 1
+    assert calls[0][0] == PROFILE_CATALOG_URL
+    assert calls[0][1]["verify"] == str(ca_bundle)
+    assert calls[0][1]["verify"] is not False
+
+
+@pytest.mark.parametrize("configured_path", [None, "", "   ", False, 0])
+def test_refresh_never_disables_tls_verification_when_ca_path_is_absent(
+    monkeypatch, tmp_path, configured_path
+):
+    bundle = tmp_path / "bundle.csv"
+    cache = tmp_path / "cache" / "Item.csv"
+    bundle.write_bytes(CATALOG)
+    overrides = {"base_url": PROFILE_CATALOG_ORIGIN}
+    if configured_path is not None:
+        overrides["tls_ca_bundle_path"] = configured_path
+    monkeypatch.setattr(
+        logistics_runtime_profile,
+        "load_logistics_runtime_profile",
+        lambda required=None: _profile(**overrides),
+    )
+    calls = []
+
+    def fake_get(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse(CATALOG)
+
+    assert refresh_item_catalog(bundle, cache_path=cache, get=fake_get) == cache
+    assert len(calls) == 1
+    assert "verify" not in calls[0][1]
+    assert calls[0][1].get("verify", True) is True
+
+
 def test_runtime_profile_origin_drives_default_catalog_route(monkeypatch, tmp_path):
     bundle = tmp_path / "bundle.csv"
     cache = tmp_path / "cache" / "Item.csv"

@@ -1,4 +1,5 @@
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import re
@@ -6,6 +7,10 @@ import subprocess
 
 import pytest
 import update_service
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from direct_sync_push import manifest_hash
 from tools import install_logistics_runtime_profile as machine_profiles
 
@@ -122,6 +127,26 @@ def _machine_bundle():
             },
         }
     }
+
+
+def _private_ca_pem() -> bytes:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Container Audit Test Private CA")]
+    )
+    now = datetime.now(timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(private_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(private_key, hashes.SHA256())
+    )
+    return certificate.public_bytes(serialization.Encoding.PEM)
 
 
 def test_machine_secret_dpapi_loads_dependency_in_clean_powershell():
@@ -332,6 +357,63 @@ def test_atomic_file_bytes_replaces_and_preserves_under_windows_powershell_51(
         "residue_count": 0,
     }
     assert result["powershell_version"].startswith("5.1.")
+
+
+def test_tls_ca_bundle_installer_parameter_is_opt_in_and_targets_profile_directory(
+    tmp_path,
+):
+    source = tmp_path / "stage" / "private-ca.cert.pem"
+    source.parent.mkdir()
+    source.write_bytes(_private_ca_pem())
+    profile = tmp_path / "program-data" / "runtime-profile.json"
+    source_ps = str(source.resolve()).replace("'", "''")
+    profile_ps = str(profile.resolve()).replace("'", "''")
+    expected_ps = str(
+        (profile.parent / "tls" / "ca-bundle.pem").resolve()
+    ).replace("'", "''")
+    body = (
+        f"$profile='{profile_ps}';"
+        "$absent=Resolve-ContainerAuditTlsCaBundle '' $profile;"
+        "if($null -ne $absent){throw 'empty CA path did not preserve default'};"
+        f"$resolved=Resolve-ContainerAuditTlsCaBundle '{source_ps}' $profile;"
+        f"if([string]$resolved.target_path -cne '{expected_ps}'){{"
+        "throw 'CA target is not the durable profile-owned path'};"
+        f"if($resolved.bytes.Length -ne {source.stat().st_size}){{"
+        "throw 'CA source bytes were not preserved'};"
+        "[ordered]@{default_is_null=($null -eq $absent);"
+        "target=[string]$resolved.target_path;bytes=[int]$resolved.bytes.Length}"
+        "|ConvertTo-Json -Compress"
+    )
+
+    completed = _run_installer_functions(
+        [
+            "Get-StrictFullPath",
+            "Assert-NoReparsePoint",
+            "Resolve-ContainerAuditTlsCaBundle",
+        ],
+        body,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    result = json.loads(completed.stdout)
+    assert result == {
+        "default_is_null": True,
+        "target": str((profile.parent / "tls" / "ca-bundle.pem").resolve()),
+        "bytes": source.stat().st_size,
+    }
+
+
+def test_package_installer_persists_only_opt_in_tls_ca_bundle():
+    text = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
+
+    assert '[string]$TlsCaBundlePath = ""' in text
+    assert "Resolve-ContainerAuditTlsCaBundle $TlsCaBundlePath $target" in text
+    assert "$values['tls_ca_bundle_path'] = [string]$tlsCaBundle.target_path" in text
+    assert "'tls\\ca-bundle.pem'" in text
+    assert "Write-AtomicFileBytes $tlsCaBundle.target_path" in text
+    assert "tls_private_ca_configured = ($isolated -or $null -ne $tlsCaBundle)" in text
+    assert "verify=False" not in text
+    assert "CERT_NONE" not in text
 
 
 def test_package_installer_uses_tokenless_self_enrollment_and_system_task():
@@ -646,13 +728,15 @@ def test_nonproduction_server_and_test_identity_override_is_documented():
         "[string]$ProducerInstallId",
         "[string]$ProducerId",
         "[string]$SourceHostId",
+        "[string]$TlsCaBundlePath",
         "[void](Invoke-ContainerAuditWorkerPcRegistration `",
         "$endpointUrl `",
         "$EnrollmentTokenEnv `",
         "$ProducerIdentityPath `",
         "$ProducerInstallId `",
         "$ProducerId `",
-        "$SourceHostId)",
+        "$SourceHostId `",
+        "$TlsCaBundlePath)",
         "self_enrollment_requested = $true",
         "GetEnvironmentVariable($EnrollmentTokenEnv, 'Process')",
         "Self-enrollment response missing machine credential bundle.",

@@ -19,6 +19,7 @@ param(
     [string]$ProducerInstallId = "",
     [string]$ProducerId = "",
     [string]$SourceHostId = "",
+    [string]$TlsCaBundlePath = "",
     [string]$OperatorUserSid = "",
     [string]$OperatorLocalAppDataRoot = ""
 )
@@ -1099,13 +1100,51 @@ function Get-ContainerAuditSafeProfileText($Value, [string]$FieldName) {
     return $text
 }
 
+function Resolve-ContainerAuditTlsCaBundle(
+    [string]$SourcePath,
+    [string]$ProfilePath
+) {
+    if ([string]::IsNullOrWhiteSpace($SourcePath)) { return $null }
+    $source = [System.IO.Path]::GetFullPath($SourcePath)
+    Assert-NoReparsePoint $source "Container_Audit TLS CA bundle source"
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Container_Audit TLS CA bundle source is unavailable."
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($source)
+    if ($bytes.Length -le 0 -or $bytes.Length -gt 131072) {
+        throw "Container_Audit TLS CA bundle source size is invalid."
+    }
+    $certificate = $null
+    try {
+        $certificate = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2 -ArgumentList $source
+        if ($null -eq $certificate -or $certificate.RawData.Length -le 0) {
+            throw "Container_Audit TLS CA bundle source certificate is invalid."
+        }
+    }
+    catch {
+        throw "Container_Audit TLS CA bundle source is not a valid certificate."
+    }
+    finally {
+        if ($null -ne $certificate) { $certificate.Reset() }
+    }
+    $profileTarget = [System.IO.Path]::GetFullPath($ProfilePath)
+    $target = Join-Path (Split-Path -Parent $profileTarget) 'tls\ca-bundle.pem'
+    Assert-NoReparsePoint $target "Container_Audit TLS CA bundle target"
+    return [pscustomobject]@{
+        source_path = $source
+        target_path = $target
+        bytes = $bytes
+    }
+}
+
 function Install-ContainerAuditMachineProfile(
     $ResponsePayload,
     [string]$ExpectedProducerSecret,
     [string]$ExpectedSourceHostId,
     [string]$ExpectedDeviceId,
     [string]$ProfilePath,
-    $QualificationContext = $null
+    $QualificationContext = $null,
+    [string]$TlsCaBundlePath = ''
 ) {
     $bundle = $ResponsePayload.machine_credential_bundle
     if ($null -eq $bundle) { return $null }
@@ -1196,6 +1235,12 @@ function Install-ContainerAuditMachineProfile(
     if ($isolated -and ($null -eq $QualificationContext -or [string]$QualificationContext.server_base_url -cne $baseUrl)) {
         throw "Machine logistics loopback origin lacks the bound qualification context."
     }
+    $target = [System.IO.Path]::GetFullPath($ProfilePath)
+    Assert-NoReparsePoint $target "Container_Audit machine logistics profile"
+    $tlsCaBundle = Resolve-ContainerAuditTlsCaBundle $TlsCaBundlePath $target
+    if ($isolated -and $null -ne $tlsCaBundle) {
+        throw "Explicit TLS CA bundle must not override isolated qualification trust."
+    }
     $values = [ordered]@{
         contract_version = 'km-logistics-runtime-profile-v1'
         base_url = $baseUrl
@@ -1209,8 +1254,9 @@ function Install-ContainerAuditMachineProfile(
         bearer_token_ref = 'dpapi:secrets/bearer-token.dpapi'
         timeout_seconds = $timeout
     }
-    $target = [System.IO.Path]::GetFullPath($ProfilePath)
-    Assert-NoReparsePoint $target "Container_Audit machine logistics profile"
+    if ($null -ne $tlsCaBundle) {
+        $values['tls_ca_bundle_path'] = [string]$tlsCaBundle.target_path
+    }
     $parent = Split-Path -Parent $target
     $secretPath = Join-Path $parent 'secrets\bearer-token.dpapi'
     Assert-NoReparsePoint $secretPath "Container_Audit machine logistics credential"
@@ -1230,15 +1276,17 @@ function Install-ContainerAuditMachineProfile(
         required = $true
         isolated_qualification = $isolated
         isolated_qualification_authority_id = $(if ($isolated) { [string]$QualificationContext.authority_instance_id } else { '' })
-        tls_private_ca_configured = $isolated
+        tls_private_ca_configured = ($isolated -or $null -ne $tlsCaBundle)
     }
     if (Test-Path -LiteralPath $target -PathType Leaf) {
         $existing = Read-BoundedJson $target "Existing Container_Audit machine logistics profile"
-        Assert-ExactJsonFields $existing @(
+        $existingFields = @(
             'contract_version', 'base_url', 'authority_scope', 'authority_epoch',
             'authority_plane', 'ledger_plane', 'plane_epoch', 'device_id',
             'source_host_id', 'bearer_token_ref', 'timeout_seconds'
-        ) "Existing machine logistics profile"
+        )
+        if ($null -ne $tlsCaBundle) { $existingFields += 'tls_ca_bundle_path' }
+        Assert-ExactJsonFields $existing $existingFields "Existing machine logistics profile"
         if ((Get-CanonicalJsonSha256 $existing) -cne (Get-CanonicalJsonSha256 $values)) {
             throw "Existing machine logistics profile conflicts with enrollment."
         }
@@ -1253,6 +1301,19 @@ function Install-ContainerAuditMachineProfile(
         if (-not (Test-MachineSecret ([System.IO.File]::ReadAllBytes($secretPath)) $bearerToken $entropy)) {
             throw "Existing machine logistics credential conflicts with enrollment."
         }
+        if ($null -ne $tlsCaBundle) {
+            if (-not (Test-Path -LiteralPath $tlsCaBundle.target_path -PathType Leaf)) {
+                throw "Existing machine logistics TLS CA bundle is unavailable."
+            }
+            Assert-NoReparsePoint $tlsCaBundle.target_path "Existing machine logistics TLS CA bundle"
+            $existingCaBytes = [System.IO.File]::ReadAllBytes($tlsCaBundle.target_path)
+            if (
+                [Convert]::ToBase64String($existingCaBytes) -cne
+                [Convert]::ToBase64String([byte[]]$tlsCaBundle.bytes)
+            ) {
+                throw "Existing machine logistics TLS CA bundle conflicts with enrollment."
+            }
+        }
         Set-ContainerAuditMachineProfileAcl $parent
         $summary.status = 'reused'
         $summary.created_paths = @()
@@ -1261,12 +1322,19 @@ function Install-ContainerAuditMachineProfile(
     if (Test-Path -LiteralPath $secretPath) {
         throw "Orphan machine logistics credential already exists."
     }
+    if ($null -ne $tlsCaBundle -and (Test-Path -LiteralPath $tlsCaBundle.target_path)) {
+        throw "Orphan machine logistics TLS CA bundle already exists."
+    }
     Set-ContainerAuditMachineProfileAcl $parent
     Assert-NoReparsePoint $secretPath "Container_Audit machine logistics credential"
     $entropy = (New-Object System.Text.UTF8Encoding($false)).GetBytes('KMTech Logistics Runtime Profile v1')
     $protected = Protect-MachineSecret $bearerToken $entropy
     $created = New-Object System.Collections.Generic.List[string]
     try {
+        if ($null -ne $tlsCaBundle) {
+            Write-AtomicFileBytes $tlsCaBundle.target_path ([byte[]]$tlsCaBundle.bytes)
+            [void]$created.Add([string]$tlsCaBundle.target_path)
+        }
         Write-AtomicFileBytes $secretPath $protected
         [void]$created.Add($secretPath)
         Write-AtomicUtf8JsonFile $target $values
@@ -1278,6 +1346,15 @@ function Install-ContainerAuditMachineProfile(
         if (-not (Test-MachineSecret ([System.IO.File]::ReadAllBytes($secretPath)) $bearerToken $entropy)) {
             throw "Machine logistics credential readback failed."
         }
+        if ($null -ne $tlsCaBundle) {
+            $installedCaBytes = [System.IO.File]::ReadAllBytes($tlsCaBundle.target_path)
+            if (
+                [Convert]::ToBase64String($installedCaBytes) -cne
+                [Convert]::ToBase64String([byte[]]$tlsCaBundle.bytes)
+            ) {
+                throw "Machine logistics TLS CA bundle exact readback failed."
+            }
+        }
     }
     catch {
         foreach ($createdPath in @($created.ToArray() | Sort-Object -Descending)) {
@@ -1287,6 +1364,9 @@ function Install-ContainerAuditMachineProfile(
     }
     $summary.status = 'installed'
     $summary.created_paths = @($target, $secretPath)
+    if ($null -ne $tlsCaBundle) {
+        $summary.created_paths += [string]$tlsCaBundle.target_path
+    }
     return $summary
 }
 
@@ -1304,7 +1384,8 @@ function Invoke-ContainerAuditWorkerPcRegistration(
     [string]$ProducerIdentityPath = '',
     [string]$ProducerInstallId = '',
     [string]$ProducerId = '',
-    [string]$SourceHostId = ''
+    [string]$SourceHostId = '',
+    [string]$TlsCaBundlePath = ''
 ) {
     $blockedReport = [ordered]@{
         report_version = 'container-audit-worker-pc-registration-v1'
@@ -1532,7 +1613,8 @@ function Invoke-ContainerAuditWorkerPcRegistration(
             $resolvedSourceHostId `
             $hostName `
             $MachineProfilePath `
-            $qualificationContext
+            $qualificationContext `
+            $TlsCaBundlePath
         if ($null -eq $machineProfile) {
             throw "Self-enrollment response missing machine credential bundle."
         }
@@ -3537,7 +3619,8 @@ if (-not $reuseExistingIdentity) {
         $ProducerIdentityPath `
         $ProducerInstallId `
         $ProducerId `
-        $SourceHostId)
+        $SourceHostId `
+        $TlsCaBundlePath)
 }
 $registrationReport = Read-BoundedJson $registrationReportPath "Container_Audit registration report"
 if (
