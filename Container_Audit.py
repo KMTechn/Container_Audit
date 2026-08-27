@@ -44,9 +44,13 @@ from item_catalog import ItemCatalog
 from item_catalog_sync import (
     ACTIVE_PATH_ENV,
     ItemCatalogSyncError,
+    SNAPSHOT_PARSE_FAILED,
+    SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
+    get_catalog_attempt_context,
     get_verified_catalog_snapshot,
     refresh_item_catalog,
     requires_verified_catalog_snapshot,
+    write_item_catalog_failure_diagnostic,
 )
 from label_qr import (
     canonical_master_label_key,
@@ -1497,7 +1501,8 @@ class ContainerAudit:
         if requires_verified_catalog_snapshot(item_path):
             if verified_payload is None:
                 raise ItemCatalogSyncError(
-                    "central item catalog snapshot is unavailable after verification"
+                    "central item catalog snapshot is unavailable after verification",
+                    cause_code=SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
                 )
             try:
                 return list(
@@ -1507,7 +1512,12 @@ class ContainerAudit:
                 )
             except (UnicodeError, csv.Error) as exc:
                 raise ItemCatalogSyncError(
-                    "central item catalog snapshot could not be parsed"
+                    "central item catalog snapshot could not be parsed",
+                    cause_code=SNAPSHOT_PARSE_FAILED,
+                    diagnostic_context={
+                        **get_catalog_attempt_context(),
+                        "exception_type": type(exc).__name__,
+                    },
                 ) from exc
         encodings_to_try = ['utf-8-sig', 'cp949', 'euc-kr', 'utf-8']
         for encoding in encodings_to_try:
@@ -11247,7 +11257,8 @@ def prepare_startup_item_catalog() -> str:
         and get_verified_catalog_snapshot(active_path) is None
     ):
         raise ItemCatalogSyncError(
-            "central item catalog snapshot is unavailable after verification"
+            "central item catalog snapshot is unavailable after verification",
+            cause_code=SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
         )
     os.environ[ACTIVE_PATH_ENV] = str(active_path)
     return str(active_path)
@@ -11262,11 +11273,11 @@ ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
 )
 
 
-def _show_item_catalog_startup_error() -> None:
+def _show_item_catalog_startup_error(cause_code: str) -> None:
     try:
         messagebox.showerror(
             ITEM_CATALOG_STARTUP_ERROR_TITLE,
-            ITEM_CATALOG_STARTUP_ERROR_MESSAGE,
+            f"{ITEM_CATALOG_STARTUP_ERROR_MESSAGE}\n오류 코드: {cause_code}",
         )
     except Exception:  # The fail-closed exit must survive Tk initialization failures.
         pass
@@ -11300,10 +11311,17 @@ def main():
     try:
         try:
             prepare_startup_item_catalog()
-        except ItemCatalogSyncError:
-            _show_item_catalog_startup_error()
+            app = ContainerAudit()
+        except ItemCatalogSyncError as exc:
+            try:
+                write_item_catalog_failure_diagnostic(
+                    storage_paths.item_catalog_diagnostic_path,
+                    exc,
+                )
+            except Exception:  # Diagnostic persistence must not bypass fail-closed exit.
+                pass
+            _show_item_catalog_startup_error(exc.cause_code)
             return ITEM_CATALOG_STARTUP_EXIT_CODE
-        app = ContainerAudit()
         app.root.after(500, lambda: schedule_update_check(app.root))
         app.run()
         return 0

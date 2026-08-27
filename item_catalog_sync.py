@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import hashlib
 import hmac
 import io
@@ -10,6 +11,7 @@ import json
 import logging
 import os
 import tempfile
+from http.client import responses as HTTP_STATUS_REASONS
 from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
@@ -34,6 +36,23 @@ CACHE_AUTHORITY_SCHEMA = "kmtech.item-catalog.authority.v2"
 CACHE_RECOVERY_SCHEMA = "kmtech.item-catalog.recovery.v1"
 CACHE_HMAC_KEY_LABEL = b"kmtech:item-catalog-cache:v2:key"
 CACHE_HMAC_DOMAIN = b"kmtech:item-catalog-cache:v2:record\0"
+CATALOG_DIAGNOSTIC_SCHEMA = "kmtech.container-audit.item-catalog-startup-diagnostic.v1"
+PROFILE_LOAD_FAILED = "PROFILE_LOAD_FAILED"
+PROFILE_INCOMPLETE = "PROFILE_INCOMPLETE"
+URL_NOT_TRUSTED = "URL_NOT_TRUSTED"
+REQUEST_FAILED_NO_CACHE = "REQUEST_FAILED_NO_CACHE"
+SNAPSHOT_UNAVAILABLE_AFTER_VERIFY = "SNAPSHOT_UNAVAILABLE_AFTER_VERIFY"
+SNAPSHOT_PARSE_FAILED = "SNAPSHOT_PARSE_FAILED"
+ITEM_CATALOG_CAUSE_CODES = frozenset(
+    {
+        PROFILE_LOAD_FAILED,
+        PROFILE_INCOMPLETE,
+        URL_NOT_TRUSTED,
+        REQUEST_FAILED_NO_CACHE,
+        SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
+        SNAPSHOT_PARSE_FAILED,
+    }
+)
 BASE_URL_ENV_NAMES = (
     "WORKER_ANALYSIS_SERVER_URL",
     "WORKER_ANALYSIS_LOGISTICS_API_BASE_URL",
@@ -48,10 +67,199 @@ BASE_URL_ENV_NAMES = (
 
 _VERIFIED_CATALOG_SNAPSHOTS: dict[str, bytes] = {}
 _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS: set[str] = set()
+_CATALOG_ATTEMPT_CONTEXT: dict[str, object] = {}
+
+
+def _catalog_url_components(
+    url: str,
+    *,
+    redacted_values: tuple[str, ...] = (),
+) -> dict[str, object]:
+    def clean(value: object) -> str:
+        text = str(value or "")
+        for secret in redacted_values:
+            if secret:
+                text = text.replace(secret, "[REDACTED]")
+        return text
+
+    try:
+        parsed = urlsplit(str(url or ""))
+        try:
+            port = parsed.port
+        except ValueError:
+            port = None
+        return {
+            "scheme": clean(parsed.scheme.lower()),
+            "host": clean((parsed.hostname or "").lower()),
+            "port": port,
+            "path": clean(parsed.path),
+        }
+    except ValueError:
+        return {"scheme": "", "host": "", "port": None, "path": ""}
+
+
+def _empty_catalog_attempt_context() -> dict[str, object]:
+    return {
+        "catalog_url": _catalog_url_components(""),
+        "request_sent": False,
+        "http_status_code": None,
+        "http_reason_phrase": "",
+        "pre_send_rejection_code": None,
+        "central_enrolled": False,
+        "profile_present": False,
+        "qualification_authority_id_present": False,
+        "exception_type": "",
+    }
+
+
+def _reset_catalog_attempt_context(url: str = "") -> None:
+    global _CATALOG_ATTEMPT_CONTEXT
+    _CATALOG_ATTEMPT_CONTEXT = _empty_catalog_attempt_context()
+    _CATALOG_ATTEMPT_CONTEXT["catalog_url"] = _catalog_url_components(url)
+
+
+def _update_catalog_attempt_context(**values: object) -> None:
+    _CATALOG_ATTEMPT_CONTEXT.update(values)
+
+
+def get_catalog_attempt_context() -> dict[str, object]:
+    context = dict(_CATALOG_ATTEMPT_CONTEXT or _empty_catalog_attempt_context())
+    context["catalog_url"] = dict(context["catalog_url"])
+    return context
+
+
+def _profile_secret_values(profile: object) -> tuple[str, ...]:
+    return tuple(
+        value
+        for value in (
+            str(getattr(profile, "bearer_token", "") or "").strip(),
+            str(getattr(profile, "device_id", "") or "").strip(),
+            str(getattr(profile, "source_host_id", "") or "").strip(),
+            str(
+                getattr(profile, "isolated_qualification_authority_id", "") or ""
+            ).strip(),
+        )
+        if value
+    )
+
+
+def _bounded_http_reason_phrase(status_code: int | None, value: object) -> str:
+    if status_code is None:
+        return ""
+    canonical = str(HTTP_STATUS_REASONS.get(int(status_code), "") or "")
+    candidate = " ".join(str(value or "").split())
+    if canonical and candidate.casefold() == canonical.casefold():
+        return canonical
+    return "UNAVAILABLE"
+
+
+def _bounded_exception_type(value: object) -> str:
+    text = str(value or "")
+    return "".join(
+        character
+        for character in text[:200]
+        if character.isalnum() or character in "._"
+    )
+
+
+def _sanitized_catalog_attempt_context(
+    context: Mapping[str, object],
+) -> dict[str, object]:
+    raw_url = context.get("catalog_url")
+    url = dict(raw_url) if isinstance(raw_url, Mapping) else {}
+    try:
+        port = int(url["port"]) if url.get("port") is not None else None
+    except (TypeError, ValueError):
+        port = None
+    if port is not None and not 1 <= port <= 65535:
+        port = None
+    try:
+        status_code = (
+            int(context["http_status_code"])
+            if context.get("http_status_code") is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        status_code = None
+    if status_code is not None and not 100 <= status_code <= 599:
+        status_code = None
+    rejection_code = str(context.get("pre_send_rejection_code") or "")
+    if rejection_code not in ITEM_CATALOG_CAUSE_CODES:
+        rejection_code = ""
+    return {
+        "catalog_url": {
+            "scheme": str(url.get("scheme") or "")[:32],
+            "host": str(url.get("host") or "")[:253],
+            "port": port,
+            "path": str(url.get("path") or "")[:2048],
+        },
+        "request_sent": bool(context.get("request_sent")),
+        "http_status_code": status_code,
+        "http_reason_phrase": _bounded_http_reason_phrase(
+            status_code,
+            context.get("http_reason_phrase"),
+        ),
+        "pre_send_rejection_code": rejection_code or None,
+        "central_enrolled": bool(context.get("central_enrolled")),
+        "profile_present": bool(context.get("profile_present")),
+        "qualification_authority_id_present": bool(
+            context.get("qualification_authority_id_present")
+        ),
+        "exception_type": _bounded_exception_type(context.get("exception_type")),
+    }
 
 
 class ItemCatalogSyncError(RuntimeError):
     """Raised when an enrolled PC cannot establish a central catalog baseline."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        cause_code: str,
+        diagnostic_context: Mapping[str, object] | None = None,
+    ) -> None:
+        if cause_code not in ITEM_CATALOG_CAUSE_CODES:
+            raise ValueError(f"unsupported item catalog cause code: {cause_code}")
+        super().__init__(message)
+        context = dict(diagnostic_context or get_catalog_attempt_context())
+        context["catalog_url"] = dict(
+            context.get("catalog_url") or _catalog_url_components("")
+        )
+        if not str(context.get("exception_type") or ""):
+            context["exception_type"] = type(self).__name__
+        self.cause_code = cause_code
+        self.diagnostic_context = context
+
+    def diagnostic_payload(self) -> dict[str, object]:
+        return {
+            "schema": CATALOG_DIAGNOSTIC_SCHEMA,
+            "status": "FAIL",
+            "recorded_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "cause_code": self.cause_code,
+            **get_catalog_attempt_context_from_error(self),
+        }
+
+
+def get_catalog_attempt_context_from_error(
+    error: ItemCatalogSyncError,
+) -> dict[str, object]:
+    return _sanitized_catalog_attempt_context(error.diagnostic_context)
+
+
+def write_item_catalog_failure_diagnostic(
+    path: str | Path,
+    error: ItemCatalogSyncError,
+) -> Path:
+    destination = Path(path)
+    payload = json.dumps(
+        error.diagnostic_payload(),
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    _atomic_write(destination, (payload + "\n").encode("utf-8"))
+    return destination
 
 
 def _catalog_snapshot_key(path: str | Path) -> str:
@@ -111,6 +319,22 @@ def _load_item_catalog_logistics_profile() -> Any | None:
     profile = load_logistics_runtime_profile(required=None)
     if profile is None:
         return None
+    qualification_authority_id_present = bool(
+        str(
+            getattr(profile, "isolated_qualification_authority_id", "") or ""
+        ).strip()
+    )
+    secrets = _profile_secret_values(profile)
+    profile_base_url = str(getattr(profile, "base_url", "") or "").strip()
+    _update_catalog_attempt_context(
+        catalog_url=_catalog_url_components(
+            profile_base_url.rstrip("/") + CATALOG_PATH if profile_base_url else "",
+            redacted_values=secrets,
+        ),
+        central_enrolled=True,
+        profile_present=True,
+        qualification_authority_id_present=qualification_authority_id_present,
+    )
     if not all(
         (
             str(profile.bearer_token or "").strip(),
@@ -119,7 +343,14 @@ def _load_item_catalog_logistics_profile() -> Any | None:
             str(profile.base_url or "").strip(),
         )
     ):
-        raise ItemCatalogSyncError("central item catalog profile is incomplete")
+        _update_catalog_attempt_context(
+            pre_send_rejection_code=PROFILE_INCOMPLETE,
+            exception_type=ItemCatalogSyncError.__name__,
+        )
+        raise ItemCatalogSyncError(
+            "central item catalog profile is incomplete",
+            cause_code=PROFILE_INCOMPLETE,
+        )
     return profile
 
 
@@ -453,6 +684,7 @@ def refresh_item_catalog(
 ) -> Path:
     bundled = Path(bundled_path)
     cache = Path(cache_path) if cache_path is not None else default_cache_path()
+    _reset_catalog_attempt_context(url or "")
     last_good = _last_good_cache_path(cache)
     _forget_verified_catalog_snapshot(cache)
     _forget_verified_catalog_snapshot(last_good)
@@ -463,9 +695,16 @@ def refresh_item_catalog(
     fallback = cache if _is_valid_catalog(cache) else bundled
     try:
         profile = _load_item_catalog_logistics_profile()
-    except Exception:  # noqa: BLE001 - never expose profile details or secrets.
+    except ItemCatalogSyncError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - classify without exposing secrets.
+        _update_catalog_attempt_context(
+            pre_send_rejection_code=PROFILE_LOAD_FAILED,
+            exception_type=type(exc).__name__,
+        )
         raise ItemCatalogSyncError(
-            "central item catalog profile could not be loaded"
+            "central item catalog profile could not be loaded",
+            cause_code=PROFILE_LOAD_FAILED,
         ) from None
     central_enrolled = profile is not None
     if central_enrolled:
@@ -478,10 +717,32 @@ def refresh_item_catalog(
         else ""
     )
     effective_url = url or profile_catalog_url or resolve_catalog_url()
+    profile_secrets = _profile_secret_values(profile) if profile is not None else ()
+    _update_catalog_attempt_context(
+        catalog_url=_catalog_url_components(
+            effective_url,
+            redacted_values=profile_secrets,
+        ),
+        central_enrolled=central_enrolled,
+        profile_present=profile is not None,
+        qualification_authority_id_present=bool(
+            profile is not None
+            and str(
+                getattr(profile, "isolated_qualification_authority_id", "") or ""
+            ).strip()
+        ),
+    )
     if central_enrolled and not _is_trusted_authenticated_catalog_url(
         effective_url, profile
     ):
-        raise ItemCatalogSyncError("central item catalog URL is not trusted")
+        _update_catalog_attempt_context(
+            pre_send_rejection_code=URL_NOT_TRUSTED,
+            exception_type=ItemCatalogSyncError.__name__,
+        )
+        raise ItemCatalogSyncError(
+            "central item catalog URL is not trusted",
+            cause_code=URL_NOT_TRUSTED,
+        )
     try:
         request_kwargs: dict[str, object] = {
             "timeout": timeout_seconds,
@@ -500,8 +761,22 @@ def refresh_item_catalog(
             if tls_ca_bundle_path:
                 request_kwargs["verify"] = tls_ca_bundle_path
         transport = get or (_hardened_get if central_enrolled else requests.get)
+        _update_catalog_attempt_context(request_sent=True)
         response = transport(effective_url, **request_kwargs)
         status_code = getattr(response, "status_code", None)
+        try:
+            observed_status_code = (
+                int(status_code) if status_code is not None else None
+            )
+        except (TypeError, ValueError):
+            observed_status_code = None
+        _update_catalog_attempt_context(
+            http_status_code=observed_status_code,
+            http_reason_phrase=_bounded_http_reason_phrase(
+                observed_status_code,
+                getattr(response, "reason", ""),
+            ),
+        )
         if status_code is not None and 300 <= int(status_code) < 400:
             raise ValueError("item catalog redirects are not allowed")
         response.raise_for_status()
@@ -524,7 +799,8 @@ def refresh_item_catalog(
             _cache_authority_path(last_good).unlink(missing_ok=True)
             _atomic_write(cache, payload)
         return cache
-    except Exception:  # noqa: BLE001 - log only a generic, non-secret status.
+    except Exception as exc:  # noqa: BLE001 - persist type, never exception text.
+        _update_catalog_attempt_context(exception_type=type(exc).__name__)
         recovered = cache if _is_valid_catalog(cache) else None
         if central_enrolled:
             assert profile is not None
@@ -553,7 +829,8 @@ def refresh_item_catalog(
                 )
                 return authenticated_cache
             raise ItemCatalogSyncError(
-                "central item catalog is unavailable and no last central cache exists"
+                "central item catalog is unavailable and no last central cache exists",
+                cause_code=REQUEST_FAILED_NO_CACHE,
             ) from None
         fallback = recovered or fallback
         logger.warning("Item catalog sync skipped; using %s", fallback)

@@ -10,6 +10,7 @@ DATA_ROOT_ENV = "CONTAINER_AUDIT_DATA_ROOT"
 DEFAULT_VENDOR_DIR = "KMTech"
 DEFAULT_APP_DIR = "ContainerAudit"
 DEFAULT_DIRECT_SYNC_APP_DIR = "container_audit"
+ITEM_CATALOG_DIAGNOSTIC_FILENAME = "item_catalog_startup_diagnostic.json"
 EVENTS_DIR_NAME = "events"
 DIRECT_SYNC_DIR_NAME = "direct_sync"
 LEGACY_SYNCTHING_ROOT = Path("C:/Sync")
@@ -29,6 +30,7 @@ class ContainerAuditStoragePaths:
     client_state_db_path: Path
     operator_pause_path: Path
     status_path: Path
+    item_catalog_diagnostic_path: Path
 
 
 def _resolve_path(path: Path) -> Path:
@@ -111,6 +113,7 @@ def build_container_audit_storage_paths(
         client_state_db_path=direct_sync_root / "client_state.sqlite3",
         operator_pause_path=direct_sync_root / "operator_pause.json",
         status_path=status_dir / "status.json",
+        item_catalog_diagnostic_path=status_dir / ITEM_CATALOG_DIAGNOSTIC_FILENAME,
     )
 
 

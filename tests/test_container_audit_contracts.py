@@ -769,9 +769,13 @@ def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch)
 
 def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_details(
     monkeypatch,
+    tmp_path,
 ):
     sensitive_marker = "profile-token-must-not-leak"
     calls = []
+    program_data = tmp_path / "ProgramData"
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
 
     class Lease:
         def release(self):
@@ -786,7 +790,26 @@ def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_detai
         container_audit_module,
         "prepare_startup_item_catalog",
         lambda: (_ for _ in ()).throw(
-            container_audit_module.ItemCatalogSyncError(sensitive_marker)
+            container_audit_module.ItemCatalogSyncError(
+                sensitive_marker,
+                cause_code="URL_NOT_TRUSTED",
+                diagnostic_context={
+                    "catalog_url": {
+                        "scheme": "https",
+                        "host": "foreign.example.invalid",
+                        "port": 443,
+                        "path": "/inbound/api/item-catalog.csv",
+                    },
+                    "request_sent": False,
+                    "http_status_code": None,
+                    "http_reason_phrase": "",
+                    "pre_send_rejection_code": "URL_NOT_TRUSTED",
+                    "central_enrolled": True,
+                    "profile_present": True,
+                    "qualification_authority_id_present": False,
+                    "exception_type": "ItemCatalogSyncError",
+                },
+            )
         ),
     )
     monkeypatch.setattr(
@@ -807,11 +830,28 @@ def test_main_reports_catalog_gate_and_releases_instance_without_sensitive_detai
     assert result == container_audit_module.ITEM_CATALOG_STARTUP_EXIT_CODE == 3
     assert calls[-1] == "release"
     dialogs = [entry for entry in calls if isinstance(entry, tuple)]
-    assert len(dialogs) == 1
-    assert "중앙 품목 목록" in dialogs[0][0]
-    assert "IT 담당자" in dialogs[0][1]
+    assert dialogs == [
+        (
+            container_audit_module.ITEM_CATALOG_STARTUP_ERROR_TITLE,
+            f"{container_audit_module.ITEM_CATALOG_STARTUP_ERROR_MESSAGE}"
+            "\n오류 코드: URL_NOT_TRUSTED",
+        )
+    ]
     assert sensitive_marker not in dialogs[0][0]
     assert sensitive_marker not in dialogs[0][1]
+    diagnostic_path = (
+        program_data
+        / "KMTech"
+        / "DirectSync"
+        / "container_audit"
+        / "status"
+        / "item_catalog_startup_diagnostic.json"
+    )
+    diagnostic_text = diagnostic_path.read_text(encoding="utf-8")
+    diagnostic = json.loads(diagnostic_text)
+    assert diagnostic["cause_code"] == "URL_NOT_TRUSTED"
+    assert diagnostic["request_sent"] is False
+    assert sensitive_marker not in diagnostic_text
 
 
 def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):

@@ -27,6 +27,10 @@ def test_default_storage_paths_use_local_appdata_and_programdata_direct_sync(mon
     assert paths.events_dir == paths.data_root / "events"
     assert paths.direct_sync_root == (program_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert paths.queue_dir == paths.direct_sync_root / "queue"
+    assert (
+        paths.item_catalog_diagnostic_path
+        == paths.status_dir / "item_catalog_startup_diagnostic.json"
+    )
     assert not is_legacy_syncthing_path(paths.data_root)
     assert not is_legacy_syncthing_path(paths.events_dir)
     assert not is_legacy_syncthing_path(paths.direct_sync_root)
