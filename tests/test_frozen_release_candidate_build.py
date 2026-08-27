@@ -119,7 +119,7 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         'm.version(\'pyinstaller\') == \'6.20.0\'',
         '"kmtech_factory_contracts.build_cli", "prepare"',
         '"Container_Audit.spec"',
-        '"Container_Audit_DirectSync_Relay"',
+        '"--container-audit-direct-sync-relay", "--help"',
         '"Container_Audit_DirectSync_Install"',
         '"Container_Audit_Qualification_Authority"',
         '"Container_Audit_Protected_Admin_Install"',
@@ -139,6 +139,7 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         "main_exe_sha256 = $mainExeSha256",
     ):
         assert marker in script
+    assert '"Container_Audit_DirectSync_Relay"' not in script
     assert '"Container_Audit_Worker_PC_Register"' not in script
     assert "gh release create" not in script
     assert "gh release upload" not in script
@@ -152,7 +153,8 @@ def test_post_seal_python_smokes_cannot_write_bytecode_and_reverify_inventory():
 
     for marker in (
         '"-B", "tools/check_update_archive.py"',
-        '"-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py")',
+        '(Join-Path $smokeRoot "Container_Audit/Container_Audit.exe")',
+        '@("--container-audit-direct-sync-relay", "--help")',
         '"-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py")',
         '"-B", "tools/check_release_config.py"',
         '"-B", "-m", "kmtech_factory_contracts.build_cli", "verify"',

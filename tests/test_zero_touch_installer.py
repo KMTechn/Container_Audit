@@ -536,7 +536,9 @@ def test_public_installer_has_no_direct_packaged_boundary_a_helper_invocations()
         "--drain-after-scan",
     ):
         assert required in native_apply
-    assert "Container_Audit_DirectSync_Relay.exe" in native_apply
+    assert "Container_Audit.exe" in native_apply
+    assert "--container-audit-direct-sync-relay" in native_apply
+    assert "Container_Audit_DirectSync_Relay.exe" not in native_apply
     assert "Write-AtomicUtf8JsonFile $ReportPath $report" in native_apply
     assert native_apply.index("$report.status = 'APPLYING'") < native_apply.index(
         "Write-AtomicFileBytes $launcherPath $wrapperBytes"

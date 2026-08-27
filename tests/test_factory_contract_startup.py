@@ -111,6 +111,17 @@ def test_main_fails_before_runtime_when_factory_contract_gate_fails(monkeypatch)
     assert caught.value is failure
 
 
+def test_main_dispatches_product_mode_before_factory_and_gui_startup(monkeypatch):
+    monkeypatch.setattr(app, "dispatch_product_mode", lambda arguments: 23)
+
+    def unexpected_factory_startup():
+        raise AssertionError("factory/GUI startup must not run for a hosted product mode")
+
+    monkeypatch.setattr(app, "verify_factory_contract_startup", unexpected_factory_startup)
+
+    assert app.main(["--container-audit-direct-sync-relay", "--help"]) == 23
+
+
 def test_authoritative_pyinstaller_paths_include_factory_contract_data():
     spec = (ROOT / "Container_Audit.spec").read_text(encoding="utf-8")
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(

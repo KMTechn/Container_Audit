@@ -724,12 +724,12 @@ def test_noncanonical_layout_flag_requires_dedicated_test_marker(tmp_path, monke
     )
 
 
-def test_install_pack_prefers_bundled_relay_executable_without_python_dependency(tmp_path, monkeypatch):
+def test_install_pack_prefers_main_executable_relay_host_without_python_dependency(tmp_path, monkeypatch):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     app_root = tmp_path / "release-app"
     app_root.mkdir()
-    bundled_relay = app_root / "Container_Audit_DirectSync_Relay.exe"
-    bundled_relay.write_bytes(b"relay-exe")
+    application_host = app_root / "Container_Audit.exe"
+    application_host.write_bytes(b"application-exe")
     local_app_data = tmp_path / "LocalAppData"
     report_path = tmp_path / "install-pack-bundled-relay.json"
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
@@ -752,15 +752,20 @@ def test_install_pack_prefers_bundled_relay_executable_without_python_dependency
     assert exit_code == 0
     assert report["status"] == "DRY_RUN"
     assert report["use_bundled_relay_executable"] is True
+    assert report["relay_execution_mode"] == "in_process_main_executable"
     assert report["bundled_relay_executable"]["status"] == "PASS"
-    assert report["runner_command"][0] == str(bundled_relay.resolve())
+    assert report["runner_command"][:2] == [
+        str(application_host.resolve()),
+        install_pack.BUNDLED_RELAY_MODE,
+    ]
     assert "direct_sync_relay_runner.py" not in report["runner_command"]
+    assert "Container_Audit_DirectSync_Relay.exe" not in " ".join(report["runner_command"])
     assert report["app_root_dependencies"]["status"] == "SKIPPED"
     assert report["python_executable"]["status"] == "SKIPPED"
     assert report["python_runtime_imports"]["status"] == "SKIPPED"
 
 
-def test_install_pack_honors_explicit_python_exe_even_when_bundled_relay_exists(tmp_path):
+def test_install_pack_honors_explicit_python_exe_even_when_main_relay_host_exists(tmp_path):
     manifest_path, credential_path = make_manifest_and_credential(tmp_path)
     app_root = tmp_path / "release-app"
     (app_root / "tools").mkdir(parents=True)
@@ -771,7 +776,7 @@ def test_install_pack_honors_explicit_python_exe_even_when_bundled_relay_exists(
     (app_root / "producer_runtime_client.py").write_text("", encoding="utf-8")
     (app_root / "event_log_store.py").write_text("", encoding="utf-8")
     (app_root / "storage_policy.py").write_text("", encoding="utf-8")
-    (app_root / "Container_Audit_DirectSync_Relay.exe").write_bytes(b"relay-exe")
+    (app_root / "Container_Audit.exe").write_bytes(b"application-exe")
     report_path = tmp_path / "install-pack-explicit-python.json"
 
     exit_code = install_pack.main(
@@ -796,6 +801,7 @@ def test_install_pack_honors_explicit_python_exe_even_when_bundled_relay_exists(
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     assert exit_code == 0
     assert report["use_bundled_relay_executable"] is False
+    assert report["relay_execution_mode"] == "source_script"
     assert report["python_exe_explicit"] is True
     assert report["runner_command"][0] == str(Path(sys.executable).resolve())
     assert report["runner_command"][1].endswith("direct_sync_relay_runner.py")

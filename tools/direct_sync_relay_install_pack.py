@@ -45,7 +45,8 @@ SYSTEM32_CMD_EXE = r"C:\Windows\System32\cmd.exe"
 NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 DEFAULT_MIN_SOURCE_FILE_AGE_SECONDS = 30
-BUNDLED_RELAY_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
+BUNDLED_RELAY_EXE_NAME = "Container_Audit.exe"
+BUNDLED_RELAY_MODE = "--container-audit-direct-sync-relay"
 MAX_TASK_NAME_LENGTH = 128
 TASK_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+$")
 LOCAL_TEST_TASK_ENV_NAMES = (
@@ -410,9 +411,10 @@ def _bundled_relay_executable_report(app_root: str | os.PathLike[str]) -> dict:
     exists = path.is_file()
     return {
         "status": "PASS" if exists else "MISSING",
-        "blocked_reason": "" if exists else "bundled relay executable is not present",
+        "blocked_reason": "" if exists else "Container_Audit application host for DirectSync relay is not present",
         "path": str(path),
         "exists": exists,
+        "mode": BUNDLED_RELAY_MODE,
     }
 
 
@@ -1056,7 +1058,10 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     launcher_path = ""
     launcher_command = ""
     if not uninstall:
-        runner_parts = [bundled_relay_executable["path"]] if use_bundled_relay_executable else [
+        runner_parts = [
+            bundled_relay_executable["path"],
+            BUNDLED_RELAY_MODE,
+        ] if use_bundled_relay_executable else [
             python_executable["python_exe"],
             str(runner_script),
         ]
@@ -1139,6 +1144,9 @@ def build_install_plan(args: argparse.Namespace) -> dict:
         "task_runtime_acl": task_runtime_acl,
         "bundled_relay_executable": bundled_relay_executable,
         "use_bundled_relay_executable": use_bundled_relay_executable,
+        "relay_execution_mode": (
+            "in_process_main_executable" if use_bundled_relay_executable else "source_script"
+        ),
         "python_exe_explicit": python_exe_explicit,
         "app_root_dependencies": app_root_dependencies,
         "python_executable": python_executable,

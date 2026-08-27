@@ -1788,6 +1788,7 @@ function Install-ContainerAuditDirectSyncTask(
         }
         bundled_relay_executable = [ordered]@{ status = 'NOT_TESTED'; blocked_reason = ''; path = ''; exists = $false }
         use_bundled_relay_executable = $true
+        relay_execution_mode = 'in_process_main_executable'
         python_exe_explicit = $false
         app_root_dependencies = [ordered]@{ status = 'SKIPPED'; blocked_reason = ''; reason = 'bundled relay executable supplies scheduled-task runtime' }
         python_executable = [ordered]@{ status = 'SKIPPED'; blocked_reason = ''; reason = 'bundled relay executable selected' }
@@ -1877,13 +1878,14 @@ function Install-ContainerAuditDirectSyncTask(
         if ([string]::IsNullOrWhiteSpace($SourceGlob) -or $SourceGlob.Contains('**') -or $SourceGlob.Contains('/') -or $SourceGlob.Contains('\')) {
             throw "source glob must be a direct-child file pattern"
         }
-        $relayExecutable = Join-Path $appRootFull 'Container_Audit_DirectSync_Relay.exe'
+        $relayExecutable = Join-Path $appRootFull 'Container_Audit.exe'
         if (-not (Test-Path -LiteralPath $relayExecutable -PathType Leaf)) {
-            throw "bundled relay executable is not present"
+            throw "Container_Audit application host for DirectSync relay is not present"
         }
-        Assert-NoReparsePoint $relayExecutable "Container_Audit bundled DirectSync relay"
+        Assert-NoReparsePoint $relayExecutable "Container_Audit DirectSync relay application host"
         $report.bundled_relay_executable = [ordered]@{
             status = 'PASS'; blocked_reason = ''; path = $relayExecutable; exists = $true
+            mode = '--container-audit-direct-sync-relay'
         }
 
         $manifest = Read-BoundedJson $manifestFull "Container_Audit producer manifest"
@@ -2030,6 +2032,7 @@ function Install-ContainerAuditDirectSyncTask(
 
         [string[]]$runnerCommand = @(
             $relayExecutable,
+            '--container-audit-direct-sync-relay',
             '--db-path', $paths.db_path,
             '--spool-dir', $paths.spool_dir,
             '--producer-manifest-path', $manifestFull,
@@ -3118,7 +3121,6 @@ $statusDir = Join-Path $DirectSyncRoot "status"
 $requiredReleaseNames = @(
     "Container_Audit.exe",
     "Container_Audit_DirectSync_Install.exe",
-    "Container_Audit_DirectSync_Relay.exe",
     "Container_Audit_Qualification_Authority.exe"
 )
 if (-not $Uninstall.IsPresent) {
@@ -3168,10 +3170,9 @@ elseif (
 }
 $appExe = Join-Path $packageRoot "Container_Audit.exe"
 $installExe = Join-Path $packageRoot "Container_Audit_DirectSync_Install.exe"
-$runnerExe = Join-Path $packageRoot "Container_Audit_DirectSync_Relay.exe"
 $qualificationAuthorityExe = Join-Path $packageRoot "Container_Audit_Qualification_Authority.exe"
 if (-not $Uninstall.IsPresent) {
-    foreach ($required in @($appExe, $installExe, $runnerExe, $qualificationAuthorityExe)) {
+    foreach ($required in @($appExe, $installExe, $qualificationAuthorityExe)) {
         if (-not (Test-Path -LiteralPath $required -PathType Leaf)) {
             throw "Release package is incomplete. Missing: $required"
         }
@@ -3404,7 +3405,7 @@ if ($Uninstall.IsPresent) {
     }
     Write-Utf8JsonFile $externalReportPath $rollbackReport
     try {
-        Assert-NoOwnedProcess @("Container_Audit", "Container_Audit_DirectSync_Relay")
+        Assert-NoOwnedProcess @("Container_Audit")
         [void](Assert-OwnedTree $expectedApplicationParent $expectedApplicationParent "Container_Audit application parent")
         Assert-ApplicationParentInventory $expectedApplicationParent
         [void](Assert-OwnedTree $expectedLogisticsProfileRoot $expectedLogisticsProfileRoot "Container_Audit logistics profile")

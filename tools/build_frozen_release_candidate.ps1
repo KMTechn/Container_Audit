@@ -325,7 +325,6 @@ try {
     ) -Failure "Main Container_Audit PyInstaller build failed."
 
     $oneFileTools = @(
-        @("Container_Audit_DirectSync_Relay", "tools/direct_sync_relay_runner.py"),
         @("Container_Audit_DirectSync_Install", "tools/direct_sync_relay_install_pack.py"),
         @("Container_Audit_Qualification_Authority", "tools/isolated_qualification_authority.py"),
         @("Container_Audit_Protected_Admin_Install", "tools/install_protected_admin.py"),
@@ -344,6 +343,10 @@ try {
             $toolSource
         ) -Failure "Bundled release tool build failed: $toolName"
     }
+
+    Invoke-Checked -FilePath (Join-Path $packageRoot "Container_Audit.exe") `
+        -Arguments @("--container-audit-direct-sync-relay", "--help") `
+        -Failure "Packaged main-executable DirectSync relay help probe failed."
 
     Copy-Item -LiteralPath "tools/provision_protected_admin_acl.ps1" `
         -Destination (Join-Path $packageRoot "PROVISION_PROTECTED_ADMIN_ACL.ps1")
@@ -453,9 +456,9 @@ try {
         "--destination", $smokeRoot,
         "--package-root", $packageRoot
     ) -Failure "Frozen candidate archive smoke verification failed."
-    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_runner.py"), "--help"
-    ) -Failure "Staged direct-sync relay source help probe failed."
+    Invoke-Checked -FilePath (Join-Path $smokeRoot "Container_Audit/Container_Audit.exe") `
+        -Arguments @("--container-audit-direct-sync-relay", "--help") `
+        -Failure "Staged main-executable DirectSync relay help probe failed."
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py"), "--help"
     ) -Failure "Staged direct-sync operator source help probe failed."

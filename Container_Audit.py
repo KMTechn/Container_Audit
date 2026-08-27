@@ -25,6 +25,7 @@ import shutil
 import sqlite3
 from pathlib import Path
 
+from container_audit_product_host import dispatch_product_mode
 from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
@@ -299,7 +300,7 @@ def container_startup_logistics_client():
 # ####################################################################
 REPO_OWNER = "KMTechn"
 REPO_NAME = "Container_Audit"
-CURRENT_VERSION = "v2.0.96"
+CURRENT_VERSION = "v2.0.97"
 SAFE_TRANSFER_PREFLIGHT_RETRY_CODES = frozenset(
     {"PHS_LABEL_REPLACEMENT_AMBIGUOUS"}
 )
@@ -11283,7 +11284,12 @@ def _show_item_catalog_startup_error(cause_code: str) -> None:
         pass
 
 
-def main():
+def main(argv: list[str] | None = None):
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    hosted_result = dispatch_product_mode(arguments)
+    if hosted_result is not None:
+        return hosted_result
+
     verify_factory_contract_startup()
     if getattr(sys, 'frozen', False):
         application_path = os.path.dirname(sys.executable)

@@ -96,6 +96,22 @@ def test_session_direct_sync_command_forces_zero_age_scan_and_drain(tmp_path):
     assert "--drain-after-scan" in command
 
 
+def test_session_direct_sync_command_prefers_main_executable_relay_mode(tmp_path):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    application_exe = app_root / "Container_Audit.exe"
+    application_exe.write_bytes(b"exe")
+
+    command = bootstrap.build_session_direct_sync_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "data" / "direct_sync",
+        scan_source_dir=tmp_path / "data" / "events",
+    )
+
+    assert command[:2] == [str(application_exe.resolve()), bootstrap.DIRECT_SYNC_RELAY_MODE]
+    assert "Container_Audit_DirectSync_Relay.exe" not in " ".join(command)
+
+
 def test_install_command_falls_back_to_python_script(tmp_path):
     app_root = tmp_path / "app"
     tools_dir = app_root / "tools"

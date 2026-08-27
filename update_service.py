@@ -98,7 +98,6 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/tools/install_logistics_runtime_profile.py",
         "Container_Audit/tools/check_logistics_runtime_profile.py",
         "Container_Audit/Container_Audit_DirectSync_Install.exe",
-        "Container_Audit/Container_Audit_DirectSync_Relay.exe",
         "Container_Audit/Container_Audit_Qualification_Authority.exe",
         "Container_Audit/Container_Audit_Protected_Admin_Install.exe",
         "Container_Audit/PROVISION_PROTECTED_ADMIN_ACL.ps1",
@@ -121,6 +120,9 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/build-manifest.json",
         "Container_Audit/contract.lock.json",
     }
+)
+RETIRED_UPDATE_ARCHIVE_FILES = frozenset(
+    {"Container_Audit/Container_Audit_DirectSync_Relay.exe"}
 )
 ALLOWED_RELEASE_ASSET_HOSTS = frozenset(
     {
@@ -747,6 +749,9 @@ def validate_update_archive_layout(members: list[str], archive_policy: Mapping[s
     if top_level != {"Container_Audit"}:
         raise ValueError("업데이트 ZIP은 최상위 Container_Audit 폴더 하나만 포함해야 합니다.")
     present_files = {name.rstrip("/") for name in file_names if not name.endswith("/")}
+    retired = sorted(RETIRED_UPDATE_ARCHIVE_FILES & present_files)
+    if retired:
+        raise ValueError("업데이트 ZIP에 폐기된 별도 helper 실행 파일이 포함되어 있습니다: " + ", ".join(retired))
     missing = sorted(REQUIRED_UPDATE_ARCHIVE_FILES - present_files)
     if missing:
         raise ValueError("업데이트 ZIP에 필수 파일이 없습니다: " + ", ".join(missing))

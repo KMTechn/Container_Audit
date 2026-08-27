@@ -20,7 +20,8 @@ CANONICAL_DIRECT_SYNC_ROOT = r"C:\ProgramData\KMTech\DirectSync\container_audit"
 NONCANONICAL_LAYOUT_TEST_MODE_ENV = "KMTECH_FACTORY_INSTALL_TEST_MODE"
 DEFAULT_SOURCE_GLOB = "*.csv"
 INSTALL_EXE_NAME = "Container_Audit_DirectSync_Install.exe"
-RUNNER_EXE_NAME = "Container_Audit_DirectSync_Relay.exe"
+APPLICATION_EXE_NAME = "Container_Audit.exe"
+DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 
 _STARTED_ROOTS: set[str] = set()
 
@@ -110,10 +111,10 @@ def build_session_direct_sync_command(
     min_source_file_age_seconds: int = 0,
 ) -> list[str]:
     selected_app_root = Path(app_root).expanduser().resolve()
-    runner_exe = _existing_file(selected_app_root / RUNNER_EXE_NAME, selected_app_root / "tools" / RUNNER_EXE_NAME)
+    application_exe = _existing_file(selected_app_root / APPLICATION_EXE_NAME)
     runner_script = selected_app_root / "tools" / "direct_sync_relay_runner.py"
-    if runner_exe is not None:
-        command = [str(runner_exe)]
+    if application_exe is not None:
+        command = [str(application_exe), DIRECT_SYNC_RELAY_MODE]
     elif runner_script.is_file() and not getattr(sys, "frozen", False):
         command = [sys.executable, str(runner_script)]
     else:

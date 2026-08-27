@@ -103,7 +103,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 `
 
 The confirmation may be supplied only after the qualification owner has proved
 no active tray or unresolved operation, a fully ACKed relay, and no running GUI
-or packaged relay process. The report path must be a fresh absolute file
+or packaged relay process. The packaged relay is a separate SYSTEM process that
+hosts relay mode in `Container_Audit.exe`; it is not a distinct relay helper PE.
+The report path must be a fresh absolute file
 outside every deletion target. The bounded report records only path/status
 metadata and must never contain tokens, DPAPI bytes, profile secrets, event
 payloads, or barcodes.

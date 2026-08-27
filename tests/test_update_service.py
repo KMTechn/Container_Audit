@@ -603,7 +603,6 @@ def test_update_service_rejects_archive_missing_required_files(tmp_path):
         "Container_Audit/tools/direct_sync_relay_install_pack.py",
         "Container_Audit/tools/register_container_audit_worker_pc.py",
         "Container_Audit/Container_Audit_DirectSync_Install.exe",
-        "Container_Audit/Container_Audit_DirectSync_Relay.exe",
         "Container_Audit/direct_sync_runtime.py",
         "Container_Audit/storage_policy.py",
         "Container_Audit/storage_utils.py",
@@ -623,6 +622,16 @@ def test_update_archive_contract_does_not_require_registration_child_executable(
         "Container_Audit/Container_Audit_Worker_PC_Register.exe"
         not in update_service.REQUIRED_UPDATE_ARCHIVE_FILES
     )
+
+
+def test_update_archive_contract_rejects_retired_direct_sync_relay_helper():
+    members = sorted(
+        update_service.REQUIRED_UPDATE_ARCHIVE_FILES
+        | {"Container_Audit/Container_Audit_DirectSync_Relay.exe"}
+    )
+
+    with pytest.raises(ValueError, match="폐기된 별도 helper"):
+        update_service.validate_update_archive_layout(members)
 
 
 @pytest.mark.parametrize(
