@@ -305,6 +305,8 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
     local_app_data = tmp_path / "LocalAppData"
     report_path = tmp_path / "registration-current-user.json"
     profile_path = tmp_path / "profiles" / "Container_Audit" / "runtime-profile.json"
+    tls_ca_bundle_path = tmp_path / "private-ca.cert.pem"
+    tls_ca_bundle_path.write_bytes(b"private-ca-fixture")
     captured = {}
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
@@ -362,6 +364,8 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
             "current_user",
             "--logistics-profile-path",
             str(profile_path),
+            "--tls-ca-bundle-path",
+            str(tls_ca_bundle_path),
             "--endpoint-url",
             "https://worker.example.invalid/api/producer-ingest/v1/source-file",
             "--report-path",
@@ -376,6 +380,9 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
     assert captured["dpapi"]["credential_scope"] == "current_user"
     assert captured["profile_kwargs"]["credential_scope"] == "current_user"
     assert captured["profile_kwargs"]["profile_path"] == str(profile_path)
+    assert captured["profile_kwargs"]["tls_ca_bundle_path"] == str(
+        tls_ca_bundle_path
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="CurrentUser DPAPI is Windows-only")

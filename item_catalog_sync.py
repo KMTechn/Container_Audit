@@ -68,6 +68,22 @@ BASE_URL_ENV_NAMES = (
 _VERIFIED_CATALOG_SNAPSHOTS: dict[str, bytes] = {}
 _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS: set[str] = set()
 _CATALOG_ATTEMPT_CONTEXT: dict[str, object] = {}
+_CATALOG_SOURCES = frozenset(
+    {"UNKNOWN", "CENTRAL_REFRESH", "VERIFIED_CACHE", "LOCAL_CACHE", "BUNDLED"}
+)
+_CACHE_STATES = frozenset(
+    {
+        "NOT_CHECKED",
+        "ABSENT",
+        "CATALOG_INVALID",
+        "AUTHORITY_MISSING",
+        "AUTHORITY_OR_HMAC_INVALID",
+        "RECOVERY_INVALID",
+        "VALID_AUTHENTICATED",
+        "VALID_AUTHENTICATED_RECOVERY",
+        "VALID_UNAUTHENTICATED",
+    }
+)
 
 
 def _catalog_url_components(
@@ -108,7 +124,17 @@ def _empty_catalog_attempt_context() -> dict[str, object]:
         "central_enrolled": False,
         "profile_present": False,
         "qualification_authority_id_present": False,
+        "tls_ca_bundle_configured": False,
         "exception_type": "",
+        "catalog_source": "UNKNOWN",
+        "cache_path": "",
+        "cache_catalog_present": False,
+        "cache_authority_present": False,
+        "cache_recovery_present": False,
+        "legacy_cache_present": False,
+        "cache_state": "NOT_CHECKED",
+        "cache_used": False,
+        "cache_last_modified_utc": "UNKNOWN",
     }
 
 
@@ -162,6 +188,19 @@ def _bounded_exception_type(value: object) -> str:
     )
 
 
+def _bounded_timestamp(value: object) -> str:
+    text = str(value or "").strip()
+    if text == "UNKNOWN":
+        return text
+    try:
+        parsed = dt.datetime.fromisoformat(text)
+    except ValueError:
+        return "UNKNOWN"
+    if parsed.tzinfo is None:
+        return "UNKNOWN"
+    return parsed.astimezone(dt.timezone.utc).isoformat()
+
+
 def _sanitized_catalog_attempt_context(
     context: Mapping[str, object],
 ) -> dict[str, object]:
@@ -186,6 +225,12 @@ def _sanitized_catalog_attempt_context(
     rejection_code = str(context.get("pre_send_rejection_code") or "")
     if rejection_code not in ITEM_CATALOG_CAUSE_CODES:
         rejection_code = ""
+    catalog_source = str(context.get("catalog_source") or "UNKNOWN")
+    if catalog_source not in _CATALOG_SOURCES:
+        catalog_source = "UNKNOWN"
+    cache_state = str(context.get("cache_state") or "NOT_CHECKED")
+    if cache_state not in _CACHE_STATES:
+        cache_state = "NOT_CHECKED"
     return {
         "catalog_url": {
             "scheme": str(url.get("scheme") or "")[:32],
@@ -205,7 +250,21 @@ def _sanitized_catalog_attempt_context(
         "qualification_authority_id_present": bool(
             context.get("qualification_authority_id_present")
         ),
+        "tls_ca_bundle_configured": bool(
+            context.get("tls_ca_bundle_configured")
+        ),
         "exception_type": _bounded_exception_type(context.get("exception_type")),
+        "catalog_source": catalog_source,
+        "cache_path": str(context.get("cache_path") or "")[:4096],
+        "cache_catalog_present": bool(context.get("cache_catalog_present")),
+        "cache_authority_present": bool(context.get("cache_authority_present")),
+        "cache_recovery_present": bool(context.get("cache_recovery_present")),
+        "legacy_cache_present": bool(context.get("legacy_cache_present")),
+        "cache_state": cache_state,
+        "cache_used": bool(context.get("cache_used")),
+        "cache_last_modified_utc": _bounded_timestamp(
+            context.get("cache_last_modified_utc")
+        ),
     }
 
 
@@ -258,6 +317,27 @@ def write_item_catalog_failure_diagnostic(
         sort_keys=True,
         separators=(",", ":"),
     )
+    _atomic_write(destination, (payload + "\n").encode("utf-8"))
+    return destination
+
+
+def write_item_catalog_startup_diagnostic(path: str | Path) -> Path:
+    """Persist the latest successful central-refresh or verified-cache decision."""
+
+    context = _sanitized_catalog_attempt_context(get_catalog_attempt_context())
+    payload = json.dumps(
+        {
+            "schema": CATALOG_DIAGNOSTIC_SCHEMA,
+            "status": "DEGRADED_CACHE" if context["cache_used"] else "READY",
+            "recorded_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "cause_code": None,
+            **context,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    destination = Path(path)
     _atomic_write(destination, (payload + "\n").encode("utf-8"))
     return destination
 
@@ -334,6 +414,9 @@ def _load_item_catalog_logistics_profile() -> Any | None:
         central_enrolled=True,
         profile_present=True,
         qualification_authority_id_present=qualification_authority_id_present,
+        tls_ca_bundle_configured=bool(
+            str(getattr(profile, "tls_ca_bundle_path", "") or "").strip()
+        ),
     )
     if not all(
         (
@@ -448,6 +531,65 @@ def _last_good_cache_path(cache: Path) -> Path:
 
 def _cache_recovery_path(cache: Path) -> Path:
     return cache.with_name(f"{cache.name}.recovery.json")
+
+
+def _legacy_cache_path_for(cache: Path) -> Path | None:
+    if (
+        cache.name == "Item.csv"
+        and cache.parent.name == LOGISTICS_PROGRAM
+        and cache.parent.parent.name == "ItemCatalog"
+    ):
+        return cache.parent.parent / "Item.csv"
+    return None
+
+
+def _path_modified_utc(path: Path) -> str:
+    try:
+        return dt.datetime.fromtimestamp(
+            path.stat().st_mtime,
+            tz=dt.timezone.utc,
+        ).isoformat()
+    except OSError:
+        return "UNKNOWN"
+
+
+def _initial_cache_state(cache: Path) -> str:
+    if not cache.is_file():
+        return "ABSENT"
+    if not _is_valid_catalog(cache):
+        return "CATALOG_INVALID"
+    if not _cache_authority_path(cache).is_file():
+        return "AUTHORITY_MISSING"
+    return "AUTHORITY_OR_HMAC_INVALID"
+
+
+def _update_cache_attempt_context(cache: Path) -> None:
+    legacy_cache = _legacy_cache_path_for(cache)
+    _update_catalog_attempt_context(
+        cache_path=str(cache),
+        cache_catalog_present=cache.is_file(),
+        cache_authority_present=_cache_authority_path(cache).is_file(),
+        cache_recovery_present=_cache_recovery_path(cache).is_file(),
+        legacy_cache_present=bool(legacy_cache and legacy_cache.is_file()),
+        cache_state=_initial_cache_state(cache),
+        cache_used=False,
+        cache_last_modified_utc="UNKNOWN",
+    )
+
+
+def _mark_catalog_source(
+    path: Path,
+    *,
+    source: str,
+    cache_state: str,
+    cache_used: bool,
+) -> None:
+    _update_catalog_attempt_context(
+        catalog_source=source,
+        cache_state=cache_state,
+        cache_used=cache_used,
+        cache_last_modified_utc=_path_modified_utc(path),
+    )
 
 
 def _cache_authority_record(
@@ -685,6 +827,7 @@ def refresh_item_catalog(
     bundled = Path(bundled_path)
     cache = Path(cache_path) if cache_path is not None else default_cache_path()
     _reset_catalog_attempt_context(url or "")
+    _update_cache_attempt_context(cache)
     last_good = _last_good_cache_path(cache)
     _forget_verified_catalog_snapshot(cache)
     _forget_verified_catalog_snapshot(last_good)
@@ -730,6 +873,10 @@ def refresh_item_catalog(
             and str(
                 getattr(profile, "isolated_qualification_authority_id", "") or ""
             ).strip()
+        ),
+        tls_ca_bundle_configured=bool(
+            profile is not None
+            and str(getattr(profile, "tls_ca_bundle_path", "") or "").strip()
         ),
     )
     if central_enrolled and not _is_trusted_authenticated_catalog_url(
@@ -792,12 +939,26 @@ def refresh_item_catalog(
                 bearer_token=str(profile.bearer_token).strip(),
             )
             _remember_verified_catalog_snapshot(cache, payload)
+            _update_cache_attempt_context(cache)
+            _mark_catalog_source(
+                cache,
+                source="CENTRAL_REFRESH",
+                cache_state="VALID_AUTHENTICATED",
+                cache_used=False,
+            )
         else:
             _cache_authority_path(cache).unlink(missing_ok=True)
             _cache_recovery_path(cache).unlink(missing_ok=True)
             last_good.unlink(missing_ok=True)
             _cache_authority_path(last_good).unlink(missing_ok=True)
             _atomic_write(cache, payload)
+            _update_cache_attempt_context(cache)
+            _mark_catalog_source(
+                cache,
+                source="CENTRAL_REFRESH",
+                cache_state="VALID_UNAUTHENTICATED",
+                cache_used=False,
+            )
         return cache
     except Exception as exc:  # noqa: BLE001 - persist type, never exception text.
         _update_catalog_attempt_context(exception_type=type(exc).__name__)
@@ -824,15 +985,40 @@ def refresh_item_catalog(
                     bearer_token=bearer_token,
                 )
             if authenticated_cache is not None:
+                _update_cache_attempt_context(cache)
+                _mark_catalog_source(
+                    authenticated_cache,
+                    source="VERIFIED_CACHE",
+                    cache_state=(
+                        "VALID_AUTHENTICATED"
+                        if authenticated_cache == cache
+                        else "VALID_AUTHENTICATED_RECOVERY"
+                    ),
+                    cache_used=True,
+                )
                 logger.warning(
                     "Central item catalog refresh failed; using the last central cache"
                 )
                 return authenticated_cache
+            _update_cache_attempt_context(cache)
+            if (
+                _cache_recovery_path(cache).is_file()
+                and get_catalog_attempt_context()["cache_state"] == "ABSENT"
+            ):
+                _update_catalog_attempt_context(cache_state="RECOVERY_INVALID")
             raise ItemCatalogSyncError(
                 "central item catalog is unavailable and no last central cache exists",
                 cause_code=REQUEST_FAILED_NO_CACHE,
             ) from None
         fallback = recovered or fallback
+        _mark_catalog_source(
+            fallback,
+            source="LOCAL_CACHE" if fallback == cache else "BUNDLED",
+            cache_state=(
+                "VALID_UNAUTHENTICATED" if fallback == cache else "ABSENT"
+            ),
+            cache_used=fallback == cache,
+        )
         logger.warning("Item catalog sync skipped; using %s", fallback)
         return fallback
 

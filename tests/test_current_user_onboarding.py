@@ -5,8 +5,10 @@ from types import SimpleNamespace
 
 import pytest
 
+import current_user_onboarding as onboarding_module
 from current_user_onboarding import (
     CurrentUserOnboardingError,
+    ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV,
     inspect_current_user_state,
     onboard_current_user,
     remove_current_user_setup,
@@ -76,7 +78,10 @@ def _ready_state(paths, *, source_host_id="container-audit-user-1"):
 
 def _profile_loader(path: Path):
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return SimpleNamespace(source_host_id=payload["source_host_id"])
+    return SimpleNamespace(
+        source_host_id=payload["source_host_id"],
+        tls_ca_bundle_path=payload.get("tls_ca_bundle_path", ""),
+    )
 
 
 def _credential_loader(_path: Path):
@@ -159,6 +164,85 @@ def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
     assert paths.ledger_path.is_file()
     assert first["state_scope"] == "current_user"
     assert first["system_scheduled_task_required"] is False
+
+
+def test_registration_runner_forwards_bootstrap_tls_ca_bundle(tmp_path, monkeypatch):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    local_app_data = tmp_path / "LocalAppData"
+    environment = {"LOCALAPPDATA": str(local_app_data)}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    paths.bootstrap_tls_ca_bundle_path.parent.mkdir(parents=True)
+    paths.bootstrap_tls_ca_bundle_path.write_bytes(b"private-ca-fixture")
+    captured = {}
+
+    def fake_registration(arguments):
+        captured["arguments"] = list(arguments)
+        return 0
+
+    monkeypatch.setattr(
+        "tools.register_container_audit_worker_pc.main",
+        fake_registration,
+    )
+
+    result = onboarding_module._registration_runner(
+        paths,
+        server_base_url="https://worker.example.invalid",
+        environ=environment,
+    )
+
+    assert result == 0
+    arguments = captured["arguments"]
+    ca_index = arguments.index("--tls-ca-bundle-path")
+    assert arguments[ca_index + 1] == str(paths.bootstrap_tls_ca_bundle_path)
+
+
+def test_ready_profile_adds_configured_ca_without_registration(tmp_path, monkeypatch):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    ca_source = tmp_path / "private-ca.cert.pem"
+    ca_source.write_bytes(b"private-ca-fixture")
+    environment = {
+        "CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state"),
+        ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV: str(ca_source),
+    }
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    _ready_state(paths)
+    upgrades = []
+
+    def fake_upgrade(**kwargs):
+        upgrades.append(kwargs)
+        payload = json.loads(paths.logistics_profile_path.read_text(encoding="utf-8"))
+        payload["tls_ca_bundle_path"] = str(
+            paths.logistics_profile_path.parent / "tls" / "ca-bundle.pem"
+        )
+        _write_json(paths.logistics_profile_path, payload)
+        return {"status": "upgraded"}
+
+    monkeypatch.setattr(
+        "tools.install_logistics_runtime_profile.install_tls_ca_bundle_for_existing_profile",
+        fake_upgrade,
+    )
+
+    report = onboard_current_user(
+        app_root,
+        environ=environment,
+        require_bootstrap_integrity=False,
+        registration_runner=lambda _paths: (_ for _ in ()).throw(
+            AssertionError("ready profile must not be registered again")
+        ),
+        profile_loader=_profile_loader,
+        credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory,
+        autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+
+    assert report["status"] == "READY"
+    assert report["action"] == "REUSED"
+    assert report["state_readback"]["tls_private_ca_configured"] is True
+    assert len(upgrades) == 1
+    assert upgrades[0]["tls_ca_bundle_path"] == str(ca_source)
 
 
 def test_missing_registration_result_is_unknown_not_success(tmp_path):

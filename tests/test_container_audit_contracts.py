@@ -793,6 +793,80 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
     ]
 
 
+def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_path):
+    calls = []
+    dialogs = []
+    local_app_data = tmp_path / "LocalAppData"
+    cache_path = (
+        local_app_data
+        / "KMTech"
+        / "ItemCatalog"
+        / "Container_Audit"
+        / "Item.csv"
+    )
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
+
+    class Lease:
+        def release(self):
+            calls.append("release")
+
+    class FakeRoot:
+        def after(self, delay_ms, _callback):
+            calls.append(("after", delay_ms))
+
+    class FakeApp:
+        def __init__(self):
+            calls.append("client-created")
+            self.root = FakeRoot()
+
+        def run(self):
+            calls.append("run")
+
+    monkeypatch.setattr(container_audit_module, "_first_run_onboarding_enabled", lambda: False)
+    monkeypatch.setattr(
+        container_audit_module,
+        "acquire_runtime_instance",
+        lambda _data_root: Lease(),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "prepare_startup_item_catalog",
+        lambda: calls.append("catalog") or str(cache_path),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "get_catalog_attempt_context",
+        lambda: {
+            "catalog_source": "VERIFIED_CACHE",
+            "cache_used": True,
+            "cache_last_modified_utc": "2026-08-28T00:21:44+00:00",
+        },
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "write_item_catalog_startup_diagnostic",
+        lambda path: calls.append(("diagnostic", Path(path))),
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showwarning",
+        lambda title, message: dialogs.append((title, message)),
+    )
+    monkeypatch.setattr(container_audit_module, "ContainerAudit", FakeApp)
+
+    result = container_audit_module.main([])
+
+    assert result == 0
+    assert calls[0] == "catalog"
+    assert calls[1][0] == "diagnostic"
+    assert calls[2:] == ["client-created", ("after", 500), "run", "release"]
+    assert len(dialogs) == 1
+    assert dialogs[0][0] == container_audit_module.ITEM_CATALOG_CACHE_WARNING_TITLE
+    assert "2026-08-28" in dialogs[0][1]
+    assert "UNKNOWN" not in dialogs[0][1]
+
+
 def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch):
     calls = []
     monkeypatch.setattr(container_audit_module, "acquire_runtime_instance", lambda _data_root: None)

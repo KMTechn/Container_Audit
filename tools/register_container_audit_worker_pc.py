@@ -693,6 +693,10 @@ def _self_enroll(
                 str(getattr(args, "logistics_profile_path", "") or "").strip()
                 or None
             ),
+            tls_ca_bundle_path=(
+                str(getattr(args, "tls_ca_bundle_path", "") or "").strip()
+                or None
+            ),
             credential_scope=str(
                 getattr(args, "credential_scope", "machine") or "machine"
             ),
@@ -875,6 +879,7 @@ def main(argv: list[str] | None = None) -> int:
         default="machine",
     )
     parser.add_argument("--logistics-profile-path", default="")
+    parser.add_argument("--tls-ca-bundle-path", default="")
     parser.add_argument("--self-enroll", action="store_true")
     machine_profile_group = parser.add_mutually_exclusive_group()
     machine_profile_group.add_argument("--require-machine-credential-bundle", action="store_true")

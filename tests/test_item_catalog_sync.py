@@ -192,6 +192,46 @@ def test_catalog_cause_code_request_failed_no_cache(monkeypatch, tmp_path):
     assert raised.value.diagnostic_context["exception_type"] == "OSError"
 
 
+def test_enrolled_catalog_reports_legacy_root_cache_but_never_trusts_it(
+    monkeypatch, tmp_path
+):
+    local_app_data = tmp_path / "LocalAppData"
+    legacy_cache = local_app_data / "KMTech" / "ItemCatalog" / "Item.csv"
+    legacy_cache.parent.mkdir(parents=True)
+    legacy_cache.write_bytes(CATALOG)
+    bundle = tmp_path / "bundle.csv"
+    bundle.write_bytes(CATALOG)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setattr(
+        logistics_runtime_profile,
+        "load_logistics_runtime_profile",
+        lambda required=None: _profile(base_url=PROFILE_CATALOG_ORIGIN),
+    )
+
+    with pytest.raises(sync.ItemCatalogSyncError) as raised:
+        refresh_item_catalog(
+            bundle,
+            get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                OSError("catalog transport failed")
+            ),
+        )
+
+    expected_cache = (
+        local_app_data
+        / "KMTech"
+        / "ItemCatalog"
+        / "Container_Audit"
+        / "Item.csv"
+    )
+    context = raised.value.diagnostic_context
+    assert raised.value.cause_code == sync.REQUEST_FAILED_NO_CACHE
+    assert context["cache_path"] == str(expected_cache)
+    assert context["legacy_cache_present"] is True
+    assert context["cache_catalog_present"] is False
+    assert context["cache_authority_present"] is False
+    assert context["cache_state"] == "ABSENT"
+
+
 @pytest.mark.parametrize(
     "catalog_url",
     (PRODUCTION_CATALOG_URL, PRODUCTION_CATALOG_URL_WITH_PORT),
@@ -673,6 +713,20 @@ def test_central_refresh_success_and_offline_last_good(monkeypatch, tmp_path):
     ) == cache
     assert cache.read_bytes() == CATALOG
     assert list(cache.parent.glob("*.tmp")) == []
+    context = sync.get_catalog_attempt_context()
+    assert context["catalog_source"] == "VERIFIED_CACHE"
+    assert context["cache_state"] == "VALID_AUTHENTICATED"
+    assert context["cache_used"] is True
+    assert context["cache_last_modified_utc"] != "UNKNOWN"
+
+    diagnostic_path = tmp_path / "status" / "item_catalog_startup_diagnostic.json"
+    sync.write_item_catalog_startup_diagnostic(diagnostic_path)
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+    assert diagnostic["status"] == "DEGRADED_CACHE"
+    assert diagnostic["cause_code"] is None
+    assert diagnostic["catalog_source"] == "VERIFIED_CACHE"
+    assert diagnostic["cache_used"] is True
+    assert diagnostic["cache_last_modified_utc"] != "UNKNOWN"
 
 
 def test_pre_enrollment_cache_is_not_accepted_after_enrollment(monkeypatch, tmp_path):

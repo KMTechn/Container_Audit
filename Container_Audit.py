@@ -63,6 +63,7 @@ from item_catalog_sync import (
     refresh_item_catalog,
     requires_verified_catalog_snapshot,
     write_item_catalog_failure_diagnostic,
+    write_item_catalog_startup_diagnostic,
 )
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
@@ -11534,6 +11535,12 @@ ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
     "네트워크 연결과 이 PC의 중앙 물류 설정을 확인한 뒤 다시 실행하세요. "
     "계속 실패하면 IT 담당자에게 문의하세요."
 )
+ITEM_CATALOG_CACHE_WARNING_TITLE = "검증된 품목 캐시 사용"
+ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
+    "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n\n"
+    "캐시 기준 시각: {cache_time}\n"
+    "네트워크가 복구되면 다음 실행에서 중앙 목록을 다시 확인합니다."
+)
 FIRST_RUN_ONBOARDING_ERROR_TITLE = "초기 설정 실패"
 FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
     "이 사용자 계정의 이적 검사 초기 설정을 완료하지 못했습니다.\n\n"
@@ -11568,6 +11575,32 @@ def _show_item_catalog_startup_error(cause_code: str) -> None:
             f"{ITEM_CATALOG_STARTUP_ERROR_MESSAGE}\n오류 코드: {cause_code}",
         )
     except Exception:  # The fail-closed exit must survive Tk initialization failures.
+        pass
+
+
+def _item_catalog_cache_time_for_display(value: object) -> str:
+    text = str(value or "").strip()
+    if not text or text == "UNKNOWN":
+        return "UNKNOWN"
+    try:
+        parsed = datetime.datetime.fromisoformat(text)
+    except ValueError:
+        return "UNKNOWN"
+    if parsed.tzinfo is None:
+        return "UNKNOWN"
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _show_item_catalog_cache_warning(context: Mapping[str, object]) -> None:
+    cache_time = _item_catalog_cache_time_for_display(
+        context.get("cache_last_modified_utc")
+    )
+    try:
+        messagebox.showwarning(
+            ITEM_CATALOG_CACHE_WARNING_TITLE,
+            ITEM_CATALOG_CACHE_WARNING_MESSAGE.format(cache_time=cache_time),
+        )
+    except Exception:
         pass
 
 
@@ -11612,7 +11645,20 @@ def main(argv: list[str] | None = None):
                 _show_first_run_onboarding_error(exc)
                 return ONBOARDING_EXIT_CODE
         try:
-            prepare_startup_item_catalog()
+            active_catalog_path = prepare_startup_item_catalog()
+            if active_catalog_path is not None:
+                catalog_context = get_catalog_attempt_context()
+                try:
+                    write_item_catalog_startup_diagnostic(
+                        storage_paths.item_catalog_diagnostic_path
+                    )
+                except Exception:
+                    pass
+                if (
+                    catalog_context.get("cache_used")
+                    and catalog_context.get("catalog_source") == "VERIFIED_CACHE"
+                ):
+                    _show_item_catalog_cache_warning(catalog_context)
             app = ContainerAudit()
         except ItemCatalogSyncError as exc:
             try:
