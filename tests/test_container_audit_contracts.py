@@ -1694,6 +1694,92 @@ def test_synchronous_log_event_writes_durable_csv_entry(tmp_path):
     assert details["dispatch_key"] == "container_audit|legacy_transfer_csv|TRAY_COMPLETE"
 
 
+def test_local_only_event_is_durably_split_from_direct_sync_csv(tmp_path):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(
+        tmp_path / "events" / "이적작업이벤트로그_홍길동_20260829.csv"
+    )
+    app.local_events_folder = str(tmp_path / "local_events")
+
+    assert app._log_event(
+        "IDLE_START",
+        {"threshold_sec": 60},
+        synchronous=True,
+    ) is True
+
+    assert not Path(app.log_file_path).exists()
+    local_path = (
+        tmp_path / "local_events" / "이적로컬이벤트로그_홍길동_20260829.csv"
+    )
+    with local_path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["event"] for row in rows] == ["IDLE_START"]
+    details = json.loads(rows[0]["details"])
+    assert details["stream_disposition"] == "LOCAL_ONLY_NOT_FOR_DIRECT_SYNC"
+    assert details["direct_sync_eligible"] is False
+
+
+def test_contract_candidate_event_stays_in_direct_sync_csv(tmp_path):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events" / "events.csv")
+    app.local_events_folder = str(tmp_path / "local_events")
+
+    assert app._log_event(
+        "PRODUCT_EXCHANGE_COMPLETED",
+        {"exchange_id": "exchange-observed"},
+        synchronous=True,
+    ) is True
+
+    with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["event"] for row in rows] == ["PRODUCT_EXCHANGE_COMPLETED"]
+    assert not Path(app.local_events_folder).exists()
+
+
+def test_async_local_only_event_captures_local_stream_path(tmp_path):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events" / "events.csv")
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.log_queue = queue.Queue()
+
+    assert app._log_event("IDLE_END", {"duration_sec": "12.50"}) is True
+    app.log_file_path = str(tmp_path / "events" / "next-worker.csv")
+    app.log_queue.put(None)
+    app._event_log_writer()
+
+    local_path = tmp_path / "local_events" / "local-only-events.csv"
+    with local_path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["event"] for row in rows] == ["IDLE_END"]
+    assert not (tmp_path / "events" / "events.csv").exists()
+    assert not Path(app.log_file_path).exists()
+
+
+def test_test_tray_contract_event_never_enters_direct_sync_csv(tmp_path):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.current_tray = TraySession(is_test_tray=True)
+    app.log_file_path = str(tmp_path / "events" / "events.csv")
+    app.local_events_folder = str(tmp_path / "local_events")
+
+    assert app._log_event(
+        "SCAN_OK",
+        {"barcode": "TEST-ONLY"},
+        synchronous=True,
+    ) is True
+
+    local_path = tmp_path / "local_events" / "local-only-events.csv"
+    with local_path.open(newline="", encoding="utf-8-sig") as handle:
+        row = next(csv.DictReader(handle))
+    details = json.loads(row["details"])
+    assert row["event"] == "SCAN_OK"
+    assert details["stream_disposition_reason"] == "TEST_TRAY"
+    assert not Path(app.log_file_path).exists()
+
+
 def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_write(tmp_path, monkeypatch):
     calls = []
     sequence = []
@@ -3797,7 +3883,9 @@ def test_load_current_tray_state_discards_state_already_completed(tmp_path, monk
 
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
-    with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
+    assert not Path(app.log_file_path).exists()
+    local_path = tmp_path / "local_only" / "local-only-events.csv"
+    with local_path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert rows[0]["event"] == "TRAY_STATE_DISCARDED_AFTER_COMPLETION"
     assert json.loads(rows[0]["details"])["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
@@ -6615,7 +6703,9 @@ def test_internal_test_tray_never_calls_exact_transfer_server(tmp_path):
 
     assert app.complete_tray() is True
 
-    with open(app.log_file_path, newline="", encoding="utf-8-sig") as handle:
+    assert not Path(app.log_file_path).exists()
+    local_path = tmp_path / "local_only" / "local-only-events.csv"
+    with local_path.open(newline="", encoding="utf-8-sig") as handle:
         details = json.loads(next(csv.DictReader(handle))["details"])
     assert details["transfer_seal_status"] == "TEST_SKIPPED"
     assert details["transfer_seal_idempotency_key"] is None
@@ -9759,8 +9849,14 @@ def test_replacement_scanner_flow_writes_correction_and_direct_sync_plan(tmp_pat
 
     with replacement_log_path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
-    assert [row["event"] for row in rows] == ["HISTORICAL_REPLACE_START", "MASTER_LABEL_REPLACEMENT_APPLIED"]
-    replacement_detail = json.loads(rows[1]["details"])
+    assert [row["event"] for row in rows] == ["MASTER_LABEL_REPLACEMENT_APPLIED"]
+    local_replacement_path = (
+        tmp_path / "local_only" / "이적로컬이벤트로그_홍길동_20260624.csv"
+    )
+    with local_replacement_path.open(newline="", encoding="utf-8-sig") as f:
+        local_rows = list(csv.DictReader(f))
+    assert [row["event"] for row in local_rows] == ["HISTORICAL_REPLACE_START"]
+    replacement_detail = json.loads(rows[0]["details"])
     assert replacement_detail["dispatch_key"] == "container_audit|legacy_transfer_csv|MASTER_LABEL_REPLACEMENT_APPLIED"
     assert replacement_detail["old_master_label"] == old_label
     assert replacement_detail["new_master_label"] == new_label
@@ -9808,9 +9904,9 @@ def test_replacement_scanner_flow_writes_correction_and_direct_sync_plan(tmp_pat
         ),
     )
     assert plan.metadata["relative_path"] == "legacy_csv/이적작업이벤트로그_홍길동_20260624.csv"
-    assert plan.metadata["row_count"] == 2
+    assert plan.metadata["row_count"] == 1
     assert plan.metadata["first_row_number"] == 2
-    assert plan.metadata["last_row_number"] == 3
+    assert plan.metadata["last_row_number"] == 2
     assert plan.metadata["source_host_id"] == "container-host-01"
     assert plan.metadata["producer_install_id"] == "install-container-01"
 

@@ -25,6 +25,7 @@ def test_default_storage_paths_keep_business_and_direct_sync_in_current_user_sco
 
     assert paths.data_root == (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert paths.events_dir == paths.data_root / "events"
+    assert paths.local_events_dir == paths.data_root / "local_events"
     assert paths.config_dir == paths.data_root / "config"
     assert paths.settings_path == paths.config_dir / "container_audit_settings.json"
     assert paths.worker_registry_path == paths.config_dir / "worker_registry.json"
@@ -70,11 +71,14 @@ def test_container_audit_setup_uses_local_events_folder(monkeypatch, tmp_path):
 
     expected_root = (local_app_data / "KMTech" / "ContainerAudit").resolve()
     expected_events = expected_root / "events"
+    expected_local_events = expected_root / "local_events"
     assert Path(app.data_root) == expected_root
     assert Path(app.save_folder) == expected_events
+    assert Path(app.local_events_folder) == expected_local_events
     assert Path(app.direct_sync_scan_source_dir) == expected_events
     assert Path(app.direct_sync_program_data_root) == (local_app_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert expected_events.is_dir()
+    assert expected_local_events.is_dir()
     assert Path(app.config_folder).is_dir()
     assert Path(app.parked_trays_dir).is_dir()
     assert Path(app.config_folder) == expected_root / "config"
@@ -133,6 +137,7 @@ def test_explicit_state_root_keeps_all_derived_writes_in_that_user_scope(monkeyp
 
     assert paths.data_root == state_root.resolve()
     assert paths.events_dir == state_root.resolve() / "events"
+    assert paths.local_events_dir == state_root.resolve() / "local_events"
     assert paths.config_dir == state_root.resolve() / "config"
     assert paths.parked_trays_dir == state_root.resolve() / "parked_trays"
     assert paths.direct_sync_root == state_root.resolve() / "direct_sync"

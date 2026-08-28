@@ -50,6 +50,7 @@ from event_log_store import (
     append_event_log_entry,
     append_event_log_entry_idempotent,
 )
+from event_stream_policy import LOCAL_ONLY_EVENT_TYPES, local_only_event_log_path
 from event_payloads import (
     build_master_label_replacement_detail,
     build_scan_ok_detail,
@@ -1141,6 +1142,7 @@ class ContainerAudit:
         ensure_container_audit_storage_dirs(self.storage_paths)
         self.data_root = str(self.storage_paths.data_root)
         self.save_folder = str(self.storage_paths.events_dir)
+        self.local_events_folder = str(self.storage_paths.local_events_dir)
         self.direct_sync_scan_source_dir = str(self.storage_paths.events_dir)
         self.direct_sync_program_data_root = str(self.storage_paths.direct_sync_root)
         self.config_folder = str(self.storage_paths.config_dir)
@@ -8475,6 +8477,24 @@ class ContainerAudit:
         if not target_log_file_path: return False
         normalized_idempotency_key = str(idempotency_key or "").strip()
         raw_detail = dict(detail or {})
+        local_only = (
+            str(event_type or "").strip() in LOCAL_ONLY_EVENT_TYPES
+            or bool(getattr(getattr(self, "current_tray", None), "is_test_tray", False))
+        )
+        if local_only:
+            target_log_file_path = str(
+                local_only_event_log_path(
+                    target_log_file_path,
+                    local_events_dir=getattr(self, "local_events_folder", ""),
+                )
+            )
+            raw_detail["stream_disposition"] = "LOCAL_ONLY_NOT_FOR_DIRECT_SYNC"
+            raw_detail["direct_sync_eligible"] = False
+            raw_detail["stream_disposition_reason"] = (
+                "EXPLICIT_LOCAL_EVENT_TYPE"
+                if str(event_type or "").strip() in LOCAL_ONLY_EVENT_TYPES
+                else "TEST_TRAY"
+            )
         if normalized_idempotency_key:
             existing_key = str(raw_detail.get("idempotency_key") or "").strip()
             if existing_key and existing_key != normalized_idempotency_key:
@@ -8524,7 +8544,7 @@ class ContainerAudit:
                         durable=True,
                     )
                     self._last_log_event_was_replay = False
-                if event_type in {
+                if not local_only and event_type in {
                     "TRAY_COMPLETE",
                     "PRODUCT_EXCHANGE_COMPLETED",
                     "PHS_REPLACEMENT_WAITING_MARKED",

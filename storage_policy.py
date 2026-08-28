@@ -12,6 +12,7 @@ DEFAULT_APP_DIR = "ContainerAudit"
 DEFAULT_DIRECT_SYNC_APP_DIR = "container_audit"
 ITEM_CATALOG_DIAGNOSTIC_FILENAME = "item_catalog_startup_diagnostic.json"
 EVENTS_DIR_NAME = "events"
+LOCAL_EVENTS_DIR_NAME = "local_events"
 DIRECT_SYNC_DIR_NAME = "direct_sync"
 CONFIG_DIR_NAME = "config"
 PARKED_TRAYS_DIR_NAME = "parked_trays"
@@ -25,6 +26,7 @@ LEGACY_SYNCTHING_ROOT = Path("C:/Sync")
 class ContainerAuditStoragePaths:
     data_root: Path
     events_dir: Path
+    local_events_dir: Path
     config_dir: Path
     settings_path: Path
     worker_registry_path: Path
@@ -149,6 +151,7 @@ def build_container_audit_storage_paths(
         )
 
     events_dir = root / EVENTS_DIR_NAME
+    local_events_dir = root / LOCAL_EVENTS_DIR_NAME
     config_dir = root / CONFIG_DIR_NAME
     parked_trays_dir = root / PARKED_TRAYS_DIR_NAME
     direct_sync_root = _default_direct_sync_root(
@@ -166,6 +169,7 @@ def build_container_audit_storage_paths(
         runtime_targets = (
             root,
             events_dir,
+            local_events_dir,
             config_dir,
             parked_trays_dir,
             direct_sync_root,
@@ -183,6 +187,7 @@ def build_container_audit_storage_paths(
     return ContainerAuditStoragePaths(
         data_root=root,
         events_dir=events_dir,
+        local_events_dir=local_events_dir,
         config_dir=config_dir,
         settings_path=config_dir / SETTINGS_FILE_NAME,
         worker_registry_path=config_dir / WORKER_REGISTRY_FILE_NAME,
@@ -206,6 +211,7 @@ def ensure_container_audit_storage_dirs(paths: ContainerAuditStoragePaths) -> No
     for directory in (
         paths.data_root,
         paths.events_dir,
+        paths.local_events_dir,
         paths.config_dir,
         paths.parked_trays_dir,
         paths.direct_sync_root,
