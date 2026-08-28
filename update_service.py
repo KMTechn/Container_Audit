@@ -11,6 +11,11 @@ from typing import Any, Mapping
 from urllib.parse import parse_qsl, unquote, urlparse
 import zipfile
 
+from vendor.kmtech_zero_pe.release_signature import (
+    manifest_signature_version,
+    verify_release_signature,
+)
+
 
 WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -581,26 +586,15 @@ def canonical_manifest_bytes(manifest: Mapping[str, Any]) -> bytes:
     return json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
 
 
-def verify_update_manifest_signature(manifest: Mapping[str, Any], signature: bytes, public_key_hex: str) -> None:
+def verify_update_manifest_signature(manifest: Mapping[str, Any], signature: bytes, public_key_config: str) -> None:
     try:
-        from cryptography.exceptions import InvalidSignature
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-    except ImportError as exc:
-        raise ValueError("cryptography가 업데이트 manifest 서명 검증에 필요합니다.") from exc
-    try:
-        public_key = bytes.fromhex(str(public_key_hex or "").strip())
-    except ValueError as exc:
-        raise ValueError("업데이트 manifest 공개키 형식이 올바르지 않습니다.") from exc
-    if len(public_key) != 32:
-        raise ValueError("업데이트 manifest 공개키 길이가 올바르지 않습니다.")
-    if len(signature) != 64:
-        raise ValueError("업데이트 manifest 서명 길이가 올바르지 않습니다.")
-    try:
-        Ed25519PublicKey.from_public_bytes(public_key).verify(
-            signature,
+        verify_release_signature(
             canonical_manifest_bytes(manifest),
+            signature,
+            public_key_config,
+            manifest_signature_version(manifest),
         )
-    except InvalidSignature as exc:
+    except ValueError as exc:
         raise ValueError("업데이트 manifest 서명 검증에 실패했습니다.") from exc
 
 

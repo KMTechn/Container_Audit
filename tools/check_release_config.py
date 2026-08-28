@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from vendor.kmtech_zero_pe.release_signature import validate_public_key_config
+
 
 SETTINGS_FILE = "container_audit_settings.json"
 ALLOWED_SETTINGS_KEYS = {
@@ -142,8 +148,13 @@ def validate_update_settings_payload(payload: Any) -> None:
     public_key = payload.get("manifest_public_key")
     if not isinstance(public_key, str) or not public_key.strip():
         raise ValueError("update_settings.manifest_public_key is required")
-    if not all(ch in "0123456789abcdefABCDEF" for ch in public_key.strip()) or len(public_key.strip()) != 64:
-        raise ValueError("update_settings.manifest_public_key must be 64 hex characters")
+    try:
+        validate_public_key_config(public_key)
+    except ValueError as exc:
+        raise ValueError(
+            "update_settings.manifest_public_key must be 64 hex characters "
+            "or a valid ES256 JWK/transition bundle"
+        ) from exc
     channel = payload.get("channel")
     if not isinstance(channel, str) or not channel.strip():
         raise ValueError("update_settings.channel is required")
