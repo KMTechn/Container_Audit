@@ -35,6 +35,18 @@ from direct_sync_push import (  # noqa: E402
     validate_endpoint_url,
 )
 from direct_sync_runtime import _safe_secret_ref_name, _wincred_target_name  # noqa: E402
+from recovery_two_phase import (  # noqa: E402
+    STATE_CLEANUP_INTENT_DURABLE,
+    STATE_COMMIT_INTENT_DURABLE,
+    STATE_COMPLETE,
+    STATE_LOCAL_PACKAGE_DURABLE,
+    STATE_LOCAL_PERSISTED,
+    STATE_PREPARED,
+    STATE_PREPARE_INTENT_DURABLE,
+    STATE_SERVER_COMMITTED,
+    RecoveryTwoPhaseJournal,
+    RecoveryTwoPhaseStateError,
+)
 from storage_policy import (  # noqa: E402
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
@@ -67,6 +79,36 @@ ADMIN_RECOVERY_PROOF_CONTRACT_VERSION = "producer-admin-recovery-proof-v1"
 ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION = "producer-admin-recovery-complete-v1"
 ADMIN_RECOVERY_AUDIENCE = "worker-analysis-producer-admin-recovery-v1"
 ADMIN_RECOVERY_PATH = "/api/producer-ingest/v2/recover"
+ADMIN_RECOVERY_2PC_PREPARE_PATH = "/api/producer-ingest/v2/recover/prepare"
+ADMIN_RECOVERY_2PC_COMMIT_PATH = "/api/producer-ingest/v2/recover/commit"
+ADMIN_RECOVERY_2PC_STATUS_PATH = "/api/producer-ingest/v2/recover/status"
+ADMIN_RECOVERY_2PC_PREPARE_REQUEST_CONTRACT_VERSION = (
+    "producer-admin-recovery-prepare-request-v1"
+)
+ADMIN_RECOVERY_2PC_PREPARE_RESPONSE_CONTRACT_VERSION = (
+    "producer-admin-recovery-prepare-response-v1"
+)
+ADMIN_RECOVERY_2PC_PREPARE_PROOF_CONTRACT_VERSION = (
+    "producer-admin-recovery-prepare-proof-v1"
+)
+ADMIN_RECOVERY_2PC_COMMIT_REQUEST_CONTRACT_VERSION = (
+    "producer-admin-recovery-commit-request-v1"
+)
+ADMIN_RECOVERY_2PC_COMMIT_RESPONSE_CONTRACT_VERSION = (
+    "producer-admin-recovery-commit-response-v1"
+)
+ADMIN_RECOVERY_2PC_COMMIT_PROOF_CONTRACT_VERSION = (
+    "producer-admin-recovery-commit-proof-v1"
+)
+ADMIN_RECOVERY_2PC_STATUS_REQUEST_CONTRACT_VERSION = (
+    "producer-admin-recovery-status-request-v1"
+)
+ADMIN_RECOVERY_2PC_STATUS_RESPONSE_CONTRACT_VERSION = (
+    "producer-admin-recovery-status-response-v1"
+)
+ADMIN_RECOVERY_2PC_STATUS_PROOF_CONTRACT_VERSION = (
+    "producer-admin-recovery-status-proof-v1"
+)
 DEFAULT_ENROLLMENT_TOKEN_ENV = "CONTAINER_AUDIT_ENROLLMENT_TOKEN"
 CRYPTPROTECT_LOCAL_MACHINE = 0x4
 CRYPTPROTECT_UI_FORBIDDEN = 0x1
@@ -115,6 +157,37 @@ class EnrollmentAdminRecoveryRequired(DirectSyncPushError):
         if self.key_state:
             report["possession_key_state"] = dict(self.key_state)
         return report
+
+
+class RecoveryTwoPhaseResumeRequired(DirectSyncPushError):
+    """A committed prepare is recoverable from the durable local journal."""
+
+    def __init__(self, reason: str, *, journal_path: Path, state: str) -> None:
+        self.journal_path = Path(journal_path)
+        self.state = str(state)
+        super().__init__(str(reason))
+
+    def public_report(self) -> dict:
+        return {
+            "status": "RESUME_TWO_PHASE_RECOVERY",
+            "recovery_action": "RESUME_TWO_PHASE_RECOVERY",
+            "administrator_required": False,
+            "server_credential_committed": self.state
+            in {
+                STATE_SERVER_COMMITTED,
+                STATE_LOCAL_PERSISTED,
+                STATE_CLEANUP_INTENT_DURABLE,
+                STATE_COMPLETE,
+            },
+            "recovery_two_phase_state": self.state,
+            "recovery_two_phase_journal_path": str(self.journal_path),
+        }
+
+
+def _recovery_two_phase_cut_point(_name: str) -> None:
+    """No-op production seam used by crash-cut tests to emulate power loss."""
+
+    return None
 
 
 def _default_app_root() -> str:
@@ -301,6 +374,11 @@ def _default_admin_recovery_url(endpoint_url: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}{ADMIN_RECOVERY_PATH}"
 
 
+def _default_admin_recovery_two_phase_url(endpoint_url: str, path: str) -> str:
+    parsed = urlparse(endpoint_url)
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
 def _validate_enrollment_url(
     enrollment_url: str,
     endpoint_url: str,
@@ -348,6 +426,31 @@ def _validate_admin_recovery_url(recovery_url: str, endpoint_url: str) -> str:
     return parsed_recovery.geturl()
 
 
+def _validate_admin_recovery_two_phase_url(
+    recovery_url: str,
+    endpoint_url: str,
+    *,
+    expected_path: str,
+) -> str:
+    validate_endpoint_url(endpoint_url)
+    parsed_endpoint = urlparse(endpoint_url)
+    parsed_recovery = urlparse(str(recovery_url or "").strip())
+    if (
+        parsed_recovery.scheme != "https"
+        or parsed_recovery.netloc != parsed_endpoint.netloc
+        or parsed_recovery.username
+        or parsed_recovery.password
+        or parsed_recovery.query
+        or parsed_recovery.fragment
+        or parsed_recovery.path != expected_path
+    ):
+        raise DirectSyncPushError(
+            "admin recovery two-phase URL must be HTTPS, same-origin, and use "
+            f"{expected_path}"
+        )
+    return parsed_recovery.geturl()
+
+
 def _legacy_path_block_report(field_name: str, path: str | os.PathLike[str]) -> dict | None:
     raw_path = str(path or "").strip()
     if raw_path and is_legacy_syncthing_path(raw_path):
@@ -368,6 +471,10 @@ def _explicit_output_path_policy_report(args: argparse.Namespace) -> dict:
         _legacy_path_block_report(
             "admin_recovery_secret_file",
             getattr(args, "admin_recovery_secret_file", ""),
+        ),
+        _legacy_path_block_report(
+            "admin_recovery_journal_path",
+            getattr(args, "admin_recovery_journal_path", ""),
         ),
     ]
     unsafe_paths = [check for check in checks if check]
@@ -960,6 +1067,310 @@ def _post_enrollment_request(
         )
 
 
+def _strict_json_value_equal(left, right) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is type(right) and left == right
+    if isinstance(left, (int, float)) or isinstance(right, (int, float)):
+        return type(left) is type(right) and left == right
+    if isinstance(left, dict) or isinstance(right, dict):
+        if not isinstance(left, dict) or not isinstance(right, dict):
+            return False
+        return set(left) == set(right) and all(
+            _strict_json_value_equal(left[key], right[key]) for key in left
+        )
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(
+                _strict_json_value_equal(left_item, right_item)
+                for left_item, right_item in zip(left, right)
+            )
+        )
+    return type(left) is type(right) and left == right
+
+
+def _recovery_two_phase_id(prefix: str, payload: dict) -> str:
+    digest = hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
+    return f"{prefix}-{digest[:32]}"
+
+
+def _recovery_two_phase_response_payload(response, *, action: str) -> dict:
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise DirectSyncPushError(
+            f"admin recovery two-phase {action} response is not JSON: "
+            f"HTTP {response.status_code}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise DirectSyncPushError(
+            f"admin recovery two-phase {action} response is not an object: "
+            f"HTTP {response.status_code}"
+        )
+    if response.status_code >= 400:
+        code = str((payload.get("error") or {}).get("code") or response.status_code)
+        raise EnrollmentAdminRecoveryRequired(
+            f"server refused audited producer recovery {action}",
+            error_code=code,
+        )
+    if response.status_code != 200:
+        raise DirectSyncPushError(
+            f"admin recovery two-phase {action} returned HTTP {response.status_code}"
+        )
+    return payload
+
+
+def _recovery_two_phase_urls(args: argparse.Namespace, endpoint_url: str) -> dict:
+    values = {}
+    for name, path in (
+        ("prepare", ADMIN_RECOVERY_2PC_PREPARE_PATH),
+        ("commit", ADMIN_RECOVERY_2PC_COMMIT_PATH),
+        ("status", ADMIN_RECOVERY_2PC_STATUS_PATH),
+    ):
+        explicit = str(
+            getattr(args, f"admin_recovery_{name}_url", "") or ""
+        ).strip()
+        values[name] = _validate_admin_recovery_two_phase_url(
+            explicit or _default_admin_recovery_two_phase_url(endpoint_url, path),
+            endpoint_url,
+            expected_path=path,
+        )
+    return values
+
+
+def _recovery_two_phase_journal(
+    args: argparse.Namespace,
+    credential: dict,
+) -> RecoveryTwoPhaseJournal:
+    explicit = str(
+        getattr(args, "admin_recovery_journal_path", "") or ""
+    ).strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+    else:
+        data_dir = str(credential.get("secret_data_dir") or "").strip()
+        if not data_dir:
+            raise DirectSyncPushError(
+                "two-phase recovery requires a durable direct-sync data directory"
+            )
+        path = (
+            Path(data_dir)
+            / "status"
+            / "admin_recovery_two_phase_journal.json"
+        )
+    if is_legacy_syncthing_path(path):
+        raise DirectSyncPushError(
+            "admin recovery two-phase journal must not use the legacy Syncthing folder"
+        )
+    return RecoveryTwoPhaseJournal(path)
+
+
+def _seal_recovery_two_phase_package(response_payload: dict) -> bytes:
+    serialized = canonical_json_bytes(response_payload).decode("utf-8")
+    sealed = _dpapi_protect_current_user(serialized)
+    if not isinstance(sealed, bytes) or not sealed:
+        raise DirectSyncPushError(
+            "admin recovery two-phase package sealing failed"
+        )
+    return sealed
+
+
+def _open_recovery_two_phase_package(
+    journal: RecoveryTwoPhaseJournal,
+) -> dict:
+    try:
+        serialized = _dpapi_unprotect_current_user(journal.read_sealed_package())
+        payload = load_json_no_duplicate_keys(serialized.encode("utf-8"))
+    except (UnicodeError, ValueError, RecoveryTwoPhaseStateError) as exc:
+        raise RecoveryTwoPhaseResumeRequired(
+            "durable recovery package could not be read back",
+            journal_path=journal.path,
+            state=str((journal.load() or {}).get("state") or "UNKNOWN"),
+        ) from exc
+    if not isinstance(payload, dict) or canonical_json_bytes(payload) != serialized.encode(
+        "utf-8"
+    ):
+        raise RecoveryTwoPhaseResumeRequired(
+            "durable recovery package canonical readback mismatch",
+            journal_path=journal.path,
+            state=str((journal.load() or {}).get("state") or "UNKNOWN"),
+        )
+    return payload
+
+
+def _validate_recovery_two_phase_prepare_response(
+    response_payload: dict,
+    *,
+    bindings: dict,
+) -> None:
+    possession = response_payload.get("possession_key")
+    secret = response_payload.get("secret")
+    secret_fingerprint = response_payload.get("secret_fingerprint_sha256")
+    active_manifest_hashes = response_payload.get("active_manifest_hashes")
+    proposed_epoch = response_payload.get("proposed_credential_epoch")
+    try:
+        prepare_expires_at = _dt.datetime.strptime(
+            str(response_payload.get("prepare_expires_at") or ""),
+            "%Y-%m-%dT%H:%M:%SZ",
+        ).replace(tzinfo=_dt.timezone.utc)
+    except ValueError as exc:
+        raise DirectSyncPushError(
+            "admin recovery prepare expiry is invalid"
+        ) from exc
+    if (
+        response_payload.get("contract_version")
+        != ADMIN_RECOVERY_2PC_PREPARE_RESPONSE_CONTRACT_VERSION
+        or response_payload.get("status") != "prepared"
+        or response_payload.get("recovery_state") != "PREPARED"
+        or response_payload.get("authorization_state") != "RESERVED"
+        or response_payload.get("identity_action") != "REATTACHED"
+        or response_payload.get("recovery_action") != "ADMIN_RECOVERY"
+        or response_payload.get("client_request_id")
+        != bindings["client_request_id"]
+        or response_payload.get("producer_id") != bindings["producer_id"]
+        or response_payload.get("producer_install_id")
+        != bindings["producer_install_id"]
+        or response_payload.get("source_host_id")
+        != bindings["source_host_id"]
+        or not isinstance(response_payload.get("prepare_id"), str)
+        or not response_payload["prepare_id"].strip()
+        or prepare_expires_at <= _dt.datetime.now(_dt.timezone.utc)
+        or not isinstance(proposed_epoch, int)
+        or isinstance(proposed_epoch, bool)
+        or proposed_epoch < 2
+        or not isinstance(response_payload.get("key_id"), str)
+        or not response_payload["key_id"].strip()
+        or not isinstance(secret, str)
+        or not secret.strip()
+        or not isinstance(secret_fingerprint, str)
+        or secret_fingerprint
+        != hashlib.sha256(secret.encode("utf-8")).hexdigest()
+        or not isinstance(active_manifest_hashes, list)
+        or bindings["manifest_hash"]
+        not in {str(value).strip().lower() for value in active_manifest_hashes}
+        or not isinstance(possession, dict)
+        or possession.get("contract_version")
+        != POSSESSION_KEY_CONTRACT_VERSION
+        or possession.get("fingerprint")
+        != bindings["possession_key_fingerprint"]
+    ):
+        raise DirectSyncPushError(
+            "admin recovery prepare response does not prove a pending bound generation"
+        )
+
+
+def _validate_recovery_two_phase_status_response(
+    response_payload: dict,
+    *,
+    journal_payload: dict,
+) -> str:
+    bindings = journal_payload["bindings"]
+    state = str(response_payload.get("recovery_state") or "")
+    if (
+        response_payload.get("contract_version")
+        != ADMIN_RECOVERY_2PC_STATUS_RESPONSE_CONTRACT_VERSION
+        or response_payload.get("status") != "observed"
+        or state not in {"PREPARED", "COMMITTED", "ABORTED", "EXPIRED"}
+        or response_payload.get("prepare_id") != journal_payload["prepare_id"]
+        or response_payload.get("client_request_id")
+        != bindings["client_request_id"]
+        or response_payload.get("producer_id") != bindings["producer_id"]
+        or response_payload.get("producer_install_id")
+        != bindings["producer_install_id"]
+        or response_payload.get("source_host_id")
+        != bindings["source_host_id"]
+    ):
+        raise DirectSyncPushError(
+            "admin recovery status response binding is invalid"
+        )
+    return state
+
+
+def _validate_recovery_two_phase_commit_response(
+    response_payload: dict,
+    *,
+    journal_payload: dict,
+) -> None:
+    bindings = journal_payload["bindings"]
+    possession = response_payload.get("possession_key")
+    if (
+        response_payload.get("contract_version")
+        != ADMIN_RECOVERY_2PC_COMMIT_RESPONSE_CONTRACT_VERSION
+        or response_payload.get("status") != "recovered"
+        or response_payload.get("recovery_state") != "COMMITTED"
+        or response_payload.get("authorization_state")
+        != "OPERATION_PENDING"
+        or response_payload.get("identity_action") != "REATTACHED"
+        or response_payload.get("recovery_action") != "ADMIN_RECOVERY"
+        or response_payload.get("prepare_id") != journal_payload["prepare_id"]
+        or response_payload.get("client_request_id")
+        != bindings["client_request_id"]
+        or response_payload.get("commit_id") != bindings["commit_id"]
+        or response_payload.get("producer_id") != bindings["producer_id"]
+        or response_payload.get("producer_install_id")
+        != bindings["producer_install_id"]
+        or response_payload.get("source_host_id")
+        != bindings["source_host_id"]
+        or response_payload.get("key_id") != journal_payload["prepared_key_id"]
+        or response_payload.get("secret_fingerprint_sha256")
+        != journal_payload["prepared_secret_fingerprint_sha256"]
+        or response_payload.get("credential_epoch")
+        != journal_payload["proposed_credential_epoch"]
+        or not isinstance(response_payload.get("committed_at"), str)
+        or not response_payload["committed_at"].strip()
+        or not isinstance(possession, dict)
+        or possession.get("contract_version")
+        != POSSESSION_KEY_CONTRACT_VERSION
+        or possession.get("fingerprint")
+        != bindings["possession_key_fingerprint"]
+    ):
+        raise DirectSyncPushError(
+            "admin recovery commit response does not prove the requested activation"
+        )
+
+
+def _recovery_two_phase_signed_status(
+    *,
+    journal_payload: dict,
+    possession_key,
+    urls: dict,
+    headers: dict,
+    timeout: int,
+    verify: str | bool,
+) -> dict:
+    bindings = journal_payload["bindings"]
+    proof = {
+        "contract_version": ADMIN_RECOVERY_2PC_STATUS_PROOF_CONTRACT_VERSION,
+        "prepare_id": journal_payload["prepare_id"],
+        "client_request_id": bindings["client_request_id"],
+        "authorization_id": bindings["authorization_id"],
+        "producer_id": bindings["producer_id"],
+        "producer_install_id": bindings["producer_install_id"],
+        "source_host_id": bindings["source_host_id"],
+        "manifest_hash": bindings["manifest_hash"],
+        "new_possession_key_fingerprint": bindings[
+            "possession_key_fingerprint"
+        ],
+    }
+    response = _post_enrollment_request(
+        urls["status"],
+        json={
+            "contract_version": ADMIN_RECOVERY_2PC_STATUS_REQUEST_CONTRACT_VERSION,
+            "proof": proof,
+            "signature": b64url_encode(
+                possession_key.sign_es256(canonical_json_bytes(proof))
+            ),
+        },
+        headers=headers,
+        timeout=timeout,
+        allow_redirects=False,
+        verify=verify,
+    )
+    return _recovery_two_phase_response_payload(response, action="status")
+
+
 def _finalize_server_registration(
     args: argparse.Namespace,
     manifest: dict,
@@ -1025,6 +1436,13 @@ def _finalize_server_registration(
             credential_scope=str(
                 getattr(args, "credential_scope", "machine") or "machine"
             ),
+            allow_existing_token_rotation=bool(
+                getattr(args, "admin_recovery_two_phase", False)
+            ),
+            expected_producer_id=str(credential["producer_id"]),
+            expected_producer_install_id=str(identity["producer_install_id"]),
+            expected_manifest_hash=expected_manifest_hash,
+            expected_endpoint_url=str(credential["endpoint_url"]),
         )
     if machine_profile is None and bool(
         getattr(args, "require_machine_credential_bundle", False)
@@ -1473,7 +1891,423 @@ def _admin_recover(
     return credential, report
 
 
+def _admin_recover_two_phase(
+    args: argparse.Namespace,
+    manifest: dict,
+    credential: dict,
+    secret_ref_scheme: str,
+    secret_ref_target: str,
+) -> tuple[dict, dict]:
+    if getattr(args, "_isolated_qualification_context", None) is not None:
+        raise DirectSyncPushError(
+            "admin recovery is not available through the isolated qualification authority"
+        )
+    if secret_ref_scheme != "dpapi" or str(
+        getattr(args, "credential_scope", "") or ""
+    ).strip().lower() != "current_user":
+        raise DirectSyncPushError(
+            "two-phase recovery prototype requires current_user dpapi persistence"
+        )
+
+    journal = _recovery_two_phase_journal(args, credential)
+    existing_journal = journal.load()
+    recovery_path = Path(
+        str(getattr(args, "admin_recovery_secret_file", "") or "")
+    ).expanduser().resolve(strict=False)
+    authorization = None
+    if recovery_path.is_file():
+        _loaded_path, authorization = _load_admin_recovery_authorization(
+            str(recovery_path),
+            expected_producer_id=str(credential["producer_id"]),
+        )
+    elif existing_journal is None or existing_journal["state"] in {
+        STATE_PREPARE_INTENT_DURABLE,
+        STATE_PREPARED,
+    }:
+        raise DirectSyncPushError(
+            "admin recovery authorization is required until the prepared package is durable"
+        )
+
+    urls = _recovery_two_phase_urls(args, credential["endpoint_url"])
+    token = args.enrollment_token or os.getenv(
+        args.enrollment_token_env or DEFAULT_ENROLLMENT_TOKEN_ENV,
+        "",
+    )
+    headers = {"X-Producer-Enrollment-Token": token} if token else {}
+    configured_ca_bundle_path = str(
+        getattr(args, "tls_ca_bundle_path", "") or ""
+    ).strip()
+    verify = configured_ca_bundle_path or True
+    timeout = max(1, int(args.enrollment_timeout_seconds))
+    identity = manifest["pc_identity"]
+    expected_manifest_hash = manifest_hash(manifest)
+
+    try:
+        possession_key_context = PersistentPossessionKey.provision_initial(
+            scope=SCOPE_CURRENT_USER
+        )
+    except PossessionKeyAdminRecoveryRequired as exc:
+        raise EnrollmentAdminRecoveryRequired(
+            "audited recovery possession key is unavailable or policy-invalid; automatic replacement is forbidden",
+            error_code="possession_key_admin_recovery_required",
+            key_state=exc.public_state(),
+        ) from exc
+
+    with possession_key_context as possession_key:
+        possession_descriptor = possession_key.descriptor()
+        non_exportability = possession_key.assert_non_exportable()
+        authorization_id = str(
+            (authorization or {}).get("authorization_id")
+            or (existing_journal or {}).get("bindings", {}).get("authorization_id")
+            or ""
+        )
+        authorization_audit_event_id = str(
+            (authorization or {}).get("audit_event_id")
+            or (existing_journal or {})
+            .get("bindings", {})
+            .get("authorization_audit_event_id")
+            or ""
+        )
+        id_source = {
+            "authorization_id": authorization_id,
+            "producer_id": credential["producer_id"],
+            "producer_install_id": identity["producer_install_id"],
+            "source_host_id": identity["source_host_id"],
+            "manifest_hash": expected_manifest_hash,
+            "possession_key_fingerprint": possession_descriptor.fingerprint,
+        }
+        client_request_id = _recovery_two_phase_id("prepare", id_source)
+        commit_id = _recovery_two_phase_id(
+            "commit",
+            {**id_source, "client_request_id": client_request_id},
+        )
+        bindings = {
+            "authorization_id": authorization_id,
+            "authorization_audit_event_id": authorization_audit_event_id,
+            "client_request_id": client_request_id,
+            "commit_id": commit_id,
+            "producer_id": str(credential["producer_id"]),
+            "producer_install_id": str(identity["producer_install_id"]),
+            "source_host_id": str(identity["source_host_id"]),
+            "manifest_hash": expected_manifest_hash,
+            "possession_key_fingerprint": possession_descriptor.fingerprint,
+        }
+        journal_payload = journal.initialize(bindings)
+
+        if journal_payload["state"] in {
+            STATE_PREPARE_INTENT_DURABLE,
+            STATE_PREPARED,
+        }:
+            if authorization is None:
+                raise DirectSyncPushError(
+                    "prepared recovery package cannot be resumed without its protected authorization"
+                )
+            prepare_proof = {
+                "contract_version": (
+                    ADMIN_RECOVERY_2PC_PREPARE_PROOF_CONTRACT_VERSION
+                ),
+                "authorization_id": authorization["authorization_id"],
+                "nonce": authorization["nonce"],
+                "expires_at": authorization["expires_at"],
+                "audience": authorization["audience"],
+                "client_request_id": client_request_id,
+                "producer_id": credential["producer_id"],
+                "producer_install_id": identity["producer_install_id"],
+                "source_host_id": identity["source_host_id"],
+                "manifest_hash": expected_manifest_hash,
+                "new_possession_key_fingerprint": (
+                    possession_descriptor.fingerprint
+                ),
+            }
+            _recovery_two_phase_cut_point("BEFORE_PREPARE_REQUEST")
+            prepare_response = _post_enrollment_request(
+                urls["prepare"],
+                json={
+                    "contract_version": (
+                        ADMIN_RECOVERY_2PC_PREPARE_REQUEST_CONTRACT_VERSION
+                    ),
+                    "proof": prepare_proof,
+                    "signature": b64url_encode(
+                        possession_key.sign_es256(
+                            canonical_json_bytes(prepare_proof)
+                        )
+                    ),
+                    "recovery_token": authorization["recovery_token"],
+                    "new_possession_public_jwk": dict(
+                        possession_descriptor.public_jwk
+                    ),
+                    "manifest": manifest,
+                    "endpoint_url": credential["endpoint_url"],
+                },
+                headers=headers,
+                timeout=timeout,
+                allow_redirects=False,
+                verify=verify,
+            )
+            prepared_payload = _recovery_two_phase_response_payload(
+                prepare_response,
+                action="prepare",
+            )
+            _validate_recovery_two_phase_prepare_response(
+                prepared_payload,
+                bindings=bindings,
+            )
+            if journal_payload["state"] == STATE_PREPARE_INTENT_DURABLE:
+                journal_payload = journal.record_prepared(
+                    prepare_id=prepared_payload["prepare_id"],
+                    prepare_expires_at=prepared_payload["prepare_expires_at"],
+                    proposed_credential_epoch=prepared_payload[
+                        "proposed_credential_epoch"
+                    ],
+                    prepared_key_id=prepared_payload["key_id"],
+                    prepared_secret_fingerprint_sha256=prepared_payload[
+                        "secret_fingerprint_sha256"
+                    ],
+                )
+            elif any(
+                (
+                    journal_payload["prepare_id"]
+                    != prepared_payload["prepare_id"],
+                    journal_payload["prepare_expires_at"]
+                    != prepared_payload["prepare_expires_at"],
+                    journal_payload["proposed_credential_epoch"]
+                    != prepared_payload["proposed_credential_epoch"],
+                    journal_payload["prepared_key_id"]
+                    != prepared_payload["key_id"],
+                    journal_payload["prepared_secret_fingerprint_sha256"]
+                    != prepared_payload["secret_fingerprint_sha256"],
+                )
+            ):
+                raise DirectSyncPushError(
+                    "idempotent prepare response changed its pending generation"
+                )
+            _recovery_two_phase_cut_point("AFTER_PREPARE_RESPONSE")
+            _recovery_two_phase_cut_point("BEFORE_LOCAL_PACKAGE_STAGE")
+            journal_payload = journal.stage_sealed_package(
+                _seal_recovery_two_phase_package(prepared_payload)
+            )
+            opened = _open_recovery_two_phase_package(journal)
+            if not _strict_json_value_equal(opened, prepared_payload):
+                raise DirectSyncPushError(
+                    "prepared recovery package semantic readback mismatch"
+                )
+            _recovery_two_phase_cut_point("AFTER_LOCAL_PACKAGE_STAGE")
+
+        journal_payload = journal.load() or {}
+        if journal_payload.get("state") == STATE_LOCAL_PACKAGE_DURABLE:
+            journal_payload = journal.mark_commit_intent()
+
+        if journal_payload.get("state") == STATE_COMMIT_INTENT_DURABLE:
+            try:
+                _recovery_two_phase_cut_point("BEFORE_COMMIT_REQUEST")
+                status_payload = _recovery_two_phase_signed_status(
+                    journal_payload=journal_payload,
+                    possession_key=possession_key,
+                    urls=urls,
+                    headers=headers,
+                    timeout=timeout,
+                    verify=verify,
+                )
+                server_state = _validate_recovery_two_phase_status_response(
+                    status_payload,
+                    journal_payload=journal_payload,
+                )
+                if server_state == "PREPARED":
+                    commit_proof = {
+                        "contract_version": (
+                            ADMIN_RECOVERY_2PC_COMMIT_PROOF_CONTRACT_VERSION
+                        ),
+                        "prepare_id": journal_payload["prepare_id"],
+                        "client_request_id": bindings["client_request_id"],
+                        "commit_id": bindings["commit_id"],
+                        "authorization_id": bindings["authorization_id"],
+                        "producer_id": bindings["producer_id"],
+                        "producer_install_id": bindings[
+                            "producer_install_id"
+                        ],
+                        "source_host_id": bindings["source_host_id"],
+                        "manifest_hash": bindings["manifest_hash"],
+                        "sealed_package_sha256": journal_payload[
+                            "sealed_package_sha256"
+                        ],
+                        "prepared_key_id": journal_payload[
+                            "prepared_key_id"
+                        ],
+                        "prepared_secret_fingerprint_sha256": journal_payload[
+                            "prepared_secret_fingerprint_sha256"
+                        ],
+                        "new_possession_key_fingerprint": bindings[
+                            "possession_key_fingerprint"
+                        ],
+                    }
+                    commit_response = _post_enrollment_request(
+                        urls["commit"],
+                        json={
+                            "contract_version": (
+                                ADMIN_RECOVERY_2PC_COMMIT_REQUEST_CONTRACT_VERSION
+                            ),
+                            "proof": commit_proof,
+                            "signature": b64url_encode(
+                                possession_key.sign_es256(
+                                    canonical_json_bytes(commit_proof)
+                                )
+                            ),
+                        },
+                        headers=headers,
+                        timeout=timeout,
+                        allow_redirects=False,
+                        verify=verify,
+                    )
+                    _recovery_two_phase_cut_point("AFTER_COMMIT_REQUEST")
+                    _recovery_two_phase_cut_point(
+                        "BEFORE_COMMIT_RESPONSE_ACCEPT"
+                    )
+                    committed_payload = _recovery_two_phase_response_payload(
+                        commit_response,
+                        action="commit",
+                    )
+                elif server_state == "COMMITTED":
+                    committed_payload = dict(status_payload)
+                    committed_payload.update(
+                        {
+                            "contract_version": (
+                                ADMIN_RECOVERY_2PC_COMMIT_RESPONSE_CONTRACT_VERSION
+                            ),
+                            "status": "recovered",
+                        }
+                    )
+                else:
+                    journal.mark_aborted()
+                    raise DirectSyncPushError(
+                        "prepared recovery expired or was aborted; the old server credential remains active"
+                    )
+                _validate_recovery_two_phase_commit_response(
+                    committed_payload,
+                    journal_payload=journal_payload,
+                )
+                journal_payload = journal.mark_server_committed(
+                    committed_at=committed_payload["committed_at"],
+                    credential_epoch=committed_payload["credential_epoch"],
+                )
+                _recovery_two_phase_cut_point(
+                    "AFTER_COMMIT_RESPONSE_ACCEPT"
+                )
+            except BaseException as exc:
+                if not isinstance(exc, Exception):
+                    raise
+                current = journal.load() or journal_payload
+                if current.get("state") == STATE_COMMIT_INTENT_DURABLE:
+                    raise RecoveryTwoPhaseResumeRequired(
+                        "commit outcome is unknown; restart must reconcile by signed status",
+                        journal_path=journal.path,
+                        state=STATE_COMMIT_INTENT_DURABLE,
+                    ) from exc
+                raise
+
+        journal_payload = journal.load() or {}
+        if journal_payload.get("state") not in {
+            STATE_SERVER_COMMITTED,
+            STATE_LOCAL_PERSISTED,
+            STATE_CLEANUP_INTENT_DURABLE,
+        }:
+            raise RecoveryTwoPhaseStateError(
+                "two-phase recovery did not reach a resumable committed state"
+            )
+        prepared_payload = _open_recovery_two_phase_package(journal)
+        if (
+            prepared_payload.get("key_id")
+            != journal_payload["prepared_key_id"]
+            or prepared_payload.get("secret_fingerprint_sha256")
+            != journal_payload["prepared_secret_fingerprint_sha256"]
+        ):
+            raise RecoveryTwoPhaseResumeRequired(
+                "durable prepared package no longer matches the committed generation",
+                journal_path=journal.path,
+                state=str(journal_payload["state"]),
+            )
+        activation_payload = dict(prepared_payload)
+        activation_payload.update(
+            {
+                "contract_version": ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION,
+                "status": "recovered",
+                "recovery_state": "COMMITTED",
+                "identity_action": "REATTACHED",
+                "recovery_action": "ADMIN_RECOVERY",
+                "authorization_state": "OPERATION_PENDING",
+                "credential_epoch": journal_payload[
+                    "committed_credential_epoch"
+                ],
+            }
+        )
+        _recovery_two_phase_cut_point("BEFORE_LOCAL_CREDENTIAL_ACTIVATION")
+        try:
+            credential, report = _finalize_server_registration(
+                args,
+                manifest,
+                credential,
+                secret_ref_scheme,
+                secret_ref_target,
+                response_payload=activation_payload,
+                registration_url=urls["commit"],
+                registration_contract_version=(
+                    ADMIN_RECOVERY_2PC_COMMIT_RESPONSE_CONTRACT_VERSION
+                ),
+                token=token,
+                authority_ca_bundle_path="",
+                configured_ca_bundle_path=configured_ca_bundle_path,
+                enrollment_ca_bundle_path=configured_ca_bundle_path,
+                possession_descriptor=possession_descriptor,
+                non_exportability=non_exportability,
+                extra_report={
+                    "admin_recovery_verified": True,
+                    "admin_recovery_action": "ADMIN_RECOVERY",
+                    "admin_recovery_authorization_id": bindings[
+                        "authorization_id"
+                    ],
+                    "admin_recovery_authorization_audit_event_id": bindings[
+                        "authorization_audit_event_id"
+                    ],
+                    "admin_recovery_secret_cleanup_required": True,
+                    "admin_recovery_secret_file": str(recovery_path),
+                    "recovery_two_phase": True,
+                    "recovery_two_phase_protocol_version": (
+                        "producer-admin-recovery-2pc-v1"
+                    ),
+                    "recovery_two_phase_prepare_id": journal_payload[
+                        "prepare_id"
+                    ],
+                    "recovery_two_phase_client_request_id": bindings[
+                        "client_request_id"
+                    ],
+                    "recovery_two_phase_commit_id": bindings["commit_id"],
+                    "recovery_two_phase_journal_path": str(journal.path),
+                    "recovery_two_phase_sealed_package_path": str(
+                        journal.sealed_package_path
+                    ),
+                    "recovery_two_phase_state": str(
+                        journal_payload["state"]
+                    ),
+                    "recovery_two_phase_resume_without_admin": True,
+                    "producer_credential_dual_valid_window": False,
+                },
+            )
+        except Exception as exc:
+            raise RecoveryTwoPhaseResumeRequired(
+                "server committed; local activation must resume from the sealed package",
+                journal_path=journal.path,
+                state=str(journal_payload["state"]),
+            ) from exc
+        _recovery_two_phase_cut_point("AFTER_LOCAL_CREDENTIAL_ACTIVATION")
+        return credential, report
+
+
 def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, dict]:
+    if bool(getattr(args, "admin_recovery_two_phase", False)) and not str(
+        getattr(args, "admin_recovery_secret_file", "") or ""
+    ).strip():
+        raise DirectSyncPushError(
+            "--admin-recovery-two-phase requires --admin-recovery-secret-file"
+        )
     hostname = args.hostname or socket.gethostname()
     host_slug = _slug(hostname)
     storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
@@ -1594,13 +2428,22 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         )
     elif getattr(args, "admin_recovery_secret_file", ""):
         registration_action = "admin_recovery"
-        credential, enrollment_report = _admin_recover(
-            args,
-            manifest,
-            credential,
-            secret_ref_scheme,
-            secret_ref_target,
-        )
+        if bool(getattr(args, "admin_recovery_two_phase", False)):
+            credential, enrollment_report = _admin_recover_two_phase(
+                args,
+                manifest,
+                credential,
+                secret_ref_scheme,
+                secret_ref_target,
+            )
+        else:
+            credential, enrollment_report = _admin_recover(
+                args,
+                manifest,
+                credential,
+                secret_ref_scheme,
+                secret_ref_target,
+            )
     if registration_action:
         report.update(enrollment_report)
         report["producer_id"] = credential["producer_id"]
@@ -1669,6 +2512,18 @@ def main(argv: list[str] | None = None) -> int:
     machine_profile_group.add_argument("--preserve-existing-machine-profile", action="store_true")
     parser.add_argument("--enrollment-url", default="")
     parser.add_argument("--admin-recovery-url", default="")
+    parser.add_argument(
+        "--admin-recovery-two-phase",
+        action="store_true",
+        help=(
+            "Use the crash-resumable prepare/commit recovery contract. "
+            "The existing /v2/recover path remains the default."
+        ),
+    )
+    parser.add_argument("--admin-recovery-prepare-url", default="")
+    parser.add_argument("--admin-recovery-commit-url", default="")
+    parser.add_argument("--admin-recovery-status-url", default="")
+    parser.add_argument("--admin-recovery-journal-path", default="")
     parser.add_argument("--enrollment-token", default="")
     parser.add_argument("--enrollment-token-env", default=DEFAULT_ENROLLMENT_TOKEN_ENV)
     parser.add_argument("--enrollment-timeout-seconds", type=int, default=30)
@@ -1714,6 +2569,48 @@ def main(argv: list[str] | None = None) -> int:
         print("manifest_hash_verification=PASS")
         return 0
 
+    if bool(getattr(args, "admin_recovery_two_phase", False)):
+        resume_storage_paths = build_container_audit_storage_paths(
+            application_path=args.app_root
+        )
+        resume_journal = _recovery_two_phase_journal(
+            args,
+            {"secret_data_dir": str(resume_storage_paths.direct_sync_root)},
+        )
+        completed = resume_journal.load()
+        recovery_secret_exists = bool(
+            str(getattr(args, "admin_recovery_secret_file", "") or "").strip()
+            and Path(args.admin_recovery_secret_file).expanduser().is_file()
+        )
+        if completed is not None and completed["state"] == STATE_COMPLETE and not recovery_secret_exists:
+            completed_report_path = (
+                Path(args.report_path).expanduser()
+                if args.report_path
+                else resume_storage_paths.status_dir / "worker_pc_registration.json"
+            )
+            try:
+                completed_report = load_json_no_duplicate_keys(
+                    completed_report_path.read_bytes()
+                )
+            except Exception:
+                completed_report = None
+            if (
+                isinstance(completed_report, dict)
+                and completed_report.get("status")
+                == "ADMIN_RECOVERY_REGISTERED"
+                and completed_report.get("recovery_two_phase") is True
+                and completed_report.get("recovery_two_phase_prepare_id")
+                == completed["prepare_id"]
+            ):
+                completed_report["recovery_two_phase_state"] = STATE_COMPLETE
+                completed_report["recovery_two_phase_complete"] = True
+                atomic_write_json(
+                    str(completed_report_path), completed_report, indent=2
+                )
+                resume_journal.remove_sealed_package_after_complete()
+                print(f"registration_report={completed_report_path.resolve()}")
+                return 0
+
     try:
         manifest, credential, report = build_registration_payloads(args)
     except Exception as exc:
@@ -1725,6 +2622,8 @@ def main(argv: list[str] | None = None) -> int:
             "raw_secret_written": False,
         }
         if isinstance(exc, EnrollmentAdminRecoveryRequired):
+            blocked_report.update(exc.public_report())
+        elif isinstance(exc, RecoveryTwoPhaseResumeRequired):
             blocked_report.update(exc.public_report())
         if fallback_path:
             atomic_write_json(str(fallback_path), blocked_report, indent=2)
@@ -1745,8 +2644,39 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
+    two_phase_journal = None
+    if report.get("recovery_two_phase") is True:
+        two_phase_journal = RecoveryTwoPhaseJournal(
+            str(report["recovery_two_phase_journal_path"]),
+            sealed_package_path=str(
+                report["recovery_two_phase_sealed_package_path"]
+            ),
+        )
     atomic_write_json(str(manifest_path), manifest, indent=2)
     atomic_write_json(str(credential_path), credential, indent=2)
+    persisted_credential = load_json_no_duplicate_keys(
+        credential_path.read_bytes()
+    )
+    if not _strict_json_value_equal(persisted_credential, credential):
+        report.update(
+            {
+                "status": "RESUME_TWO_PHASE_RECOVERY"
+                if two_phase_journal is not None
+                else "BLOCKED",
+                "blocked_reason": "persisted credential exact readback differs from the prepared credential",
+                "persisted_credential_verified": False,
+                "recovery_action": "RESUME_TWO_PHASE_RECOVERY"
+                if two_phase_journal is not None
+                else report.get("recovery_action", ""),
+                "administrator_required": False
+                if two_phase_journal is not None
+                else None,
+            }
+        )
+        atomic_write_json(str(report_path), report, indent=2)
+        print(f"registration_report={report_path.resolve()}")
+        return 3 if two_phase_journal is not None else 2
+    report["persisted_credential_verified"] = True
     persisted_manifest_hash = manifest_hash(
         load_json_no_duplicate_keys(manifest_path.read_bytes())
     )
@@ -1764,7 +2694,34 @@ def main(argv: list[str] | None = None) -> int:
             print(f"registration_report={report_path.resolve()}")
             return 2
         report["persisted_manifest_hash_verified"] = True
+    if two_phase_journal is not None:
+        journal_payload = two_phase_journal.load() or {}
+        if journal_payload.get("state") == STATE_SERVER_COMMITTED:
+            journal_payload = two_phase_journal.mark_local_persisted()
+        elif journal_payload.get("state") not in {
+            STATE_LOCAL_PERSISTED,
+            STATE_CLEANUP_INTENT_DURABLE,
+            STATE_COMPLETE,
+        }:
+            raise RecoveryTwoPhaseStateError(
+                "local persistence completed from an invalid two-phase state"
+            )
+        report["recovery_two_phase_state"] = journal_payload["state"]
+        report["recovery_two_phase_local_persisted"] = True
+        _recovery_two_phase_cut_point("AFTER_ALL_LOCAL_PERSISTENCE")
     if report.get("admin_recovery_secret_cleanup_required") is True:
+        if two_phase_journal is not None:
+            journal_payload = two_phase_journal.load() or {}
+            if journal_payload.get("state") == STATE_LOCAL_PERSISTED:
+                journal_payload = two_phase_journal.mark_cleanup_intent()
+            elif journal_payload.get("state") not in {
+                STATE_CLEANUP_INTENT_DURABLE,
+                STATE_COMPLETE,
+            }:
+                raise RecoveryTwoPhaseStateError(
+                    "authorization cleanup started from an invalid two-phase state"
+                )
+            report["recovery_two_phase_state"] = journal_payload["state"]
         recovery_secret_path = Path(
             str(report.get("admin_recovery_secret_file") or "")
         )
@@ -1788,7 +2745,22 @@ def main(argv: list[str] | None = None) -> int:
             not recovery_secret_path.exists()
         )
         report["admin_recovery_secret_cleanup_required"] = False
-    atomic_write_json(str(report_path), report, indent=2)
+    if two_phase_journal is None:
+        atomic_write_json(str(report_path), report, indent=2)
+    else:
+        atomic_write_json(str(report_path), report, indent=2)
+        journal_payload = two_phase_journal.load() or {}
+        if journal_payload.get("state") == STATE_CLEANUP_INTENT_DURABLE:
+            journal_payload = two_phase_journal.mark_complete()
+        elif journal_payload.get("state") != STATE_COMPLETE:
+            raise RecoveryTwoPhaseStateError(
+                "two-phase recovery could not enter COMPLETE"
+            )
+        _recovery_two_phase_cut_point("AFTER_COMPLETE_JOURNAL")
+        report["recovery_two_phase_state"] = journal_payload["state"]
+        report["recovery_two_phase_complete"] = True
+        atomic_write_json(str(report_path), report, indent=2)
+        two_phase_journal.remove_sealed_package_after_complete()
     print(f"registration_report={report_path.resolve()}")
     return 0
 

@@ -1065,6 +1065,385 @@ def test_worker_pc_registration_rejected_admin_recovery_retains_protected_secret
     assert recovery_secret_path.is_file()
 
 
+class _SimulatedRecoveryPowerLoss(BaseException):
+    pass
+
+
+class _TwoPhaseResponse:
+    def __init__(self, payload, status_code=200):
+        self._payload = dict(payload)
+        self.status_code = status_code
+
+    def json(self):
+        return dict(self._payload)
+
+
+class _FakeRecoveryTwoPhaseServer:
+    def __init__(self):
+        self.state = "NONE"
+        self.old_credential_active = True
+        self.new_credential_active = False
+        self.prepare_calls = 0
+        self.commit_calls = 0
+        self.status_calls = 0
+        self._prepared = None
+
+    def _commit_payload(self):
+        prepared = self._prepared
+        return {
+            "contract_version": (
+                registration.ADMIN_RECOVERY_2PC_COMMIT_RESPONSE_CONTRACT_VERSION
+            ),
+            "status": "recovered",
+            "recovery_state": "COMMITTED",
+            "identity_action": "REATTACHED",
+            "recovery_action": "ADMIN_RECOVERY",
+            "authorization_state": "OPERATION_PENDING",
+            "prepare_id": prepared["prepare_id"],
+            "client_request_id": prepared["client_request_id"],
+            "commit_id": prepared["commit_id"],
+            "producer_id": prepared["producer_id"],
+            "producer_install_id": prepared["producer_install_id"],
+            "source_host_id": prepared["source_host_id"],
+            "key_id": prepared["key_id"],
+            "secret_fingerprint_sha256": prepared[
+                "secret_fingerprint_sha256"
+            ],
+            "credential_epoch": prepared["proposed_credential_epoch"],
+            "committed_at": "2026-08-29T00:00:30Z",
+            "possession_key": {
+                "contract_version": registration.POSSESSION_KEY_CONTRACT_VERSION,
+                "fingerprint": TEST_POSSESSION_FINGERPRINT,
+            },
+        }
+
+    def post(self, url, *, json, **_kwargs):
+        if url.endswith(registration.ADMIN_RECOVERY_2PC_PREPARE_PATH):
+            self.prepare_calls += 1
+            proof = json["proof"]
+            if self.state == "NONE":
+                secret = "two-phase-server-secret"
+                self._prepared = {
+                    "prepare_id": "prepare-server-fixture-01",
+                    "client_request_id": proof["client_request_id"],
+                    "commit_id": registration._recovery_two_phase_id(
+                        "commit",
+                        {
+                            "authorization_id": proof["authorization_id"],
+                            "producer_id": proof["producer_id"],
+                            "producer_install_id": proof[
+                                "producer_install_id"
+                            ],
+                            "source_host_id": proof["source_host_id"],
+                            "manifest_hash": proof["manifest_hash"],
+                            "possession_key_fingerprint": proof[
+                                "new_possession_key_fingerprint"
+                            ],
+                            "client_request_id": proof["client_request_id"],
+                        },
+                    ),
+                    "producer_id": proof["producer_id"],
+                    "producer_install_id": proof["producer_install_id"],
+                    "source_host_id": proof["source_host_id"],
+                    "manifest_hash": proof["manifest_hash"],
+                    "key_id": "two-phase-key-02",
+                    "secret": secret,
+                    "secret_fingerprint_sha256": hashlib.sha256(
+                        secret.encode("utf-8")
+                    ).hexdigest(),
+                    "proposed_credential_epoch": 2,
+                }
+                self.state = "PREPARED"
+            prepared = self._prepared
+            assert proof["client_request_id"] == prepared["client_request_id"]
+            return _TwoPhaseResponse(
+                {
+                    "contract_version": (
+                        registration.ADMIN_RECOVERY_2PC_PREPARE_RESPONSE_CONTRACT_VERSION
+                    ),
+                    "status": "prepared",
+                    "recovery_state": "PREPARED",
+                    "identity_action": "REATTACHED",
+                    "recovery_action": "ADMIN_RECOVERY",
+                    "authorization_state": "RESERVED",
+                    "prepare_id": prepared["prepare_id"],
+                    "prepare_expires_at": "2999-01-01T00:00:00Z",
+                    "client_request_id": prepared["client_request_id"],
+                    "producer_id": prepared["producer_id"],
+                    "producer_install_id": prepared["producer_install_id"],
+                    "source_host_id": prepared["source_host_id"],
+                    "proposed_credential_epoch": prepared[
+                        "proposed_credential_epoch"
+                    ],
+                    "key_id": prepared["key_id"],
+                    "secret": prepared["secret"],
+                    "secret_fingerprint_sha256": prepared[
+                        "secret_fingerprint_sha256"
+                    ],
+                    "active_manifest_hashes": [prepared["manifest_hash"]],
+                    "possession_key": {
+                        "contract_version": (
+                            registration.POSSESSION_KEY_CONTRACT_VERSION
+                        ),
+                        "fingerprint": TEST_POSSESSION_FINGERPRINT,
+                    },
+                }
+            )
+        if url.endswith(registration.ADMIN_RECOVERY_2PC_STATUS_PATH):
+            self.status_calls += 1
+            proof = json["proof"]
+            prepared = self._prepared
+            assert proof["prepare_id"] == prepared["prepare_id"]
+            payload = {
+                "contract_version": (
+                    registration.ADMIN_RECOVERY_2PC_STATUS_RESPONSE_CONTRACT_VERSION
+                ),
+                "status": "observed",
+                "recovery_state": self.state,
+                "prepare_id": prepared["prepare_id"],
+                "client_request_id": prepared["client_request_id"],
+                "producer_id": prepared["producer_id"],
+                "producer_install_id": prepared["producer_install_id"],
+                "source_host_id": prepared["source_host_id"],
+            }
+            if self.state == "COMMITTED":
+                committed = self._commit_payload()
+                for key in (
+                    "identity_action",
+                    "recovery_action",
+                    "authorization_state",
+                    "commit_id",
+                    "key_id",
+                    "secret_fingerprint_sha256",
+                    "credential_epoch",
+                    "committed_at",
+                    "possession_key",
+                ):
+                    payload[key] = committed[key]
+            return _TwoPhaseResponse(payload)
+        if url.endswith(registration.ADMIN_RECOVERY_2PC_COMMIT_PATH):
+            self.commit_calls += 1
+            proof = json["proof"]
+            prepared = self._prepared
+            assert proof["prepare_id"] == prepared["prepare_id"]
+            assert proof["commit_id"] == prepared["commit_id"]
+            self.state = "COMMITTED"
+            self.old_credential_active = False
+            self.new_credential_active = True
+            return _TwoPhaseResponse(self._commit_payload())
+        raise AssertionError(f"unexpected two-phase URL: {url}")
+
+
+def _two_phase_recovery_args(tmp_path, recovery_secret_path, report_path):
+    return [
+        "--hostname",
+        "RECOVERY-2PC",
+        "--producer-id",
+        "container-audit-recovery-2pc",
+        "--source-host-id",
+        "container-audit-recovery-2pc",
+        "--producer-install-id",
+        "container-audit-install-recovery-2pc",
+        "--admin-recovery-secret-file",
+        str(recovery_secret_path),
+        "--admin-recovery-two-phase",
+        "--admin-recovery-journal-path",
+        str(tmp_path / "recovery-two-phase-journal.json"),
+        "--endpoint-url",
+        "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        "--credential-scope",
+        "current_user",
+        "--preserve-existing-machine-profile",
+        "--report-path",
+        str(report_path),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("cut_point", "expected_first_server_state"),
+    [
+        ("BEFORE_PREPARE_REQUEST", "NONE"),
+        ("AFTER_PREPARE_RESPONSE", "PREPARED"),
+        ("BEFORE_LOCAL_PACKAGE_STAGE", "PREPARED"),
+        ("AFTER_LOCAL_PACKAGE_STAGE", "PREPARED"),
+        ("BEFORE_COMMIT_REQUEST", "PREPARED"),
+        ("AFTER_COMMIT_REQUEST", "COMMITTED"),
+        ("BEFORE_COMMIT_RESPONSE_ACCEPT", "COMMITTED"),
+        ("AFTER_COMMIT_RESPONSE_ACCEPT", "COMMITTED"),
+        ("BEFORE_LOCAL_CREDENTIAL_ACTIVATION", "COMMITTED"),
+        ("AFTER_LOCAL_CREDENTIAL_ACTIVATION", "COMMITTED"),
+        ("AFTER_ALL_LOCAL_PERSISTENCE", "COMMITTED"),
+        ("AFTER_COMPLETE_JOURNAL", "COMMITTED"),
+    ],
+)
+def test_two_phase_recovery_resumes_every_crash_cut_without_new_authorization(
+    tmp_path,
+    monkeypatch,
+    cut_point,
+    expected_first_server_state,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    report_path = tmp_path / "registration-two-phase-report.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+    )
+    server = _FakeRecoveryTwoPhaseServer()
+    active_secrets = []
+    crash = {"armed": True}
+
+    def crash_hook(observed):
+        if crash["armed"] and observed == cut_point:
+            crash["armed"] = False
+            raise _SimulatedRecoveryPowerLoss(observed)
+
+    def fake_write_dpapi_secret(data_dir, target_name, secret, **_kwargs):
+        active_secrets.append(secret)
+        return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
+
+    monkeypatch.setattr(registration, "_post_enrollment_request", server.post)
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_protect_current_user",
+        lambda value: b"sealed-fixture:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_unprotect_current_user",
+        lambda value: value.removeprefix(b"sealed-fixture:").decode("utf-8"),
+    )
+    monkeypatch.setattr(registration, "_recovery_two_phase_cut_point", crash_hook)
+    args = _two_phase_recovery_args(
+        tmp_path,
+        recovery_secret_path,
+        report_path,
+    )
+
+    with pytest.raises(_SimulatedRecoveryPowerLoss, match=cut_point):
+        registration.main(args)
+
+    assert server.state == expected_first_server_state
+    assert server.old_credential_active is (server.state != "COMMITTED")
+    assert server.new_credential_active is (server.state == "COMMITTED")
+    assert recovery_secret_path.is_file() is (
+        cut_point != "AFTER_COMPLETE_JOURNAL"
+    )
+
+    monkeypatch.setattr(
+        registration,
+        "_recovery_two_phase_cut_point",
+        lambda _name: None,
+    )
+    assert registration.main(args) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    journal_path = tmp_path / "recovery-two-phase-journal.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert server.state == "COMMITTED"
+    assert server.old_credential_active is False
+    assert server.new_credential_active is True
+    assert server.commit_calls == 1
+    assert server.status_calls >= 1
+    assert report["status"] == "ADMIN_RECOVERY_REGISTERED"
+    assert report["recovery_two_phase"] is True
+    assert report["recovery_two_phase_state"] == "COMPLETE"
+    assert report["recovery_two_phase_resume_without_admin"] is True
+    assert report["producer_credential_dual_valid_window"] is False
+    assert report["admin_recovery_secret_file_deleted"] is True
+    assert journal["state"] == "COMPLETE"
+    assert not recovery_secret_path.exists()
+    assert not (tmp_path / "recovery-two-phase-journal.prepared-package.dpapi").exists()
+    assert active_secrets[-1] == "two-phase-server-secret"
+
+
+def test_legacy_v2_recovery_remains_default_when_two_phase_flag_is_absent(
+    tmp_path,
+    monkeypatch,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-legacy-recovery.json"
+    report_path = tmp_path / "registration-legacy-recovery-report.json"
+    producer_id = "container-audit-legacy-default"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id=producer_id,
+    )
+    captured = {}
+
+    class LegacyResponse:
+        status_code = 200
+
+        def json(self):
+            proof = captured["json"]["proof"]
+            return {
+                "contract_version": (
+                    registration.ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION
+                ),
+                "status": "recovered",
+                "identity_action": "REATTACHED",
+                "recovery_action": "ADMIN_RECOVERY",
+                "authorization_state": "OPERATION_PENDING",
+                "credential_epoch": 2,
+                "producer_id": proof["producer_id"],
+                "producer_install_id": proof["producer_install_id"],
+                "source_host_id": proof["source_host_id"],
+                "key_id": "legacy-key-02",
+                "secret": "legacy-secret-02",
+                "secret_fingerprint_sha256": hashlib.sha256(
+                    b"legacy-secret-02"
+                ).hexdigest(),
+                "active_manifest_hashes": [proof["manifest_hash"]],
+                "possession_key": {
+                    "contract_version": registration.POSSESSION_KEY_CONTRACT_VERSION,
+                    "fingerprint": TEST_POSSESSION_FINGERPRINT,
+                },
+            }
+
+    def legacy_post(url, *, json, **_kwargs):
+        captured.update({"url": url, "json": json})
+        return LegacyResponse()
+
+    monkeypatch.setattr(registration, "_post_enrollment_request", legacy_post)
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda data_dir, target_name, _secret, **_kwargs: Path(data_dir)
+        / "secrets"
+        / f"{target_name}.dpapi",
+    )
+
+    assert registration.main(
+        [
+            "--hostname",
+            "LEGACY-DEFAULT",
+            "--producer-id",
+            producer_id,
+            "--source-host-id",
+            producer_id,
+            "--producer-install-id",
+            "legacy-default-install",
+            "--admin-recovery-secret-file",
+            str(recovery_secret_path),
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--credential-scope",
+            "current_user",
+            "--preserve-existing-machine-profile",
+            "--report-path",
+            str(report_path),
+        ]
+    ) == 0
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert captured["url"].endswith(registration.ADMIN_RECOVERY_PATH)
+    assert report.get("recovery_two_phase") is None
+    assert report["registration_contract_version"] == (
+        registration.ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION
+    )
+
+
 def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_path, monkeypatch):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-persist-report.json"

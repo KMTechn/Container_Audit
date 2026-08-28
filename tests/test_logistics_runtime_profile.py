@@ -887,3 +887,202 @@ def test_existing_current_user_profile_can_add_ca_without_rotating_secret(
     assert profile["tls_ca_bundle_path"] == str(ca_target.resolve())
     assert ca_target.read_bytes() == ca_payload
     assert secret_path.read_bytes() == secret_before
+
+
+def _recovery_machine_bundle(*, logistics_token, manifest_hash="a" * 64):
+    producer_id = "container-producer-recovery"
+    install_id = "container-install-recovery"
+    source_host_id = "container-host-recovery"
+    device_id = "container-device-recovery"
+    endpoint_url = "https://worker.example.invalid/api/producer-ingest/v1/source-file"
+    producer_secret = "producer-secret-recovery"
+    key_id = "producer-key-recovery"
+    return {
+        "producer_id": producer_id,
+        "producer_install_id": install_id,
+        "source_host_id": source_host_id,
+        "endpoint_url": endpoint_url,
+        "key_id": key_id,
+        "secret": producer_secret,
+        "active_manifest_hashes": [manifest_hash],
+        "machine_credential_bundle": {
+            "contract_version": (
+                installer_module.MACHINE_CREDENTIAL_BUNDLE_CONTRACT_VERSION
+            ),
+            "bindings": {
+                "app": "ContainerAudit",
+                "program": "Container_Audit",
+                "source_host_id": source_host_id,
+                "device_id": device_id,
+                "authority_scope_id": "scope-recovery",
+            },
+            "credentials": {
+                "producer_ingest": {
+                    "audience": "producer-ingest-hmac-v1",
+                    "auth_scheme": "hmac-sha256",
+                    "key_id": key_id,
+                    "secret": producer_secret,
+                },
+                "logistics": {
+                    "audience": "worker-analysis-logistics-v1",
+                    "auth_scheme": "bearer",
+                    "token_header": "X-Logistics-API-Token",
+                    "token": logistics_token,
+                },
+            },
+            "profiles": {
+                "logistics": {
+                    "contract_version": installer_module.PROFILE_CONTRACT_VERSION,
+                    "base_url": "https://logistics.example.invalid",
+                    "authority_scope": "scope-recovery",
+                    "authority_epoch": 7,
+                    "authority_plane": "AUTHORITATIVE",
+                    "ledger_plane": "AUTHORITATIVE",
+                    "plane_epoch": 3,
+                    "device_id": device_id,
+                    "source_host_id": source_host_id,
+                    "timeout_seconds": 10,
+                }
+            },
+        },
+    }
+
+
+def _install_recovery_profile_fixture(tmp_path, monkeypatch, *, token="OLD-TOKEN"):
+    target = tmp_path / "profiles" / "Container_Audit" / "runtime-profile.json"
+    monkeypatch.setattr(
+        installer_module,
+        "protect_current_user_secret",
+        lambda value: b"protected:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        installer_module,
+        "unprotect_current_user_secret",
+        lambda value: value.removeprefix(b"protected:").decode("utf-8"),
+    )
+    install_runtime_profile(
+        profile_path=target,
+        base_url="https://logistics.example.invalid",
+        authority_scope="scope-recovery",
+        authority_epoch=7,
+        authority_plane="AUTHORITATIVE",
+        ledger_plane="AUTHORITATIVE",
+        plane_epoch=3,
+        device_id="container-device-recovery",
+        source_host_id="container-host-recovery",
+        bearer_token=token,
+        timeout_seconds=10.0,
+        credential_scope="current_user",
+    )
+    return target
+
+
+def test_recovery_bundle_rotates_only_current_user_token_and_preserves_profile(
+    tmp_path,
+    monkeypatch,
+):
+    target = _install_recovery_profile_fixture(tmp_path, monkeypatch)
+    profile_before = target.read_bytes()
+    response = _recovery_machine_bundle(logistics_token="NEW-TOKEN")
+
+    result = installer_module.ensure_runtime_profile_from_enrollment_bundle(
+        response,
+        expected_app="ContainerAudit",
+        expected_program="Container_Audit",
+        expected_source_host_id="container-host-recovery",
+        expected_device_id="container-device-recovery",
+        profile_path=target,
+        credential_scope="current_user",
+        allow_existing_token_rotation=True,
+        expected_producer_id="container-producer-recovery",
+        expected_producer_install_id="container-install-recovery",
+        expected_manifest_hash="a" * 64,
+        expected_endpoint_url=response["endpoint_url"],
+    )
+
+    readback = load_logistics_runtime_profile(
+        required=True,
+        profile_path=target,
+        decryptor=installer_module.unprotect_current_user_secret,
+    )
+    assert result["status"] == "rotated"
+    assert result["non_secret_profile_preserved"] is True
+    assert target.read_bytes() == profile_before
+    assert readback.bearer_token == "NEW-TOKEN"
+
+
+def test_recovery_bundle_binding_mismatch_preserves_existing_profile_and_token(
+    tmp_path,
+    monkeypatch,
+):
+    target = _install_recovery_profile_fixture(tmp_path, monkeypatch)
+    profile_before = target.read_bytes()
+    secret_path = target.parent / "secrets" / "bearer-token.dpapi"
+    secret_before = secret_path.read_bytes()
+    response = _recovery_machine_bundle(logistics_token="NEW-TOKEN")
+
+    with pytest.raises(ValueError, match="producer_id binding mismatch"):
+        installer_module.ensure_runtime_profile_from_enrollment_bundle(
+            response,
+            expected_app="ContainerAudit",
+            expected_program="Container_Audit",
+            expected_source_host_id="container-host-recovery",
+            expected_device_id="container-device-recovery",
+            profile_path=target,
+            credential_scope="current_user",
+            allow_existing_token_rotation=True,
+            expected_producer_id="wrong-producer",
+            expected_producer_install_id="container-install-recovery",
+            expected_manifest_hash="a" * 64,
+            expected_endpoint_url=response["endpoint_url"],
+        )
+
+    assert target.read_bytes() == profile_before
+    assert secret_path.read_bytes() == secret_before
+
+
+def test_recovery_bundle_rotation_readback_failure_restores_old_token(
+    tmp_path,
+    monkeypatch,
+):
+    target = _install_recovery_profile_fixture(tmp_path, monkeypatch)
+    profile_before = target.read_bytes()
+    secret_path = target.parent / "secrets" / "bearer-token.dpapi"
+    secret_before = secret_path.read_bytes()
+    response = _recovery_machine_bundle(logistics_token="NEW-TOKEN")
+    original_loader = installer_module.load_logistics_runtime_profile
+    calls = {"count": 0}
+
+    def fail_first_rotated_readback(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 2:
+            raise RuntimeError("simulated rotated-token readback interruption")
+        return original_loader(*args, **kwargs)
+
+    monkeypatch.setattr(
+        installer_module,
+        "load_logistics_runtime_profile",
+        fail_first_rotated_readback,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="simulated rotated-token readback interruption",
+    ):
+        installer_module.ensure_runtime_profile_from_enrollment_bundle(
+            response,
+            expected_app="ContainerAudit",
+            expected_program="Container_Audit",
+            expected_source_host_id="container-host-recovery",
+            expected_device_id="container-device-recovery",
+            profile_path=target,
+            credential_scope="current_user",
+            allow_existing_token_rotation=True,
+            expected_producer_id="container-producer-recovery",
+            expected_producer_install_id="container-install-recovery",
+            expected_manifest_hash="a" * 64,
+            expected_endpoint_url=response["endpoint_url"],
+        )
+
+    assert target.read_bytes() == profile_before
+    assert secret_path.read_bytes() == secret_before

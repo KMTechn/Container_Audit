@@ -606,6 +606,7 @@ def test_update_service_rejects_archive_missing_required_files(tmp_path):
         "Container_Audit/direct_sync_runtime.py",
         "Container_Audit/storage_policy.py",
         "Container_Audit/storage_utils.py",
+        "Container_Audit/recovery_two_phase.py",
     ],
 )
 def test_update_service_rejects_archive_missing_runtime_assets_or_modules(tmp_path, missing_member):

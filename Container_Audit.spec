@@ -14,7 +14,7 @@ a = Analysis(
     ['Container_Audit.py'],
     pathex=analysis_paths,
     binaries=[],
-    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('logistics_runtime_profile.py', '.'), ('isolated_qualification.py', '.'), ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle'), (os.path.join(factory_identity_root, 'build-identity.json'), '.'), (os.path.join(factory_identity_root, 'build-compatibility.json'), '.'), ('contract.lock.json', '.')],
+    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('recovery_two_phase.py', '.'), ('logistics_runtime_profile.py', '.'), ('isolated_qualification.py', '.'), ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle'), (os.path.join(factory_identity_root, 'build-identity.json'), '.'), (os.path.join(factory_identity_root, 'build-compatibility.json'), '.'), ('contract.lock.json', '.')],
     hiddenimports=['tools.direct_sync_relay_runner'],
     hookspath=['tools/pyinstaller_hooks'],
     hooksconfig={},

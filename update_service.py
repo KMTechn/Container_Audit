@@ -118,6 +118,7 @@ REQUIRED_UPDATE_ARCHIVE_FILES = frozenset(
         "Container_Audit/event_log_store.py",
         "Container_Audit/storage_policy.py",
         "Container_Audit/storage_utils.py",
+        "Container_Audit/recovery_two_phase.py",
         "Container_Audit/logistics_runtime_profile.py",
         "Container_Audit/isolated_qualification.py",
         "Container_Audit/build-identity.json",
