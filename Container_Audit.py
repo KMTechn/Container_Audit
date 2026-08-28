@@ -31,6 +31,7 @@ import requests
 from container_audit_product_host import dispatch_product_mode
 from native_audio import WavSound, stop_all_sounds
 from vendor.kmtech_zero_pe.raster import RasterImage
+from vendor.kmtech_zero_pe.release_signature import validate_public_key_config
 from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
@@ -363,9 +364,14 @@ UPDATE_BOOTSTRAP_MANIFEST_URL = (
     "container_audit/stable/latest.json"
 )
 UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL = UPDATE_BOOTSTRAP_MANIFEST_URL + ".sig"
+# Legacy bridge: deployed update feeds still carry RFC 8032 Ed25519 signatures.
+# Keep this public key readable until the operator-supplied ES256 JWK ceremony is complete.
 UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY = (
     "10d3baf546e05daaa0bbbbdd3f69630c90a245293a1690e2cfa47071292ac4a2"
 )
+UPDATE_PACKAGED_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
+UPDATE_PACKAGED_KEY_CONFIG_SCHEMA = "container-audit-update-key-config-v1"
+UPDATE_PACKAGED_KEY_CONFIG_MAX_BYTES = 16 * 1024
 RUNTIME_UPDATE_BOOTSTRAP_MESSAGE = (
     "코드 루트는 읽기 전용입니다. 앱은 업데이트를 직접 적용하지 않습니다.\n"
     "관리자가 검증된 새 배포 패키지의 INSTALL_THIS_PC.ps1로 교체 설치해 주세요."
@@ -517,11 +523,45 @@ def _get_update_manifest_signature_url(manifest_url: str) -> str:
 
 def _get_update_manifest_public_key() -> str:
     settings = _load_update_settings()
-    return str(
-        os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV)
-        or settings.get("manifest_public_key")
-        or UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
-    ).strip()
+    configured = os.environ.get(UPDATE_MANIFEST_PUBLIC_KEY_ENV)
+    if configured is None:
+        configured = settings.get("manifest_public_key")
+    if configured:
+        return str(configured).strip()
+    packaged = _load_packaged_update_manifest_public_key()
+    return packaged or UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY
+
+
+def _load_packaged_update_manifest_public_key() -> str:
+    """Read the public-only key bundle injected by the portable build."""
+
+    path = Path(__file__).resolve().with_name(UPDATE_PACKAGED_KEY_CONFIG_FILENAME)
+    if not path.exists():
+        return ""
+    try:
+        if not path.is_file() or path.stat().st_size > UPDATE_PACKAGED_KEY_CONFIG_MAX_BYTES:
+            raise ValueError("packaged update key config is missing, non-regular, or oversized")
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("packaged update key config is unreadable") from exc
+    if not isinstance(document, dict) or set(document) != {"schema", "manifest_public_key"}:
+        raise ValueError("packaged update key config fields are invalid")
+    if document.get("schema") != UPDATE_PACKAGED_KEY_CONFIG_SCHEMA:
+        raise ValueError("packaged update key config schema is invalid")
+    configured = document.get("manifest_public_key")
+    if isinstance(configured, dict):
+        normalized = json.dumps(
+            configured,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+    elif isinstance(configured, str):
+        normalized = configured.strip()
+    else:
+        raise ValueError("packaged update public key config is invalid")
+    validate_public_key_config(normalized)
+    return normalized
 
 
 def _private_update_request_kwargs(url: str) -> Dict[str, Any]:

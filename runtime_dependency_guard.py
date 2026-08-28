@@ -38,7 +38,14 @@ def _write_module_report() -> None:
         return
     target = Path(raw_path).expanduser().resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    families = ("PIL", "pygame", "charset_normalizer", "cryptography", "cffi")
+    families = (
+        "PIL",
+        "pygame",
+        "charset_normalizer",
+        "cryptography",
+        "cffi",
+        "_cffi_backend",
+    )
     loaded = {
         family: sorted(
             name

@@ -1,3 +1,4 @@
+import ast
 import hashlib
 import json
 import os
@@ -6,15 +7,45 @@ import subprocess
 import sys
 
 import native_audio
+from tools import build_portable_release_candidate as portable_builder
 from tools.stage_pure_python_charset_normalizer import stage
 
 
 ROOT = Path(__file__).resolve().parents[1]
 VENDOR = ROOT / "vendor" / "kmtech_zero_pe"
+FORBIDDEN_ROOTS = {
+    "PIL",
+    "_cffi_backend",
+    "cffi",
+    "charset_normalizer",
+    "cryptography",
+    "pygame",
+}
 
 
 def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _portable_production_imports(roots: set[str]) -> list[tuple[str, str]]:
+    paths = list(ROOT.glob("*.py"))
+    for package in portable_builder.APP_PACKAGE_DIRS:
+        paths.extend((ROOT / package).rglob("*.py"))
+    paths.extend(ROOT / "tools" / name for name in portable_builder.APP_TOOL_FILES)
+    matches: list[tuple[str, str]] = []
+    for path in sorted(paths):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                names = [node.module]
+            else:
+                continue
+            for name in names:
+                if name.split(".", 1)[0] in roots:
+                    matches.append((path.relative_to(ROOT).as_posix(), name))
+    return matches
 
 
 def test_seq259_rendering_vendor_is_byte_identical():
@@ -44,6 +75,13 @@ def test_runtime_dependencies_remove_pillow_and_pygame():
     assert "pygame" not in application
     assert "from PIL" not in label
     assert "import PIL" not in label
+
+
+def test_portable_production_imports_have_no_native_crypto_or_removed_ui_packages():
+    assert _portable_production_imports(FORBIDDEN_ROOTS) == []
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").casefold()
+    for forbidden in ("cffi", "cryptography", "pillow", "pygame"):
+        assert forbidden not in requirements
 
 
 def test_source_only_charset_normalizer_stage_has_no_pe(tmp_path):
@@ -97,8 +135,9 @@ print(json.dumps({"forbidden": forbidden, "detector": requests.compat.chardet.__
     assert loaded["PIL"] == []
     assert loaded["pygame"] == []
     assert loaded["charset_normalizer"] == []
-    assert loaded["cryptography"]
+    assert loaded["cryptography"] == []
     assert loaded["cffi"] == []
+    assert loaded["_cffi_backend"] == []
 
 
 def test_wav_sound_uses_async_winsound_flags(monkeypatch, tmp_path):
@@ -150,4 +189,37 @@ def test_frozen_builder_enforces_native_free_analysis_and_package_guard():
     assert "unused_optional_native_paths" in builder
     assert "KMTECH_PURE_PYTHON_OVERRIDE" in spec
     assert "charset_normalizer.md__mypyc" in spec
+    for module_name in ("_cffi_backend", "cffi", "cryptography"):
+        assert f"'{module_name}'" in spec
     assert "hiddenimports: list[str] = []" in hook
+
+
+def test_portable_builder_requires_empty_native_closure_and_curated_tools():
+    assert portable_builder.EXPECTED_PYTHON == (3, 12, 10)
+    assert portable_builder.ALLOWED_APP_NATIVE_NAMES == set()
+    assert "config" not in portable_builder.APP_DATA_DIRS
+    assert "config/container_audit_settings.json" in portable_builder.APP_DATA_FILES
+    assert set(portable_builder.APP_TOOL_FILES) == {
+        "direct_sync_relay_runner.py",
+        "install_logistics_runtime_profile.py",
+        "register_container_audit_worker_pc.py",
+    }
+    for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):
+        assert forbidden not in portable_builder.THIRD_PARTY
+
+
+def test_portable_launcher_uses_pythonw_source_entrypoint_without_focus():
+    launcher = (ROOT / "portable" / "launch-container-audit.cmd").read_text(
+        encoding="utf-8"
+    )
+    assert "runtime\\pythonw.exe" in launcher
+    assert " -I -B " in launcher
+    assert "app\\main.py" in launcher
+    assert "Container_Audit.exe" not in launcher
+    assert "--focus" not in launcher
+
+
+def test_release_signature_vendor_is_byte_pinned():
+    assert _sha256(VENDOR / "release_signature.py") == (
+        "ac21e2bca45899cd1161d89d4d2b6261ccb624bef745f88f5357c402e151cf1e"
+    )

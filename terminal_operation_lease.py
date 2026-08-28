@@ -21,10 +21,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from vendor.kmtech_zero_pe import (
+    jwk_thumbprint as _cng_jwk_thumbprint,
+    normalize_public_jwk as _cng_normalize_public_jwk,
+    verify_es256 as _cng_verify_es256,
+)
 
 
 JWS_ALGORITHM = "ES256"
@@ -77,11 +78,6 @@ MAX_ARTIFACT_BYTES = 512_000
 MAX_PUBLIC_KEYS = 8
 MIN_LEASE_SECONDS = 60
 MAX_LEASE_SECONDS = 24 * 60 * 60
-_P256_BYTES = 32
-_P256_ORDER = int(
-    "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
-    16,
-)
 _BASE64URL_RE = re.compile(r"[A-Za-z0-9_-]+")
 _HASH64_RE = re.compile(r"[0-9a-f]{64}")
 _UTC_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
@@ -327,78 +323,22 @@ def _b64url_decode(value: Any, *, field: str, maximum: int) -> bytes:
 
 
 def normalize_public_jwk(value: Any) -> dict[str, str]:
-    if not isinstance(value, dict) or set(value) != PUBLIC_JWK_KEYS:
-        raise _error(
-            "OPERATION_LEASE_KEY_INVALID",
-            "public JWK must contain exactly kty, crv, x, and y",
-        )
-    if value.get("kty") != "EC" or value.get("crv") != "P-256":
-        raise _error(
-            "OPERATION_LEASE_KEY_INVALID",
-            "public JWK must be an EC P-256 key",
-        )
-    x = _b64url_decode(value.get("x"), field="public_jwk.x", maximum=64)
-    y = _b64url_decode(value.get("y"), field="public_jwk.y", maximum=64)
-    if len(x) != _P256_BYTES or len(y) != _P256_BYTES:
-        raise _error(
-            "OPERATION_LEASE_KEY_INVALID",
-            "public JWK coordinates must be 32 bytes",
-        )
-    try:
-        ec.EllipticCurvePublicNumbers(
-            int.from_bytes(x, "big"),
-            int.from_bytes(y, "big"),
-            ec.SECP256R1(),
-        ).public_key()
-    except ValueError as exc:
-        raise _error(
-            "OPERATION_LEASE_KEY_INVALID",
-            "public JWK is not a point on P-256",
-        ) from exc
-    return {
-        "kty": "EC",
-        "crv": "P-256",
-        "x": str(value["x"]),
-        "y": str(value["y"]),
-    }
+    if not isinstance(value, Mapping):
+        raise _error("OPERATION_LEASE_KEY_INVALID", "public JWK is invalid")
+    return _cng_normalize_public_jwk(
+        value,
+        error_factory=_error,
+        error_code="OPERATION_LEASE_KEY_INVALID",
+    )
 
 
 def jwk_thumbprint(value: Any) -> str:
     normalized = normalize_public_jwk(value)
-    return _b64url_encode(
-        hashlib.sha256(canonical_json_bytes(normalized)).digest()
+    return _cng_jwk_thumbprint(
+        normalized,
+        error_factory=_error,
+        error_code="OPERATION_LEASE_KEY_INVALID",
     )
-
-
-def _public_key(value: Any) -> ec.EllipticCurvePublicKey:
-    normalized = normalize_public_jwk(value)
-    x = _b64url_decode(normalized["x"], field="public_jwk.x", maximum=64)
-    y = _b64url_decode(normalized["y"], field="public_jwk.y", maximum=64)
-    return ec.EllipticCurvePublicNumbers(
-        int.from_bytes(x, "big"),
-        int.from_bytes(y, "big"),
-        ec.SECP256R1(),
-    ).public_key()
-
-
-def _der_low_s(raw: bytes) -> bytes:
-    if len(raw) != 2 * _P256_BYTES:
-        raise _error(
-            "OPERATION_LEASE_SIGNATURE_INVALID",
-            "ES256 signature must contain exactly 64 raw bytes",
-        )
-    r = int.from_bytes(raw[:_P256_BYTES], "big")
-    s = int.from_bytes(raw[_P256_BYTES:], "big")
-    if (
-        not 1 <= r < _P256_ORDER
-        or not 1 <= s < _P256_ORDER
-        or s > _P256_ORDER // 2
-    ):
-        raise _error(
-            "OPERATION_LEASE_SIGNATURE_INVALID",
-            "ES256 signature must use in-range low-S components",
-        )
-    return encode_dss_signature(r, s)
 
 
 def normalize_keyring(value: Any) -> dict[str, Any]:
@@ -590,17 +530,15 @@ def verify_jws(
             "lease protected content is not exact canonical v1 JSON",
         )
     signature = _b64url_decode(parts[2], field="signature", maximum=128)
-    try:
-        _public_key(public_jwk).verify(
-            _der_low_s(signature),
-            f"{parts[0]}.{parts[1]}".encode("ascii"),
-            ec.ECDSA(hashes.SHA256()),
-        )
-    except InvalidSignature as exc:
-        raise _error(
-            "OPERATION_LEASE_SIGNATURE_INVALID",
-            "lease signature is invalid",
-        ) from exc
+    _cng_verify_es256(
+        f"{parts[0]}.{parts[1]}".encode("ascii"),
+        signature,
+        public_jwk,
+        error_factory=_error,
+        key_error_code="OPERATION_LEASE_KEY_INVALID",
+        signature_error_code="OPERATION_LEASE_SIGNATURE_INVALID",
+        require_low_s=True,
+    )
     return validate_claims(payload)
 
 

@@ -21,6 +21,9 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         'PIL',
+        '_cffi_backend',
+        'cffi',
+        'cryptography',
         'pygame',
         'charset_normalizer.md__mypyc',
         '_brotli',

@@ -50,6 +50,31 @@ def _append_event_log_worker(args):
     return count
 
 
+def test_packaged_build_update_key_config_accepts_public_es256_jwk(monkeypatch, tmp_path):
+    fixture = json.loads(
+        (Path(__file__).parent / "fixtures" / "es256-production-fixture.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    public_jwk = fixture["keys"]["valid"]
+    key_path = tmp_path / container_audit_module.UPDATE_PACKAGED_KEY_CONFIG_FILENAME
+    key_path.write_text(
+        json.dumps(
+            {
+                "schema": container_audit_module.UPDATE_PACKAGED_KEY_CONFIG_SCHEMA,
+                "manifest_public_key": public_jwk,
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(container_audit_module, "__file__", str(tmp_path / "Container_Audit.py"))
+    monkeypatch.setattr(container_audit_module, "_load_update_settings", lambda: {})
+    monkeypatch.delenv(container_audit_module.UPDATE_MANIFEST_PUBLIC_KEY_ENV, raising=False)
+
+    assert json.loads(container_audit_module._get_update_manifest_public_key()) == public_jwk
+
+
 def test_normalize_app_settings_rejects_non_object_root():
     assert container_audit_module.normalize_app_settings(["not", "an", "object"]) == {}
 
