@@ -21,7 +21,6 @@ import requests
 import subprocess
 import random
 import tempfile
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -37,7 +36,6 @@ from current_user_onboarding import (
     resolve_current_user_onboarding_paths,
 )
 from direct_sync_auto_bootstrap import (
-    CANONICAL_INSTALL_ROOT,
     start_direct_sync_auto_bootstrap,
     start_session_direct_sync,
 )
@@ -65,6 +63,7 @@ from item_catalog_sync import (
     write_item_catalog_failure_diagnostic,
     write_item_catalog_startup_diagnostic,
 )
+from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
@@ -177,7 +176,6 @@ from update_service import (
     UPDATE_PROVIDER_PRIVATE_MANIFEST,
     UPDATE_REQUIRED_PRESERVE_PATHS,
     UPDATE_RESTART_EXECUTABLE,
-    automatic_install_policy_from_manifest,
     assert_https_update_url,
     find_release_asset_update_info,
     find_release_asset_urls,
@@ -187,10 +185,8 @@ from update_service import (
     parse_sha256_checksum,
     parse_version_tag,
     release_asset_name_from_url,
-    safe_extract_update_zip,
     update_candidate_from_private_manifest,
     validate_release_asset_url,
-    verify_update_file_hash,
     verify_update_checksum,
     verify_update_manifest_signature,
 )
@@ -354,8 +350,6 @@ PHS_REPLACEMENT_REQUIRED_NOTICE = (
 LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT = 1030.0
 MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
-UPDATER_BATCH_UNSAFE_CHARS = set('%"&|<>^\r\n')
-UPDATE_EVIDENCE_SCHEMA = "container-audit-update-evidence-v1"
 UPDATE_BOOTSTRAP_MANIFEST_URL = (
     "https://worker.kmtecherp.com/static/update-feed/channels/"
     "container_audit/stable/latest.json"
@@ -364,6 +358,14 @@ UPDATE_BOOTSTRAP_MANIFEST_SIGNATURE_URL = UPDATE_BOOTSTRAP_MANIFEST_URL + ".sig"
 UPDATE_BOOTSTRAP_MANIFEST_PUBLIC_KEY = (
     "10d3baf546e05daaa0bbbbdd3f69630c90a245293a1690e2cfa47071292ac4a2"
 )
+RUNTIME_UPDATE_BOOTSTRAP_MESSAGE = (
+    "코드 루트는 읽기 전용입니다. 앱은 업데이트를 직접 적용하지 않습니다.\n"
+    "관리자가 검증된 새 배포 패키지의 INSTALL_THIS_PC.ps1로 교체 설치해 주세요."
+)
+
+
+class RuntimeCodeDeploymentDisabledError(RuntimeError):
+    """Raised when legacy in-process code deployment is invoked."""
 
 
 def _default_automatic_install_policy() -> Dict[str, Any]:
@@ -474,9 +476,12 @@ def _update_settings_path() -> str:
 def _load_update_settings() -> Dict[str, str]:
     try:
         with open(_update_settings_path(), "r", encoding="utf-8") as handle:
-            return normalize_update_settings(json.load(handle).get("update_settings"))
-    except Exception:
+            payload = json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError):
         return {}
+    if not isinstance(payload, dict):
+        return {}
+    return normalize_update_settings(payload.get("update_settings"))
 
 
 def _get_update_manifest_url() -> str:
@@ -601,322 +606,6 @@ def _safe_check_update_candidate() -> Optional[Dict[str, Any]]:
         return None
 
 
-def _validate_updater_batch_value(name: str, value: str) -> str:
-    text = str(value or "")
-    if not text:
-        raise ValueError(f"업데이트 스크립트 {name} 값이 비어 있습니다.")
-    if any(char in UPDATER_BATCH_UNSAFE_CHARS for char in text):
-        raise ValueError(f"업데이트 스크립트 {name} 값에 안전하지 않은 배치 문자가 포함되어 있습니다.")
-    return text
-
-
-def _windows_quote(path: str) -> str:
-    """Quote a validated filesystem path for the generated cmd.exe script."""
-
-    value = str(path or "")
-    if value.startswith('"') and value.endswith('"'):
-        value = value[1:-1]
-    return f'"{_validate_updater_batch_value("path", value)}"'
-
-
-def _path_on_same_volume(first: str, second: str) -> bool:
-    first_drive = os.path.splitdrive(os.path.abspath(first))[0].casefold()
-    second_drive = os.path.splitdrive(os.path.abspath(second))[0].casefold()
-    return bool(first_drive) and first_drive == second_drive
-
-
-def _is_update_reparse_point(path: str) -> bool:
-    if not os.path.lexists(path):
-        return False
-    if os.path.islink(path):
-        return True
-    try:
-        stat_result = os.stat(path, follow_symlinks=False)
-    except OSError:
-        return True
-    return bool(getattr(stat_result, "st_file_attributes", 0) & 0x400)
-
-
-def _prepare_update_sibling_root(application_path: str, sibling_root: str) -> None:
-    """Create a persistent sibling root without following a link or junction."""
-
-    if not _path_on_same_volume(application_path, sibling_root):
-        raise ValueError("업데이트 백업/증거 폴더는 애플리케이션과 같은 볼륨이어야 합니다.")
-    if _is_update_reparse_point(sibling_root):
-        raise ValueError("업데이트 백업/증거 폴더에 링크 또는 reparse point를 사용할 수 없습니다.")
-    os.makedirs(sibling_root, exist_ok=True)
-    if _is_update_reparse_point(sibling_root):
-        raise ValueError("업데이트 백업/증거 폴더에 링크 또는 reparse point를 사용할 수 없습니다.")
-
-    application_real = os.path.normcase(os.path.realpath(application_path))
-    sibling_real = os.path.normcase(os.path.realpath(sibling_root))
-    try:
-        if os.path.commonpath((application_real, sibling_real)) == application_real:
-            raise ValueError("업데이트 백업/증거 폴더는 애플리케이션 폴더 밖에 있어야 합니다.")
-    except ValueError as exc:
-        raise ValueError("업데이트 백업/증거 폴더 경로를 확인할 수 없습니다.") from exc
-
-
-def _preserve_verifier_source() -> str:
-    return r'''param(
-    [Parameter(Mandatory=$true)][string]$ApplicationPath,
-    [Parameter(Mandatory=$true)][string]$BackupPath,
-    [Parameter(Mandatory=$true)][string]$PreserveJsonPath,
-    [Parameter(Mandatory=$true)][string]$EvidencePath
-)
-$ErrorActionPreference = "Stop"
-
-function Get-FileSha256([string]$Path) {
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    $stream = [IO.File]::Open($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-    try {
-        return ([BitConverter]::ToString($algorithm.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
-    } finally {
-        $stream.Dispose()
-        $algorithm.Dispose()
-    }
-}
-
-function Get-PreservedTree([string]$RootPath) {
-    if (-not (Test-Path -LiteralPath $RootPath)) {
-        return ,@("MISSING")
-    }
-    $root = Get-Item -Force -LiteralPath $RootPath
-    if (($root.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "reparse points are not allowed in preserved update paths"
-    }
-    if (-not $root.PSIsContainer) {
-        $hash = Get-FileSha256 $root.FullName
-        return ,@("FILE|$($root.Length)|$hash")
-    }
-
-    $base = $root.FullName.TrimEnd("\") + "\"
-    $rows = [System.Collections.Generic.List[string]]::new()
-    $rows.Add("DIR|.")
-    foreach ($entry in Get-ChildItem -Force -Recurse -LiteralPath $root.FullName | Sort-Object FullName) {
-        if (($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "reparse points are not allowed in preserved update paths"
-        }
-        $relative = $entry.FullName.Substring($base.Length).Replace("\", "/")
-        if ($entry.PSIsContainer) {
-            $rows.Add("DIR|$relative")
-        } else {
-            $hash = Get-FileSha256 $entry.FullName
-            $rows.Add("FILE|$relative|$($entry.Length)|$hash")
-        }
-    }
-    return ,$rows.ToArray()
-}
-
-function Get-TreeSha256([string[]]$Rows) {
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    try {
-        $bytes = [Text.Encoding]::UTF8.GetBytes([string]::Join("`n", $Rows))
-        return ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace("-", "").ToLowerInvariant()
-    } finally {
-        $algorithm.Dispose()
-    }
-}
-
-$decodedPreservePaths = Get-Content -Raw -Encoding UTF8 -LiteralPath $PreserveJsonPath | ConvertFrom-Json
-$preservePaths = @()
-foreach ($decodedPath in $decodedPreservePaths) {
-    $preservePaths += [string]$decodedPath
-}
-foreach ($relativePath in $preservePaths) {
-    $relativeWindows = ([string]$relativePath).Replace("/", "\")
-    $beforePath = Join-Path $BackupPath $relativeWindows
-    $afterPath = Join-Path $ApplicationPath $relativeWindows
-    $before = @(Get-PreservedTree $beforePath)
-    $after = @(Get-PreservedTree $afterPath)
-    $beforeSha = Get-TreeSha256 $before
-    $afterSha = Get-TreeSha256 $after
-    $matches = $null -eq (Compare-Object -ReferenceObject $before -DifferenceObject $after)
-    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_path=$relativePath"
-    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_before_sha256=$beforeSha"
-    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_after_sha256=$afterSha"
-    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value "preserve_match=$($matches.ToString().ToLowerInvariant())"
-    if (-not $matches) {
-        throw "preserved update path changed: $relativePath"
-    }
-}
-'''
-
-
-def _process_stop_guard_source() -> str:
-    return r'''param(
-    [Parameter(Mandatory=$true)][int]$TargetProcessId,
-    [Parameter(Mandatory=$true)][string]$ExpectedExecutable
-)
-$ErrorActionPreference = "Stop"
-$process = Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue
-if ($null -eq $process) {
-    exit 0
-}
-$actualExecutable = $process.Path
-if ([string]::IsNullOrWhiteSpace($actualExecutable)) {
-    throw "cannot verify updater target process executable"
-}
-$expectedFullPath = [IO.Path]::GetFullPath($ExpectedExecutable)
-$actualFullPath = [IO.Path]::GetFullPath($actualExecutable)
-if (-not [string]::Equals($expectedFullPath, $actualFullPath, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "updater target PID belongs to a different executable"
-}
-Stop-Process -Id $TargetProcessId -Force
-Wait-Process -Id $TargetProcessId -Timeout 10 -ErrorAction SilentlyContinue
-if ($null -ne (Get-Process -Id $TargetProcessId -ErrorAction SilentlyContinue)) {
-    throw "updater target process did not stop"
-}
-'''
-
-
-def _same_update_path(left: str, right: str) -> bool:
-    try:
-        return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
-    except (OSError, TypeError, ValueError):
-        return False
-
-
-def _direct_sync_update_coordination_plan(application_path: str) -> Dict[str, Any]:
-    """Describe current-user relay processes that must be quiet during an update."""
-
-    if not _same_update_path(application_path, CANONICAL_INSTALL_ROOT):
-        return {"enabled": False, "reason": "noncanonical application layout"}
-    user_paths = resolve_current_user_onboarding_paths(application_path)
-    expected_executable = os.path.join(
-        os.path.abspath(application_path), "Container_Audit.exe"
-    )
-    return {
-        "enabled": True,
-        # These compatibility field names are consumed by the transactional
-        # updater builder. They now identify the user relay and its state root;
-        # no scheduled task is created, queried, disabled, or resumed.
-        "task_name": "KMTech.ContainerAudit.UserRelay",
-        "launcher_path": str(user_paths.direct_sync_root),
-        "application_root": os.path.abspath(application_path),
-        "application_executable": expected_executable,
-        "relay_principal": "current_user",
-        "system_scheduled_task": False,
-        "report_state": "CURRENT_USER_RELAY",
-    }
-
-
-def _direct_sync_update_coordinator_source() -> str:
-    return r'''param(
-    [Parameter(Mandatory=$true)][ValidateSet("Prepare", "Resume")][string]$Mode,
-    [Parameter(Mandatory=$true)][string]$TaskName,
-    [Parameter(Mandatory=$true)][string]$ExpectedLauncherPath,
-    [Parameter(Mandatory=$true)][string]$ExpectedApplicationRoot,
-    [Parameter(Mandatory=$true)][string]$StatePath,
-    [Parameter(Mandatory=$true)][string]$EvidencePath
-)
-$ErrorActionPreference = "Stop"
-
-function Add-Evidence([string]$Value) {
-    Add-Content -Encoding UTF8 -LiteralPath $EvidencePath -Value $Value
-}
-
-function Test-SamePath([string]$Left, [string]$Right) {
-    if ([string]::IsNullOrWhiteSpace($Left) -or [string]::IsNullOrWhiteSpace($Right)) {
-        return $false
-    }
-    return [string]::Equals(
-        [IO.Path]::GetFullPath($Left),
-        [IO.Path]::GetFullPath($Right),
-        [StringComparison]::OrdinalIgnoreCase
-    )
-}
-
-function Get-OwnedRelayProcesses([string]$ApplicationRoot) {
-    $mainExecutable = Join-Path $ApplicationRoot "Container_Audit.exe"
-    $retiredHelper = Join-Path $ApplicationRoot "Container_Audit_DirectSync_Relay.exe"
-    $owned = @()
-    foreach ($process in Get-CimInstance Win32_Process -Filter "Name='Container_Audit.exe' OR Name='Container_Audit_DirectSync_Relay.exe'") {
-        $isRetiredHelper = Test-SamePath $process.ExecutablePath $retiredHelper
-        $isHostedRelay = (
-            (Test-SamePath $process.ExecutablePath $mainExecutable) -and
-            [regex]::IsMatch(
-                [string]$process.CommandLine,
-                '(?i)(?:^|[\s"])(?:--container-audit-direct-sync-relay|--container-audit-user-relay)(?:$|[\s"])'
-            )
-        )
-        if ($isRetiredHelper -or $isHostedRelay) {
-            $owned += $process
-        }
-    }
-    return ,$owned
-}
-
-function Write-State([hashtable]$State) {
-    $temporary = "$StatePath.tmp.$PID"
-    $State | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 -LiteralPath $temporary
-    Move-Item -Force -LiteralPath $temporary -Destination $StatePath
-}
-
-if ($Mode -eq "Resume") {
-    if (-not (Test-Path -LiteralPath $StatePath -PathType Leaf)) {
-        throw "DirectSync update coordination state is missing"
-    }
-    $state = Get-Content -Raw -Encoding UTF8 -LiteralPath $StatePath | ConvertFrom-Json
-    if ($state.schema -ne "container-audit-user-relay-update-state-v1") {
-        throw "DirectSync update coordination state schema is invalid"
-    }
-    Add-Evidence "direct_sync_user_relay_resume=DEFERRED_TO_APP_RESTART"
-    exit 0
-}
-
-$ownedBefore = @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)
-foreach ($process in $ownedBefore) {
-    Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
-}
-$deadline = (Get-Date).AddSeconds(15)
-do {
-    $remaining = @(Get-OwnedRelayProcesses $ExpectedApplicationRoot)
-    if ($remaining.Count -eq 0) { break }
-    Start-Sleep -Milliseconds 200
-} while ((Get-Date) -lt $deadline)
-if ($remaining.Count -ne 0) {
-    throw "owned current-user DirectSync relay process remained alive"
-}
-Write-State @{
-    schema = "container-audit-user-relay-update-state-v1"
-    relay_was_running = ($ownedBefore.Count -gt 0)
-    principal = "current_user"
-    system_scheduled_task = $false
-}
-Add-Evidence "direct_sync_user_relay_quiesced=true"
-Add-Evidence "direct_sync_system_task=false"
-'''
-
-
-def _elevated_update_launcher_source() -> str:
-    return r'''param(
-    [Parameter(Mandatory=$true)][string]$UpdaterPath
-)
-$ErrorActionPreference = "Stop"
-$cmd = Join-Path ([Environment]::SystemDirectory) "cmd.exe"
-$quotedUpdater = '"' + $UpdaterPath + '"'
-Start-Process -FilePath $cmd -Verb RunAs -ArgumentList @('/d', '/c', $quotedUpdater) | Out-Null
-'''
-
-
-def _preserve_exclusion_paths(
-    source_path: str,
-    application_path: str,
-    preserve_paths: List[str],
-) -> List[str]:
-    exclusions: List[str] = []
-    for relative_path in preserve_paths:
-        path_parts = relative_path.replace("\\", "/").split("/")
-        exclusions.extend(
-            (
-                os.path.join(source_path, *path_parts),
-                os.path.join(application_path, *path_parts),
-            )
-        )
-    return exclusions
-
-
 def _write_update_download(response: Any, zip_path: str, *, max_bytes: int = MAX_UPDATE_DOWNLOAD_BYTES) -> None:
     content_length = str(getattr(response, "headers", {}).get("Content-Length") or "").strip()
     if content_length:
@@ -985,188 +674,12 @@ def download_and_apply_update(
     target_version=None,
     allow_source_mode: bool = False,
 ):
-    """Download a verified release and hand it to the transactional updater."""
-    update_temp_root = ""
-    updater_launched = False
-    evidence_path = ""
-    try:
-        if not checksum_url and not expected_sha256:
-            raise ValueError("업데이트 SHA256 체크섬 URL 또는 예상 해시가 필요합니다.")
-        if expected_sha256 and not is_sha256(str(expected_sha256).strip()):
-            raise ValueError("업데이트 SHA256 예상 해시 형식이 올바르지 않습니다.")
-        if re.fullmatch(r"v\d+\.\d+\.\d+", str(target_version or "")) is None:
-            raise ValueError("자동 업데이트 대상 버전은 정식 vX.Y.Z 태그여야 합니다.")
-        validated_install_policy = automatic_install_policy_from_manifest(install_policy)
-        if not allow_source_mode and not _release_runtime_mode():
-            raise ValueError("소스 실행 모드에서는 자동 업데이트를 적용하지 않습니다.")
-        if getattr(sys, 'frozen', False):
-            application_path = os.path.dirname(sys.executable)
-        else:
-            application_path = os.path.dirname(os.path.abspath(__file__))
-        application_path = os.path.abspath(application_path)
-        direct_sync_coordination = _direct_sync_update_coordination_plan(application_path)
-        download_url = assert_https_update_url(url, require_zip=True) if expected_sha256 else validate_release_asset_url(url)
-        verified_checksum_url = validate_release_asset_url(checksum_url) if checksum_url else ""
-        update_temp_root = tempfile.mkdtemp(prefix="container_audit_update_", dir=os.environ.get("TEMP", "C:\\Temp"))
-        zip_path = os.path.join(update_temp_root, "update.zip")
-        response = requests.get(download_url, stream=True, timeout=120)
-        response.raise_for_status()
-        _write_update_download(response, zip_path)
-        if verified_checksum_url:
-            checksum_response = requests.get(verified_checksum_url, stream=True, timeout=30)
-            checksum_response.raise_for_status()
-            checksum_text = _read_update_checksum_response(checksum_response)
-            _verify_update_checksum(
-                zip_path,
-                checksum_text,
-                expected_filename=release_asset_name_from_url(download_url),
-            )
-        else:
-            verify_update_file_hash(zip_path, str(expected_sha256))
-        temp_update_folder = os.path.join(update_temp_root, "extracted")
-        safe_extract_update_zip(zip_path, temp_update_folder, archive_policy=archive_policy)
-        os.remove(zip_path)
-        updater_script_path = os.path.join(update_temp_root, "updater.bat")
-        extracted_content = os.listdir(temp_update_folder)
-        if len(extracted_content) == 1 and os.path.isdir(os.path.join(temp_update_folder, extracted_content[0])):
-            new_program_folder_path = os.path.join(temp_update_folder, extracted_content[0])
-        else:
-            new_program_folder_path = temp_update_folder
+    """Reject the retired runtime code-deployment path.
 
-        restart_executable = validated_install_policy["restart_executable"]
-        if os.path.basename(sys.executable).casefold() != restart_executable.casefold():
-            raise ValueError("업데이트 재시작 실행 파일이 현재 실행 파일과 일치하지 않습니다.")
-        payload_executable = os.path.join(new_program_folder_path, restart_executable)
-        if not os.path.isfile(payload_executable):
-            raise ValueError(f"업데이트 ZIP에 {restart_executable} 파일이 없습니다.")
-
-        app_parent = os.path.dirname(application_path)
-        app_name = os.path.basename(application_path)
-        backup_root = os.path.join(app_parent, f".{app_name}.update-backups")
-        evidence_root = os.path.join(app_parent, f".{app_name}.update-evidence")
-        _prepare_update_sibling_root(application_path, backup_root)
-        _prepare_update_sibling_root(application_path, evidence_root)
-
-        run_suffix = re.sub(
-            r"[^A-Za-z0-9._-]",
-            "-",
-            f"{target_version}-{time.strftime('%Y%m%d%H%M%S')}-{os.getpid()}-{os.path.basename(update_temp_root)}",
-        )
-        backup_path = os.path.join(backup_root, run_suffix)
-        backup_partial_path = f"{backup_path}.partial"
-        evidence_path = os.path.join(evidence_root, f"{run_suffix}.log")
-        if os.path.exists(backup_path) or os.path.exists(backup_partial_path):
-            raise ValueError("고유 업데이트 백업 경로가 이미 존재합니다.")
-
-        preserve_json_path = os.path.join(update_temp_root, "preserve-paths.json")
-        preserve_verifier_path = os.path.join(update_temp_root, "verify-preserved-paths.ps1")
-        process_stop_guard_path = os.path.join(update_temp_root, "stop-update-process.ps1")
-        direct_sync_coordinator_path = ""
-        direct_sync_state_path = ""
-        elevated_launcher_path = ""
-        with open(preserve_json_path, "w", encoding="utf-8") as preserve_file:
-            json.dump(validated_install_policy["preserve_paths"], preserve_file, ensure_ascii=True)
-        with open(preserve_verifier_path, "w", encoding="utf-8") as verifier_file:
-            verifier_file.write(_preserve_verifier_source())
-        with open(process_stop_guard_path, "w", encoding="utf-8") as guard_file:
-            guard_file.write(_process_stop_guard_source())
-        if direct_sync_coordination["enabled"]:
-            direct_sync_coordinator_path = os.path.join(
-                update_temp_root,
-                "coordinate-direct-sync-update.ps1",
-            )
-            direct_sync_state_path = os.path.join(update_temp_root, "direct-sync-update-state.json")
-            elevated_launcher_path = os.path.join(update_temp_root, "launch-updater-elevated.ps1")
-            with open(direct_sync_coordinator_path, "w", encoding="utf-8") as coordinator_file:
-                coordinator_file.write(_direct_sync_update_coordinator_source())
-            with open(elevated_launcher_path, "w", encoding="utf-8") as launcher_file:
-                launcher_file.write(_elevated_update_launcher_source())
-        with open(evidence_path, "x", encoding="utf-8") as evidence_file:
-            evidence_file.write(f"schema={UPDATE_EVIDENCE_SCHEMA}\n")
-            evidence_file.write("state=PREPARED\n")
-            evidence_file.write(f"target_version={target_version}\n")
-            evidence_file.write(f"application_path={application_path}\n")
-            evidence_file.write(f"backup_path={backup_path}\n")
-            evidence_file.write(
-                "preserve_paths="
-                + ";".join(validated_install_policy["preserve_paths"])
-                + "\n"
-            )
-            evidence_file.write(
-                "direct_sync_coordination="
-                + ("ENABLED" if direct_sync_coordination["enabled"] else "NOT_REQUIRED")
-                + "\n"
-            )
-
-        with open(updater_script_path, "w", encoding='utf-8') as bat_file:
-            bat_file.write(
-                _build_updater_script(
-                    current_pid=os.getpid(),
-                    source_path=new_program_folder_path,
-                    application_path=application_path,
-                    backup_partial_path=backup_partial_path,
-                    backup_path=backup_path,
-                    temp_path=update_temp_root,
-                    restart_path=os.path.join(application_path, restart_executable),
-                    evidence_path=evidence_path,
-                    preserve_paths=validated_install_policy["preserve_paths"],
-                    preserve_json_path=preserve_json_path,
-                    preserve_verifier_path=preserve_verifier_path,
-                    process_stop_guard_path=process_stop_guard_path,
-                    target_version=str(target_version),
-                    direct_sync_coordinator_path=direct_sync_coordinator_path,
-                    direct_sync_state_path=direct_sync_state_path,
-                    direct_sync_task_name=str(direct_sync_coordination.get("task_name") or ""),
-                    direct_sync_launcher_path=str(direct_sync_coordination.get("launcher_path") or ""),
-                )
-            )
-        if direct_sync_coordination["enabled"]:
-            powershell = os.path.join(
-                os.environ.get("SystemRoot", r"C:\Windows"),
-                "System32",
-                "WindowsPowerShell",
-                "v1.0",
-                "powershell.exe",
-            )
-            subprocess.Popen(
-                [
-                    powershell,
-                    "-NoLogo",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-ExecutionPolicy",
-                    "Bypass",
-                    "-File",
-                    elevated_launcher_path,
-                    "-UpdaterPath",
-                    updater_script_path,
-                ],
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        else:
-            subprocess.Popen([updater_script_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
-        updater_launched = True
-        sys.exit(0)
-    except Exception as e:
-        print(f"업데이트 적용 실패: {e.__class__.__name__}: {e}")
-        if update_temp_root and not updater_launched:
-            shutil.rmtree(update_temp_root, ignore_errors=True)
-        if evidence_path:
-            try:
-                with open(evidence_path, "a", encoding="utf-8") as evidence_file:
-                    evidence_file.write("state=HANDOFF_FAILED\n")
-                    evidence_file.write("restart=BLOCKED\n")
-            except OSError:
-                pass
-        root_alert = tk.Tk()
-        root_alert.withdraw()
-        messagebox.showerror(
-            "업데이트 실패",
-            "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 "
-            "계속되면 관리자에게 문의하세요.",
-            parent=root_alert,
-        )
-        root_alert.destroy()
+    Signed update discovery remains available, but only the administrator-run
+    bootstrap may place code or regenerate the immutable-root inventory.
+    """
+    raise RuntimeCodeDeploymentDisabledError(RUNTIME_UPDATE_BOOTSTRAP_MESSAGE)
 
 
 def _build_updater_script(
@@ -1189,153 +702,8 @@ def _build_updater_script(
     direct_sync_task_name: str = "",
     direct_sync_launcher_path: str = "",
 ) -> str:
-    safe_source = _windows_quote(source_path)
-    safe_application = _windows_quote(application_path)
-    safe_backup_partial = _windows_quote(backup_partial_path)
-    safe_backup = _windows_quote(backup_path)
-    safe_temp = _windows_quote(temp_path)
-    safe_restart = _windows_quote(restart_path)
-    safe_evidence = _windows_quote(evidence_path)
-    safe_preserve_json = _windows_quote(preserve_json_path)
-    safe_preserve_verifier = _windows_quote(preserve_verifier_path)
-    safe_process_stop_guard = _windows_quote(process_stop_guard_path)
+    raise RuntimeCodeDeploymentDisabledError(RUNTIME_UPDATE_BOOTSTRAP_MESSAGE)
 
-    coordination_enabled = bool(direct_sync_coordinator_path)
-    if coordination_enabled and not all(
-        (direct_sync_state_path, direct_sync_task_name, direct_sync_launcher_path)
-    ):
-        raise ValueError("DirectSync update coordination parameters are incomplete")
-    if coordination_enabled:
-        safe_direct_sync_coordinator = _windows_quote(direct_sync_coordinator_path)
-        safe_direct_sync_state = _windows_quote(direct_sync_state_path)
-        safe_direct_sync_task_name = _windows_quote(direct_sync_task_name)
-        safe_direct_sync_launcher = _windows_quote(direct_sync_launcher_path)
-        safe_direct_sync_application = safe_application
-        direct_sync_prepare = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Prepare -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
-if errorlevel 1 (
-    >> {safe_evidence} echo state=DIRECT_SYNC_QUIESCE_FAILED
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 25
-)
->> {safe_evidence} echo state=DIRECT_SYNC_QUIESCED'''
-        direct_sync_resume = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Resume -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
-if errorlevel 1 (
-    set "APPLY_EXIT=26"
-    goto ROLLBACK
-)
->> {safe_evidence} echo state=DIRECT_SYNC_RESUMED'''
-        direct_sync_rollback_resume = f'''powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_direct_sync_coordinator} -Mode Resume -TaskName {safe_direct_sync_task_name} -ExpectedLauncherPath {safe_direct_sync_launcher} -ExpectedApplicationRoot {safe_direct_sync_application} -StatePath {safe_direct_sync_state} -EvidencePath {safe_evidence}
-if errorlevel 1 (
-    >> {safe_evidence} echo state=DIRECT_SYNC_ROLLBACK_RESUME_FAILED
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 30
-)
->> {safe_evidence} echo state=DIRECT_SYNC_ROLLBACK_RESUMED'''
-    else:
-        direct_sync_prepare = f">> {safe_evidence} echo state=DIRECT_SYNC_COORDINATION_NOT_REQUIRED"
-        direct_sync_resume = ""
-        direct_sync_rollback_resume = ""
-
-    exclusions = _preserve_exclusion_paths(source_path, application_path, preserve_paths)
-    quoted_exclusions = " ".join(_windows_quote(path) for path in exclusions)
-    if not quoted_exclusions:
-        raise ValueError("자동 업데이트에는 보존 경로 제외 목록이 필요합니다.")
-    mirror_exclusions = f"/XD {quoted_exclusions} /XF {quoted_exclusions}"
-    if re.fullmatch(r"v\d+\.\d+\.\d+", str(target_version or "")) is None:
-        raise ValueError("업데이트 증거 대상 버전이 올바르지 않습니다.")
-
-    return f"""@echo off
-chcp 65001 > nul
-setlocal EnableExtensions DisableDelayedExpansion
->> {safe_evidence} echo state=UPDATER_STARTED
->> {safe_evidence} echo started_at=%DATE%_%TIME%
->> {safe_evidence} echo temporary_path={safe_temp}
-timeout /t 2 /nobreak > nul
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_process_stop_guard} -TargetProcessId {int(current_pid)} -ExpectedExecutable {safe_restart}
-if errorlevel 1 (
-    >> {safe_evidence} echo state=PROCESS_STOP_GUARD_FAILED
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 20
-)
->> {safe_evidence} echo state=PROCESS_STOP_CONFIRMED
-
-if exist {safe_backup_partial} (
-    >> {safe_evidence} echo state=BACKUP_PARTIAL_ALREADY_EXISTS
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 21
-)
-if exist {safe_backup} (
-    >> {safe_evidence} echo state=BACKUP_ALREADY_EXISTS
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 22
-)
-mkdir {safe_backup_partial} > nul 2>&1
-if errorlevel 1 (
-    >> {safe_evidence} echo state=BACKUP_DIRECTORY_CREATE_FAILED
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 23
-)
-
-robocopy {safe_application} {safe_backup_partial} /MIR /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
-set "BACKUP_EXIT=%ERRORLEVEL%"
-if %BACKUP_EXIT% GEQ 8 (
-    >> {safe_evidence} echo state=BACKUP_COPY_FAILED
-    >> {safe_evidence} echo backup_exit=%BACKUP_EXIT%
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b %BACKUP_EXIT%
-)
-move /Y {safe_backup_partial} {safe_backup} > nul
-if errorlevel 1 (
-    >> {safe_evidence} echo state=BACKUP_FINALIZE_FAILED
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b 24
-)
->> {safe_evidence} echo state=BACKUP_COMPLETED
-
-{direct_sync_prepare}
-
-robocopy {safe_source} {safe_application} /MIR /IS /IT /IM /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP {mirror_exclusions}
-set "APPLY_EXIT=%ERRORLEVEL%"
-if %APPLY_EXIT% GEQ 8 goto ROLLBACK
-
-powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {safe_preserve_verifier} -ApplicationPath {safe_application} -BackupPath {safe_backup} -PreserveJsonPath {safe_preserve_json} -EvidencePath {safe_evidence}
-set "PRESERVE_EXIT=%ERRORLEVEL%"
-if not %PRESERVE_EXIT% EQU 0 (
-    set "APPLY_EXIT=%PRESERVE_EXIT%"
-    goto ROLLBACK
-)
-
-{direct_sync_resume}
-
->> {safe_evidence} echo state=UPDATE_COMPLETED
->> {safe_evidence} echo target_version={target_version}
->> {safe_evidence} echo restart=ALLOWED
-start "" {safe_restart}
-if errorlevel 1 (
-    >> {safe_evidence} echo restart=FAILED
-    exit /b 32
-)
->> {safe_evidence} echo restart=REQUESTED
-rmdir /s /q {safe_temp} > nul 2>&1
-exit /b 0
-
-:ROLLBACK
->> {safe_evidence} echo state=UPDATE_APPLY_FAILED
->> {safe_evidence} echo apply_exit=%APPLY_EXIT%
-robocopy {safe_backup} {safe_application} /MIR /IS /IT /IM /COPY:DAT /DCOPY:DAT /R:3 /W:2 /XJ /NFL /NDL /NJH /NJS /NP
-set "ROLLBACK_EXIT=%ERRORLEVEL%"
-if %ROLLBACK_EXIT% GEQ 8 (
-    >> {safe_evidence} echo state=ROLLBACK_FAILED
-    >> {safe_evidence} echo rollback_exit=%ROLLBACK_EXIT%
-    >> {safe_evidence} echo restart=BLOCKED
-    exit /b %ROLLBACK_EXIT%
-)
->> {safe_evidence} echo state=ROLLBACK_COMPLETED
->> {safe_evidence} echo rollback_exit=%ROLLBACK_EXIT%
-{direct_sync_rollback_resume}
->> {safe_evidence} echo restart=BLOCKED
-exit /b 31
-"""
 
 def check_and_apply_updates():
     if not _release_runtime_mode():
@@ -1346,7 +714,6 @@ def check_and_apply_updates():
 
 
 def _prompt_and_apply_update(candidate, parent=None):
-    download_url = candidate["download_url"]
     new_version = candidate["version"]
     root_alert = parent
     created_alert_root = None
@@ -1355,19 +722,12 @@ def _prompt_and_apply_update(candidate, parent=None):
         created_alert_root.withdraw()
         root_alert = created_alert_root
     try:
-        if messagebox.askyesno(
-            "업데이트 발견",
-            f"새로운 버전({new_version})이 발견되었습니다.\n지금 업데이트하시겠습니까? (현재: {CURRENT_VERSION})",
+        messagebox.showinfo(
+            "관리자 업데이트 필요",
+            f"새로운 버전({new_version})이 확인되었습니다. (현재: {CURRENT_VERSION})\n\n"
+            + RUNTIME_UPDATE_BOOTSTRAP_MESSAGE,
             parent=root_alert,
-        ):
-            download_and_apply_update(
-                download_url,
-                checksum_url=candidate.get("checksum_url"),
-                expected_sha256=candidate.get("sha256"),
-                archive_policy=candidate.get("archive_policy"),
-                install_policy=candidate.get("install_policy"),
-                target_version=new_version,
-            )
+        )
     finally:
         if created_alert_root is not None:
             created_alert_root.destroy()
@@ -1445,7 +805,6 @@ class ContainerAudit:
     DEFAULT_FONT = 'Malgun Gothic'
     TRAY_SIZE = 60
     SETTINGS_DIR = 'config'
-    PARKED_TRAY_DIR = os.path.join(SETTINGS_DIR, 'parked_trays')
     SETTINGS_FILE = 'container_audit_settings.json'
     WORKERS_FILE = 'worker_registry.json'
     IDLE_THRESHOLD_SEC = 420
@@ -1701,7 +1060,7 @@ class ContainerAudit:
         self._start_audio_feedback_initialization()
     def _load_best_time_records(self):
         """설정 폴더에서 30일 최고 기록 파일을 불러옵니다."""
-        self.best_time_file_path = os.path.join(self.config_folder, 'best_time_records.json')
+        self.best_time_file_path = str(self.storage_paths.best_time_records_path)
         self.best_time_store = BestTimeRecordStore(self.best_time_file_path)
         self.best_time_records = self.best_time_store.load()
 
@@ -1729,30 +1088,48 @@ class ContainerAudit:
         self.save_folder = str(self.storage_paths.events_dir)
         self.direct_sync_scan_source_dir = str(self.storage_paths.events_dir)
         self.direct_sync_program_data_root = str(self.storage_paths.direct_sync_root)
-        self.config_folder = os.path.join(self.application_path, self.SETTINGS_DIR)
-        self.parked_trays_dir = os.path.join(self.application_path, self.PARKED_TRAY_DIR)
-        os.makedirs(self.config_folder, exist_ok=True)
-        os.makedirs(self.parked_trays_dir, exist_ok=True)
+        self.config_folder = str(self.storage_paths.config_dir)
+        self.parked_trays_dir = str(self.storage_paths.parked_trays_dir)
+        self.settings_template_path = os.path.join(
+            self.application_path,
+            self.SETTINGS_DIR,
+            self.SETTINGS_FILE,
+        )
+        self.legacy_state_migration = migrate_legacy_code_root_state(
+            application_path=self.application_path,
+            config_dir=self.config_folder,
+            parked_trays_dir=self.parked_trays_dir,
+        )
 
     def load_app_settings(self) -> Dict[str, Any]:
-        path = os.path.join(self.config_folder, self.SETTINGS_FILE)
+        user_path = os.path.join(self.config_folder, self.SETTINGS_FILE)
+        template_path = str(getattr(self, "settings_template_path", "") or "").strip()
+        merged: Dict[str, Any] = {}
+        if template_path:
+            try:
+                with open(template_path, 'r', encoding='utf-8') as f:
+                    merged.update(normalize_app_settings(json.load(f)))
+            except (FileNotFoundError, UnicodeError, json.JSONDecodeError, OSError):
+                pass
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                return _drop_release_disabled_settings(normalize_app_settings(json.load(f)))
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
+            with open(user_path, 'r', encoding='utf-8') as f:
+                user_settings = normalize_app_settings(json.load(f))
+        except (FileNotFoundError, UnicodeError, json.JSONDecodeError, OSError):
+            user_settings = {}
+        # Update authority/provider settings are immutable deployment policy.
+        # Runtime state may override UI preferences, never the packaged policy.
+        user_settings.pop("update_settings", None)
+        merged.update(user_settings)
+        return _drop_release_disabled_settings(merged)
 
     def save_settings(self):
         try:
             path = os.path.join(self.config_folder, self.SETTINGS_FILE)
-            previous_settings = self.load_app_settings()
             current_settings = {
                 'scale_factor': self.scale_factor,
                 'column_widths_validator': self.column_widths,
                 'paned_window_sash_positions': self.paned_window_sash_positions,
             }
-            if "update_settings" in previous_settings:
-                current_settings["update_settings"] = previous_settings["update_settings"]
             if not _release_runtime_mode():
                 current_settings['enable_internal_test_commands'] = bool(getattr(self, 'internal_test_commands_enabled', False))
             atomic_write_json(path, current_settings, indent=4, ensure_ascii=False)

@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 import uuid
 
 from direct_sync_auto_bootstrap import run_session_direct_sync_once
+from direct_sync_auto_bootstrap import assert_runtime_state_outside_code_root
 from runtime_instance import acquire_runtime_instance
 from storage_policy import (
     build_container_audit_storage_paths,
@@ -385,6 +386,11 @@ def main(argv: list[str] | None = None) -> int:
         Path(args.scan_source_dir).expanduser().resolve()
         if args.scan_source_dir
         else storage.events_dir
+    )
+    assert_runtime_state_outside_code_root(
+        app_root=app_root,
+        direct_sync_root=direct_sync_root,
+        scan_source_dir=scan_source_dir,
     )
     direct_sync_root.mkdir(parents=True, exist_ok=True)
     scan_source_dir.mkdir(parents=True, exist_ok=True)

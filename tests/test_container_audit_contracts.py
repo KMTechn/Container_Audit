@@ -194,17 +194,9 @@ def test_release_runtime_drops_internal_test_commands_on_load_and_save(tmp_path,
     app.save_settings()
 
     saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert loaded == {
-        "scale_factor": 1.0,
-        "update_settings": {
-            "provider": "private_manifest",
-            "manifest_url": "https://updates.example/container_audit/stable/latest.json",
-            "manifest_public_key": "b" * 64,
-            "channel": "stable",
-        },
-    }
+    assert loaded == {"scale_factor": 1.0}
     assert "enable_internal_test_commands" not in saved
-    assert saved["update_settings"]["provider"] == "private_manifest"
+    assert "update_settings" not in saved
 
 
 def test_update_helpers_load_private_settings_from_config(tmp_path, monkeypatch):
@@ -1082,6 +1074,98 @@ def test_update_download_removes_partial_file_when_stream_exceeds_limit(tmp_path
     assert not zip_path.exists()
 
 
+def test_runtime_code_deployment_is_blocked_before_network_temp_or_process(
+    tmp_path,
+    monkeypatch,
+):
+    code_root = tmp_path / "read-only-code"
+    code_root.mkdir()
+    sentinel = code_root / "Container_Audit.exe"
+    sentinel.write_bytes(b"immutable")
+    before = {path.name: path.read_bytes() for path in code_root.iterdir() if path.is_file()}
+    monkeypatch.setattr(
+        container_audit_module.requests,
+        "get",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("detection-only runtime must not download an update")
+        ),
+    )
+    monkeypatch.setattr(
+        container_audit_module.tempfile,
+        "mkdtemp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("detection-only runtime must not stage an update")
+        ),
+    )
+    monkeypatch.setattr(
+        container_audit_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("detection-only runtime must not launch an updater")
+        ),
+    )
+
+    with pytest.raises(
+        container_audit_module.RuntimeCodeDeploymentDisabledError,
+        match="INSTALL_THIS_PC.ps1",
+    ):
+        container_audit_module.download_and_apply_update(
+            "https://updates.example/Container_Audit-v9.9.9.zip",
+            expected_sha256="a" * 64,
+            target_version="v9.9.9",
+        )
+    with pytest.raises(
+        container_audit_module.RuntimeCodeDeploymentDisabledError,
+        match="INSTALL_THIS_PC.ps1",
+    ):
+        container_audit_module._build_updater_script(
+            **_updater_script_kwargs(),
+        )
+
+    assert {path.name: path.read_bytes() for path in code_root.iterdir() if path.is_file()} == before
+
+
+def test_runtime_module_contains_no_code_mirror_or_updater_handoff():
+    source = Path(container_audit_module.__file__).read_text(encoding="utf-8")
+
+    for forbidden in (
+        "robocopy ",
+        " /MIR ",
+        "updater.bat",
+        ".update-backups",
+        ".update-evidence",
+        "Verb RunAs",
+    ):
+        assert forbidden not in source
+
+
+def test_update_candidate_prompt_is_bootstrap_notice_only(monkeypatch):
+    notices = []
+    parent = object()
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showinfo",
+        lambda title, message, **kwargs: notices.append((title, message, kwargs)),
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "askyesno",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("runtime must not offer in-place update consent")
+        ),
+    )
+
+    container_audit_module._prompt_and_apply_update(
+        {"version": "v9.9.9", "download_url": "https://updates.example/update.zip"},
+        parent=parent,
+    )
+
+    assert len(notices) == 1
+    assert notices[0][0] == "관리자 업데이트 필요"
+    assert "INSTALL_THIS_PC.ps1" in notices[0][1]
+    assert notices[0][2]["parent"] is parent
+
+
 def _automatic_install_policy():
     return {
         "strategy": "robocopy_backup_then_mirror",
@@ -1108,711 +1192,11 @@ def _updater_script_kwargs():
     }
 
 
-def test_updater_script_backs_up_before_copy_and_rolls_back_on_failure():
-    script = container_audit_module._build_updater_script(
-        **_updater_script_kwargs(),
-    )
-
-    assert "-TargetProcessId 12345" in script
-    assert "-ExpectedExecutable" in script
-    assert "state=PROCESS_STOP_CONFIRMED" in script
-    assert "state=PROCESS_STOP_GUARD_FAILED" in script
-    assert "taskkill" not in script.lower()
-    assert script.count("robocopy ") == 3
-    assert script.count(" /MIR ") == 3
-    assert script.count(" /IS ") == 2
-    assert script.count(" /IT ") == 2
-    assert script.count(" /IM ") == 2
-    assert "move /Y" in script
-    assert "state=BACKUP_COMPLETED" in script
-    assert "state=UPDATE_COMPLETED" in script
-    assert "state=ROLLBACK_COMPLETED" in script
-    assert "state=ROLLBACK_FAILED" in script
-    assert "restart=ALLOWED" in script
-    assert "restart=REQUESTED" in script
-    assert "restart=BLOCKED" in script.split(":ROLLBACK", 1)[1]
-    assert 'start ""' not in script.split(":ROLLBACK", 1)[1]
-    assert "/XD" in script and "/XF" in script
-    for relative_path in ("config", "logs", "ledger"):
-        assert relative_path in script
-    assert "xcopy" not in script
-    assert ":ROLLBACK" in script
-    assert "pause" not in script.lower()
-    assert script.index("state=BACKUP_COMPLETED") < script.index('set "APPLY_EXIT=')
-
-
-def test_updater_script_quiesces_direct_sync_between_backup_and_mirror():
-    kwargs = _updater_script_kwargs()
-    kwargs.update(
-        {
-            "direct_sync_coordinator_path": r"C:\Temp\update\coordinate-direct-sync-update.ps1",
-            "direct_sync_state_path": r"C:\Temp\update\direct-sync-update-state.json",
-            "direct_sync_task_name": "KMTech.ContainerAudit.UserRelay",
-            "direct_sync_launcher_path": (
-                "C:\\Users\\operator\\AppData\\Local\\KMTech\\DirectSync\\"
-                "container_audit"
-            ),
-        }
-    )
-
-    script = container_audit_module._build_updater_script(**kwargs)
-
-    apply_copy = (
-        'robocopy "C:\\Temp\\update\\extracted\\Container_Audit" '
-        '"C:\\KMTech\\Apps\\Container_Audit\\current"'
-    )
-    assert script.index("state=BACKUP_COMPLETED") < script.index("-Mode Prepare")
-    assert script.index("-Mode Prepare") < script.index(apply_copy)
-    assert script.index("-Mode Resume") < script.index("state=UPDATE_COMPLETED")
-    rollback = script.split(":ROLLBACK", 1)[1]
-    assert "-Mode Resume" in rollback
-    assert "state=DIRECT_SYNC_ROLLBACK_RESUMED" in rollback
-
-
-def test_direct_sync_update_plan_uses_current_user_relay_without_task(
-    tmp_path, monkeypatch
-):
-    application = tmp_path / "apps" / "current"
-    local_app_data = tmp_path / "LocalAppData"
-    direct_sync_root = local_app_data / "KMTech" / "DirectSync" / "container_audit"
-    monkeypatch.setattr(container_audit_module, "CANONICAL_INSTALL_ROOT", str(application))
-    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
-    monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
-
-    plan = container_audit_module._direct_sync_update_coordination_plan(str(application))
-
-    assert plan["enabled"] is True
-    assert plan["report_state"] == "CURRENT_USER_RELAY"
-    assert plan["launcher_path"] == str(direct_sync_root.resolve())
-    assert plan["relay_principal"] == "current_user"
-    assert plan["system_scheduled_task"] is False
-
-
-def test_direct_sync_update_coordinator_is_parseable_and_validates_owned_topology(tmp_path):
-    source = container_audit_module._direct_sync_update_coordinator_source()
-    assert "Get-OwnedRelayProcesses" in source
-    assert "Container_Audit_DirectSync_Relay.exe" in source
-    assert "--container-audit-direct-sync-relay" in source
-    assert "--container-audit-user-relay" in source
-    assert "process.CommandLine" in source
-    assert "isHostedRelay" in source
-    assert "container-audit-user-relay-update-state-v1" in source
-    assert "Get-ScheduledTask" not in source
-    assert "Register-ScheduledTask" not in source
-    assert "Start-ScheduledTask" not in source
-
-    powershell = shutil.which("powershell.exe")
-    if not powershell:
-        pytest.skip("Windows PowerShell is required for coordinator syntax validation")
-    completed = subprocess.run(
-        [
-            powershell,
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            "$source = [Console]::In.ReadToEnd(); [void][scriptblock]::Create($source)",
-        ],
-        input=source,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode == 0, completed.stderr
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("application_path", r"C:\Company%Apps\Container Audit"),
-        ("source_path", r"C:\Temp\update&run\Container_Audit"),
-        ("temp_path", "C:\\Temp\\update\nnext"),
-        ("restart_path", r"C:\KMTech\Apps\Container_Audit\current\Container_Audit^2.exe"),
-    ],
-)
-def test_updater_script_rejects_batch_metacharacter_paths(field, value):
-    kwargs = _updater_script_kwargs()
-    kwargs[field] = value
-
-    with pytest.raises(ValueError, match="배치 문자"):
-        container_audit_module._build_updater_script(**kwargs)
-
-
-def test_preserve_verifier_records_matching_pre_post_hashes_and_rejects_drift(tmp_path):
-    powershell = shutil.which("powershell.exe")
-    if not powershell:
-        pytest.skip("Windows PowerShell is required for updater verifier contract")
-
-    application = tmp_path / "application"
-    backup = tmp_path / "backup"
-    for base in (application, backup):
-        for relative in ("config", "logs", "ledger"):
-            (base / relative).mkdir(parents=True)
-            (base / relative / "state.bin").write_bytes(f"{relative}-state".encode())
-    preserve_json = tmp_path / "preserve.json"
-    preserve_json.write_text('["config", "logs", "ledger"]', encoding="utf-8")
-    evidence = tmp_path / "evidence.log"
-    evidence.write_text("state=BACKUP_COMPLETED\n", encoding="utf-8")
-    verifier = tmp_path / "verify.ps1"
-    verifier_source = container_audit_module._preserve_verifier_source()
-    assert "Get-FileHash" not in verifier_source
-    assert "[Security.Cryptography.SHA256]::Create()" in verifier_source
-    verifier.write_text(verifier_source, encoding="utf-8")
-    command = [
-        powershell,
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(verifier),
-        "-ApplicationPath",
-        str(application),
-        "-BackupPath",
-        str(backup),
-        "-PreserveJsonPath",
-        str(preserve_json),
-        "-EvidencePath",
-        str(evidence),
-    ]
-
-    matching = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert matching.returncode == 0, matching.stderr
-    evidence_text = evidence.read_text(encoding="utf-8-sig")
-    assert evidence_text.count("preserve_path=") == 3
-    assert evidence_text.count("preserve_before_sha256=") == 3
-    assert evidence_text.count("preserve_after_sha256=") == 3
-    assert evidence_text.count("preserve_match=true") == 3
-
-    (application / "ledger" / "state.bin").write_bytes(b"changed")
-    drifted = subprocess.run(command, capture_output=True, text=True, check=False)
-    assert drifted.returncode != 0
-    assert "preserve_match=false" in evidence.read_text(encoding="utf-8-sig")
-
-
-def test_process_stop_guard_rejects_pid_reuse_without_killing_process(tmp_path):
-    powershell = shutil.which("powershell.exe")
-    if not powershell:
-        pytest.skip("Windows PowerShell is required for updater process guard")
-
-    guard = tmp_path / "stop-update-process.ps1"
-    guard.write_text(container_audit_module._process_stop_guard_source(), encoding="utf-8")
-    base_command = [
-        powershell,
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        str(guard),
-        "-TargetProcessId",
-    ]
-    absent = subprocess.run(
-        [*base_command, "2147483647", "-ExpectedExecutable", r"C:\missing.exe"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert absent.returncode == 0, absent.stderr
-
-    mismatched = subprocess.run(
-        [*base_command, str(container_audit_module.os.getpid()), "-ExpectedExecutable", r"C:\different.exe"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert mismatched.returncode != 0
-
-
-def test_robocopy_mirror_exclusions_preserve_all_runtime_state(tmp_path):
-    robocopy = shutil.which("robocopy.exe")
-    if not robocopy:
-        pytest.skip("robocopy is required for updater mirror contract")
-
-    source = tmp_path / "payload"
-    application = tmp_path / "application"
-    for base in (source, application):
-        for relative in ("config", "logs", "ledger"):
-            (base / relative).mkdir(parents=True)
-    (source / "Container_Audit.exe").write_bytes(b"new-executable")
-    (source / "config" / "settings.json").write_text("new-settings", encoding="utf-8")
-    (source / "logs" / "runtime.log").write_text("new-log", encoding="utf-8")
-    (source / "ledger" / "ledger.db").write_bytes(b"new-ledger")
-    (application / "Container_Audit.exe").write_bytes(b"old-executable")
-    (application / "obsolete.dll").write_bytes(b"obsolete")
-    (application / "config" / "settings.json").write_text("operator-settings", encoding="utf-8")
-    (application / "logs" / "runtime.log").write_text("operator-log", encoding="utf-8")
-    (application / "ledger" / "ledger.db").write_bytes(b"operator-ledger")
-    assert len(b"new-executable") == len(b"old-executable")
-    fixed_ns = 1_700_000_000_000_000_000
-    os.utime(source / "Container_Audit.exe", ns=(fixed_ns, fixed_ns))
-    os.utime(application / "Container_Audit.exe", ns=(fixed_ns, fixed_ns))
-
-    exclusions = container_audit_module._preserve_exclusion_paths(
-        str(source),
-        str(application),
-        ["config", "logs", "ledger"],
-    )
-    completed = subprocess.run(
-        [
-            robocopy,
-            str(source),
-            str(application),
-            "/MIR",
-            "/IS",
-            "/IT",
-            "/IM",
-            "/COPY:DAT",
-            "/DCOPY:DAT",
-            "/R:1",
-            "/W:1",
-            "/XJ",
-            "/NFL",
-            "/NDL",
-            "/NJH",
-            "/NJS",
-            "/NP",
-            "/XD",
-            *exclusions,
-            "/XF",
-            *exclusions,
-        ],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert completed.returncode < 8, completed.stdout + completed.stderr
-    assert (application / "Container_Audit.exe").read_bytes() == b"new-executable"
-    assert not (application / "obsolete.dll").exists()
-    assert (application / "config" / "settings.json").read_text(encoding="utf-8") == "operator-settings"
-    assert (application / "logs" / "runtime.log").read_text(encoding="utf-8") == "operator-log"
-    assert (application / "ledger" / "ledger.db").read_bytes() == b"operator-ledger"
-
-
-def test_updater_batch_apply_failure_keeps_full_backup_rolls_back_and_blocks_restart(tmp_path):
-    cmd = shutil.which("cmd.exe")
-    powershell = shutil.which("powershell.exe")
-    robocopy = shutil.which("robocopy.exe")
-    if not all((cmd, powershell, robocopy)):
-        pytest.skip("Windows update command tools are required")
-
-    application = tmp_path / "apps" / "Container_Audit" / "current"
-    application.mkdir(parents=True)
-    for relative in ("config", "logs", "ledger"):
-        (application / relative).mkdir()
-        (application / relative / "state.bin").write_bytes(f"{relative}-state".encode())
-    (application / "Container_Audit.exe").write_bytes(b"AAAA")
-    (application / "runtime.dll").write_bytes(b"1111")
-
-    source = tmp_path / "payload"
-    source.mkdir()
-    (source / "Container_Audit.exe").write_bytes(b"BBBB")
-    (source / "runtime.dll").write_bytes(b"2222")
-    fixed_ns = 1_700_000_000_000_000_000
-    for path in (
-        application / "Container_Audit.exe",
-        application / "runtime.dll",
-        source / "Container_Audit.exe",
-        source / "runtime.dll",
-    ):
-        os.utime(path, ns=(fixed_ns, fixed_ns))
-
-    temp_path = tmp_path / "handoff"
-    temp_path.mkdir()
-    backup_root = application.parent / ".current.update-backups"
-    evidence_root = application.parent / ".current.update-evidence"
-    backup_root.mkdir()
-    evidence_root.mkdir()
-    backup_path = backup_root / "rollback-run"
-    backup_partial = backup_root / "rollback-run.partial"
-    evidence = evidence_root / "rollback-run.log"
-    evidence.write_text("state=PREPARED\n", encoding="utf-8")
-    preserve_json = temp_path / "preserve-paths.json"
-    preserve_json.write_text('["config", "logs", "ledger"]', encoding="utf-8")
-    verifier = temp_path / "verify-preserved-paths.ps1"
-    verifier.write_text("exit 55\n", encoding="utf-8")
-    process_guard = temp_path / "stop-update-process.ps1"
-    process_guard.write_text(container_audit_module._process_stop_guard_source(), encoding="utf-8")
-    updater = temp_path / "updater.bat"
-    updater.write_text(
-        container_audit_module._build_updater_script(
-            current_pid=2147483647,
-            source_path=str(source),
-            application_path=str(application),
-            backup_partial_path=str(backup_partial),
-            backup_path=str(backup_path),
-            temp_path=str(temp_path),
-            restart_path=str(application / "Container_Audit.exe"),
-            evidence_path=str(evidence),
-            preserve_paths=["config", "logs", "ledger"],
-            preserve_json_path=str(preserve_json),
-            preserve_verifier_path=str(verifier),
-            process_stop_guard_path=str(process_guard),
-            target_version="v2.0.36",
-        ),
-        encoding="utf-8",
-    )
-
-    completed = subprocess.run(
-        [cmd, "/d", "/c", str(updater)],
-        capture_output=True,
-        text=True,
-        timeout=45,
-        check=False,
-    )
-
-    assert completed.returncode == 31, completed.stdout + completed.stderr
-    evidence_text = evidence.read_text(encoding="utf-8-sig")
-    assert "state=PROCESS_STOP_CONFIRMED" in evidence_text
-    assert "state=BACKUP_COMPLETED" in evidence_text
-    assert "state=UPDATE_APPLY_FAILED" in evidence_text
-    assert "apply_exit=55" in evidence_text
-    assert "state=ROLLBACK_COMPLETED" in evidence_text
-    assert "restart=BLOCKED" in evidence_text
-    assert "restart=REQUESTED" not in evidence_text
-    assert backup_path.is_dir()
-    assert not backup_partial.exists()
-    assert (backup_path / "Container_Audit.exe").read_bytes() == b"AAAA"
-    assert (backup_path / "runtime.dll").read_bytes() == b"1111"
-    assert (application / "Container_Audit.exe").read_bytes() == b"AAAA"
-    assert (application / "runtime.dll").read_bytes() == b"1111"
-
-
-def test_download_and_apply_update_writes_updater_under_temp_root(tmp_path, monkeypatch):
-    update_root = tmp_path / "update-root"
-    application = tmp_path / "apps" / "Container_Audit" / "current"
-    application.mkdir(parents=True)
-    running_executable = application / "Container_Audit.exe"
-    running_executable.write_bytes(b"old-exe")
-    popen_paths = []
-    requests_seen = []
-    extract_kwargs = []
-    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(container_audit_module.sys, "executable", str(running_executable))
-
-    class FakeResponse:
-        def __init__(self, *, content=b"zip-bytes", text=""):
-            self.headers = {}
-            self._content = text.encode("utf-8") if text else content
-            self.text = text
-
-        def raise_for_status(self):
-            return None
-
-        def iter_content(self, chunk_size):
-            return iter([self._content])
-
-    def fake_mkdtemp(*args, **kwargs):
-        update_root.mkdir()
-        return str(update_root)
-
-    def fake_extract(zip_path, destination, **kwargs):
-        extracted = tmp_path / "update-root" / "extracted" / "Container_Audit"
-        extracted.mkdir(parents=True)
-        (extracted / "Container_Audit.exe").write_text("exe", encoding="utf-8")
-        return extracted.parent
-
-    monkeypatch.setattr(container_audit_module.tempfile, "mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda url, **kwargs: requests_seen.append((url, kwargs)) or (
-            FakeResponse(text=f"{hashlib.sha256(b'zip-bytes').hexdigest()}  update.zip")
-            if url.endswith(".sha256")
-            else FakeResponse()
-        ),
-    )
-    monkeypatch.setattr(container_audit_module, "safe_extract_update_zip", fake_extract)
-    monkeypatch.setattr(container_audit_module.subprocess, "Popen", lambda path, **kwargs: popen_paths.append(path))
-
-    with pytest.raises(SystemExit):
-        container_audit_module.download_and_apply_update(
-            "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
-            checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
-            install_policy=_automatic_install_policy(),
-            target_version="v2.0.10",
-        )
-
-    updater_path = update_root / "updater.bat"
-    assert [call[0] for call in requests_seen] == [
-        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
-        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
-    ]
-    assert popen_paths == [[str(updater_path)]]
-    assert updater_path.is_file()
-    assert update_root.exists()
-    backup_root = application.parent / ".current.update-backups"
-    evidence_root = application.parent / ".current.update-evidence"
-    evidence_files = list(evidence_root.glob("*.log"))
-    assert backup_root.is_dir()
-    assert len(evidence_files) == 1
-    evidence = evidence_files[0].read_text(encoding="utf-8")
-    assert "schema=container-audit-update-evidence-v1" in evidence
-    assert "state=PREPARED" in evidence
-    assert "preserve_paths=config;logs;ledger" in evidence
-
-
-def test_download_and_apply_update_accepts_manifest_sha256_without_checksum_url(tmp_path, monkeypatch):
-    update_root = tmp_path / "update-root"
-    application = tmp_path / "apps" / "Container_Audit" / "current"
-    application.mkdir(parents=True)
-    running_executable = application / "Container_Audit.exe"
-    running_executable.write_bytes(b"old-exe")
-    popen_paths = []
-    requests_seen = []
-    extract_kwargs = []
-    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(container_audit_module.sys, "executable", str(running_executable))
-
-    class FakeResponse:
-        headers = {}
-
-        def raise_for_status(self):
-            return None
-
-        def iter_content(self, chunk_size):
-            return iter([b"zip-bytes"])
-
-    def fake_mkdtemp(*args, **kwargs):
-        update_root.mkdir()
-        return str(update_root)
-
-    def fake_extract(zip_path, destination, **kwargs):
-        extract_kwargs.append(kwargs)
-        extracted = update_root / "extracted" / "Container_Audit"
-        extracted.mkdir(parents=True)
-        (extracted / "Container_Audit.exe").write_text("exe", encoding="utf-8")
-        return extracted.parent
-
-    monkeypatch.setattr(container_audit_module.tempfile, "mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda url, **kwargs: requests_seen.append((url, kwargs)) or FakeResponse(),
-    )
-    monkeypatch.setattr(container_audit_module, "safe_extract_update_zip", fake_extract)
-    monkeypatch.setattr(container_audit_module.subprocess, "Popen", lambda path, **kwargs: popen_paths.append(path))
-
-    with pytest.raises(SystemExit):
-        container_audit_module.download_and_apply_update(
-            "https://updates.example/Container_Audit-v2.0.10.zip",
-            expected_sha256=hashlib.sha256(b"zip-bytes").hexdigest(),
-            archive_policy={
-                "top_level": "Container_Audit",
-                "required_files": ["Container_Audit/Container_Audit.exe"],
-            },
-            install_policy=_automatic_install_policy(),
-            target_version="v2.0.10",
-        )
-
-    assert [call[0] for call in requests_seen] == [
-        "https://updates.example/Container_Audit-v2.0.10.zip",
-    ]
-    assert extract_kwargs == [
-        {
-            "archive_policy": {
-                "top_level": "Container_Audit",
-                "required_files": ["Container_Audit/Container_Audit.exe"],
-            }
-        }
-    ]
-    assert popen_paths == [[str(update_root / "updater.bat")]]
-
-
 def test_update_checksum_response_rejects_oversized_stream():
     response = FakeDownloadResponse([b"123", b"45"], headers={})
 
     with pytest.raises(ValueError, match="체크섬 크기"):
         container_audit_module._read_update_checksum_response(response, max_bytes=4)
-
-
-def test_download_and_apply_update_cleans_temp_root_when_extract_fails(tmp_path, monkeypatch):
-    update_root = tmp_path / "update-root"
-    requests_seen = []
-    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
-
-    class FakeResponse:
-        def __init__(self, *, content=b"zip-bytes", text=""):
-            self.headers = {}
-            self._content = text.encode("utf-8") if text else content
-
-        def raise_for_status(self):
-            return None
-
-        def iter_content(self, chunk_size):
-            return iter([self._content])
-
-    def fake_mkdtemp(*args, **kwargs):
-        update_root.mkdir()
-        return str(update_root)
-
-    monkeypatch.setattr(container_audit_module.tempfile, "mkdtemp", fake_mkdtemp)
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda url, **kwargs: requests_seen.append((url, kwargs)) or (
-            FakeResponse(text=f"{hashlib.sha256(b'zip-bytes').hexdigest()}  update.zip")
-            if url.endswith(".sha256")
-            else FakeResponse()
-        ),
-    )
-    monkeypatch.setattr(
-        container_audit_module,
-        "safe_extract_update_zip",
-        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("bad archive")),
-    )
-    monkeypatch.setattr(
-        container_audit_module.subprocess,
-        "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("updater should not launch after extract failure")),
-    )
-    errors = []
-
-    class FakeTk:
-        def withdraw(self):
-            return None
-
-        def destroy(self):
-            return None
-
-    monkeypatch.setattr(container_audit_module.tk, "Tk", FakeTk)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
-
-    container_audit_module.download_and_apply_update(
-        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
-        checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
-        install_policy=_automatic_install_policy(),
-        target_version="v2.0.10",
-    )
-
-    assert requests_seen[1][1]["stream"] is True
-    assert errors
-    assert not update_root.exists()
-
-
-def test_download_and_apply_update_rejects_source_mode_before_network(monkeypatch, capsys):
-    monkeypatch.setattr(container_audit_module.sys, "frozen", False, raising=False)
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download should not start in source mode")),
-    )
-    monkeypatch.setattr(
-        container_audit_module,
-        "safe_extract_update_zip",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("extract should not start in source mode")),
-    )
-    monkeypatch.setattr(
-        container_audit_module.subprocess,
-        "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("updater should not launch in source mode")),
-    )
-    errors = []
-
-    class FakeTk:
-        def withdraw(self):
-            return None
-
-        def destroy(self):
-            return None
-
-    monkeypatch.setattr(container_audit_module.tk, "Tk", FakeTk)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
-
-    container_audit_module.download_and_apply_update(
-        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
-        checksum_url="https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip.sha256",
-        install_policy=_automatic_install_policy(),
-        target_version="v2.0.10",
-    )
-
-    assert errors
-    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
-    assert "소스 실행 모드" not in errors[0][1]
-    assert "소스 실행 모드" in capsys.readouterr().out
-
-
-def test_download_and_apply_update_requires_checksum_before_network_or_extract(monkeypatch, capsys):
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("download should not start without checksum")),
-    )
-    monkeypatch.setattr(
-        container_audit_module,
-        "safe_extract_update_zip",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("extract should not start without checksum")),
-    )
-    monkeypatch.setattr(
-        container_audit_module.subprocess,
-        "Popen",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("updater should not launch without checksum")),
-    )
-    errors = []
-
-    class FakeTk:
-        def withdraw(self):
-            return None
-
-        def destroy(self):
-            return None
-
-    monkeypatch.setattr(container_audit_module.tk, "Tk", FakeTk)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
-
-    container_audit_module.download_and_apply_update(
-        "https://github.com/KMTechn/Container_Audit/releases/download/v2.0.10/update.zip",
-        checksum_url=None,
-    )
-
-    assert errors
-    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
-    assert "SHA256" not in errors[0][1]
-    assert "SHA256" in capsys.readouterr().out
-
-
-def test_download_and_apply_update_rejects_install_policy_before_network(monkeypatch, capsys):
-    monkeypatch.setattr(container_audit_module.sys, "frozen", True, raising=False)
-    monkeypatch.setattr(
-        container_audit_module.requests,
-        "get",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("invalid install policy must fail before network")
-        ),
-    )
-    errors = []
-
-    class FakeTk:
-        def withdraw(self):
-            return None
-
-        def destroy(self):
-            return None
-
-    monkeypatch.setattr(container_audit_module.tk, "Tk", FakeTk)
-    monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showerror",
-        lambda *args, **kwargs: errors.append(args),
-    )
-
-    container_audit_module.download_and_apply_update(
-        "https://updates.example/Container_Audit-v2.0.10.zip",
-        expected_sha256="a" * 64,
-        install_policy={
-            "strategy": "robocopy_backup_then_mirror",
-            "preserve_paths": ["config", "logs"],
-            "restart_executable": "Container_Audit.exe",
-        },
-        target_version="v2.0.10",
-    )
-
-    assert errors
-    assert errors[0][1] == "업데이트를 적용하지 못했습니다. 프로그램을 다시 시작한 뒤 계속되면 관리자에게 문의하세요."
-    assert "preserve_paths" not in errors[0][1]
-    assert "preserve_paths" in capsys.readouterr().out
 
 
 def test_check_for_updates_defaults_off_before_network(monkeypatch):
@@ -1971,16 +1355,15 @@ def test_legacy_test1_settings_bootstrap_private_update_prompt_on_tk_thread(tmp_
     prompt_parents = []
     tk_thread_ids = []
 
-    def fake_askyesno(*args, **kwargs):
+    def fake_showinfo(*args, **kwargs):
         prompt_thread_ids.append(threading.get_ident())
         prompt_parents.append(kwargs.get("parent"))
-        return False
 
     def fake_tk():
         tk_thread_ids.append(threading.get_ident())
         raise AssertionError("the supplied Tk parent must be reused")
 
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", fake_askyesno)
+    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", fake_showinfo)
     monkeypatch.setattr(container_audit_module.tk, "Tk", fake_tk)
 
     container_audit_module.schedule_update_check(parent)

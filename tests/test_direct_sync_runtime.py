@@ -288,6 +288,21 @@ def test_load_credentials_supports_env_secret_ref(monkeypatch, tmp_path):
     assert "runtime-secret-from-env" not in path.read_text(encoding="utf-8")
 
 
+def test_secret_data_default_uses_current_user_scope_not_credential_sibling(
+    monkeypatch,
+    tmp_path,
+):
+    credential = tmp_path / "read-only-code" / "credential.json"
+    user_profile = tmp_path / "operator"
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(user_profile))
+
+    selected = direct_sync_runtime._default_secret_data_dir(credential)
+
+    assert selected == user_profile / "AppData" / "Local" / "CompanyProducerConnector"
+    assert credential.parent not in selected.parents
+
+
 def test_load_credentials_blocks_raw_secret_in_production_profile(monkeypatch, tmp_path):
     path = write_credential_file(tmp_path)
     monkeypatch.setenv("APP_ENV", "production")

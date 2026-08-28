@@ -166,6 +166,132 @@ def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
     assert first["system_scheduled_task_required"] is False
 
 
+def test_integrity_required_first_run_and_rerun_leave_code_root_exactly_unchanged(tmp_path):
+    app_root = tmp_path / "hardened-app"
+    (app_root / "config").mkdir(parents=True)
+    (app_root / "Container_Audit.exe").write_bytes(b"main")
+    (app_root / "config" / "container_audit_settings.json").write_text(
+        '{"scale_factor": 1.0}\n',
+        encoding="utf-8",
+    )
+    entries = []
+    for path in sorted(
+        (candidate for candidate in app_root.rglob("*") if candidate.is_file()),
+        key=lambda candidate: candidate.relative_to(app_root).as_posix(),
+    ):
+        payload = path.read_bytes()
+        entries.append(
+            {
+                "path": path.relative_to(app_root).as_posix(),
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    aggregate = hashlib.sha256(
+        "".join(
+            f"{item['sha256']} {item['size']} {item['path']}\n"
+            for item in entries
+        ).encode("utf-8")
+    ).hexdigest()
+    _write_json(
+        app_root / "bootstrap-integrity.json",
+        {
+            "schema_version": "container-audit-bootstrap-integrity-v1",
+            "status": "PASS",
+            "code_root": str(app_root.resolve()),
+            "file_count": len(entries),
+            "aggregate_sha256": aggregate,
+            "files": entries,
+        },
+    )
+    before = {
+        path.relative_to(app_root).as_posix(): path.read_bytes()
+        for path in app_root.rglob("*")
+        if path.is_file()
+    }
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "user-state")}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    registration_calls = []
+
+    def register(selected_paths):
+        registration_calls.append(selected_paths)
+        _ready_state(selected_paths)
+        return 0
+
+    kwargs = {
+        "environ": environment,
+        "require_bootstrap_integrity": True,
+        "registration_runner": register,
+        "profile_loader": _profile_loader,
+        "credential_loader": _credential_loader,
+        "ledger_factory": _ledger_factory,
+        "autostart_installer": _autostart,
+        "relay_launcher": _relay_start,
+    }
+
+    first = onboard_current_user(app_root, **kwargs)
+    after_first = {
+        path.relative_to(app_root).as_posix(): path.read_bytes()
+        for path in app_root.rglob("*")
+        if path.is_file()
+    }
+    second = onboard_current_user(app_root, **kwargs)
+    after_second = {
+        path.relative_to(app_root).as_posix(): path.read_bytes()
+        for path in app_root.rglob("*")
+        if path.is_file()
+    }
+
+    assert first["action"] == "CREATED"
+    assert second["action"] == "REUSED"
+    assert len(registration_calls) == 1
+    assert before == after_first == after_second
+    assert verify_bootstrap_integrity(paths, required=True)["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "override_name,relative_value",
+    [
+        ("CONTAINER_AUDIT_DATA_ROOT", "state"),
+        ("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", "config/runtime-profile.json"),
+    ],
+)
+def test_onboarding_rejects_code_root_state_overrides_before_writing(
+    tmp_path,
+    override_name,
+    relative_value,
+):
+    app_root = tmp_path / "hardened-app"
+    app_root.mkdir()
+    sentinel = app_root / "Container_Audit.exe"
+    sentinel.write_bytes(b"immutable")
+    environment = {
+        "CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "user-state"),
+        override_name: str(app_root / relative_value),
+        "TEMP": str(tmp_path / "safe-report-root"),
+    }
+
+    with pytest.raises(CurrentUserOnboardingError, match="read-only application code root"):
+        resolve_current_user_onboarding_paths(app_root, environ=environment)
+
+    assert sentinel.read_bytes() == b"immutable"
+    assert list(app_root.rglob("*")) == [sentinel]
+
+
+def test_explicit_onboarding_root_is_self_contained_without_ambient_home(tmp_path):
+    app_root = tmp_path / "app"
+    state_root = tmp_path / "state"
+    paths = resolve_current_user_onboarding_paths(
+        app_root,
+        environ={"CONTAINER_AUDIT_DATA_ROOT": str(state_root)},
+    )
+
+    assert paths.data_root == state_root.resolve()
+    assert paths.direct_sync_root == state_root.resolve() / "direct_sync"
+    assert paths.logistics_profile_path == state_root.resolve() / "logistics-profile" / "runtime-profile.json"
+    assert paths.bootstrap_tls_ca_bundle_path == state_root.resolve() / "bootstrap" / "ca-bundle.pem"
+
+
 def test_registration_runner_forwards_bootstrap_tls_ca_bundle(tmp_path, monkeypatch):
     app_root = tmp_path / "app"
     app_root.mkdir()

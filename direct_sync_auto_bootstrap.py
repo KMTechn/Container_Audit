@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from typing import Any
 import uuid
 
+from storage_policy import path_is_within
+
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
 CANONICAL_INSTALL_ROOT = r"C:\KMTech\Apps\Container_Audit\current"
@@ -64,6 +66,22 @@ def _runtime_paths(direct_sync_root: str | os.PathLike[str]) -> dict[str, str]:
     }
 
 
+def assert_runtime_state_outside_code_root(
+    *,
+    app_root: str | os.PathLike[str],
+    direct_sync_root: str | os.PathLike[str],
+    scan_source_dir: str | os.PathLike[str],
+) -> None:
+    code_root = Path(app_root).expanduser().resolve(strict=False)
+    for value in (direct_sync_root, scan_source_dir):
+        candidate = Path(value).expanduser()
+        if not candidate.is_absolute():
+            raise ValueError("DirectSync runtime state paths must be absolute")
+        resolved = candidate.resolve(strict=False)
+        if path_is_within(resolved, code_root) or path_is_within(code_root, resolved):
+            raise ValueError("DirectSync runtime state must be disjoint from the code root")
+
+
 def build_session_direct_sync_command(
     *,
     app_root: str | os.PathLike[str],
@@ -73,6 +91,11 @@ def build_session_direct_sync_command(
     min_source_file_age_seconds: int = 0,
 ) -> list[str]:
     selected_app_root = Path(app_root).expanduser().resolve()
+    assert_runtime_state_outside_code_root(
+        app_root=selected_app_root,
+        direct_sync_root=direct_sync_root,
+        scan_source_dir=scan_source_dir,
+    )
     application_exe = _existing_file(selected_app_root / APPLICATION_EXE_NAME)
     runner_script = selected_app_root / "tools" / "direct_sync_relay_runner.py"
     if application_exe is not None:

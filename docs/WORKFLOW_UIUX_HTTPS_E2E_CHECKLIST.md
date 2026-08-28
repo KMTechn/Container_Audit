@@ -27,7 +27,7 @@
 | SCAN-004 | Product barcode rejected for format, mismatch, duplicate, or full tray | `decide_product_scan`, `show_fullscreen_warning` | `SCAN_FAIL_*` detail includes expected/scanned data; warning is visible and focus returns. | headless plus manual UI |
 | BTN-UNDO | Last scan is undone | `undo_last_scan` | State rollback preserves old scan if save or audit log fails. | headless contract |
 | BTN-RESET | Current work is reset | `reset_current_work` | State deletion and `TRAY_RESET` log are ordered so failures preserve current work. | headless contract |
-| BTN-PARK | Current tray is parked | `park_current_tray` | Parked state is saved under `config/parked_trays`; current state delete/log rollback is safe. | headless contract |
+| BTN-PARK | Current tray is parked | `park_current_tray` | Parked state is saved under `%LOCALAPPDATA%/KMTech/ContainerAudit/parked_trays`; current state delete/log rollback is safe. | headless contract |
 | BTN-RESTORE | Parked tray is restored by double-click | `on_parked_tray_select`, `restore_parked_tray` | Path stays inside parked directory; invalid/foreign/completed trays are rejected or quarantined. | headless contract plus manual UI |
 | BTN-SUBMIT | Partial tray is submitted manually | `submit_current_tray`, `_complete_current_tray_as_partial`, `complete_tray` | `TRAY_COMPLETE` includes `is_partial_submission=true` and barcode list. | headless contract |
 | AUTO-COMPLETE | Tray reaches target quantity | `complete_tray`, `build_tray_complete_detail` | `TRAY_COMPLETE` is synchronously durable before UI reset and state deletion. | headless contract |

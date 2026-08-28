@@ -1,5 +1,8 @@
 import json
 from pathlib import Path
+
+import pytest
+
 import direct_sync_auto_bootstrap as bootstrap
 
 
@@ -57,6 +60,54 @@ def test_missing_runner_is_fail_closed(tmp_path):
 
     assert result["status"] == "FAIL"
     assert result["reason"] == "direct-sync relay runner is missing"
+
+
+@pytest.mark.parametrize("state_kind", ["direct", "events"])
+def test_session_command_rejects_code_root_state_before_any_write(
+    tmp_path,
+    state_kind,
+):
+    app_root = _source_app(tmp_path)
+    direct_root = (
+        app_root / "runtime_data" / "direct_sync"
+        if state_kind == "direct"
+        else tmp_path / "state"
+    )
+    events = (
+        app_root / "runtime_data" / "events"
+        if state_kind == "events"
+        else tmp_path / "events"
+    )
+    before = {
+        path.relative_to(app_root).as_posix(): path.read_bytes()
+        for path in app_root.rglob("*")
+        if path.is_file()
+    }
+
+    with pytest.raises(ValueError, match="disjoint from the code root"):
+        bootstrap.build_session_direct_sync_command(
+            app_root=app_root,
+            direct_sync_root=direct_root,
+            scan_source_dir=events,
+        )
+
+    assert {
+        path.relative_to(app_root).as_posix(): path.read_bytes()
+        for path in app_root.rglob("*")
+        if path.is_file()
+    } == before
+    assert not (app_root / "runtime_data").exists()
+
+
+def test_session_command_rejects_relative_runtime_state_paths(tmp_path):
+    app_root = _source_app(tmp_path)
+
+    with pytest.raises(ValueError, match="must be absolute"):
+        bootstrap.build_session_direct_sync_command(
+            app_root=app_root,
+            direct_sync_root="relative-direct-sync",
+            scan_source_dir=tmp_path / "events",
+        )
 
 
 def test_lost_process_exit_code_is_unknown(monkeypatch):

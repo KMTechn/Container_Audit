@@ -45,7 +45,7 @@ from direct_sync_push import (
 )
 from direct_sync_operator import read_operator_pause
 from producer_runtime_client import ensure_runtime_authority
-from storage_policy import is_legacy_syncthing_path
+from storage_policy import current_user_data_home, is_legacy_syncthing_path
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
@@ -294,10 +294,10 @@ def _safe_secret_ref_name(value: str) -> str:
 
 
 def _default_secret_data_dir(credential_path: Path) -> Path:
-    local_app_data = os.getenv("LOCALAPPDATA")
-    if local_app_data:
-        return Path(local_app_data) / "CompanyProducerConnector"
-    return credential_path.parent / "CompanyProducerConnector"
+    try:
+        return current_user_data_home() / "CompanyProducerConnector"
+    except ValueError as exc:
+        raise DirectSyncPushError("current-user secret data root is unavailable") from exc
 
 
 def _dpapi_unprotect_current_user(protected: bytes) -> bytes:

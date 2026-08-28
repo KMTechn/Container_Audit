@@ -136,7 +136,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Unins
 ### 🔄 자동 업데이트 시스템
 - **서명된 사내 feed**: 배포본은 Ed25519 서명·SHA-256·PC rollout을 검증한 뒤 새 버전을 안내
 - **구 설치본 bootstrap**: 저장 설정에 updater 항목이 없는 frozen 설치본도 내장 공개키로 사내 feed를 확인
-- **사용자 확인**: 새 버전 발견 시 확인창에서 동의한 경우에만 백업·검증·재시작 절차 수행
+- **읽기 전용 코드 루트**: 일반 사용자 런타임은 다운로드·mirror·rollback으로 설치 코드를 수정하지 않음
+- **관리자 배포**: 새 버전 발견 시 안내만 표시하며 실제 코드 교체와 integrity inventory 생성은 새 패키지의 `INSTALL_THIS_PC.ps1`로 수행
 - **명시적 중지 보존**: 환경변수나 설치 설정이 `provider=off`이면 자동 확인을 하지 않음
 
 ## 📁 파일 구조 및 데이터 관리
@@ -147,11 +148,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Unins
 ├── events/                                  # 앱이 직접 쓰는 로컬 이벤트/상태 저장소
 │   ├── 이적작업이벤트로그_[작업자]_[날짜].csv  # 이적 작업 로그
 │   └── _current_tray_state_[PC].json        # 비정상 종료 복구 상태
-└── direct_sync/                             # HTTPS 릴레이 큐/스풀/상태 저장소
-    ├── queue/
-    ├── spool/
-    ├── status/
-    └── logs/
+├── config/                                  # 사용자 UI 설정/작업자 목록/최고 기록
+└── parked_trays/                            # 보류 트레이 상태
+
+%LOCALAPPDATA%\KMTech\DirectSync\container_audit/
+├── queue/                                   # HTTPS 릴레이 durable queue
+├── spool/
+├── status/
+└── logs/
 ```
 
 ### 설정 및 자산 파일
@@ -162,7 +166,7 @@ assets/
 └── logo.ico         # 애플리케이션 아이콘
 
 config/
-└── container_audit_settings.json  # UI 설정 (스케일, 컬럼 너비)
+└── container_audit_settings.json  # 읽기 전용 UI 기본값 템플릿
 ```
 
 ## 🔍 API 및 이벤트 시스템
@@ -398,7 +402,9 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 * **데이터 중요성**: 이 로그 파일들은 모든 작업의 증거 자료이므로 **절대로 임의로 수정하거나 삭제하지 마세요.**
 
-* **설정 파일**: 프로그램 창 크기, 스캔 딜레이 등의 설정은 프로그램 폴더 내 `config\container_audit_settings.json` 파일에 저장됩니다.
+* **설정 파일**: 사용자 UI 설정은 `%LOCALAPPDATA%\KMTech\ContainerAudit\config\container_audit_settings.json`에 저장됩니다. 프로그램 폴더의 같은 이름 파일은 읽기 전용 기본값 템플릿입니다.
+
+* **코드/상태 분리**: 설치 코드 루트는 관리자 배포 전용(RX)이며 로그, 설정, 작업자 목록, 최고 기록, 보류 트레이, 릴레이 상태를 쓰지 않습니다. `CONTAINER_AUDIT_DATA_ROOT`는 코드 루트와 완전히 분리된 절대 경로여야 합니다.
 
 ## 🔒 보안 및 규정 준수
 

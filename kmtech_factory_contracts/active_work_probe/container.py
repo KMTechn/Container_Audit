@@ -421,7 +421,7 @@ class ContainerAuditAdapter:
 
     @property
     def parked_root(self) -> Path:
-        return self.install_root / "config" / "parked_trays"
+        return self.data_root / "parked_trays"
 
     @property
     def spool_root(self) -> Path:

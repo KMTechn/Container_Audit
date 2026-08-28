@@ -21,7 +21,13 @@ from logistics_runtime_profile import (
     load_logistics_runtime_profile,
     unprotect_current_user_secret,
 )
-from storage_policy import DATA_ROOT_ENV, is_legacy_syncthing_path
+from storage_policy import (
+    DATA_ROOT_ENV,
+    build_container_audit_storage_paths,
+    current_user_data_home,
+    is_legacy_syncthing_path,
+    path_is_within,
+)
 from user_relay import (
     install_user_relay_autostart,
     remove_user_relay_autostart,
@@ -89,23 +95,31 @@ def resolve_current_user_onboarding_paths(
     values = os.environ if environ is None else environ
     selected_app_root = _resolved(app_root)
     explicit_data_root = str(values.get(DATA_ROOT_ENV) or "").strip()
-    local_app_data = str(values.get("LOCALAPPDATA") or "").strip()
+    try:
+        storage_paths = build_container_audit_storage_paths(
+            application_path=str(selected_app_root),
+            environ=values,
+        )
+        user_root = (
+            storage_paths.data_root
+            if explicit_data_root
+            else current_user_data_home(values)
+        )
+    except ValueError as exc:
+        safe_report_root = str(values.get("TEMP") or values.get("TMP") or "").strip()
+        report_root = _resolved(safe_report_root) if safe_report_root else _resolved(Path.home() / ".kmtech")
+        raise CurrentUserOnboardingError(
+            str(exc),
+            report_path=report_root / "container-audit-current-user-onboarding-rejected.json",
+            status="FAILED",
+        ) from exc
+    data_root = storage_paths.data_root
+    direct_sync_root = storage_paths.direct_sync_root
     if explicit_data_root:
-        data_root = _resolved(explicit_data_root)
-        direct_sync_root = data_root / "direct_sync"
         default_logistics_profile = (
             data_root / "logistics-profile" / "runtime-profile.json"
         )
     else:
-        if not local_app_data:
-            raise CurrentUserOnboardingError(
-                "LOCALAPPDATA is unavailable for current-user onboarding",
-                report_path=selected_app_root / "current-user-onboarding-unavailable.json",
-                status="UNKNOWN",
-            )
-        user_root = _resolved(local_app_data)
-        data_root = user_root / "KMTech" / "ContainerAudit"
-        direct_sync_root = user_root / "KMTech" / "DirectSync" / "container_audit"
         default_logistics_profile = (
             user_root
             / "KMTech"
@@ -115,18 +129,48 @@ def resolve_current_user_onboarding_paths(
             / "runtime-profile.json"
         )
     explicit_profile = str(values.get(LOGISTICS_PROFILE_PATH_ENV) or "").strip()
-    logistics_profile = (
-        _resolved(explicit_profile) if explicit_profile else default_logistics_profile
-    )
+    if explicit_profile:
+        profile_candidate = Path(explicit_profile).expanduser()
+        if not profile_candidate.is_absolute():
+            raise CurrentUserOnboardingError(
+                f"{LOGISTICS_PROFILE_PATH_ENV} must be an absolute current-user path",
+                report_path=user_root / "KMTech" / "ContainerAudit" / "current-user-onboarding-rejected.json",
+                status="FAILED",
+            )
+        logistics_profile = _resolved(profile_candidate)
+    else:
+        logistics_profile = default_logistics_profile
     bootstrap_tls_ca_bundle = (
-        _resolved(local_app_data)
+        data_root / "bootstrap" / "ca-bundle.pem"
+        if explicit_data_root
+        else user_root
         / "KMTech"
         / "Bootstrap"
         / "Container_Audit"
         / "ca-bundle.pem"
-        if local_app_data
-        else data_root.parent / "Bootstrap" / "Container_Audit" / "ca-bundle.pem"
     )
+    code_root_state_paths = (
+        data_root,
+        direct_sync_root,
+        logistics_profile,
+        bootstrap_tls_ca_bundle,
+    )
+    if any(
+        path_is_within(candidate, selected_app_root)
+        or path_is_within(selected_app_root, candidate)
+        for candidate in code_root_state_paths
+    ):
+        safe_report_root = str(values.get("TEMP") or values.get("TMP") or "").strip()
+        report_path = (
+            _resolved(safe_report_root)
+            if safe_report_root
+            else _resolved(Path.home() / ".kmtech")
+        ) / "container-audit-current-user-onboarding-rejected.json"
+        raise CurrentUserOnboardingError(
+            "current-user onboarding state must be outside the read-only application code root",
+            report_path=report_path,
+            status="FAILED",
+        )
     for candidate in (data_root, direct_sync_root, logistics_profile):
         if is_legacy_syncthing_path(candidate):
             raise CurrentUserOnboardingError(

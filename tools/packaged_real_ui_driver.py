@@ -888,7 +888,7 @@ class Driver:
             self.report["artifact_identity"]["installed_executable"]["path"]
         )
         if self.args.preseed_worker:
-            registry_path = executable_path.parent / "config" / "worker_registry.json"
+            registry_path = self.data_root / "config" / "worker_registry.json"
             registry_path.parent.mkdir(parents=True, exist_ok=True)
             registry_path.write_text(
                 json.dumps(

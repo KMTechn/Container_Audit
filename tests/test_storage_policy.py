@@ -25,6 +25,11 @@ def test_default_storage_paths_keep_business_and_direct_sync_in_current_user_sco
 
     assert paths.data_root == (local_app_data / "KMTech" / "ContainerAudit").resolve()
     assert paths.events_dir == paths.data_root / "events"
+    assert paths.config_dir == paths.data_root / "config"
+    assert paths.settings_path == paths.config_dir / "container_audit_settings.json"
+    assert paths.worker_registry_path == paths.config_dir / "worker_registry.json"
+    assert paths.best_time_records_path == paths.config_dir / "best_time_records.json"
+    assert paths.parked_trays_dir == paths.data_root / "parked_trays"
     assert paths.direct_sync_root == (local_app_data / "KMTech" / "DirectSync" / "container_audit").resolve()
     assert paths.queue_dir == paths.direct_sync_root / "queue"
     assert (
@@ -72,6 +77,65 @@ def test_container_audit_setup_uses_local_events_folder(monkeypatch, tmp_path):
     assert expected_events.is_dir()
     assert Path(app.config_folder).is_dir()
     assert Path(app.parked_trays_dir).is_dir()
+    assert Path(app.config_folder) == expected_root / "config"
+    assert Path(app.parked_trays_dir) == expected_root / "parked_trays"
+    assert not (application_path / "config").exists()
+
+
+def test_missing_local_app_data_uses_user_profile_not_programdata_or_code(monkeypatch, tmp_path):
+    user_profile = tmp_path / "Users" / "operator"
+    program_data = tmp_path / "ProgramData"
+    app_root = tmp_path / "app"
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("USERPROFILE", str(user_profile))
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+
+    paths = build_container_audit_storage_paths(application_path=str(app_root))
+
+    expected_home = (user_profile / "AppData" / "Local").resolve()
+    assert paths.data_root == expected_home / "KMTech" / "ContainerAudit"
+    assert paths.direct_sync_root == expected_home / "KMTech" / "DirectSync" / "container_audit"
+    assert program_data.resolve() not in paths.data_root.parents
+    assert app_root.resolve() not in paths.data_root.parents
+
+
+@pytest.mark.parametrize("relative", ["runtime-state", ".\\runtime-state"])
+def test_explicit_state_root_must_be_absolute(monkeypatch, tmp_path, relative):
+    monkeypatch.setenv(DATA_ROOT_ENV, relative)
+
+    with pytest.raises(ValueError, match="absolute"):
+        build_container_audit_storage_paths(application_path=str(tmp_path / "app"))
+
+
+@pytest.mark.parametrize("placement", ["same", "child", "ancestor"])
+def test_runtime_state_and_code_root_must_be_disjoint(monkeypatch, tmp_path, placement):
+    app_root = tmp_path / "apps" / "Container_Audit" / "current"
+    if placement == "same":
+        state_root = app_root
+    elif placement == "child":
+        state_root = app_root / "runtime-state"
+    else:
+        state_root = app_root.parent
+    monkeypatch.setenv(DATA_ROOT_ENV, str(state_root))
+
+    with pytest.raises(ValueError, match="read-only application code root"):
+        build_container_audit_storage_paths(application_path=str(app_root))
+
+
+def test_explicit_state_root_keeps_all_derived_writes_in_that_user_scope(monkeypatch, tmp_path):
+    app_root = tmp_path / "app"
+    state_root = tmp_path / "operator-state"
+    monkeypatch.setenv(DATA_ROOT_ENV, str(state_root))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "ambient-local"))
+
+    paths = build_container_audit_storage_paths(application_path=str(app_root))
+
+    assert paths.data_root == state_root.resolve()
+    assert paths.events_dir == state_root.resolve() / "events"
+    assert paths.config_dir == state_root.resolve() / "config"
+    assert paths.parked_trays_dir == state_root.resolve() / "parked_trays"
+    assert paths.direct_sync_root == state_root.resolve() / "direct_sync"
 
 
 def test_today_history_loads_offline_from_local_events_folder(monkeypatch, tmp_path):

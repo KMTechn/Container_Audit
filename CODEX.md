@@ -15,8 +15,8 @@
 - 작업 중인 트레이를 보류/복구하고, 비정상 종료 후 현재 트레이 상태를 복구한다.
 - seal 전 중앙 PHS2 트레이에서 개별 제품 1~2개를 two-bundle CAS로 원자 교체하며, 원래 PHS2 identity는 유지한다.
 - `pygame` 기반 성공/오류 사운드와 Tkinter GUI를 제공한다.
-- GitHub Release 기반 자동 업데이트 코드는 `main()`에서 호출된다. 다만 frozen/release 모드가 아니면 업데이트 확인은 즉시 반환한다.
-- 기본 데이터 루트는 `%LOCALAPPDATA%\KMTech\ContainerAudit`이며 `events`는 앱 로컬 저장소, `direct_sync`는 HTTPS 릴레이 큐/스풀/상태 저장소다.
+- 배포본은 서명된 업데이트 후보를 확인해 관리자 배포가 필요하다고 안내한다. 일반 사용자 런타임은 코드 루트를 수정하지 않으며 실제 교체는 `INSTALL_THIS_PC.ps1`로만 수행한다.
+- 기본 business state 루트는 `%LOCALAPPDATA%\KMTech\ContainerAudit`, DirectSync 루트는 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`다.
 
 ## 기술 스택
 
@@ -48,7 +48,7 @@ python -m pytest -q -p no:cacheprovider <changed-test-node>
 - `assets/Item.csv`: 품목 기준 데이터. 바코드 검증 로직의 핵심 입력이다.
 - `assets/*.wav`: 성공/오류/조합 사운드.
 - `assets/logo.*`, `assets/*LHD*.png`, `assets/*RHD*.png`: UI/배포 자산.
-- `config/container_audit_settings.json`: UI 배율, 컬럼 폭 등 런타임 설정.
+- `config/container_audit_settings.json`: 읽기 전용으로 패키징되는 UI 기본값 템플릿. 사용자 설정은 user state에 저장한다.
 - `config/validator_settings.json`: 검증 관련 설정 파일 후보.
 - `ANALYSIS_GUIDE.txt`, `TEST_CODE.txt`: 기존 분석/테스트 메모.
 
@@ -56,16 +56,17 @@ python -m pytest -q -p no:cacheprovider <changed-test-node>
 
 - 운영 로그: `%LOCALAPPDATA%\KMTech\ContainerAudit\events\이적작업이벤트로그_[작업자]_[YYYYMMDD].csv`
 - 현재 트레이 상태: `%LOCALAPPDATA%\KMTech\ContainerAudit\events\_current_tray_state_[컴퓨터ID].json`
-- HTTPS 릴레이 상태/큐: `%LOCALAPPDATA%\KMTech\ContainerAudit\direct_sync`
-- 보류 트레이: `config/parked_trays`
-- 최고 기록: `config/best_time_records.json`
-- 앱 설정: `config/container_audit_settings.json`
+- HTTPS 릴레이 상태/큐: `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`
+- 보류 트레이: `%LOCALAPPDATA%\KMTech\ContainerAudit\parked_trays`
+- 작업자 목록/최고 기록/앱 설정: `%LOCALAPPDATA%\KMTech\ContainerAudit\config`
+- 코드 루트의 `config/container_audit_settings.json`은 읽기 전용 기본값 템플릿이며 런타임에 수정하지 않는다.
 
 ## 작업 시 주의점
 
 - direct-sync 장기 보관/취합 관련 수정 전 `DIRECT_SYNC_DATA_PLATFORM_NOTES.md`를 먼저 확인한다.
 - 이 앱은 단일 대형 파일 구조라 기능 수정 전 `Container_Audit.py`에서 관련 메서드 묶음을 먼저 찾아야 한다.
 - 앱은 기본적으로 로컬 앱 데이터 폴더에 파일을 쓰므로 실제 GUI 실행은 `%LOCALAPPDATA%\KMTech\ContainerAudit`에 로그/상태 파일 생성 부작용이 있다. 테스트 격리는 `CONTAINER_AUDIT_DATA_ROOT`로 별도 루트를 지정한다.
+- 설치 코드 루트는 관리자 배포 전용이며 일반 사용자에게 RX로 유지한다. 코드 루트와 같거나 서로 포함하는 `CONTAINER_AUDIT_DATA_ROOT`는 시작 전에 거부한다.
 - 배포 버전은 `C:\Sync`와 같은 Syncthing 경로를 기본 저장소로 쓰지 않아야 한다. 코드의 저장 정책은 `storage_policy.py`를 기준으로 확인한다.
 - `assets/Item.csv` 형식 변경은 바코드 검증과 UI 표시를 동시에 깨뜨릴 수 있다.
 - 기존 `ANALYSIS_GUIDE.txt` 일부 설명은 현재 코드의 상태 파일 위치와 다를 수 있으므로 코드 기준으로 판단한다.

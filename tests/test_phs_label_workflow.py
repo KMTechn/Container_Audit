@@ -9,6 +9,7 @@ from phs_label_workflow import (
     PHSLabelExchangeCoordinator,
     PHSLabelExchangeJournal,
     PHSLabelRenderer,
+    PHSLabelWorkflowError,
     PHSPhysicalPrintError,
     PhysicalPrintEvidence,
     RenderedPHSLabel,
@@ -833,6 +834,21 @@ def test_real_renderer_writes_date_partitioned_png(tmp_path):
     assert TARGET_DATE in output.parts
     assert len(rendered.sha256) == 64
     assert output.stat().st_size > 0
+
+
+@pytest.mark.parametrize("business_date", ["../outside", "2026-02-30", "20260828"])
+def test_renderer_rejects_unsafe_or_invalid_business_date_before_writing(
+    tmp_path,
+    business_date,
+):
+    target = _target_label()
+    target["business_date"] = business_date
+
+    with pytest.raises(PHSLabelWorkflowError) as captured:
+        PHSLabelRenderer(tmp_path / "labels").render(_tray(), target)
+
+    assert captured.value.code == "PHS_TARGET_LABEL_INVALID"
+    assert not (tmp_path / "labels").exists()
 
 
 def test_ui_keeps_fixed_exchange_button_and_f8_shortcut():

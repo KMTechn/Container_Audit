@@ -422,9 +422,36 @@ class PHSLabelRenderer:
                 "PHS_TARGET_LABEL_INVALID",
                 "중앙 target label의 QR/date/worker-code 증거가 불완전합니다.",
             )
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", business_date) is None:
+            raise PHSLabelWorkflowError(
+                "PHS_TARGET_LABEL_INVALID",
+                "중앙 target label의 business date 형식이 올바르지 않습니다.",
+            )
+        try:
+            datetime.strptime(business_date, "%Y-%m-%d")
+        except ValueError as exc:
+            raise PHSLabelWorkflowError(
+                "PHS_TARGET_LABEL_INVALID",
+                "중앙 target label의 business date 값이 올바르지 않습니다.",
+            ) from exc
         safe_label = re.sub(r"[^A-Za-z0-9._-]+", "_", label_id)[:120]
-        folder = self.output_root / business_date / "phs_label_exchange"
+        output_root = self.output_root.expanduser().resolve(strict=False)
+        folder = output_root / business_date / "phs_label_exchange"
+        try:
+            folder.resolve(strict=False).relative_to(output_root)
+        except (OSError, ValueError) as exc:
+            raise PHSLabelWorkflowError(
+                "PHS_TARGET_LABEL_INVALID",
+                "현품표 PNG 상태 경로가 사용자 상태 루트를 벗어났습니다.",
+            ) from exc
         folder.mkdir(parents=True, exist_ok=True)
+        try:
+            folder.resolve(strict=True).relative_to(output_root)
+        except (OSError, ValueError) as exc:
+            raise PHSLabelWorkflowError(
+                "PHS_TARGET_LABEL_INVALID",
+                "현품표 PNG 상태 경로를 안전하게 확인할 수 없습니다.",
+            ) from exc
         output_path = folder / f"{safe_label}.png"
 
         qr = qrcode.QRCode(
