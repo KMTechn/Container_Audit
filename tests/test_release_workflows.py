@@ -123,7 +123,7 @@ def test_release_verifier_is_bound_to_tag_source_and_factory_contract():
     ) == 1
     assert builder.count(
         '"--expected-contract-sha256", $factoryContractSha256'
-    ) == 2
+    ) == 3
 
 
 def test_release_records_hosted_ci_factually_without_making_it_a_gate():

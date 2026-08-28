@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import ntpath
 import re
@@ -28,7 +29,10 @@ from kmtech_factory_contracts.active_work_probe.core import (  # noqa: E402
 )
 from kmtech_factory_contracts.canonical import file_sha256, load_json_strict  # noqa: E402
 from kmtech_factory_contracts.errors import FactoryContractError  # noqa: E402
-from kmtech_factory_contracts.package import verify_staged_package  # noqa: E402
+from kmtech_factory_contracts.package import (  # noqa: E402
+    BOOTSTRAP_INTEGRITY_RECORD_PATH,
+    verify_staged_package,
+)
 from tools.check_release_config import validate_release_config  # noqa: E402
 from update_service import safe_extract_update_zip  # noqa: E402
 
@@ -101,6 +105,7 @@ WINDOWS_POWERSHELL_IDENTITY_FIELDS = frozenset(
 )
 LOCAL_QUALIFICATION_SCHEMA = "container-audit-local-artifact-qualification-v2"
 LOCAL_QUALIFICATION_STATUS = "LOCAL_ARTIFACT_QUALIFICATION_PASS"
+BOOTSTRAP_INTEGRITY_SCHEMA = "container-audit-bootstrap-integrity-v1"
 LOCAL_QUALIFICATION_FIELDS = frozenset(
     {
         "schema_version",
@@ -404,6 +409,108 @@ def _verify_probe_identities(package_root: Path, *, expected_commit: str) -> dic
     }
 
 
+def _verify_bootstrap_integrity(package_root: Path) -> dict[str, Any]:
+    record_path = package_root / BOOTSTRAP_INTEGRITY_RECORD_PATH
+    if record_path.is_symlink() or not record_path.is_file():
+        raise ValueError("bootstrap integrity record is absent or redirected")
+    record = load_json_strict(record_path)
+    if not isinstance(record, Mapping):
+        raise ValueError("bootstrap integrity record must be an object")
+    if record.get("schema_version") != BOOTSTRAP_INTEGRITY_SCHEMA:
+        raise ValueError("bootstrap integrity record schema is invalid")
+    if record.get("status") != "PASS":
+        raise ValueError("bootstrap integrity record is not PASS")
+    if record.get("code_root") != ".":
+        raise ValueError("bootstrap integrity record code root is not portable")
+
+    files = record.get("files")
+    if not isinstance(files, list) or not files:
+        raise ValueError("bootstrap integrity record file inventory is invalid")
+    file_count = record.get("file_count")
+    if isinstance(file_count, bool) or not isinstance(file_count, int):
+        raise ValueError("bootstrap integrity record file count is invalid")
+    if file_count != len(files):
+        raise ValueError("bootstrap integrity record file count is invalid")
+
+    normalized: list[tuple[str, int, str]] = []
+    declared_paths: set[str] = set()
+    for item in files:
+        if not isinstance(item, Mapping):
+            raise ValueError("bootstrap integrity inventory entry is invalid")
+        relative_path = item.get("path")
+        if not isinstance(relative_path, str) or "\\" in relative_path:
+            raise ValueError("bootstrap integrity inventory path is invalid")
+        parts = relative_path.split("/")
+        if (
+            not relative_path
+            or relative_path.startswith("/")
+            or any(part in {"", ".", ".."} for part in parts)
+            or ":" in parts[0]
+        ):
+            raise ValueError("bootstrap integrity inventory path is unsafe")
+        folded = relative_path.casefold()
+        if folded in declared_paths:
+            raise ValueError("bootstrap integrity inventory path is duplicated")
+        declared_paths.add(folded)
+
+        expected_size = item.get("size")
+        expected_hash = item.get("sha256")
+        if (
+            isinstance(expected_size, bool)
+            or not isinstance(expected_size, int)
+            or expected_size < 0
+            or not isinstance(expected_hash, str)
+            or not SHA256_RE.fullmatch(expected_hash)
+        ):
+            raise ValueError("bootstrap integrity inventory metadata is invalid")
+        target = package_root.joinpath(*parts)
+        if target.is_symlink() or not target.is_file():
+            raise ValueError(
+                f"bootstrap code file is absent or redirected: {relative_path}"
+            )
+        if target.stat().st_size != expected_size or file_sha256(target) != expected_hash:
+            raise ValueError(f"bootstrap code file integrity failed: {relative_path}")
+        normalized.append((expected_hash, expected_size, relative_path))
+
+    actual_paths: set[str] = set()
+    for candidate in package_root.rglob("*"):
+        if candidate.is_symlink():
+            raise ValueError("bootstrap code inventory contains a redirected path")
+        if not candidate.is_file():
+            continue
+        relative_path = candidate.relative_to(package_root).as_posix()
+        if relative_path.casefold() == BOOTSTRAP_INTEGRITY_RECORD_PATH.casefold():
+            continue
+        actual_paths.add(relative_path.casefold())
+    if actual_paths != declared_paths:
+        raise ValueError("bootstrap code inventory exact readback failed")
+
+    aggregate_payload = "".join(
+        f"{sha256} {size} {relative_path}\n"
+        for sha256, size, relative_path in normalized
+    ).encode("utf-8")
+    aggregate = hashlib.sha256(aggregate_payload).hexdigest()
+    if record.get("aggregate_sha256") != aggregate:
+        raise ValueError("bootstrap integrity aggregate is invalid")
+    main_entries = [
+        relative_path
+        for _sha256, _size, relative_path in normalized
+        if relative_path.casefold() == "container_audit.exe".casefold()
+    ]
+    if len(main_entries) != 1:
+        raise ValueError(
+            "bootstrap integrity record does not identify Container_Audit.exe"
+        )
+    return {
+        "status": "PASS",
+        "schema_version": BOOTSTRAP_INTEGRITY_SCHEMA,
+        "record_path": BOOTSTRAP_INTEGRITY_RECORD_PATH,
+        "file_count": len(normalized),
+        "aggregate_sha256": aggregate,
+        "main_executable": main_entries[0],
+    }
+
+
 def verify_frozen_release(
     zip_path: Path,
     checksum_path: Path,
@@ -489,7 +596,10 @@ def verify_frozen_release(
         }
         expected_archive_files = {
             f"Container_Audit/{relative}" for relative in manifest_paths
-        } | {"Container_Audit/build-manifest.json"}
+        } | {
+            "Container_Audit/build-manifest.json",
+            f"Container_Audit/{BOOTSTRAP_INTEGRITY_RECORD_PATH}",
+        }
         if archived_files != expected_archive_files:
             missing = sorted(expected_archive_files - archived_files)
             extra = sorted(archived_files - expected_archive_files)
@@ -499,6 +609,7 @@ def verify_frozen_release(
         if set(manifest.get("expected_files") or ()) != REQUIRED_MANIFEST_EXPECTED_FILES:
             raise ValueError("build manifest expected-files contract differs")
 
+        bootstrap_integrity_report = _verify_bootstrap_integrity(package_root)
         package_report = verify_staged_package(
             package_root,
             expected_contract_sha256=expected_contract_sha256,
@@ -573,6 +684,7 @@ def verify_frozen_release(
             "crc_and_safe_extraction": True,
             "exact_manifest_membership": True,
         },
+        "bootstrap_integrity": bootstrap_integrity_report,
         "package": package_report,
         "container_audit_exe_sha256": executable_hash,
         "active_work_probe": probe_report,

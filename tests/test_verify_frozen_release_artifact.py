@@ -1,3 +1,4 @@
+import hashlib
 import json
 import shutil
 import subprocess
@@ -63,7 +64,38 @@ def _write_json(path, value):
     )
 
 
-def _frozen_candidate(tmp_path):
+def _write_bootstrap_integrity(package):
+    files = []
+    for path in sorted(package.rglob("*"), key=lambda value: value.as_posix().casefold()):
+        if not path.is_file() or path.name.casefold() == "bootstrap-integrity.json":
+            continue
+        files.append(
+            {
+                "path": path.relative_to(package).as_posix(),
+                "size": path.stat().st_size,
+                "sha256": file_sha256(path),
+            }
+        )
+    aggregate_payload = "".join(
+        f"{row['sha256']} {row['size']} {row['path']}\n" for row in files
+    ).encode("utf-8")
+    _write_json(
+        package / "bootstrap-integrity.json",
+        {
+            "schema_version": "container-audit-bootstrap-integrity-v1",
+            "status": "PASS",
+            "code_root": ".",
+            "installed_at": "2026-08-28T00:00:00Z",
+            "file_count": len(files),
+            "aggregate_sha256": hashlib.sha256(aggregate_payload).hexdigest(),
+            "files": files,
+            "identity_profile_created": False,
+            "state_scope": "current_user_first_run",
+        },
+    )
+
+
+def _frozen_candidate(tmp_path, *, bootstrap_mutation=None):
     source = tmp_path / "source"
     source.mkdir()
     shutil.copyfile(ROOT / "contract.lock.json", source / "contract.lock.json")
@@ -122,6 +154,17 @@ def _frozen_candidate(tmp_path):
         built_at_utc="2026-08-12T00:00:00Z",
     )
     write_json(package / "build-manifest.json", manifest)
+    _write_bootstrap_integrity(package)
+    if bootstrap_mutation == "absent":
+        (package / "bootstrap-integrity.json").unlink()
+    elif bootstrap_mutation == "tampered":
+        record = json.loads(
+            (package / "bootstrap-integrity.json").read_text(encoding="utf-8")
+        )
+        record["aggregate_sha256"] = "0" * 64
+        _write_json(package / "bootstrap-integrity.json", record)
+    elif bootstrap_mutation is not None:
+        raise AssertionError(bootstrap_mutation)
 
     qualified_root = tmp_path / "qualified"
     qualified_root.mkdir()
@@ -247,6 +290,7 @@ def test_frozen_release_verifier_accepts_exact_sealed_candidate(tmp_path):
     assert report["status"] == "PASS_SELF_CONSISTENCY"
     assert report["archive"]["sha256"] == file_sha256(zip_path)
     assert report["archive"]["exact_manifest_membership"] is True
+    assert report["bootstrap_integrity"]["status"] == "PASS"
     assert report["package"]["app_version"] == TAG
     assert report["tag_object_sha"] == tag_object
     assert report["source_commit"] == commit
@@ -255,6 +299,20 @@ def test_frozen_release_verifier_accepts_exact_sealed_candidate(tmp_path):
     assert report["active_work_probe"]["identities"]["independent"]["supported_apps"] == [
         "Container_Audit"
     ]
+
+
+def test_frozen_release_verifier_requires_bootstrap_integrity_record(tmp_path):
+    candidate = _frozen_candidate(tmp_path, bootstrap_mutation="absent")
+
+    with pytest.raises(ValueError, match="archive membership differs.*bootstrap-integrity"):
+        _verify_preserved_candidate(candidate)
+
+
+def test_frozen_release_verifier_rejects_tampered_bootstrap_integrity_record(tmp_path):
+    candidate = _frozen_candidate(tmp_path, bootstrap_mutation="tampered")
+
+    with pytest.raises(ValueError, match="bootstrap integrity aggregate is invalid"):
+        _verify_preserved_candidate(candidate)
 
 
 def test_checksum_parser_requires_exact_single_filename(tmp_path):

@@ -578,9 +578,39 @@ try {
         windows_powershell = $sealedWindowsPowerShellIdentity
     }
     $receiptJson = $receipt | ConvertTo-Json -Depth 5
+    $receiptPath = Join-Path $candidateRoot "local-artifact-qualification-receipt.json"
     Write-NewUtf8File `
-        -Path (Join-Path $candidateRoot "local-artifact-qualification-receipt.json") `
+        -Path $receiptPath `
         -Text ($receiptJson + "`n")
+    $prepublishVerificationPath = Join-Path $candidateRoot "prepublish-verification.json"
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
+        "-B", "tools/verify_frozen_release_artifact.py",
+        "--zip-path", $zipPath,
+        "--checksum-path", $checksumPath,
+        "--expected-tag", $Tag,
+        "--expected-tag-object", $tagObject,
+        "--expected-commit", $sourceCommit,
+        "--expected-tree", $sourceTree,
+        "--expected-contract-sha256", $factoryContractSha256,
+        "--expected-zip-sha256", $zipSha256,
+        "--expected-zip-size", "$($zipInfo.Length)",
+        "--expected-main-exe-sha256", $mainExeSha256,
+        "--report-path", $prepublishVerificationPath
+    ) -Failure "Prepublish verifier rejected the locally built frozen candidate."
+    $prepublishVerification = Get-Content -Raw -Encoding UTF8 `
+        -LiteralPath $prepublishVerificationPath | ConvertFrom-Json
+    if (
+        [string]$prepublishVerification.status -cne 'PASS_SELF_CONSISTENCY' -or
+        [string]$prepublishVerification.bootstrap_integrity.status -cne 'PASS' -or
+        [string]$prepublishVerification.governing_local_byte_parity.status -cne 'NOT_TESTED' -or
+        $prepublishVerification.archive.exact_manifest_membership -ne $true
+    ) {
+        throw "Prepublish verification report does not prove the complete release gate."
+    }
+    Write-Output (
+        "prepublish_verifier_gate=PASS report=$prepublishVerificationPath " +
+        "bootstrap_integrity=PASS exact_manifest_membership=PASS"
+    )
     Write-Output "frozen_candidate_build=LOCAL_ARTIFACT_QUALIFICATION_PASS"
     Write-Output "candidate_root=$candidateRoot"
     Write-Output "final_intended_tag=$Tag object=$tagObject peel=$sourceCommit"

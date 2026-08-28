@@ -133,6 +133,11 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         '"tools/check_update_archive.py"',
         '"tools/check_release_config.py"',
         '"local-artifact-qualification-receipt.json"',
+        '"prepublish-verification.json"',
+        '"tools/verify_frozen_release_artifact.py"',
+        "[string]$prepublishVerification.status -cne 'PASS_SELF_CONSISTENCY'",
+        "[string]$prepublishVerification.bootstrap_integrity.status -cne 'PASS'",
+        'prepublish_verifier_gate=PASS',
         'Write-BootstrapIntegrityRecord',
         'Assert-BootstrapIntegrityRecord',
         '"bootstrap_integrity.ps1"',
@@ -149,6 +154,9 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
     assert "gh release upload" not in script
     assert "git push" not in script
     assert "PRIVATE_UPDATE_MANIFEST" not in script
+    assert script.index('$receiptPath = Join-Path $candidateRoot') < script.index(
+        '"tools/verify_frozen_release_artifact.py"'
+    ) < script.index('frozen_candidate_build=LOCAL_ARTIFACT_QUALIFICATION_PASS')
 
 
 def test_post_seal_python_smokes_cannot_write_bytecode_and_reverify_inventory():
