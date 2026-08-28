@@ -4,6 +4,7 @@ import pytest
 
 from tools import build_release_config
 from tools import check_release_config
+from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
 
 
 def write_settings(config_dir, payload):
@@ -46,6 +47,62 @@ def test_release_config_accepts_private_update_settings(tmp_path):
     )
 
     check_release_config.validate_release_config(config_dir)
+
+
+@pytest.mark.parametrize("transition_bundle", [False, True])
+def test_release_config_accepts_es256_private_update_key_config(tmp_path, transition_bundle):
+    with P256KeyPair.generate() as private_key:
+        public_jwk = dict(private_key.public_jwk)
+    public_key_config = public_jwk
+    if transition_bundle:
+        public_key_config = {
+            "ed25519-v1": "a" * 64,
+            "es256-v1": public_jwk,
+        }
+
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                "manifest_signature_url": "https://updates.example/container_audit/stable/latest.json.sig",
+                "manifest_public_key": json.dumps(public_key_config, sort_keys=True),
+                "channel": "stable",
+            },
+        },
+    )
+
+    check_release_config.validate_release_config(config_dir)
+
+
+def test_release_config_rejects_malformed_es256_transition_key(tmp_path):
+    with P256KeyPair.generate() as private_key:
+        public_jwk = dict(private_key.public_jwk)
+    public_jwk["crv"] = "P-384"
+
+    config_dir = tmp_path / "config"
+    write_settings(
+        config_dir,
+        {
+            "update_settings": {
+                "provider": "private_manifest",
+                "manifest_url": "https://updates.example/container_audit/stable/latest.json",
+                "manifest_public_key": json.dumps(
+                    {
+                        "ed25519-v1": "a" * 64,
+                        "es256-v1": public_jwk,
+                    },
+                    sort_keys=True,
+                ),
+                "channel": "stable",
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="valid ES256 JWK/transition bundle"):
+        check_release_config.validate_release_config(config_dir)
 
 
 def test_release_config_accepts_github_update_provider_for_public_fallback(tmp_path):
