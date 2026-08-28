@@ -1,7 +1,7 @@
 {
   "app_id": "container_audit",
   "contract_bundle_corrective_revision": 1,
-  "contract_bundle_sha256": "a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046",
+  "contract_bundle_sha256": "afa1f0e1f4e16421116438fcf998899694186db4c668bfa7fdd7192ede3b3a9a",
   "contract_bundle_version": "1.0.3",
   "db_schema_supported": {
     "maximum": 0,

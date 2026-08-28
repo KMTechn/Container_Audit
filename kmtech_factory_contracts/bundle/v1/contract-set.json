@@ -5,8 +5,8 @@
   "files": [
     {
       "path": "catalogs/canonical-stream-catalog.json",
-      "sha256": "e58b7be56856b524b4870d9ca95b196d77f1b85c69be1bb868185c9f7fb8c494",
-      "size": 5216
+      "sha256": "ea3226821d7d4947ca8c239aac3a7546d7b472eee0a7dcdb20e95c50820d3d2a",
+      "size": 5240
     },
     {
       "path": "compatibility/coinstall-matrix.json",

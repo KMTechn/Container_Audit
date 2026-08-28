@@ -181,6 +181,7 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
     assert registration_report["machine_profiles"] == {}
     assert "PHS_RECONCILIATION_ACTION_RESOLVED" in persisted_manifest["streams"][0]["raw_event_names"]
     assert "PHS_RECONCILIATION_LABEL_EXCHANGED" in persisted_manifest["streams"][0]["raw_event_names"]
+    assert "TRAY_RESTORE" in persisted_manifest["streams"][0]["raw_event_names"]
 
     source_file = tmp_path / "이적작업이벤트로그_install_contract.csv"
     source_file.write_text(

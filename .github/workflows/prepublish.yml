@@ -20,7 +20,7 @@ jobs:
       RELEASE_TAG: ${{ github.ref_name }}
       ZIP_NAME: Container_Audit-${{ github.ref_name }}.zip
       CHECKSUM_NAME: Container_Audit-${{ github.ref_name }}.zip.sha256
-      FACTORY_CONTRACT_SHA256: a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046
+      FACTORY_CONTRACT_SHA256: afa1f0e1f4e16421116438fcf998899694186db4c668bfa7fdd7192ede3b3a9a
 
     steps:
       - name: Checkout exact tagged source

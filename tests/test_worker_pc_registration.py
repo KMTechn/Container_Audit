@@ -28,6 +28,7 @@ GUI_ORDER_RAW_EVENT_NAMES = [
     "POST_REVIEW_REQUIRED",
     "TRAY_DISCARDED_BY_OPERATOR",
     "TRAY_RESET",
+    "TRAY_RESTORE",
     "MASTER_LABEL_REPLACEMENT_APPLIED",
     "PHS_REPLACEMENT_WAITING_MARKED",
     "PHS_RECONCILIATION_ACTION_RESOLVED",
@@ -160,7 +161,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert manifest["pc_identity"]["source_host_id"] == "container-audit-pc-01"
     raw_event_names = manifest["streams"][0]["raw_event_names"]
     catalog_names = _catalog_container_audit_raw_event_names()
-    assert len(catalog_names) == 17
+    assert len(catalog_names) == 18
     assert raw_event_names == catalog_names
     assert manifest["sync"]["sync_transport"] == "http_push"
     assert manifest["sync"]["sync_dir"] == (expected_root / "events").as_posix()
@@ -200,7 +201,7 @@ def test_worker_pc_registration_emits_catalog_order_raw_event_names_not_gui_orde
     catalog_names = _catalog_container_audit_raw_event_names()
     raw_event_names = manifest["streams"][0]["raw_event_names"]
 
-    assert len(catalog_names) == 17
+    assert len(catalog_names) == 18
     assert raw_event_names == catalog_names
     assert raw_event_names == registration._container_audit_catalog_raw_event_names()
     assert set(raw_event_names) == set(GUI_ORDER_RAW_EVENT_NAMES)

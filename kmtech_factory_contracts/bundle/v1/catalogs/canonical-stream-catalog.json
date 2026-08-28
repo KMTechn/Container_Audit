@@ -21,6 +21,7 @@
         "TRAY_COMPLETE",
         "TRAY_DISCARDED_BY_OPERATOR",
         "TRAY_RESET",
+        "TRAY_RESTORE",
         "WORK_END",
         "WORK_START"
       ],
