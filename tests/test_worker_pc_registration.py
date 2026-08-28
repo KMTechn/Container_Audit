@@ -3,6 +3,7 @@ import json
 import os
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,65 @@ GUI_ORDER_RAW_EVENT_NAMES = [
 ]
 TEST_MACHINE_GUID = "00112233-4455-6677-8899-aabbccddeeff"
 TEST_USER_SID = "S-1-5-21-100-200-300-1001"
+TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+TEST_POSSESSION_PUBLIC_JWK = {
+    "crv": "P-256",
+    "kty": "EC",
+    "x": "ftdPP0FoUhV62ssO6cL7HqpHkBIBrG_8AtnYvilamcc",
+    "y": "IHDnlSA-nqN6SQxMtpQ580nxmwRaJ2dJfEFm7Mk7-IQ",
+}
+
+
+class _FakePossessionKey:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    def descriptor(self):
+        return SimpleNamespace(
+            contract_version=registration.POSSESSION_KEY_CONTRACT_VERSION,
+            scope=registration.SCOPE_CURRENT_USER,
+            created=True,
+            public_jwk=dict(TEST_POSSESSION_PUBLIC_JWK),
+            fingerprint=TEST_POSSESSION_FINGERPRINT,
+            export_policy=0,
+        )
+
+    def assert_non_exportable(self):
+        return SimpleNamespace(private_export_status_hex="0x80090029")
+
+    def sign_es256(self, value):
+        assert isinstance(value, bytes)
+        return b"\x01" * 64
+
+
+@pytest.fixture(autouse=True)
+def _fake_persistent_possession_key(monkeypatch):
+    monkeypatch.setattr(
+        registration.PersistentPossessionKey,
+        "provision_initial",
+        classmethod(lambda _cls, *args, **kwargs: _FakePossessionKey()),
+    )
+    monkeypatch.setattr(
+        registration.PersistentPossessionKey,
+        "open_existing",
+        classmethod(lambda _cls, *args, **kwargs: _FakePossessionKey()),
+    )
+
+
+def _v2_response_binding():
+    return {
+        "contract_version": registration.SELF_ENROLLMENT_CONTRACT_VERSION,
+        "identity_action": "CREATED",
+        "authorization_state": "OPERATION_PENDING",
+        "credential_epoch": 1,
+        "possession_key": {
+            "contract_version": registration.POSSESSION_KEY_CONTRACT_VERSION,
+            "fingerprint": TEST_POSSESSION_FINGERPRINT,
+        },
+    }
 
 
 def _generated_install_id(*, user_sid=TEST_USER_SID, app_id=registration.INSTALL_IDENTITY_APP_ID):
@@ -163,6 +223,7 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
 
         def json(self):
             return {
+                **_v2_response_binding(),
                 "status": "enrolled",
                 "producer_id": "server-producer-pc-02",
                 "key_id": "server-key-pc-02",
@@ -189,7 +250,7 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
         captured["wincred_target"] = target_name
         captured["wincred_secret"] = secret
 
-    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
     monkeypatch.setattr(registration, "_write_wincred_secret", fake_write_wincred)
 
     exit_code = registration.main(
@@ -226,14 +287,21 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     assert credential["producer_id"] == "server-producer-pc-02"
     assert credential["key_id"] == "server-key-pc-02"
     assert "secret" not in credential
-    assert captured["url"] == "https://worker.example.invalid/api/producer-ingest/v1/enroll"
+    assert captured["url"] == "https://worker.example.invalid/api/producer-ingest/v2/enroll"
     assert captured["headers"]["X-Producer-Enrollment-Token"] == "install-token"
-    assert captured["json"]["contract_version"] == "producer-self-enrollment-v1"
+    assert captured["json"]["contract_version"] == "producer-self-enrollment-v2"
+    assert captured["json"]["possession_public_jwk"] == TEST_POSSESSION_PUBLIC_JWK
     assert captured["json"]["producer_id"] == "container-audit-pc-02"
     assert captured["json"]["key_id"] == "install-request-key-pc-02"
     assert captured["json"]["manifest"]["schema_version"] == "producer-onboarding-manifest-v1"
     assert captured["wincred_target"] == "KMTech.DirectSync.ContainerAudit.PC-02"
     assert captured["wincred_secret"] == "server-issued-secret-pc-02"
+    assert report["identity_action"] == "CREATED"
+    assert report["authorization_state"] == "OPERATION_PENDING"
+    assert report["possession_key_scope"] == "current_user"
+    assert report["possession_key_fingerprint"] == TEST_POSSESSION_FINGERPRINT
+    assert report["possession_key_export_policy"] == 0
+    assert report["possession_private_export_status"] == "0x80090029"
 
 
 def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowlist(tmp_path, monkeypatch):
@@ -251,6 +319,7 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
 
         def json(self):
             return {
+                **_v2_response_binding(),
                 "status": "enrolled",
                 "producer_id": "producer-pc-ip",
                 "key_id": "server-key-pc-ip",
@@ -279,7 +348,7 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
         captured["dpapi_secret"] = secret
         return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
 
-    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
     monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
 
     exit_code = registration.main(
@@ -329,6 +398,7 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
 
         def json(self):
             return {
+                **_v2_response_binding(),
                 "status": "enrolled",
                 "producer_id": "producer-current-user",
                 "key_id": "key-current-user",
@@ -360,7 +430,7 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
         path.write_bytes(b"protected")
         return path
 
-    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
     monkeypatch.setattr(
         registration,
         "ensure_runtime_profile_from_enrollment_bundle",
@@ -402,6 +472,46 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
     assert credential["tls_ca_bundle_path"] == str(
         profile_path.resolve().parent / "tls" / "ca-bundle.pem"
     )
+    assert report["enrollment_transport_trust_env"] is False
+
+
+def test_enrollment_transport_ignores_environment_ca_and_passes_explicit_verify(
+    monkeypatch,
+):
+    captured = {}
+    sentinel = object()
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", r"C:\wrong\ambient-ca.pem")
+
+    class FakeSession:
+        trust_env = True
+
+        def __enter__(self):
+            captured["session"] = self
+            return self
+
+        def __exit__(self, _exc_type, _exc, _traceback):
+            return None
+
+        def post(self, url, **kwargs):
+            captured["url"] = url
+            captured["kwargs"] = kwargs
+            return sentinel
+
+    monkeypatch.setattr(registration.requests, "Session", FakeSession)
+
+    response = registration._post_enrollment_request(
+        "https://worker.example.invalid/api/producer-ingest/v2/enroll",
+        json={"contract_version": "producer-self-enrollment-v2"},
+        headers={},
+        timeout=30,
+        allow_redirects=False,
+        verify=r"C:\approved\private-ca.pem",
+    )
+
+    assert response is sentinel
+    assert captured["session"].trust_env is False
+    assert captured["kwargs"]["verify"] == r"C:\approved\private-ca.pem"
+    assert captured["kwargs"]["allow_redirects"] is False
 
 
 @pytest.mark.skipif(os.name != "nt", reason="CurrentUser DPAPI is Windows-only")
@@ -426,6 +536,7 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
 
         def json(self):
             return {
+                **_v2_response_binding(),
                 "status": "enrolled",
                 "producer_id": "producer-pc-hash",
                 "key_id": "server-key-pc-hash",
@@ -433,7 +544,11 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
                 "active_manifest_hashes": ["0" * 64],
             }
 
-    monkeypatch.setattr(registration.requests, "post", lambda *args, **kwargs: FakeResponse())
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        lambda *args, **kwargs: FakeResponse(),
+    )
     monkeypatch.setattr(
         registration,
         "_write_dpapi_secret",
@@ -471,7 +586,8 @@ def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, mon
 
         def json(self):
             return {
-                "status": "already_enrolled",
+                **_v2_response_binding(),
+                "status": "enrolled",
                 "producer_id": "producer-pc-preserve",
                 "key_id": "server-key-pc-preserve",
                 "secret": "server-issued-secret-pc-preserve",
@@ -485,7 +601,7 @@ def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, mon
         captured["manifest"] = json["manifest"]
         return FakeResponse()
 
-    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
     monkeypatch.setattr(
         registration,
         "ensure_runtime_profile_from_enrollment_bundle",
@@ -565,7 +681,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
     def fake_write_wincred(target_name, secret):
         writes.append((target_name, secret))
 
-    monkeypatch.setattr(registration.requests, "post", fake_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
     monkeypatch.setattr(registration, "_write_wincred_secret", fake_write_wincred)
 
     exit_code = registration.main(
@@ -682,13 +798,32 @@ def test_worker_pc_registration_generated_install_id_ignores_app_and_state_paths
     assert first == second == recreated == _generated_install_id()
 
 
-def _identity_payload(producer_id, source_host_id, producer_install_id):
-    return {
+def _identity_payload(
+    producer_id,
+    source_host_id,
+    producer_install_id,
+    *,
+    possession_bound=False,
+):
+    payload = {
         "schema_version": registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
         "producer_id": producer_id,
         "source_host_id": source_host_id,
         "producer_install_id": producer_install_id,
     }
+    if possession_bound:
+        payload.update(
+            {
+                "enrollment_contract_version": (
+                    registration.SELF_ENROLLMENT_CONTRACT_VERSION
+                ),
+                "possession_key_contract_version": (
+                    registration.POSSESSION_KEY_CONTRACT_VERSION
+                ),
+                "possession_key_fingerprint": TEST_POSSESSION_FINGERPRINT,
+            }
+        )
+    return payload
 
 
 def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code=""):
@@ -702,6 +837,7 @@ def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code="
                     "error": {"code": error_code or str(status_code), "message": error_code},
                 }
             return {
+                **_v2_response_binding(),
                 "status": status,
                 "producer_id": captured["json"]["producer_id"],
                 "key_id": captured["json"]["key_id"],
@@ -726,11 +862,217 @@ def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code="
     return fake_post
 
 
+def _write_admin_recovery_authorization(path, *, producer_id):
+    path.write_text(
+        json.dumps(
+            {
+                "contract_version": (
+                    registration.ADMIN_RECOVERY_AUTHORIZATION_CONTRACT_VERSION
+                ),
+                "authorization_id": "recovery-fixture-01",
+                "producer_id": producer_id,
+                "recovery_token": "recovery-token-fixture",
+                "nonce": "recovery-nonce-fixture",
+                "expires_at": "2999-01-01T00:00:00Z",
+                "audience": registration.ADMIN_RECOVERY_AUDIENCE,
+                "audit_event_id": "authz-audit-fixture-01",
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_worker_pc_registration_admin_recovery_is_explicit_signed_and_cleans_secret(
+    tmp_path, monkeypatch
+):
+    local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
+    report_path = tmp_path / "registration-admin-recovery-report.json"
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    ca_path = tmp_path / "private-ca.cert.pem"
+    ca_path.write_bytes(b"private-ca-fixture")
+    producer_id = "container-audit-recovery"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id=producer_id,
+    )
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            proof = captured["json"]["proof"]
+            return {
+                "contract_version": (
+                    registration.ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION
+                ),
+                "status": "recovered",
+                "identity_action": "REATTACHED",
+                "recovery_action": "ADMIN_RECOVERY",
+                "authorization_state": "OPERATION_PENDING",
+                "credential_epoch": 2,
+                "producer_id": proof["producer_id"],
+                "producer_install_id": proof["producer_install_id"],
+                "source_host_id": proof["source_host_id"],
+                "key_id": "server-recovery-key-02",
+                "secret": "server-recovery-secret-02",
+                "secret_fingerprint_sha256": "c" * 64,
+                "active_manifest_hashes": [proof["manifest_hash"]],
+                "possession_key": {
+                    "contract_version": (
+                        registration.POSSESSION_KEY_CONTRACT_VERSION
+                    ),
+                    "fingerprint": TEST_POSSESSION_FINGERPRINT,
+                },
+            }
+
+    def fake_post(url, *, json, headers, timeout, **kwargs):
+        captured.update(
+            {
+                "url": url,
+                "json": json,
+                "headers": headers,
+                "timeout": timeout,
+                "kwargs": kwargs,
+            }
+        )
+        return FakeResponse()
+
+    def fake_write_dpapi_secret(data_dir, target_name, secret):
+        captured["dpapi_secret"] = secret
+        return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
+
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(tmp_path / "ambient-wrong-ca.pem"))
+    monkeypatch.setattr(registration, "_post_enrollment_request", fake_post)
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "RECOVERY",
+            "--admin-recovery-secret-file",
+            str(recovery_secret_path),
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--tls-ca-bundle-path",
+            str(ca_path),
+            "--preserve-existing-machine-profile",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    identity_path = (
+        local_app_data
+        / "KMTech"
+        / "DirectSync"
+        / "container_audit"
+        / "producer_identity.json"
+    )
+    identity = json.loads(identity_path.read_text(encoding="utf-8"))
+    proof = captured["json"]["proof"]
+
+    assert exit_code == 0
+    assert report["status"] == "ADMIN_RECOVERY_REGISTERED"
+    assert report["registration_action"] == "admin_recovery"
+    assert report["admin_recovery_verified"] is True
+    assert report["admin_recovery_secret_file_deleted"] is True
+    assert report["enrollment_contract_version"] == (
+        registration.SELF_ENROLLMENT_CONTRACT_VERSION
+    )
+    assert report["registration_contract_version"] == (
+        registration.ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION
+    )
+    assert report["credential_epoch"] == 2
+    assert not recovery_secret_path.exists()
+    assert identity["possession_key_fingerprint"] == TEST_POSSESSION_FINGERPRINT
+    assert captured["url"] == (
+        "https://worker.example.invalid/api/producer-ingest/v2/recover"
+    )
+    assert captured["kwargs"]["verify"] == str(ca_path)
+    assert captured["json"]["contract_version"] == (
+        registration.ADMIN_RECOVERY_COMPLETE_CONTRACT_VERSION
+    )
+    assert captured["json"]["new_possession_public_jwk"] == (
+        TEST_POSSESSION_PUBLIC_JWK
+    )
+    assert proof == {
+        "contract_version": registration.ADMIN_RECOVERY_PROOF_CONTRACT_VERSION,
+        "authorization_id": "recovery-fixture-01",
+        "nonce": "recovery-nonce-fixture",
+        "expires_at": "2999-01-01T00:00:00Z",
+        "audience": registration.ADMIN_RECOVERY_AUDIENCE,
+        "producer_id": producer_id,
+        "producer_install_id": _generated_install_id(),
+        "source_host_id": producer_id,
+        "manifest_hash": registration.manifest_hash(captured["json"]["manifest"]),
+        "new_possession_key_fingerprint": TEST_POSSESSION_FINGERPRINT,
+    }
+    assert len(captured["json"]["signature"]) == 86
+    assert captured["dpapi_secret"] == "server-recovery-secret-02"
+
+
+def test_worker_pc_registration_rejected_admin_recovery_retains_protected_secret(
+    tmp_path, monkeypatch
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    report_path = tmp_path / "registration-admin-recovery-rejected.json"
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-bad",
+    )
+
+    class RejectedResponse:
+        status_code = 409
+
+        def json(self):
+            return {
+                "status": "rejected",
+                "error": {
+                    "code": "recovery_proof_invalid",
+                    "message": "recovery proof invalid",
+                },
+            }
+
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        lambda *args, **kwargs: RejectedResponse(),
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "RECOVERY-BAD",
+            "--admin-recovery-secret-file",
+            str(recovery_secret_path),
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["enrollment_error_code"] == "recovery_proof_invalid"
+    assert recovery_secret_path.is_file()
+
+
 def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_path, monkeypatch):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-persist-report.json"
     captured = {}
-    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured))
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        _fake_enroll_post(captured),
+    )
     monkeypatch.setattr(
         registration,
         "_write_dpapi_secret",
@@ -766,6 +1108,7 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
         "container-audit-pc-persist",
         "container-audit-pc-persist",
         generated_install_id,
+        possession_bound=True,
     )
     assert captured["json"]["producer_id"] == "container-audit-pc-persist"
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == generated_install_id
@@ -774,7 +1117,9 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     )
 
 
-def test_worker_pc_registration_reuses_persisted_identity_without_machine_lookup(tmp_path, monkeypatch):
+def test_worker_pc_registration_preserves_legacy_identity_without_key_or_http(
+    tmp_path, monkeypatch
+):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
@@ -785,7 +1130,7 @@ def test_worker_pc_registration_reuses_persisted_identity_without_machine_lookup
     )
     identity_path.write_text(json.dumps(pinned, indent=2) + "\n", encoding="utf-8")
     report_path = tmp_path / "registration-identity-reuse-report.json"
-    captured = {}
+    calls = []
     monkeypatch.setattr(
         registration,
         "_current_machine_guid",
@@ -796,7 +1141,23 @@ def test_worker_pc_registration_reuses_persisted_identity_without_machine_lookup
         "_current_user_sid",
         lambda: (_ for _ in ()).throw(AssertionError("persisted identity must bypass user lookup")),
     )
-    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or (_ for _ in ()).throw(
+            AssertionError("legacy identity must not be enrolled automatically")
+        ),
+    )
+    monkeypatch.setattr(
+        registration.PersistentPossessionKey,
+        "provision_initial",
+        classmethod(
+            lambda _cls, *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("legacy identity must not create a possession key")
+            )
+        ),
+    )
     monkeypatch.setattr(
         registration,
         "_write_dpapi_secret",
@@ -817,29 +1178,28 @@ def test_worker_pc_registration_reuses_persisted_identity_without_machine_lookup
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     persisted = json.loads(identity_path.read_text(encoding="utf-8"))
-    generated_install_id = _generated_install_id()
-
-    assert exit_code == 0
-    assert report["producer_identity_source"] == "identity_file"
-    assert report["producer_install_id_derivation"] == "identity_file"
-    assert captured["json"]["producer_id"] == "container-audit-pc-reuse"
-    assert captured["json"]["manifest"]["pc_identity"]["source_host_id"] == "container-audit-pc-reuse"
-    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
-        "container-audit-pc-reuse-aaaaaaaaaaaa"
+    assert exit_code == 2
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["recovery_action"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["enrollment_error_code"] == (
+        "legacy_producer_admin_recovery_required"
     )
-    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] != generated_install_id
-    assert persisted["producer_install_id"] == "container-audit-pc-reuse-aaaaaaaaaaaa"
-    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
-        registration._container_audit_catalog_raw_event_names()
-    )
-    assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] != GUI_ORDER_RAW_EVENT_NAMES
+    assert report["automatic_key_replacement"] is False
+    assert report["automatic_legacy_migration"] is False
+    assert "existing legacy producer identity" in report["blocked_reason"]
+    assert calls == []
+    assert persisted == pinned
 
 
 def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated(tmp_path, monkeypatch):
     _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-pin-report.json"
     captured = {}
-    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        _fake_enroll_post(captured),
+    )
     monkeypatch.setattr(
         registration,
         "_write_dpapi_secret",
@@ -857,6 +1217,7 @@ def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated
             "--producer-install-id",
             "container-audit-test1-pin-fixture",
             "--self-enroll",
+            "--confirm-new-server-identity",
             "--endpoint-url",
             "https://worker.example.invalid/api/producer-ingest/v1/source-file",
             "--report-path",
@@ -878,10 +1239,16 @@ def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated
     )
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] != generated_install_id
     assert identity["producer_install_id"] == "container-audit-test1-pin-fixture"
+    assert identity["enrollment_contract_version"] == (
+        registration.SELF_ENROLLMENT_CONTRACT_VERSION
+    )
+    assert identity["possession_key_fingerprint"] == TEST_POSSESSION_FINGERPRINT
     assert "9231ea1cf5b8" not in identity_path.read_text(encoding="utf-8")
 
 
-def test_worker_pc_registration_uses_seeded_identity_file_path(tmp_path, monkeypatch):
+def test_worker_pc_registration_seeded_legacy_identity_requires_admin_recovery(
+    tmp_path, monkeypatch
+):
     _self_enroll_env(tmp_path, monkeypatch)
     seed_path = tmp_path / "seed" / "producer_identity.json"
     seed_path.parent.mkdir()
@@ -892,8 +1259,15 @@ def test_worker_pc_registration_uses_seeded_identity_file_path(tmp_path, monkeyp
     )
     seed_path.write_text(json.dumps(seed, indent=2) + "\n", encoding="utf-8")
     report_path = tmp_path / "registration-identity-seed-report.json"
-    captured = {}
-    monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
+    calls = []
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        lambda *args, **kwargs: calls.append((args, kwargs))
+        or (_ for _ in ()).throw(
+            AssertionError("seeded legacy identity must not enroll")
+        ),
+    )
     monkeypatch.setattr(
         registration,
         "_write_dpapi_secret",
@@ -915,17 +1289,12 @@ def test_worker_pc_registration_uses_seeded_identity_file_path(tmp_path, monkeyp
     )
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
-    persist_path = Path(report["producer_identity_path"])
-    persisted = json.loads(persist_path.read_text(encoding="utf-8"))
-
-    assert exit_code == 0
-    assert report["producer_identity_source"] == "identity_file"
-    assert report["producer_identity_loaded_from"] == str(seed_path.resolve())
-    assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
-        "container-audit-seed-host-bbbbbbbbbbbb"
-    )
-    assert persisted == seed
-    assert persist_path != seed_path.resolve()
+    assert exit_code == 2
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["recovery_action"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["automatic_legacy_migration"] is False
+    assert calls == []
+    assert json.loads(seed_path.read_text(encoding="utf-8")) == seed
 
 
 def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evidence(
@@ -936,8 +1305,8 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
     captured = {}
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     monkeypatch.setattr(
-        registration.requests,
-        "post",
+        registration,
+        "_post_enrollment_request",
         _fake_enroll_post(
             captured,
             status_code=409,
@@ -965,8 +1334,11 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert exit_code == 2
-    assert report["status"] == "BLOCKED"
-    assert report["blocked_reason"] == "self-enroll failed: producer_identity_conflict"
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["recovery_action"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["enrollment_error_code"] == "producer_identity_conflict"
+    assert report["automatic_legacy_migration"] is False
+    assert "audited administrator recovery" in report["blocked_reason"]
     assert report["raw_secret_written"] is False
     assert writes == []
     assert not identity_path.exists()
@@ -985,8 +1357,8 @@ def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp
     report_path = tmp_path / "registration-bad-identity-report.json"
     calls = []
     monkeypatch.setattr(
-        registration.requests,
-        "post",
+        registration,
+        "_post_enrollment_request",
         lambda *args, **kwargs: calls.append((args, kwargs)) or (_ for _ in ()).throw(
             AssertionError("malformed identity must not enroll")
         ),

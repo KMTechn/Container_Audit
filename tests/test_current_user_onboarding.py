@@ -18,6 +18,39 @@ from current_user_onboarding import (
 from direct_sync_push import manifest_hash
 
 
+TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+
+
+class _FakeExistingPossessionKey:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    def descriptor(self):
+        return SimpleNamespace(
+            contract_version=onboarding_module.POSSESSION_KEY_CONTRACT_VERSION,
+            scope=onboarding_module.SCOPE_CURRENT_USER,
+            fingerprint=TEST_POSSESSION_FINGERPRINT,
+            export_policy=0,
+        )
+
+    def assert_non_exportable(self):
+        return SimpleNamespace(private_export_status_hex="0x80090029")
+
+
+@pytest.fixture(autouse=True)
+def _fake_existing_possession_key(monkeypatch):
+    monkeypatch.setattr(
+        onboarding_module.PersistentPossessionKey,
+        "open_existing",
+        classmethod(
+            lambda _cls, *args, **kwargs: _FakeExistingPossessionKey()
+        ),
+    )
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -32,6 +65,13 @@ def _ready_state(paths, *, source_host_id="container-audit-user-1"):
         "producer_id": source_host_id,
         "source_host_id": source_host_id,
         "producer_install_id": "container-audit-install-1",
+        "enrollment_contract_version": (
+            onboarding_module.SELF_ENROLLMENT_CONTRACT_VERSION
+        ),
+        "possession_key_contract_version": (
+            onboarding_module.POSSESSION_KEY_CONTRACT_VERSION
+        ),
+        "possession_key_fingerprint": TEST_POSSESSION_FINGERPRINT,
     }
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
@@ -60,6 +100,10 @@ def _ready_state(paths, *, source_host_id="container-audit-user-1"):
             "server_registration_verified": True,
             "manifest_hash_verified": True,
             "persisted_manifest_hash_verified": True,
+            "possession_key_verified": True,
+            "enrollment_contract_version": (
+                onboarding_module.SELF_ENROLLMENT_CONTRACT_VERSION
+            ),
             "manifest_hash": manifest_hash(manifest),
         },
     )
@@ -127,6 +171,69 @@ def test_state_absent_partial_and_existing_are_distinguished(tmp_path):
     )
     assert ready["status"] == "READY"
     assert ready["source_host_id"] == "container-audit-user-1"
+    assert ready["possession_key"]["scope"] == "current_user"
+    assert ready["possession_key"]["fingerprint"] == (
+        TEST_POSSESSION_FINGERPRINT
+    )
+
+
+def test_admin_recovery_report_is_terminal_not_retryable(tmp_path):
+    paths = resolve_current_user_onboarding_paths(
+        tmp_path / "app",
+        environ={"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")},
+    )
+    _write_json(
+        paths.registration_report_path,
+        {
+            "status": onboarding_module.ADMIN_RECOVERY_ACTION,
+            "recovery_action": onboarding_module.ADMIN_RECOVERY_ACTION,
+            "enrollment_error_code": "admin_recovery_required",
+            "blocked_reason": "existing legacy producer requires audited recovery",
+        },
+    )
+
+    state = inspect_current_user_state(paths)
+
+    assert state["status"] == "RECOVERY_REQUIRED"
+    assert state["recovery_action"] == onboarding_module.ADMIN_RECOVERY_ACTION
+    assert state["enrollment_error_code"] == "admin_recovery_required"
+
+
+def test_legacy_complete_state_requires_admin_recovery_without_opening_key(
+    tmp_path, monkeypatch
+):
+    paths = resolve_current_user_onboarding_paths(
+        tmp_path / "app",
+        environ={"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")},
+    )
+    _ready_state(paths)
+    identity = json.loads(paths.identity_path.read_text(encoding="utf-8"))
+    for field in (
+        "enrollment_contract_version",
+        "possession_key_contract_version",
+        "possession_key_fingerprint",
+    ):
+        identity.pop(field)
+    _write_json(paths.identity_path, identity)
+    monkeypatch.setattr(
+        onboarding_module.PersistentPossessionKey,
+        "open_existing",
+        classmethod(
+            lambda _cls, *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("legacy state must not open or create a new key")
+            )
+        ),
+    )
+
+    state = inspect_current_user_state(
+        paths,
+        profile_loader=_profile_loader,
+        credential_loader=_credential_loader,
+    )
+
+    assert state["status"] == "RECOVERY_REQUIRED"
+    assert state["recovery_action"] == onboarding_module.ADMIN_RECOVERY_ACTION
+    assert "legacy producer identity" in state["reason"]
 
 
 def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):

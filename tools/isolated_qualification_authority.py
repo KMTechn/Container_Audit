@@ -75,11 +75,16 @@ from transfer_seal import _deterministic_id, _sha256, membership_hash  # noqa: E
 from tools.install_logistics_runtime_profile import (  # noqa: E402
     MACHINE_CREDENTIAL_BUNDLE_CONTRACT_VERSION,
 )
+from vendor.kmtech_zero_pe import (  # noqa: E402
+    POSSESSION_KEY_CONTRACT_VERSION,
+    jwk_thumbprint as possession_jwk_thumbprint,
+    normalize_public_jwk as normalize_possession_public_jwk,
+)
 
 
-SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v1"
+SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
 AUTHORITY_CONTRACT_VERSION = "container-audit-isolated-qualification-authority-v1"
-PRIVATE_STATE_CONTRACT_VERSION = "container-audit-isolated-qualification-private-v1"
+PRIVATE_STATE_CONTRACT_VERSION = "container-audit-isolated-qualification-private-v2"
 STATUS_CONTRACT_VERSION = "container-audit-isolated-qualification-status-v1"
 FIXTURE_CONTRACT_VERSION = "container-audit-isolated-qualification-fixture-v1"
 DEFAULT_PORT = 18470
@@ -523,6 +528,7 @@ def _expected_private_fields() -> frozenset[str]:
             "producer_key_id",
             "enrolled_producer_id",
             "enrolled_producer_install_id",
+            "enrolled_possession_key_fingerprint",
             "runtime_next_request_token",
             "runtime_next_request_sequence",
             "runtime_lease_id",
@@ -544,7 +550,11 @@ def _validate_private_state(payload: Mapping[str, Any], instance_id: str) -> dic
             raise IsolatedQualificationError(
                 f"qualification authority private {name} is invalid"
             )
-    for name in ("enrolled_producer_id", "enrolled_producer_install_id"):
+    for name in (
+        "enrolled_producer_id",
+        "enrolled_producer_install_id",
+        "enrolled_possession_key_fingerprint",
+    ):
         value = payload.get(name)
         if not isinstance(value, str) or len(value) > 256 or any(
             character.isspace() for character in value
@@ -623,6 +633,7 @@ def initialize_authority(
             "producer_key_id": f"qualification-key-{secrets.token_hex(8)}",
             "enrolled_producer_id": "",
             "enrolled_producer_install_id": "",
+            "enrolled_possession_key_fingerprint": "",
             "runtime_next_request_token": "",
             "runtime_next_request_sequence": 0,
             "runtime_lease_id": "",
@@ -857,7 +868,7 @@ class QualificationRequestHandler(BaseHTTPRequestHandler):
         try:
             if parsed.query:
                 raise ValueError("queries are not accepted")
-            if parsed.path == "/api/producer-ingest/v1/enroll":
+            if parsed.path == "/api/producer-ingest/v2/enroll":
                 self._handle_enroll()
                 return
             if parsed.path == "/api/producer-ingest/v1/runtime-lease":
@@ -886,6 +897,12 @@ class QualificationRequestHandler(BaseHTTPRequestHandler):
             or request.get("endpoint_url") != self.authority.context.endpoint_url
         ):
             raise ValueError("enrollment contract is invalid")
+        possession_public_jwk = normalize_possession_public_jwk(
+            request.get("possession_public_jwk")
+        )
+        possession_fingerprint = possession_jwk_thumbprint(
+            possession_public_jwk
+        )
         identity = manifest.get("pc_identity")
         if not isinstance(identity, dict):
             raise ValueError("enrollment identity is invalid")
@@ -908,16 +925,31 @@ class QualificationRequestHandler(BaseHTTPRequestHandler):
             enrolled_install_id = str(
                 self.authority.private.get("enrolled_producer_install_id") or ""
             )
-            if (enrolled_producer_id or enrolled_install_id) and (
-                enrolled_producer_id != producer_id
-                or enrolled_install_id != producer_install_id
-            ):
-                self._reject("qualification_enrollment_identity_conflict", status=409)
+            enrolled_possession_fingerprint = str(
+                self.authority.private.get(
+                    "enrolled_possession_key_fingerprint"
+                )
+                or ""
+            )
+            if enrolled_producer_id or enrolled_install_id:
+                if (
+                    enrolled_producer_id != producer_id
+                    or enrolled_install_id != producer_install_id
+                    or enrolled_possession_fingerprint
+                    != possession_fingerprint
+                ):
+                    self._reject(
+                        "qualification_enrollment_identity_conflict",
+                        status=409,
+                    )
+                    return
+                self._reject("reattach_proof_required", status=409)
                 return
             self.authority.private.update(
                 {
                     "enrolled_producer_id": producer_id,
                     "enrolled_producer_install_id": producer_install_id,
+                    "enrolled_possession_key_fingerprint": possession_fingerprint,
                 }
             )
             self.authority.persist_private()
@@ -925,7 +957,11 @@ class QualificationRequestHandler(BaseHTTPRequestHandler):
         self._json(
             200,
             {
+                "contract_version": SELF_ENROLLMENT_CONTRACT_VERSION,
                 "status": "enrolled",
+                "identity_action": "CREATED",
+                "authorization_state": "OPERATION_PENDING",
+                "credential_epoch": 1,
                 "producer_id": producer_id,
                 "key_id": key_id,
                 "secret": producer_secret,
@@ -933,6 +969,10 @@ class QualificationRequestHandler(BaseHTTPRequestHandler):
                     producer_secret.encode("utf-8")
                 ).hexdigest(),
                 "active_manifest_hashes": [expected_hash],
+                "possession_key": {
+                    "contract_version": POSSESSION_KEY_CONTRACT_VERSION,
+                    "fingerprint": possession_fingerprint,
+                },
                 "server_binding": {
                     "mode": ACTIVATION_MODE,
                     "authority_instance_id": self.authority.context.authority_instance_id,

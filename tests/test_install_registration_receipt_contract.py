@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import direct_sync_push
 import direct_sync_runtime
@@ -7,6 +8,36 @@ from direct_sync_push import ProducerCredentials, RELAY_STATUS_ACKED, manifest_h
 from direct_sync_runtime import DirectSyncRuntimeConfig, enqueue_completed_source_file, run_relay_once
 from producer_runtime_client import RuntimePreparation
 from tools import register_container_audit_worker_pc as registration
+
+
+TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+TEST_POSSESSION_PUBLIC_JWK = {
+    "crv": "P-256",
+    "kty": "EC",
+    "x": "ftdPP0FoUhV62ssO6cL7HqpHkBIBrG_8AtnYvilamcc",
+    "y": "IHDnlSA-nqN6SQxMtpQ580nxmwRaJ2dJfEFm7Mk7-IQ",
+}
+
+
+class _FakePossessionKey:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, _exc_type, _exc, _traceback):
+        return None
+
+    def descriptor(self):
+        return SimpleNamespace(
+            contract_version=registration.POSSESSION_KEY_CONTRACT_VERSION,
+            scope=registration.SCOPE_CURRENT_USER,
+            created=True,
+            public_jwk=dict(TEST_POSSESSION_PUBLIC_JWK),
+            fingerprint=TEST_POSSESSION_FINGERPRINT,
+            export_policy=0,
+        )
+
+    def assert_non_exportable(self):
+        return SimpleNamespace(private_export_status_hex="0x80090029")
 
 
 class _Response:
@@ -57,7 +88,15 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
         return _Response(
             200,
             {
-                "status": "already_enrolled",
+                "contract_version": registration.SELF_ENROLLMENT_CONTRACT_VERSION,
+                "status": "enrolled",
+                "identity_action": "CREATED",
+                "authorization_state": "OPERATION_PENDING",
+                "credential_epoch": 1,
+                "possession_key": {
+                    "contract_version": registration.POSSESSION_KEY_CONTRACT_VERSION,
+                    "fingerprint": TEST_POSSESSION_FINGERPRINT,
+                },
                 "producer_id": "container-audit-test1",
                 "key_id": "container-audit-test1-key",
                 "secret": "fixture-secret-not-persisted-in-json",
@@ -72,7 +111,12 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
         path.write_bytes(b"fixture-machine-protected-secret")
         return path
 
-    monkeypatch.setattr(registration.requests, "post", enroll_post)
+    monkeypatch.setattr(registration, "_post_enrollment_request", enroll_post)
+    monkeypatch.setattr(
+        registration.PersistentPossessionKey,
+        "provision_initial",
+        classmethod(lambda _cls, *args, **kwargs: _FakePossessionKey()),
+    )
     monkeypatch.setattr(registration, "_write_dpapi_secret", write_dpapi_secret)
     monkeypatch.setattr(
         direct_sync_push,
@@ -116,6 +160,7 @@ def test_install_registration_manifest_authorization_and_first_clean_receipt(tmp
             "--endpoint-url",
             "https://worker.example.invalid/api/producer-ingest/v1/source-file",
             "--self-enroll",
+            "--confirm-new-server-identity",
             "--preserve-existing-machine-profile",
             "--manifest-path",
             str(manifest_path),

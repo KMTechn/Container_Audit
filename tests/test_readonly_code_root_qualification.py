@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 import direct_sync_auto_bootstrap
+import current_user_onboarding as onboarding_module
 from best_time_records import BestTimeRecordStore
 from Container_Audit import ContainerAudit
 from current_user_onboarding import (
@@ -113,6 +114,11 @@ def _ready_state(paths) -> None:
         "producer_id": source_host_id,
         "source_host_id": source_host_id,
         "producer_install_id": producer_install_id,
+        "enrollment_contract_version": "producer-self-enrollment-v2",
+        "possession_key_contract_version": "producer-machine-possession-key-v1",
+        "possession_key_fingerprint": (
+            "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+        ),
     }
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
@@ -142,6 +148,8 @@ def _ready_state(paths) -> None:
             "manifest_hash_verified": True,
             "persisted_manifest_hash_verified": True,
             "manifest_hash": manifest_hash(manifest),
+            "possession_key_verified": True,
+            "enrollment_contract_version": "producer-self-enrollment-v2",
         },
     )
     _write_json(
@@ -172,6 +180,20 @@ def test_runtime_operates_with_code_root_denied_write_and_preserves_inventory(
     tmp_path,
     monkeypatch,
 ):
+    monkeypatch.setattr(
+        onboarding_module,
+        "_possession_key_readback",
+        lambda _identity: {
+            "status": "READY",
+            "contract_version": "producer-machine-possession-key-v1",
+            "scope": "current_user",
+            "fingerprint": (
+                "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+            ),
+            "export_policy": 0,
+            "private_export_status": "0x80090029",
+        },
+    )
     app_root = tmp_path / "hardened-code"
     state_root = tmp_path / "current-user-state"
     (app_root / "config").mkdir(parents=True)

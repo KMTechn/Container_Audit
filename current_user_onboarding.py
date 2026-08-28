@@ -36,6 +36,13 @@ from user_relay import (
     start_user_relay_process,
     user_relay_stop_path,
 )
+from vendor.kmtech_zero_pe import (
+    ADMIN_RECOVERY_ACTION,
+    AdminRecoveryRequired as PossessionKeyAdminRecoveryRequired,
+    POSSESSION_KEY_CONTRACT_VERSION,
+    PersistentPossessionKey,
+    SCOPE_CURRENT_USER,
+)
 
 
 DEFAULT_SERVER_BASE_URL = "https://worker.kmtecherp.com"
@@ -48,6 +55,7 @@ ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV = (
     "CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH"
 )
 ONBOARDING_EXIT_CODE = 4
+SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
 
 
 class CurrentUserOnboardingError(RuntimeError):
@@ -55,6 +63,10 @@ class CurrentUserOnboardingError(RuntimeError):
         super().__init__(message)
         self.report_path = Path(report_path)
         self.status = status
+
+
+class CurrentUserPossessionRecoveryRequired(ValueError):
+    recovery_action = ADMIN_RECOVERY_ACTION
 
 
 @dataclass(frozen=True)
@@ -356,6 +368,48 @@ def _default_profile_loader(path: Path) -> Any:
     )
 
 
+def _possession_key_readback(identity: Mapping[str, Any]) -> dict[str, Any]:
+    enrollment_contract = str(
+        identity.get("enrollment_contract_version") or ""
+    )
+    key_contract = str(
+        identity.get("possession_key_contract_version") or ""
+    )
+    expected_fingerprint = str(
+        identity.get("possession_key_fingerprint") or ""
+    )
+    if (
+        enrollment_contract != SELF_ENROLLMENT_CONTRACT_VERSION
+        or key_contract != POSSESSION_KEY_CONTRACT_VERSION
+        or not expected_fingerprint
+    ):
+        raise CurrentUserPossessionRecoveryRequired(
+            "legacy producer identity has no v2 possession-key binding; audited administrator recovery is required"
+        )
+    try:
+        with PersistentPossessionKey.open_existing(
+            scope=SCOPE_CURRENT_USER
+        ) as possession_key:
+            descriptor = possession_key.descriptor()
+            non_exportability = possession_key.assert_non_exportable()
+    except PossessionKeyAdminRecoveryRequired as exc:
+        raise CurrentUserPossessionRecoveryRequired(
+            f"persisted possession key requires audited administrator recovery: {exc.reason}"
+        ) from exc
+    if descriptor.fingerprint != expected_fingerprint:
+        raise CurrentUserPossessionRecoveryRequired(
+            "persisted producer identity and current possession key fingerprint differ"
+        )
+    return {
+        "status": "READY",
+        "contract_version": descriptor.contract_version,
+        "scope": descriptor.scope,
+        "fingerprint": descriptor.fingerprint,
+        "export_policy": descriptor.export_policy,
+        "private_export_status": non_exportability.private_export_status_hex,
+    }
+
+
 def inspect_current_user_state(
     paths: CurrentUserOnboardingPaths,
     *,
@@ -375,6 +429,21 @@ def inspect_current_user_state(
         return {"status": "ABSENT", "present": present}
     if present["registration_report"] and sum(present.values()) == 1:
         report = _read_json(paths.registration_report_path, "registration report")
+        if (
+            str(report.get("status") or "") == ADMIN_RECOVERY_ACTION
+            or str(report.get("recovery_action") or "")
+            == ADMIN_RECOVERY_ACTION
+        ):
+            return {
+                "status": "RECOVERY_REQUIRED",
+                "present": present,
+                "reason": str(report.get("blocked_reason") or "").strip()
+                or "audited administrator recovery is required",
+                "recovery_action": ADMIN_RECOVERY_ACTION,
+                "enrollment_error_code": str(
+                    report.get("enrollment_error_code") or ""
+                ),
+            }
         if str(report.get("status") or "") in {"BLOCKED", "FAILED", "UNKNOWN"}:
             return {"status": "ABSENT_RETRYABLE", "present": present}
     if not all(present.values()):
@@ -410,6 +479,9 @@ def inspect_current_user_state(
             registration.get("server_registration_verified") is not True
             or registration.get("manifest_hash_verified") is not True
             or registration.get("persisted_manifest_hash_verified") is not True
+            or registration.get("possession_key_verified") is not True
+            or registration.get("enrollment_contract_version")
+            != SELF_ENROLLMENT_CONTRACT_VERSION
             or len(expected_manifest_hash) != 64
             or manifest_hash(manifest) != expected_manifest_hash
         ):
@@ -420,6 +492,7 @@ def inspect_current_user_state(
             raise ValueError("logistics profile is not current-user scoped")
         resolved_credential = credential_loader(paths.credential_path)
         resolved_profile = profile_loader(paths.logistics_profile_path)
+        possession_key = _possession_key_readback(identity)
         if resolved_credential is None or resolved_profile is None:
             raise ValueError("credential/profile readback returned no value")
         if (
@@ -428,18 +501,22 @@ def inspect_current_user_state(
         ):
             raise ValueError("logistics profile identity binding differs")
     except Exception as exc:
-        return {
+        result = {
             "status": "RECOVERY_REQUIRED",
             "present": present,
             "reason": str(exc),
             "error_type": exc.__class__.__name__,
         }
+        if isinstance(exc, CurrentUserPossessionRecoveryRequired):
+            result["recovery_action"] = ADMIN_RECOVERY_ACTION
+        return result
     return {
         "status": "READY",
         "present": present,
         "source_host_id": required_identity["source_host_id"],
         "producer_install_id": required_identity["producer_install_id"],
         "manifest_hash": expected_manifest_hash,
+        "possession_key": possession_key,
         "tls_private_ca_configured": bool(
             getattr(resolved_profile, "tls_ca_bundle_path", "")
         ),
@@ -593,6 +670,15 @@ def onboard_current_user(
                 credential_loader=credential_loader,
             )
         if state["status"] == "RECOVERY_REQUIRED":
+            if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
+                raise CurrentUserOnboardingError(
+                    str(
+                        state.get("reason")
+                        or "audited administrator recovery is required"
+                    ),
+                    report_path=paths.onboarding_report_path,
+                    status=ADMIN_RECOVERY_ACTION,
+                )
             raise ValueError(str(state.get("reason") or "partial current-user state"))
         if state["status"] in {"ABSENT", "ABSENT_RETRYABLE"}:
             if registration_runner is None:
