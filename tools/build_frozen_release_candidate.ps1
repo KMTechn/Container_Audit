@@ -18,6 +18,7 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot "resolve_release_python.ps1")
 . (Join-Path $PSScriptRoot "resolve_windows_powershell.ps1")
+. (Join-Path $PSScriptRoot "bootstrap_integrity.ps1")
 
 $factoryContractSha256 = "a60ab6e9b74aed08c53b801d52b415ffb728e73afbf64908eba7885c7f474046"
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..")).TrimEnd([char[]]"\/")
@@ -311,7 +312,8 @@ try {
         "register_container_audit_worker_pc.py",
         "isolated_qualification_authority.py",
         "install_logistics_runtime_profile.py",
-        "check_logistics_runtime_profile.py"
+        "check_logistics_runtime_profile.py",
+        "bootstrap_integrity.ps1"
     )) {
         Copy-Item -LiteralPath (Join-Path "tools" $relativeTool) `
             -Destination (Join-Path $releaseToolsRoot $relativeTool)
@@ -446,6 +448,18 @@ try {
         "--expected-contract-sha256", $factoryContractSha256
     ) -Failure "Sealed factory package verification failed."
 
+    $bootstrapIntegrity = Write-BootstrapIntegrityRecord `
+        -Root $packageRoot `
+        -CodeRootIdentity '.'
+    $bootstrapIntegrityReadback = Assert-BootstrapIntegrityRecord $packageRoot
+    $bootstrapIntegrityPath = Join-Path $packageRoot $BootstrapIntegrityFileName
+    $bootstrapIntegrityInfo = Get-Item -LiteralPath $bootstrapIntegrityPath
+    Write-Output (
+        "bootstrap_integrity=PASS path=$bootstrapIntegrityPath " +
+        "bytes=$($bootstrapIntegrityInfo.Length) file_count=$($bootstrapIntegrityReadback.file_count) " +
+        "aggregate_sha256=$($bootstrapIntegrity.aggregate_sha256)"
+    )
+
     Compress-Archive -LiteralPath $packageRoot -DestinationPath $zipPath -CompressionLevel Optimal
     if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) {
         throw "Frozen candidate ZIP was not created."
@@ -466,6 +480,12 @@ try {
         "-B", "tools/check_release_config.py",
         "--config-dir", (Join-Path $smokeRoot "Container_Audit/config")
     ) -Failure "Extracted release configuration validation failed."
+    $smokeBootstrapIntegrity = Assert-BootstrapIntegrityRecord `
+        (Join-Path $smokeRoot "Container_Audit")
+    Write-Output (
+        "extracted_bootstrap_integrity=PASS file_count=$($smokeBootstrapIntegrity.file_count) " +
+        "aggregate_sha256=$($smokeBootstrapIntegrity.aggregate_sha256)"
+    )
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-B", "-m", "kmtech_factory_contracts.build_cli", "verify",
         "--stage-root", (Join-Path $smokeRoot "Container_Audit"),

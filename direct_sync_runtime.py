@@ -414,7 +414,20 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
     isolated_context_path = str(
         payload.get("isolated_qualification_context_path") or ""
     ).strip()
-    tls_ca_bundle_path = ""
+    tls_ca_bundle_path = str(payload.get("tls_ca_bundle_path") or "").strip()
+    if tls_ca_bundle_path:
+        ca_bundle = Path(tls_ca_bundle_path).expanduser()
+        if not ca_bundle.is_absolute():
+            raise DirectSyncPushError("tls_ca_bundle_path must be absolute")
+        try:
+            if ca_bundle.is_symlink() or not ca_bundle.is_file():
+                raise DirectSyncPushError("TLS CA bundle is unavailable")
+            ca_size = ca_bundle.stat().st_size
+        except OSError as exc:
+            raise DirectSyncPushError("TLS CA bundle is unavailable") from exc
+        if ca_size <= 0 or ca_size > 1024 * 1024:
+            raise DirectSyncPushError("TLS CA bundle size is invalid")
+        tls_ca_bundle_path = str(ca_bundle.resolve())
     runtime_lease_mode = str(payload.get("runtime_lease_mode") or "enforce").strip().lower()
     if runtime_lease_mode not in {"observe", "enforce"}:
         raise DirectSyncPushError("runtime_lease_mode must be observe or enforce")
@@ -445,6 +458,14 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
         # The qualification CA signs the loopback authority alone, so a bound
         # external origin keeps ordinary trust instead of that private root.
         if endpoint_url == isolated_context.endpoint_url:
+            if (
+                tls_ca_bundle_path
+                and Path(tls_ca_bundle_path).resolve()
+                != Path(isolated_context.ca_bundle_path).resolve()
+            ):
+                raise DirectSyncPushError(
+                    "credential TLS CA bundle conflicts with isolated qualification context"
+                )
             tls_ca_bundle_path = isolated_context.ca_bundle_path
     else:
         validate_endpoint_url(endpoint_url)

@@ -15,6 +15,7 @@ from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL_THIS_PC.ps1"
+INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 
 
 def _powershell() -> str:
@@ -86,9 +87,12 @@ def _private_ca_pem() -> bytes:
 
 def test_bootstrap_is_minimal_code_placement_contract():
     text = INSTALLER.read_text(encoding="utf-8")
+    helper = INTEGRITY_HELPER.read_text(encoding="utf-8")
 
     assert len(text.splitlines()) <= 500
-    assert "container-audit-bootstrap-integrity-v1" in text
+    assert '. (Join-Path $PSScriptRoot "tools\\bootstrap_integrity.ps1")' in text
+    assert "container-audit-bootstrap-integrity-v1" in helper
+    assert "Write-BootstrapIntegrityRecord" in text
     assert "identity_profile_created=false" in text
     assert "elevation_points=1:code_placement" in text
     assert "Set-HardenedCodeAcl" in text
@@ -113,8 +117,42 @@ def test_bootstrap_is_minimal_code_placement_contract():
 
 
 def test_bootstrap_powershell_parses():
-    escaped = str(INSTALLER).replace("'", "''")
-    completed = subprocess.run(
+    for script in (INSTALLER, INTEGRITY_HELPER):
+        escaped = str(script).replace("'", "''")
+        completed = subprocess.run(
+            [
+                _powershell(),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                (
+                    "$tokens=$null;$errors=$null;"
+                    "[void][System.Management.Automation.Language.Parser]::ParseFile("
+                    f"'{escaped}',[ref]$tokens,[ref]$errors);"
+                    "if($errors.Count){$errors|ForEach-Object{$_.ToString()};exit 1}"
+                ),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(
+    tmp_path,
+):
+    package = tmp_path / "build" / "Container_Audit"
+    package.mkdir(parents=True)
+    (package / "Container_Audit.exe").write_bytes(b"portable-main")
+    (package / "runtime.dll").write_bytes(b"portable-runtime")
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_BOOTSTRAP_HELPER"] = str(INTEGRITY_HELPER)
+    environment["KMTECH_TEST_PACKAGE_ROOT"] = str(package)
+    generate = subprocess.run(
         [
             _powershell(),
             "-NoLogo",
@@ -122,19 +160,71 @@ def test_bootstrap_powershell_parses():
             "-NonInteractive",
             "-Command",
             (
-                "$tokens=$null;$errors=$null;"
-                "[void][System.Management.Automation.Language.Parser]::ParseFile("
-                f"'{escaped}',[ref]$tokens,[ref]$errors);"
-                "if($errors.Count){$errors|ForEach-Object{$_.ToString()};exit 1}"
+                ". $env:KMTECH_TEST_BOOTSTRAP_HELPER;"
+                "Write-BootstrapIntegrityRecord -Root $env:KMTECH_TEST_PACKAGE_ROOT "
+                "-CodeRootIdentity '.' | Out-Null;"
+                "Assert-BootstrapIntegrityRecord $env:KMTECH_TEST_PACKAGE_ROOT | Out-Null"
             ),
         ],
         check=False,
         capture_output=True,
         text=True,
         timeout=30,
+        env=environment,
     )
+    assert generate.returncode == 0, generate.stderr or generate.stdout
+    record = json.loads((package / "bootstrap-integrity.json").read_text(encoding="utf-8"))
+    assert record["code_root"] == "."
+    assert {item["path"] for item in record["files"]} == {
+        "Container_Audit.exe",
+        "runtime.dll",
+    }
 
-    assert completed.returncode == 0, completed.stderr or completed.stdout
+    relocated = tmp_path / "Downloads" / "Container_Audit"
+    relocated.parent.mkdir()
+    shutil.move(str(package), str(relocated))
+    environment["KMTECH_TEST_PACKAGE_ROOT"] = str(relocated)
+    verify = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                ". $env:KMTECH_TEST_BOOTSTRAP_HELPER;"
+                "Assert-BootstrapIntegrityRecord $env:KMTECH_TEST_PACKAGE_ROOT | Out-Null"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+    assert verify.returncode == 0, verify.stderr or verify.stdout
+
+    (relocated / "runtime.dll").write_bytes(b"tampered")
+    blocked = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                ". $env:KMTECH_TEST_BOOTSTRAP_HELPER;"
+                "Assert-BootstrapIntegrityRecord $env:KMTECH_TEST_PACKAGE_ROOT | Out-Null"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+    assert blocked.returncode != 0
+    assert "inventory differs" in (blocked.stderr + blocked.stdout)
 
 
 def test_bootstrap_dry_run_does_not_create_identity_profile_or_target(tmp_path):

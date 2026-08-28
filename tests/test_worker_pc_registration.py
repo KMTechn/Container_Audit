@@ -166,11 +166,12 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
                 },
             }
 
-    def fake_post(url, *, json, headers, timeout):
+    def fake_post(url, *, json, headers, timeout, **kwargs):
         captured["url"] = url
         captured["json"] = json
         captured["headers"] = headers
         captured["timeout"] = timeout
+        captured["request_kwargs"] = kwargs
         return FakeResponse()
 
     def fake_write_wincred(target_name, secret):
@@ -253,11 +254,12 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
                 },
             }
 
-    def fake_post(url, *, json, headers, timeout):
+    def fake_post(url, *, json, headers, timeout, **kwargs):
         captured["url"] = url
         captured["json"] = json
         captured["headers"] = headers
         captured["timeout"] = timeout
+        captured["request_kwargs"] = kwargs
         return FakeResponse()
 
     def fake_write_dpapi_secret(data_dir, target_name, secret):
@@ -326,8 +328,9 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
                 "machine_credential_bundle": {"fixture": True},
             }
 
-    def fake_post(_url, *, json, **_kwargs):
+    def fake_post(_url, *, json, **kwargs):
         captured["manifest"] = json["manifest"]
+        captured["request_kwargs"] = kwargs
         return FakeResponse()
 
     def fake_profile(_bundle, **kwargs):
@@ -382,6 +385,11 @@ def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
     assert captured["profile_kwargs"]["profile_path"] == str(profile_path)
     assert captured["profile_kwargs"]["tls_ca_bundle_path"] == str(
         tls_ca_bundle_path
+    )
+    assert captured["request_kwargs"]["verify"] == str(tls_ca_bundle_path)
+    assert captured["request_kwargs"]["allow_redirects"] is False
+    assert credential["tls_ca_bundle_path"] == str(
+        profile_path.resolve().parent / "tls" / "ca-bundle.pem"
     )
 
 
@@ -659,7 +667,7 @@ def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code="
         def status_code(self):
             return status_code
 
-    def fake_post(_url, *, json, headers=None, timeout=None):
+    def fake_post(_url, *, json, headers=None, timeout=None, **_kwargs):
         captured["url"] = _url
         captured["json"] = json
         captured["headers"] = headers

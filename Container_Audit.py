@@ -23,6 +23,7 @@ import random
 import tempfile
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from container_audit_product_host import dispatch_product_mode
 from kmtech_factory_contracts import load_and_verify_contract_lock
@@ -67,6 +68,7 @@ from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
+    load_logistics_runtime_profile,
     unprotect_current_user_secret,
 )
 from label_qr import (
@@ -516,6 +518,48 @@ def _get_update_manifest_public_key() -> str:
     ).strip()
 
 
+def _private_update_request_kwargs(url: str) -> Dict[str, Any]:
+    """Bind same-origin private update discovery to the enrolled CA explicitly."""
+
+    request_kwargs: Dict[str, Any] = {"allow_redirects": False}
+    try:
+        app_root = (
+            Path(sys.executable).resolve().parent
+            if getattr(sys, "frozen", False)
+            else Path(__file__).resolve().parent
+        )
+        profile_path = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
+        if not profile_path:
+            profile_path = str(
+                resolve_current_user_onboarding_paths(app_root).logistics_profile_path
+            )
+        profile = load_logistics_runtime_profile(
+            required=False,
+            profile_path=profile_path,
+            decryptor=unprotect_current_user_secret,
+        )
+        if profile is None:
+            return request_kwargs
+        requested = urlsplit(str(url or ""))
+        enrolled = urlsplit(str(profile.base_url or ""))
+        if (
+            requested.scheme.lower(),
+            requested.netloc.lower(),
+        ) != (
+            enrolled.scheme.lower(),
+            enrolled.netloc.lower(),
+        ):
+            return request_kwargs
+        ca_bundle_path = str(profile.tls_ca_bundle_path or "").strip()
+        if ca_bundle_path:
+            request_kwargs["verify"] = ca_bundle_path
+    except Exception:
+        # Update discovery is optional; onboarding and catalog startup retain
+        # their own fail-closed profile validation.
+        return request_kwargs
+    return request_kwargs
+
+
 def _check_github_release_for_updates() -> Optional[Dict[str, Any]]:
     api_url = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
     response = requests.get(api_url, timeout=5)
@@ -568,7 +612,11 @@ def _check_private_manifest_for_updates() -> Optional[Dict[str, Any]]:
     assert_https_update_url(manifest_url)
     if is_github_hosted_update_url(manifest_url):
         raise ValueError("private_manifest updater manifest URL must not point to GitHub-hosted update storage")
-    response = requests.get(manifest_url, timeout=5)
+    response = requests.get(
+        manifest_url,
+        timeout=5,
+        **_private_update_request_kwargs(manifest_url),
+    )
     response.raise_for_status()
     manifest = response.json()
     if not isinstance(manifest, dict):
@@ -577,7 +625,11 @@ def _check_private_manifest_for_updates() -> Optional[Dict[str, Any]]:
     assert_https_update_url(signature_url)
     if is_github_hosted_update_url(signature_url):
         raise ValueError("private_manifest updater signature URL must not point to GitHub-hosted update storage")
-    signature_response = requests.get(signature_url, timeout=5)
+    signature_response = requests.get(
+        signature_url,
+        timeout=5,
+        **_private_update_request_kwargs(signature_url),
+    )
     signature_response.raise_for_status()
     verify_update_manifest_signature(manifest, signature_response.content, public_key_hex)
     return update_candidate_from_private_manifest(
@@ -10924,6 +10976,12 @@ FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
     "네트워크 연결을 확인한 뒤 다시 실행하세요. 계속 실패하면 오류 보고서 경로를 "
     "IT 담당자에게 전달하세요."
 )
+BOOTSTRAP_INTEGRITY_WARNING_TITLE = "배포 무결성 기록 없음"
+BOOTSTRAP_INTEGRITY_WARNING_MESSAGE = (
+    "bootstrap 무결성 기록이 없어 경고 상태로 계속 시작합니다.\n\n"
+    "프로그램 파일이 일부만 압축 해제됐을 수 있으므로 공식 ZIP을 다시 받아 확인하세요. "
+    "기록이 존재하지만 일치하지 않는 경우에는 시작이 차단됩니다."
+)
 
 
 def _first_run_onboarding_enabled() -> bool:
@@ -10939,6 +10997,19 @@ def _show_first_run_onboarding_error(failure: CurrentUserOnboardingError) -> Non
     try:
         messagebox.showerror(
             FIRST_RUN_ONBOARDING_ERROR_TITLE,
+            operator_message,
+        )
+    except Exception:
+        pass
+
+
+def _show_bootstrap_integrity_warning(report_path: object) -> None:
+    operator_message = (
+        f"{BOOTSTRAP_INTEGRITY_WARNING_MESSAGE}\n보고서: {str(report_path or 'UNKNOWN')}"
+    )
+    try:
+        messagebox.showwarning(
+            BOOTSTRAP_INTEGRITY_WARNING_TITLE,
             operator_message,
         )
     except Exception:
@@ -11014,13 +11085,19 @@ def main(argv: list[str] | None = None):
     try:
         if _first_run_onboarding_enabled():
             try:
-                onboard_current_user(
+                onboarding_report = onboard_current_user(
                     application_path,
                     require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
                 )
             except CurrentUserOnboardingError as exc:
                 _show_first_run_onboarding_error(exc)
                 return ONBOARDING_EXIT_CODE
+            if onboarding_report.get("bootstrap_integrity") == "absent":
+                _show_bootstrap_integrity_warning(
+                    resolve_current_user_onboarding_paths(
+                        application_path
+                    ).onboarding_report_path
+                )
         try:
             active_catalog_path = prepare_startup_item_catalog()
             if active_catalog_path is not None:

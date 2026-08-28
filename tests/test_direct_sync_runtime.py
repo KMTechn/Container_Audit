@@ -288,6 +288,53 @@ def test_load_credentials_supports_env_secret_ref(monkeypatch, tmp_path):
     assert "runtime-secret-from-env" not in path.read_text(encoding="utf-8")
 
 
+def test_load_credentials_carries_explicit_private_ca_to_all_producer_transports(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setenv("CONTAINER_RUNTIME_SECRET", "runtime-secret-from-env")
+    ca_bundle = tmp_path / "profile" / "tls" / "ca-bundle.pem"
+    ca_bundle.parent.mkdir(parents=True)
+    ca_bundle.write_bytes(b"private-ca-fixture")
+    path = tmp_path / "credential-private-ca.json"
+    path.write_text(
+        json.dumps(
+            {
+                "producer_id": "producer-runtime-ca",
+                "key_id": "key-runtime-ca",
+                "secret_ref": "env:CONTAINER_RUNTIME_SECRET",
+                "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+                "tls_ca_bundle_path": str(ca_bundle),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    credentials = load_credentials_from_json(path)
+
+    assert credentials.tls_ca_bundle_path == str(ca_bundle.resolve())
+
+
+def test_load_credentials_rejects_missing_explicit_private_ca(monkeypatch, tmp_path):
+    monkeypatch.setenv("CONTAINER_RUNTIME_SECRET", "runtime-secret-from-env")
+    path = tmp_path / "credential-missing-ca.json"
+    path.write_text(
+        json.dumps(
+            {
+                "producer_id": "producer-runtime-ca",
+                "key_id": "key-runtime-ca",
+                "secret_ref": "env:CONTAINER_RUNTIME_SECRET",
+                "endpoint_url": "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+                "tls_ca_bundle_path": str(tmp_path / "missing-ca.pem"),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(DirectSyncPushError, match="TLS CA bundle is unavailable"):
+        load_credentials_from_json(path)
+
+
 def test_secret_data_default_uses_current_user_scope_not_credential_sibling(
     monkeypatch,
     tmp_path,

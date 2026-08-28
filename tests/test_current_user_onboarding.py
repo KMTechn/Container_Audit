@@ -395,6 +395,37 @@ def test_missing_registration_result_is_unknown_not_success(tmp_path):
     assert report["action"] == "UNKNOWN"
 
 
+def test_missing_bootstrap_integrity_is_diagnostic_warning_not_startup_failure(tmp_path):
+    app_root = tmp_path / "downloaded-app"
+    app_root.mkdir()
+    (app_root / "Container_Audit.exe").write_bytes(b"main")
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+
+    def register(selected_paths):
+        _ready_state(selected_paths)
+        return 0
+
+    report = onboard_current_user(
+        app_root,
+        environ=environment,
+        require_bootstrap_integrity=True,
+        registration_runner=register,
+        profile_loader=_profile_loader,
+        credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory,
+        autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+
+    assert report["status"] == "READY"
+    assert report["action"] == "CREATED"
+    assert report["bootstrap_integrity"] == "absent"
+    assert report["bootstrap_integrity_detail"]["status"] == "ABSENT"
+    persisted = json.loads(paths.onboarding_report_path.read_text(encoding="utf-8"))
+    assert persisted["bootstrap_integrity"] == "absent"
+
+
 def test_bootstrap_integrity_verifies_exact_inventory(tmp_path):
     app_root = tmp_path / "hardened-app"
     app_root.mkdir()
@@ -423,7 +454,7 @@ def test_bootstrap_integrity_verifies_exact_inventory(tmp_path):
         {
             "schema_version": "container-audit-bootstrap-integrity-v1",
             "status": "PASS",
-            "code_root": str(app_root.resolve()),
+            "code_root": ".",
             "file_count": len(entries),
             "aggregate_sha256": aggregate,
             "files": entries,

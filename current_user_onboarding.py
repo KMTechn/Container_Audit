@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from typing import Any, Callable, Mapping, MutableMapping
 import uuid
@@ -248,12 +249,30 @@ def verify_bootstrap_integrity(
 ) -> dict[str, Any]:
     if not required:
         return {"status": "NOT_TESTED", "reason": "source-mode onboarding"}
+    try:
+        record_stat = paths.bootstrap_integrity_path.lstat()
+    except FileNotFoundError:
+        return {
+            "status": "ABSENT",
+            "reason": "bootstrap integrity record is absent; continuing with a warning",
+            "record_path": str(paths.bootstrap_integrity_path),
+        }
+    except OSError as exc:
+        raise ValueError("bootstrap integrity record is unreadable") from exc
+    if stat.S_ISLNK(record_stat.st_mode) or not stat.S_ISREG(record_stat.st_mode):
+        raise ValueError("bootstrap integrity record is redirected or not a regular file")
     record = _read_json(paths.bootstrap_integrity_path, "bootstrap integrity record")
     if record.get("schema_version") != BOOTSTRAP_INTEGRITY_VERSION:
         raise ValueError("bootstrap integrity record schema is invalid")
     if record.get("status") != "PASS":
         raise ValueError("bootstrap integrity record is not PASS")
-    if _resolved(str(record.get("code_root") or "")) != paths.app_root:
+    declared_code_root = str(record.get("code_root") or "")
+    resolved_code_root = (
+        paths.bootstrap_integrity_path.parent.resolve()
+        if declared_code_root == "."
+        else _resolved(declared_code_root)
+    )
+    if resolved_code_root != paths.app_root:
         raise ValueError("bootstrap integrity record code root is invalid")
     files = record.get("files")
     if not isinstance(files, list) or not files:
@@ -539,10 +558,14 @@ def onboard_current_user(
         "failure": "",
     }
     try:
-        report["bootstrap_integrity"] = verify_bootstrap_integrity(
+        bootstrap_integrity_detail = verify_bootstrap_integrity(
             paths,
             required=require_integrity,
         )
+        report["bootstrap_integrity"] = str(
+            bootstrap_integrity_detail.get("status") or "UNKNOWN"
+        ).lower()
+        report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
         state = inspect_current_user_state(
             paths,
             profile_loader=profile_loader,
@@ -754,6 +777,7 @@ def onboarding_main(argv: list[str] | None = None) -> int:
         return ONBOARDING_EXIT_CODE
     print(f"onboarding_status={report['status']}")
     print(f"onboarding_action={report['action']}")
+    print(f"bootstrap_integrity={report['bootstrap_integrity']}")
     print(f"onboarding_report={resolve_current_user_onboarding_paths(args.app_root).onboarding_report_path}")
     return 0
 

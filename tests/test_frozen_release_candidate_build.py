@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "tools" / "build_frozen_release_candidate.ps1"
 PYTHON_RESOLVER = ROOT / "tools" / "resolve_release_python.ps1"
 WINDOWS_POWERSHELL_RESOLVER = ROOT / "tools" / "resolve_windows_powershell.ps1"
+BOOTSTRAP_INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 PWSH = "pwsh"
 
 
@@ -132,6 +133,9 @@ def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package()
         '"tools/check_update_archive.py"',
         '"tools/check_release_config.py"',
         '"local-artifact-qualification-receipt.json"',
+        'Write-BootstrapIntegrityRecord',
+        'Assert-BootstrapIntegrityRecord',
+        '"bootstrap_integrity.ps1"',
         'status = "LOCAL_ARTIFACT_QUALIFICATION_PASS"',
         "tag_object_sha = $tagObject",
         "zip_sha256 = $zipSha256",
@@ -195,7 +199,12 @@ def test_supported_source_help_probe_writes_no_bytecode(tmp_path, relative_scrip
 
 
 def test_frozen_candidate_builder_powershell_parses():
-    for script_path in (BUILDER, PYTHON_RESOLVER, WINDOWS_POWERSHELL_RESOLVER):
+    for script_path in (
+        BUILDER,
+        PYTHON_RESOLVER,
+        WINDOWS_POWERSHELL_RESOLVER,
+        BOOTSTRAP_INTEGRITY_HELPER,
+    ):
         escaped = str(script_path).replace("'", "''")
         command = (
             "$tokens=$null;$errors=$null;"

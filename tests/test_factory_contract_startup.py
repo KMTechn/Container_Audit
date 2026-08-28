@@ -7,7 +7,11 @@ import Container_Audit as app
 from kmtech_factory_contracts import CONTRACT_BUNDLE_SHA256, FactoryContractError
 from kmtech_factory_contracts.build_cli import prepare_identity
 from kmtech_factory_contracts.installer import offline_preflight
-from kmtech_factory_contracts.package import create_build_manifest, write_json
+from kmtech_factory_contracts.package import (
+    create_build_manifest,
+    verify_staged_package,
+    write_json,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -71,6 +75,36 @@ def test_generated_container_contract_uses_cmd_without_task_action_mismatch(tmp_
     stale_action = offline_preflight(candidate=generated, installed_builds=[installed])
     stale_action_codes = {issue["code"] for issue in stale_action["issues"]}
     assert "TASK_ACTION_MISMATCH" in stale_action_codes
+
+
+def test_factory_manifest_delegates_only_bootstrap_record_to_its_fail_closed_verifier(
+    tmp_path,
+):
+    stage_root = tmp_path / "stage"
+    prepare_identity(
+        repository=ROOT,
+        stage_root=stage_root,
+        app_id="container_audit",
+        app_version=app.CURRENT_VERSION,
+        db_schema_current=0,
+        development=True,
+    )
+    manifest = create_build_manifest(
+        stage_root,
+        built_at_utc="2026-08-28T00:00:00Z",
+    )
+    write_json(stage_root / "build-manifest.json", manifest)
+    (stage_root / "bootstrap-integrity.json").write_text(
+        '{"schema_version":"container-audit-bootstrap-integrity-v1"}\n',
+        encoding="utf-8",
+    )
+
+    assert verify_staged_package(stage_root, release_mode=False)["status"] == "PASS"
+
+    (stage_root / "unexpected.bin").write_bytes(b"not delegated")
+    with pytest.raises(FactoryContractError) as caught:
+        verify_staged_package(stage_root, release_mode=False)
+    assert caught.value.code == "PAYLOAD_HASH_MISMATCH"
 
 
 @pytest.mark.parametrize(

@@ -40,6 +40,8 @@ from storage_policy import (  # noqa: E402
 )
 from storage_utils import atomic_write_json  # noqa: E402
 from tools.install_logistics_runtime_profile import (  # noqa: E402
+    TLS_CA_BUNDLE_RELATIVE_PATH,
+    default_profile_path,
     ensure_runtime_profile_from_enrollment_bundle,
 )
 
@@ -633,12 +635,21 @@ def _self_enroll(
         == str(getattr(isolated_context, "endpoint_url", "") or "")
         else ""
     )
+    configured_ca_bundle_path = str(
+        getattr(args, "tls_ca_bundle_path", "") or ""
+    ).strip()
     if isolated_context is None:
         response = requests.post(
             enrollment_url,
             json=payload,
             headers=headers,
             timeout=max(1, int(args.enrollment_timeout_seconds)),
+            allow_redirects=False,
+            **(
+                {"verify": configured_ca_bundle_path}
+                if configured_ca_bundle_path
+                else {}
+            ),
         )
     else:
         with requests.Session() as session:
@@ -703,6 +714,19 @@ def _self_enroll(
         )
     if machine_profile is None and bool(getattr(args, "require_machine_credential_bundle", False)):
         raise DirectSyncPushError("self-enroll response missing machine credential bundle")
+    if configured_ca_bundle_path:
+        if machine_profile is not None:
+            selected_profile_path = (
+                Path(str(getattr(args, "logistics_profile_path", "") or "")).expanduser()
+                if str(getattr(args, "logistics_profile_path", "") or "").strip()
+                else default_profile_path()
+            )
+            producer_ca_bundle_path = (
+                selected_profile_path.resolve().parent / TLS_CA_BUNDLE_RELATIVE_PATH
+            )
+        else:
+            producer_ca_bundle_path = Path(configured_ca_bundle_path).expanduser().resolve()
+        credential["tls_ca_bundle_path"] = str(producer_ca_bundle_path)
     try:
         bootstrap_report = _bootstrap_secret_ref(
             secret_ref_scheme=secret_ref_scheme,
@@ -734,6 +758,12 @@ def _self_enroll(
         "machine_profiles": {"logistics": machine_profile} if machine_profile else {},
         "machine_profile_mode": (
             "preserved_existing" if preserve_existing_machine_profile else "enrollment_bundle"
+        ),
+        "enrollment_tls_ca_bundle_configured": bool(
+            authority_ca_bundle_path or configured_ca_bundle_path
+        ),
+        "producer_tls_ca_bundle_persisted": bool(
+            credential.get("tls_ca_bundle_path")
         ),
     }
 

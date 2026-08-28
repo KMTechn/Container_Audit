@@ -256,6 +256,39 @@ def test_private_manifest_rejects_github_hosted_manifest_url(monkeypatch):
         container_audit_module._check_private_manifest_for_updates()
 
 
+def test_private_update_transport_uses_enrolled_ca_only_for_same_origin(
+    tmp_path,
+    monkeypatch,
+):
+    ca_bundle = tmp_path / "tls" / "ca-bundle.pem"
+    ca_bundle.parent.mkdir()
+    ca_bundle.write_bytes(b"private-ca-fixture")
+
+    class Profile:
+        base_url = "https://updates.example:8443"
+        tls_ca_bundle_path = str(ca_bundle)
+
+    monkeypatch.setenv(
+        container_audit_module.LOGISTICS_PROFILE_PATH_ENV,
+        str(tmp_path / "runtime-profile.json"),
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "load_logistics_runtime_profile",
+        lambda **_kwargs: Profile(),
+    )
+
+    same_origin = container_audit_module._private_update_request_kwargs(
+        "https://updates.example:8443/static/latest.json"
+    )
+    other_origin = container_audit_module._private_update_request_kwargs(
+        "https://updates.example:9443/static/latest.json"
+    )
+
+    assert same_origin == {"allow_redirects": False, "verify": str(ca_bundle)}
+    assert other_origin == {"allow_redirects": False}
+
+
 class DummyListbox:
     def __init__(self):
         self.deleted = False
@@ -760,7 +793,13 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
     monkeypatch.setattr(
         container_audit_module,
         "onboard_current_user",
-        lambda *_args, **_kwargs: calls.append("onboarded") or {"status": "READY"},
+        lambda *_args, **_kwargs: calls.append("onboarded")
+        or {"status": "READY", "bootstrap_integrity": "absent"},
+    )
+    monkeypatch.setattr(
+        container_audit_module,
+        "_show_bootstrap_integrity_warning",
+        lambda report_path: calls.append(("integrity-warning", Path(report_path))),
     )
     monkeypatch.setattr(
         container_audit_module,
@@ -777,6 +816,10 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
     assert container_audit_module.main([]) == 0
     assert calls == [
         "onboarded",
+        (
+            "integrity-warning",
+            tmp_path / "state" / "direct_sync" / "status" / "current_user_onboarding.json",
+        ),
         "catalog",
         "client-created",
         "update-scheduled",

@@ -17,6 +17,7 @@ BUILD_IDENTITY_SCHEMA_VERSION = 1
 BUILD_MANIFEST_SCHEMA_VERSION = 1
 BUILD_COMPATIBILITY_SCHEMA_VERSION = 1
 SHA256_LENGTH = 64
+BOOTSTRAP_INTEGRITY_RECORD_PATH = "bootstrap-integrity.json"
 
 
 BUILD_IDENTITY_REQUIRED_FIELDS = (
@@ -254,7 +255,13 @@ def create_build_manifest(
             "PACKAGE_PROVENANCE_MISMATCH",
             "embedded identity compatibility hash differs",
         )
-    inventory = payload_inventory(stage_root, excluded={manifest_path})
+    # The portable bootstrap record seals this manifest and every other package
+    # byte, so it is necessarily produced after the factory manifest.  It has
+    # its own fail-closed verifier and is excluded here to avoid a hash cycle.
+    inventory = payload_inventory(
+        stage_root,
+        excluded={manifest_path, BOOTSTRAP_INTEGRITY_RECORD_PATH},
+    )
     inventory_sha256 = canonical_sha256(inventory)
     return {
         "build_manifest_schema_version": BUILD_MANIFEST_SCHEMA_VERSION,
@@ -370,7 +377,10 @@ def verify_staged_package(
             "PACKAGE_PROVENANCE_MISMATCH",
             "outer, embedded, and compatibility identities differ",
         )
-    inventory = payload_inventory(stage_root, excluded={manifest_relative})
+    inventory = payload_inventory(
+        stage_root,
+        excluded={manifest_relative, BOOTSTRAP_INTEGRITY_RECORD_PATH},
+    )
     if inventory != manifest.get("payload_inventory"):
         raise FactoryContractError("PAYLOAD_HASH_MISMATCH", "payload inventory differs from the manifest")
     if canonical_sha256(inventory) != manifest.get("payload_inventory_sha256"):

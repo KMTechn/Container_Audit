@@ -12,28 +12,14 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ExpectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
-$IntegrityFileName = "bootstrap-integrity.json"
-$IntegritySchema = "container-audit-bootstrap-integrity-v1"
+. (Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1")
+$IntegrityFileName = $BootstrapIntegrityFileName
 $LegacyRelayTaskName = "direct-sync-relay-container-audit"
 $LegacyQualificationTaskName = "container-audit-isolated-qualification-authority"
 $BootstrapScriptPath = $MyInvocation.MyCommand.Path
 $BootstrapBoundParameters = @{}
 foreach ($boundName in $PSBoundParameters.Keys) {
     $BootstrapBoundParameters[$boundName] = $PSBoundParameters[$boundName]
-}
-
-function Get-StrictFullPath([string]$Path, [string]$Purpose) {
-    if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) {
-        throw "$Purpose must be an absolute path."
-    }
-    if ($Path.StartsWith('\\?\') -or $Path.StartsWith('\\.\')) {
-        throw "$Purpose must not use a device namespace."
-    }
-    $full = [IO.Path]::GetFullPath($Path).TrimEnd('\')
-    if ([string]::IsNullOrWhiteSpace($full) -or $full -eq [IO.Path]::GetPathRoot($full)) {
-        throw "$Purpose must not be a filesystem root."
-    }
-    return $full
 }
 
 function Test-SamePath([string]$Left, [string]$Right) {
@@ -57,18 +43,6 @@ function Assert-NoReparsePoint([string]$Path, [string]$Purpose) {
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
             throw "$Purpose must not contain a reparse point: $($item.FullName)"
         }
-    }
-}
-
-function Get-FileSha256([string]$Path) {
-    $stream = [IO.File]::OpenRead($Path)
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        return ([BitConverter]::ToString($sha.ComputeHash($stream))).Replace('-', '').ToLowerInvariant()
-    }
-    finally {
-        $sha.Dispose()
-        $stream.Dispose()
     }
 }
 
@@ -110,51 +84,6 @@ function Invoke-SelfElevated {
     $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
     exit $process.ExitCode
-}
-
-function Get-RelativeCodePath([string]$Root, [string]$Path) {
-    $rootFull = (Get-StrictFullPath $Root "inventory root") + '\'
-    $pathFull = [IO.Path]::GetFullPath($Path)
-    if (-not $pathFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Inventory path escaped its root."
-    }
-    return $pathFull.Substring($rootFull.Length).Replace('\', '/')
-}
-
-function Get-CodeInventory([string]$Root) {
-    $rootFull = Get-StrictFullPath $Root "code root"
-    $result = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $rootFull -File -Force -Recurse | Sort-Object FullName)) {
-        $relative = Get-RelativeCodePath $rootFull $file.FullName
-        if ($relative.Equals($IntegrityFileName, [StringComparison]::OrdinalIgnoreCase)) {
-            continue
-        }
-        $result += [pscustomobject][ordered]@{
-            path = $relative
-            size = [int64]$file.Length
-            sha256 = Get-FileSha256 $file.FullName
-        }
-    }
-    return $result
-}
-
-function Get-InventoryAggregate([object[]]$Inventory) {
-    $lines = @($Inventory | ForEach-Object { "$($_.sha256) $($_.size) $($_.path)" })
-    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($lines -join "`n") + "`n")
-    $sha = [Security.Cryptography.SHA256]::Create()
-    try {
-        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
-    }
-    finally {
-        $sha.Dispose()
-    }
-}
-
-function Write-Utf8Json([string]$Path, $Payload) {
-    $temporary = "$Path.tmp.$PID"
-    $json = $Payload | ConvertTo-Json -Depth 8
-    [IO.File]::WriteAllText($temporary, $json + [Environment]::NewLine, (New-Object Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $temporary -Destination $Path -Force
 }
 
 function Assert-RequiredRelease([string]$Root) {
@@ -421,18 +350,9 @@ try {
     if ($stagedAggregate -cne $sourceAggregate) {
         throw "Staged code integrity readback differs from the frozen release."
     }
-    $record = [ordered]@{
-        schema_version = $IntegritySchema
-        status = 'PASS'
-        code_root = $installRootFull
-        installed_at = (Get-Date).ToUniversalTime().ToString('o')
-        file_count = $stagedInventory.Count
-        aggregate_sha256 = $stagedAggregate
-        files = $stagedInventory
-        identity_profile_created = $false
-        state_scope = 'current_user_first_run'
-    }
-    Write-Utf8Json (Join-Path $stagingRoot $IntegrityFileName) $record
+    [void](Write-BootstrapIntegrityRecord `
+        -Root $stagingRoot `
+        -CodeRootIdentity $installRootFull)
     if ($applyHardenedAcl) {
         Set-HardenedCodeAcl $stagingRoot -Recursive
     }
