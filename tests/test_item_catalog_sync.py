@@ -729,6 +729,73 @@ def test_central_refresh_success_and_offline_last_good(monkeypatch, tmp_path):
     assert diagnostic["cache_last_modified_utc"] != "UNKNOWN"
 
 
+def test_authenticated_cache_survives_same_host_closed_port_outage(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "bundle.csv"
+    cache = tmp_path / "cache" / "Item.csv"
+    bundle.write_bytes(CATALOG)
+    profile = _profile(base_url=PROFILE_CATALOG_ORIGIN)
+    monkeypatch.setattr(
+        logistics_runtime_profile,
+        "load_logistics_runtime_profile",
+        lambda required=None: profile,
+    )
+
+    assert refresh_item_catalog(
+        bundle,
+        cache_path=cache,
+        get=lambda *_args, **_kwargs: FakeResponse(CATALOG),
+    ) == cache
+    profile.base_url = "https://server5.autoloop.test:18458"
+
+    assert refresh_item_catalog(
+        bundle,
+        cache_path=cache,
+        get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            ConnectionRefusedError("closed same-host port")
+        ),
+    ) == cache
+    context = sync.get_catalog_attempt_context()
+    assert context["catalog_url"]["port"] == 18458
+    assert context["catalog_source"] == "VERIFIED_CACHE"
+    assert context["cache_state"] == "VALID_AUTHENTICATED"
+    assert context["cache_used"] is True
+
+
+def test_authenticated_cache_rejects_different_host_after_endpoint_change(
+    monkeypatch, tmp_path
+):
+    bundle = tmp_path / "bundle.csv"
+    cache = tmp_path / "cache" / "Item.csv"
+    bundle.write_bytes(CATALOG)
+    profile = _profile(base_url=PROFILE_CATALOG_ORIGIN)
+    monkeypatch.setattr(
+        logistics_runtime_profile,
+        "load_logistics_runtime_profile",
+        lambda required=None: profile,
+    )
+
+    assert refresh_item_catalog(
+        bundle,
+        cache_path=cache,
+        get=lambda *_args, **_kwargs: FakeResponse(CATALOG),
+    ) == cache
+    profile.base_url = "https://different.autoloop.test:18458"
+
+    with pytest.raises(sync.ItemCatalogSyncError) as raised:
+        refresh_item_catalog(
+            bundle,
+            cache_path=cache,
+            get=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                ConnectionRefusedError("different-host outage")
+            ),
+        )
+
+    assert raised.value.cause_code == sync.REQUEST_FAILED_NO_CACHE
+    assert sync.get_verified_catalog_snapshot(cache) is None
+
+
 def test_pre_enrollment_cache_is_not_accepted_after_enrollment(monkeypatch, tmp_path):
     bundle = tmp_path / "bundle.csv"
     cache = tmp_path / "cache" / "Item.csv"
