@@ -1040,16 +1040,10 @@ def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
     app.audio_feedback_init_started = False
     app.success_sound = None
     app.error_sound = None
-    monkeypatch.setattr(container_audit_module.pygame, "init", lambda: None)
     monkeypatch.setattr(
-        container_audit_module.pygame.mixer,
-        "init",
-        lambda: (_ for _ in ()).throw(container_audit_module.pygame.error("no audio device")),
-    )
-    monkeypatch.setattr(
-        container_audit_module.pygame.mixer,
-        "Sound",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Sound should not load after init failure")),
+        container_audit_module,
+        "WavSound",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("no audio device")),
     )
 
     app._load_audio_feedback()
@@ -4986,7 +4980,7 @@ def test_on_closing_logs_discard_when_operator_declines_save(monkeypatch):
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.pygame, "quit", lambda: None)
+    monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
 
     app.on_closing()
 
@@ -5054,7 +5048,7 @@ def test_on_closing_preserves_unclaimed_current_state_on_login_screen(monkeypatc
     app.save_settings = lambda: None
     app._cancel_all_jobs = lambda: setattr(app, "cancelled", True)
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.pygame, "quit", lambda: None)
+    monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
 
     app.on_closing()
 
@@ -5087,7 +5081,7 @@ def test_on_closing_logs_partial_exchange_cancel_before_shutdown(monkeypatch):
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.pygame, "quit", lambda: None)
+    monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
 
     app.on_closing()
 
@@ -5140,7 +5134,7 @@ def test_on_closing_logs_replacement_cancel_before_shutdown(monkeypatch):
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.pygame, "quit", lambda: None)
+    monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
 
     app.on_closing()
 

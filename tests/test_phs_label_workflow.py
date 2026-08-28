@@ -13,6 +13,7 @@ from phs_label_workflow import (
     PHSPhysicalPrintError,
     PhysicalPrintEvidence,
     RenderedPHSLabel,
+    WindowsGDIPhysicalLabelPrinter,
 )
 from transfer_seal import (
     TransferSealError,
@@ -20,6 +21,7 @@ from transfer_seal import (
     validate_compact_phs2_preflight,
 )
 import tray_state
+from vendor.kmtech_zero_pe.raster import RasterImage
 
 
 SCOPE = "PLANT-01"
@@ -834,6 +836,45 @@ def test_real_renderer_writes_date_partitioned_png(tmp_path):
     assert TARGET_DATE in output.parts
     assert len(rendered.sha256) == 64
     assert output.stat().st_size > 0
+    image = RasterImage.from_png(output)
+    assert (image.width, image.height) == (1100, 600)
+
+
+def test_physical_printer_uses_job_local_a4_geometry(monkeypatch, tmp_path):
+    png = tmp_path / "label.png"
+    png.write_bytes(b"placeholder")
+    captured = {}
+
+    class FakePrinter:
+        def __init__(self, printer_name):
+            captured["printer_name"] = printer_name
+
+        def print_png(self, path, spec):
+            captured["path"] = Path(path)
+            captured["spec"] = spec
+            return type("Receipt", (), {"job_id": 73})()
+
+    monkeypatch.setattr(
+        WindowsGDIPhysicalLabelPrinter,
+        "_default_printer_name",
+        staticmethod(lambda: "Fixture Printer"),
+    )
+    monkeypatch.setattr("phs_label_workflow.GdiPrinter", FakePrinter)
+
+    evidence = WindowsGDIPhysicalLabelPrinter().print_png(
+        str(png), document_name="PHS fixture"
+    )
+
+    spec = captured["spec"]
+    assert captured["printer_name"] == "Fixture Printer"
+    assert captured["path"] == png.resolve()
+    assert spec.paper.orientation == "portrait"
+    assert spec.paper.paper_size_code == 9
+    assert spec.paper.driver_scale_percent == 100
+    assert spec.margins_mm.left == spec.margins_mm.top == 0.0
+    assert spec.margins_mm.right == spec.margins_mm.bottom == 0.0
+    assert spec.content_scale_percent == 100
+    assert evidence.spool_job_id == 73
 
 
 @pytest.mark.parametrize("business_date", ["../outside", "2026-02-30", "20260828"])

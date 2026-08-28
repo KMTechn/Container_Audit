@@ -1,5 +1,4 @@
-Pillow
+chardet>=5.2.0
 cryptography>=41.0.0
-pygame
 qrcode
 requests

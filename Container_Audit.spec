@@ -1,16 +1,42 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+
+
+pure_python_override = os.environ.get('KMTECH_PURE_PYTHON_OVERRIDE', '').strip()
+analysis_paths = [pure_python_override] if pure_python_override else []
+factory_identity_root = os.environ.get(
+    'KMTECH_FACTORY_CONTRACT_IDENTITY_ROOT',
+    'build/factory_contract_identity',
+).strip()
 
 a = Analysis(
     ['Container_Audit.py'],
-    pathex=[],
+    pathex=analysis_paths,
     binaries=[],
-    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('logistics_runtime_profile.py', '.'), ('isolated_qualification.py', '.'), ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle'), ('build/factory_contract_identity/build-identity.json', '.'), ('build/factory_contract_identity/build-compatibility.json', '.'), ('contract.lock.json', '.')],
-    hiddenimports=['pygame', 'PIL.Image', 'PIL.ImageTk', 'tools.direct_sync_relay_runner'],
-    hookspath=[],
+    datas=[('assets', 'assets'), ('build/release_config', 'config'), ('build/release_tools', 'tools'), ('direct_sync_push.py', '.'), ('direct_sync_runtime.py', '.'), ('producer_runtime_client.py', '.'), ('direct_sync_operator.py', '.'), ('event_log_store.py', '.'), ('storage_policy.py', '.'), ('storage_utils.py', '.'), ('logistics_runtime_profile.py', '.'), ('isolated_qualification.py', '.'), ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle'), (os.path.join(factory_identity_root, 'build-identity.json'), '.'), (os.path.join(factory_identity_root, 'build-compatibility.json'), '.'), ('contract.lock.json', '.')],
+    hiddenimports=['tools.direct_sync_relay_runner'],
+    hookspath=['tools/pyinstaller_hooks'],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'PIL',
+        'pygame',
+        'charset_normalizer.md__mypyc',
+        '_brotli',
+        'brotli',
+        'bcrypt',
+        'jsonschema',
+        'jsonschema_specifications',
+        'numpy',
+        'psutil',
+        'pywintypes',
+        'referencing',
+        'rpds',
+        'win32',
+        'win32pdh',
+        'yaml',
+    ],
     noarchive=False,
     optimize=0,
 )

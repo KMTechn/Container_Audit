@@ -1,0 +1,9 @@
+{
+  "contract_version": "kmtech-zero-pe-contract-v1",
+  "source_artifact": "E:/KMTech/autoloop-20260824/seq259-zero-pe-contract",
+  "source_path": "src/kmtech_zero_pe",
+  "files": {
+    "gdi_print.py": "48453e70a4bdd2008c2e4565bf647a852f319322458f9dc5a094a064274faece",
+    "raster.py": "1296fc461e349cc02c1379b09096559203d2ec22cdc27c780958a05006d97c48"
+  }
+}

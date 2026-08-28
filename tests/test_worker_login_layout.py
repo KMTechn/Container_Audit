@@ -114,6 +114,20 @@ class FakeWorkerRegistry:
         return ["테스트 작업자"]
 
 
+class FakeRasterImage:
+    def __init__(self, width=1200, height=360):
+        self.width = width
+        self.height = height
+
+    def resized(self, width, height, *, resample):
+        assert resample == "bilinear"
+        return FakeRasterImage(width, height)
+
+    def to_tk_photo_image(self, *, master=None):
+        assert master is not None
+        return self
+
+
 def _factory(*args, **kwargs):
     return FakeWidget(*args, **kwargs)
 
@@ -123,7 +137,11 @@ def worker_login_view(monkeypatch):
     for name in ("Frame", "Label", "Button", "Combobox"):
         monkeypatch.setattr(container_audit_module.ttk, name, _factory)
     monkeypatch.setattr(container_audit_module.tk, "StringVar", FakeStringVar)
-    monkeypatch.setattr(container_audit_module.ImageTk, "PhotoImage", lambda image: image)
+    monkeypatch.setattr(
+        container_audit_module.RasterImage,
+        "from_png",
+        lambda _path: FakeRasterImage(),
+    )
 
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = FakeRoot(1366, 768)

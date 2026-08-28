@@ -12,12 +12,9 @@ import time
 import json
 import re
 from typing import List, Dict, Optional, Any, Callable, Mapping, Sequence
-from PIL import Image, ImageTk
 from dataclasses import dataclass, field
 import queue
-import pygame
 import uuid
-import requests
 import subprocess
 import random
 import tempfile
@@ -25,7 +22,15 @@ import sqlite3
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from runtime_dependency_guard import install_charset_normalizer_block
+
+install_charset_normalizer_block()
+
+import requests
+
 from container_audit_product_host import dispatch_product_mode
+from native_audio import WavSound, stop_all_sounds
+from vendor.kmtech_zero_pe.raster import RasterImage
 from kmtech_factory_contracts import load_and_verify_contract_lock
 from container_audit_test_harness import parse_internal_test_command
 from best_time_records import BestTimeRecordStore
@@ -1086,10 +1091,8 @@ class ContainerAudit:
             success_sound = error_sound = None
             error_message = ""
             try:
-                pygame.init()
-                pygame.mixer.init()
-                success_sound = pygame.mixer.Sound(resource_path('assets/success.wav'))
-                error_sound = pygame.mixer.Sound(resource_path('assets/error.wav'))
+                success_sound = WavSound(resource_path('assets/success.wav'))
+                error_sound = WavSound(resource_path('assets/error.wav'))
             except Exception as exc:
                 error_message = str(exc)
 
@@ -1604,8 +1607,8 @@ class ContainerAudit:
         if logo_size == getattr(self, "_worker_login_logo_size", None):
             return
         try:
-            resized = logo_source.resize(logo_size, Image.Resampling.LANCZOS)
-            self.logo_photo_ref = ImageTk.PhotoImage(resized)
+            resized = logo_source.resized(*logo_size, resample="bilinear")
+            self.logo_photo_ref = resized.to_tk_photo_image(master=logo_label)
             logo_label.configure(image=self.logo_photo_ref)
             self._worker_login_logo_size = logo_size
         except Exception as exc:
@@ -1629,8 +1632,7 @@ class ContainerAudit:
         self._authenticated_protected_admin = False
         try:
             logo_path = resource_path(os.path.join('assets', 'logo.png'))
-            with Image.open(logo_path) as logo_img:
-                self._worker_login_logo_source = logo_img.copy()
+            self._worker_login_logo_source = RasterImage.from_png(logo_path)
             self._worker_login_logo_label = ttk.Label(center_frame, style='TLabel')
             self._worker_login_logo_label.pack()
         except Exception as e:
@@ -8411,7 +8413,7 @@ class ContainerAudit:
                 except tk.TclError as e: print(f"종료 시 sash 위치 저장 오류: {e}")
             self.save_settings(); self._cancel_all_jobs(); self.log_queue.put(None)
             if self.log_thread.is_alive(): self.log_thread.join(timeout=1.0)
-            pygame.quit()
+            stop_all_sounds()
             self.root.destroy()
 
     def _event_log_writer(self):
@@ -9274,13 +9276,13 @@ class ContainerAudit:
                         if max_w < 20: max_w = 250
                         if max_h < 20: max_h = 250
                         img_path = resource_path(item_info['Tray Image'])
-                        img = Image.open(img_path)
-                        original_width, original_height = img.size
+                        img = RasterImage.from_png(img_path)
+                        original_width, original_height = img.width, img.height
                         ratio = min(max_w / original_width, max_h / original_height)
                         new_width = int(original_width * ratio)
                         new_height = int(original_height * ratio)
-                        resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
-                        photo = ImageTk.PhotoImage(resized_img)
+                        resized_img = img.resized(new_width, new_height, resample="bilinear")
+                        photo = resized_img.to_tk_photo_image(master=self.tray_image_label)
                         self.tray_image_label.config(image=photo, text="")
                         self.tray_image_label.image = photo
                     except Exception as e:

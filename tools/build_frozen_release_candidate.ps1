@@ -27,6 +27,8 @@ $approvedStorageRoot = [IO.Path]::GetFullPath("E:\KMTech").TrimEnd('\') + '\'
 $distRoot = Join-Path $candidateRoot "dist"
 $packageRoot = Join-Path $distRoot "Container_Audit"
 $pyinstallerRoot = Join-Path $candidateRoot "pyinstaller"
+$purePythonOverrideRoot = Join-Path $candidateRoot "pure-python-overrides"
+$pyinstallerHookRoot = Join-Path $repositoryRoot "tools/pyinstaller_hooks"
 $zipPath = Join-Path $candidateRoot "Container_Audit-$Tag.zip"
 $checksumPath = "$zipPath.sha256"
 $smokeRoot = Join-Path $candidateRoot "smoke"
@@ -97,6 +99,66 @@ function Write-NewUtf8File {
         throw "Create-once evidence path already exists: $Path"
     }
     [IO.File]::WriteAllText($Path, $Text, [Text.UTF8Encoding]::new($false))
+}
+
+function Assert-LowRiskNativeFreePackage {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
+        throw "Release package root is missing for native dependency validation: $Root"
+    }
+    $pygamePaths = [Collections.Generic.List[string]]::new()
+    $pillowPaths = [Collections.Generic.List[string]]::new()
+    $charsetNativePaths = [Collections.Generic.List[string]]::new()
+    $unusedOptionalNativePaths = [Collections.Generic.List[string]]::new()
+    $unusedOptionalNativeRoots = @(
+        'bcrypt', 'numpy', 'numpy.libs', 'psutil', 'pywin32_system32',
+        'rpds', 'win32', 'yaml'
+    )
+    foreach ($candidate in Get-ChildItem -LiteralPath $Root -Recurse -File) {
+        $relative = [IO.Path]::GetRelativePath($Root, $candidate.FullName).Replace('\', '/')
+        $parts = @($relative.ToLowerInvariant().Split('/'))
+        if (@($parts | Where-Object { $_ -like 'pygame*' }).Count -gt 0) {
+            $pygamePaths.Add($relative)
+        }
+        if (@($parts | Where-Object { $_ -eq 'pil' -or $_ -like 'pillow*' }).Count -gt 0) {
+            $pillowPaths.Add($relative)
+        }
+        if (
+            $parts -contains 'charset_normalizer' -and
+            $candidate.Extension.ToLowerInvariant() -in @('.dll', '.exe', '.pyd')
+        ) {
+            $charsetNativePaths.Add($relative)
+        }
+        if (
+            $candidate.Extension.ToLowerInvariant() -in @('.dll', '.exe', '.pyd') -and
+            (
+                @($parts | Where-Object { $_ -in $unusedOptionalNativeRoots }).Count -gt 0 -or
+                $candidate.Name.ToLowerInvariant().StartsWith('_brotli.')
+            )
+        ) {
+            $unusedOptionalNativePaths.Add($relative)
+        }
+    }
+    if (
+        $pygamePaths.Count -or $pillowPaths.Count -or $charsetNativePaths.Count -or
+        $unusedOptionalNativePaths.Count
+    ) {
+        throw (
+            "low-risk native dependency removal failed: " +
+            "pygame=$($pygamePaths -join ','), pillow=$($pillowPaths -join ','), " +
+            "charset_native=$($charsetNativePaths -join ','), " +
+            "unused_optional_native=$($unusedOptionalNativePaths -join ',')"
+        )
+    }
+    return [pscustomobject]@{
+        pygame_paths = @($pygamePaths)
+        pillow_paths = @($pillowPaths)
+        charset_normalizer_native_paths = @($charsetNativePaths)
+        unused_optional_native_paths = @($unusedOptionalNativePaths)
+        charset_normalizer_mode = 'pure-python-source-override'
+        audio_backend = 'stdlib-winsound'
+    }
 }
 
 if ($PSVersionTable.PSVersion.Major -lt 7) {
@@ -225,6 +287,29 @@ try {
     [IO.Directory]::CreateDirectory($identityRoot) | Out-Null
     [IO.Directory]::CreateDirectory($releaseConfigRoot) | Out-Null
     [IO.Directory]::CreateDirectory($releaseToolsRoot) | Out-Null
+    if (-not (Test-Path -LiteralPath $pyinstallerHookRoot -PathType Container)) {
+        throw "PyInstaller native-free hook directory is missing: $pyinstallerHookRoot"
+    }
+    Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
+        "-B", "tools/stage_pure_python_charset_normalizer.py",
+        "--output-root", $purePythonOverrideRoot
+    ) -Failure "Source-only charset-normalizer staging failed."
+    $env:KMTECH_PURE_PYTHON_OVERRIDE = $purePythonOverrideRoot
+    $nativeFreePyInstallerArgs = @(
+        "--paths", $purePythonOverrideRoot,
+        "--additional-hooks-dir", $pyinstallerHookRoot,
+        "--runtime-hook", (Join-Path $repositoryRoot "runtime_dependency_guard.py"),
+        "--exclude-module", "PIL",
+        "--exclude-module", "pygame",
+        "--exclude-module", "charset_normalizer.md__mypyc"
+    )
+    foreach ($moduleName in @(
+        '_brotli', 'brotli', 'bcrypt', 'jsonschema', 'jsonschema_specifications',
+        'numpy', 'psutil', 'pywintypes', 'referencing', 'rpds', 'win32',
+        'win32pdh', 'yaml'
+    )) {
+        $nativeFreePyInstallerArgs += @('--exclude-module', $moduleName)
+    }
     $tagIdentityJson = & $releasePythonExecutable tools/read_release_qualification_tag.py `
         --repository . --tag-ref $tagRef --expected-tag $Tag
     if ($LASTEXITCODE -ne 0) {
@@ -337,7 +422,8 @@ try {
         $toolName = $tool[0]
         $toolSource = $tool[1]
         Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-            "-m", "PyInstaller", "--paths", ".", "--name", $toolName,
+            "-m", "PyInstaller", $nativeFreePyInstallerArgs,
+            "--paths", ".", "--name", $toolName,
             "--onefile", "--console", "--clean", "--noconfirm",
             "--distpath", $packageRoot,
             "--workpath", (Join-Path $pyinstallerRoot $toolName),
@@ -373,7 +459,8 @@ try {
 
     $probeBundleSource = [IO.Path]::GetFullPath((Join-Path $repositoryRoot "kmtech_factory_contracts/bundle"))
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
-        "-m", "PyInstaller", "--paths", ".", "--name", "KMTechActiveWorkProbe",
+        "-m", "PyInstaller", $nativeFreePyInstallerArgs,
+        "--paths", ".", "--name", "KMTechActiveWorkProbe",
         "--onefile", "--console", "--distpath", $packageRoot,
         "--workpath", (Join-Path $pyinstallerRoot "active_work_probe"),
         "--specpath", (Join-Path $pyinstallerRoot "active_work_probe"),
@@ -430,6 +517,16 @@ try {
             throw "Source and packaged active-work probe identities differ."
         }
     }
+
+    $nativeFreeReport = Assert-LowRiskNativeFreePackage -Root $packageRoot
+    Write-Output (
+        "low_risk_native_free=PASS audio=$($nativeFreeReport.audio_backend) " +
+        "charset=$($nativeFreeReport.charset_normalizer_mode) " +
+        "pygame=$($nativeFreeReport.pygame_paths.Count) " +
+        "pillow=$($nativeFreeReport.pillow_paths.Count) " +
+        "charset_native=$($nativeFreeReport.charset_normalizer_native_paths.Count) " +
+        "unused_optional_native=$($nativeFreeReport.unused_optional_native_paths.Count)"
+    )
 
     Invoke-Checked -FilePath $releasePythonExecutable -Arguments @(
         "-m", "kmtech_factory_contracts.build_cli", "manifest",
@@ -574,6 +671,7 @@ try {
         zip_size = $zipInfo.Length
         main_exe_sha256 = $mainExeSha256
         probe_sha256 = $probeSha256
+        low_risk_native_free = $nativeFreeReport
         final_release_identity_sha256 = $finalReleaseIdentitySha256
         windows_powershell = $sealedWindowsPowerShellIdentity
     }
