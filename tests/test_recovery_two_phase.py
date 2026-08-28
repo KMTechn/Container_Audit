@@ -3,14 +3,17 @@ import json
 import pytest
 
 from recovery_two_phase import (
+    STATE_ABORTED,
     STATE_CLEANUP_INTENT_DURABLE,
     STATE_COMMIT_INTENT_DURABLE,
     STATE_COMPLETE,
+    STATE_EXPIRED,
     STATE_LOCAL_PACKAGE_DURABLE,
     STATE_LOCAL_PERSISTED,
     STATE_PREPARED,
     STATE_PREPARE_INTENT_DURABLE,
     STATE_SERVER_COMMITTED,
+    TERMINAL_REASON_SIGNED_STATUS_EXPIRED,
     RecoveryTwoPhaseJournal,
     RecoveryTwoPhaseStateError,
 )
@@ -131,3 +134,73 @@ def test_completed_journal_is_archived_before_a_new_authorization(tmp_path):
     assert restarted["state"] == STATE_PREPARE_INTENT_DURABLE
     assert restarted["bindings"] == _bindings("02")
     assert (tmp_path / "completed-prepare-01.json").is_file()
+
+
+def test_confirmed_expiry_is_terminal_secret_free_and_archivable(tmp_path):
+    journal = RecoveryTwoPhaseJournal(tmp_path / "journal.json")
+    journal.initialize(_bindings("01"))
+    journal.record_prepared(
+        prepare_id="prepare-server-01",
+        prepare_expires_at="2026-08-29T00:15:00Z",
+        proposed_credential_epoch=2,
+        prepared_key_id="key-02",
+        prepared_secret_fingerprint_sha256="b" * 64,
+    )
+    journal.stage_sealed_package(b"sealed-expired-package")
+    journal.mark_commit_intent()
+
+    expired = journal.mark_expired()
+
+    assert expired["state"] == STATE_EXPIRED
+    assert (
+        expired["terminal_reason_code"]
+        == TERMINAL_REASON_SIGNED_STATUS_EXPIRED
+    )
+    assert expired["terminal_server_state"] == STATE_EXPIRED
+    assert expired["terminal_observed_at"].endswith("Z")
+    assert expired["committed_credential_epoch"] is None
+    assert expired["server_committed_at"] == ""
+    assert expired["transitions"][-1]["from"] == STATE_COMMIT_INTENT_DURABLE
+    assert expired["transitions"][-1]["to"] == STATE_EXPIRED
+
+    with pytest.raises(RecoveryTwoPhaseStateError, match="not durable"):
+        journal.read_sealed_package()
+
+    journal.remove_sealed_package_after_expiry()
+    assert not journal.sealed_package_path.exists()
+
+    restarted = journal.initialize(_bindings("02"))
+    assert restarted["state"] == STATE_PREPARE_INTENT_DURABLE
+    assert restarted["bindings"] == _bindings("02")
+    archived = tmp_path / "terminal-prepare-01.json"
+    assert archived.is_file()
+    serialized = archived.read_text(encoding="utf-8")
+    assert "sealed-expired-package" not in serialized
+    assert "recovery_token" not in serialized
+
+
+def test_aborted_terminal_package_is_removed_before_new_authorization(tmp_path):
+    journal = RecoveryTwoPhaseJournal(tmp_path / "journal.json")
+    journal.initialize(_bindings("01"))
+    journal.record_prepared(
+        prepare_id="prepare-server-01",
+        prepare_expires_at="2999-01-01T00:00:00Z",
+        proposed_credential_epoch=2,
+        prepared_key_id="key-02",
+        prepared_secret_fingerprint_sha256="b" * 64,
+    )
+    journal.stage_sealed_package(b"sealed-aborted-package")
+    journal.mark_commit_intent()
+    assert journal.mark_aborted()["state"] == STATE_ABORTED
+    assert journal.sealed_package_path.is_file()
+
+    journal.remove_sealed_package_after_terminal()
+
+    assert not journal.sealed_package_path.exists()
+    restarted = journal.initialize(_bindings("02"))
+    assert restarted["state"] == STATE_PREPARE_INTENT_DURABLE
+    archived = tmp_path / "terminal-prepare-01.json"
+    assert archived.is_file()
+    assert json.loads(archived.read_text(encoding="utf-8"))["state"] == (
+        STATE_ABORTED
+    )

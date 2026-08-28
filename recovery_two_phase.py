@@ -13,6 +13,9 @@ from storage_utils import atomic_write_json
 
 JOURNAL_SCHEMA_VERSION = "kmtech-recovery-2pc-client-journal-v1"
 PROTOCOL_VERSION = "producer-admin-recovery-2pc-v1"
+TERMINAL_REASON_SIGNED_STATUS_EXPIRED = (
+    "SIGNED_STATUS_CONFIRMED_PREPARE_EXPIRED"
+)
 
 STATE_PREPARE_INTENT_DURABLE = "PREPARE_INTENT_DURABLE"
 STATE_PREPARED = "PREPARED"
@@ -23,23 +26,27 @@ STATE_LOCAL_PERSISTED = "LOCAL_PERSISTED"
 STATE_CLEANUP_INTENT_DURABLE = "CLEANUP_INTENT_DURABLE"
 STATE_COMPLETE = "COMPLETE"
 STATE_ABORTED = "ABORTED"
+STATE_EXPIRED = "EXPIRED"
 
-TERMINAL_STATES = frozenset({STATE_COMPLETE, STATE_ABORTED})
+TERMINAL_STATES = frozenset({STATE_COMPLETE, STATE_ABORTED, STATE_EXPIRED})
 
 _ALLOWED_TRANSITIONS = {
     STATE_PREPARE_INTENT_DURABLE: frozenset({STATE_PREPARED, STATE_ABORTED}),
-    STATE_PREPARED: frozenset({STATE_LOCAL_PACKAGE_DURABLE, STATE_ABORTED}),
+    STATE_PREPARED: frozenset(
+        {STATE_LOCAL_PACKAGE_DURABLE, STATE_ABORTED, STATE_EXPIRED}
+    ),
     STATE_LOCAL_PACKAGE_DURABLE: frozenset(
-        {STATE_COMMIT_INTENT_DURABLE, STATE_ABORTED}
+        {STATE_COMMIT_INTENT_DURABLE, STATE_ABORTED, STATE_EXPIRED}
     ),
     STATE_COMMIT_INTENT_DURABLE: frozenset(
-        {STATE_SERVER_COMMITTED, STATE_ABORTED}
+        {STATE_SERVER_COMMITTED, STATE_ABORTED, STATE_EXPIRED}
     ),
     STATE_SERVER_COMMITTED: frozenset({STATE_LOCAL_PERSISTED}),
     STATE_LOCAL_PERSISTED: frozenset({STATE_CLEANUP_INTENT_DURABLE}),
     STATE_CLEANUP_INTENT_DURABLE: frozenset({STATE_COMPLETE}),
     STATE_COMPLETE: frozenset(),
     STATE_ABORTED: frozenset(),
+    STATE_EXPIRED: frozenset(),
 }
 
 _REQUIRED_BINDING_FIELDS = frozenset(
@@ -188,16 +195,21 @@ class RecoveryTwoPhaseJournal:
         if existing is not None:
             if existing["bindings"] != normalized:
                 if (
-                    existing["state"] == STATE_COMPLETE
+                    existing["state"] in TERMINAL_STATES
                     and not self.sealed_package_path.exists()
                 ):
+                    archive_prefix = (
+                        "completed"
+                        if existing["state"] == STATE_COMPLETE
+                        else "terminal"
+                    )
                     archive = self.path.with_name(
-                        "completed-"
+                        f"{archive_prefix}-"
                         f"{existing['bindings']['client_request_id']}.json"
                     )
                     if archive.exists():
                         raise RecoveryTwoPhaseStateError(
-                            "completed recovery journal archive already exists"
+                            "terminal recovery journal archive already exists"
                         )
                     os.replace(self.path, archive)
                     existing = None
@@ -222,6 +234,9 @@ class RecoveryTwoPhaseJournal:
             "sealed_package_sha256": "",
             "server_committed_at": "",
             "committed_credential_epoch": None,
+            "terminal_reason_code": "",
+            "terminal_server_state": "",
+            "terminal_observed_at": "",
             "created_at": now,
             "updated_at": now,
             "transitions": [
@@ -335,6 +350,7 @@ class RecoveryTwoPhaseJournal:
             STATE_PREPARE_INTENT_DURABLE,
             STATE_PREPARED,
             STATE_ABORTED,
+            STATE_EXPIRED,
         }:
             raise RecoveryTwoPhaseStateError(
                 "recovery two-phase package is not durable"
@@ -405,6 +421,55 @@ class RecoveryTwoPhaseJournal:
                 "committed recovery cannot transition to ABORTED"
             )
         return self.transition({state}, STATE_ABORTED)
+
+    def mark_expired(self) -> dict[str, Any]:
+        payload = self.load()
+        if payload is None:
+            raise RecoveryTwoPhaseStateError(
+                "recovery two-phase journal is absent"
+            )
+        state = str(payload["state"])
+        if state == STATE_EXPIRED:
+            return payload
+        if state not in {
+            STATE_PREPARED,
+            STATE_LOCAL_PACKAGE_DURABLE,
+            STATE_COMMIT_INTENT_DURABLE,
+        }:
+            raise RecoveryTwoPhaseStateError(
+                "only an uncommitted prepared recovery can expire"
+            )
+        return self.transition(
+            {state},
+            STATE_EXPIRED,
+            terminal_reason_code=TERMINAL_REASON_SIGNED_STATUS_EXPIRED,
+            terminal_server_state=STATE_EXPIRED,
+            terminal_observed_at=_utc_now(),
+        )
+
+    def remove_sealed_package_after_expiry(self) -> None:
+        payload = self.load()
+        if payload is None or payload["state"] != STATE_EXPIRED:
+            raise RecoveryTwoPhaseStateError(
+                "expired sealed package cleanup requires EXPIRED journal"
+            )
+        self.sealed_package_path.unlink(missing_ok=True)
+        if self.sealed_package_path.exists():
+            raise RecoveryTwoPhaseStateError(
+                "expired sealed package cleanup failed"
+            )
+
+    def remove_sealed_package_after_terminal(self) -> None:
+        payload = self.load()
+        if payload is None or payload["state"] not in TERMINAL_STATES:
+            raise RecoveryTwoPhaseStateError(
+                "sealed package cleanup requires a terminal journal"
+            )
+        self.sealed_package_path.unlink(missing_ok=True)
+        if self.sealed_package_path.exists():
+            raise RecoveryTwoPhaseStateError(
+                "terminal sealed package cleanup failed"
+            )
 
     def remove_sealed_package_after_complete(self) -> None:
         payload = self.load()

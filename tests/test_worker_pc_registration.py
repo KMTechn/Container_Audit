@@ -863,20 +863,27 @@ def _fake_enroll_post(captured, status="enrolled", status_code=200, error_code="
     return fake_post
 
 
-def _write_admin_recovery_authorization(path, *, producer_id):
+def _write_admin_recovery_authorization(
+    path,
+    *,
+    producer_id,
+    authorization_id="recovery-fixture-01",
+    audit_event_id="authz-audit-fixture-01",
+    expires_at="2999-01-01T00:00:00Z",
+):
     path.write_text(
         json.dumps(
             {
                 "contract_version": (
                     registration.ADMIN_RECOVERY_AUTHORIZATION_CONTRACT_VERSION
                 ),
-                "authorization_id": "recovery-fixture-01",
+                "authorization_id": authorization_id,
                 "producer_id": producer_id,
                 "recovery_token": "recovery-token-fixture",
                 "nonce": "recovery-nonce-fixture",
-                "expires_at": "2999-01-01T00:00:00Z",
+                "expires_at": expires_at,
                 "audience": registration.ADMIN_RECOVERY_AUDIENCE,
-                "audit_event_id": "authz-audit-fixture-01",
+                "audit_event_id": audit_event_id,
             },
             sort_keys=True,
         )
@@ -1086,6 +1093,9 @@ class _FakeRecoveryTwoPhaseServer:
         self.prepare_calls = 0
         self.commit_calls = 0
         self.status_calls = 0
+        self.expire_on_status_call = None
+        self.fail_on_status_call = None
+        self.prepare_expires_at = "2999-01-01T00:00:00Z"
         self._prepared = None
 
     def _commit_payload(self):
@@ -1154,6 +1164,17 @@ class _FakeRecoveryTwoPhaseServer:
                     "proposed_credential_epoch": 2,
                 }
                 self.state = "PREPARED"
+            elif self.state != "PREPARED":
+                return _TwoPhaseResponse(
+                    {
+                        "status": "rejected",
+                        "error": {
+                            "code": "recovery_prepare_not_available",
+                            "message": "Recovery prepare is no longer pending",
+                        },
+                    },
+                    status_code=409,
+                )
             prepared = self._prepared
             assert proof["client_request_id"] == prepared["client_request_id"]
             return _TwoPhaseResponse(
@@ -1167,7 +1188,7 @@ class _FakeRecoveryTwoPhaseServer:
                     "recovery_action": "ADMIN_RECOVERY",
                     "authorization_state": "RESERVED",
                     "prepare_id": prepared["prepare_id"],
-                    "prepare_expires_at": "2999-01-01T00:00:00Z",
+                    "prepare_expires_at": self.prepare_expires_at,
                     "client_request_id": prepared["client_request_id"],
                     "producer_id": prepared["producer_id"],
                     "producer_install_id": prepared["producer_install_id"],
@@ -1191,7 +1212,20 @@ class _FakeRecoveryTwoPhaseServer:
             )
         if url.endswith(registration.ADMIN_RECOVERY_2PC_STATUS_PATH):
             self.status_calls += 1
+            if self.fail_on_status_call == self.status_calls:
+                raise RuntimeError("simulated status transport failure")
+            if self.expire_on_status_call == self.status_calls:
+                self.state = "EXPIRED"
+            assert (
+                json["contract_version"]
+                == registration.ADMIN_RECOVERY_2PC_STATUS_REQUEST_CONTRACT_VERSION
+            )
+            assert len(json["signature"]) == 86
             proof = json["proof"]
+            assert (
+                proof["contract_version"]
+                == registration.ADMIN_RECOVERY_2PC_STATUS_PROOF_CONTRACT_VERSION
+            )
             prepared = self._prepared
             assert proof["prepare_id"] == prepared["prepare_id"]
             payload = {
@@ -1330,6 +1364,12 @@ def test_two_phase_recovery_resumes_every_crash_cut_without_new_authorization(
     assert recovery_secret_path.is_file() is (
         cut_point != "AFTER_COMPLETE_JOURNAL"
     )
+    if cut_point == "AFTER_LOCAL_PACKAGE_STAGE":
+        _write_admin_recovery_authorization(
+            recovery_secret_path,
+            producer_id="container-audit-recovery-2pc",
+            expires_at="2000-01-01T00:00:00Z",
+        )
 
     monkeypatch.setattr(
         registration,
@@ -1356,6 +1396,331 @@ def test_two_phase_recovery_resumes_every_crash_cut_without_new_authorization(
     assert not recovery_secret_path.exists()
     assert not (tmp_path / "recovery-two-phase-journal.prepared-package.dpapi").exists()
     assert active_secrets[-1] == "two-phase-server-secret"
+
+
+@pytest.mark.parametrize(
+    ("cut_point", "first_journal_state", "remove_authorization_before_restart"),
+    [
+        ("BEFORE_EXPIRED_TERMINAL_JOURNAL", "PREPARED", True),
+        ("AFTER_EXPIRED_TERMINAL_JOURNAL", "EXPIRED", False),
+    ],
+)
+def test_two_phase_expiry_crash_cuts_restart_to_audited_terminal_state(
+    tmp_path,
+    monkeypatch,
+    cut_point,
+    first_journal_state,
+    remove_authorization_before_restart,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    report_path = tmp_path / "registration-two-phase-report.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+    )
+    server = _FakeRecoveryTwoPhaseServer()
+    server.expire_on_status_call = 1
+    server.prepare_expires_at = "2000-01-01T00:00:00Z"
+    active_secrets = []
+    crash = {"armed": True}
+
+    def crash_hook(observed):
+        if crash["armed"] and observed == cut_point:
+            crash["armed"] = False
+            raise _SimulatedRecoveryPowerLoss(observed)
+
+    def fake_write_dpapi_secret(data_dir, target_name, secret, **_kwargs):
+        active_secrets.append(secret)
+        return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
+
+    monkeypatch.setattr(registration, "_post_enrollment_request", server.post)
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_protect_current_user",
+        lambda value: b"sealed-fixture:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_unprotect_current_user",
+        lambda value: value.removeprefix(b"sealed-fixture:").decode("utf-8"),
+    )
+    monkeypatch.setattr(registration, "_recovery_two_phase_cut_point", crash_hook)
+    args = _two_phase_recovery_args(
+        tmp_path,
+        recovery_secret_path,
+        report_path,
+    )
+
+    with pytest.raises(_SimulatedRecoveryPowerLoss, match=cut_point):
+        registration.main(args)
+
+    journal_path = tmp_path / "recovery-two-phase-journal.json"
+    first_journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert first_journal["state"] == first_journal_state
+    assert first_journal["prepare_expires_at"] == "2000-01-01T00:00:00Z"
+    assert server.state == "EXPIRED"
+    assert server.commit_calls == 0
+    assert server.old_credential_active is True
+    assert server.new_credential_active is False
+    if remove_authorization_before_restart:
+        recovery_secret_path.unlink()
+
+    monkeypatch.setattr(
+        registration,
+        "_recovery_two_phase_cut_point",
+        lambda _name: None,
+    )
+    assert registration.main(args) == 2
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert report["enrollment_error_code"] == "recovery_prepare_expired"
+    assert report["required_next_action"] == "NEW_AUDITED_RECOVERY_REQUIRED"
+    assert report["server_credential_committed"] is False
+    assert report["recovery_two_phase_state"] == "EXPIRED"
+    assert journal["state"] == "EXPIRED"
+    assert (
+        journal["terminal_reason_code"]
+        == "SIGNED_STATUS_CONFIRMED_PREPARE_EXPIRED"
+    )
+    assert journal["terminal_server_state"] == "EXPIRED"
+    assert journal["committed_credential_epoch"] is None
+    assert server.commit_calls == 0
+    assert active_secrets == []
+    assert recovery_secret_path.is_file() is (
+        not remove_authorization_before_restart
+    )
+    assert not (
+        tmp_path / "recovery-two-phase-journal.prepared-package.dpapi"
+    ).exists()
+
+
+def test_two_phase_expiry_after_package_stage_removes_stale_package(
+    tmp_path,
+    monkeypatch,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    report_path = tmp_path / "registration-two-phase-report.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+    )
+    server = _FakeRecoveryTwoPhaseServer()
+    server.expire_on_status_call = 2
+    active_secrets = []
+
+    monkeypatch.setattr(registration, "_post_enrollment_request", server.post)
+    monkeypatch.setattr(
+        registration,
+        "_write_dpapi_secret",
+        lambda _data_dir, _target_name, secret, **_kwargs: active_secrets.append(
+            secret
+        ),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_protect_current_user",
+        lambda value: b"sealed-fixture:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_unprotect_current_user",
+        lambda value: value.removeprefix(b"sealed-fixture:").decode("utf-8"),
+    )
+    args = _two_phase_recovery_args(
+        tmp_path,
+        recovery_secret_path,
+        report_path,
+    )
+
+    assert registration.main(args) == 2
+
+    journal_path = tmp_path / "recovery-two-phase-journal.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert [row["to"] for row in journal["transitions"]][-3:] == [
+        "LOCAL_PACKAGE_DURABLE",
+        "COMMIT_INTENT_DURABLE",
+        "EXPIRED",
+    ]
+    assert report["enrollment_error_code"] == "recovery_prepare_expired"
+    assert report["recovery_two_phase_state"] == "EXPIRED"
+    assert server.commit_calls == 0
+    assert server.old_credential_active is True
+    assert server.new_credential_active is False
+    assert active_secrets == []
+    assert not (
+        tmp_path / "recovery-two-phase-journal.prepared-package.dpapi"
+    ).exists()
+
+
+def test_two_phase_terminal_journals_roll_to_new_authorizations(
+    tmp_path,
+    monkeypatch,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    report_path = tmp_path / "registration-two-phase-report.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+    )
+    expired_server = _FakeRecoveryTwoPhaseServer()
+    expired_server.expire_on_status_call = 1
+    active_secrets = []
+
+    def fake_write_dpapi_secret(data_dir, target_name, secret, **_kwargs):
+        active_secrets.append(secret)
+        return Path(data_dir) / "secrets" / f"{target_name}.dpapi"
+
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        expired_server.post,
+    )
+    monkeypatch.setattr(registration, "_write_dpapi_secret", fake_write_dpapi_secret)
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_protect_current_user",
+        lambda value: b"sealed-fixture:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_unprotect_current_user",
+        lambda value: value.removeprefix(b"sealed-fixture:").decode("utf-8"),
+    )
+    args = _two_phase_recovery_args(
+        tmp_path,
+        recovery_secret_path,
+        report_path,
+    )
+
+    assert registration.main(args) == 2
+    journal_path = tmp_path / "recovery-two-phase-journal.json"
+    expired_journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    assert expired_journal["state"] == "EXPIRED"
+    assert expired_server.commit_calls == 0
+
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+        authorization_id="recovery-fixture-02",
+        audit_event_id="authz-audit-fixture-02",
+    )
+    replacement_server = _FakeRecoveryTwoPhaseServer()
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        replacement_server.post,
+    )
+
+    assert registration.main(args) == 0
+
+    completed = json.loads(journal_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    archived = list(tmp_path.glob("terminal-*.json"))
+    assert completed["state"] == "COMPLETE"
+    assert completed["bindings"]["authorization_id"] == "recovery-fixture-02"
+    assert report["status"] == "ADMIN_RECOVERY_REGISTERED"
+    assert report["recovery_two_phase_state"] == "COMPLETE"
+    assert replacement_server.commit_calls == 1
+    assert replacement_server.old_credential_active is False
+    assert replacement_server.new_credential_active is True
+    assert len(archived) == 1
+    assert json.loads(archived[0].read_text(encoding="utf-8"))["state"] == (
+        "EXPIRED"
+    )
+    assert not recovery_secret_path.exists()
+    assert active_secrets[-1] == "two-phase-server-secret"
+
+    stale_complete_package = (
+        tmp_path / "recovery-two-phase-journal.prepared-package.dpapi"
+    )
+    stale_complete_package.write_bytes(b"sealed-package-left-by-power-loss")
+    assert stale_complete_package.is_file()
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+        authorization_id="recovery-fixture-03",
+        audit_event_id="authz-audit-fixture-03",
+    )
+    third_server = _FakeRecoveryTwoPhaseServer()
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        third_server.post,
+    )
+
+    assert registration.main(args) == 0
+
+    third_completed = json.loads(journal_path.read_text(encoding="utf-8"))
+    completed_archives = list(tmp_path.glob("completed-*.json"))
+    assert third_completed["state"] == "COMPLETE"
+    assert third_completed["bindings"]["authorization_id"] == (
+        "recovery-fixture-03"
+    )
+    assert third_server.commit_calls == 1
+    assert len(completed_archives) == 1
+    assert json.loads(
+        completed_archives[0].read_text(encoding="utf-8")
+    )["state"] == "COMPLETE"
+    assert not recovery_secret_path.exists()
+    assert not stale_complete_package.exists()
+
+
+def test_two_phase_unavailable_status_remains_reconcilable_not_expired(
+    tmp_path,
+    monkeypatch,
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+    recovery_secret_path = tmp_path / "protected-recovery.json"
+    report_path = tmp_path / "registration-two-phase-report.json"
+    _write_admin_recovery_authorization(
+        recovery_secret_path,
+        producer_id="container-audit-recovery-2pc",
+    )
+    server = _FakeRecoveryTwoPhaseServer()
+    server.fail_on_status_call = 2
+
+    monkeypatch.setattr(registration, "_post_enrollment_request", server.post)
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_protect_current_user",
+        lambda value: b"sealed-fixture:" + value.encode("utf-8"),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_dpapi_unprotect_current_user",
+        lambda value: value.removeprefix(b"sealed-fixture:").decode("utf-8"),
+    )
+    args = _two_phase_recovery_args(
+        tmp_path,
+        recovery_secret_path,
+        report_path,
+    )
+
+    assert registration.main(args) == 2
+
+    journal_path = tmp_path / "recovery-two-phase-journal.json"
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert journal["state"] == "COMMIT_INTENT_DURABLE"
+    assert journal["terminal_reason_code"] == ""
+    assert journal["terminal_server_state"] == ""
+    assert journal["terminal_observed_at"] == ""
+    assert report["status"] == "RESUME_TWO_PHASE_RECOVERY"
+    assert report["recovery_two_phase_state"] == "COMMIT_INTENT_DURABLE"
+    assert report["server_credential_committed"] is False
+    assert server.state == "PREPARED"
+    assert server.commit_calls == 0
+    assert recovery_secret_path.is_file()
+    assert (
+        tmp_path / "recovery-two-phase-journal.prepared-package.dpapi"
+    ).is_file()
 
 
 def test_legacy_v2_recovery_remains_default_when_two_phase_flag_is_absent(

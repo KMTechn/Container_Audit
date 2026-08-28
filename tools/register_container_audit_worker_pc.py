@@ -39,11 +39,14 @@ from recovery_two_phase import (  # noqa: E402
     STATE_CLEANUP_INTENT_DURABLE,
     STATE_COMMIT_INTENT_DURABLE,
     STATE_COMPLETE,
+    STATE_EXPIRED,
     STATE_LOCAL_PACKAGE_DURABLE,
     STATE_LOCAL_PERSISTED,
     STATE_PREPARED,
     STATE_PREPARE_INTENT_DURABLE,
     STATE_SERVER_COMMITTED,
+    TERMINAL_STATES,
+    TERMINAL_REASON_SIGNED_STATUS_EXPIRED,
     RecoveryTwoPhaseJournal,
     RecoveryTwoPhaseStateError,
 )
@@ -184,10 +187,55 @@ class RecoveryTwoPhaseResumeRequired(DirectSyncPushError):
         }
 
 
+class RecoveryTwoPhaseExpired(EnrollmentAdminRecoveryRequired):
+    """A server-confirmed expired prepare needs a new audited recovery."""
+
+    def __init__(self, *, journal_path: Path) -> None:
+        self.journal_path = Path(journal_path)
+        super().__init__(
+            "server status confirmed that the prepared recovery expired; "
+            "a new audited recovery is required",
+            error_code="recovery_prepare_expired",
+        )
+
+    def public_report(self) -> dict:
+        report = super().public_report()
+        report.update(
+            {
+                "administrator_required": True,
+                "server_credential_committed": False,
+                "recovery_two_phase": True,
+                "recovery_two_phase_state": STATE_EXPIRED,
+                "recovery_two_phase_terminal_reason_code": (
+                    TERMINAL_REASON_SIGNED_STATUS_EXPIRED
+                ),
+                "recovery_two_phase_journal_path": str(self.journal_path),
+                "required_next_action": "NEW_AUDITED_RECOVERY_REQUIRED",
+            }
+        )
+        return report
+
+
 def _recovery_two_phase_cut_point(_name: str) -> None:
     """No-op production seam used by crash-cut tests to emulate power loss."""
 
     return None
+
+
+def _recovery_two_phase_terminalize_expired(
+    journal: RecoveryTwoPhaseJournal,
+) -> None:
+    payload = journal.load()
+    if payload is None:
+        raise RecoveryTwoPhaseStateError(
+            "recovery two-phase journal is absent"
+        )
+    if payload["state"] != STATE_EXPIRED:
+        _recovery_two_phase_cut_point("BEFORE_EXPIRED_TERMINAL_JOURNAL")
+        payload = journal.mark_expired()
+        _recovery_two_phase_cut_point("AFTER_EXPIRED_TERMINAL_JOURNAL")
+    journal.remove_sealed_package_after_expiry()
+    raise RecoveryTwoPhaseExpired(journal_path=journal.path)
 
 
 def _default_app_root() -> str:
@@ -1211,7 +1259,10 @@ def _validate_recovery_two_phase_prepare_response(
     active_manifest_hashes = response_payload.get("active_manifest_hashes")
     proposed_epoch = response_payload.get("proposed_credential_epoch")
     try:
-        prepare_expires_at = _dt.datetime.strptime(
+        # Parse the timestamp, but let the bound status endpoint decide whether
+        # it elapsed.  A local clock comparison cannot authoritatively expire
+        # server state and would discard the prepare_id needed to reconcile it.
+        _dt.datetime.strptime(
             str(response_payload.get("prepare_expires_at") or ""),
             "%Y-%m-%dT%H:%M:%SZ",
         ).replace(tzinfo=_dt.timezone.utc)
@@ -1236,7 +1287,6 @@ def _validate_recovery_two_phase_prepare_response(
         != bindings["source_host_id"]
         or not isinstance(response_payload.get("prepare_id"), str)
         or not response_payload["prepare_id"].strip()
-        or prepare_expires_at <= _dt.datetime.now(_dt.timezone.utc)
         or not isinstance(proposed_epoch, int)
         or isinstance(proposed_epoch, bool)
         or proposed_epoch < 2
@@ -1915,18 +1965,6 @@ def _admin_recover_two_phase(
         str(getattr(args, "admin_recovery_secret_file", "") or "")
     ).expanduser().resolve(strict=False)
     authorization = None
-    if recovery_path.is_file():
-        _loaded_path, authorization = _load_admin_recovery_authorization(
-            str(recovery_path),
-            expected_producer_id=str(credential["producer_id"]),
-        )
-    elif existing_journal is None or existing_journal["state"] in {
-        STATE_PREPARE_INTENT_DURABLE,
-        STATE_PREPARED,
-    }:
-        raise DirectSyncPushError(
-            "admin recovery authorization is required until the prepared package is durable"
-        )
 
     urls = _recovery_two_phase_urls(args, credential["endpoint_url"])
     token = args.enrollment_token or os.getenv(
@@ -1956,6 +1994,97 @@ def _admin_recover_two_phase(
     with possession_key_context as possession_key:
         possession_descriptor = possession_key.descriptor()
         non_exportability = possession_key.assert_non_exportable()
+        existing_state = str((existing_journal or {}).get("state") or "")
+
+        # PREPARED status needs only the durable binding and possession key.
+        # Reconcile it before touching an authorization file that may have
+        # expired or been replaced while this client was offline.
+        if existing_state == STATE_PREPARED:
+            try:
+                resume_status_payload = _recovery_two_phase_signed_status(
+                    journal_payload=existing_journal,
+                    possession_key=possession_key,
+                    urls=urls,
+                    headers=headers,
+                    timeout=timeout,
+                    verify=verify,
+                )
+                resume_server_state = (
+                    _validate_recovery_two_phase_status_response(
+                        resume_status_payload,
+                        journal_payload=existing_journal,
+                    )
+                )
+            except Exception as exc:
+                raise RecoveryTwoPhaseResumeRequired(
+                    "signed prepare status could not be reconciled before "
+                    "authorization readback; no commit was attempted",
+                    journal_path=journal.path,
+                    state=STATE_PREPARED,
+                ) from exc
+            if resume_server_state == STATE_EXPIRED:
+                _recovery_two_phase_terminalize_expired(journal)
+            if resume_server_state == "ABORTED":
+                journal.mark_aborted()
+                raise EnrollmentAdminRecoveryRequired(
+                    "server status confirmed that the prepared recovery "
+                    "was aborted",
+                    error_code="recovery_prepare_aborted",
+                )
+            if resume_server_state != STATE_PREPARED:
+                raise EnrollmentAdminRecoveryRequired(
+                    "server committed before the prepared package became "
+                    "durable on this client",
+                    error_code=(
+                        "recovery_committed_before_local_package_durable"
+                    ),
+                )
+
+        if existing_state in TERMINAL_STATES:
+            journal.remove_sealed_package_after_terminal()
+            try:
+                _loaded_path, authorization = (
+                    _load_admin_recovery_authorization(
+                        str(recovery_path),
+                        expected_producer_id=str(credential["producer_id"]),
+                    )
+                )
+            except Exception as exc:
+                if existing_state == STATE_EXPIRED:
+                    raise RecoveryTwoPhaseExpired(
+                        journal_path=journal.path
+                    ) from exc
+                raise
+            if (
+                authorization["authorization_id"]
+                == existing_journal["bindings"]["authorization_id"]
+            ):
+                if existing_state == STATE_EXPIRED:
+                    raise RecoveryTwoPhaseExpired(journal_path=journal.path)
+                raise EnrollmentAdminRecoveryRequired(
+                    "a terminal recovery journal requires a different "
+                    "audited authorization",
+                    error_code="terminal_recovery_authorization_reuse",
+                )
+        elif existing_journal is None or existing_state in {
+            STATE_PREPARE_INTENT_DURABLE,
+            STATE_PREPARED,
+        }:
+            _loaded_path, authorization = _load_admin_recovery_authorization(
+                str(recovery_path),
+                expected_producer_id=str(credential["producer_id"]),
+            )
+            if (
+                existing_state == STATE_PREPARED
+                and authorization["authorization_id"]
+                != existing_journal["bindings"]["authorization_id"]
+            ):
+                raise EnrollmentAdminRecoveryRequired(
+                    "a different authorization cannot replace a server-pending "
+                    "prepared recovery",
+                    error_code="pending_prepare_authorization_mismatch",
+                )
+
         authorization_id = str(
             (authorization or {}).get("authorization_id")
             or (existing_journal or {}).get("bindings", {}).get("authorization_id")
@@ -2044,10 +2173,48 @@ def _admin_recover_two_phase(
                 allow_redirects=False,
                 verify=verify,
             )
-            prepared_payload = _recovery_two_phase_response_payload(
-                prepare_response,
-                action="prepare",
-            )
+            try:
+                prepared_payload = _recovery_two_phase_response_payload(
+                    prepare_response,
+                    action="prepare",
+                )
+            except EnrollmentAdminRecoveryRequired as exc:
+                if (
+                    journal_payload["state"] == STATE_PREPARED
+                    and exc.error_code == "recovery_prepare_not_available"
+                ):
+                    try:
+                        status_payload = _recovery_two_phase_signed_status(
+                            journal_payload=journal_payload,
+                            possession_key=possession_key,
+                            urls=urls,
+                            headers=headers,
+                            timeout=timeout,
+                            verify=verify,
+                        )
+                        unavailable_state = (
+                            _validate_recovery_two_phase_status_response(
+                                status_payload,
+                                journal_payload=journal_payload,
+                            )
+                        )
+                    except Exception as status_exc:
+                        raise RecoveryTwoPhaseResumeRequired(
+                            "prepare replay was unavailable and signed status "
+                            "could not be reconciled; no commit was attempted",
+                            journal_path=journal.path,
+                            state=STATE_PREPARED,
+                        ) from status_exc
+                    if unavailable_state == STATE_EXPIRED:
+                        _recovery_two_phase_terminalize_expired(journal)
+                    if unavailable_state == "ABORTED":
+                        journal.mark_aborted()
+                        raise EnrollmentAdminRecoveryRequired(
+                            "server status confirmed that the prepared "
+                            "recovery was aborted",
+                            error_code="recovery_prepare_aborted",
+                        ) from exc
+                raise
             _validate_recovery_two_phase_prepare_response(
                 prepared_payload,
                 bindings=bindings,
@@ -2082,6 +2249,45 @@ def _admin_recover_two_phase(
                     "idempotent prepare response changed its pending generation"
                 )
             _recovery_two_phase_cut_point("AFTER_PREPARE_RESPONSE")
+            try:
+                stage_status_payload = _recovery_two_phase_signed_status(
+                    journal_payload=journal_payload,
+                    possession_key=possession_key,
+                    urls=urls,
+                    headers=headers,
+                    timeout=timeout,
+                    verify=verify,
+                )
+                stage_server_state = (
+                    _validate_recovery_two_phase_status_response(
+                        stage_status_payload,
+                        journal_payload=journal_payload,
+                    )
+                )
+            except Exception as exc:
+                raise RecoveryTwoPhaseResumeRequired(
+                    "signed prepare status is unavailable before local "
+                    "package staging; no commit was attempted",
+                    journal_path=journal.path,
+                    state=STATE_PREPARED,
+                ) from exc
+            if stage_server_state == STATE_EXPIRED:
+                _recovery_two_phase_terminalize_expired(journal)
+            if stage_server_state == "ABORTED":
+                journal.mark_aborted()
+                raise EnrollmentAdminRecoveryRequired(
+                    "server status confirmed that the prepared recovery "
+                    "was aborted",
+                    error_code="recovery_prepare_aborted",
+                )
+            if stage_server_state != STATE_PREPARED:
+                raise EnrollmentAdminRecoveryRequired(
+                    "server committed before the prepared package became "
+                    "durable on this client",
+                    error_code=(
+                        "recovery_committed_before_local_package_durable"
+                    ),
+                )
             _recovery_two_phase_cut_point("BEFORE_LOCAL_PACKAGE_STAGE")
             journal_payload = journal.stage_sealed_package(
                 _seal_recovery_two_phase_package(prepared_payload)
@@ -2176,10 +2382,14 @@ def _admin_recover_two_phase(
                             "status": "recovered",
                         }
                     )
+                elif server_state == STATE_EXPIRED:
+                    _recovery_two_phase_terminalize_expired(journal)
                 else:
                     journal.mark_aborted()
-                    raise DirectSyncPushError(
-                        "prepared recovery expired or was aborted; the old server credential remains active"
+                    raise EnrollmentAdminRecoveryRequired(
+                        "server status confirmed that the prepared recovery "
+                        "was aborted",
+                        error_code="recovery_prepare_aborted",
                     )
                 _validate_recovery_two_phase_commit_response(
                     committed_payload,
