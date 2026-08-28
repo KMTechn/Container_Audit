@@ -473,6 +473,27 @@ def test_validate_endpoint_url_rejects_invalid_port_before_dns_lookup(monkeypatc
         )
 
 
+def test_validate_credentials_endpoint_allows_enrolled_private_ca_without_isolated_context(
+    monkeypatch,
+):
+    credentials = ProducerCredentials(
+        producer_id="producer-container",
+        key_id="key-container",
+        secret="container-secret",
+        endpoint_url="https://worker.example.invalid/api/producer-ingest/v1/source-file",
+        tls_ca_bundle_path="C:/ProgramData/KMTech/tls/private-ca.pem",
+    )
+    monkeypatch.setattr(
+        direct_sync_push.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [
+            (direct_sync_push.socket.AF_INET, 0, 0, "", ("8.8.8.8", 443))
+        ],
+    )
+
+    direct_sync_push.validate_credentials_endpoint(credentials)
+
+
 def test_upload_rejects_hostname_resolving_to_private_address_before_posting(tmp_path, monkeypatch):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)

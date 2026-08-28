@@ -484,13 +484,12 @@ def validate_credentials_endpoint(credentials: ProducerCredentials) -> None:
     ca_bundle_path = str(
         getattr(credentials, "tls_ca_bundle_path", "") or ""
     ).strip()
-    if not context_path and not ca_bundle_path:
+    if not context_path:
+        # A private CA is ordinary transport trust material for an enrolled
+        # production/test origin.  Only an explicit isolated qualification
+        # context activates the authority-origin binding checks below.
         validate_endpoint_url(credentials.endpoint_url)
         return
-    if not context_path:
-        raise DirectSyncPushError(
-            "isolated qualification credential context is incomplete"
-        )
     try:
         from isolated_qualification import load_isolated_qualification_context
 
