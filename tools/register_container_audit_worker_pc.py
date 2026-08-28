@@ -7,8 +7,10 @@ from __future__ import annotations
 import argparse
 import ctypes
 import datetime as _dt
+import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import uuid
@@ -60,6 +62,9 @@ CONTAINER_AUDIT_CATALOG_STREAM_ID = "container_audit_events"
 PRODUCER_IDENTITY_SCHEMA_VERSION = "container-audit-producer-identity-v1"
 PRODUCER_IDENTITY_FILENAME = "producer_identity.json"
 PRODUCER_IDENTITY_REQUIRED_FIELDS = ("producer_id", "source_host_id", "producer_install_id")
+INSTALL_IDENTITY_DERIVATION_VERSION = "container-audit-install-identity-v1"
+INSTALL_IDENTITY_APP_ID = "container_audit"
+INSTALL_IDENTITY_HASH_HEX_LENGTH = 32
 
 
 def _default_app_root() -> str:
@@ -72,6 +77,144 @@ def _slug(value: str) -> str:
     cleaned = "".join(ch.lower() if ch.isalnum() else "-" for ch in str(value or "").strip())
     parts = [part for part in cleaned.split("-") if part]
     return "-".join(parts) or "unknown"
+
+
+def _normalize_machine_guid(value: str) -> str:
+    try:
+        return str(uuid.UUID(str(value or "").strip().strip("{}"))).lower()
+    except (AttributeError, ValueError) as exc:
+        raise DirectSyncPushError("Windows MachineGuid is unavailable or invalid") from exc
+
+
+def _normalize_user_sid(value: str) -> str:
+    normalized = str(value or "").strip().upper()
+    parts = normalized.split("-")
+    if (
+        len(parts) < 4
+        or parts[0] != "S"
+        or parts[1] != "1"
+        or any(not part.isdigit() for part in parts[2:])
+    ):
+        raise DirectSyncPushError("current Windows user SID is unavailable or invalid")
+    return normalized
+
+
+def _normalize_install_identity_app_id(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{1,63}", normalized):
+        raise DirectSyncPushError("install identity app_id is invalid")
+    return normalized
+
+
+def _current_machine_guid() -> str:
+    if os.name != "nt":
+        raise DirectSyncPushError("Windows MachineGuid lookup is only available on Windows")
+    try:
+        import winreg
+
+        access = winreg.KEY_READ | getattr(winreg, "KEY_WOW64_64KEY", 0)
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Cryptography",
+            access=access,
+        ) as key:
+            value, value_type = winreg.QueryValueEx(key, "MachineGuid")
+    except (OSError, ImportError) as exc:
+        raise DirectSyncPushError("Windows MachineGuid lookup failed") from exc
+    if value_type not in {winreg.REG_SZ, winreg.REG_EXPAND_SZ}:
+        raise DirectSyncPushError("Windows MachineGuid registry type is invalid")
+    return _normalize_machine_guid(value)
+
+
+def _current_user_sid() -> str:
+    if os.name != "nt":
+        raise DirectSyncPushError("Windows user SID lookup is only available on Windows")
+
+    class _SidAndAttributes(ctypes.Structure):
+        _fields_ = [("sid", ctypes.c_void_p), ("attributes", wintypes.DWORD)]
+
+    class _TokenUser(ctypes.Structure):
+        _fields_ = [("user", _SidAndAttributes)]
+
+    advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    advapi32.OpenProcessToken.argtypes = (
+        wintypes.HANDLE,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.HANDLE),
+    )
+    advapi32.OpenProcessToken.restype = wintypes.BOOL
+    advapi32.GetTokenInformation.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_uint,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    )
+    advapi32.GetTokenInformation.restype = wintypes.BOOL
+    advapi32.ConvertSidToStringSidW.argtypes = (
+        ctypes.c_void_p,
+        ctypes.POINTER(wintypes.LPWSTR),
+    )
+    advapi32.ConvertSidToStringSidW.restype = wintypes.BOOL
+    kernel32.GetCurrentProcess.argtypes = ()
+    kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.LocalFree.argtypes = (ctypes.c_void_p,)
+    kernel32.LocalFree.restype = ctypes.c_void_p
+
+    token = wintypes.HANDLE()
+    if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
+        raise DirectSyncPushError("current Windows user token lookup failed")
+    try:
+        required = wintypes.DWORD()
+        advapi32.GetTokenInformation(token, 1, None, 0, ctypes.byref(required))
+        if required.value <= 0:
+            raise DirectSyncPushError("current Windows user SID size lookup failed")
+        token_buffer = ctypes.create_string_buffer(required.value)
+        if not advapi32.GetTokenInformation(
+            token,
+            1,
+            token_buffer,
+            required.value,
+            ctypes.byref(required),
+        ):
+            raise DirectSyncPushError("current Windows user SID lookup failed")
+        token_user = ctypes.cast(token_buffer, ctypes.POINTER(_TokenUser)).contents
+        sid_text = wintypes.LPWSTR()
+        if not advapi32.ConvertSidToStringSidW(token_user.user.sid, ctypes.byref(sid_text)):
+            raise DirectSyncPushError("current Windows user SID conversion failed")
+        try:
+            return _normalize_user_sid(sid_text.value)
+        finally:
+            kernel32.LocalFree(ctypes.cast(sid_text, ctypes.c_void_p))
+    finally:
+        kernel32.CloseHandle(token)
+
+
+def derive_path_independent_install_id(
+    *,
+    machine_guid: str,
+    user_sid: str,
+    app_id: str = INSTALL_IDENTITY_APP_ID,
+) -> str:
+    """Derive a lookup identity, not a possession proof, without filesystem inputs."""
+
+    canonical = {
+        "app_id": _normalize_install_identity_app_id(app_id),
+        "machine_guid": _normalize_machine_guid(machine_guid),
+        "user_sid": _normalize_user_sid(user_sid),
+        "version": INSTALL_IDENTITY_DERIVATION_VERSION,
+    }
+    seed = json.dumps(
+        canonical,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = hashlib.sha256(seed).hexdigest()[:INSTALL_IDENTITY_HASH_HEX_LENGTH]
+    return f"container-audit-install-{digest}"
 
 
 def _default_secret_ref(hostname: str) -> str:
@@ -248,7 +391,6 @@ def _resolve_producer_identity(
     host_slug: str,
 ) -> dict[str, str]:
     generated_source_host_id = f"container-audit-{host_slug}"
-    generated_install_id = f"container-audit-{host_slug}-{uuid.getnode():012x}"
     explicit_identity_path = str(getattr(args, "producer_identity_path", "") or "").strip()
     default_identity_path = _default_producer_identity_path(args, storage_paths)
     loaded: dict[str, str] | None = None
@@ -265,9 +407,17 @@ def _resolve_producer_identity(
     cli_producer_install_id = str(args.producer_install_id or "").strip()
     cli_producer_id = str(args.producer_id or "").strip()
     source_host_id = cli_source_host_id or (loaded or {}).get("source_host_id") or generated_source_host_id
-    producer_install_id = (
-        cli_producer_install_id or (loaded or {}).get("producer_install_id") or generated_install_id
-    )
+    producer_install_id = cli_producer_install_id or (loaded or {}).get("producer_install_id")
+    if cli_producer_install_id:
+        producer_install_id_derivation = "cli"
+    elif loaded is not None:
+        producer_install_id_derivation = "identity_file"
+    else:
+        producer_install_id = derive_path_independent_install_id(
+            machine_guid=_current_machine_guid(),
+            user_sid=_current_user_sid(),
+        )
+        producer_install_id_derivation = INSTALL_IDENTITY_DERIVATION_VERSION
     producer_id = cli_producer_id or (loaded or {}).get("producer_id") or source_host_id
     if cli_source_host_id or cli_producer_install_id or cli_producer_id:
         identity_source = "cli"
@@ -283,6 +433,7 @@ def _resolve_producer_identity(
         "identity_source": identity_source,
         "identity_loaded_from": loaded_from,
         "identity_persist_path": str(default_identity_path),
+        "producer_install_id_derivation": producer_install_id_derivation,
     }
 
 
@@ -856,6 +1007,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "producer_identity_source": identity["identity_source"],
         "producer_identity_loaded_from": identity["identity_loaded_from"],
         "producer_identity_path": identity["identity_persist_path"],
+        "producer_install_id_derivation": identity["producer_install_id_derivation"],
         "local_storage": {
             "data_root": str(storage_paths.data_root),
             "events_dir": str(storage_paths.events_dir),

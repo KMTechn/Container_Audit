@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,16 @@ GUI_ORDER_RAW_EVENT_NAMES = [
     "PHS_RECONCILIATION_LABEL_EXCHANGED",
     "WORK_END",
 ]
+TEST_MACHINE_GUID = "00112233-4455-6677-8899-aabbccddeeff"
+TEST_USER_SID = "S-1-5-21-100-200-300-1001"
+
+
+def _generated_install_id(*, user_sid=TEST_USER_SID, app_id=registration.INSTALL_IDENTITY_APP_ID):
+    return registration.derive_path_independent_install_id(
+        machine_guid=TEST_MACHINE_GUID,
+        user_sid=user_sid,
+        app_id=app_id,
+    )
 
 
 def _catalog_container_audit_raw_event_names():
@@ -629,8 +640,46 @@ def _self_enroll_env(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
     monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
-    monkeypatch.setattr(registration.uuid, "getnode", lambda: 0xEDE662C694C5)
+    monkeypatch.setattr(registration, "_current_machine_guid", lambda: TEST_MACHINE_GUID)
+    monkeypatch.setattr(registration, "_current_user_sid", lambda: TEST_USER_SID)
     return local_app_data, program_data
+
+
+def test_path_independent_install_identity_fixed_vector_and_collision_boundaries():
+    install_id = _generated_install_id()
+
+    assert install_id == "container-audit-install-2cee67264192f4c9657e849f28723681"
+    assert _generated_install_id(user_sid="S-1-5-21-100-200-300-1002") != install_id
+    assert _generated_install_id(app_id="defect_inspection") != install_id
+
+
+def test_worker_pc_registration_generated_install_id_ignores_app_and_state_paths(
+    tmp_path, monkeypatch
+):
+    _self_enroll_env(tmp_path, monkeypatch)
+
+    def run_probe(name, app_root, state_root):
+        report_path = tmp_path / f"{name}.json"
+        monkeypatch.setenv(DATA_ROOT_ENV, str(state_root))
+        assert registration.main(
+            [
+                "--app-root",
+                str(app_root),
+                "--hostname",
+                "PATH-PROBE",
+                "--report-path",
+                str(report_path),
+            ]
+        ) == 0
+        return json.loads(report_path.read_text(encoding="utf-8"))["producer_install_id"]
+
+    first_state = tmp_path / "state-a"
+    first = run_probe("path-a", tmp_path / "release-a", first_state)
+    second = run_probe("path-b", tmp_path / "release-b", tmp_path / "state-b")
+    shutil.rmtree(first_state)
+    recreated = run_probe("path-a-recreated", tmp_path / "release-a", first_state)
+
+    assert first == second == recreated == _generated_install_id()
 
 
 def _identity_payload(producer_id, source_host_id, producer_install_id):
@@ -703,11 +752,14 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     report = json.loads(report_path.read_text(encoding="utf-8"))
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    generated_install_id = f"container-audit-pc-persist-{0xEDE662C694C5:012x}"
+    generated_install_id = _generated_install_id()
 
     assert exit_code == 0
     assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
     assert report["producer_identity_source"] == "generated"
+    assert report["producer_install_id_derivation"] == (
+        registration.INSTALL_IDENTITY_DERIVATION_VERSION
+    )
     assert report["producer_identity_persisted"] is True
     assert Path(report["producer_identity_path"]) == identity_path.resolve()
     assert identity == _identity_payload(
@@ -722,7 +774,7 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     )
 
 
-def test_worker_pc_registration_reuses_persisted_identity_instead_of_new_node_id(tmp_path, monkeypatch):
+def test_worker_pc_registration_reuses_persisted_identity_without_machine_lookup(tmp_path, monkeypatch):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity_path.parent.mkdir(parents=True, exist_ok=True)
@@ -734,6 +786,16 @@ def test_worker_pc_registration_reuses_persisted_identity_instead_of_new_node_id
     identity_path.write_text(json.dumps(pinned, indent=2) + "\n", encoding="utf-8")
     report_path = tmp_path / "registration-identity-reuse-report.json"
     captured = {}
+    monkeypatch.setattr(
+        registration,
+        "_current_machine_guid",
+        lambda: (_ for _ in ()).throw(AssertionError("persisted identity must bypass machine lookup")),
+    )
+    monkeypatch.setattr(
+        registration,
+        "_current_user_sid",
+        lambda: (_ for _ in ()).throw(AssertionError("persisted identity must bypass user lookup")),
+    )
     monkeypatch.setattr(registration.requests, "post", _fake_enroll_post(captured, status="already_enrolled"))
     monkeypatch.setattr(
         registration,
@@ -755,10 +817,11 @@ def test_worker_pc_registration_reuses_persisted_identity_instead_of_new_node_id
 
     report = json.loads(report_path.read_text(encoding="utf-8"))
     persisted = json.loads(identity_path.read_text(encoding="utf-8"))
-    generated_install_id = f"container-audit-pc-reuse-{0xEDE662C694C5:012x}"
+    generated_install_id = _generated_install_id()
 
     assert exit_code == 0
     assert report["producer_identity_source"] == "identity_file"
+    assert report["producer_install_id_derivation"] == "identity_file"
     assert captured["json"]["producer_id"] == "container-audit-pc-reuse"
     assert captured["json"]["manifest"]["pc_identity"]["source_host_id"] == "container-audit-pc-reuse"
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
@@ -804,10 +867,11 @@ def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated
     report = json.loads(report_path.read_text(encoding="utf-8"))
     identity_path = Path(report["producer_identity_path"])
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
-    generated_install_id = f"container-audit-test1-{0xEDE662C694C5:012x}"
+    generated_install_id = _generated_install_id()
 
     assert exit_code == 0
     assert report["producer_identity_source"] == "cli"
+    assert report["producer_install_id_derivation"] == "cli"
     assert captured["json"]["producer_id"] == "container-audit-test1"
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
         "container-audit-test1-pin-fixture"
@@ -907,7 +971,7 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
     assert writes == []
     assert not identity_path.exists()
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == (
-        f"container-audit-test1-{0xEDE662C694C5:012x}"
+        _generated_install_id()
     )
     assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
         registration._container_audit_catalog_raw_event_names()
