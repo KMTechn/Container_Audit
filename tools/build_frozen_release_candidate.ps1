@@ -611,6 +611,16 @@ try {
         "prepublish_verifier_gate=PASS report=$prepublishVerificationPath " +
         "bootstrap_integrity=PASS exact_manifest_membership=PASS"
     )
+    & tools\prepublish_release_gate.ps1 `
+        -Mode VerifyLocal `
+        -Tag $Tag `
+        -ExpectedCommit $sourceCommit `
+        -ZipName ([IO.Path]::GetFileName($zipPath)) `
+        -ChecksumName ([IO.Path]::GetFileName($checksumPath)) `
+        -RecordMember "Container_Audit/bootstrap-integrity.json" `
+        -WorkRoot $candidateRoot `
+        -StatePath (Join-Path $candidateRoot "unused-prepublish-state.json") `
+        -VerifierReportPath $prepublishVerificationPath
     Write-Output "frozen_candidate_build=LOCAL_ARTIFACT_QUALIFICATION_PASS"
     Write-Output "candidate_root=$candidateRoot"
     Write-Output "final_intended_tag=$Tag object=$tagObject peel=$sourceCommit"
