@@ -6,13 +6,26 @@ param(
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$TlsCaBundlePath = "",
     [string]$OperatorLocalAppDataRoot = "",
+    [string]$ElevationLogPath = "",
+    [switch]$ReplaceExistingVerifiedPortable,
+    [string]$ReplacementTransactionId = "",
+    [string]$ReplacementReceiptPath = "",
+    [switch]$ProbeVerifiedReplacementRestore,
+    [switch]$RestoreVerifiedReplacement,
+    [string]$ReplacementReceiptSha256 = "",
+    [string]$RestoreEvidencePath = "",
     [switch]$AllowNoncanonicalLayoutForTest,
-    [switch]$ApplyHardenedAclForTest
+    [switch]$ApplyHardenedAclForTest,
+    [switch]$InjectRestoreFailureAfterDisplaceForTest
 )
 
 $ErrorActionPreference = "Stop"
 $ExpectedInstallRoot = "C:\KMTech\Apps\Container_Audit\current"
-. (Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1")
+$BootstrapIntegrityFunctions = Join-Path $PSScriptRoot "tools\bootstrap_integrity.ps1"
+if (-not (Test-Path -LiteralPath $BootstrapIntegrityFunctions -PathType Leaf)) {
+    throw "Bootstrap integrity producer is unavailable."
+}
+. $BootstrapIntegrityFunctions
 $IntegrityFileName = $BootstrapIntegrityFileName
 $LegacyRelayTaskName = "direct-sync-relay-container-audit"
 $LegacyQualificationTaskName = "container-audit-isolated-qualification-authority"
@@ -93,7 +106,10 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         'runtime\python.exe',
         'runtime\pythonw.exe',
         'app\main.py',
-        'launch-container-audit.cmd'
+        'launch-container-audit.cmd',
+        'INSTALL_CANONICAL_PORTABLE.ps1',
+        'INSTALL_THIS_PC.ps1',
+        'tools\bootstrap_integrity.ps1'
     )
     $frozen = @($frozenFiles | Where-Object {
         Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf
@@ -121,6 +137,8 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         [string]$manifest.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$manifest.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$manifest.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$manifest.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
         @($manifest.allowed_unsigned_app_pe).Count -ne 0 -or
         @($manifest.forbidden_dependency_paths).Count -ne 0
     ) {
@@ -128,11 +146,20 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     }
     $pythonwPath = Join-Path $Root 'runtime\pythonw.exe'
     $launcherPath = Join-Path $Root 'launch-container-audit.cmd'
+    $installerPath = Join-Path $Root 'INSTALL_CANONICAL_PORTABLE.ps1'
+    $helperPath = Join-Path $Root 'INSTALL_THIS_PC.ps1'
+    $integrityHelperPath = Join-Path $Root 'tools\bootstrap_integrity.ps1'
     if (
         (Get-FileSha256 $pythonwPath) -cne
             ([string]$manifest.runtime_pythonw_sha256).ToLowerInvariant() -or
         (Get-FileSha256 $launcherPath) -cne
-            ([string]$manifest.launcher_sha256).ToLowerInvariant()
+            ([string]$manifest.launcher_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $installerPath) -cne
+            ([string]$manifest.installer_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $helperPath) -cne
+            ([string]$manifest.helper_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $integrityHelperPath) -cne
+            ([string]$manifest.integrity_helper_sha256).ToLowerInvariant()
     ) {
         throw "Portable release manifest hash readback failed."
     }
@@ -160,6 +187,24 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         }
     }
     return 'PORTABLE_CPYTHON'
+}
+
+function Write-ElevationLog([string]$Status, [string]$Message) {
+    if ([string]::IsNullOrWhiteSpace($ElevationLogPath)) { return }
+    $path = Get-StrictFullPath $ElevationLogPath "ElevationLogPath"
+    New-Item -ItemType Directory -Path (Split-Path -Parent $path) -Force | Out-Null
+    $entry = [ordered]@{
+        captured_at = (Get-Date).ToUniversalTime().ToString('o')
+        process_id = $PID
+        elevated = $true
+        status = $Status
+        message = $Message
+    }
+    [IO.File]::AppendAllText(
+        $path,
+        (($entry | ConvertTo-Json -Compress) + [Environment]::NewLine),
+        (New-Object Text.UTF8Encoding($false))
+    )
 }
 
 function ConvertTo-NormalizedAclRights([int64]$Rights) {
@@ -306,6 +351,45 @@ function Test-CurrentUserRelayPersistencePresent {
     }
 }
 
+function Test-PathWithin([string]$Candidate, [string]$Root) {
+    $candidateFull = Get-StrictFullPath $Candidate 'candidate path'
+    $rootFull = (Get-StrictFullPath $Root 'root path') + '\'
+    return $candidateFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)
+}
+
+function Assert-ContainerReplacementRestoreQuiescent(
+    [string]$CurrentRoot,
+    [switch]$SkipOwnedTaskCheckForGuardedTest
+) {
+    $rootPrefix = (Get-StrictFullPath $CurrentRoot 'restore process root') + '\'
+    try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) }
+    catch { throw 'Replacement restore could not prove process quiescence.' }
+    $matches = @($processes | Where-Object {
+        if ([int]$_.ProcessId -eq $PID) { return $false }
+        $command = [string]$_.CommandLine
+        $executable = [string]$_.ExecutablePath
+        return (
+            (
+                -not [string]::IsNullOrWhiteSpace($executable) -and
+                $executable.StartsWith($rootPrefix, [StringComparison]::OrdinalIgnoreCase) -and
+                [IO.Path]::GetFileName($executable) -in @('python.exe', 'pythonw.exe', 'Container_Audit.exe')
+            ) -or
+            (
+                $command.IndexOf($rootPrefix.TrimEnd('\'), [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                $command.IndexOf('app\main.py', [StringComparison]::OrdinalIgnoreCase) -ge 0
+            )
+        )
+    })
+    if ($matches.Count -ne 0) { throw 'Replacement restore requires zero Container product processes.' }
+    if (-not $SkipOwnedTaskCheckForGuardedTest.IsPresent) {
+        try { $task = Get-ScheduledTask -TaskName $LegacyRelayTaskName -ErrorAction SilentlyContinue }
+        catch { throw 'Replacement restore could not prove scheduled-task quiescence.' }
+        if ($null -ne $task -and [string]$task.State -cne 'Disabled') {
+            throw 'Replacement restore requires the owned scheduled writer to be disabled or absent.'
+        }
+    }
+}
+
 $testOverride = (
     $AllowNoncanonicalLayoutForTest.IsPresent -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
@@ -318,11 +402,101 @@ if ([string]::IsNullOrWhiteSpace($OperatorLocalAppDataRoot)) {
 if ($ApplyHardenedAclForTest.IsPresent -and -not $testOverride) {
     throw "ApplyHardenedAclForTest requires the guarded noncanonical test layout."
 }
+if ($InjectRestoreFailureAfterDisplaceForTest.IsPresent -and -not $testOverride) {
+    throw 'InjectRestoreFailureAfterDisplaceForTest requires the guarded noncanonical test layout.'
+}
+if ($ReplaceExistingVerifiedPortable.IsPresent -and $Uninstall.IsPresent) {
+    throw "ReplaceExistingVerifiedPortable cannot be combined with Uninstall."
+}
 $applyHardenedAcl = (-not $testOverride -or $ApplyHardenedAclForTest.IsPresent)
 $aclReadbackStatus = if ($applyHardenedAcl) { 'UNKNOWN' } else { 'NOT_TESTED' }
 $installRootFull = Get-StrictFullPath $InstallRoot "InstallRoot"
 if (-not (Test-SamePath $installRootFull $ExpectedInstallRoot) -and -not $testOverride) {
     throw "InstallRoot must be the hardened Container_Audit code root."
+}
+if ($ProbeVerifiedReplacementRestore.IsPresent) {
+    if (
+        -not $DryRun.IsPresent -or $Uninstall.IsPresent -or
+        $ReplaceExistingVerifiedPortable.IsPresent -or $RestoreVerifiedReplacement.IsPresent
+    ) { throw 'ProbeVerifiedReplacementRestore is a DryRun-only exclusive operation.' }
+    Write-Output 'replacement_restore_status=DRY_RUN'
+    Write-Output 'replacement_restore_schema=container-audit-verified-replacement-v1'
+    Write-Output 'replacement_restore_receipt_required_at_apply=true'
+    Write-Output 'identity_profile_created=false'
+    exit 0
+}
+if ($RestoreVerifiedReplacement.IsPresent) {
+    if ($DryRun.IsPresent -or $Uninstall.IsPresent -or $ReplaceExistingVerifiedPortable.IsPresent) {
+        throw 'RestoreVerifiedReplacement cannot be combined with placement, uninstall, or DryRun.'
+    }
+    if ($PSBoundParameters.ContainsKey('SourceRoot') -or -not [string]::IsNullOrWhiteSpace($TlsCaBundlePath)) {
+        throw 'RestoreVerifiedReplacement does not accept source or TLS mutation inputs.'
+    }
+    if ($ReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'Replacement restore transaction id is invalid.'
+    }
+    if ([string]::IsNullOrWhiteSpace($ReplacementReceiptPath) -or [string]::IsNullOrWhiteSpace($RestoreEvidencePath)) {
+        throw 'Replacement restore receipt and evidence paths are required.'
+    }
+    if (-not $testOverride) {
+        Invoke-SelfElevated
+        Write-ElevationLog 'STARTED' 'Elevated Container verified replacement restore started.'
+    }
+    $restoreEvidenceFull = Get-StrictFullPath $RestoreEvidencePath 'RestoreEvidencePath'
+    try {
+        Assert-ContainerReplacementRestoreQuiescent `
+            -CurrentRoot $installRootFull `
+            -SkipOwnedTaskCheckForGuardedTest:$testOverride
+        $receipt = Read-BootstrapReplacementReceipt `
+            -Path $ReplacementReceiptPath `
+            -ExpectedSha256 $ReplacementReceiptSha256
+        $result = Invoke-BootstrapVerifiedReplacementRestore `
+            -Receipt $receipt `
+            -ReceiptPath $ReplacementReceiptPath `
+            -InstallRoot $installRootFull `
+            -ExpectedAppId 'container_audit' `
+            -ExpectedTransactionId $ReplacementTransactionId `
+            -ExpectedHelperSha256 (Get-FileSha256 $BootstrapScriptPath) `
+            -InjectFailureAfterDisplace:$InjectRestoreFailureAfterDisplaceForTest.IsPresent
+        $evidence = [ordered]@{
+            schema_version = 'container-audit-verified-replacement-code-restore-v1'
+            status = 'PASS'
+            action = [string]$result.status
+            app_id = 'container_audit'
+            transaction_id = $ReplacementTransactionId
+            receipt_path = Get-StrictFullPath $ReplacementReceiptPath 'replacement receipt path'
+            receipt_sha256 = $ReplacementReceiptSha256
+            install_root = $installRootFull
+            failed_new_root = [string]$result.failed_new_root
+            prior_code_exact = [bool]$result.prior_code_exact
+            failed_new_preserved = [bool]$result.failed_new_preserved
+            identity_or_credential_copied = $false
+            completed_at = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $evidence | Out-Null
+        if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container verified replacement restore completed.' }
+        Write-Output "replacement_restore_status=$($result.status)"
+        Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
+        Write-Output "replacement_restore_evidence_sha256=$(Get-FileSha256 $restoreEvidenceFull)"
+        exit 0
+    }
+    catch {
+        $failure = [ordered]@{
+            schema_version = 'container-audit-verified-replacement-code-restore-v1'
+            status = 'ROLLBACK_FAILED'
+            app_id = 'container_audit'
+            transaction_id = $ReplacementTransactionId
+            failure_type = $_.Exception.GetType().Name
+            mutation_silently_ignored = $false
+            identity_or_credential_copied = $false
+            failed_at = (Get-Date).ToUniversalTime().ToString('o')
+        }
+        try { Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $failure | Out-Null } catch {}
+        if (-not $testOverride) { Write-ElevationLog 'FAILED' 'Elevated Container verified replacement restore failed.' }
+        Write-Output 'replacement_restore_status=ROLLBACK_FAILED'
+        Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
+        throw
+    }
 }
 if (
     $Uninstall.IsPresent -and
@@ -337,6 +511,7 @@ if (
 }
 if (-not $DryRun.IsPresent -and -not $testOverride) {
     Invoke-SelfElevated
+    Write-ElevationLog 'STARTED' 'Elevated Container code placement started.'
 }
 
 if ($Uninstall.IsPresent) {
@@ -377,6 +552,14 @@ if (Test-SamePath $sourceRootFull $installRootFull) {
 }
 Assert-NoReparsePoint $sourceRootFull "Frozen release"
 $releaseLayout = Assert-RequiredRelease $sourceRootFull $testOverride
+if ($releaseLayout -ceq 'PORTABLE_CPYTHON') {
+    if (-not (Test-SamePath $BootstrapScriptPath (Join-Path $sourceRootFull 'INSTALL_THIS_PC.ps1'))) {
+        throw 'Code helper must execute from the admitted SourceRoot.'
+    }
+    if (-not (Test-SamePath $BootstrapIntegrityFunctions (Join-Path $sourceRootFull 'tools\bootstrap_integrity.ps1'))) {
+        throw 'Integrity helper must load from the admitted SourceRoot.'
+    }
+}
 $sourceInventory = @(Get-CodeInventory $sourceRootFull)
 if ($sourceInventory.Count -eq 0) {
     throw "Frozen release code inventory is empty."
@@ -396,6 +579,11 @@ if ($DryRun.IsPresent) {
 
 $applicationParent = Split-Path -Parent $installRootFull
 $stagingRoot = Join-Path $applicationParent ('.current.bootstrap.' + [Guid]::NewGuid().ToString('N'))
+$replacementApplied = $false
+$replacementRollbackRoot = ''
+$replacementReceiptFull = ''
+$replacementReceiptWritten = $false
+$previousReplacementIdentity = $null
 New-Item -ItemType Directory -Path $applicationParent -Force | Out-Null
 if ($applyHardenedAcl) {
     Set-HardenedCodeAcl $applicationParent
@@ -442,10 +630,66 @@ try {
             $existingAggregate -cne $sourceAggregate -or
             $existingCodeAggregate -cne $sourceAggregate
         ) {
-            throw "A different or damaged hardened code placement exists; remove it explicitly before replacement."
+            if (-not $ReplaceExistingVerifiedPortable.IsPresent) {
+                throw "A different or damaged hardened code placement exists; remove it explicitly before replacement."
+            }
+            if (
+                $ReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$' -or
+                [string]::IsNullOrWhiteSpace($ReplacementReceiptPath)
+            ) { throw 'Verified replacement requires an exact durable receipt binding.' }
+            $replacementReceiptFull = Get-StrictFullPath $ReplacementReceiptPath 'ReplacementReceiptPath'
+            if (
+                (Test-PathWithin $replacementReceiptFull $applicationParent) -or
+                (Test-Path -LiteralPath $replacementReceiptFull)
+            ) { throw 'Replacement receipt must be a new path outside the code parent.' }
+            $ambiguousSiblings = @(Get-ChildItem -LiteralPath $applicationParent -Directory -Force | Where-Object {
+                $_.Name -match '^\.current\.(rollback|failed)\.'
+            })
+            if ($ambiguousSiblings.Count -ne 0) {
+                throw 'Verified replacement found an unrelated rollback or failed sibling.'
+            }
+            Assert-ContainerReplacementRestoreQuiescent `
+                -CurrentRoot $installRootFull `
+                -SkipOwnedTaskCheckForGuardedTest:$testOverride
+            [void](Assert-BootstrapIntegrityRecord -Root $installRootFull)
+            Assert-NoReparsePoint $installRootFull 'Verified replacement existing code root'
+            if ($applyHardenedAcl) { Assert-HardenedCodeAcl $installRootFull -Recursive }
+            $existingManifestPath = Join-Path $installRootFull 'portable-manifest.json'
+            if (-not (Test-Path -LiteralPath $existingManifestPath -PathType Leaf)) {
+                throw 'Verified replacement requires an existing portable manifest.'
+            }
+            $existingManifest = Get-Content -LiteralPath $existingManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (
+                [string]$existingManifest.schema -cne 'container-audit-portable-tree-v1' -or
+                [string]$existingManifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+                [string]$existingManifest.source_tree -cnotmatch '^[0-9a-f]{40}$'
+            ) { throw 'Verified replacement existing portable identity is invalid.' }
+            $previousReplacementIdentity = Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
+            $replacementRollbackRoot = Join-Path $applicationParent ('.current.rollback.' + $ReplacementTransactionId)
+            $failedRoot = Join-Path $applicationParent ('.current.failed.' + $ReplacementTransactionId)
+            if ((Test-Path -LiteralPath $replacementRollbackRoot) -or (Test-Path -LiteralPath $failedRoot)) {
+                throw 'Verified replacement transaction siblings already exist.'
+            }
+            Move-Item -LiteralPath $installRootFull -Destination $replacementRollbackRoot
+            try {
+                Move-Item -LiteralPath $stagingRoot -Destination $installRootFull
+                $replacementApplied = $true
+                $bootstrapStatus = 'REPLACED_VERIFIED'
+            }
+            catch {
+                if (
+                    -not (Test-Path -LiteralPath $installRootFull) -and
+                    (Test-Path -LiteralPath $replacementRollbackRoot -PathType Container)
+                ) {
+                    Move-Item -LiteralPath $replacementRollbackRoot -Destination $installRootFull
+                }
+                throw
+            }
         }
-        Remove-Item -LiteralPath $stagingRoot -Recurse -Force
-        $bootstrapStatus = 'REUSED'
+        else {
+            Remove-Item -LiteralPath $stagingRoot -Recurse -Force
+            $bootstrapStatus = 'REUSED'
+        }
     }
     else {
         Move-Item -LiteralPath $stagingRoot -Destination $installRootFull
@@ -458,6 +702,38 @@ try {
     $installedAggregate = Get-InventoryAggregate @(Get-CodeInventory $installRootFull)
     if ($installedAggregate -cne $sourceAggregate) {
         throw "Installed code integrity readback failed."
+    }
+    $replacementReceipt = $null
+    if ($replacementApplied) {
+        $newIdentity = Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
+        $oldIdentity = Get-BootstrapReplacementTreeIdentity $replacementRollbackRoot $installRootFull
+        if (
+            -not (Test-BootstrapReplacementTreeIdentity $previousReplacementIdentity $oldIdentity) -or
+            [string]$newIdentity.aggregate_sha256 -cne $sourceAggregate
+        ) { throw 'Verified replacement tree identity readback failed.' }
+        $parentAcl = Get-BootstrapAclIdentity $applicationParent
+        $receiptPayload = [ordered]@{
+            schema_version = 'container-audit-verified-replacement-v1'
+            status = 'OLD_PRESERVED_NEW_VERIFIED'
+            app_id = 'container_audit'
+            transaction_id = $ReplacementTransactionId
+            created_at = (Get-Date).ToUniversalTime().ToString('o')
+            helper_sha256 = Get-FileSha256 $BootstrapScriptPath
+            integrity_helper_sha256 = Get-FileSha256 $BootstrapIntegrityFunctions
+            receipt_path = $replacementReceiptFull
+            install_root = $installRootFull
+            install_parent = $applicationParent
+            rollback_root = $replacementRollbackRoot
+            failed_root = Join-Path $applicationParent ('.current.failed.' + $ReplacementTransactionId)
+            parent_acl = $parentAcl
+            old = $oldIdentity
+            new = $newIdentity
+            identity_or_credential_copied = $false
+        }
+        $replacementReceipt = Write-BootstrapReplacementReceipt `
+            -Path $replacementReceiptFull `
+            -Payload $receiptPayload
+        $replacementReceiptWritten = $true
     }
     Write-Output "bootstrap_status=$bootstrapStatus"
     Write-Output "acl_readback_status=$aclReadbackStatus"
@@ -475,8 +751,22 @@ try {
     Write-Output "aggregate_sha256=$sourceAggregate"
     Write-Output "identity_profile_created=false"
     Write-Output "elevation_points=1:code_placement"
+    if ($replacementApplied) {
+        Write-Output 'replacement_rollback_status=PRESERVED'
+        Write-Output "replacement_rollback_root=$replacementRollbackRoot"
+        Write-Output 'replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED'
+        Write-Output "replacement_receipt_path=$($replacementReceipt.path)"
+        Write-Output "replacement_receipt_sha256=$($replacementReceipt.sha256)"
+        Write-Output "replacement_transaction_id=$ReplacementTransactionId"
+    }
+    if (-not $testOverride) {
+        Write-ElevationLog 'PASS' "Elevated Container code placement completed: $bootstrapStatus."
+    }
 }
 catch {
+    if (-not $testOverride) {
+        Write-ElevationLog 'FAILED' ($_.Exception.GetType().Name)
+    }
     if (Test-Path -LiteralPath $stagingRoot) {
         $stagingFull = Get-StrictFullPath $stagingRoot "bootstrap staging root"
         $parentFull = (Get-StrictFullPath $applicationParent "application parent") + '\'
@@ -484,6 +774,27 @@ catch {
             throw "Bootstrap failed and staging cleanup target escaped its parent."
         }
         Remove-Item -LiteralPath $stagingFull -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if ($replacementApplied) {
+        $failedRoot = Join-Path $applicationParent ('.current.failed.' + $ReplacementTransactionId)
+        if (Test-Path -LiteralPath $installRootFull -PathType Container) {
+            if (Test-Path -LiteralPath $failedRoot) {
+                throw 'Verified replacement failure containment target already exists.'
+            }
+            Move-Item -LiteralPath $installRootFull -Destination $failedRoot
+        }
+        if (-not (Test-Path -LiteralPath $replacementRollbackRoot -PathType Container)) {
+            throw 'Verified replacement rollback source is unavailable.'
+        }
+        Move-Item -LiteralPath $replacementRollbackRoot -Destination $installRootFull
+        $restoredIdentity = Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
+        if (-not (Test-BootstrapReplacementTreeIdentity $previousReplacementIdentity $restoredIdentity)) {
+            throw 'Verified replacement prior tree restore readback failed.'
+        }
+        if ($replacementReceiptWritten -and (Test-Path -LiteralPath $replacementReceiptFull -PathType Leaf)) {
+            Remove-Item -LiteralPath $replacementReceiptFull -Force -ErrorAction SilentlyContinue
+        }
+        throw 'Verified replacement failed and the prior canonical tree was restored.'
     }
     throw
 }

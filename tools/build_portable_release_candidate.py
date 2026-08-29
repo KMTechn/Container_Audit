@@ -359,6 +359,11 @@ def build(
         "entrypoint": "runtime/pythonw.exe app/main.py",
         "launcher": "launch-container-audit.cmd",
         "launcher_sha256": _sha256(output / "launch-container-audit.cmd"),
+        "installer_sha256": _sha256(output / "INSTALL_CANONICAL_PORTABLE.ps1"),
+        "helper_sha256": _sha256(output / "INSTALL_THIS_PC.ps1"),
+        "integrity_helper_sha256": _sha256(
+            output / "tools" / "bootstrap_integrity.ps1"
+        ),
         "third_party_versions": versions,
         "allowed_unsigned_app_pe": native,
         "update_key_config_sha256": update_key_config_sha256,

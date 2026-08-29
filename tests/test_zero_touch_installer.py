@@ -29,6 +29,8 @@ def _powershell() -> str:
 def _run_installer(source_root: Path, install_root: Path, *extra: str):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    package_helper = source_root / "INSTALL_THIS_PC.ps1"
+    installer_path = package_helper if package_helper.is_file() else INSTALLER
     return subprocess.run(
         [
             _powershell(),
@@ -38,7 +40,7 @@ def _run_installer(source_root: Path, install_root: Path, *extra: str):
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(INSTALLER),
+            str(installer_path),
             "-SourceRoot",
             str(source_root),
             "-InstallRoot",
@@ -54,6 +56,56 @@ def _run_installer(source_root: Path, install_root: Path, *extra: str):
     )
 
 
+def _run_restore(
+    install_root: Path,
+    receipt: Path,
+    receipt_sha256: str,
+    transaction_id: str,
+    evidence: Path,
+    *extra: str,
+):
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    installer_path = install_root / "INSTALL_THIS_PC.ps1"
+    return subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(installer_path),
+            "-InstallRoot",
+            str(install_root),
+            "-AllowNoncanonicalLayoutForTest",
+            "-RestoreVerifiedReplacement",
+            "-ReplacementTransactionId",
+            transaction_id,
+            "-ReplacementReceiptPath",
+            str(receipt),
+            "-ReplacementReceiptSha256",
+            receipt_sha256,
+            "-RestoreEvidencePath",
+            str(evidence),
+            *extra,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+
+def _output_value(output: str, name: str) -> str:
+    prefix = f"{name}="
+    values = [line[len(prefix) :] for line in output.splitlines() if line.startswith(prefix)]
+    assert len(values) == 1, (name, output)
+    return values[0]
+
+
 def _release_fixture(root: Path) -> Path:
     release = root / "frozen-release"
     release.mkdir(parents=True)
@@ -66,25 +118,44 @@ def _release_fixture(root: Path) -> Path:
     return release
 
 
-def _portable_release_fixture(root: Path) -> Path:
-    release = root / "portable release 한글"
+def _portable_release_fixture(
+    root: Path,
+    *,
+    directory: str = "portable release 한글",
+    source_commit: str = "a" * 40,
+    main_payload: str = "# portable main\n",
+) -> Path:
+    release = root / directory
     (release / "runtime").mkdir(parents=True)
     (release / "app").mkdir()
     (release / "runtime" / "python.exe").write_bytes(b"signed-python-test-double")
     pythonw = b"signed-pythonw-test-double"
     (release / "runtime" / "pythonw.exe").write_bytes(pythonw)
-    (release / "app" / "main.py").write_text("# portable main\n", encoding="utf-8")
+    (release / "app" / "main.py").write_text(main_payload, encoding="utf-8")
     launcher = b"@echo off\r\n"
     (release / "launch-container-audit.cmd").write_bytes(launcher)
+    (release / "tools").mkdir()
+    shutil.copy2(PORTABLE_INSTALLER, release / "INSTALL_CANONICAL_PORTABLE.ps1")
+    shutil.copy2(INSTALLER, release / "INSTALL_THIS_PC.ps1")
+    shutil.copy2(INTEGRITY_HELPER, release / "tools" / "bootstrap_integrity.ps1")
     files = [path for path in release.rglob("*") if path.is_file()]
     manifest = {
         "schema": "container-audit-portable-tree-v1",
-        "source_commit": "a" * 40,
+        "source_commit": source_commit,
         "source_tree": "b" * 40,
         "entrypoint": "runtime/pythonw.exe app/main.py",
         "launcher": "launch-container-audit.cmd",
         "runtime_pythonw_sha256": hashlib.sha256(pythonw).hexdigest(),
         "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
+        "installer_sha256": hashlib.sha256(
+            (release / "INSTALL_CANONICAL_PORTABLE.ps1").read_bytes()
+        ).hexdigest(),
+        "helper_sha256": hashlib.sha256(
+            (release / "INSTALL_THIS_PC.ps1").read_bytes()
+        ).hexdigest(),
+        "integrity_helper_sha256": hashlib.sha256(
+            (release / "tools" / "bootstrap_integrity.ps1").read_bytes()
+        ).hexdigest(),
         "allowed_unsigned_app_pe": [],
         "forbidden_dependency_paths": [],
         "file_count_before_manifest": len(files),
@@ -121,12 +192,16 @@ def test_bootstrap_is_minimal_code_placement_contract():
     text = INSTALLER.read_text(encoding="utf-8")
     helper = INTEGRITY_HELPER.read_text(encoding="utf-8")
 
-    assert len(text.splitlines()) <= 500
-    assert '. (Join-Path $PSScriptRoot "tools\\bootstrap_integrity.ps1")' in text
+    assert len(text.splitlines()) <= 900
+    assert ". $BootstrapIntegrityFunctions" in text
     assert "container-audit-bootstrap-integrity-v1" in helper
     assert "Write-BootstrapIntegrityRecord" in text
     assert "identity_profile_created=false" in text
     assert "elevation_points=1:code_placement" in text
+    assert "ReplaceExistingVerifiedPortable" in text
+    assert "ProbeVerifiedReplacementRestore" in text
+    assert "RestoreVerifiedReplacement" in text
+    assert "OLD_PRESERVED_NEW_VERIFIED" in text
     assert "Set-HardenedCodeAcl" in text
     assert "Assert-HardenedCodeAcl" in text
     assert "'/setowner', '*S-1-5-32-544'" in text
@@ -230,6 +305,36 @@ def test_portable_installer_fences_canonical_scheduled_writer_around_replacement
     assert "log_actual_write=$true" in text
 
 
+def test_portable_installer_binds_verified_replace_receipt_and_later_restore():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+
+    receipt_path_index = text.index("$replacementReceiptPath = Join-Path")
+    prestate_index = text.index("$candidate = InstalledManifest")
+    quiesce_index = text.index("Product $install '--remove-current-user-setup'", prestate_index)
+    placement_index = text.index("& $winps @bootstrap", quiesce_index)
+    receipt_readback_index = text.index("ReadReplacementReceipt", placement_index)
+    restore_index = text.index("& $winps @restoreBootstrap", receipt_readback_index)
+    lifecycle_restore_index = text.index("Restore $before", restore_index)
+
+    assert (
+        receipt_path_index
+        < prestate_index
+        < quiesce_index
+        < placement_index
+        < receipt_readback_index
+        < restore_index
+        < lifecycle_restore_index
+    )
+    assert "CODE_PRESTATE_NOT_VERIFIED_REPLACE" in text
+    assert "'-ReplaceExistingVerifiedPortable'" in text
+    assert "'-ReplacementTransactionId',$replacementTransactionId" in text
+    assert "'-ReplacementReceiptPath',$replacementReceiptPath" in text
+    assert "'-ReplacementReceiptSha256',$replacementReceiptSha256" in text
+    assert "'-RestoreVerifiedReplacement'" in text
+    assert "READY_PENDING_FINAL_COMPOSITE" in text
+    assert "CODE_ROLLBACK_FAILED" in text
+
+
 def test_portable_installer_restore_binding_mismatch_is_explicit_without_mutation():
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
@@ -303,7 +408,7 @@ def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
             "-ExecutionPolicy",
             "Bypass",
             "-File",
-            str(PORTABLE_INSTALLER),
+            str(source / "INSTALL_CANONICAL_PORTABLE.ps1"),
             "-SourceRoot",
             str(source),
             "-InstallRoot",
@@ -327,6 +432,101 @@ def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
         f'"{install / "app" / "main.py"}" --container-audit-user-relay'
         in completed.stdout
     )
+    assert not install.exists()
+
+
+def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path):
+    source = _portable_release_fixture(tmp_path)
+    install = tmp_path / "apps" / "current"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+
+    top = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(PORTABLE_INSTALLER),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+    helper = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(INSTALLER),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-DryRun",
+            "-AllowNoncanonicalLayoutForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert top.returncode != 0
+    assert "admitted SourceRoot" in (top.stderr + top.stdout)
+    assert helper.returncode != 0
+    assert "admitted SourceRoot" in (helper.stderr + helper.stdout)
+    assert not install.exists()
+
+
+def test_portable_plan_rejects_wrong_entrypoint_before_mutation(tmp_path):
+    source = _portable_release_fixture(tmp_path)
+    manifest_path = source / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["entrypoint"] = "runtime/python.exe app/main.py"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=True), encoding="utf-8")
+    install = tmp_path / "apps" / "current"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-File",
+            str(source / "INSTALL_CANONICAL_PORTABLE.ps1"),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "Portable manifest readback failed" in (completed.stderr + completed.stdout)
     assert not install.exists()
 
 
@@ -363,6 +563,214 @@ def test_bootstrap_accepts_portable_tree_and_integrity_readback(tmp_path):
         env=environment,
     )
     assert verified.returncode == 0, verified.stderr or verified.stdout
+
+
+def test_bootstrap_replaces_only_an_integrity_verified_portable_tree(tmp_path):
+    first_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable first",
+        source_commit="a" * 40,
+        main_payload="# first portable main\n",
+    )
+    second_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable second",
+        source_commit="b" * 40,
+        main_payload="# second portable main\n",
+    )
+    install = tmp_path / "apps" / "current"
+    receipt = tmp_path / "receipts" / "replacement.json"
+    transaction_id = "1" * 32
+    first = _run_installer(first_source, install)
+
+    replaced = _run_installer(
+        second_source,
+        install,
+        "-ReplaceExistingVerifiedPortable",
+        "-ReplacementTransactionId",
+        transaction_id,
+        "-ReplacementReceiptPath",
+        str(receipt),
+    )
+
+    assert first.returncode == 0, first.stderr or first.stdout
+    assert replaced.returncode == 0, replaced.stderr or replaced.stdout
+    assert "bootstrap_status=REPLACED_VERIFIED" in replaced.stdout
+    assert "replacement_rollback_status=PRESERVED" in replaced.stdout
+    assert "replacement_receipt_status=OLD_PRESERVED_NEW_VERIFIED" in replaced.stdout
+    assert _output_value(replaced.stdout, "replacement_receipt_path") == str(receipt)
+    assert _output_value(replaced.stdout, "replacement_transaction_id") == transaction_id
+    payload = json.loads(receipt.read_text(encoding="utf-8"))
+    assert payload["schema_version"] == "container-audit-verified-replacement-v1"
+    assert payload["status"] == "OLD_PRESERVED_NEW_VERIFIED"
+    assert payload["transaction_id"] == transaction_id
+    assert payload["identity_or_credential_copied"] is False
+    assert (install / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# second portable main\n"
+    )
+    rollback = install.parent / f".current.rollback.{transaction_id}"
+    assert rollback.is_dir()
+    assert (rollback / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# first portable main\n"
+    )
+
+
+def test_bootstrap_later_restore_is_receipt_bound_resumable_and_preserves_failed_new(
+    tmp_path,
+):
+    first_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable first",
+        source_commit="a" * 40,
+        main_payload="# first portable main\n",
+    )
+    second_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable second",
+        source_commit="b" * 40,
+        main_payload="# second portable main\n",
+    )
+    install = tmp_path / "apps" / "current"
+    receipt = tmp_path / "receipts" / "replacement.json"
+    transaction_id = "2" * 32
+    assert _run_installer(first_source, install).returncode == 0
+    replaced = _run_installer(
+        second_source,
+        install,
+        "-ReplaceExistingVerifiedPortable",
+        "-ReplacementTransactionId",
+        transaction_id,
+        "-ReplacementReceiptPath",
+        str(receipt),
+    )
+    assert replaced.returncode == 0, replaced.stderr or replaced.stdout
+    receipt_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    receipt_before = receipt.read_bytes()
+    evidence = tmp_path / "evidence" / "restore.json"
+
+    restored = _run_restore(
+        install,
+        receipt,
+        receipt_sha256,
+        transaction_id,
+        evidence,
+    )
+
+    assert restored.returncode == 0, restored.stderr or restored.stdout
+    assert "replacement_restore_status=RESTORED" in restored.stdout
+    assert receipt.read_bytes() == receipt_before
+    assert (install / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# first portable main\n"
+    )
+    failed_root = install.parent / f".current.failed.{transaction_id}"
+    assert (failed_root / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# second portable main\n"
+    )
+    assert not list(install.parent.glob(".current.rollback.*"))
+    restored_evidence = json.loads(evidence.read_text(encoding="utf-8"))
+    assert restored_evidence["status"] == "PASS"
+    assert restored_evidence["prior_code_exact"] is True
+    assert restored_evidence["failed_new_preserved"] is True
+
+    repeated = _run_restore(
+        install,
+        receipt,
+        receipt_sha256,
+        transaction_id,
+        tmp_path / "evidence" / "restore-repeat.json",
+    )
+    assert repeated.returncode == 0, repeated.stderr or repeated.stdout
+    assert "replacement_restore_status=ALREADY_RESTORED" in repeated.stdout
+
+
+def test_bootstrap_restore_failure_is_explicit_and_contains_pre_restore_state(tmp_path):
+    first_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable first",
+        source_commit="a" * 40,
+        main_payload="# first portable main\n",
+    )
+    second_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable second",
+        source_commit="b" * 40,
+        main_payload="# second portable main\n",
+    )
+    install = tmp_path / "apps" / "current"
+    receipt = tmp_path / "receipts" / "replacement.json"
+    transaction_id = "3" * 32
+    assert _run_installer(first_source, install).returncode == 0
+    replaced = _run_installer(
+        second_source,
+        install,
+        "-ReplaceExistingVerifiedPortable",
+        "-ReplacementTransactionId",
+        transaction_id,
+        "-ReplacementReceiptPath",
+        str(receipt),
+    )
+    assert replaced.returncode == 0, replaced.stderr or replaced.stdout
+    receipt_sha256 = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    failure_evidence = tmp_path / "evidence" / "restore-failed.json"
+
+    failed = _run_restore(
+        install,
+        receipt,
+        receipt_sha256,
+        transaction_id,
+        failure_evidence,
+        "-InjectRestoreFailureAfterDisplaceForTest",
+    )
+
+    assert failed.returncode != 0
+    assert "replacement_restore_status=ROLLBACK_FAILED" in failed.stdout
+    assert json.loads(failure_evidence.read_text(encoding="utf-8"))["status"] == (
+        "ROLLBACK_FAILED"
+    )
+    assert (install / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# second portable main\n"
+    )
+    rollback = install.parent / f".current.rollback.{transaction_id}"
+    assert (rollback / "app" / "main.py").read_text(encoding="utf-8") == (
+        "# first portable main\n"
+    )
+    assert not (install.parent / f".current.failed.{transaction_id}").exists()
+
+
+def test_bootstrap_refuses_verified_replacement_when_existing_tree_is_tampered(tmp_path):
+    first_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable first",
+        source_commit="a" * 40,
+        main_payload="# first portable main\n",
+    )
+    second_source = _portable_release_fixture(
+        tmp_path,
+        directory="portable second",
+        source_commit="b" * 40,
+        main_payload="# second portable main\n",
+    )
+    install = tmp_path / "apps" / "current"
+    assert _run_installer(first_source, install).returncode == 0
+    (install / "app" / "main.py").write_text("# tampered\n", encoding="utf-8")
+    manifest_before = (install / "portable-manifest.json").read_bytes()
+    receipt = tmp_path / "receipts" / "tampered-replacement.json"
+
+    blocked = _run_installer(
+        second_source,
+        install,
+        "-ReplaceExistingVerifiedPortable",
+        "-ReplacementTransactionId",
+        "4" * 32,
+        "-ReplacementReceiptPath",
+        str(receipt),
+    )
+
+    assert blocked.returncode != 0
+    assert "integrity inventory differs" in (blocked.stderr + blocked.stdout)
+    assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# tampered\n"
+    assert (install / "portable-manifest.json").read_bytes() == manifest_before
+    assert not list(install.parent.glob(".current.rollback.*"))
 
 
 def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(

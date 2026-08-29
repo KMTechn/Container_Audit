@@ -159,3 +159,329 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
         aggregate_sha256 = $aggregate
     }
 }
+
+function Get-BootstrapStringSha256([string]$Value) {
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($Value)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        return ([BitConverter]::ToString($sha.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Test-BootstrapSamePath([string]$Left, [string]$Right) {
+    return (Get-StrictFullPath $Left 'left path').Equals(
+        (Get-StrictFullPath $Right 'right path'),
+        [StringComparison]::OrdinalIgnoreCase
+    )
+}
+
+function Assert-BootstrapNoReparsePoint([string]$Path, [string]$Purpose) {
+    $root = Get-StrictFullPath $Path $Purpose
+    if (-not (Test-Path -LiteralPath $root)) { throw "$Purpose is unavailable." }
+    $items = @((Get-Item -LiteralPath $root -Force -ErrorAction Stop))
+    if ($items[0].PSIsContainer) {
+        $items += @(Get-ChildItem -LiteralPath $root -Force -Recurse -ErrorAction Stop)
+    }
+    foreach ($item in $items) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "$Purpose contains a reparse point: $($item.FullName)"
+        }
+    }
+}
+
+function Get-BootstrapAclIdentity([string]$Path) {
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    $sections = (
+        [Security.AccessControl.AccessControlSections]::Access -bor
+        [Security.AccessControl.AccessControlSections]::Owner -bor
+        [Security.AccessControl.AccessControlSections]::Group
+    )
+    $acl = if ($item.PSIsContainer) {
+        [IO.Directory]::GetAccessControl($item.FullName, $sections)
+    }
+    else {
+        [IO.File]::GetAccessControl($item.FullName, $sections)
+    }
+    $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+    $sddl = $acl.GetSecurityDescriptorSddlForm($sections)
+    return [pscustomobject][ordered]@{
+        owner_sid = [string]$owner
+        access_rules_protected = [bool]$acl.AreAccessRulesProtected
+        sddl_sha256 = Get-BootstrapStringSha256 $sddl
+    }
+}
+
+function Assert-BootstrapRelocatedIntegrityRecord(
+    [string]$Root,
+    [string]$ExpectedCodeRoot
+) {
+    $rootFull = Get-StrictFullPath $Root 'relocated bootstrap root'
+    $expectedRoot = Get-StrictFullPath $ExpectedCodeRoot 'declared bootstrap root'
+    $recordPath = Join-Path $rootFull $BootstrapIntegrityFileName
+    if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) {
+        throw 'Relocated bootstrap integrity record is absent.'
+    }
+    if ((Get-Item -LiteralPath $recordPath -Force).Length -gt 1048576) {
+        throw 'Relocated bootstrap integrity record is oversized.'
+    }
+    $record = Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        [string]$record.schema_version -cne $BootstrapIntegritySchema -or
+        [string]$record.status -cne 'PASS' -or
+        -not (Test-BootstrapSamePath ([string]$record.code_root) $expectedRoot)
+    ) {
+        throw 'Relocated bootstrap integrity identity is invalid.'
+    }
+    $inventory = @(Get-CodeInventory $rootFull)
+    $aggregate = Get-InventoryAggregate $inventory
+    if (
+        [int]$record.file_count -ne $inventory.Count -or
+        @($record.files).Count -ne $inventory.Count -or
+        [string]$record.aggregate_sha256 -cne $aggregate
+    ) {
+        throw 'Relocated bootstrap integrity aggregate differs.'
+    }
+    $actualByPath = @{}
+    foreach ($item in $inventory) { $actualByPath[[string]$item.path] = $item }
+    foreach ($expected in @($record.files)) {
+        $path = [string]$expected.path
+        if (-not $actualByPath.ContainsKey($path)) {
+            throw 'Relocated bootstrap integrity inventory is incomplete.'
+        }
+        $actual = $actualByPath[$path]
+        if (
+            [int64]$expected.size -ne [int64]$actual.size -or
+            [string]$expected.sha256 -cne [string]$actual.sha256
+        ) {
+            throw 'Relocated bootstrap integrity inventory differs.'
+        }
+        $actualByPath.Remove($path)
+    }
+    if ($actualByPath.Count -ne 0) {
+        throw 'Relocated bootstrap integrity contains unrecorded files.'
+    }
+    return [pscustomobject][ordered]@{
+        file_count = $inventory.Count
+        aggregate_sha256 = $aggregate
+        integrity_sha256 = Get-FileSha256 $recordPath
+    }
+}
+
+function Get-BootstrapReplacementTreeIdentity(
+    [string]$Root,
+    [string]$DeclaredCodeRoot
+) {
+    $rootFull = Get-StrictFullPath $Root 'replacement tree'
+    Assert-BootstrapNoReparsePoint $rootFull 'replacement tree'
+    $integrity = Assert-BootstrapRelocatedIntegrityRecord `
+        -Root $rootFull `
+        -ExpectedCodeRoot $DeclaredCodeRoot
+    $manifestPath = Join-Path $rootFull 'portable-manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw 'Replacement tree portable manifest is absent.'
+    }
+    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 65536) {
+        throw 'Replacement tree portable manifest is oversized.'
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (
+        [string]$manifest.schema -cne 'container-audit-portable-tree-v1' -or
+        [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$manifest.source_tree -cnotmatch '^[0-9a-f]{40}$'
+    ) {
+        throw 'Replacement tree portable identity is invalid.'
+    }
+    $acl = Get-BootstrapAclIdentity $rootFull
+    return [pscustomobject][ordered]@{
+        file_count = [int]$integrity.file_count
+        aggregate_sha256 = [string]$integrity.aggregate_sha256
+        integrity_sha256 = [string]$integrity.integrity_sha256
+        manifest_sha256 = Get-FileSha256 $manifestPath
+        source_commit = [string]$manifest.source_commit
+        source_tree = [string]$manifest.source_tree
+        owner_sid = [string]$acl.owner_sid
+        access_rules_protected = [bool]$acl.access_rules_protected
+        acl_sddl_sha256 = [string]$acl.sddl_sha256
+        reparse_count = 0
+    }
+}
+
+function Test-BootstrapReplacementTreeIdentity($Expected, $Actual) {
+    foreach ($name in @(
+        'file_count', 'aggregate_sha256', 'integrity_sha256', 'manifest_sha256',
+        'source_commit', 'source_tree', 'owner_sid', 'access_rules_protected',
+        'acl_sddl_sha256', 'reparse_count'
+    )) {
+        if ([string]$Expected.$name -cne [string]$Actual.$name) { return $false }
+    }
+    return $true
+}
+
+function Write-BootstrapReplacementReceipt(
+    [string]$Path,
+    $Payload,
+    [switch]$AllowReplace
+) {
+    $full = Get-StrictFullPath $Path 'replacement receipt path'
+    $parent = Split-Path -Parent $full
+    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    Assert-BootstrapNoReparsePoint $parent 'replacement receipt parent'
+    if ((Test-Path -LiteralPath $full) -and -not $AllowReplace.IsPresent) {
+        throw 'Replacement receipt path already exists.'
+    }
+    Write-Utf8Json -Path $full -Payload $Payload
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        throw 'Replacement receipt write readback failed.'
+    }
+    return [pscustomobject][ordered]@{
+        path = $full
+        sha256 = Get-FileSha256 $full
+    }
+}
+
+function Read-BootstrapReplacementReceipt(
+    [string]$Path,
+    [string]$ExpectedSha256
+) {
+    $full = Get-StrictFullPath $Path 'replacement receipt path'
+    if (-not (Test-Path -LiteralPath $full -PathType Leaf)) {
+        throw 'Replacement receipt is absent.'
+    }
+    Assert-BootstrapNoReparsePoint $full 'replacement receipt'
+    $length = (Get-Item -LiteralPath $full -Force).Length
+    if ($length -le 0 -or $length -gt 131072) { throw 'Replacement receipt size is invalid.' }
+    if ($ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Replacement receipt SHA-256 is invalid.'
+    }
+    if ((Get-FileSha256 $full) -cne $ExpectedSha256) {
+        throw 'Replacement receipt SHA-256 differs.'
+    }
+    try { return Get-Content -LiteralPath $full -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'Replacement receipt JSON is invalid.' }
+}
+
+function Invoke-BootstrapVerifiedReplacementRestore(
+    $Receipt,
+    [string]$ReceiptPath,
+    [string]$InstallRoot,
+    [string]$ExpectedAppId,
+    [string]$ExpectedTransactionId,
+    [string]$ExpectedHelperSha256,
+    [switch]$InjectFailureAfterDisplace
+) {
+    $current = Get-StrictFullPath $InstallRoot 'restore current root'
+    $parent = Get-StrictFullPath (Split-Path -Parent $current) 'restore parent'
+    $rollback = Get-StrictFullPath ([string]$Receipt.rollback_root) 'restore rollback root'
+    $failed = Get-StrictFullPath ([string]$Receipt.failed_root) 'restore failed root'
+    $receiptFull = Get-StrictFullPath $ReceiptPath 'replacement receipt path'
+    if (
+        [string]$Receipt.schema_version -cne 'container-audit-verified-replacement-v1' -or
+        [string]$Receipt.status -cne 'OLD_PRESERVED_NEW_VERIFIED' -or
+        [string]$Receipt.app_id -cne $ExpectedAppId -or
+        [string]$Receipt.transaction_id -cne $ExpectedTransactionId -or
+        [string]$Receipt.helper_sha256 -cne $ExpectedHelperSha256 -or
+        -not (Test-BootstrapSamePath ([string]$Receipt.receipt_path) $receiptFull) -or
+        -not (Test-BootstrapSamePath ([string]$Receipt.install_root) $current) -or
+        -not (Test-BootstrapSamePath ([string]$Receipt.install_parent) $parent) -or
+        -not (Test-BootstrapSamePath (Split-Path -Parent $rollback) $parent) -or
+        -not (Test-BootstrapSamePath (Split-Path -Parent $failed) $parent) -or
+        [IO.Path]::GetFileName($rollback) -cnotmatch '^\.current\.rollback\.[0-9a-f]{32}$' -or
+        [IO.Path]::GetFileName($failed) -cne ".current.failed.$ExpectedTransactionId"
+    ) {
+        throw 'Replacement receipt identity or path binding is invalid.'
+    }
+    Assert-BootstrapNoReparsePoint $parent 'replacement restore parent'
+    $parentAcl = Get-BootstrapAclIdentity $parent
+    if (
+        [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
+        [string]$Receipt.parent_acl.access_rules_protected -cne [string]$parentAcl.access_rules_protected -or
+        [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
+    ) { throw 'Replacement restore parent ACL identity differs.' }
+    $siblings = @(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object {
+        $_.Name -match '^\.current\.(rollback|failed)\.'
+    } | ForEach-Object { $_.FullName })
+    $allowed = @($rollback, $failed | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
+    foreach ($sibling in $siblings) {
+        if (@($allowed | Where-Object { Test-BootstrapSamePath $_ $sibling }).Count -ne 1) {
+            throw 'An unrelated replacement sibling makes restore ambiguous.'
+        }
+    }
+
+    $currentExists = Test-Path -LiteralPath $current -PathType Container
+    $rollbackExists = Test-Path -LiteralPath $rollback -PathType Container
+    $failedExists = Test-Path -LiteralPath $failed -PathType Container
+    $currentIdentity = if ($currentExists) { Get-BootstrapReplacementTreeIdentity $current $current } else { $null }
+    $rollbackIdentity = if ($rollbackExists) { Get-BootstrapReplacementTreeIdentity $rollback $current } else { $null }
+    $failedIdentity = if ($failedExists) { Get-BootstrapReplacementTreeIdentity $failed $current } else { $null }
+    $pending = $currentExists -and $rollbackExists -and -not $failedExists -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.new $currentIdentity) -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.old $rollbackIdentity)
+    $displaced = -not $currentExists -and $rollbackExists -and $failedExists -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.old $rollbackIdentity) -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.new $failedIdentity)
+    $restored = $currentExists -and -not $rollbackExists -and $failedExists -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.old $currentIdentity) -and
+        (Test-BootstrapReplacementTreeIdentity $Receipt.new $failedIdentity)
+    if ($restored) {
+        return [pscustomobject][ordered]@{
+            status = 'ALREADY_RESTORED'
+            install_root = $current
+            failed_new_root = $failed
+            prior_code_exact = $true
+            failed_new_preserved = $true
+        }
+    }
+    if (-not $pending -and -not $displaced) {
+        throw 'Replacement restore state is ambiguous or drifted.'
+    }
+    try {
+        if ($pending) { Move-Item -LiteralPath $current -Destination $failed -ErrorAction Stop }
+        if ($InjectFailureAfterDisplace.IsPresent) { throw 'Injected restore failure after current displacement.' }
+        Move-Item -LiteralPath $rollback -Destination $current -ErrorAction Stop
+        $restoredOld = Get-BootstrapReplacementTreeIdentity $current $current
+        $preservedNew = Get-BootstrapReplacementTreeIdentity $failed $current
+        if (
+            -not (Test-BootstrapReplacementTreeIdentity $Receipt.old $restoredOld) -or
+            -not (Test-BootstrapReplacementTreeIdentity $Receipt.new $preservedNew)
+        ) { throw 'Replacement restore exact readback failed.' }
+        return [pscustomobject][ordered]@{
+            status = 'RESTORED'
+            install_root = $current
+            failed_new_root = $failed
+            prior_code_exact = $true
+            failed_new_preserved = $true
+        }
+    }
+    catch {
+        $original = $_.Exception.Message
+        $contained = $false
+        try {
+            if (
+                (Test-Path -LiteralPath $current -PathType Container) -and
+                -not (Test-Path -LiteralPath $rollback) -and
+                (Test-Path -LiteralPath $failed -PathType Container)
+            ) {
+                Move-Item -LiteralPath $current -Destination $rollback -ErrorAction Stop
+            }
+            if (
+                -not (Test-Path -LiteralPath $current) -and
+                (Test-Path -LiteralPath $failed -PathType Container)
+            ) {
+                Move-Item -LiteralPath $failed -Destination $current -ErrorAction Stop
+            }
+            $containedCurrent = Get-BootstrapReplacementTreeIdentity $current $current
+            $containedRollback = Get-BootstrapReplacementTreeIdentity $rollback $current
+            $contained = (
+                -not (Test-Path -LiteralPath $failed) -and
+                (Test-BootstrapReplacementTreeIdentity $Receipt.new $containedCurrent) -and
+                (Test-BootstrapReplacementTreeIdentity $Receipt.old $containedRollback)
+            )
+        }
+        catch { $contained = $false }
+        if (-not $contained) { throw "Replacement restore failed and containment also failed: $original" }
+        throw "Replacement restore failed; the pre-restore state was contained: $original"
+    }
+}

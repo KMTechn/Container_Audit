@@ -47,7 +47,16 @@ function Command([string]$Root) {
         (Arg (Join-Path $Root 'app\main.py')))
 }
 function Manifest([string]$Root, [bool]$UnsignedOk) {
-    foreach ($relative in @('portable-manifest.json','runtime\python.exe','runtime\pythonw.exe','app\main.py','launch-container-audit.cmd')) {
+    foreach ($relative in @(
+        'portable-manifest.json',
+        'runtime\python.exe',
+        'runtime\pythonw.exe',
+        'app\main.py',
+        'launch-container-audit.cmd',
+        'INSTALL_CANONICAL_PORTABLE.ps1',
+        'INSTALL_THIS_PC.ps1',
+        'tools\bootstrap_integrity.ps1'
+    )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
             throw "Portable tree is missing $relative."
         }
@@ -61,16 +70,88 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
     if ((Get-Item $path).Length -gt 65536) { throw 'Portable manifest is oversized.' }
     $value = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
+        [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
+        [string]$value.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
         @($value.allowed_unsigned_app_pe).Count -ne 0 -or
         @($value.forbidden_dependency_paths).Count -ne 0 -or
         (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
-        (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant()) {
+        (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'INSTALL_CANONICAL_PORTABLE.ps1')) -cne ([string]$value.installer_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'INSTALL_THIS_PC.ps1')) -cne ([string]$value.helper_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\bootstrap_integrity.ps1')) -cne ([string]$value.integrity_helper_sha256).ToLowerInvariant()) {
         throw 'Portable manifest readback failed.'
     }
+    $filesBeforeManifest = @(
+        Get-ChildItem -LiteralPath $Root -File -Force -Recurse |
+            Where-Object {
+                -not (Same $_.FullName $path) -and
+                [string]$_.Name -cne 'bootstrap-integrity.json'
+            }
+    )
+    $bytesBeforeManifest = [int64](
+        ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
+    )
+    if (
+        [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
+        [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
+    ) { throw 'Portable tree metrics differ from the manifest.' }
     if (-not $UnsignedOk) {
         foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
             if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
                 throw "Signed CPython readback failed: $relative"
+            }
+        }
+    }
+    return $value
+}
+function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
+    foreach ($relative in @(
+        'portable-manifest.json',
+        'runtime\python.exe',
+        'runtime\pythonw.exe',
+        'app\main.py',
+        'launch-container-audit.cmd'
+    )) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
+            throw "Installed portable tree is missing $relative."
+        }
+    }
+    foreach ($item in @((Get-Item $Root -Force)) + @(Get-ChildItem $Root -Force -Recurse)) {
+        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Installed portable tree contains a reparse point: $($item.FullName)"
+        }
+    }
+    $path = Join-Path $Root 'portable-manifest.json'
+    if ((Get-Item $path).Length -gt 65536) { throw 'Installed portable manifest is oversized.' }
+    $value = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
+        [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
+        [string]$value.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
+        [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
+        @($value.allowed_unsigned_app_pe).Count -ne 0 -or
+        @($value.forbidden_dependency_paths).Count -ne 0 -or
+        (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant()) {
+        throw 'Installed portable manifest readback failed.'
+    }
+    $filesBeforeManifest = @(
+        Get-ChildItem -LiteralPath $Root -File -Force -Recurse |
+            Where-Object { -not (Same $_.FullName $path) }
+    )
+    $bytesBeforeManifest = [int64](
+        ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
+    )
+    if (
+        [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
+        [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
+    ) { throw 'Installed portable tree metrics differ from the manifest.' }
+    if (-not $UnsignedOk) {
+        foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
+            if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
+                throw "Installed signed CPython readback failed: $relative"
             }
         }
     }
@@ -119,6 +200,71 @@ function StartRaw([string]$Line) {
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$Line}
     if ([uint32]$created.ReturnValue -ne 0) { throw 'Rollback process start failed.' }
     return [int]$created.ProcessId
+}
+function ReadReplacementReceipt(
+    [string]$Path,
+    [string]$ExpectedTransactionId,
+    [string]$ExpectedInstallRoot,
+    $ExpectedSourceManifest,
+    [string]$ExpectedManifestSha256,
+    [string]$ExpectedHelperSha256,
+    [string]$ExpectedIntegrityHelperSha256
+) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw 'Verified replacement receipt is absent.'
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Length -le 0 -or $item.Length -gt 131072) {
+        throw 'Verified replacement receipt size is invalid.'
+    }
+    try { $receipt = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'Verified replacement receipt JSON is invalid.' }
+    if (
+        [string]$receipt.schema_version -cne 'container-audit-verified-replacement-v1' -or
+        [string]$receipt.status -cne 'OLD_PRESERVED_NEW_VERIFIED' -or
+        [string]$receipt.app_id -cne 'container_audit' -or
+        [string]$receipt.transaction_id -cne $ExpectedTransactionId -or
+        -not (Same ([string]$receipt.receipt_path) $Path) -or
+        -not (Same ([string]$receipt.install_root) $ExpectedInstallRoot) -or
+        [string]$receipt.helper_sha256 -cne $ExpectedHelperSha256 -or
+        [string]$receipt.integrity_helper_sha256 -cne $ExpectedIntegrityHelperSha256 -or
+        [string]$receipt.new.source_commit -cne [string]$ExpectedSourceManifest.source_commit -or
+        [string]$receipt.new.source_tree -cne [string]$ExpectedSourceManifest.source_tree -or
+        [string]$receipt.new.manifest_sha256 -cne $ExpectedManifestSha256 -or
+        [bool]$receipt.identity_or_credential_copied
+    ) { throw 'Verified replacement receipt contract readback failed.' }
+    return $receipt
+}
+function ReadReplacementRestoreEvidence(
+    [string]$Path,
+    [string]$ExpectedTransactionId,
+    [string]$ExpectedReceiptPath,
+    [string]$ExpectedReceiptSha256,
+    [string]$ExpectedInstallRoot
+) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        throw 'Verified replacement restore evidence is absent.'
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    if ($item.Length -le 0 -or $item.Length -gt 131072) {
+        throw 'Verified replacement restore evidence size is invalid.'
+    }
+    try { $evidence = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'Verified replacement restore evidence JSON is invalid.' }
+    if (
+        [string]$evidence.schema_version -cne 'container-audit-verified-replacement-code-restore-v1' -or
+        [string]$evidence.status -cne 'PASS' -or
+        [string]$evidence.action -notin @('RESTORED','ALREADY_RESTORED') -or
+        [string]$evidence.app_id -cne 'container_audit' -or
+        [string]$evidence.transaction_id -cne $ExpectedTransactionId -or
+        -not (Same ([string]$evidence.receipt_path) $ExpectedReceiptPath) -or
+        [string]$evidence.receipt_sha256 -cne $ExpectedReceiptSha256 -or
+        -not (Same ([string]$evidence.install_root) $ExpectedInstallRoot) -or
+        -not [bool]$evidence.prior_code_exact -or
+        -not [bool]$evidence.failed_new_preserved -or
+        [bool]$evidence.identity_or_credential_copied
+    ) { throw 'Verified replacement restore evidence contract readback failed.' }
+    return $evidence
 }
 
 function UtcText([datetime]$Value) {
@@ -473,11 +619,24 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
 
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
 $source = Full $SourceRoot 'SourceRoot'; $install = Full $InstallRoot 'InstallRoot'
+$SourceRoot = $source
 if (-not $testMode -and -not (Same $install $CanonicalRoot)) { throw 'InstallRoot is not canonical.' }
+if (-not (Same $PSCommandPath (Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1'))) {
+    throw 'Top-level installer must execute from the admitted SourceRoot.'
+}
 $sourceManifest = Manifest $source $SkipSignatureValidationForTest
+$sourceManifestSha256 = Sha (Join-Path $source 'portable-manifest.json')
+$sourceHelperSha256 = Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
+$sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
 $wanted = Command $install
 if ($PlanOnly) {
-    "install_status=PLAN_ONLY"; "install_root=$install"; "autostart_command=$wanted"; 'registry_changed=false'; exit 0
+    "install_status=PLAN_ONLY"
+    "install_root=$install"
+    "autostart_command=$wanted"
+    'replacement_prestate_required=VERIFIED_REPLACE'
+    'replacement_restore_status=AVAILABLE_RECEIPT_BOUND'
+    'registry_changed=false'
+    exit 0
 }
 
 $winps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
@@ -488,7 +647,12 @@ $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
-$auditPath = Join-Path $lad "KMTech\ContainerAudit\install-audit\canonical-portable-$runId.json"
+$auditRoot = Join-Path $lad 'KMTech\ContainerAudit\install-audit'
+$auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
+$elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"
+$replacementTransactionId = [Guid]::NewGuid().ToString('N')
+$replacementReceiptPath = Join-Path $auditRoot "canonical-portable-$runId-replacement.json"
+$replacementRestoreEvidencePath = Join-Path $auditRoot "canonical-portable-$runId-code-restore.json"
 $evidenceFull = if ($EvidencePath) { Full $EvidencePath 'EvidencePath' } else { '' }
 $before = Snapshot
 $old = @(Relays)
@@ -504,6 +668,7 @@ $audit = [ordered]@{
     install_root=$install
     code_placement='NOT_STARTED'
     source_commit=[string]$sourceManifest.source_commit
+    source_manifest_sha256=$sourceManifestSha256
     runtime_pythonw_sha256=''
     runtime_pythonw_signature=''
     registry_value=$RunName
@@ -519,6 +684,18 @@ $audit = [ordered]@{
         natural_trigger_proof=$null
         restore_failure_code=''
     }
+    code_replacement=[ordered]@{
+        status='NOT_REQUIRED'
+        prestate='NOT_EVALUATED'
+        transaction_id=$replacementTransactionId
+        receipt_path=''
+        receipt_sha256=''
+        rollback_root=''
+        restore_evidence_path=''
+        restore_evidence_sha256=''
+        later_restore_surface='NOT_REQUIRED'
+        identity_or_credential_copied=$false
+    }
     rollback=[ordered]@{
         available=$true
         applied=$false
@@ -531,6 +708,10 @@ if ($evidenceFull) { Save $evidenceFull $audit }
 
 $mutated = $false
 $writerRestoreNeeded = [bool]$writerBefore.restore_required
+$runtimeQuiescedForReplacement = $false
+$codeRestoreNeeded = $false
+$replacementReceipt = $null
+$replacementReceiptSha256 = ''
 try {
     if ($writerRestoreNeeded) {
         $writerDisabled = Disable-CanonicalWriter $install $writerBefore
@@ -544,27 +725,101 @@ try {
     }
 
     $placement = 'INSTALL_REQUIRED'
+    $existingVerified = $false
     if (Test-Path $install -PathType Container) {
         try {
-            $candidate = Manifest $install $SkipSignatureValidationForTest
-            if ([string]$candidate.source_commit -cne [string]$sourceManifest.source_commit -or
-                (Sha (Join-Path $install 'runtime\pythonw.exe')) -cne (Sha (Join-Path $source 'runtime\pythonw.exe'))) { throw 'identity differs' }
-            $helper = (Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1').Replace("'","''")
+            $candidate = InstalledManifest $install $SkipSignatureValidationForTest
+            $helper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
             $escapedRoot = $install.Replace("'","''")
             & $winps -NoLogo -NoProfile -NonInteractive -Command ". '$helper'; [void](Assert-BootstrapIntegrityRecord '$escapedRoot')"
             if ($LASTEXITCODE -ne 0) { throw 'integrity differs' }
-            $placement = 'REUSED_VERIFIED'
-        } catch { $placement = 'INSTALL_REQUIRED' }
+            $existingVerified = $true
+            $audit.code_replacement.prestate='VERIFIED_REPLACE'
+            if (
+                [string]$candidate.source_commit -ceq [string]$sourceManifest.source_commit -and
+                [string]$candidate.source_tree -ceq [string]$sourceManifest.source_tree -and
+                (Sha (Join-Path $install 'runtime\pythonw.exe')) -ceq (Sha (Join-Path $source 'runtime\pythonw.exe'))
+            ) { $placement = 'REUSED_VERIFIED' }
+        }
+        catch {
+            $audit.code_replacement.prestate='UNKNOWN_OR_DAMAGED'
+            $audit.code_replacement.prestate_failure_type=$_.Exception.GetType().Name
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+        }
+        if (-not $existingVerified) {
+            throw 'CODE_PRESTATE_NOT_VERIFIED_REPLACE'
+        }
     }
     if ($placement -eq 'INSTALL_REQUIRED') {
-        $bootstrap = @('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $PSScriptRoot 'INSTALL_THIS_PC.ps1'),'-SourceRoot',$source,'-InstallRoot',$install)
+        $replaceExisting = Test-Path -LiteralPath $install -PathType Container
+        if ($replaceExisting) {
+            $mutated = $true
+            Product $install '--remove-current-user-setup'
+            $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (
+                (Snapshot).exists -or
+                [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
+                [string]$removal.relay_process.status -cne 'ABSENT' -or
+                @(Relays).Count -ne 0
+            ) { throw 'Verified replacement runtime quiescence failed.' }
+            $runtimeQuiescedForReplacement = $true
+            $audit.code_replacement.status='PRESTATE_VERIFIED_RUNTIME_QUIESCED'
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+        }
+        $bootstrap = @(
+            '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+            '-SourceRoot',$source,
+            '-InstallRoot',$install,
+            '-ElevationLogPath',$elevationLogPath
+        )
+        if ($replaceExisting) {
+            $bootstrap += @(
+                '-ReplaceExistingVerifiedPortable',
+                '-ReplacementTransactionId',$replacementTransactionId,
+                '-ReplacementReceiptPath',$replacementReceiptPath
+            )
+        }
         if ($testMode) { $bootstrap += '-AllowNoncanonicalLayoutForTest' }
-        & $winps @bootstrap
-        if ($LASTEXITCODE -ne 0) { throw "Code placement failed: $LASTEXITCODE" }
-        $placement = 'PASS'
+        $bootstrapOutput = @(& $winps @bootstrap)
+        $bootstrapExitCode = $LASTEXITCODE
+        if ($bootstrapExitCode -ne 0) { throw "Code placement failed: $bootstrapExitCode" }
+        if ($replaceExisting) {
+            $replacementReceiptSha256 = Sha $replacementReceiptPath
+            $replacementReceipt = ReadReplacementReceipt `
+                -Path $replacementReceiptPath `
+                -ExpectedTransactionId $replacementTransactionId `
+                -ExpectedInstallRoot $install `
+                -ExpectedSourceManifest $sourceManifest `
+                -ExpectedManifestSha256 $sourceManifestSha256 `
+                -ExpectedHelperSha256 $sourceHelperSha256 `
+                -ExpectedIntegrityHelperSha256 $sourceIntegrityHelperSha256
+            if (
+                -not (Test-Path -LiteralPath ([string]$replacementReceipt.rollback_root) -PathType Container) -or
+                -not (Test-Path -LiteralPath $install -PathType Container)
+            ) { throw 'Verified replacement preserved-tree readback failed.' }
+            $codeRestoreNeeded = $true
+            $placement = 'REPLACED_VERIFIED'
+            $audit.code_replacement.status='OLD_PRESERVED_NEW_VERIFIED'
+            $audit.code_replacement.receipt_path=$replacementReceiptPath
+            $audit.code_replacement.receipt_sha256=$replacementReceiptSha256
+            $audit.code_replacement.rollback_root=[string]$replacementReceipt.rollback_root
+            $audit.code_replacement.later_restore_surface='READY_PENDING_FINAL_COMPOSITE'
+        }
+        else { $placement = 'PASS_NEW_VERIFIED' }
     }
-    $installedManifest = Manifest $install $SkipSignatureValidationForTest
-    if ([string]$installedManifest.source_commit -cne [string]$sourceManifest.source_commit) { throw 'Installed identity differs.' }
+    $installedManifest = InstalledManifest $install $SkipSignatureValidationForTest
+    if (
+        [string]$installedManifest.source_commit -cne [string]$sourceManifest.source_commit -or
+        [string]$installedManifest.source_tree -cne [string]$sourceManifest.source_tree -or
+        (Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256
+    ) { throw 'Installed identity differs.' }
+    $installedHelper = (Join-Path $source 'tools\bootstrap_integrity.ps1').Replace("'","''")
+    $escapedInstalledRoot = $install.Replace("'","''")
+    & $winps -NoLogo -NoProfile -NonInteractive -Command ". '$installedHelper'; [void](Assert-BootstrapIntegrityRecord '$escapedInstalledRoot')"
+    if ($LASTEXITCODE -ne 0) { throw 'Installed aggregate integrity differs.' }
     $audit.code_placement=$placement
     $audit.source_commit=[string]$installedManifest.source_commit
     $audit.runtime_pythonw_sha256=Sha (Join-Path $install 'runtime\pythonw.exe')
@@ -576,7 +831,7 @@ try {
     Product $install '--remove-current-user-setup'
     $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
-        [string]$removal.relay_process.status -cne 'ABSENT') { throw 'Removal readback failed.' }
+        [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) { throw 'Removal readback failed.' }
     $started = (Get-Date).ToUniversalTime()
     Product $install '--onboard-current-user'
     $onboarding = Get-Content $onboardingPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -625,14 +880,65 @@ try {
     "autostart_command=$wanted"
     "autostart_process_id=$pidValue"
     "stop_marker_absent=$($audit.stop_marker_absent.ToString().ToLowerInvariant())"
+    if ($codeRestoreNeeded) {
+        "replacement_receipt_path=$replacementReceiptPath"
+        "replacement_receipt_sha256=$replacementReceiptSha256"
+        "replacement_transaction_id=$replacementTransactionId"
+        'later_phase_replacement_restore_status=READY_PENDING_FINAL_COMPOSITE'
+    }
     'cold_boot_status=UNPROVEN'
     "audit_path=$auditPath"
 }
 catch {
     $original=$_
     $autostartRollbackFailure=''
+    $codeRollbackFailure=''
+    if ($codeRestoreNeeded) {
+        try {
+            Product $install '--remove-current-user-setup'
+            if ((Snapshot).exists -or @(Relays).Count -ne 0) {
+                throw 'Replacement rollback runtime quiescence failed.'
+            }
+            $restoreBootstrap = @(
+                '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+                '-File',(Join-Path $install 'INSTALL_THIS_PC.ps1'),
+                '-InstallRoot',$install,
+                '-ElevationLogPath',$elevationLogPath,
+                '-RestoreVerifiedReplacement',
+                '-ReplacementTransactionId',$replacementTransactionId,
+                '-ReplacementReceiptPath',$replacementReceiptPath,
+                '-ReplacementReceiptSha256',$replacementReceiptSha256,
+                '-RestoreEvidencePath',$replacementRestoreEvidencePath
+            )
+            if ($testMode) { $restoreBootstrap += '-AllowNoncanonicalLayoutForTest' }
+            $restoreOutput = @(& $winps @restoreBootstrap)
+            $restoreExitCode = $LASTEXITCODE
+            if ($restoreExitCode -ne 0) { throw "Code restore failed: $restoreExitCode" }
+            $restoreEvidence = ReadReplacementRestoreEvidence `
+                -Path $replacementRestoreEvidencePath `
+                -ExpectedTransactionId $replacementTransactionId `
+                -ExpectedReceiptPath $replacementReceiptPath `
+                -ExpectedReceiptSha256 $replacementReceiptSha256 `
+                -ExpectedInstallRoot $install
+            $audit.code_replacement.status='RESTORED_LATER_PHASE_FAILURE'
+            $audit.code_replacement.restore_evidence_path=$replacementRestoreEvidencePath
+            $audit.code_replacement.restore_evidence_sha256=Sha $replacementRestoreEvidencePath
+            $audit.code_replacement.later_restore_surface='CONSUMED'
+            $codeRestoreNeeded=$false
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+        }
+        catch {
+            $codeRollbackFailure=$_.Exception.GetType().Name
+            $audit.status='CODE_ROLLBACK_FAILED'
+            $audit.code_replacement.status='ROLLBACK_FAILED_CONTAINED_OR_STOPPED'
+            $audit.code_replacement.restore_failure_type=$codeRollbackFailure
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+        }
+    }
     try {
-        if($mutated){
+        if($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)){
             try{Product $install '--remove-current-user-setup'}catch{}
             Restore $before
             if(Test-Path $stop){Remove-Item $stop -Force}
@@ -655,7 +961,7 @@ catch {
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
     }
-    if ($writerRestoreNeeded) {
+    if ($writerRestoreNeeded -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
         try {
             $writerEnabled = Enable-CanonicalWriter $install $writerBefore
             $audit.scheduled_writer.restore_readback = $writerEnabled
@@ -677,6 +983,9 @@ catch {
     }
     if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
         throw "AUTOSTART_ROLLBACK_FAILED: $autostartRollbackFailure"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+        throw "CODE_ROLLBACK_FAILED: $codeRollbackFailure"
     }
     $audit.status='FAILED_ROLLED_BACK'
     $audit.failure_type=$original.Exception.GetType().Name
