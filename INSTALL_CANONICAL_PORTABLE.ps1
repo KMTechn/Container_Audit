@@ -188,6 +188,42 @@ function Relays {
         [string]$_.ExecutablePath -match '(?i)(pythonw?\.exe|Container_Audit\.exe)$'
     })
 }
+function Assert-CanonicalRuntimePreimage(
+    $Before,
+    [object[]]$Processes,
+    [string]$ExpectedCommand,
+    [string]$ExpectedRoot,
+    [bool]$StopMarkerExists
+) {
+    $items = @($Processes)
+    if ([bool]$Before.exists) {
+        if (
+            [string]$Before.kind -cne 'String' -or
+            [string]$Before.data -cne $ExpectedCommand
+        ) { throw 'CANONICAL_HKCU_RUN_BINDING_MISMATCH' }
+    }
+    elseif (
+        -not [string]::IsNullOrEmpty([string]$Before.kind) -or
+        -not [string]::IsNullOrEmpty([string]$Before.data)
+    ) { throw 'CANONICAL_HKCU_RUN_ABSENCE_CONTRACT_INVALID' }
+    if ($items.Count -gt 1) { throw 'CANONICAL_RELAY_CARDINALITY_INVALID' }
+    $expectedExecutable = Join-Path $ExpectedRoot 'runtime\pythonw.exe'
+    foreach ($item in $items) {
+        if (
+            -not [bool]$Before.exists -or
+            -not (Same ([string]$item.ExecutablePath) $expectedExecutable) -or
+            [string]$item.CommandLine -cne $ExpectedCommand
+        ) { throw 'CANONICAL_RELAY_BINDING_MISMATCH' }
+    }
+    if ($StopMarkerExists) { throw 'CANONICAL_STOP_MARKER_PREEXISTS' }
+    return [ordered]@{
+        status='PASS'
+        hkcu_run_state=if ([bool]$Before.exists) { 'EXACT_CANONICAL' } else { 'ABSENT' }
+        relay_count=$items.Count
+        relay_binding_exact=$true
+        stop_marker_absent=$true
+    }
+}
 function Product([string]$Root,[string]$Mode) {
     $args = '-I -B {0} {1} --app-root {2}' -f
         (Arg (Join-Path $Root 'app\main.py')),$Mode,(Arg (Join-Path $Root 'app'))
@@ -656,6 +692,12 @@ $replacementRestoreEvidencePath = Join-Path $auditRoot "canonical-portable-$runI
 $evidenceFull = if ($EvidencePath) { Full $EvidencePath 'EvidencePath' } else { '' }
 $before = Snapshot
 $old = @(Relays)
+$runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
+    -Before $before `
+    -Processes $old `
+    -ExpectedCommand $wanted `
+    -ExpectedRoot $install `
+    -StopMarkerExists (Test-Path -LiteralPath $stop)
 $writerBefore = if ($testMode) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
@@ -673,6 +715,7 @@ $audit = [ordered]@{
     runtime_pythonw_signature=''
     registry_value=$RunName
     preimage=$before
+    runtime_preimage_binding=$runtimePreimageBinding
     after=[ordered]@{exists=$true;kind='String';data=$wanted}
     stop_marker_path=$stop
     scheduled_writer=[ordered]@{

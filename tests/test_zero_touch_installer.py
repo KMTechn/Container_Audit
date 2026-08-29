@@ -263,6 +263,86 @@ def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback
     assert "cold_boot_status=UNPROVEN" in text
 
 
+def test_portable_installer_validates_runtime_binding_before_preimage_acceptance():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    capture_index = text.index("$old = @(Relays)")
+    validation_index = text.index(
+        "$runtimePreimageBinding = Assert-CanonicalRuntimePreimage", capture_index
+    )
+    audit_index = text.index("$audit = [ordered]@{", validation_index)
+    save_index = text.index("Save $auditPath $audit", audit_index)
+    disable_index = text.index("$writerDisabled = Disable-CanonicalWriter", save_index)
+    assert capture_index < validation_index < audit_index < save_index < disable_index
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @('Full','Same','Assert-CanonicalRuntimePreimage')) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$root = 'C:\KMTech\Apps\Container_Audit\current'
+$command = 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py --container-audit-user-relay'
+$validBefore = [pscustomobject]@{ exists=$true; kind='String'; data=$command }
+$validProcess = [pscustomobject]@{
+    ExecutablePath='C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe'
+    CommandLine=$command
+}
+$valid = Assert-CanonicalRuntimePreimage $validBefore @($validProcess) $command $root $false
+if ([string]$valid.status -cne 'PASS' -or [int]$valid.relay_count -ne 1) { exit 12 }
+$wrongBefore = [pscustomobject]@{ exists=$true; kind='String'; data='C:\foreign\pythonw.exe --container-audit-user-relay' }
+try {
+    [void](Assert-CanonicalRuntimePreimage $wrongBefore @() $command $root $false)
+    exit 13
+}
+catch {
+    if ($_.Exception.Message -cne 'CANONICAL_HKCU_RUN_BINDING_MISMATCH') { exit 14 }
+}
+$foreign = [pscustomobject]@{
+    ExecutablePath='C:\foreign\pythonw.exe'
+    CommandLine=$command
+}
+try {
+    [void](Assert-CanonicalRuntimePreimage $validBefore @($foreign) $command $root $false)
+    exit 15
+}
+catch {
+    if ($_.Exception.Message -cne 'CANONICAL_RELAY_BINDING_MISMATCH') { exit 16 }
+}
+try {
+    [void](Assert-CanonicalRuntimePreimage $validBefore @($validProcess) $command $root $true)
+    exit 17
+}
+catch {
+    if ($_.Exception.Message -cne 'CANONICAL_STOP_MARKER_PREEXISTS') { exit 18 }
+}
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_portable_installer_fences_canonical_scheduled_writer_around_replacement():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
     audit_index = text.index("$audit = [ordered]@{")
