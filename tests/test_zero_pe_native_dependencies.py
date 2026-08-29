@@ -204,6 +204,11 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
         "install_logistics_runtime_profile.py",
         "register_container_audit_worker_pc.py",
     }
+    assert set(portable_builder.PORTABLE_INSTALL_ASSETS) == {
+        ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
+        ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
+        ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+    }
     for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):
         assert forbidden not in portable_builder.THIRD_PARTY
 

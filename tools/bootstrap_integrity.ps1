@@ -138,8 +138,19 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
     if ([string]$record.aggregate_sha256 -cne $aggregate) {
         throw "Bootstrap integrity aggregate is invalid."
     }
-    if (@($inventory | Where-Object { [string]$_.path -ieq 'Container_Audit.exe' }).Count -ne 1) {
-        throw "Bootstrap integrity record does not identify Container_Audit.exe."
+    $frozenMainCount = @(
+        $inventory | Where-Object { [string]$_.path -ieq 'Container_Audit.exe' }
+    ).Count
+    $portablePythonCount = @(
+        $inventory | Where-Object { [string]$_.path -ieq 'runtime/pythonw.exe' }
+    ).Count
+    $portableMainCount = @(
+        $inventory | Where-Object { [string]$_.path -ieq 'app/main.py' }
+    ).Count
+    $frozenLayout = $frozenMainCount -eq 1
+    $portableLayout = $portablePythonCount -eq 1 -and $portableMainCount -eq 1
+    if ($frozenLayout -eq $portableLayout) {
+        throw "Bootstrap integrity record does not identify exactly one supported release layout."
     }
     return [pscustomobject]@{
         status = 'PASS'

@@ -50,6 +50,11 @@ APP_TOOL_FILES = (
     "install_logistics_runtime_profile.py",
     "register_container_audit_worker_pc.py",
 )
+PORTABLE_INSTALL_ASSETS = (
+    ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
+    ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
+    ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+)
 UPDATE_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
 UPDATE_KEY_CONFIG_SCHEMA = "container-audit-update-key-config-v1"
 THIRD_PARTY = {
@@ -328,6 +333,15 @@ def build(
         repo_root / "portable" / "launch-container-audit.cmd",
         output / "launch-container-audit.cmd",
     )
+    for source_relative, target_relative in PORTABLE_INSTALL_ASSETS:
+        source = repo_root / source_relative
+        target = output / target_relative
+        if not source.is_file():
+            raise PortableBuildError(
+                f"portable install asset is missing: {source_relative}"
+            )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     native = _app_native_inventory(app_root)
     forbidden_paths = _forbidden_dependency_paths(output)
     if forbidden_paths:

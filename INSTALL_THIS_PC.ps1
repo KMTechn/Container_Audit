@@ -86,13 +86,80 @@ function Invoke-SelfElevated {
     exit $process.ExitCode
 }
 
-function Assert-RequiredRelease([string]$Root) {
-    foreach ($name in @('Container_Audit.exe', 'contract.lock.json')) {
-        $path = Join-Path $Root $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Frozen release is incomplete. Missing: $name"
+function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTest) {
+    $frozenFiles = @('Container_Audit.exe', 'contract.lock.json')
+    $portableFiles = @(
+        'portable-manifest.json',
+        'runtime\python.exe',
+        'runtime\pythonw.exe',
+        'app\main.py',
+        'launch-container-audit.cmd'
+    )
+    $frozen = @($frozenFiles | Where-Object {
+        Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf
+    }).Count -eq $frozenFiles.Count
+    $portable = @($portableFiles | Where-Object {
+        Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf
+    }).Count -eq $portableFiles.Count
+    if ($frozen -eq $portable) {
+        throw "Release layout must be exactly one of FROZEN_EXE or PORTABLE_CPYTHON."
+    }
+    if ($frozen) { return 'FROZEN_EXE' }
+
+    $manifestPath = Join-Path $Root 'portable-manifest.json'
+    if ((Get-Item -LiteralPath $manifestPath -Force).Length -gt 65536) {
+        throw "Portable release manifest is oversized."
+    }
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 |
+            ConvertFrom-Json
+    }
+    catch {
+        throw "Portable release manifest is invalid."
+    }
+    if (
+        [string]$manifest.schema -cne 'container-audit-portable-tree-v1' -or
+        [string]$manifest.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
+        [string]$manifest.launcher -cne 'launch-container-audit.cmd' -or
+        @($manifest.allowed_unsigned_app_pe).Count -ne 0 -or
+        @($manifest.forbidden_dependency_paths).Count -ne 0
+    ) {
+        throw "Portable release manifest contract is invalid."
+    }
+    $pythonwPath = Join-Path $Root 'runtime\pythonw.exe'
+    $launcherPath = Join-Path $Root 'launch-container-audit.cmd'
+    if (
+        (Get-FileSha256 $pythonwPath) -cne
+            ([string]$manifest.runtime_pythonw_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $launcherPath) -cne
+            ([string]$manifest.launcher_sha256).ToLowerInvariant()
+    ) {
+        throw "Portable release manifest hash readback failed."
+    }
+    $filesBeforeManifest = @(
+        Get-ChildItem -LiteralPath $Root -File -Force -Recurse |
+            Where-Object {
+                -not (Test-SamePath $_.FullName $manifestPath)
+            }
+    )
+    $bytesBeforeManifest = [int64](
+        ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
+    )
+    if (
+        [int64]$manifest.file_count_before_manifest -ne $filesBeforeManifest.Count -or
+        [int64]$manifest.byte_count_before_manifest -ne $bytesBeforeManifest
+    ) {
+        throw "Portable release tree metrics differ from the manifest."
+    }
+    if (-not $AllowUnsignedPortableForTest) {
+        foreach ($relativePath in @('runtime\python.exe', 'runtime\pythonw.exe')) {
+            $signature = Get-AuthenticodeSignature -LiteralPath (Join-Path $Root $relativePath)
+            if ([string]$signature.Status -cne 'Valid') {
+                throw "Portable CPython signature is not valid: $relativePath"
+            }
         }
     }
+    return 'PORTABLE_CPYTHON'
 }
 
 function ConvertTo-NormalizedAclRights([int64]$Rights) {
@@ -309,7 +376,7 @@ if (Test-SamePath $sourceRootFull $installRootFull) {
     throw "SourceRoot and InstallRoot must differ."
 }
 Assert-NoReparsePoint $sourceRootFull "Frozen release"
-Assert-RequiredRelease $sourceRootFull
+$releaseLayout = Assert-RequiredRelease $sourceRootFull $testOverride
 $sourceInventory = @(Get-CodeInventory $sourceRootFull)
 if ($sourceInventory.Count -eq 0) {
     throw "Frozen release code inventory is empty."
@@ -318,6 +385,7 @@ $sourceAggregate = Get-InventoryAggregate $sourceInventory
 if ($DryRun.IsPresent) {
     Write-Output "bootstrap_status=DRY_RUN"
     Write-Output "code_root=$installRootFull"
+    Write-Output "release_layout=$releaseLayout"
     Write-Output "file_count=$($sourceInventory.Count)"
     Write-Output "aggregate_sha256=$sourceAggregate"
     Write-Output "identity_profile_created=false"
@@ -398,6 +466,7 @@ try {
         Write-Output "dacl_normalized=true"
     }
     Write-Output "code_root=$installRootFull"
+    Write-Output "release_layout=$releaseLayout"
     Write-Output "integrity_record=$(Join-Path $installRootFull $IntegrityFileName)"
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
     if ($null -eq $tlsCaBootstrap) { Write-Output "tls_ca_bootstrap_status=ABSENT" }

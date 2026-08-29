@@ -15,6 +15,7 @@ from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL_THIS_PC.ps1"
+PORTABLE_INSTALLER = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 
 
@@ -62,6 +63,37 @@ def _release_fixture(root: Path) -> Path:
         encoding="utf-8",
     )
     (release / "runtime.dll").write_bytes(b"reachable-runtime")
+    return release
+
+
+def _portable_release_fixture(root: Path) -> Path:
+    release = root / "portable release 한글"
+    (release / "runtime").mkdir(parents=True)
+    (release / "app").mkdir()
+    (release / "runtime" / "python.exe").write_bytes(b"signed-python-test-double")
+    pythonw = b"signed-pythonw-test-double"
+    (release / "runtime" / "pythonw.exe").write_bytes(pythonw)
+    (release / "app" / "main.py").write_text("# portable main\n", encoding="utf-8")
+    launcher = b"@echo off\r\n"
+    (release / "launch-container-audit.cmd").write_bytes(launcher)
+    files = [path for path in release.rglob("*") if path.is_file()]
+    manifest = {
+        "schema": "container-audit-portable-tree-v1",
+        "source_commit": "a" * 40,
+        "source_tree": "b" * 40,
+        "entrypoint": "runtime/pythonw.exe app/main.py",
+        "launcher": "launch-container-audit.cmd",
+        "runtime_pythonw_sha256": hashlib.sha256(pythonw).hexdigest(),
+        "launcher_sha256": hashlib.sha256(launcher).hexdigest(),
+        "allowed_unsigned_app_pe": [],
+        "forbidden_dependency_paths": [],
+        "file_count_before_manifest": len(files),
+        "byte_count_before_manifest": sum(path.stat().st_size for path in files),
+    }
+    (release / "portable-manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=True),
+        encoding="utf-8",
+    )
     return release
 
 
@@ -117,7 +149,7 @@ def test_bootstrap_is_minimal_code_placement_contract():
 
 
 def test_bootstrap_powershell_parses():
-    for script in (INSTALLER, INTEGRITY_HELPER):
+    for script in (INSTALLER, PORTABLE_INSTALLER, INTEGRITY_HELPER):
         escaped = str(script).replace("'", "''")
         completed = subprocess.run(
             [
@@ -140,6 +172,197 @@ def test_bootstrap_powershell_parses():
         )
 
         assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+
+    preimage_index = text.index("Save $auditPath $audit")
+    mutation_index = text.index("Product $install '--remove-current-user-setup'")
+    assert preimage_index < mutation_index
+    assert "Restore $before" in text
+    assert "AUTOSTART_ROLLBACK_FAILED" in text
+    assert "Product $install '--onboard-current-user'" in text
+    assert "relay_autostart.command -cne $wanted" in text
+    assert "StartRaw ([string]$item.CommandLine)" in text
+    assert "cold_boot_status=UNPROVEN" in text
+
+
+def test_portable_installer_fences_canonical_scheduled_writer_around_replacement():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    audit_index = text.index("$audit = [ordered]@{")
+    preimage_save_index = text.index("Save $auditPath $audit", audit_index)
+    disable_index = text.index(
+        "$writerDisabled = Disable-CanonicalWriter", preimage_save_index
+    )
+    stop_proof_index = text.index(
+        "$writerStopped = Confirm-CanonicalWriterStopped", disable_index
+    )
+    placement_index = text.index("& $winps @bootstrap", stop_proof_index)
+    product_pass_index = text.index("$audit.status='PRODUCT_PHASE_PASS'", placement_index)
+    enable_index = text.index(
+        "$writerEnabled = Enable-CanonicalWriter", product_pass_index
+    )
+    natural_trigger_index = text.index(
+        "$writerRunning = Confirm-CanonicalWriterRunning", enable_index
+    )
+    final_pass_index = text.index("$audit.status='PASS'", natural_trigger_index)
+
+    assert (
+        preimage_save_index
+        < disable_index
+        < stop_proof_index
+        < placement_index
+        < product_pass_index
+        < enable_index
+        < natural_trigger_index
+        < final_pass_index
+    )
+    assert "Disable-ScheduledTask" in text
+    assert "Enable-ScheduledTask" in text
+    assert "Start-ScheduledTask" not in text
+    assert "CANONICAL_WRITER_STOP_PROOF_FAILED" in text
+    assert "CANONICAL_WRITER_RESTORE_NEXT_TRIGGER_NOT_FUTURE" in text
+    assert "CANONICAL_WRITER_NATURAL_TRIGGER_PROOF_FAILED" in text
+    assert "CANONICAL_WRITER_RESTORE_FAILED" in text
+    assert "log_size_mtime_sha256_unchanged=$true" in text
+    assert "last_run_time_advanced=$true" in text
+    assert "log_actual_write=$true" in text
+
+
+def test_portable_installer_restore_binding_mismatch_is_explicit_without_mutation():
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+$functions = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Assert-CanonicalWriterRestoreReadback'
+}, $true))
+if ($functions.Count -ne 1) { exit 11 }
+Invoke-Expression $functions[0].Extent.Text
+$before = [pscustomobject]@{ binding_sha256 = ('a' * 64) }
+$after = [pscustomobject]@{
+    present = $true
+    classification = 'CANONICAL_QUIESCE_RESTORE'
+    enabled = $true
+    binding_sha256 = ('b' * 64)
+}
+try {
+    Assert-CanonicalWriterRestoreReadback $before $after
+    exit 12
+}
+catch {
+    if ($_.Exception.Message -cne 'CANONICAL_WRITER_RESTORE_BINDING_MISMATCH') {
+        exit 13
+    }
+}
+exit 0
+"""
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
+    tmp_path,
+):
+    source = _portable_release_fixture(tmp_path)
+    install = tmp_path / "설치 위치" / "Container Audit" / "current"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(PORTABLE_INSTALLER),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "install_status=PLAN_ONLY" in completed.stdout
+    assert "registry_changed=false" in completed.stdout
+    assert f'"{install / "runtime" / "pythonw.exe"}" -I -B' in completed.stdout
+    assert (
+        f'"{install / "app" / "main.py"}" --container-audit-user-relay'
+        in completed.stdout
+    )
+    assert not install.exists()
+
+
+def test_bootstrap_accepts_portable_tree_and_integrity_readback(tmp_path):
+    source = _portable_release_fixture(tmp_path)
+    install = tmp_path / "apps" / "portable current"
+
+    completed = _run_installer(source, install)
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+    assert "release_layout=PORTABLE_CPYTHON" in completed.stdout
+    assert (install / "runtime" / "pythonw.exe").read_bytes() == (
+        source / "runtime" / "pythonw.exe"
+    ).read_bytes()
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_BOOTSTRAP_HELPER"] = str(INTEGRITY_HELPER)
+    environment["KMTECH_TEST_PACKAGE_ROOT"] = str(install)
+    verified = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                ". $env:KMTECH_TEST_BOOTSTRAP_HELPER;"
+                "Assert-BootstrapIntegrityRecord $env:KMTECH_TEST_PACKAGE_ROOT | Out-Null"
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+    assert verified.returncode == 0, verified.stderr or verified.stdout
 
 
 def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(
@@ -316,9 +539,11 @@ def test_bootstrap_refuses_implicit_replacement_and_inverse_preserves_user_state
     conflict = _run_installer(source, install)
 
     assert conflict.returncode != 0
-    assert "different or damaged hardened code placement exists" in (
-        conflict.stderr + conflict.stdout
-    )
+    # Windows PowerShell may hard-wrap stderr in the middle of words.  The
+    # semantic diagnostic must still be present after removing presentation
+    # whitespace introduced by the host.
+    conflict_text = "".join((conflict.stderr + conflict.stdout).split()).lower()
+    assert "differentordamagedhardenedcodeplacementexists" in conflict_text
     removed = _run_installer(source, install, "-Uninstall")
     assert removed.returncode == 0, removed.stderr
     assert "uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED" in removed.stdout
