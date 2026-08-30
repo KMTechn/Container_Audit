@@ -1110,6 +1110,21 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
         return "producer_receipt_invalid", "accepted receipt next_retry_after must be null", 0, 0
     if receipt.get("error") is not None:
         return "producer_receipt_invalid", "accepted receipt must not include error details", 0, 0
+    projection_disposition = receipt.get("projection_disposition")
+    if not isinstance(projection_disposition, str):
+        return (
+            "producer_receipt_invalid",
+            "accepted receipt projection_disposition must be a string",
+            0,
+            0,
+        )
+    if projection_disposition != "COMPLETE":
+        return (
+            "producer_projection_incomplete",
+            "accepted receipt projection_disposition must be COMPLETE",
+            0,
+            0,
+        )
     totals = receipt.get("totals")
     if not isinstance(totals, dict):
         return "producer_receipt_invalid", "producer receipt totals are missing or invalid", 0, 0
