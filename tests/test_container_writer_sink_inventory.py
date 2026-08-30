@@ -98,6 +98,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
                 "dotnet_process_start",
                 "invoke_expression",
                 "native_command",
+                "native_process_api",
                 "reflective_invocation",
                 "scheduler_com",
                 "service_control_api",
@@ -124,7 +125,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
         "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
         "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
-        "PowerShell Start-Process, Invoke-Expression/IEX, call-operator, direct bare .exe command, explicit COM/WMI process creation, explicit .NET Process.Start, scheduler COM, service-control, and reflection primitives are conservatively treated as writer boundaries.",
+        "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
         "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
         "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
         "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
@@ -676,10 +677,22 @@ POWERSHELL_UNFENCED_INJECTIONS = (
         id="dot-source",
     ),
     pytest.param(
+        "module_import",
+        "Import-Module 'fixture-unfenced.psm1'\n",
+        "dot_source",
+        id="module-import",
+    ),
+    pytest.param(
         "start_process",
         "Start-Process -FilePath 'schtasks.exe' -ArgumentList '/Create'\n",
         "start_process",
         id="start-process",
+    ),
+    pytest.param(
+        "invoke_item",
+        "Invoke-Item 'fixture-unfenced.cmd'\n",
+        "start_process",
+        id="invoke-item",
     ),
     pytest.param(
         "invoke_expression",
@@ -700,16 +713,34 @@ POWERSHELL_UNFENCED_INJECTIONS = (
         id="native-command",
     ),
     pytest.param(
+        "relative_script_command",
+        ".\\fixture-unfenced.ps1\n",
+        "native_command",
+        id="relative-script-command",
+    ),
+    pytest.param(
         "com_wmi_process_create",
         "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c exit 0' }\n",
         "com_wmi_process_create",
         id="com-wmi-process",
     ),
     pytest.param(
+        "generic_com",
+        "$automation = New-Object -ComObject 'MMC20.Application'\n",
+        "com_wmi_process_create",
+        id="generic-com",
+    ),
+    pytest.param(
         "dotnet_process_start",
         "[System.Diagnostics.Process]::Start('cmd.exe')\n",
         "dotnet_process_start",
         id="dotnet-process-start",
+    ),
+    pytest.param(
+        "native_process_api",
+        "[NativeMethods]::CreateProcessW($null, $commandLine)\n",
+        "native_process_api",
+        id="native-process-api",
     ),
     pytest.param(
         "scheduler_com",
@@ -728,6 +759,12 @@ POWERSHELL_UNFENCED_INJECTIONS = (
         "$method = [Type]::GetType($typeName).GetMethod($methodName); $method.Invoke($null, @())\n",
         "reflective_invocation",
         id="reflective-invocation",
+    ),
+    pytest.param(
+        "runspace_begin_invoke",
+        "$pipeline.BeginInvoke()\n",
+        "reflective_invocation",
+        id="runspace-begin-invoke",
     ),
 )
 

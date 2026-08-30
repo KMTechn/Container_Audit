@@ -85,6 +85,35 @@ POWERSHELL_REFLECTION_COMMANDS = (
     "MethodInfo",
     "Activator]::CreateInstance",
 )
+POWERSHELL_DIRECT_COMMAND_NAMES = (
+    "at",
+    "cmd",
+    "cscript",
+    "icacls",
+    "mshta",
+    "msiexec",
+    "net",
+    "netsh",
+    "powershell",
+    "pwsh",
+    "reg",
+    "regsvr32",
+    "rundll32",
+    "schtasks",
+    "wmic",
+    "wscript",
+)
+POWERSHELL_NATIVE_PROCESS_APIS = (
+    "CreateProcess",
+    "CreateProcessAsUser",
+    "CreateProcessWithLogonW",
+    "CreateProcessWithTokenW",
+    "NtCreateUserProcess",
+    "RtlCreateUserProcess",
+    "ShellExecute",
+    "ShellExecuteEx",
+    "WinExec",
+)
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
@@ -1763,6 +1792,13 @@ def _powershell_command_present(code: str, command: str) -> bool:
     )
 
 
+def _powershell_statement_command(code: str, command_pattern: str) -> re.Match[str] | None:
+    return re.search(
+        rf"(?i)(?:^|[;{{}}|()]\s*)({command_pattern})(?![A-Za-z0-9_-])",
+        code,
+    )
+
+
 def _powershell_function_at_line(
     function_ranges: list[dict[str, Any]], line: int
 ) -> dict[str, Any] | None:
@@ -1881,6 +1917,12 @@ def _powershell_line_sites(
     if dot_source is not None:
         target, static = _powershell_target(dot_source.group(1))
         add("dot_source", ".", target, static)
+    module_import = _powershell_statement_command(
+        code,
+        r"Import-Module|Import-PSSession|using\s+module",
+    )
+    if module_import is not None:
+        add("dot_source", module_import.group(1), "", False)
 
     start_process = re.search(r"(?i)(?<![A-Za-z0-9_-])Start-Process\b(.*)", code)
     if start_process is not None:
@@ -1891,6 +1933,12 @@ def _powershell_line_sites(
             (file_path or positional).group(1) if (file_path or positional) else ""
         )
         add("start_process", "Start-Process", target, static)
+    start_alias = _powershell_statement_command(
+        code,
+        r"saps|start|Invoke-Item|ii",
+    )
+    if start_alias is not None:
+        add("start_process", start_alias.group(1), "", False)
 
     invoke_expression = next(
         (
@@ -1911,9 +1959,12 @@ def _powershell_line_sites(
         target, static = _powershell_target(call_operator.group(1))
         add("call_operator", "&", target, static)
 
-    native_command = re.search(
-        r"(?i)(?:^|[;{}|]\s*)([A-Za-z][A-Za-z0-9_.\\:/-]*\.exe)\b",
+    direct_names = "|".join(
+        re.escape(command) for command in POWERSHELL_DIRECT_COMMAND_NAMES
+    )
+    native_command = _powershell_statement_command(
         code,
+        rf"(?:\.?\.?[\\/])?[A-Za-z][A-Za-z0-9_.\\:/-]*\.(?:exe|com|cmd|bat|ps1|psm1)|{direct_names}",
     )
     if native_command is not None:
         target = native_command.group(1)
@@ -1929,8 +1980,27 @@ def _powershell_line_sites(
         )
     ):
         add("com_wmi_process_create", "Win32_Process.Create", "", False)
-    if "wscript.shell" in line.casefold() or "shell.application" in line.casefold():
+    if (
+        "-comobject" in line.casefold()
+        or "gettypefromprogid" in line.casefold()
+        or "wscript.shell" in line.casefold()
+        or "shell.application" in line.casefold()
+    ):
         add("com_wmi_process_create", "COM process launch", "", False)
+
+    native_process_api = next(
+        (
+            api
+            for api in POWERSHELL_NATIVE_PROCESS_APIS
+            if re.search(
+                rf"(?i)(?<![A-Za-z0-9_-]){re.escape(api)}(?:A|W)?(?![A-Za-z0-9_-])",
+                context,
+            )
+        ),
+        "",
+    )
+    if native_process_api:
+        add("native_process_api", native_process_api, "", False)
 
     if re.search(
         r"(?i)(?:System\.)?Diagnostics\.Process\s*\]\s*::\s*Start\b|"
@@ -1999,12 +2069,20 @@ def _powershell_line_sites(
         or re.search(r"(?i)\.Invoke(?:ReturnAsIs)?\s*\(", code)
         or re.search(r"(?i)\[ScriptBlock\]\s*::\s*Create\s*\(", code)
         or re.search(r"(?i)\.InvokeScript\s*\(", code)
+        or re.search(r"(?i)\.(?:AddScript|BeginInvoke)\s*\(", code)
+        or re.search(
+            r"(?i)\b(?:RunspaceFactory|CreateRunspace|CreatePipeline)\b",
+            code,
+        )
         or any(
             _powershell_command_present(code, command)
             for command in (
                 "Add-Type",
                 "Invoke-Command",
                 "New-Module",
+                "Register-EngineEvent",
+                "Register-ObjectEvent",
+                "Register-WmiEvent",
                 "Start-Job",
                 "Start-ThreadJob",
             )
@@ -2144,6 +2222,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
                     "dotnet_process_start",
                     "invoke_expression",
                     "native_command",
+                    "native_process_api",
                     "reflective_invocation",
                     "scheduler_com",
                     "service_control_api",
@@ -2238,6 +2317,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
         "dotnet_process_start",
         "invoke_expression",
         "native_command",
+        "native_process_api",
         "reflective_invocation",
         "scheduled_task_cmdlet",
         "scheduler_com",
@@ -2482,7 +2562,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
             "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
             "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
-            "PowerShell Start-Process, Invoke-Expression/IEX, call-operator, direct bare .exe command, explicit COM/WMI process creation, explicit .NET Process.Start, scheduler COM, service-control, and reflection primitives are conservatively treated as writer boundaries.",
+            "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
             "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
             "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
             "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
@@ -2514,6 +2594,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
                     "dotnet_process_start",
                     "invoke_expression",
                     "native_command",
+                    "native_process_api",
                     "reflective_invocation",
                     "scheduler_com",
                     "service_control_api",

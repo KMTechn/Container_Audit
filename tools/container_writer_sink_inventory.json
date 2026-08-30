@@ -5192,7 +5192,7 @@
     "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
     "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
     "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
-    "PowerShell Start-Process, Invoke-Expression/IEX, call-operator, direct bare .exe command, explicit COM/WMI process creation, explicit .NET Process.Start, scheduler COM, service-control, and reflection primitives are conservatively treated as writer boundaries.",
+    "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
     "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
     "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
     "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review."
@@ -5648,7 +5648,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "803517bf0a6b4df3a84ed415a4cab53cdfa473880682c9e96059e83646a9ce17",
+  "inventory_sha256": "7b9e73b17fe047bad4450be5350b4b3752793be416df6c85e64edff4b5cbe81d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
