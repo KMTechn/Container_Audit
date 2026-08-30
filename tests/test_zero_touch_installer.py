@@ -263,6 +263,151 @@ def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback
     assert "cold_boot_status=UNPROVEN" in text
 
 
+def test_bootstrap_task_query_failure_stops_without_task_mutation():
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @('Get-LegacyTaskByNameFailClosed','Remove-OwnedLegacyTask')) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$script:stopCalls = 0
+$script:unregisterCalls = 0
+function Get-ScheduledTask {
+    [CmdletBinding()]
+    param()
+    throw [InvalidOperationException]::new('injected provider failure')
+}
+function Stop-ScheduledTask { $script:stopCalls += 1 }
+function Unregister-ScheduledTask { $script:unregisterCalls += 1 }
+try {
+    Remove-OwnedLegacyTask 'direct-sync-relay-container-audit' 'C:\expected'
+    exit 12
+}
+catch {
+    if (-not $_.Exception.Message.StartsWith(
+        'Legacy scheduled task observation failed:',
+        [StringComparison]::Ordinal
+    )) { exit 13 }
+}
+if ($script:stopCalls -ne 0 -or $script:unregisterCalls -ne 0) { exit 14 }
+exit 0
+"""
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_rollback_product_failure_records_explicit_failure_without_restore():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    initialization = text.index("$audit.rollback.runtime_restored = (-not $mutated)")
+    product = text.index("Product $install '--remove-current-user-setup'", initialization)
+    success = text.index("$audit.rollback.runtime_restored = $true", product)
+    assert initialization < product < success
+    assert "try{Product $install '--remove-current-user-setup'}catch{}" not in text
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 20 }
+$candidates = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.TryStatementAst] -and
+        $node.Extent.Text.Contains("Product `$install '--remove-current-user-setup'") -and
+        $node.Extent.Text.Contains("`$audit.status = 'AUTOSTART_ROLLBACK_FAILED'") -and
+        -not $node.Extent.Text.Contains('Enable-CanonicalWriter')
+}, $true))
+if ($candidates.Count -ne 1) { exit 21 }
+$script:productCalls = 0
+$script:restoreCalls = 0
+$script:startCalls = 0
+$script:saveCalls = 0
+function Product {
+    param($Root, $Mode)
+    $script:productCalls += 1
+    throw [InvalidOperationException]::new('injected rollback removal failure')
+}
+function Restore { $script:restoreCalls += 1 }
+function StartRaw { $script:startCalls += 1; return 1234 }
+function Save { $script:saveCalls += 1 }
+$mutated = $true
+$codeRollbackFailure = ''
+$install = 'C:\unused'
+$before = [pscustomobject]@{ exists=$false; kind=''; data='' }
+$stop = 'C:\unused\stop.json'
+$old = @()
+$auditPath = 'C:\unused\audit.json'
+$evidenceFull = ''
+$autostartRollbackFailure = ''
+$audit = [ordered]@{
+    status = ''
+    failure_type = ''
+    rollback = [ordered]@{ applied=$true; runtime_restored=$false }
+}
+try { throw [ApplicationException]::new('original failure') }
+catch { $original = $_ }
+Invoke-Expression $candidates[0].Extent.Text
+if ($script:productCalls -ne 1) { exit 22 }
+if ($script:restoreCalls -ne 0 -or $script:startCalls -ne 0) { exit 23 }
+if ([bool]$audit.rollback.runtime_restored) { exit 24 }
+if ([string]$audit.status -cne 'AUTOSTART_ROLLBACK_FAILED') { exit 25 }
+if ([string]::IsNullOrWhiteSpace($autostartRollbackFailure)) { exit 26 }
+if ($script:saveCalls -ne 1) { exit 27 }
+exit 0
+"""
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            command,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_portable_installer_validates_runtime_binding_before_preimage_acceptance():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
     capture_index = text.index("$old = @(Relays)")
