@@ -183,10 +183,26 @@ function Save([string]$Path, $Value) {
     Move-Item $temp $Path -Force
 }
 function Relays {
-    return @(Get-CimInstance Win32_Process | Where-Object {
+    return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
         [string]$_.CommandLine -like '*--container-audit-user-relay*' -and
         [string]$_.ExecutablePath -match '(?i)(pythonw?\.exe|Container_Audit\.exe)$'
     })
+}
+function Assert-RollbackRelayPreimage([object[]]$ExpectedRelays) {
+    $actualRelays = @(Relays)
+    if ($actualRelays.Count -ne $ExpectedRelays.Count) {
+        throw 'rollback relay process-count readback failed'
+    }
+    foreach ($expected in $ExpectedRelays) {
+        $matching = @($actualRelays | Where-Object {
+            (Same ([string]$_.ExecutablePath) ([string]$expected.ExecutablePath)) -and
+            [string]$_.CommandLine -ceq [string]$expected.CommandLine
+        })
+        if ($matching.Count -ne 1) {
+            throw 'rollback relay executable/command readback failed'
+        }
+    }
+    return $actualRelays
 }
 function Assert-CanonicalRuntimePreimage(
     $Before,
@@ -980,27 +996,37 @@ catch {
             if ($evidenceFull) { Save $evidenceFull $audit }
         }
     }
+    $audit.rollback.applied = $mutated
+    $audit.rollback.runtime_restored = (-not $mutated)
     try {
-        if($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)){
-            try{Product $install '--remove-current-user-setup'}catch{}
+        if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+            Product $install '--remove-current-user-setup'
+            [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
             Restore $before
-            if(Test-Path $stop){Remove-Item $stop -Force}
-            foreach($item in $old){
-                $newPid=StartRaw ([string]$item.CommandLine)
+            if (Test-Path $stop) { Remove-Item $stop -Force }
+            foreach ($item in $old) {
+                $newPid = StartRaw ([string]$item.CommandLine)
                 Start-Sleep -Seconds 3
-                $p=Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
-                if($null-eq$p -or -not(Same ([string]$p.ExecutablePath)([string]$item.ExecutablePath))){throw 'runtime restore failed'}
+                $p = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
+                if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
+                    throw 'runtime restore failed'
+                }
             }
-            $check=Snapshot
-            if([bool]$check.exists-ne[bool]$before.exists -or [string]$check.data-cne[string]$before.data){throw 'registry restore failed'}
+            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+            $check = Snapshot
+            if (
+                [bool]$check.exists -ne [bool]$before.exists -or
+                [string]$check.kind -cne [string]$before.kind -or
+                [string]$check.data -cne [string]$before.data
+            ) { throw 'registry restore failed' }
+            $audit.rollback.runtime_restored = $true
         }
-        $audit.rollback.applied=$mutated
-        $audit.rollback.runtime_restored=$true
     }
     catch {
-        $audit.status='AUTOSTART_ROLLBACK_FAILED'
-        $autostartRollbackFailure=$_.Exception.GetType().Name
-        $audit.failure_type=$original.Exception.GetType().Name
+        $audit.status = 'AUTOSTART_ROLLBACK_FAILED'
+        $audit.rollback.runtime_restored = $false
+        $autostartRollbackFailure = $_.Exception.GetType().Name
+        $audit.failure_type = $original.Exception.GetType().Name
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
     }
