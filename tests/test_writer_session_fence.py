@@ -261,6 +261,69 @@ def test_delegation_requires_exact_source_token_tuple_and_live_authority(tmp_pat
         thread.join(5)
 
 
+@pytest.mark.skipif(not WINPS.exists(), reason="Windows PowerShell 5.1 is required")
+def test_powershell_delegated_operation_requires_exact_live_source_tuple(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "control"
+    token = "p" * 64
+    payload = _active_payload(
+        token=token,
+        sources=["canonical_code_placement"],
+    )
+    _write_active(root, payload)
+    ready = threading.Event()
+    release = threading.Event()
+
+    def hold_authority() -> None:
+        lease = fence._acquire_named_mutex(
+            payload["session_authority_mutex_name"],
+            1.0,
+        )
+        assert lease is not None and not lease.abandoned
+        ready.set()
+        release.wait(10)
+        lease.release()
+
+    thread = threading.Thread(target=hold_authority, daemon=True)
+    thread.start()
+    assert ready.wait(5)
+    quoted_helper = str(PS_HELPER).replace("'", "''")
+    quoted_root = str(root).replace("'", "''")
+
+    def invoke(source: str) -> subprocess.CompletedProcess[str]:
+        script = (
+            f". '{quoted_helper}'; "
+            "$lease = Enter-ContainerWriterDelegatedOperation "
+            f"-ControlRoot '{quoted_root}' "
+            f"-SessionId '{payload['session_id']}' "
+            f"-AttemptId '{payload['attempt_id']}' "
+            f"-ReplacementTransactionId '{payload['replacement_transaction_id']}' "
+            f"-DelegationToken '{token}' -Source '{source}'; "
+            "Exit-ContainerWriterAdmission $lease; 'PASS'"
+        )
+        return subprocess.run(
+            [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+
+    try:
+        admitted = invoke("canonical_code_placement")
+        assert admitted.returncode == 0, admitted.stdout + admitted.stderr
+        assert "PASS" in admitted.stdout
+        wrong_source = invoke("different_source")
+        assert wrong_source.returncode != 0
+        assert "DELEGATED_OPERATION_MISMATCH" in (
+            wrong_source.stdout + wrong_source.stderr
+        )
+    finally:
+        release.set()
+        thread.join(5)
+
+
 def test_decorator_exposes_source_and_blocks_body_zero_mutation(tmp_path: Path) -> None:
     root = tmp_path / "control"
     effect = tmp_path / "effect.txt"
@@ -350,7 +413,14 @@ def test_every_derived_sink_has_negative_and_positive_admission_controls(
             encoding="utf-8"
         )
     )
-    sink_rows = inventory["writer_sinks"]
+    sink_rows = list(inventory["writer_sinks"])
+    sink_rows.extend(
+        {
+            "source": row["source"],
+            "function": "powershell::" + row["file"],
+        }
+        for row in inventory["powershell_writer_sinks"]
+    )
     sources = inventory["writer_sink_sources"]
     assert sources == sorted(set(sources)) and sources
     assert sink_rows

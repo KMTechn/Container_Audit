@@ -293,6 +293,89 @@ def test_bootstrap_powershell_parses():
         assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_direct_production_helper_requires_exact_writer_delegation_before_elevation():
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(INSTALLER),
+            "-RestoreVerifiedReplacement",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert completed.returncode != 0
+    assert "exact attempt-bound writer fence parameters" in (
+        completed.stdout + completed.stderr
+    )
+    assert "Elevated Container verified replacement restore started" not in (
+        completed.stdout + completed.stderr
+    )
+
+
+def test_direct_production_helper_rejects_well_formed_but_inactive_delegation(
+    tmp_path,
+):
+    environment = dict(os.environ)
+    environment["LOCALAPPDATA"] = str(tmp_path / "local-app-data")
+    writer_fence_sha256 = hashlib.sha256(WRITER_FENCE_HELPER.read_bytes()).hexdigest()
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(INSTALLER),
+            "-RestoreVerifiedReplacement",
+            "-WriterFenceHelperPath",
+            str(WRITER_FENCE_HELPER),
+            "-ExpectedWriterFenceHelperSha256",
+            writer_fence_sha256,
+            "-WriterFenceSessionId",
+            "1" * 32,
+            "-WriterFenceAttemptId",
+            "2" * 32,
+            "-WriterFenceReplacementTransactionId",
+            "3" * 32,
+            "-WriterFenceDelegationToken",
+            "4" * 64,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "CONTAINER_WRITER_FENCE_" in completed.stdout + completed.stderr
+    assert "Elevated Container verified replacement restore started" not in (
+        completed.stdout + completed.stderr
+    )
+
+
+def test_canonical_installer_passes_exact_placement_delegation_to_every_helper_call():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+
+    assert text.count("'-WriterFenceHelperPath'") == 2
+    assert text.count("'-ExpectedWriterFenceHelperSha256'") == 2
+    assert text.count("'-WriterFenceSessionId'") == 2
+    assert text.count("'-WriterFenceAttemptId'") == 2
+    assert text.count("'-WriterFenceReplacementTransactionId'") == 2
+    assert text.count("'-WriterFenceDelegationToken'") == 2
+
+
 def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
 

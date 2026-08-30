@@ -6,7 +6,7 @@ $Script:ContainerWriterFenceAppId = 'container_audit'
 $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-authority-v1'
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
-$Script:ContainerWriterFenceInventorySha256 = 'd4708bcaae436cbba313b9c6809b0ea2c8ffc7f2ee6637063720c4d2a2db3062'
+$Script:ContainerWriterFenceInventorySha256 = '803517bf0a6b4df3a84ed415a4cab53cdfa473880682c9e96059e83646a9ce17'
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
     'schema','status','app_id','session_id','attempt_id','replacement_transaction_id',
@@ -645,6 +645,42 @@ function Assert-ContainerWriterFenceOwner {
         return $active
     }
     finally { Exit-ContainerWriterAdmission $lease }
+}
+
+function Enter-ContainerWriterDelegatedOperation {
+    param(
+        [string]$ControlRoot = '',
+        [string]$SessionId,
+        [string]$AttemptId,
+        [string]$ReplacementTransactionId,
+        [string]$DelegationToken,
+        [string]$Source,
+        [int]$TimeoutMilliseconds = 5000
+    )
+    if (
+        [string]::IsNullOrWhiteSpace($DelegationToken) -or
+        $DelegationToken.Length -lt 32 -or
+        [string]::IsNullOrWhiteSpace($Source)
+    ) { throw 'CONTAINER_WRITER_FENCE_DELEGATED_OPERATION_INVALID' }
+    $lease = Enter-ContainerWriterAdmission $ControlRoot $TimeoutMilliseconds
+    try {
+        $active = Read-ContainerWriterFence $ControlRoot
+        Assert-ContainerWriterSessionAuthority $active
+        if (
+            [string]$active.session_id -cne $SessionId -or
+            [string]$active.attempt_id -cne $AttemptId -or
+            [string]$active.replacement_transaction_id -cne $ReplacementTransactionId -or
+            [string]$active.status -cnotin @('PREPARED','RESTORING','RESTORE_FAILED','INSTALLING') -or
+            [string]$active.delegation_sha256 -cne (Get-ContainerWriterFenceStringSha256 $DelegationToken) -or
+            [string]$Source -cnotin @($active.delegated_sources) -or
+            (ConvertTo-ContainerWriterFenceUtc ([string]$active.delegation_expires_at_utc)) -lt [DateTime]::UtcNow
+        ) { throw 'CONTAINER_WRITER_FENCE_DELEGATED_OPERATION_MISMATCH' }
+        return $lease
+    }
+    catch {
+        Exit-ContainerWriterAdmission $lease
+        throw
+    }
 }
 
 function Invoke-ContainerWriterFenceMutation {

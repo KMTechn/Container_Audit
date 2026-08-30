@@ -17,12 +17,74 @@ SNAPSHOT_PATH = ROOT / "tools" / "container_writer_sink_inventory.json"
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "vendor")
 SHIPPED_PORTABLE_ENTRYPOINTS = (Path("portable/main.py"),)
 POWERSHELL_PATHS = (
+    Path("tools/bootstrap_integrity.ps1"),
     Path("tools/container_writer_session.ps1"),
     Path("INSTALL_CANONICAL_PORTABLE.ps1"),
     Path("INSTALL_THIS_PC.ps1"),
     Path("tools/container_writer_fence.ps1"),
 )
+POWERSHELL_LIBRARY_PATHS = frozenset(
+    {
+        Path("tools/bootstrap_integrity.ps1"),
+        Path("tools/container_writer_fence.ps1"),
+    }
+)
 COMMON_FENCE_GUARD_PREFIX = "Invoke-ContainerWriterFenceMutation"
+POWERSHELL_PLACEMENT_SOURCE = "canonical_code_placement"
+POWERSHELL_ENTRYPOINT_GUARDS: dict[Path, dict[str, Any]] = {
+    Path("INSTALL_CANONICAL_PORTABLE.ps1"): {
+        "entry_guard": "Enter-ContainerWriterSessionAuthority",
+        "guard_kind": "session_authority",
+        "writer_source": "",
+    },
+    Path("INSTALL_THIS_PC.ps1"): {
+        "entry_guard": "Enter-ContainerPlacementWriterFence",
+        "guard_kind": "delegated_operation",
+        "internal_guard_function": "Enter-ContainerPlacementWriterFence",
+        "internal_guard": "Enter-ContainerWriterDelegatedOperation",
+        "prelaunch_boundary": "Invoke-SelfElevated",
+        "writer_source": POWERSHELL_PLACEMENT_SOURCE,
+    },
+    Path("tools/container_writer_session.ps1"): {
+        "entry_guard": "Assert-ContainerWriterPublicInvocation",
+        "guard_kind": "session_contract",
+        "writer_source": "",
+    },
+}
+POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
+    Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset({"$writerFenceHelperPath"}),
+    Path("INSTALL_THIS_PC.ps1"): frozenset(
+        {"$BootstrapIntegrityFunctions", "$writerFenceHelperFull", "$writerFenceHelperPath"}
+    ),
+    Path("tools/container_writer_session.ps1"): frozenset(
+        {"$Script:IntegrityHelperPath", "$Script:WriterFenceHelperPath"}
+    ),
+}
+POWERSHELL_FILESYSTEM_MUTATION_COMMANDS = (
+    "Add-Content",
+    "Clear-Content",
+    "Copy-Item",
+    "Move-Item",
+    "New-Item",
+    "Out-File",
+    "Remove-Item",
+    "Rename-Item",
+    "Set-Acl",
+    "Set-Content",
+)
+POWERSHELL_REGISTRY_MUTATION_COMMANDS = (
+    "New-ItemProperty",
+    "Remove-ItemProperty",
+    "Rename-ItemProperty",
+    "Set-ItemProperty",
+)
+POWERSHELL_REFLECTION_COMMANDS = (
+    "InvokeMember",
+    "GetMethod",
+    "GetMethods",
+    "MethodInfo",
+    "Activator]::CreateInstance",
+)
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
@@ -292,6 +354,56 @@ def _discover_shipped_application_paths(root: Path) -> tuple[Path, ...]:
             paths.add(relative)
     paths.update(_discover_frozen_tool_paths(root))
     return tuple(sorted(paths, key=lambda path: path.as_posix().casefold()))
+
+
+def _discover_shipped_powershell_paths(root: Path) -> tuple[Path, ...]:
+    """Derive shipped PowerShell sources from the portable builder contract."""
+
+    builder = root / "tools" / "build_portable_release_candidate.py"
+    if not builder.is_file():
+        # Isolated detector fixtures intentionally omit the release builder.
+        return POWERSHELL_PATHS
+    tree = ast.parse(builder.read_text(encoding="utf-8"), filename=str(builder))
+    install_assets: Any | None = None
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == "PORTABLE_INSTALL_ASSETS"
+            for target in targets
+        ):
+            continue
+        try:
+            install_assets = ast.literal_eval(node.value)
+        except (TypeError, ValueError, SyntaxError) as exc:
+            raise InventoryError(
+                "portable PowerShell shipping inventory is not static"
+            ) from exc
+        break
+    if not isinstance(install_assets, (tuple, list)):
+        raise InventoryError("portable install asset inventory is missing")
+    discovered: set[Path] = set()
+    for entry in install_assets:
+        if not isinstance(entry, (tuple, list)) or len(entry) != 2:
+            raise InventoryError("portable install asset entry is invalid")
+        source = entry[0]
+        if not isinstance(source, str) or not source.casefold().endswith(".ps1"):
+            continue
+        relative = Path(source.replace("\\", "/"))
+        if relative.is_absolute() or ".." in relative.parts:
+            raise InventoryError("portable PowerShell asset path is unsafe")
+        discovered.add(relative)
+    if not discovered:
+        raise InventoryError("portable PowerShell shipping inventory is empty")
+    missing = sorted(
+        path.as_posix() for path in discovered if not (root / path).is_file()
+    )
+    if missing:
+        raise InventoryError(
+            "shipped PowerShell source is missing: " + ", ".join(missing)
+        )
+    return tuple(sorted(discovered, key=lambda path: path.as_posix().casefold()))
 
 
 def _canonical_json_bytes(payload: dict[str, Any]) -> bytes:
@@ -1614,72 +1726,601 @@ def _powershell_function_ranges(lines: list[str]) -> list[dict[str, Any]]:
     return ranges
 
 
+def _powershell_code_only(line: str) -> str:
+    output: list[str] = []
+    quote = ""
+    escaped = False
+    for character in line:
+        if escaped:
+            escaped = False
+            output.append(" ")
+            continue
+        if character == "`":
+            escaped = True
+            output.append(" ")
+            continue
+        if quote:
+            if character == quote:
+                quote = ""
+            output.append(" ")
+            continue
+        if character in {"'", '"'}:
+            quote = character
+            output.append(" ")
+            continue
+        if character == "#":
+            break
+        output.append(character)
+    return "".join(output)
+
+
+def _powershell_command_present(code: str, command: str) -> bool:
+    return bool(
+        re.search(
+            rf"(?i)(?<![A-Za-z0-9_-]){re.escape(command)}(?![A-Za-z0-9_-])",
+            code,
+        )
+    )
+
+
+def _powershell_function_at_line(
+    function_ranges: list[dict[str, Any]], line: int
+) -> dict[str, Any] | None:
+    return next(
+        (
+            candidate
+            for candidate in function_ranges
+            if candidate["start"] <= line <= candidate["end"]
+        ),
+        None,
+    )
+
+
+def _powershell_entry_guard(
+    relative_path: Path,
+    lines: list[str],
+    function_ranges: list[dict[str, Any]],
+) -> dict[str, Any]:
+    contract = POWERSHELL_ENTRYPOINT_GUARDS.get(relative_path)
+    if contract is None:
+        return {
+            "required": False,
+            "guard_name": "",
+            "guard_kind": "",
+            "guard_line": None,
+            "valid": False,
+            "writer_source": "",
+        }
+    entry_guard = str(contract["entry_guard"])
+    guard_lines = [
+        index
+        for index, line in enumerate(lines, start=1)
+        if _powershell_command_present(_powershell_code_only(line), entry_guard)
+        and _powershell_function_at_line(function_ranges, index) is None
+        and not re.match(r"^\s*function\b", line, re.IGNORECASE)
+    ]
+    valid = bool(guard_lines)
+    internal_function_name = str(contract.get("internal_guard_function", ""))
+    internal_guard = str(contract.get("internal_guard", ""))
+    prelaunch_boundary = str(contract.get("prelaunch_boundary", ""))
+    if internal_function_name:
+        internal_function = next(
+            (
+                candidate
+                for candidate in function_ranges
+                if candidate["name"] == internal_function_name
+            ),
+            None,
+        )
+        if internal_function is None:
+            valid = False
+        else:
+            function_lines = list(internal_function["lines"])
+            internal_positions = [
+                index
+                for index, line in enumerate(function_lines)
+                if _powershell_command_present(
+                    _powershell_code_only(line), internal_guard
+                )
+            ]
+            prelaunch_positions = [
+                index
+                for index, line in enumerate(function_lines)
+                if _powershell_command_present(
+                    _powershell_code_only(line), prelaunch_boundary
+                )
+            ]
+            valid = bool(
+                valid
+                and len(internal_positions) >= 2
+                and len(prelaunch_positions) == 1
+                and internal_positions[0]
+                < prelaunch_positions[0]
+                < internal_positions[-1]
+            )
+    return {
+        "required": True,
+        "guard_name": entry_guard,
+        "guard_kind": str(contract["guard_kind"]),
+        "guard_line": guard_lines[0] if guard_lines else None,
+        "valid": valid,
+        "writer_source": str(contract.get("writer_source", "")),
+    }
+
+
+def _powershell_target(fragment: str) -> tuple[str, bool]:
+    target = fragment.strip().rstrip(";|")
+    static = bool(target) and not target.startswith(("$", "(", "@{"))
+    return target, static
+
+
+def _powershell_line_sites(
+    lines: list[str], index: int
+) -> list[dict[str, Any]]:
+    line = lines[index - 1]
+    code = _powershell_code_only(line)
+    if not code.strip():
+        return []
+    context_start = max(0, index - 3)
+    context_end = min(len(lines), index + 2)
+    context = "\n".join(lines[context_start:context_end])
+    context_folded = context.casefold()
+    sites: list[dict[str, Any]] = []
+
+    def add(kind: str, command: str, target: str = "", static: bool = True) -> None:
+        row = {
+            "kind": kind,
+            "command": command,
+            "target": target,
+            "target_static": static,
+        }
+        if row not in sites:
+            sites.append(row)
+
+    dot_source = re.search(r"(?<![A-Za-z0-9_.])\.\s+([^;|}]+)", code)
+    if dot_source is not None:
+        target, static = _powershell_target(dot_source.group(1))
+        add("dot_source", ".", target, static)
+
+    start_process = re.search(r"(?i)(?<![A-Za-z0-9_-])Start-Process\b(.*)", code)
+    if start_process is not None:
+        arguments = start_process.group(1)
+        file_path = re.search(r"(?i)-FilePath\s+([^\s,;|]+)", arguments)
+        positional = re.search(r"^\s*([^\s,;|]+)", arguments)
+        target, static = _powershell_target(
+            (file_path or positional).group(1) if (file_path or positional) else ""
+        )
+        add("start_process", "Start-Process", target, static)
+
+    invoke_expression = next(
+        (
+            command
+            for command in ("Invoke-Expression", "IEX")
+            if _powershell_command_present(code, command)
+        ),
+        "",
+    )
+    if invoke_expression:
+        add("invoke_expression", invoke_expression, "", False)
+
+    call_operator = re.search(
+        r"(?<![A-Za-z0-9_>])&\s*([^\s|;,)]+)",
+        code,
+    )
+    if call_operator is not None:
+        target, static = _powershell_target(call_operator.group(1))
+        add("call_operator", "&", target, static)
+
+    native_command = re.search(
+        r"(?i)(?:^|[;{}|]\s*)([A-Za-z][A-Za-z0-9_.\\:/-]*\.exe)\b",
+        code,
+    )
+    if native_command is not None:
+        target = native_command.group(1)
+        add("native_command", target, target, True)
+
+    if (
+        "win32_process" in context_folded
+        and "create" in context_folded
+        and (
+            _powershell_command_present(code, "Invoke-CimMethod")
+            or _powershell_command_present(code, "Invoke-WmiMethod")
+            or "[wmiclass]" in context_folded
+        )
+    ):
+        add("com_wmi_process_create", "Win32_Process.Create", "", False)
+    if "wscript.shell" in line.casefold() or "shell.application" in line.casefold():
+        add("com_wmi_process_create", "COM process launch", "", False)
+
+    if re.search(
+        r"(?i)(?:System\.)?Diagnostics\.Process\s*\]\s*::\s*Start\b|"
+        r"\[\s*Diagnostics\.Process\s*\]\s*::\s*Start\b",
+        code,
+    ) or re.search(
+        r"(?i)\[(?:System\.)?Diagnostics\.Process\]\s*::\s*new\b|"
+        r"New-Object\s+(?:System\.)?Diagnostics\.Process\b",
+        code,
+    ) or ("processstartinfo" in context_folded and re.search(r"(?i)\.Start\s*\(", code)):
+        add("dotnet_process_start", "System.Diagnostics.Process.Start", "", False)
+
+    if "schedule.service" in line.casefold() or (
+        "schedule.service" in "\n".join(lines).casefold()
+        and re.search(
+            r"(?i)\.(?:RegisterTaskDefinition|RegisterTask|DeleteTask|NewTask)\s*\(",
+            code,
+        )
+    ):
+        add("scheduler_com", "Schedule.Service", "", False)
+
+    service_command = next(
+        (
+            command
+            for command in SERVICE_MUTATION_COMMANDS
+            if _powershell_command_present(code, command)
+        ),
+        "",
+    )
+    service_api = bool(
+        service_command
+        or re.search(r"(?i)(?<![A-Za-z0-9_.-])sc\.exe(?![A-Za-z0-9_.-])", code)
+        or (
+            "win32_service" in context_folded
+            and any(
+                name in context_folded
+                for name in (
+                    "create",
+                    "changestartmode",
+                    "delete",
+                    "startservice",
+                    "stopservice",
+                )
+            )
+        )
+        or "serviceprocess.servicecontroller" in context_folded
+        or re.search(
+            r"(?i)\b(?:OpenSCManagerW?|CreateServiceW?|ChangeServiceConfigW?|DeleteService)\b",
+            context,
+        )
+    )
+    if service_api:
+        add("service_control_api", service_command or "service control API", "", False)
+
+    reflective_boundary = bool(
+        (
+            any(
+                marker.casefold() in context_folded
+                for marker in POWERSHELL_REFLECTION_COMMANDS
+            )
+            and (
+                re.search(r"(?i)\.(?:Invoke|InvokeMember)\s*\(", code)
+                or "getmethod" in context_folded
+            )
+        )
+        or re.search(r"(?i)\.Invoke(?:ReturnAsIs)?\s*\(", code)
+        or re.search(r"(?i)\[ScriptBlock\]\s*::\s*Create\s*\(", code)
+        or re.search(r"(?i)\.InvokeScript\s*\(", code)
+        or any(
+            _powershell_command_present(code, command)
+            for command in (
+                "Add-Type",
+                "Invoke-Command",
+                "New-Module",
+                "Start-Job",
+                "Start-ThreadJob",
+            )
+        )
+        or bool(re.search(r"(?i)ForEach-Object\b.*\s-Parallel\b", code))
+    )
+    if reflective_boundary:
+        add("reflective_invocation", "reflection invoke", "", False)
+
+    scheduled_command = next(
+        (
+            command
+            for command in SCHEDULED_TASK_MUTATION_COMMANDS
+            if _powershell_command_present(code, command)
+        ),
+        "",
+    )
+    if scheduled_command:
+        add("scheduled_task_cmdlet", scheduled_command)
+    if service_command:
+        add("service_cmdlet", service_command)
+
+    filesystem_commands = [
+        command
+        for command in POWERSHELL_FILESYSTEM_MUTATION_COMMANDS
+        if _powershell_command_present(code, command)
+    ]
+    dotnet_file = re.search(
+        r"(?i)\[(?:System\.)?(?:IO\.)?File\]\s*::\s*"
+        r"(?:AppendAllText|Copy|Delete|Move|Replace|WriteAllBytes|WriteAllLines|WriteAllText)\b",
+        code,
+    )
+    native_acl = bool(
+        call_operator is not None
+        and re.search(r"(?i)(?:\$icacls\b|\bicacls(?:\.exe)?\b)", line)
+    )
+    if filesystem_commands or dotnet_file or native_acl:
+        command = ",".join(filesystem_commands)
+        if dotnet_file:
+            command = command or ".NET File mutation"
+        if native_acl:
+            command = command or "icacls.exe"
+        add("filesystem_mutation", command)
+
+    registry_commands = [
+        command
+        for command in POWERSHELL_REGISTRY_MUTATION_COMMANDS
+        if _powershell_command_present(code, command)
+    ]
+    if registry_commands:
+        add("registry_mutation", ",".join(registry_commands))
+
+    return sites
+
+
+def _powershell_site_guard(
+    relative_path: Path,
+    site: dict[str, Any],
+    function: dict[str, Any] | None,
+    entry_guard: dict[str, Any],
+) -> tuple[bool, str, int | None]:
+    function_name = "" if function is None else str(function["name"])
+    if site["kind"] == "scheduled_task_cmdlet":
+        approved_wrapper = (
+            relative_path == Path("tools/container_writer_fence.ps1")
+            and function_name in APPROVED_SCHEDULED_TASK_WRAPPERS
+            and any(
+                COMMON_FENCE_GUARD_PREFIX in candidate
+                for candidate in ([] if function is None else function["lines"])
+            )
+        )
+        if approved_wrapper:
+            return True, COMMON_FENCE_GUARD_PREFIX, int(function["start"])
+    if site["kind"] == "call_operator" and (
+        relative_path == Path("tools/container_writer_fence.ps1")
+        and function_name == COMMON_FENCE_GUARD_PREFIX
+    ):
+        return True, COMMON_FENCE_GUARD_PREFIX, int(function["start"])
+    if site["kind"] == "dot_source":
+        approved = POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS.get(
+            relative_path, frozenset()
+        )
+        if site["target"] in approved:
+            return True, "byte_pinned_function_library", int(site["line"])
+    if entry_guard["valid"]:
+        guard_line = int(entry_guard["guard_line"])
+        if function is not None or int(site["line"]) >= guard_line:
+            return True, str(entry_guard["guard_name"]), guard_line
+    return False, "", None
+
+
 def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
+    powershell_paths = _discover_shipped_powershell_paths(root)
     files: list[dict[str, Any]] = []
-    mutation_sites: list[dict[str, Any]] = []
+    all_sites: list[dict[str, Any]] = []
+    execution_sites: list[dict[str, Any]] = []
+    direct_mutation_sites: list[dict[str, Any]] = []
+    script_entrypoints: list[dict[str, Any]] = []
+    mutation_scopes: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     delegated_sources: list[str] = []
-    for relative_path in POWERSHELL_PATHS:
+    for relative_path in powershell_paths:
         lines = (root / relative_path).read_text(encoding="utf-8").splitlines()
         function_ranges = _powershell_function_ranges(lines)
+        entry_guard = _powershell_entry_guard(relative_path, lines, function_ranges)
         if relative_path.name == "INSTALL_CANONICAL_PORTABLE.ps1":
             delegated_sources = _extract_ps_delegated_sources(lines)
         per_file_sites: list[dict[str, Any]] = []
-        for index, line in enumerate(lines, start=1):
-            command = next(
-                (
-                    candidate
-                    for candidate in SCHEDULED_TASK_MUTATION_COMMANDS
-                    if re.search(
-                        rf"(?i)(?<![A-Za-z0-9_-]){re.escape(candidate)}(?![A-Za-z0-9_-])",
-                        line,
-                    )
-                ),
-                "",
-            )
-            if not command or line.lstrip().startswith("#"):
-                continue
-            function = next(
-                (
-                    candidate
-                    for candidate in function_ranges
-                    if candidate["start"] <= index <= candidate["end"]
-                ),
-                None,
-            )
+        for index in range(1, len(lines) + 1):
+            function = _powershell_function_at_line(function_ranges, index)
             function_name = "" if function is None else str(function["name"])
-            approved_wrapper = (
-                relative_path == Path("tools/container_writer_fence.ps1")
-                and function_name in APPROVED_SCHEDULED_TASK_WRAPPERS
-                and any(
-                    COMMON_FENCE_GUARD_PREFIX in candidate
-                    for candidate in function["lines"]
+            for discovered in _powershell_line_sites(lines, index):
+                site = {
+                    "file": _relative(relative_path),
+                    "line": index,
+                    "function": function_name,
+                    **discovered,
+                }
+                guarded, guard_name, guard_line = _powershell_site_guard(
+                    relative_path,
+                    site,
+                    function,
+                    entry_guard,
                 )
+                site.update(
+                    {
+                        "guarded": guarded,
+                        "guard_name": guard_name,
+                        "guard_line": guard_line,
+                    }
+                )
+                per_file_sites.append(site)
+                all_sites.append(site)
+                if site["kind"] in {
+                    "call_operator",
+                    "com_wmi_process_create",
+                    "dot_source",
+                    "dotnet_process_start",
+                    "invoke_expression",
+                    "native_command",
+                    "reflective_invocation",
+                    "scheduler_com",
+                    "service_control_api",
+                    "start_process",
+                }:
+                    execution_sites.append(site)
+                if site["kind"] in {
+                    "filesystem_mutation",
+                    "registry_mutation",
+                    "scheduled_task_cmdlet",
+                    "service_cmdlet",
+                }:
+                    direct_mutation_sites.append(site)
+                if site["kind"] != "dot_source":
+                    mutation_scopes[(_relative(relative_path), function_name)].append(site)
+        writer_sites = [
+            site
+            for site in per_file_sites
+            if site["kind"] not in {"dot_source"}
+        ]
+        if writer_sites and relative_path not in POWERSHELL_LIBRARY_PATHS:
+            registered = relative_path in POWERSHELL_ENTRYPOINT_GUARDS
+            script_entrypoints.append(
+                {
+                    "file": _relative(relative_path),
+                    "writer_source": (
+                        str(entry_guard["writer_source"]) if registered else ""
+                    ),
+                    "guard_name": (
+                        str(entry_guard["guard_name"])
+                        if registered
+                        else "registered_shipped_powershell_guard"
+                    ),
+                    "guard_kind": (
+                        str(entry_guard["guard_kind"])
+                        if registered
+                        else "unregistered_shipped_asset"
+                    ),
+                    "guard_line": entry_guard["guard_line"] if registered else None,
+                    "guarded": bool(entry_guard["valid"]) if registered else False,
+                    "writer_site_count": len(writer_sites),
+                    "writer_site_kinds": sorted(
+                        {str(site["kind"]) for site in writer_sites}
+                    ),
+                }
             )
-            site = {
-                "file": _relative(relative_path),
-                "line": index,
-                "command": command,
-                "wrapper_function": function_name,
-                "guard_name": COMMON_FENCE_GUARD_PREFIX if approved_wrapper else "",
-                "guard_line": function["start"] if approved_wrapper else None,
-                "register_line": None,
-                "guarded": approved_wrapper,
-                "registered": approved_wrapper,
-            }
-            per_file_sites.append(site)
-            mutation_sites.append(site)
         files.append(
             {
                 "file": _relative(relative_path),
-                "scheduled_task_mutation_sites": per_file_sites,
+                "entry_guard": entry_guard,
+                "sites": per_file_sites,
             }
         )
     files.sort(key=lambda row: row["file"])
-    mutation_sites.sort(key=lambda row: (row["file"], row["line"]))
+    all_sites.sort(key=lambda row: (row["file"], row["line"], row["kind"]))
+    execution_sites.sort(
+        key=lambda row: (row["file"], row["line"], row["kind"])
+    )
+    direct_mutation_sites.sort(
+        key=lambda row: (row["file"], row["line"], row["kind"])
+    )
+    script_entrypoints.sort(key=lambda row: row["file"])
+    scheduled_sites = [
+        {
+            "file": site["file"],
+            "line": site["line"],
+            "command": site["command"],
+            "wrapper_function": site["function"],
+            "guard_name": site["guard_name"],
+            "guard_line": site["guard_line"],
+            "register_line": None,
+            "guarded": site["guarded"],
+            "registered": site["guarded"],
+        }
+        for site in all_sites
+        if site["kind"] == "scheduled_task_cmdlet"
+    ]
+    scope_rows = [
+        {
+            "file": file,
+            "function": function or "__script__",
+            "site_count": len(sites),
+            "site_kinds": sorted({str(site["kind"]) for site in sites}),
+            "guarded": all(bool(site["guarded"]) for site in sites),
+        }
+        for (file, function), sites in sorted(mutation_scopes.items())
+    ]
+    guarded_failure_kinds = {
+        "call_operator",
+        "com_wmi_process_create",
+        "dot_source",
+        "dotnet_process_start",
+        "invoke_expression",
+        "native_command",
+        "reflective_invocation",
+        "scheduled_task_cmdlet",
+        "scheduler_com",
+        "service_cmdlet",
+        "service_control_api",
+        "start_process",
+    }
+    direct_entrypoint_guard_kinds = {
+        "filesystem_mutation",
+        "registry_mutation",
+    }
+    guard_failures = [
+        site
+        for site in all_sites
+        if (
+            site["kind"] in guarded_failure_kinds
+            or (
+                site["kind"] in direct_entrypoint_guard_kinds
+                and Path(str(site["file"])) in POWERSHELL_ENTRYPOINT_GUARDS
+            )
+        )
+        and not site["guarded"]
+    ]
+    guard_failures.extend(
+        {
+            **site,
+            "kind": "library_top_level_writer",
+            "command": site["command"] or site["kind"],
+        }
+        for site in all_sites
+        if Path(str(site["file"])) in POWERSHELL_LIBRARY_PATHS
+        and not site["function"]
+        and site["kind"] != "dot_source"
+    )
+    guard_failures.extend(
+        {
+            "file": entry["file"],
+            "line": 1,
+            "function": "__script__",
+            "kind": "script_entrypoint",
+            "command": entry["file"],
+            "target": entry["file"],
+            "target_static": True,
+            "guarded": False,
+            "guard_name": entry["guard_name"],
+            "guard_line": entry["guard_line"],
+        }
+        for entry in script_entrypoints
+        if not entry["guarded"]
+    )
+    guard_failures.sort(
+        key=lambda row: (str(row["file"]), int(row["line"]), str(row["kind"]))
+    )
+    writer_sinks = [
+        {
+            "file": entry["file"],
+            "source": entry["writer_source"],
+            "guard_name": entry["guard_name"],
+            "guard_line": entry["guard_line"],
+            "guarded": entry["guarded"],
+            "writer_site_count": entry["writer_site_count"],
+            "writer_site_kinds": entry["writer_site_kinds"],
+        }
+        for entry in script_entrypoints
+        if entry["writer_source"]
+    ]
     return {
         "common_guard_prefix": COMMON_FENCE_GUARD_PREFIX,
+        "asset_derivation": "portable_builder.PORTABLE_INSTALL_ASSETS",
+        "asset_paths": [_relative(path) for path in powershell_paths],
         "files": files,
-        "mutation_sites": mutation_sites,
+        "mutation_sites": scheduled_sites,
+        "all_sites": all_sites,
+        "execution_sites": execution_sites,
+        "direct_mutation_sites": direct_mutation_sites,
+        "mutation_scopes": scope_rows,
+        "script_entrypoints": script_entrypoints,
+        "writer_sinks": writer_sinks,
+        "guard_failures": guard_failures,
+        "site_counts_by_kind": {
+            kind: sum(1 for site in all_sites if site["kind"] == kind)
+            for kind in sorted({str(site["kind"]) for site in all_sites})
+        },
         "installer_delegated_sources": delegated_sources,
     }
 
@@ -1731,13 +2372,12 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     )
 
     powershell = _collect_powershell_inventory(repo_root)
-    guard_failures = [
-        site
-        for site in powershell["mutation_sites"]
-        if not site["guarded"]
-    ]
+    guard_failures = list(powershell["guard_failures"])
 
-    all_sources = sorted({row["source"] for row in sink_rows})
+    all_sources = sorted(
+        {row["source"] for row in sink_rows}
+        | {row["source"] for row in powershell["writer_sinks"]}
+    )
     route_rows: list[dict[str, Any]] = []
     for route_def in KNOWN_ROUTE_DEFS:
         if route_def["kind"] == "python":
@@ -1801,7 +2441,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     route_rows.sort(key=lambda row: row["route_id"])
 
     payload: dict[str, Any] = {
-        "schema_version": "container-audit-writer-sink-inventory-v6",
+        "schema_version": "container-audit-writer-sink-inventory-v7",
         "entrypoint_modules": [_relative(path) for path in shipped_application_paths],
         "entrypoint_derivation": (
             "all root Python files, all Python files under the portable builder's "
@@ -1830,6 +2470,8 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             for node, reason in sorted(TRUSTED_CONTROL_PLANE_MUTATIONS.items())
         ],
         "python_external_control_commands": python_external_control,
+        "powershell_writer_sinks": powershell["writer_sinks"],
+        "powershell_execution_inventory": powershell,
         "powershell_scheduled_task_guards": powershell,
         "powershell_guard_failures": guard_failures,
         "known_route_coverage": route_rows,
@@ -1839,6 +2481,11 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
             "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
             "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
+            "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+            "PowerShell Start-Process, Invoke-Expression/IEX, call-operator, direct bare .exe command, explicit COM/WMI process creation, explicit .NET Process.Start, scheduler COM, service-control, and reflection primitives are conservatively treated as writer boundaries.",
+            "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
+            "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
+            "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
         ],
         "coverage_summary": {
             "closure_module_count": len(parsed_modules),
@@ -1848,6 +2495,31 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
                 python_external_control["literal_sites"]
             ),
             "sink_function_count": len(sink_rows),
+            "powershell_sink_count": len(powershell["writer_sinks"]),
+            "total_cross_language_sink_count": len(sink_rows)
+            + len(powershell["writer_sinks"]),
+            "powershell_mutation_scope_count": len(powershell["mutation_scopes"]),
+            "powershell_direct_mutation_site_count": len(
+                powershell["direct_mutation_sites"]
+            ),
+            "powershell_execution_site_count": len(powershell["execution_sites"]),
+            "powershell_execution_site_counts_by_kind": {
+                kind: count
+                for kind, count in powershell["site_counts_by_kind"].items()
+                if kind
+                in {
+                    "call_operator",
+                    "com_wmi_process_create",
+                    "dot_source",
+                    "dotnet_process_start",
+                    "invoke_expression",
+                    "native_command",
+                    "reflective_invocation",
+                    "scheduler_com",
+                    "service_control_api",
+                    "start_process",
+                }
+            },
             "scheduled_task_mutation_site_count": len(powershell["mutation_sites"]),
             "trusted_control_plane_mutation_count": len(
                 TRUSTED_CONTROL_PLANE_MUTATIONS

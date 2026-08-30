@@ -521,7 +521,7 @@ function Read-ContainerWriterSinkInventory(
     }
     $sources = @($inventory.writer_sink_sources)
     if (
-        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v6' -or
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v7' -or
         [string]$inventory.inventory_sha256 -cne [string]$Contract.all_writer_fence.writer_inventory_sha256 -or
         $inventory.writer_sink_sources -isnot [Object[]] -or
         $sources.Count -le 0 -or
@@ -2595,13 +2595,50 @@ function Invoke-ContainerRecovery {
     $Script:ContainerRecoveryLifecycleEvidenceSha = $null
     $flow = Invoke-RecoveryStateMachine -CodeRestoreAction {
         $powerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+        $placementWriterSource = 'canonical_code_placement'
+        $placementDelegationToken = ''
+        $placementDelegationOwned = $false
         $helperLock = $null
         $integrityLock = $null
         $replacementReceiptLock = $null
+        $writerFenceHelperLock = $null
         try {
+            $writerContract = Read-ContainerWriterPublicContract $ExpectedContractSha256
+            $knownWriterSources = Read-ContainerWriterSinkInventory $writerContract $root
+            if ($placementWriterSource -cnotin $knownWriterSources) {
+                throw 'Container placement writer source is absent from the code-derived inventory.'
+            }
+            $active = Assert-ContainerWriterFenceOwner `
+                -SessionId $SessionId `
+                -AttemptId $AttemptId `
+                -ReplacementTransactionId $ReplacementTransactionId
+            if ([string]::IsNullOrWhiteSpace([string]$active.delegation_sha256)) {
+                $placementDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
+                [void](Set-ContainerWriterFenceDelegation `
+                    -SessionId $SessionId `
+                    -AttemptId $AttemptId `
+                    -ReplacementTransactionId $ReplacementTransactionId `
+                    -DelegationToken $placementDelegationToken `
+                    -DelegatedSources ([Object[]]@($placementWriterSource)) `
+                    -LifetimeSeconds 180)
+                $placementDelegationOwned = $true
+            }
+            else {
+                $placementDelegationToken = [Environment]::GetEnvironmentVariable(
+                    'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
+                    'Process'
+                )
+                if (
+                    [string]::IsNullOrWhiteSpace($placementDelegationToken) -or
+                    [string]$active.delegation_sha256 -cne (Get-ContainerWriterFenceStringSha256 $placementDelegationToken) -or
+                    $placementWriterSource -cnotin @($active.delegated_sources)
+                ) { throw 'Existing Container placement delegation is not current-session exact.' }
+            }
+            $expectedWriterFenceHelperSha256 = Get-FileSha256 $Script:WriterFenceHelperPath
             $helperLock = Open-PinnedReadLock $HelperPath 1048576 $ExpectedHelperSha256
             $integrityLock = Open-PinnedReadLock $Script:IntegrityHelperPath 1048576 ([string]$replacementValidation.payload.integrity_helper_sha256)
             $replacementReceiptLock = Open-PinnedReadLock $ReplacementReceiptPath 1048576 $ReplacementReceiptSha256
+            $writerFenceHelperLock = Open-PinnedReadLock $Script:WriterFenceHelperPath 1048576 $expectedWriterFenceHelperSha256
             Register-ContainerSystemMutationAttempt
             & $powerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $HelperPath `
                 -InstallRoot $InstallRoot `
@@ -2609,15 +2646,30 @@ function Invoke-ContainerRecovery {
                 -ReplacementTransactionId $ReplacementTransactionId `
                 -ReplacementReceiptPath $ReplacementReceiptPath `
                 -ReplacementReceiptSha256 $ReplacementReceiptSha256 `
-                -RestoreEvidencePath $codeRestorePath | Out-Null
+                -RestoreEvidencePath $codeRestorePath `
+                -WriterFenceHelperPath $Script:WriterFenceHelperPath `
+                -ExpectedWriterFenceHelperSha256 $expectedWriterFenceHelperSha256 `
+                -WriterFenceSessionId $SessionId `
+                -WriterFenceAttemptId $AttemptId `
+                -WriterFenceReplacementTransactionId $ReplacementTransactionId `
+                -WriterFenceDelegationToken $placementDelegationToken | Out-Null
             $childExit = $LASTEXITCODE
             if ((Get-FileSha256 $HelperPath) -cne $ExpectedHelperSha256) { throw 'Container helper pin changed during restore execution.' }
             if ((Get-FileSha256 $Script:IntegrityHelperPath) -cne [string]$replacementValidation.payload.integrity_helper_sha256) { throw 'Container integrity helper pin changed during restore execution.' }
+            if ((Get-FileSha256 $Script:WriterFenceHelperPath) -cne $expectedWriterFenceHelperSha256) { throw 'Container writer fence helper pin changed during restore execution.' }
         }
         finally {
+            if ($null -ne $writerFenceHelperLock) { $writerFenceHelperLock.Dispose() }
             if ($null -ne $replacementReceiptLock) { $replacementReceiptLock.Dispose() }
             if ($null -ne $integrityLock) { $integrityLock.Dispose() }
             if ($null -ne $helperLock) { $helperLock.Dispose() }
+            if ($placementDelegationOwned) {
+                [void](Clear-ContainerWriterFenceDelegation `
+                    -SessionId $SessionId `
+                    -AttemptId $AttemptId `
+                    -ReplacementTransactionId $ReplacementTransactionId `
+                    -DelegationToken $placementDelegationToken)
+            }
         }
         $actualRestoreSha = Get-FileSha256 $codeRestorePath
         $evidence = Test-RestoreEvidence $codeRestorePath $actualRestoreSha $ReplacementTransactionId $ReplacementReceiptPath $ReplacementReceiptSha256 $root ([string]$replacementValidation.payload.failed_root) $SessionStartedAtUtc

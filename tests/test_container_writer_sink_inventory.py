@@ -3,6 +3,10 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +37,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     payload = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     module = _load_module()
 
-    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v6"
+    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v7"
     assert payload["inventory_sha256"] == module._inventory_sha256(payload)
     assert payload["entrypoint_modules"] == [
         path.as_posix() for path in module._discover_shipped_application_paths(ROOT)
@@ -69,6 +73,37 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
             payload["python_external_control_commands"]["literal_sites"]
         ),
         "sink_function_count": len(payload["writer_sinks"]),
+        "powershell_sink_count": len(payload["powershell_writer_sinks"]),
+        "total_cross_language_sink_count": len(payload["writer_sinks"])
+        + len(payload["powershell_writer_sinks"]),
+        "powershell_mutation_scope_count": len(
+            payload["powershell_execution_inventory"]["mutation_scopes"]
+        ),
+        "powershell_direct_mutation_site_count": len(
+            payload["powershell_execution_inventory"]["direct_mutation_sites"]
+        ),
+        "powershell_execution_site_count": len(
+            payload["powershell_execution_inventory"]["execution_sites"]
+        ),
+        "powershell_execution_site_counts_by_kind": {
+            kind: count
+            for kind, count in payload["powershell_execution_inventory"][
+                "site_counts_by_kind"
+            ].items()
+            if kind
+            in {
+                "call_operator",
+                "com_wmi_process_create",
+                "dot_source",
+                "dotnet_process_start",
+                "invoke_expression",
+                "native_command",
+                "reflective_invocation",
+                "scheduler_com",
+                "service_control_api",
+                "start_process",
+            }
+        },
         "scheduled_task_mutation_site_count": len(
             payload["powershell_scheduled_task_guards"]["mutation_sites"]
         ),
@@ -88,6 +123,11 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
         "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
         "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
+        "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+        "PowerShell Start-Process, Invoke-Expression/IEX, call-operator, direct bare .exe command, explicit COM/WMI process creation, explicit .NET Process.Start, scheduler COM, service-control, and reflection primitives are conservatively treated as writer boundaries.",
+        "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
+        "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
+        "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
     ]
 
     uncovered_nodes = [
@@ -121,6 +161,48 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         and "Register-ScheduledTask" in row["commands"]
         for row in external_commands["literal_sites"]
     )
+    assert payload["powershell_writer_sinks"] == [
+        {
+            "file": "INSTALL_THIS_PC.ps1",
+            "source": "canonical_code_placement",
+            "guard_name": "Enter-ContainerPlacementWriterFence",
+            "guard_line": next(
+                row["guard_line"]
+                for row in payload["powershell_execution_inventory"][
+                    "script_entrypoints"
+                ]
+                if row["file"] == "INSTALL_THIS_PC.ps1"
+            ),
+            "guarded": True,
+            "writer_site_count": next(
+                row["writer_site_count"]
+                for row in payload["powershell_execution_inventory"][
+                    "script_entrypoints"
+                ]
+                if row["file"] == "INSTALL_THIS_PC.ps1"
+            ),
+            "writer_site_kinds": next(
+                row["writer_site_kinds"]
+                for row in payload["powershell_execution_inventory"][
+                    "script_entrypoints"
+                ]
+                if row["file"] == "INSTALL_THIS_PC.ps1"
+            ),
+        }
+    ]
+    assert "canonical_code_placement" in payload["writer_sink_sources"]
+    assert payload["powershell_execution_inventory"]["asset_derivation"] == (
+        "portable_builder.PORTABLE_INSTALL_ASSETS"
+    )
+    assert payload["powershell_execution_inventory"]["asset_paths"] == [
+        path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
+    ]
+    assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
+        "call_operator": 18,
+        "com_wmi_process_create": 1,
+        "dot_source": 6,
+        "start_process": 3,
+    }
     raster_write = next(
         row
         for row in payload["closure_direct_mutation_functions"]
@@ -298,6 +380,59 @@ def _write_minimal_inventory_fixture(root: Path, container_source: str) -> None:
         target = root / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("# no scheduled-task mutation\n", encoding="utf-8")
+
+
+def test_new_shipped_powershell_helper_requires_a_registered_guard(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "def main():\n    pass\n")
+    new_helper = Path("tools/new-placement-helper.ps1")
+    helper_path = tmp_path / new_helper
+    helper_path.write_text(
+        "Remove-Item -LiteralPath 'fixture' -Force\n",
+        encoding="utf-8",
+    )
+    assets = tuple((path.as_posix(), path.as_posix()) for path in module.POWERSHELL_PATHS)
+    assets += ((new_helper.as_posix(), new_helper.as_posix()),)
+    builder = tmp_path / "tools" / "build_portable_release_candidate.py"
+    builder.write_text(
+        "PORTABLE_INSTALL_ASSETS = " + repr(assets) + "\n",
+        encoding="utf-8",
+    )
+
+    payload = module.derive_inventory(tmp_path)
+
+    assert new_helper.as_posix() in payload["powershell_execution_inventory"][
+        "asset_paths"
+    ]
+    assert any(
+        row["file"] == new_helper.as_posix()
+        and row["kind"] == "script_entrypoint"
+        for row in payload["powershell_guard_failures"]
+    )
+
+
+def test_direct_mutation_before_registered_helper_guard_fails_closed(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "def main():\n    pass\n")
+    helper = tmp_path / "INSTALL_THIS_PC.ps1"
+    helper.write_text(
+        "Remove-Item -LiteralPath 'fixture' -Force\n"
+        + _fenced_powershell_fixture(""),
+        encoding="utf-8",
+    )
+
+    payload = module.derive_inventory(tmp_path)
+
+    assert any(
+        row["file"] == "INSTALL_THIS_PC.ps1"
+        and row["kind"] == "filesystem_mutation"
+        and row["line"] == 1
+        for row in payload["powershell_guard_failures"]
+    )
 
 
 def test_new_direct_writer_sink_without_real_fence_fails_inventory_gate(
@@ -525,3 +660,138 @@ def test_external_control_builder_and_aliased_runner_require_fence_at_execution(
     (tmp_path / "Container_Audit.py").write_text(fenced, encoding="utf-8")
     admitted = module.derive_inventory(tmp_path)
     assert admitted["uncovered_direct_mutation_functions"] == []
+
+
+POWERSHELL_UNFENCED_INJECTIONS = (
+    pytest.param(
+        "script_entrypoint",
+        "Remove-Item -LiteralPath 'fixture' -Force\n",
+        "script_entrypoint",
+        id="direct-helper",
+    ),
+    pytest.param(
+        "dot_source",
+        ". $PSScriptRoot\\fixture-unfenced.ps1\n",
+        "dot_source",
+        id="dot-source",
+    ),
+    pytest.param(
+        "start_process",
+        "Start-Process -FilePath 'schtasks.exe' -ArgumentList '/Create'\n",
+        "start_process",
+        id="start-process",
+    ),
+    pytest.param(
+        "invoke_expression",
+        "Invoke-Expression $runtimeCommand\n",
+        "invoke_expression",
+        id="invoke-expression",
+    ),
+    pytest.param(
+        "call_operator",
+        "& $runtimeCommand '/Create'\n",
+        "call_operator",
+        id="call-operator",
+    ),
+    pytest.param(
+        "native_command",
+        "powershell.exe -NoProfile -File .\\fixture-unfenced.ps1\n",
+        "native_command",
+        id="native-command",
+    ),
+    pytest.param(
+        "com_wmi_process_create",
+        "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c exit 0' }\n",
+        "com_wmi_process_create",
+        id="com-wmi-process",
+    ),
+    pytest.param(
+        "dotnet_process_start",
+        "[System.Diagnostics.Process]::Start('cmd.exe')\n",
+        "dotnet_process_start",
+        id="dotnet-process-start",
+    ),
+    pytest.param(
+        "scheduler_com",
+        "$scheduler = New-Object -ComObject 'Schedule.Service'\n",
+        "scheduler_com",
+        id="scheduler-com",
+    ),
+    pytest.param(
+        "service_control_api",
+        "New-Service -Name fixture -BinaryPathName 'fixture.exe'\n",
+        "service_control_api",
+        id="service-control",
+    ),
+    pytest.param(
+        "reflective_invocation",
+        "$method = [Type]::GetType($typeName).GetMethod($methodName); $method.Invoke($null, @())\n",
+        "reflective_invocation",
+        id="reflective-invocation",
+    ),
+)
+
+
+def _fenced_powershell_fixture(injected_line: str) -> str:
+    return (
+        "function Enter-ContainerPlacementWriterFence {\n"
+        "    $probe = Enter-ContainerWriterDelegatedOperation -Source canonical_code_placement\n"
+        "    Invoke-SelfElevated\n"
+        "    return Enter-ContainerWriterDelegatedOperation -Source canonical_code_placement\n"
+        "}\n"
+        "$lease = Enter-ContainerPlacementWriterFence\n"
+        + injected_line
+    )
+
+
+@pytest.mark.parametrize(
+    ("case_name", "injected_line", "expected_failure_kind"),
+    POWERSHELL_UNFENCED_INJECTIONS,
+)
+def test_each_static_powershell_execution_form_breaks_release_gate_when_unfenced(
+    tmp_path: Path,
+    case_name: str,
+    injected_line: str,
+    expected_failure_kind: str,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "def main():\n    pass\n")
+    helper = tmp_path / "INSTALL_THIS_PC.ps1"
+    helper.write_text(injected_line, encoding="utf-8")
+
+    rejected = module.derive_inventory(tmp_path)
+    failure_kinds = {
+        row["kind"] for row in rejected["powershell_guard_failures"]
+    }
+    assert expected_failure_kind in failure_kinds, case_name
+    snapshot = tmp_path / "tools" / "container_writer_sink_inventory.json"
+    snapshot.write_bytes(module._canonical_json_bytes(rejected))
+    gate = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import pathlib,sys; "
+                "from tools.build_portable_release_candidate import "
+                "_assert_writer_sink_inventory; "
+                "_assert_writer_sink_inventory(pathlib.Path(sys.argv[1]))"
+            ),
+            str(tmp_path),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert gate.returncode == 1, (case_name, gate.stdout, gate.stderr)
+    assert "writer sink inventory is not release-admissible" in gate.stderr
+
+    helper.write_text(_fenced_powershell_fixture(injected_line), encoding="utf-8")
+    admitted = module.derive_inventory(tmp_path)
+    assert admitted["powershell_guard_failures"] == [], case_name
+    print(
+        "INJECTION_GATE "
+        f"case={case_name} kind={expected_failure_kind} "
+        f"gate_exit={gate.returncode} reverted_guard_failures=0"
+    )

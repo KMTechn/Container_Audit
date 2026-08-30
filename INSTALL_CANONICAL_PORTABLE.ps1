@@ -173,7 +173,7 @@ function Assert-WriterSinkInventory(
     try { $inventory = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw 'Writer sink inventory JSON is invalid.' }
     if (
-        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v6' -or
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v7' -or
         [string]$inventory.inventory_sha256 -cne $ExpectedContractSha256 -or
         $inventory.writer_sink_sources -isnot [Object[]] -or
         @($inventory.writer_sink_sources).Count -le 0 -or
@@ -1308,7 +1308,13 @@ $enteredPlacementTry = $true
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-SourceRoot',$source,
             '-InstallRoot',$install,
-            '-ElevationLogPath',$elevationLogPath
+            '-ElevationLogPath',$elevationLogPath,
+            '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
+            '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
+            '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+            '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
+            '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
         )
         if ($replaceExisting) {
             $bootstrap += @(
@@ -1549,7 +1555,13 @@ catch {
                 '-ReplacementTransactionId',$replacementTransactionId,
                 '-ReplacementReceiptPath',$replacementReceiptPath,
                 '-ReplacementReceiptSha256',$replacementReceiptSha256,
-                '-RestoreEvidencePath',$replacementRestoreEvidencePath
+                '-RestoreEvidencePath',$replacementRestoreEvidencePath,
+                '-WriterFenceHelperPath',(Join-Path $install 'tools\container_writer_fence.ps1'),
+                '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+                '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
+                '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+                '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
+                '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
             )
             if ($testMode) { $restoreBootstrap += '-AllowNoncanonicalLayoutForTest' }
             $restoreOutput = @(& $winps @restoreBootstrap)

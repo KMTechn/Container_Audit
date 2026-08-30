@@ -14,6 +14,12 @@ param(
     [switch]$RestoreVerifiedReplacement,
     [string]$ReplacementReceiptSha256 = "",
     [string]$RestoreEvidencePath = "",
+    [string]$WriterFenceHelperPath = "",
+    [string]$ExpectedWriterFenceHelperSha256 = "",
+    [string]$WriterFenceSessionId = "",
+    [string]$WriterFenceAttemptId = "",
+    [string]$WriterFenceReplacementTransactionId = "",
+    [string]$WriterFenceDelegationToken = "",
     [switch]$AllowNoncanonicalLayoutForTest,
     [switch]$ApplyHardenedAclForTest,
     [switch]$InjectRestoreFailureAfterDisplaceForTest
@@ -29,6 +35,7 @@ if (-not (Test-Path -LiteralPath $BootstrapIntegrityFunctions -PathType Leaf)) {
 $IntegrityFileName = $BootstrapIntegrityFileName
 $LegacyRelayTaskName = "direct-sync-relay-container-audit"
 $LegacyQualificationTaskName = "container-audit-isolated-qualification-authority"
+$PlacementWriterSource = "canonical_code_placement"
 $BootstrapScriptPath = $MyInvocation.MyCommand.Path
 $BootstrapBoundParameters = @{}
 foreach ($boundName in $PSBoundParameters.Keys) {
@@ -237,6 +244,49 @@ function Invoke-SelfElevated {
     exit $process.ExitCode
 }
 
+function Enter-ContainerPlacementWriterFence {
+    if (
+        [string]::IsNullOrWhiteSpace($WriterFenceHelperPath) -or
+        [string]$ExpectedWriterFenceHelperSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$WriterFenceSessionId -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$WriterFenceAttemptId -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$WriterFenceReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$WriterFenceDelegationToken -cnotmatch '^[0-9a-f]{64}$'
+    ) {
+        throw 'Production placement requires exact attempt-bound writer fence parameters.'
+    }
+    $writerFenceHelperFull = Get-StrictFullPath $WriterFenceHelperPath 'writer fence helper'
+    $expectedWriterFenceHelper = Get-StrictFullPath `
+        (Join-Path $PSScriptRoot 'tools\container_writer_fence.ps1') `
+        'expected writer fence helper'
+    if (-not (Test-SamePath $writerFenceHelperFull $expectedWriterFenceHelper)) {
+        throw 'Production placement writer fence helper path differs.'
+    }
+    if (-not (Test-Path -LiteralPath $writerFenceHelperFull -PathType Leaf)) {
+        throw 'Production placement writer fence helper is unavailable.'
+    }
+    if ((Get-FileSha256 $writerFenceHelperFull) -cne $ExpectedWriterFenceHelperSha256) {
+        throw 'Production placement writer fence helper byte pin differs.'
+    }
+    . $writerFenceHelperFull
+    $preflightLease = Enter-ContainerWriterDelegatedOperation `
+        -SessionId $WriterFenceSessionId `
+        -AttemptId $WriterFenceAttemptId `
+        -ReplacementTransactionId $WriterFenceReplacementTransactionId `
+        -DelegationToken $WriterFenceDelegationToken `
+        -Source $PlacementWriterSource `
+        -TimeoutMilliseconds 15000
+    Exit-ContainerWriterAdmission $preflightLease
+    Invoke-SelfElevated
+    return Enter-ContainerWriterDelegatedOperation `
+        -SessionId $WriterFenceSessionId `
+        -AttemptId $WriterFenceAttemptId `
+        -ReplacementTransactionId $WriterFenceReplacementTransactionId `
+        -DelegationToken $WriterFenceDelegationToken `
+        -Source $PlacementWriterSource `
+        -TimeoutMilliseconds 15000
+}
+
 function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTest) {
     $frozenFiles = @('Container_Audit.exe', 'contract.lock.json')
     $portableFiles = @(
@@ -330,7 +380,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     try { $writerInventory = Get-Content -LiteralPath $writerSinkInventoryPath -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw "Writer sink inventory is invalid." }
     if (
-        [string]$writerInventory.schema_version -cne 'container-audit-writer-sink-inventory-v6' -or
+        [string]$writerInventory.schema_version -cne 'container-audit-writer-sink-inventory-v7' -or
         [string]$writerInventory.inventory_sha256 -cne [string]$manifest.writer_sink_inventory_contract_sha256 -or
         [string]$writerInventory.inventory_sha256 -cne [string]$writerSessionContract.all_writer_fence.writer_inventory_sha256 -or
         @($writerInventory.uncovered_direct_mutation_functions).Count -ne 0 -or
@@ -643,6 +693,22 @@ if ($ProbeVerifiedReplacementRestore.IsPresent) {
     Write-Output 'identity_profile_created=false'
     exit 0
 }
+if (
+    $Uninstall.IsPresent -and
+    -not $DryRun.IsPresent -and
+    -not $testOverride -and
+    (Test-CurrentUserRelayPersistencePresent)
+) {
+    throw (
+        "Run Container_Audit.exe --remove-current-user-setup as the current user " +
+        "before removing hardened code."
+    )
+}
+$placementWriterFenceLease = $null
+if (-not $DryRun.IsPresent -and -not $testOverride) {
+    $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
+}
+try {
 if ($RestoreVerifiedReplacement.IsPresent) {
     if ($DryRun.IsPresent -or $Uninstall.IsPresent -or $ReplaceExistingVerifiedPortable.IsPresent) {
         throw 'RestoreVerifiedReplacement cannot be combined with placement, uninstall, or DryRun.'
@@ -657,7 +723,6 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         throw 'Replacement restore receipt and evidence paths are required.'
     }
     if (-not $testOverride) {
-        Invoke-SelfElevated
         Write-ElevationLog 'STARTED' 'Elevated Container verified replacement restore started.'
     }
     $restoreEvidenceFull = Get-StrictFullPath $RestoreEvidencePath 'RestoreEvidencePath'
@@ -722,19 +787,7 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         throw
     }
 }
-if (
-    $Uninstall.IsPresent -and
-    -not $DryRun.IsPresent -and
-    -not $testOverride -and
-    (Test-CurrentUserRelayPersistencePresent)
-) {
-    throw (
-        "Run Container_Audit.exe --remove-current-user-setup as the current user " +
-        "before removing hardened code."
-    )
-}
 if (-not $DryRun.IsPresent -and -not $testOverride) {
-    Invoke-SelfElevated
     Write-ElevationLog 'STARTED' 'Elevated Container code placement started.'
 }
 
@@ -1021,4 +1074,10 @@ catch {
         throw 'Verified replacement failed and the prior canonical tree was restored.'
     }
     throw
+}
+}
+finally {
+    if ($null -ne $placementWriterFenceLease) {
+        Exit-ContainerWriterAdmission $placementWriterFenceLease
+    }
 }
