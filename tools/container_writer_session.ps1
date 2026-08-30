@@ -27,6 +27,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$Mode = $Mode.ToLowerInvariant()
 
 $Script:TaskName = 'direct-sync-relay-container-audit'
 $Script:TaskPath = '\'
@@ -36,6 +37,7 @@ $Script:RestoredSchema = 'container-audit-writer-session-restored-v1'
 $Script:RecoverySchema = 'container-audit-window-recovery-v1'
 $Script:ReplacementSchema = 'container-audit-verified-replacement-v1'
 $Script:HistoricalSchema = 'container-audit-canonical-writer-lifecycle-v1'
+$Script:MaximumSessionAge = [TimeSpan]::FromHours(24)
 $Script:AdapterPath = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $Script:IntegrityHelperPath = Join-Path $PSScriptRoot 'bootstrap_integrity.ps1'
 if (-not (Test-Path -LiteralPath $Script:IntegrityHelperPath -PathType Leaf)) {
@@ -81,6 +83,15 @@ function ConvertTo-RoundTripUtc([string]$Value, [string]$Purpose) {
     catch { throw "$Purpose is not a round-trip timestamp." }
 }
 
+function Assert-CurrentSessionWindow([string]$Value) {
+    $started = ConvertTo-RoundTripUtc $Value 'session start'
+    $now = [DateTime]::UtcNow
+    if ($started -gt $now.AddSeconds(5) -or $started -lt $now.Subtract($Script:MaximumSessionAge)) {
+        throw 'Session start is not within the current deployment-window lifetime.'
+    }
+    return $started
+}
+
 function Assert-Hex([string]$Value, [int]$Length, [string]$Purpose) {
     if ($Value -cnotmatch ("^[0-9a-f]{{$Length}}$")) { throw "$Purpose is malformed." }
 }
@@ -98,21 +109,40 @@ function Read-BoundedJson([string]$Path, [int64]$MaximumBytes, [string]$Expected
     $full = Get-StrictFullPath $Path 'JSON evidence path'
     if (-not (Test-Path -LiteralPath $full -PathType Leaf)) { throw 'JSON evidence is absent.' }
     Assert-BootstrapNoReparsePoint $full 'JSON evidence'
-    $before = Get-Item -LiteralPath $full -Force -ErrorAction Stop
-    if ([int64]$before.Length -le 0 -or [int64]$before.Length -gt $MaximumBytes) {
-        throw 'JSON evidence size is invalid.'
+    $stream = New-Object IO.FileStream(
+        $full,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::Read
+    )
+    try {
+        $length = [int64]$stream.Length
+        if ($length -le 0 -or $length -gt $MaximumBytes -or $length -gt [int]::MaxValue) {
+            throw 'JSON evidence size is invalid.'
+        }
+        $bytes = New-Object byte[] ([int]$length)
+        $offset = 0
+        while ($offset -lt $bytes.Length) {
+            $read = $stream.Read($bytes, $offset, $bytes.Length - $offset)
+            if ($read -le 0) { throw 'JSON evidence ended before its declared length.' }
+            $offset += $read
+        }
+        $algorithm = [Security.Cryptography.SHA256]::Create()
+        try {
+            $actualSha = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+        }
+        finally { $algorithm.Dispose() }
+        if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+            Assert-Hex $ExpectedSha256 64 'expected JSON SHA-256'
+            if ($actualSha -cne $ExpectedSha256) { throw 'JSON evidence SHA-256 differs.' }
+        }
+        $decoder = New-Object Text.UTF8Encoding($false, $true)
+        $json = $decoder.GetString($bytes)
+        if ($json.Length -gt 0 -and $json[0] -eq [char]0xfeff) { $json = $json.Substring(1) }
+        try { return ConvertFrom-Json -InputObject $json }
+        catch { throw 'JSON evidence is invalid.' }
     }
-    $actualSha = Get-FileSha256 $full
-    $after = Get-Item -LiteralPath $full -Force -ErrorAction Stop
-    if ([int64]$before.Length -ne [int64]$after.Length -or $before.LastWriteTimeUtc -ne $after.LastWriteTimeUtc) {
-        throw 'JSON evidence changed while it was read.'
-    }
-    if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
-        Assert-Hex $ExpectedSha256 64 'expected JSON SHA-256'
-        if ($actualSha -cne $ExpectedSha256) { throw 'JSON evidence SHA-256 differs.' }
-    }
-    try { return Get-Content -LiteralPath $full -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch { throw 'JSON evidence is invalid.' }
+    finally { $stream.Dispose() }
 }
 
 function Write-JsonAtomic([string]$Path, $Payload, [switch]$AllowReplace) {
@@ -244,23 +274,42 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
     $principal = [string]$task.Principal.UserId
     $principalSid = Get-CurrentUserSid
     $definition = Export-ScheduledTask -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop
-    $identityMaterial = @(
-        [string]$task.TaskPath,
-        [string]$task.TaskName,
-        [string]$action.Execute,
-        [string]$action.WorkingDirectory,
-        $argumentsSha,
-        $principal,
-        $principalSid,
-        [string]$task.Principal.LogonType,
-        [string]$task.Principal.RunLevel,
-        [string]$trigger.CimClass.CimClassName,
-        [string]$trigger.StartBoundary,
-        [string]$trigger.Enabled,
-        [string]$trigger.Repetition.Interval,
-        [string]$task.Settings.StartWhenAvailable,
-        [string]$task.Settings.MultipleInstances
-    ) -join "`n"
+    # Keep this normalized binding byte-for-byte compatible with the canonical
+    # installer and the independently observed eight-point lifecycle receipt.
+    $bindingValue = [ordered]@{
+        task_name = [string]$task.TaskName
+        task_path = [string]$task.TaskPath
+        actions = @($actions | ForEach-Object {
+            [ordered]@{
+                execute = [string]$_.Execute
+                arguments = [string]$_.Arguments
+                working_directory = [string]$_.WorkingDirectory
+            }
+        })
+        principal = [ordered]@{
+            user_id = [string]$task.Principal.UserId
+            logon_type = [string]$task.Principal.LogonType
+            run_level = [string]$task.Principal.RunLevel
+        }
+        triggers = @($triggers | ForEach-Object {
+            [ordered]@{
+                type = [string]$_.CimClass.CimClassName
+                enabled = [bool]$_.Enabled
+                start_boundary = [string]$_.StartBoundary
+                repetition_interval = [string]$_.Repetition.Interval
+                repetition_duration = [string]$_.Repetition.Duration
+                stop_at_duration_end = [bool]$_.Repetition.StopAtDurationEnd
+            }
+        })
+        settings = [ordered]@{
+            start_when_available = [bool]$task.Settings.StartWhenAvailable
+            multiple_instances = [string]$task.Settings.MultipleInstances
+            execution_time_limit = [string]$task.Settings.ExecutionTimeLimit
+            disallow_start_if_on_batteries = [bool]$task.Settings.DisallowStartIfOnBatteries
+            stop_if_going_on_batteries = [bool]$task.Settings.StopIfGoingOnBatteries
+        }
+    }
+    $bindingJson = $bindingValue | ConvertTo-Json -Depth 8 -Compress
     $identityExact = (
         (Test-BootstrapSamePath ([string]$action.Execute) $expectedExecutable) -and
         (Test-BootstrapSamePath ([string]$action.WorkingDirectory) $expectedWorkingDirectory) -and
@@ -303,7 +352,7 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
             start_when_available = [bool]$task.Settings.StartWhenAvailable
             multiple_instances = [string]$task.Settings.MultipleInstances
             definition_sha256 = Get-StringSha256 ([string]$definition)
-            binding_sha256 = Get-StringSha256 $identityMaterial
+            binding_sha256 = Get-StringSha256 $bindingJson
         }
     }
 }
@@ -353,6 +402,7 @@ function Assert-LiveMatchesHistorical($Live, $Historical, [string]$CanonicalInst
     $preimage = $Historical.preimage
     $exact = (
         [string]$Live.identity.status -ceq 'PASS' -and
+        [string]$Live.identity.binding_sha256 -ceq [string]$preimage.binding_sha256 -and
         [string]$Live.identity.task_name -ceq [string]$preimage.task_name -and
         [string]$Live.identity.task_path -ceq [string]$preimage.task_path -and
         (Test-BootstrapSamePath ([string]$Live.identity.execute) ([string]$preimage.action_execute)) -and
@@ -422,7 +472,7 @@ function Invoke-ContainerWriterPrepare {
     Assert-Hex $CurrentSessionId 32 'session id'
     Assert-Hex $CurrentAttemptId 32 'attempt id'
     Assert-Hex $CurrentOrchestratorSha256 64 'orchestrator SHA-256'
-    [void](ConvertTo-RoundTripUtc $CurrentSessionStartedAtUtc 'session start')
+    [void](Assert-CurrentSessionWindow $CurrentSessionStartedAtUtc)
     Assert-Hex $CapabilitySha256 64 'historical receipt SHA-256'
     $root = Get-StrictFullPath $CanonicalInstallRoot 'Container install root'
     $outputFull = Get-StrictFullPath $OutputPath 'prepared receipt path'
@@ -579,6 +629,7 @@ function Test-PreparedReceiptPayload {
         $top = @('schema','status','session_id','attempt_id','session_started_at_utc','orchestrator_sha256','adapter_sha256','evidence_path','started_at_utc','completed_at_utc','secret_values_recorded','historical_capability','pre_readback','disable','quiescence','failure')
         if (-not (Test-ExactPropertySet $Receipt $top)) { return $false }
         $sessionStart = ConvertTo-RoundTripUtc ([string]$Receipt.session_started_at_utc) 'receipt session start'
+        $expectedSessionStart = Assert-CurrentSessionWindow $ExpectedSessionStartedAtUtc
         $started = ConvertTo-RoundTripUtc ([string]$Receipt.started_at_utc) 'receipt start'
         $completed = ConvertTo-RoundTripUtc ([string]$Receipt.completed_at_utc) 'receipt completion'
         return (
@@ -591,6 +642,7 @@ function Test-PreparedReceiptPayload {
             [string]$Receipt.adapter_sha256 -ceq $ExpectedAdapterSha256 -and
             (Test-BootstrapSamePath ([string]$Receipt.evidence_path) $ExpectedPath) -and
             $Receipt.secret_values_recorded -is [bool] -and -not [bool]$Receipt.secret_values_recorded -and
+            $sessionStart -eq $expectedSessionStart -and
             $started -ge $sessionStart.AddSeconds(-2) -and $completed -ge $started -and
             $completed -le [DateTime]::UtcNow.AddSeconds(5) -and
             [string]$Receipt.historical_capability.schema -ceq $Script:HistoricalSchema -and
@@ -599,6 +651,7 @@ function Test-PreparedReceiptPayload {
             [string]$Receipt.historical_capability.capability_binding_sha256 -cmatch '^[0-9a-f]{64}$' -and
             [string]$Receipt.pre_readback.identity.status -ceq 'PASS' -and
             [string]$Receipt.pre_readback.identity.binding_sha256 -cmatch '^[0-9a-f]{64}$' -and
+            [string]$Receipt.pre_readback.identity.binding_sha256 -ceq [string]$Receipt.historical_capability.capability_binding_sha256 -and
             [bool]$Receipt.pre_readback.enabled -and [string]$Receipt.pre_readback.state -ceq 'Ready' -and
             [int64]$Receipt.pre_readback.last_task_result -eq 0 -and [int]$Receipt.pre_readback.exact_writer_process_count -eq 0 -and
             [string]$Receipt.disable.status -ceq 'COMMAND_SUCCEEDED' -and [bool]$Receipt.disable.binding_unchanged -and
@@ -687,6 +740,16 @@ function Get-ContainerReplacementReceiptValidation {
         if (-not (Test-ReplacementReceiptShape $receipt)) { throw 'Replacement receipt shape is invalid.' }
         $current = Get-StrictFullPath $CanonicalInstallRoot 'Container install root'
         $parent = Get-StrictFullPath (Split-Path -Parent $current) 'Container install parent'
+        if ((Test-PathInside $receiptFull $parent) -or (Test-BootstrapSamePath $receiptFull $parent)) {
+            throw 'Replacement receipt must be outside the mutable application parent.'
+        }
+        if ((Test-PathInside $helperFull $parent) -or (Test-BootstrapSamePath $helperFull $parent)) {
+            throw 'Container restore helper must be outside the mutable application parent.'
+        }
+        $helperIntegrity = Join-Path (Split-Path -Parent $helperFull) 'tools\bootstrap_integrity.ps1'
+        if (-not (Test-BootstrapSamePath $helperIntegrity $Script:IntegrityHelperPath)) {
+            throw 'Container restore helper and adapter do not share the pinned integrity helper.'
+        }
         $rollback = Get-StrictFullPath ([string]$receipt.rollback_root) 'replacement rollback root'
         $failed = Get-StrictFullPath ([string]$receipt.failed_root) 'replacement failed root'
         $expectedIntegritySha = Get-FileSha256 $Script:IntegrityHelperPath
@@ -905,6 +968,7 @@ function Invoke-ContainerRecovery {
     }
     $flow = Invoke-RecoveryStateMachine -CodeRestoreAction {
         if (Test-Path -LiteralPath $RestoreEvidencePath) { throw 'Code restore evidence path already exists.' }
+        if ((Get-FileSha256 $HelperPath) -cne $ExpectedHelperSha256) { throw 'Container helper pin changed before restore execution.' }
         $powerShell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
         & $powerShell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $HelperPath `
             -InstallRoot $InstallRoot `
@@ -914,6 +978,7 @@ function Invoke-ContainerRecovery {
             -ReplacementReceiptSha256 $ReplacementReceiptSha256 `
             -RestoreEvidencePath $RestoreEvidencePath | Out-Null
         $childExit = $LASTEXITCODE
+        if ((Get-FileSha256 $HelperPath) -cne $ExpectedHelperSha256) { throw 'Container helper pin changed during restore execution.' }
         $evidence = Test-RestoreEvidence $RestoreEvidencePath $ReplacementTransactionId $ReplacementReceiptPath $ReplacementReceiptSha256 $InstallRoot
         return [pscustomobject][ordered]@{
             status = if ($childExit -eq 0 -and [string]$evidence.status -ceq 'PASS') { 'PASS' } else { 'FAIL' }
@@ -954,25 +1019,37 @@ function Invoke-ContainerWriterSessionSelfTest {
         completed_at_utc = [DateTime]::UtcNow.AddSeconds(-20).ToString('o')
         secret_values_recorded = $false
         historical_capability = [pscustomobject][ordered]@{ schema = $Script:HistoricalSchema; receipt_sha256 = $capability; eight_points_pass = $true; capability_binding_sha256 = '5' * 64 }
-        pre_readback = [pscustomobject][ordered]@{ enabled = $true; state = 'Ready'; last_task_result = 0; exact_writer_process_count = 0; last_run_time_utc = [DateTime]::UtcNow.AddMinutes(-2).ToString('o'); identity = [pscustomobject][ordered]@{ status = 'PASS'; binding_sha256 = '6' * 64 } }
+        pre_readback = [pscustomobject][ordered]@{ enabled = $true; state = 'Ready'; last_task_result = 0; exact_writer_process_count = 0; last_run_time_utc = [DateTime]::UtcNow.AddMinutes(-2).ToString('o'); identity = [pscustomobject][ordered]@{ status = 'PASS'; binding_sha256 = '5' * 64 } }
         disable = [pscustomobject][ordered]@{ status = 'COMMAND_SUCCEEDED'; binding_unchanged = $true }
         quiescence = [pscustomobject][ordered]@{ status = 'PASS'; last_run_time_unchanged = $true; log_unchanged = $true; runtime_status_unchanged = $true; exact_writer_process_count = 0 }
         failure = [pscustomobject][ordered]@{ silently_ignored = $false }
     }
     $validPrepared = Test-PreparedReceiptPayload $payload $receiptPath $session $attempt $startedAt $orchestrator $capability $Script:AdapterSha256
     $staleSessionRejected = -not (Test-PreparedReceiptPayload $payload $receiptPath ('7' * 32) $attempt $startedAt $orchestrator $capability $Script:AdapterSha256)
+    $bindingMismatchPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $bindingMismatchPayload.pre_readback.identity.binding_sha256 = '6' * 64
+    $bindingMismatchRejected = -not (Test-PreparedReceiptPayload $bindingMismatchPayload $receiptPath $session $attempt $startedAt $orchestrator $capability $Script:AdapterSha256)
+    $expiredStartedAt = [DateTime]::UtcNow.Subtract($Script:MaximumSessionAge).AddMinutes(-1).ToString('o')
+    $expiredPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $expiredPayload.session_started_at_utc = $expiredStartedAt
+    $expiredPayload.started_at_utc = (ConvertTo-RoundTripUtc $expiredStartedAt 'expired session').AddSeconds(1).ToString('o')
+    $expiredPayload.completed_at_utc = (ConvertTo-RoundTripUtc $expiredStartedAt 'expired session').AddSeconds(2).ToString('o')
+    $expiredSessionRejected = -not (Test-PreparedReceiptPayload $expiredPayload $receiptPath $session $attempt $expiredStartedAt $orchestrator $capability $Script:AdapterSha256)
     $replacement = [pscustomobject][ordered]@{
         schema_version = $Script:ReplacementSchema; status = 'WRONG'; app_id = 'container_audit'; transaction_id = '8' * 32; created_at = [DateTime]::UtcNow.ToString('o'); helper_sha256 = '9' * 64; integrity_helper_sha256 = 'a' * 64; receipt_path = 'E:\r.json'; install_root = 'C:\KMTech\Apps\Container_Audit\current'; install_parent = 'C:\KMTech\Apps\Container_Audit'; rollback_root = 'C:\KMTech\Apps\Container_Audit\.current.rollback.' + ('8' * 32); failed_root = 'C:\KMTech\Apps\Container_Audit\.current.failed.' + ('8' * 32); parent_acl = [pscustomobject][ordered]@{ owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; sddl_sha256 = 'b' * 64 }; old = [pscustomobject][ordered]@{ file_count = 1; aggregate_sha256 = 'c' * 64; integrity_sha256 = 'd' * 64; manifest_sha256 = 'e' * 64; source_commit = 'f' * 40; source_tree = '1' * 40; owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; acl_sddl_sha256 = '2' * 64; reparse_count = 0 }; new = [pscustomobject][ordered]@{ file_count = 1; aggregate_sha256 = '3' * 64; integrity_sha256 = '4' * 64; manifest_sha256 = '5' * 64; source_commit = '6' * 40; source_tree = '7' * 40; owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; acl_sddl_sha256 = '8' * 64; reparse_count = 0 }; identity_or_credential_copied = $false
     }
     $invalidReplacementRejected = -not (Test-ReplacementReceiptShape $replacement)
-    $writerCalled = $false
-    $codeFailure = Invoke-RecoveryStateMachine -CodeRestoreAction { throw 'injected' } -WriterRestoreAction { $script:writerCalled = $true; return [pscustomobject]@{ status = 'PASS' } }
-    $codeFailureExplicit = ([string]$codeFailure.status -ceq 'FAIL' -and [string]$codeFailure.failure_code -ceq 'CODE_RESTORE_FAILED' -and [string]$codeFailure.writer_restore.status -ceq 'NOT_RUN' -and -not $writerCalled -and -not [bool]$codeFailure.code_restore.silently_ignored)
+    $Script:SelfTestWriterCalled = $false
+    $codeFailure = Invoke-RecoveryStateMachine -CodeRestoreAction { throw 'injected' } -WriterRestoreAction { $Script:SelfTestWriterCalled = $true; return [pscustomobject]@{ status = 'PASS' } }
+    $codeFailureExplicit = ([string]$codeFailure.status -ceq 'FAIL' -and [string]$codeFailure.failure_code -ceq 'CODE_RESTORE_FAILED' -and [string]$codeFailure.writer_restore.status -ceq 'NOT_RUN' -and -not [bool]$Script:SelfTestWriterCalled -and -not [bool]$codeFailure.code_restore.silently_ignored)
+    $Script:SelfTestWriterCalled = $null
     $writerFailure = Invoke-RecoveryStateMachine -CodeRestoreAction { return [pscustomobject]@{ status = 'PASS' } } -WriterRestoreAction { return [pscustomobject]@{ status = 'FAIL'; silently_ignored = $false } }
     $writerFailureExplicit = ([string]$writerFailure.status -ceq 'FAIL' -and [string]$writerFailure.failure_code -ceq 'WRITER_RESTORE_FAILED' -and -not [bool]$writerFailure.writer_restore.silently_ignored)
     $checks = @(
         [pscustomobject][ordered]@{ name = 'valid_current_session_prepared_receipt'; status = if ($validPrepared) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'stale_session_rejected'; status = if ($staleSessionRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'historical_binding_mismatch_rejected'; status = if ($bindingMismatchRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'expired_session_rejected'; status = if ($expiredSessionRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'invalid_replacement_receipt_rejected'; status = if ($invalidReplacementRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'code_restore_failure_explicit_and_writer_not_run'; status = if ($codeFailureExplicit) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'writer_restore_failure_explicit'; status = if ($writerFailureExplicit) { 'PASS' } else { 'FAIL' } }
@@ -981,7 +1058,7 @@ function Invoke-ContainerWriterSessionSelfTest {
     return [pscustomobject][ordered]@{ schema = 'container-audit-writer-session-self-test-v1'; status = if ($passed) { 'PASS' } else { 'FAIL' }; checks = $checks; system_mutation_attempted = $false; secret_values_recorded = $false }
 }
 
-if ($Mode -ceq 'SelfTest') {
+if ($Mode -ceq 'selftest') {
     $result = Invoke-ContainerWriterSessionSelfTest
     $result | ConvertTo-Json -Depth 12 -Compress
     if ([string]$result.status -ceq 'PASS') { exit 0 }
@@ -991,9 +1068,9 @@ if ($Mode -ceq 'SelfTest') {
 Assert-Hex $SessionId 32 'session id'
 Assert-Hex $AttemptId 32 'attempt id'
 Assert-Hex $OrchestratorSha256 64 'orchestrator SHA-256'
-[void](ConvertTo-RoundTripUtc $SessionStartedAtUtc 'session start')
+[void](Assert-CurrentSessionWindow $SessionStartedAtUtc)
 
-if ($Mode -ceq 'Prepare') {
+if ($Mode -ceq 'prepare') {
     $result = Invoke-ContainerWriterPrepare $InstallRoot $EvidencePath $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $HistoricalReceiptPath $HistoricalReceiptSha256 -RetainDisabled:$RetainDisabledOnFailure.IsPresent
     Write-Output "writer_session_status=$($result.status)"
     Write-Output "writer_session_receipt=$($result.record.path)"
@@ -1002,15 +1079,21 @@ if ($Mode -ceq 'Prepare') {
     exit 20
 }
 
-if ($Mode -ceq 'ValidatePrepared') {
+if ($Mode -ceq 'validateprepared') {
     $validation = Test-ContainerPreparedReceipt $InstallRoot $PreparedReceiptPath $PreparedReceiptSha256 $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $HistoricalReceiptSha256 -RequireLiveDisabled
     Write-Output "writer_session_validation_status=$($validation.status)"
     if ([string]$validation.status -ceq 'PASS') { exit 0 }
     exit 20
 }
 
-if ($Mode -ceq 'ValidateReplacement') {
-    $validation = Get-ContainerReplacementReceiptValidation $InstallRoot $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId $ExpectedSourceCommit $ExpectedSourceAggregateSha256 $HelperPath $ExpectedHelperSha256
+if ($Mode -ceq 'validatereplacement') {
+    $preparedValidation = Test-ContainerPreparedReceipt $InstallRoot $PreparedReceiptPath $PreparedReceiptSha256 $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $HistoricalReceiptSha256 -RequireLiveDisabled
+    if ([string]$preparedValidation.status -cne 'PASS' -or -not [bool]$preparedValidation.live_disabled_exact) {
+        $validation = [pscustomobject][ordered]@{ status = 'FAIL'; reason = 'CURRENT_SESSION_PREPARED_RECEIPT_INVALID'; payload = $null }
+    }
+    else {
+        $validation = Get-ContainerReplacementReceiptValidation $InstallRoot $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId $ExpectedSourceCommit $ExpectedSourceAggregateSha256 $HelperPath $ExpectedHelperSha256
+    }
     $result = [ordered]@{
         schema = 'container-audit-replacement-receipt-validation-v1'
         status = [string]$validation.status
@@ -1022,6 +1105,7 @@ if ($Mode -ceq 'ValidateReplacement') {
         adapter_sha256 = $Script:AdapterSha256
         replacement_transaction_id = $ReplacementTransactionId
         replacement_receipt_sha256 = $ReplacementReceiptSha256
+        prepared_receipt_sha256 = $PreparedReceiptSha256
         secret_values_recorded = $false
         validated_at_utc = [DateTime]::UtcNow.ToString('o')
     }
@@ -1033,7 +1117,7 @@ if ($Mode -ceq 'ValidateReplacement') {
     exit 20
 }
 
-if ($Mode -ceq 'RestoreWriter') {
+if ($Mode -ceq 'restorewriter') {
     $result = Invoke-ContainerWriterRestore $InstallRoot $EvidencePath $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $PreparedReceiptPath $PreparedReceiptSha256 $HistoricalReceiptSha256
     Write-Output "writer_restore_status=$($result.status)"
     Write-Output "writer_restore_receipt=$($result.record.path)"
@@ -1042,7 +1126,7 @@ if ($Mode -ceq 'RestoreWriter') {
     exit 20
 }
 
-if ($Mode -ceq 'Recover') {
+if ($Mode -ceq 'recover') {
     $result = Invoke-ContainerRecovery
     Write-Output "container_recovery_status=$($result.status)"
     Write-Output "container_recovery_receipt=$($result.record.path)"

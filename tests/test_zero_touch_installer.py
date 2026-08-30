@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL_THIS_PC.ps1"
 PORTABLE_INSTALLER = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
+WRITER_SESSION_ADAPTER = ROOT / "tools" / "container_writer_session.ps1"
 
 
 def _powershell() -> str:
@@ -138,6 +139,10 @@ def _portable_release_fixture(
     shutil.copy2(PORTABLE_INSTALLER, release / "INSTALL_CANONICAL_PORTABLE.ps1")
     shutil.copy2(INSTALLER, release / "INSTALL_THIS_PC.ps1")
     shutil.copy2(INTEGRITY_HELPER, release / "tools" / "bootstrap_integrity.ps1")
+    shutil.copy2(
+        WRITER_SESSION_ADAPTER,
+        release / "tools" / "container_writer_session.ps1",
+    )
     files = [path for path in release.rglob("*") if path.is_file()]
     manifest = {
         "schema": "container-audit-portable-tree-v1",
@@ -155,6 +160,9 @@ def _portable_release_fixture(
         ).hexdigest(),
         "integrity_helper_sha256": hashlib.sha256(
             (release / "tools" / "bootstrap_integrity.ps1").read_bytes()
+        ).hexdigest(),
+        "writer_session_adapter_sha256": hashlib.sha256(
+            (release / "tools" / "container_writer_session.ps1").read_bytes()
         ).hexdigest(),
         "allowed_unsigned_app_pe": [],
         "forbidden_dependency_paths": [],

@@ -55,7 +55,8 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         'launch-container-audit.cmd',
         'INSTALL_CANONICAL_PORTABLE.ps1',
         'INSTALL_THIS_PC.ps1',
-        'tools\bootstrap_integrity.ps1'
+        'tools\bootstrap_integrity.ps1',
+        'tools\container_writer_session.ps1'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
             throw "Portable tree is missing $relative."
@@ -80,7 +81,8 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'INSTALL_CANONICAL_PORTABLE.ps1')) -cne ([string]$value.installer_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'INSTALL_THIS_PC.ps1')) -cne ([string]$value.helper_sha256).ToLowerInvariant() -or
-        (Sha (Join-Path $Root 'tools\bootstrap_integrity.ps1')) -cne ([string]$value.integrity_helper_sha256).ToLowerInvariant()) {
+        (Sha (Join-Path $Root 'tools\bootstrap_integrity.ps1')) -cne ([string]$value.integrity_helper_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_session.ps1')) -cne ([string]$value.writer_session_adapter_sha256).ToLowerInvariant()) {
         throw 'Portable manifest readback failed.'
     }
     $filesBeforeManifest = @(
@@ -112,7 +114,8 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         'runtime\python.exe',
         'runtime\pythonw.exe',
         'app\main.py',
-        'launch-container-audit.cmd'
+        'launch-container-audit.cmd',
+        'tools\container_writer_session.ps1'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
             throw "Installed portable tree is missing $relative."
@@ -134,7 +137,8 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         @($value.allowed_unsigned_app_pe).Count -ne 0 -or
         @($value.forbidden_dependency_paths).Count -ne 0 -or
         (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
-        (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant()) {
+        (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_session.ps1')) -cne ([string]$value.writer_session_adapter_sha256).ToLowerInvariant()) {
         throw 'Installed portable manifest readback failed.'
     }
     $filesBeforeManifest = @(
