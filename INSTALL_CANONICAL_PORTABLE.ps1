@@ -31,6 +31,37 @@ function Full([string]$Value, [string]$Purpose) {
 function Same([string]$Left, [string]$Right) {
     return (Full $Left 'left path').Equals((Full $Right 'right path'), 'OrdinalIgnoreCase')
 }
+function Test-ExactPropertySet($Value, [string[]]$Expected) {
+    if ($null -eq $Value) { return $false }
+    $actual = @($Value.PSObject.Properties.Name)
+    if ($actual.Count -ne $Expected.Count) { return $false }
+    foreach ($name in $Expected) {
+        if ($name -cnotin $actual) { return $false }
+    }
+    return $true
+}
+function Test-ExactStringProperties($Value, [string[]]$Names) {
+    if ($null -eq $Value) { return $false }
+    foreach ($name in $Names) {
+        $property = $Value.PSObject.Properties[$name]
+        if ($null -eq $property -or -not ($property.Value -is [string])) { return $false }
+    }
+    return $true
+}
+function Test-JsonInteger($Value) {
+    return ($Value -is [int] -or $Value -is [long])
+}
+function Test-JsonTrue($Value) {
+    return ($Value -is [bool] -and $Value)
+}
+function Test-JsonPositiveInt32($Value) {
+    if (-not (Test-JsonInteger $Value)) { return $false }
+    return ([int64]$Value -gt 0 -and [int64]$Value -le [int]::MaxValue)
+}
+function Get-CanonicalInstallSuccessStatus([bool]$IsTestMode) {
+    if ($IsTestMode) { return 'TEST_ONLY_PARTIAL' }
+    return 'PASS'
+}
 function Sha([string]$Path) {
     $stream = [IO.File]::OpenRead($Path); $hash = [Security.Cryptography.SHA256]::Create()
     try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
@@ -46,12 +77,15 @@ function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha2
         [string]$contract.app_id -cne 'container_audit' -or
         [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
         (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
-        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v2' -or
+        [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
+        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v3' -or
         [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
         [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
+        (@($contract.receipts.prepared_required_bindings) -join ',') -cne 'session_id,attempt_id,replacement_transaction_id,session_started_at_utc,orchestrator_sha256,session_authority_mutex_name,adapter_sha256,contract_sha256,evidence_path,historical_capability.receipt_sha256,historical_capability.capability_binding_sha256' -or
         [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
-        -not [bool]$contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore -or
-        -not [bool]$contract.security.evidence_paths_outside_install_parent_required
+        -not (Test-JsonTrue $contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore) -or
+        -not (Test-JsonTrue $contract.security.active_session_authority_mutex_required) -or
+        -not (Test-JsonTrue $contract.security.evidence_paths_outside_install_parent_required)
     ) { throw 'Writer session public contract semantics differ.' }
 }
 function Arg([string]$Value) {
@@ -119,6 +153,10 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
     )
     if (
+        -not (Test-JsonInteger $value.file_count_before_manifest) -or
+        -not (Test-JsonInteger $value.byte_count_before_manifest) -or
+        [int64]$value.file_count_before_manifest -lt 0 -or
+        [int64]$value.byte_count_before_manifest -lt 0 -or
         [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
         [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
     ) { throw 'Portable tree metrics differ from the manifest.' }
@@ -178,6 +216,10 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
     )
     if (
+        -not (Test-JsonInteger $value.file_count_before_manifest) -or
+        -not (Test-JsonInteger $value.byte_count_before_manifest) -or
+        [int64]$value.file_count_before_manifest -lt 0 -or
+        [int64]$value.byte_count_before_manifest -lt 0 -or
         [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
         [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
     ) { throw 'Installed portable tree metrics differ from the manifest.' }
@@ -305,7 +347,47 @@ function ReadReplacementReceipt(
     }
     try { $receipt = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw 'Verified replacement receipt JSON is invalid.' }
+    $top = @(
+        'schema_version','status','app_id','transaction_id','created_at','helper_sha256',
+        'integrity_helper_sha256','receipt_path','install_root','install_parent',
+        'rollback_root','failed_root','parent_acl','old','new','identity_or_credential_copied'
+    )
+    $topStrings = @(
+        'schema_version','status','app_id','transaction_id','created_at','helper_sha256',
+        'integrity_helper_sha256','receipt_path','install_root','install_parent',
+        'rollback_root','failed_root'
+    )
+    $acl = @('owner_sid','access_rules_protected','sddl_sha256')
+    $tree = @(
+        'file_count','aggregate_sha256','integrity_sha256','manifest_sha256',
+        'source_commit','source_tree','owner_sid','access_rules_protected',
+        'acl_sddl_sha256','reparse_count'
+    )
+    $treeStrings = @(
+        'aggregate_sha256','integrity_sha256','manifest_sha256','source_commit',
+        'source_tree','owner_sid','acl_sddl_sha256'
+    )
     if (
+        -not (Test-ExactPropertySet $receipt $top) -or
+        -not (Test-ExactStringProperties $receipt $topStrings) -or
+        -not (Test-ExactPropertySet $receipt.parent_acl $acl) -or
+        -not (Test-ExactStringProperties $receipt.parent_acl @('owner_sid','sddl_sha256')) -or
+        -not ($receipt.parent_acl.access_rules_protected -is [bool]) -or
+        -not (Test-ExactPropertySet $receipt.old $tree) -or
+        -not (Test-ExactPropertySet $receipt.new $tree) -or
+        -not (Test-ExactStringProperties $receipt.old $treeStrings) -or
+        -not (Test-ExactStringProperties $receipt.new $treeStrings) -or
+        -not ($receipt.old.access_rules_protected -is [bool]) -or
+        -not ($receipt.new.access_rules_protected -is [bool]) -or
+        -not (Test-JsonInteger $receipt.old.file_count) -or
+        -not (Test-JsonInteger $receipt.new.file_count) -or
+        [int64]$receipt.old.file_count -lt 0 -or
+        [int64]$receipt.new.file_count -lt 0 -or
+        -not (Test-JsonInteger $receipt.old.reparse_count) -or
+        -not (Test-JsonInteger $receipt.new.reparse_count) -or
+        [int64]$receipt.old.reparse_count -ne 0 -or
+        [int64]$receipt.new.reparse_count -ne 0 -or
+        -not ($receipt.identity_or_credential_copied -is [bool]) -or
         [string]$receipt.schema_version -cne 'container-audit-verified-replacement-v1' -or
         [string]$receipt.status -cne 'OLD_PRESERVED_NEW_VERIFIED' -or
         [string]$receipt.app_id -cne 'container_audit' -or
@@ -317,7 +399,7 @@ function ReadReplacementReceipt(
         [string]$receipt.new.source_commit -cne [string]$ExpectedSourceManifest.source_commit -or
         [string]$receipt.new.source_tree -cne [string]$ExpectedSourceManifest.source_tree -or
         [string]$receipt.new.manifest_sha256 -cne $ExpectedManifestSha256 -or
-        [bool]$receipt.identity_or_credential_copied
+        $receipt.identity_or_credential_copied
     ) { throw 'Verified replacement receipt contract readback failed.' }
     return $receipt
 }
@@ -337,7 +419,21 @@ function ReadReplacementRestoreEvidence(
     }
     try { $evidence = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw 'Verified replacement restore evidence JSON is invalid.' }
+    $top = @(
+        'schema_version','status','action','app_id','transaction_id','receipt_path',
+        'receipt_sha256','install_root','failed_new_root','prior_code_exact',
+        'failed_new_preserved','identity_or_credential_copied','completed_at'
+    )
+    $strings = @(
+        'schema_version','status','action','app_id','transaction_id','receipt_path',
+        'receipt_sha256','install_root','failed_new_root','completed_at'
+    )
     if (
+        -not (Test-ExactPropertySet $evidence $top) -or
+        -not (Test-ExactStringProperties $evidence $strings) -or
+        -not ($evidence.prior_code_exact -is [bool]) -or
+        -not ($evidence.failed_new_preserved -is [bool]) -or
+        -not ($evidence.identity_or_credential_copied -is [bool]) -or
         [string]$evidence.schema_version -cne 'container-audit-verified-replacement-code-restore-v1' -or
         [string]$evidence.status -cne 'PASS' -or
         [string]$evidence.action -notin @('RESTORED','ALREADY_RESTORED') -or
@@ -346,9 +442,9 @@ function ReadReplacementRestoreEvidence(
         -not (Same ([string]$evidence.receipt_path) $ExpectedReceiptPath) -or
         [string]$evidence.receipt_sha256 -cne $ExpectedReceiptSha256 -or
         -not (Same ([string]$evidence.install_root) $ExpectedInstallRoot) -or
-        -not [bool]$evidence.prior_code_exact -or
-        -not [bool]$evidence.failed_new_preserved -or
-        [bool]$evidence.identity_or_credential_copied
+        -not $evidence.prior_code_exact -or
+        -not $evidence.failed_new_preserved -or
+        $evidence.identity_or_credential_copied
     ) { throw 'Verified replacement restore evidence contract readback failed.' }
     return $evidence
 }
@@ -931,6 +1027,9 @@ try {
     $after = Snapshot
     if ([string]$onboarding.status -cne 'READY' -or [string]$onboarding.relay_autostart.command -cne $wanted -or
         -not $after.exists -or [string]$after.data -cne $wanted) { throw 'Onboarding Run readback failed.' }
+    if (-not (Test-JsonPositiveInt32 $onboarding.relay_start.process_id)) {
+        throw 'Onboarding relay process id type/readback failed.'
+    }
     $pidValue = [int]$onboarding.relay_start.process_id
     Start-Sleep -Seconds 5
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
@@ -940,15 +1039,15 @@ try {
     while((Get-Date)-lt $deadline){
         if((Test-Path $relayPath) -and (Get-Item $relayPath).LastWriteTimeUtc -ge $started.AddSeconds(-1)){
             $relay=Get-Content $relayPath -Raw -Encoding UTF8|ConvertFrom-Json
-            if([bool]$relay.persistent_retry){break}
+            if(Test-JsonTrue $relay.persistent_retry){break}
         }
         Start-Sleep -Milliseconds 500
     }
-    if($null-eq$relay -or -not [bool]$relay.persistent_retry){throw 'Fresh relay status proof failed.'}
-    $audit.status='PRODUCT_PHASE_PASS'
+    if($null-eq$relay -or -not (Test-JsonTrue $relay.persistent_retry)){throw 'Fresh relay status proof failed.'}
+    $audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } else { 'PRODUCT_PHASE_PASS' }
     $audit.stop_marker_absent=-not(Test-Path $stop)
     $audit.onboarding=[ordered]@{status=[string]$onboarding.status;action=[string]$onboarding.action;autostart_writer='product_onboarding'}
-    $audit.exact_launch=[ordered]@{status='PROVEN';process_id=$pidValue;executable=[string]$process.ExecutablePath;relay_status=[string]$relay.status;persistent_retry=[bool]$relay.persistent_retry}
+    $audit.exact_launch=[ordered]@{status='PROVEN';process_id=$pidValue;executable=[string]$process.ExecutablePath;relay_status=[string]$relay.status;persistent_retry=$relay.persistent_retry}
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
 
@@ -962,11 +1061,12 @@ try {
         $audit.rollback.scheduled_writer_restored=$true
         $writerRestoreNeeded=$false
     }
-    $audit.status='PASS'
+    $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
+    $audit.status=$terminalStatus
     $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
-    'install_status=PASS'
+    "install_status=$terminalStatus"
     "install_root=$install"
     "code_placement_status=$placement"
     'autostart_status=PROVEN_NON_REBOOT_APPROXIMATION'

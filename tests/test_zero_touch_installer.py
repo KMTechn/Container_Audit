@@ -640,14 +640,22 @@ def test_portable_installer_fences_canonical_scheduled_writer_around_replacement
         "$writerStopped = Confirm-CanonicalWriterStopped", disable_index
     )
     placement_index = text.index("& $winps @bootstrap", stop_proof_index)
-    product_pass_index = text.index("$audit.status='PRODUCT_PHASE_PASS'", placement_index)
+    product_pass_index = text.index(
+        "$audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } "
+        "else { 'PRODUCT_PHASE_PASS' }",
+        placement_index,
+    )
     enable_index = text.index(
         "$writerEnabled = Enable-CanonicalWriter", product_pass_index
     )
     natural_trigger_index = text.index(
         "$writerRunning = Confirm-CanonicalWriterRunning", enable_index
     )
-    final_pass_index = text.index("$audit.status='PASS'", natural_trigger_index)
+    terminal_status_index = text.index(
+        "$terminalStatus=Get-CanonicalInstallSuccessStatus $testMode",
+        natural_trigger_index,
+    )
+    final_pass_index = text.index("$audit.status=$terminalStatus", terminal_status_index)
 
     assert (
         preimage_save_index
@@ -657,6 +665,7 @@ def test_portable_installer_fences_canonical_scheduled_writer_around_replacement
         < product_pass_index
         < enable_index
         < natural_trigger_index
+        < terminal_status_index
         < final_pass_index
     )
     assert "Disable-ScheduledTask" in text
@@ -669,6 +678,552 @@ def test_portable_installer_fences_canonical_scheduled_writer_around_replacement
     assert "log_size_mtime_sha256_unchanged=$true" in text
     assert "last_run_time_advanced=$true" in text
     assert "log_actual_write=$true" in text
+
+
+def test_portable_installer_test_mode_terminal_status_is_explicitly_nonproduction():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    assert (
+        "$audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } "
+        "else { 'PRODUCT_PHASE_PASS' }"
+    ) in text
+    assert "$audit.status=$terminalStatus" in text
+    assert '"install_status=$terminalStatus"' in text
+    assert "$audit.status='PASS'" not in text
+    assert "'install_status=PASS'" not in text
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+$functions = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Get-CanonicalInstallSuccessStatus'
+}, $true))
+if ($functions.Count -ne 1) { exit 11 }
+Invoke-Expression $functions[0].Extent.Text
+if ((Get-CanonicalInstallSuccessStatus $false) -cne 'PASS') { exit 12 }
+if ((Get-CanonicalInstallSuccessStatus $true) -cne 'TEST_ONLY_PARTIAL') { exit 13 }
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_receipt_readers_require_exact_shapes_and_json_scalar_types(tmp_path):
+    transaction_id = "1" * 32
+    source_commit = "a" * 40
+    source_tree = "b" * 40
+    helper_sha256 = "c" * 64
+    integrity_helper_sha256 = "d" * 64
+    manifest_sha256 = "e" * 64
+    restore_receipt_sha256 = "f" * 64
+    install_root = tmp_path / "apps" / "current"
+    install_parent = install_root.parent
+
+    def tree(seed: str, *, commit: str, source: str, manifest: str) -> dict:
+        return {
+            "file_count": 3,
+            "aggregate_sha256": seed * 64,
+            "integrity_sha256": chr(ord(seed) + 1) * 64,
+            "manifest_sha256": manifest,
+            "source_commit": commit,
+            "source_tree": source,
+            "owner_sid": "S-1-5-32-544",
+            "access_rules_protected": True,
+            "acl_sddl_sha256": chr(ord(seed) + 2) * 64,
+            "reparse_count": 0,
+        }
+
+    replacement_template = {
+        "schema_version": "container-audit-verified-replacement-v1",
+        "status": "OLD_PRESERVED_NEW_VERIFIED",
+        "app_id": "container_audit",
+        "transaction_id": transaction_id,
+        "created_at": "2026-08-30T00:00:00.0000000Z",
+        "helper_sha256": helper_sha256,
+        "integrity_helper_sha256": integrity_helper_sha256,
+        "receipt_path": "",
+        "install_root": str(install_root),
+        "install_parent": str(install_parent),
+        "rollback_root": str(install_parent / f".current.rollback.{transaction_id}"),
+        "failed_root": str(install_parent / f".current.failed.{transaction_id}"),
+        "parent_acl": {
+            "owner_sid": "S-1-5-32-544",
+            "access_rules_protected": True,
+            "sddl_sha256": "9" * 64,
+        },
+        "old": tree("1", commit="2" * 40, source="3" * 40, manifest="4" * 64),
+        "new": tree(
+            "5", commit=source_commit, source=source_tree, manifest=manifest_sha256
+        ),
+        "identity_or_credential_copied": False,
+    }
+
+    def clone(value: dict) -> dict:
+        return json.loads(json.dumps(value))
+
+    def write_replacement(name: str, mutate=None) -> Path:
+        path = tmp_path / "validator-fixtures" / f"replacement-{name}.json"
+        payload = clone(replacement_template)
+        payload["receipt_path"] = str(path)
+        if mutate:
+            mutate(payload)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+        return path
+
+    valid_replacement = write_replacement("valid")
+    replacement_string_zero = write_replacement(
+        "string-zero",
+        lambda payload: payload["old"].__setitem__("reparse_count", "0"),
+    )
+    replacement_nested_string_false = write_replacement(
+        "nested-string-false",
+        lambda payload: payload["old"].__setitem__(
+            "access_rules_protected", "false"
+        ),
+    )
+    replacement_top_string_false = write_replacement(
+        "top-string-false",
+        lambda payload: payload.__setitem__(
+            "identity_or_credential_copied", "false"
+        ),
+    )
+    replacement_extra = write_replacement(
+        "extra",
+        lambda payload: payload.__setitem__("observation_status", "SNAPSHOT_ERROR"),
+    )
+
+    def remove_parent_acl_hash(payload: dict) -> None:
+        del payload["parent_acl"]["sddl_sha256"]
+
+    replacement_missing_nested = write_replacement(
+        "missing-nested", remove_parent_acl_hash
+    )
+
+    restore_template = {
+        "schema_version": "container-audit-verified-replacement-code-restore-v1",
+        "status": "PASS",
+        "action": "RESTORED",
+        "app_id": "container_audit",
+        "transaction_id": transaction_id,
+        "receipt_path": str(valid_replacement),
+        "receipt_sha256": restore_receipt_sha256,
+        "install_root": str(install_root),
+        "failed_new_root": str(
+            install_parent / f".current.failed.{transaction_id}"
+        ),
+        "prior_code_exact": True,
+        "failed_new_preserved": True,
+        "identity_or_credential_copied": False,
+        "completed_at": "2026-08-30T00:01:00.0000000Z",
+    }
+
+    def write_restore(name: str, mutate=None) -> Path:
+        path = tmp_path / "validator-fixtures" / f"restore-{name}.json"
+        payload = clone(restore_template)
+        if mutate:
+            mutate(payload)
+        path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+        return path
+
+    valid_restore = write_restore("valid")
+    restore_prior_string_false = write_restore(
+        "prior-string-false",
+        lambda payload: payload.__setitem__("prior_code_exact", "false"),
+    )
+    restore_failed_string_false = write_restore(
+        "failed-string-false",
+        lambda payload: payload.__setitem__("failed_new_preserved", "false"),
+    )
+    restore_identity_string_false = write_restore(
+        "identity-string-false",
+        lambda payload: payload.__setitem__(
+            "identity_or_credential_copied", "false"
+        ),
+    )
+    restore_extra = write_restore(
+        "extra",
+        lambda payload: payload.__setitem__(
+            "observation_status", "SNAPSHOT_ERROR"
+        ),
+    )
+
+    def remove_completed_at(payload: dict) -> None:
+        del payload["completed_at"]
+
+    restore_missing = write_restore("missing", remove_completed_at)
+
+    assert json.loads(replacement_string_zero.read_text(encoding="utf-8"))["old"][
+        "reparse_count"
+    ] == "0"
+    assert json.loads(restore_prior_string_false.read_text(encoding="utf-8"))[
+        "prior_code_exact"
+    ] == "false"
+
+    environment = dict(os.environ)
+    environment.update(
+        {
+            "KMTECH_TEST_INSTALLER_PATH": str(PORTABLE_INSTALLER),
+            "KMTECH_TEST_VALID_REPLACEMENT": str(valid_replacement),
+            "KMTECH_TEST_REPLACEMENT_STRING_ZERO": str(replacement_string_zero),
+            "KMTECH_TEST_REPLACEMENT_NESTED_STRING_FALSE": str(
+                replacement_nested_string_false
+            ),
+            "KMTECH_TEST_REPLACEMENT_TOP_STRING_FALSE": str(
+                replacement_top_string_false
+            ),
+            "KMTECH_TEST_REPLACEMENT_EXTRA": str(replacement_extra),
+            "KMTECH_TEST_REPLACEMENT_MISSING_NESTED": str(
+                replacement_missing_nested
+            ),
+            "KMTECH_TEST_VALID_RESTORE": str(valid_restore),
+            "KMTECH_TEST_RESTORE_PRIOR_STRING_FALSE": str(
+                restore_prior_string_false
+            ),
+            "KMTECH_TEST_RESTORE_FAILED_STRING_FALSE": str(
+                restore_failed_string_false
+            ),
+            "KMTECH_TEST_RESTORE_IDENTITY_STRING_FALSE": str(
+                restore_identity_string_false
+            ),
+            "KMTECH_TEST_RESTORE_EXTRA": str(restore_extra),
+            "KMTECH_TEST_RESTORE_MISSING": str(restore_missing),
+            "KMTECH_TEST_INSTALL_ROOT": str(install_root),
+            "KMTECH_TEST_TRANSACTION_ID": transaction_id,
+            "KMTECH_TEST_SOURCE_COMMIT": source_commit,
+            "KMTECH_TEST_SOURCE_TREE": source_tree,
+            "KMTECH_TEST_HELPER_SHA256": helper_sha256,
+            "KMTECH_TEST_INTEGRITY_HELPER_SHA256": integrity_helper_sha256,
+            "KMTECH_TEST_MANIFEST_SHA256": manifest_sha256,
+            "KMTECH_TEST_RESTORE_RECEIPT_SHA256": restore_receipt_sha256,
+        }
+    )
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @(
+    'Full','Same','Test-ExactPropertySet','Test-ExactStringProperties',
+    'Test-JsonInteger','ReadReplacementReceipt','ReadReplacementRestoreEvidence'
+)) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$manifest = [pscustomobject]@{
+    source_commit = $env:KMTECH_TEST_SOURCE_COMMIT
+    source_tree = $env:KMTECH_TEST_SOURCE_TREE
+}
+$replacement = ReadReplacementReceipt `
+    $env:KMTECH_TEST_VALID_REPLACEMENT `
+    $env:KMTECH_TEST_TRANSACTION_ID `
+    $env:KMTECH_TEST_INSTALL_ROOT `
+    $manifest `
+    $env:KMTECH_TEST_MANIFEST_SHA256 `
+    $env:KMTECH_TEST_HELPER_SHA256 `
+    $env:KMTECH_TEST_INTEGRITY_HELPER_SHA256
+if ([string]$replacement.status -cne 'OLD_PRESERVED_NEW_VERIFIED') { exit 12 }
+foreach ($path in @(
+    $env:KMTECH_TEST_REPLACEMENT_STRING_ZERO,
+    $env:KMTECH_TEST_REPLACEMENT_NESTED_STRING_FALSE,
+    $env:KMTECH_TEST_REPLACEMENT_TOP_STRING_FALSE,
+    $env:KMTECH_TEST_REPLACEMENT_EXTRA,
+    $env:KMTECH_TEST_REPLACEMENT_MISSING_NESTED
+)) {
+    try {
+        [void](ReadReplacementReceipt `
+            $path `
+            $env:KMTECH_TEST_TRANSACTION_ID `
+            $env:KMTECH_TEST_INSTALL_ROOT `
+            $manifest `
+            $env:KMTECH_TEST_MANIFEST_SHA256 `
+            $env:KMTECH_TEST_HELPER_SHA256 `
+            $env:KMTECH_TEST_INTEGRITY_HELPER_SHA256)
+        exit 13
+    }
+    catch {
+        if ($_.Exception.Message -cne 'Verified replacement receipt contract readback failed.') {
+            exit 14
+        }
+    }
+}
+$restore = ReadReplacementRestoreEvidence `
+    $env:KMTECH_TEST_VALID_RESTORE `
+    $env:KMTECH_TEST_TRANSACTION_ID `
+    $env:KMTECH_TEST_VALID_REPLACEMENT `
+    $env:KMTECH_TEST_RESTORE_RECEIPT_SHA256 `
+    $env:KMTECH_TEST_INSTALL_ROOT
+if ([string]$restore.status -cne 'PASS') { exit 15 }
+foreach ($path in @(
+    $env:KMTECH_TEST_RESTORE_PRIOR_STRING_FALSE,
+    $env:KMTECH_TEST_RESTORE_FAILED_STRING_FALSE,
+    $env:KMTECH_TEST_RESTORE_IDENTITY_STRING_FALSE,
+    $env:KMTECH_TEST_RESTORE_EXTRA,
+    $env:KMTECH_TEST_RESTORE_MISSING
+)) {
+    try {
+        [void](ReadReplacementRestoreEvidence `
+            $path `
+            $env:KMTECH_TEST_TRANSACTION_ID `
+            $env:KMTECH_TEST_VALID_REPLACEMENT `
+            $env:KMTECH_TEST_RESTORE_RECEIPT_SHA256 `
+            $env:KMTECH_TEST_INSTALL_ROOT)
+        exit 16
+    }
+    catch {
+        if ($_.Exception.Message -cne 'Verified replacement restore evidence contract readback failed.') {
+            exit 17
+        }
+    }
+}
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_runtime_json_scalar_guards_reject_string_false_and_zero():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    assert "if(Test-JsonTrue $relay.persistent_retry){break}" in text
+    assert (
+        "if($null-eq$relay -or -not (Test-JsonTrue "
+        "$relay.persistent_retry)){throw 'Fresh relay status proof failed.'}"
+    ) in text
+    assert "[bool]$relay.persistent_retry" not in text
+    assert (
+        "Test-JsonPositiveInt32 $onboarding.relay_start.process_id"
+    ) in text
+    assert (
+        "Test-JsonTrue "
+        "$contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore"
+    ) in text
+    assert (
+        "Test-JsonTrue $contract.security.active_session_authority_mutex_required"
+    ) in text
+    assert (
+        "Test-JsonTrue "
+        "$contract.security.evidence_paths_outside_install_parent_required"
+    ) in text
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @('Test-JsonInteger','Test-JsonTrue','Test-JsonPositiveInt32')) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$payload = @'
+{
+  "actual_true": true,
+  "actual_false": false,
+  "string_false": "false",
+  "string_zero": "0",
+  "actual_pid": 123,
+  "string_pid": "123",
+  "zero_pid": 0
+}
+'@ | ConvertFrom-Json
+if (-not (Test-JsonTrue $payload.actual_true)) { exit 12 }
+if (Test-JsonTrue $payload.actual_false) { exit 13 }
+if (Test-JsonTrue $payload.string_false) { exit 14 }
+if (Test-JsonTrue $payload.string_zero) { exit 15 }
+if (-not (Test-JsonPositiveInt32 $payload.actual_pid)) { exit 16 }
+if (Test-JsonPositiveInt32 $payload.string_pid) { exit 17 }
+if (Test-JsonPositiveInt32 $payload.string_zero) { exit 18 }
+if (Test-JsonPositiveInt32 $payload.zero_pid) { exit 19 }
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.parametrize(
+    "metric_field", ("file_count_before_manifest", "byte_count_before_manifest")
+)
+def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_field):
+    source = _portable_release_fixture(tmp_path)
+    manifest_path = source / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    metric = manifest[metric_field]
+    assert isinstance(metric, int) and not isinstance(metric, bool)
+    manifest[metric_field] = str(metric)
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=True), encoding="utf-8"
+    )
+    assert isinstance(
+        json.loads(manifest_path.read_text(encoding="utf-8"))[metric_field], str
+    )
+
+    install = tmp_path / "apps" / "current"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(source / "INSTALL_CANONICAL_PORTABLE.ps1"),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "Portable tree metrics differ from the manifest" in (
+        completed.stderr + completed.stdout
+    )
+    assert not install.exists()
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    (
+        (
+            "lifecycle_restore",
+            "require_lifecycle_restore_before_writer_restore",
+        ),
+        ("security", "active_session_authority_mutex_required"),
+        ("security", "evidence_paths_outside_install_parent_required"),
+    ),
+)
+def test_portable_plan_rejects_string_false_public_contract_booleans(
+    tmp_path, section, field
+):
+    source = _portable_release_fixture(tmp_path)
+    contract_path = source / "tools" / "container_writer_session_contract.json"
+    contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    assert contract[section][field] is True
+    contract[section][field] = "false"
+    contract_path.write_text(
+        json.dumps(contract, ensure_ascii=True), encoding="utf-8"
+    )
+    assert (
+        json.loads(contract_path.read_text(encoding="utf-8"))[section][field]
+        == "false"
+    )
+
+    manifest_path = source / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["writer_session_contract_sha256"] = hashlib.sha256(
+        contract_path.read_bytes()
+    ).hexdigest()
+    files = [
+        path
+        for path in source.rglob("*")
+        if path.is_file()
+        and path != manifest_path
+        and path.name != "bootstrap-integrity.json"
+    ]
+    manifest["file_count_before_manifest"] = len(files)
+    manifest["byte_count_before_manifest"] = sum(
+        path.stat().st_size for path in files
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=True), encoding="utf-8"
+    )
+
+    install = tmp_path / "apps" / "current"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(source / "INSTALL_CANONICAL_PORTABLE.ps1"),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "Writer session public contract semantics differ" in (
+        completed.stderr + completed.stdout
+    )
+    assert not install.exists()
 
 
 def test_portable_installer_binds_verified_replace_receipt_and_later_restore():
