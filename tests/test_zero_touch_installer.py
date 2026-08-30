@@ -18,6 +18,7 @@ INSTALLER = ROOT / "INSTALL_THIS_PC.ps1"
 PORTABLE_INSTALLER = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 WRITER_SESSION_ADAPTER = ROOT / "tools" / "container_writer_session.ps1"
+WRITER_SESSION_CONTRACT = ROOT / "tools" / "container_writer_session_contract.json"
 
 
 def _powershell() -> str:
@@ -143,6 +144,10 @@ def _portable_release_fixture(
         WRITER_SESSION_ADAPTER,
         release / "tools" / "container_writer_session.ps1",
     )
+    shutil.copy2(
+        WRITER_SESSION_CONTRACT,
+        release / "tools" / "container_writer_session_contract.json",
+    )
     files = [path for path in release.rglob("*") if path.is_file()]
     manifest = {
         "schema": "container-audit-portable-tree-v1",
@@ -161,8 +166,16 @@ def _portable_release_fixture(
         "integrity_helper_sha256": hashlib.sha256(
             (release / "tools" / "bootstrap_integrity.ps1").read_bytes()
         ).hexdigest(),
+        "writer_session_adapter_path": "tools/container_writer_session.ps1",
         "writer_session_adapter_sha256": hashlib.sha256(
             (release / "tools" / "container_writer_session.ps1").read_bytes()
+        ).hexdigest(),
+        "writer_session_contract_path": "tools/container_writer_session_contract.json",
+        "writer_session_contract_schema": (
+            "container-audit-writer-session-cli-contract-v1"
+        ),
+        "writer_session_contract_sha256": hashlib.sha256(
+            (release / "tools" / "container_writer_session_contract.json").read_bytes()
         ).hexdigest(),
         "allowed_unsigned_app_pe": [],
         "forbidden_dependency_paths": [],

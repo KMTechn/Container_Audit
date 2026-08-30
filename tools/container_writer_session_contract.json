@@ -1,0 +1,235 @@
+{
+  "schema": "container-audit-writer-session-cli-contract-v1",
+  "app_id": "container_audit",
+  "cli": {
+    "relative_path": "tools/container_writer_session.ps1",
+    "public_writer_modes": [
+      "Contract",
+      "Prepare",
+      "ValidatePrepared",
+      "RestoreWriter"
+    ],
+    "compatibility_modes": [
+      "ValidateReplacement",
+      "Recover"
+    ],
+    "contract_mode": "Contract",
+    "success_exit_code": 0,
+    "failure_exit_codes": [
+      1,
+      20
+    ]
+  },
+  "identifiers": {
+    "session_id_pattern": "^[0-9a-f]{32}$",
+    "attempt_id_pattern": "^[0-9a-f]{32}$",
+    "sha256_pattern": "^[0-9a-f]{64}$",
+    "commit_pattern": "^[0-9a-f]{40}$",
+    "session_max_age_hours": 24
+  },
+  "operations": {
+    "Contract": {
+      "mutation_class": "NONE",
+      "required_arguments": [
+        "ExpectedContractSha256"
+      ],
+      "success_output_keys": [
+        "json_stdout"
+      ]
+    },
+    "Prepare": {
+      "mutation_class": "SCHEDULED_WRITER_DISABLE",
+      "required_arguments": [
+        "InstallRoot",
+        "EvidencePath",
+        "SessionId",
+        "AttemptId",
+        "ReplacementTransactionId",
+        "SessionStartedAtUtc",
+        "OrchestratorSha256",
+        "ExpectedContractSha256",
+        "HistoricalReceiptPath",
+        "HistoricalReceiptSha256"
+      ],
+      "success_output_keys": [
+        "writer_session_status",
+        "writer_session_receipt",
+        "writer_session_receipt_sha256"
+      ]
+    },
+    "ValidatePrepared": {
+      "mutation_class": "NONE",
+      "required_arguments": [
+        "InstallRoot",
+        "PreparedReceiptPath",
+        "PreparedReceiptSha256",
+        "SessionId",
+        "AttemptId",
+        "ReplacementTransactionId",
+        "SessionStartedAtUtc",
+        "OrchestratorSha256",
+        "ExpectedContractSha256",
+        "HistoricalReceiptSha256"
+      ],
+      "success_output_keys": [
+        "writer_session_validation_status"
+      ]
+    },
+    "RestoreWriter": {
+      "mutation_class": "SCHEDULED_WRITER_ENABLE_NATURAL_TRIGGER_READBACK_AND_LIFECYCLE_FAILURE_CONTAINMENT",
+      "required_arguments": [
+        "InstallRoot",
+        "EvidencePath",
+        "PreparedReceiptPath",
+        "PreparedReceiptSha256",
+        "HistoricalReceiptSha256",
+        "LifecycleRestoreReceiptPath",
+        "LifecycleRestoreReceiptSha256",
+        "RestoreEvidencePath",
+        "RestoreEvidenceSha256",
+        "ReplacementReceiptPath",
+        "ReplacementReceiptSha256",
+        "SessionId",
+        "AttemptId",
+        "ReplacementTransactionId",
+        "SessionStartedAtUtc",
+        "OrchestratorSha256",
+        "ExpectedContractSha256"
+      ],
+      "success_output_keys": [
+        "writer_restore_status",
+        "writer_restore_receipt",
+        "writer_restore_receipt_sha256"
+      ]
+    },
+    "ValidateReplacement": {
+      "mutation_class": "EVIDENCE_ONLY",
+      "required_arguments": [
+        "InstallRoot",
+        "EvidencePath",
+        "PreparedReceiptPath",
+        "PreparedReceiptSha256",
+        "HistoricalReceiptSha256",
+        "ReplacementReceiptPath",
+        "ReplacementReceiptSha256",
+        "ReplacementTransactionId",
+        "ExpectedSourceCommit",
+        "ExpectedSourceAggregateSha256",
+        "HelperPath",
+        "ExpectedHelperSha256",
+        "SessionId",
+        "AttemptId",
+        "SessionStartedAtUtc",
+        "OrchestratorSha256",
+        "ExpectedContractSha256"
+      ],
+      "success_output_keys": [
+        "replacement_receipt_validation_status",
+        "replacement_receipt_validation_evidence",
+        "replacement_receipt_validation_evidence_sha256"
+      ]
+    },
+    "Recover": {
+      "mutation_class": "CODE_LIFECYCLE_AND_WRITER_RESTORE_COMPATIBILITY",
+      "required_arguments": [
+        "InstallRoot",
+        "EvidencePath",
+        "PreparedReceiptPath",
+        "PreparedReceiptSha256",
+        "HistoricalReceiptSha256",
+        "LifecycleRestoreReceiptPath",
+        "ReplacementReceiptPath",
+        "ReplacementReceiptSha256",
+        "ReplacementTransactionId",
+        "ExpectedSourceCommit",
+        "ExpectedSourceAggregateSha256",
+        "HelperPath",
+        "ExpectedHelperSha256",
+        "RestoreEvidencePath",
+        "WriterRestoreEvidencePath",
+        "SessionId",
+        "AttemptId",
+        "SessionStartedAtUtc",
+        "OrchestratorSha256",
+        "ExpectedContractSha256"
+      ],
+      "success_output_keys": [
+        "container_recovery_status",
+        "container_recovery_receipt",
+        "container_recovery_receipt_sha256"
+      ]
+    }
+  },
+  "receipts": {
+    "prepared_schema": "container-audit-writer-session-prepared-v2",
+    "restored_schema": "container-audit-writer-session-restored-v2",
+    "recovery_schema": "container-audit-window-recovery-v1",
+    "replacement_schema": "container-audit-verified-replacement-v1",
+    "replacement_validation_schema": "container-audit-replacement-receipt-validation-v1",
+    "lifecycle_restore_schema": "container-audit-replacement-lifecycle-restore-v1",
+    "historical_schema": "container-audit-canonical-writer-lifecycle-v1",
+    "prepared_required_bindings": [
+      "session_id",
+      "attempt_id",
+      "replacement_transaction_id",
+      "session_started_at_utc",
+      "orchestrator_sha256",
+      "adapter_sha256",
+      "contract_sha256",
+      "evidence_path",
+      "historical_capability.receipt_sha256",
+      "historical_capability.capability_binding_sha256"
+    ]
+  },
+  "lifecycle_restore": {
+    "writer_mode": "RestoreWriter",
+    "product_mode": "--restore-current-user-lifecycle-after-replacement",
+    "product_execution_tree": "verified_failed_new_tree",
+    "product_mode_arguments": [
+      "--app-root",
+      "--code-root",
+      "--replacement-transaction-id",
+      "--replacement-receipt-path",
+      "--replacement-receipt-sha256",
+      "--writer-contract-sha256",
+      "--report-path",
+      "--session-id",
+      "--attempt-id",
+      "--session-started-at-utc",
+      "--orchestrator-sha256"
+    ],
+    "transaction_argument": "ReplacementTransactionId",
+    "replacement_receipt_argument": "ReplacementReceiptPath",
+    "replacement_receipt_sha256_argument": "ReplacementReceiptSha256",
+    "code_restore_evidence_argument": "RestoreEvidencePath",
+    "code_restore_evidence_sha256_argument": "RestoreEvidenceSha256",
+    "writer_mode_output_argument": "EvidencePath",
+    "recover_writer_output_argument": "WriterRestoreEvidencePath",
+    "writer_contract_sha256_argument": "ExpectedContractSha256",
+    "order": [
+      "validate_current_session_prepared_receipt",
+      "validate_transaction_bound_replacement_receipt",
+      "restore_code",
+      "restore_current_user_product_lifecycle",
+      "validate_lifecycle_restore_receipt",
+      "restore_writer",
+      "write_combined_recovery_receipt"
+    ],
+    "require_same_session_receipt": true,
+    "require_code_restore_before_writer_restore": true,
+    "require_lifecycle_restore_before_writer_restore": true,
+    "require_live_current_user_lifecycle_before_writer_restore": true,
+    "require_non_elevated_medium_integrity_lifecycle_producer": true,
+    "producer_code_tree_read_locked_through_execution": true,
+    "failure_is_explicit": true
+  },
+  "security": {
+    "secret_values_recorded": false,
+    "manual_writer_start_allowed": false,
+    "contract_mode_system_mutation": false,
+    "evidence_paths_outside_install_parent_required": true,
+    "evidence_paths_local_fixed_drive_required": true,
+    "evidence_path_reparse_ancestors_forbidden": true,
+    "evidence_path_aliases_canonicalized": true
+  }
+}

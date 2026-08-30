@@ -77,6 +77,29 @@ function ConvertTo-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('\', '\').Replace('"', '\"') + '"'
 }
 
+function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha256) {
+    if ((Get-Item -LiteralPath $Path -Force).Length -gt 65536) {
+        throw "Writer session public contract is oversized."
+    }
+    if ((Get-FileSha256 $Path) -cne $ExpectedSha256) {
+        throw "Writer session public contract hash differs."
+    }
+    try { $contract = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "Writer session public contract JSON is invalid." }
+    if (
+        [string]$contract.schema -cne 'container-audit-writer-session-cli-contract-v1' -or
+        [string]$contract.app_id -cne 'container_audit' -or
+        [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
+        (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
+        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v2' -or
+        [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
+        [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
+        [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
+        -not [bool]$contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore -or
+        -not [bool]$contract.security.evidence_paths_outside_install_parent_required
+    ) { throw "Writer session public contract semantics differ." }
+}
+
 function Invoke-SelfElevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -110,7 +133,8 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         'INSTALL_CANONICAL_PORTABLE.ps1',
         'INSTALL_THIS_PC.ps1',
         'tools\bootstrap_integrity.ps1',
-        'tools\container_writer_session.ps1'
+        'tools\container_writer_session.ps1',
+        'tools\container_writer_session_contract.json'
     )
     $frozen = @($frozenFiles | Where-Object {
         Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf
@@ -138,6 +162,9 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         [string]$manifest.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$manifest.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$manifest.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$manifest.writer_session_adapter_path -cne 'tools/container_writer_session.ps1' -or
+        [string]$manifest.writer_session_contract_path -cne 'tools/container_writer_session_contract.json' -or
+        [string]$manifest.writer_session_contract_schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$manifest.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
         @($manifest.allowed_unsigned_app_pe).Count -ne 0 -or
@@ -151,6 +178,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     $helperPath = Join-Path $Root 'INSTALL_THIS_PC.ps1'
     $integrityHelperPath = Join-Path $Root 'tools\bootstrap_integrity.ps1'
     $writerSessionAdapterPath = Join-Path $Root 'tools\container_writer_session.ps1'
+    $writerSessionContractPath = Join-Path $Root 'tools\container_writer_session_contract.json'
     if (
         (Get-FileSha256 $pythonwPath) -cne
             ([string]$manifest.runtime_pythonw_sha256).ToLowerInvariant() -or
@@ -163,10 +191,13 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         (Get-FileSha256 $integrityHelperPath) -cne
             ([string]$manifest.integrity_helper_sha256).ToLowerInvariant() -or
         (Get-FileSha256 $writerSessionAdapterPath) -cne
-            ([string]$manifest.writer_session_adapter_sha256).ToLowerInvariant()
+            ([string]$manifest.writer_session_adapter_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $writerSessionContractPath) -cne
+            ([string]$manifest.writer_session_contract_sha256).ToLowerInvariant()
     ) {
         throw "Portable release manifest hash readback failed."
     }
+    Assert-WriterSessionPublicContract $writerSessionContractPath ([string]$manifest.writer_session_contract_sha256).ToLowerInvariant()
     $filesBeforeManifest = @(
         Get-ChildItem -LiteralPath $Root -File -Force -Recurse |
             Where-Object {

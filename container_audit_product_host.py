@@ -12,17 +12,20 @@ import sys
 from typing import Iterator, Sequence
 import uuid
 
-
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 USER_RELAY_MODE = "--container-audit-user-relay"
 ONBOARD_CURRENT_USER_MODE = "--onboard-current-user"
 REMOVE_CURRENT_USER_MODE = "--remove-current-user-setup"
+RESTORE_CURRENT_USER_LIFECYCLE_MODE = (
+    "--restore-current-user-lifecycle-after-replacement"
+)
 PRODUCT_MODES = frozenset(
     {
         DIRECT_SYNC_RELAY_MODE,
         USER_RELAY_MODE,
         ONBOARD_CURRENT_USER_MODE,
         REMOVE_CURRENT_USER_MODE,
+        RESTORE_CURRENT_USER_LIFECYCLE_MODE,
     }
 )
 HOSTED_RELAY_FAILURE_EXIT_CODE = 1
@@ -172,4 +175,8 @@ def dispatch_product_mode(argv: Sequence[str]) -> int | None:
             from current_user_onboarding import removal_main
 
             return int(removal_main(arguments))
+        if mode == RESTORE_CURRENT_USER_LIFECYCLE_MODE:
+            from current_user_onboarding import replacement_lifecycle_restore_main
+
+            return int(replacement_lifecycle_restore_main(arguments))
     raise AssertionError(f"unhandled Container_Audit product mode: {mode}")

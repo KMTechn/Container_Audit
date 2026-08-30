@@ -55,6 +55,10 @@ PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
     ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
+    (
+        "tools/container_writer_session_contract.json",
+        "tools/container_writer_session_contract.json",
+    ),
 )
 UPDATE_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
 UPDATE_KEY_CONFIG_SCHEMA = "container-audit-update-key-config-v1"
@@ -365,8 +369,18 @@ def build(
         "integrity_helper_sha256": _sha256(
             output / "tools" / "bootstrap_integrity.ps1"
         ),
+        "writer_session_adapter_path": "tools/container_writer_session.ps1",
         "writer_session_adapter_sha256": _sha256(
             output / "tools" / "container_writer_session.ps1"
+        ),
+        "writer_session_contract_path": (
+            "tools/container_writer_session_contract.json"
+        ),
+        "writer_session_contract_schema": (
+            "container-audit-writer-session-cli-contract-v1"
+        ),
+        "writer_session_contract_sha256": _sha256(
+            output / "tools" / "container_writer_session_contract.json"
         ),
         "third_party_versions": versions,
         "allowed_unsigned_app_pe": native,

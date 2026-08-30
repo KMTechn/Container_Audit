@@ -35,14 +35,18 @@ def test_windowed_host_supplies_and_restores_output_streams(monkeypatch):
     observed = []
 
     def fake_main(arguments):
-        observed.append((sys.stdout is not None, sys.stderr is not None, list(arguments)))
+        observed.append(
+            (sys.stdout is not None, sys.stderr is not None, list(arguments))
+        )
         return 0
 
     monkeypatch.setattr(direct_sync_relay_runner, "main", fake_main)
     monkeypatch.setattr(sys, "stdout", None)
     monkeypatch.setattr(sys, "stderr", None)
 
-    assert product_host.dispatch_product_mode([product_host.DIRECT_SYNC_RELAY_MODE]) == 0
+    assert (
+        product_host.dispatch_product_mode([product_host.DIRECT_SYNC_RELAY_MODE]) == 0
+    )
     assert observed == [(True, True, [])]
     assert sys.stdout is None
     assert sys.stderr is None
@@ -114,7 +118,7 @@ def test_user_relay_mode_reuses_main_process(monkeypatch):
     assert observed == [["--once"]]
 
 
-def test_onboarding_and_public_removal_modes_dispatch_in_process(monkeypatch):
+def test_current_user_product_modes_dispatch_in_process(monkeypatch):
     observed = []
     monkeypatch.setattr(
         current_user_onboarding,
@@ -126,14 +130,56 @@ def test_onboarding_and_public_removal_modes_dispatch_in_process(monkeypatch):
         "removal_main",
         lambda arguments: observed.append(("remove", list(arguments))) or 0,
     )
+    monkeypatch.setattr(
+        current_user_onboarding,
+        "replacement_lifecycle_restore_main",
+        lambda arguments: observed.append(("restore", list(arguments))) or 0,
+    )
 
-    assert product_host.dispatch_product_mode(
-        [product_host.ONBOARD_CURRENT_USER_MODE, "--app-root", "app"]
-    ) == 0
-    assert product_host.dispatch_product_mode(
-        [product_host.REMOVE_CURRENT_USER_MODE, "--app-root", "app"]
-    ) == 0
+    assert (
+        product_host.dispatch_product_mode(
+            [product_host.ONBOARD_CURRENT_USER_MODE, "--app-root", "app"]
+        )
+        == 0
+    )
+    assert (
+        product_host.dispatch_product_mode(
+            [product_host.REMOVE_CURRENT_USER_MODE, "--app-root", "app"]
+        )
+        == 0
+    )
+    restore_arguments = [
+        "--app-root",
+        "current/app",
+        "--code-root",
+        "current",
+        "--replacement-transaction-id",
+        "a" * 32,
+        "--replacement-receipt-path",
+        "receipt.json",
+        "--replacement-receipt-sha256",
+        "b" * 64,
+        "--writer-contract-sha256",
+        "c" * 64,
+        "--report-path",
+        "lifecycle.json",
+        "--session-id",
+        "d" * 32,
+        "--attempt-id",
+        "e" * 32,
+        "--session-started-at-utc",
+        "2026-08-30T00:00:00+00:00",
+        "--orchestrator-sha256",
+        "f" * 64,
+    ]
+    assert (
+        product_host.dispatch_product_mode(
+            [product_host.RESTORE_CURRENT_USER_LIFECYCLE_MODE, *restore_arguments]
+        )
+        == 0
+    )
     assert observed == [
         ("onboard", ["--app-root", "app"]),
         ("remove", ["--app-root", "app"]),
+        ("restore", restore_arguments),
     ]
