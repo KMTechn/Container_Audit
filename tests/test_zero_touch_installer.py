@@ -447,41 +447,161 @@ foreach ($name in @('Full','Same','Assert-CanonicalRuntimePreimage')) {
     if ($functions.Count -ne 1) { exit 11 }
     Invoke-Expression $functions[0].Extent.Text
 }
+$script:mutationCalls = 0
+function Product { $script:mutationCalls += 1 }
+function Restore { $script:mutationCalls += 1 }
+function StartRaw { $script:mutationCalls += 1 }
+function Save { $script:mutationCalls += 1 }
+function Set-ItemProperty { $script:mutationCalls += 1 }
+function Remove-ItemProperty { $script:mutationCalls += 1 }
+function Start-Process { $script:mutationCalls += 1 }
+function Stop-Process { $script:mutationCalls += 1 }
 $root = 'C:\KMTech\Apps\Container_Audit\current'
 $command = 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py --container-audit-user-relay'
-$validBefore = [pscustomobject]@{ exists=$true; kind='String'; data=$command }
-$validProcess = [pscustomobject]@{
+$validBefore = [ordered]@{ exists=$true; kind='String'; data=$command }
+$validProcess = New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
     ExecutablePath='C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe'
     CommandLine=$command
 }
-$valid = Assert-CanonicalRuntimePreimage $validBefore @($validProcess) $command $root $false
-if ([string]$valid.status -cne 'PASS' -or [int]$valid.relay_count -ne 1) { exit 12 }
-$wrongBefore = [pscustomobject]@{ exists=$true; kind='String'; data='C:\foreign\pythonw.exe --container-audit-user-relay' }
-try {
-    [void](Assert-CanonicalRuntimePreimage $wrongBefore @() $command $root $false)
-    exit 13
-}
-catch {
-    if ($_.Exception.Message -cne 'CANONICAL_HKCU_RUN_BINDING_MISMATCH') { exit 14 }
-}
-$foreign = [pscustomobject]@{
+$wrongBefore = [ordered]@{ exists=$true; kind='String'; data='C:\foreign\pythonw.exe --container-audit-user-relay' }
+$foreign = New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
     ExecutablePath='C:\foreign\pythonw.exe'
     CommandLine=$command
 }
+$orderedType = 'System.Collections.Specialized.OrderedDictionary'
+$cimType = 'Microsoft.Management.Infrastructure.CimInstance'
+if (
+    $validBefore.GetType().FullName -cne $orderedType -or
+    $wrongBefore.GetType().FullName -cne $orderedType
+) { exit 12 }
+if (
+    $validProcess.GetType().FullName -cne $cimType -or
+    $foreign.GetType().FullName -cne $cimType
+) { exit 13 }
+$valid = Assert-CanonicalRuntimePreimage $validBefore @($validProcess) $command $root $false
+if ($valid.GetType().FullName -cne $orderedType) { exit 14 }
+if ([string]$valid.status -cne 'PASS' -or [int]$valid.relay_count -ne 1) { exit 15 }
 try {
-    [void](Assert-CanonicalRuntimePreimage $validBefore @($foreign) $command $root $false)
-    exit 15
+    [void](Assert-CanonicalRuntimePreimage $wrongBefore @() $command $root $false)
+    exit 16
 }
 catch {
-    if ($_.Exception.Message -cne 'CANONICAL_RELAY_BINDING_MISMATCH') { exit 16 }
+    if ($_.Exception.Message -cne 'CANONICAL_HKCU_RUN_BINDING_MISMATCH') { exit 17 }
+}
+try {
+    [void](Assert-CanonicalRuntimePreimage $validBefore @($foreign) $command $root $false)
+    exit 18
+}
+catch {
+    if ($_.Exception.Message -cne 'CANONICAL_RELAY_BINDING_MISMATCH') { exit 19 }
 }
 try {
     [void](Assert-CanonicalRuntimePreimage $validBefore @($validProcess) $command $root $true)
-    exit 17
+    exit 20
 }
 catch {
-    if ($_.Exception.Message -cne 'CANONICAL_STOP_MARKER_PREEXISTS') { exit 18 }
+    if ($_.Exception.Message -cne 'CANONICAL_STOP_MARKER_PREEXISTS') { exit 21 }
 }
+if ($script:mutationCalls -ne 0) { exit 22 }
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_rollback_relay_guard_executes_exact_negative_rows_without_mutation():
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @('Full','Same','Assert-RollbackRelayPreimage')) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$script:scenario = ''
+$script:readCalls = 0
+$script:mutationCalls = 0
+function Product { $script:mutationCalls += 1 }
+function Restore { $script:mutationCalls += 1 }
+function StartRaw { $script:mutationCalls += 1 }
+function Save { $script:mutationCalls += 1 }
+function Set-ItemProperty { $script:mutationCalls += 1 }
+function Remove-ItemProperty { $script:mutationCalls += 1 }
+function Start-Process { $script:mutationCalls += 1 }
+function Stop-Process { $script:mutationCalls += 1 }
+function New-SyntheticRelay([string]$ExecutablePath, [string]$CommandLine) {
+    return New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
+        ExecutablePath = $ExecutablePath
+        CommandLine = $CommandLine
+    }
+}
+$expectedCommand = 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe --container-audit-user-relay'
+$script:expectedRow = New-SyntheticRelay 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe' $expectedCommand
+$script:extraRow = New-SyntheticRelay 'C:\KMTech\Apps\Container_Audit\other\runtime\pythonw.exe' 'pythonw.exe --container-audit-user-relay --extra'
+$script:mismatchRow = New-SyntheticRelay 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe' ($expectedCommand + ' --different')
+$cimType = 'Microsoft.Management.Infrastructure.CimInstance'
+foreach ($row in @($script:expectedRow, $script:extraRow, $script:mismatchRow)) {
+    if ($row.GetType().FullName -cne $cimType) { exit 12 }
+}
+function Relays {
+    $script:readCalls += 1
+    switch -CaseSensitive ($script:scenario) {
+        'exact' { return @($script:expectedRow) }
+        'extra' { return @($script:expectedRow, $script:extraRow) }
+        'mismatch' { return @($script:mismatchRow) }
+        'query_error' { throw [InvalidOperationException]::new('injected relay inventory failure') }
+        default { throw [InvalidOperationException]::new('unexpected harness scenario') }
+    }
+}
+$script:scenario = 'exact'
+$exact = @(Assert-RollbackRelayPreimage -ExpectedRelays @($script:expectedRow))
+if ($exact.Count -ne 1 -or $exact[0].GetType().FullName -cne $cimType) { exit 13 }
+$script:scenario = 'extra'
+try {
+    [void](Assert-RollbackRelayPreimage -ExpectedRelays @($script:expectedRow))
+    exit 14
+}
+catch {
+    if ($_.Exception.Message -cne 'rollback relay process-count readback failed') { exit 15 }
+}
+$script:scenario = 'mismatch'
+try {
+    [void](Assert-RollbackRelayPreimage -ExpectedRelays @($script:expectedRow))
+    exit 16
+}
+catch {
+    if ($_.Exception.Message -cne 'rollback relay executable/command readback failed') { exit 17 }
+}
+$script:scenario = 'query_error'
+try {
+    [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
+    exit 18
+}
+catch {
+    if ($_.Exception.Message -cne 'injected relay inventory failure') { exit 19 }
+}
+if ($script:readCalls -ne 4) { exit 20 }
+if ($script:mutationCalls -ne 0) { exit 21 }
 exit 0
 """
     completed = subprocess.run(
@@ -587,22 +707,43 @@ $functions = @($ast.FindAll({
 }, $true))
 if ($functions.Count -ne 1) { exit 11 }
 Invoke-Expression $functions[0].Extent.Text
-$before = [pscustomobject]@{ binding_sha256 = ('a' * 64) }
-$after = [pscustomobject]@{
+$script:mutationCalls = 0
+function Enable-CanonicalWriter { $script:mutationCalls += 1 }
+function Disable-CanonicalWriter { $script:mutationCalls += 1 }
+function Start-ScheduledTask { $script:mutationCalls += 1 }
+function Stop-ScheduledTask { $script:mutationCalls += 1 }
+function Restore { $script:mutationCalls += 1 }
+$before = [ordered]@{ binding_sha256 = ('a' * 64) }
+$matchingAfter = [ordered]@{
+    present = $true
+    classification = 'CANONICAL_QUIESCE_RESTORE'
+    enabled = $true
+    binding_sha256 = ('a' * 64)
+}
+$after = [ordered]@{
     present = $true
     classification = 'CANONICAL_QUIESCE_RESTORE'
     enabled = $true
     binding_sha256 = ('b' * 64)
 }
+$orderedType = 'System.Collections.Specialized.OrderedDictionary'
+foreach ($row in @($before, $matchingAfter, $after)) {
+    if ($row.GetType().FullName -cne $orderedType) { exit 12 }
+}
+try {
+    Assert-CanonicalWriterRestoreReadback $before $matchingAfter
+}
+catch { exit 13 }
 try {
     Assert-CanonicalWriterRestoreReadback $before $after
-    exit 12
+    exit 14
 }
 catch {
     if ($_.Exception.Message -cne 'CANONICAL_WRITER_RESTORE_BINDING_MISMATCH') {
-        exit 13
+        exit 15
     }
 }
+if ($script:mutationCalls -ne 0) { exit 16 }
 exit 0
 """
     completed = subprocess.run(
