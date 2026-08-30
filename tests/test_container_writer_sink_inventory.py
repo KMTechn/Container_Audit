@@ -33,7 +33,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     payload = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     module = _load_module()
 
-    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v5"
+    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v6"
     assert payload["inventory_sha256"] == module._inventory_sha256(payload)
     assert payload["entrypoint_modules"] == [
         path.as_posix() for path in module._discover_shipped_application_paths(ROOT)
@@ -59,6 +59,15 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "closure_direct_mutation_function_count": len(
             payload["closure_direct_mutation_functions"]
         ),
+        "external_process_mutation_site_count": sum(
+            1
+            for row in payload["closure_direct_mutation_functions"]
+            for site in row["mutation_sites"]
+            if site["category"] == "external_process"
+        ),
+        "python_external_control_literal_site_count": len(
+            payload["python_external_control_commands"]["literal_sites"]
+        ),
         "sink_function_count": len(payload["writer_sinks"]),
         "scheduled_task_mutation_site_count": len(
             payload["powershell_scheduled_task_guards"]["mutation_sites"]
@@ -78,6 +87,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "SQL mutation detection requires a directly supplied mutating SQL literal or constant-only f-string at the call site.",
         "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
         "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
+        "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
     ]
 
     uncovered_nodes = [
@@ -100,6 +110,17 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert "transfer_seal.TransferSealStore._initialize" in covered_nodes
     assert "kmtech_factory_contracts.active_work_probe.cli._create_new_fsynced" in covered_nodes
     assert "tools.direct_sync_relay_operator._write_json_atomic" in covered_nodes
+    assert "tools.direct_sync_relay_install_pack._run_command" in covered_nodes
+    assert payload["coverage_summary"]["external_process_mutation_site_count"] > 0
+    external_commands = payload["python_external_control_commands"]
+    assert {"Register-ScheduledTask", "schtasks.exe"} <= set(
+        external_commands["commands"]
+    )
+    assert any(
+        row["file"] == "tools/direct_sync_relay_install_pack.py"
+        and "Register-ScheduledTask" in row["commands"]
+        for row in external_commands["literal_sites"]
+    )
     raster_write = next(
         row
         for row in payload["closure_direct_mutation_functions"]
@@ -407,3 +428,100 @@ def test_new_network_writer_without_fence_fails_inventory_gate(
             "writer_admission_sources": [],
         }
     ]
+
+
+def test_new_external_task_or_service_registration_without_fence_fails_inventory_gate(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    unfenced = (
+        "import subprocess\n"
+        "def install_scheduled_task():\n"
+        "    subprocess.run(['powershell.exe', '-Command', "
+        "'Register-ScheduledTask -TaskName fixture -Force'])\n"
+        "def install_service():\n"
+        "    command = ['sc.exe', 'create', 'fixture', 'binPath=fixture.exe']\n"
+        "    subprocess.run(command, check=False)\n"
+        "def main():\n"
+        "    install_scheduled_task()\n"
+        "    install_service()\n"
+    )
+    _write_minimal_inventory_fixture(tmp_path, unfenced)
+
+    payload = module.derive_inventory(tmp_path)
+
+    assert [row["node"] for row in payload["uncovered_direct_mutation_functions"]] == [
+        "Container_Audit.install_scheduled_task",
+        "Container_Audit.install_service",
+    ]
+    assert all(
+        row["mutation_sites"][0]["category"] == "external_process"
+        for row in payload["uncovered_direct_mutation_functions"]
+    )
+    assert {"Register-ScheduledTask", "sc.exe"} <= set(
+        payload["python_external_control_commands"]["commands"]
+    )
+
+    fenced = (
+        "import subprocess\n"
+        "from writer_session_fence import writer_sink\n"
+        "@writer_sink('external_control_fixture')\n"
+        "def install_scheduled_task():\n"
+        "    subprocess.run(['powershell.exe', '-Command', "
+        "'Register-ScheduledTask -TaskName fixture -Force'])\n"
+        "@writer_sink('external_control_fixture')\n"
+        "def install_service():\n"
+        "    subprocess.run(['sc.exe', 'create', 'fixture', 'binPath=fixture.exe'])\n"
+        "def main():\n"
+        "    install_scheduled_task()\n"
+        "    install_service()\n"
+    )
+    (tmp_path / "Container_Audit.py").write_text(fenced, encoding="utf-8")
+    admitted = module.derive_inventory(tmp_path)
+    assert admitted["uncovered_direct_mutation_functions"] == []
+
+
+def test_external_control_builder_and_aliased_runner_require_fence_at_execution(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    unfenced = (
+        "from subprocess import run as launch\n"
+        "def scheduled_task_command():\n"
+        "    return ['schtasks', '/Create', '/TN', 'fixture', '/TR', 'fixture.exe']\n"
+        "def service_command():\n"
+        "    return ['sc.exe', 'create', 'fixture', 'binPath=fixture.exe']\n"
+        "def run_control_command(command):\n"
+        "    launch(command, check=False)\n"
+        "def main():\n"
+        "    run_control_command(scheduled_task_command())\n"
+        "    run_control_command(service_command())\n"
+    )
+    _write_minimal_inventory_fixture(tmp_path, unfenced)
+
+    payload = module.derive_inventory(tmp_path)
+
+    assert [row["node"] for row in payload["uncovered_direct_mutation_functions"]] == [
+        "Container_Audit.run_control_command"
+    ]
+    mutation_site = payload["uncovered_direct_mutation_functions"][0][
+        "mutation_sites"
+    ][0]
+    assert mutation_site["operation"] == "subprocess.run"
+    assert mutation_site["category"] == "external_process"
+    assert {"schtasks", "sc.exe"} <= set(
+        payload["python_external_control_commands"]["commands"]
+    )
+
+    fenced = unfenced.replace(
+        "from subprocess import run as launch\n",
+        "from subprocess import run as launch\n"
+        "from writer_session_fence import writer_sink\n",
+    ).replace(
+        "def run_control_command(command):\n",
+        "@writer_sink('external_control_fixture')\n"
+        "def run_control_command(command):\n",
+    )
+    (tmp_path / "Container_Audit.py").write_text(fenced, encoding="utf-8")
+    admitted = module.derive_inventory(tmp_path)
+    assert admitted["uncovered_direct_mutation_functions"] == []

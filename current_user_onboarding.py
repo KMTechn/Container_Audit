@@ -501,6 +501,7 @@ def _assert_tree_has_no_reparse_points(root: Path, purpose: str) -> None:
             raise ValueError(f"{purpose} contains a reparse point")
 
 
+@writer_sink("current_user_onboarding")
 def _windows_acl_identity(path: Path) -> dict[str, Any]:
     """Read the same owner/protection/SDDL identity as bootstrap_integrity.ps1."""
 
@@ -809,6 +810,7 @@ def _replacement_user_relay_command_line(app_root: Path) -> str:
     return subprocess.list2cmdline(_replacement_user_relay_command(app_root))
 
 
+@writer_sink("current_user_lifecycle_restore")
 def _start_replacement_user_relay_process(app_root: Path) -> dict[str, Any]:
     selected = _resolved(app_root)
     command = _replacement_user_relay_command(selected)

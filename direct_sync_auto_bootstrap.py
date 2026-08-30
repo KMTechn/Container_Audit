@@ -156,6 +156,7 @@ def build_session_direct_sync_command(
     return command
 
 
+@writer_sink("session_direct_sync_process")
 def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     try:
         completed = subprocess.run(

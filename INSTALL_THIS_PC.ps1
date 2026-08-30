@@ -330,7 +330,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     try { $writerInventory = Get-Content -LiteralPath $writerSinkInventoryPath -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw "Writer sink inventory is invalid." }
     if (
-        [string]$writerInventory.schema_version -cne 'container-audit-writer-sink-inventory-v5' -or
+        [string]$writerInventory.schema_version -cne 'container-audit-writer-sink-inventory-v6' -or
         [string]$writerInventory.inventory_sha256 -cne [string]$manifest.writer_sink_inventory_contract_sha256 -or
         [string]$writerInventory.inventory_sha256 -cne [string]$writerSessionContract.all_writer_fence.writer_inventory_sha256 -or
         @($writerInventory.uncovered_direct_mutation_functions).Count -ne 0 -or

@@ -277,21 +277,73 @@
       "caller_guard_sources": [],
       "coverage_status": "covered",
       "covered_entrypoints": [],
+      "decorated_source": "current_user_onboarding",
+      "direct_callers": [],
+      "file": "current_user_onboarding.py",
+      "kind": "function",
+      "line": 505,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 551,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "current_user_onboarding._windows_acl_identity",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "current_user_lifecycle_restore",
+      "direct_callers": [],
+      "file": "current_user_onboarding.py",
+      "kind": "function",
+      "line": 814,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 822,
+          "operation": "subprocess.Popen",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "current_user_onboarding._start_replacement_user_relay_process",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
       "decorated_source": "current_user_onboarding_storage",
       "direct_callers": [],
       "file": "current_user_onboarding.py",
       "kind": "function",
-      "line": 938,
+      "line": 940,
       "mutation_sites": [
         {
           "category": "registry",
-          "line": 944,
+          "line": 946,
           "operation": "winreg.CreateKeyEx",
           "writer_admission_sources": []
         },
         {
           "category": "registry",
-          "line": 950,
+          "line": 952,
           "operation": "winreg.SetValueEx",
           "writer_admission_sources": []
         }
@@ -353,6 +405,48 @@
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
         "portable.main.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.ContainerAudit._log_event",
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "user_relay.__file_entry__",
+        "user_relay.main"
+      ],
+      "decorated_source": "session_direct_sync_process",
+      "direct_callers": [
+        "direct_sync_auto_bootstrap.run_session_direct_sync_once"
+      ],
+      "file": "direct_sync_auto_bootstrap.py",
+      "kind": "function",
+      "line": 160,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 162,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "direct_sync_auto_bootstrap._run_command",
+      "reachable_entrypoints": [
+        "Container_Audit.ContainerAudit._log_event",
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "user_relay.__file_entry__",
+        "user_relay.main"
       ],
       "reachable_from_product_entrypoint": true,
       "trust_reason": "",
@@ -1676,21 +1770,54 @@
       ],
       "decorated_source": "factory_contract_identity",
       "direct_callers": [
+        "kmtech_factory_contracts.build_cli._release_git_gate",
+        "kmtech_factory_contracts.build_cli.prepare_identity"
+      ],
+      "file": "kmtech_factory_contracts/build_cli.py",
+      "kind": "function",
+      "line": 34,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 35,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_factory_contracts.build_cli._git",
+      "reachable_entrypoints": [
+        "kmtech_factory_contracts.build_cli.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "kmtech_factory_contracts.build_cli.__file_entry__"
+      ],
+      "decorated_source": "factory_contract_identity",
+      "direct_callers": [
         "kmtech_factory_contracts.build_cli.main"
       ],
       "file": "kmtech_factory_contracts/build_cli.py",
       "kind": "function",
-      "line": 102,
+      "line": 103,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 169,
+          "line": 170,
           "operation": "stage_root.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 172,
+          "line": 173,
           "operation": "shutil.copyfile",
           "writer_admission_sources": []
         }
@@ -3190,6 +3317,71 @@
       "caller_guard_sources": [],
       "coverage_status": "covered",
       "covered_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "decorated_source": "direct_sync_install_pack",
+      "direct_callers": [
+        "tools.direct_sync_relay_install_pack.build_install_plan"
+      ],
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "kind": "function",
+      "line": 656,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 675,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "tools.direct_sync_relay_install_pack._python_runtime_import_report",
+      "reachable_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "decorated_source": "direct_sync_install_pack",
+      "direct_callers": [
+        "tools.direct_sync_relay_install_pack._apply_task_runtime_acl",
+        "tools.direct_sync_relay_install_pack.main"
+      ],
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "kind": "function",
+      "line": 1198,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 1200,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "tools.direct_sync_relay_install_pack._run_command",
+      "reachable_entrypoints": [
+        "tools.direct_sync_relay_install_pack.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
         "tools.direct_sync_relay_operator.__file_entry__"
       ],
       "decorated_source": "relay_operator_report",
@@ -3393,6 +3585,13 @@
           "line": 222,
           "operation": "path.mkdir",
           "writer_admission_sources": []
+        },
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 223,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
         }
       ],
       "node": "tools.install_logistics_runtime_profile._secure_profile_directory",
@@ -3479,23 +3678,57 @@
       ],
       "decorated_source": "protected_admin_profile",
       "direct_callers": [
+        "tools.install_protected_admin._apply_exact_acl",
+        "tools.install_protected_admin._resolve_reader_sid",
+        "tools.install_protected_admin._verify_exact_acl"
+      ],
+      "file": "tools/install_protected_admin.py",
+      "kind": "function",
+      "line": 79,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 86,
+          "operation": "subprocess.run",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "tools.install_protected_admin._run_powershell",
+      "reachable_entrypoints": [
+        "tools.install_protected_admin.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "tools.install_protected_admin.__file_entry__"
+      ],
+      "decorated_source": "protected_admin_profile",
+      "direct_callers": [
         "tools.install_protected_admin._remove_or_invalidate_failed_profile",
         "tools.install_protected_admin._restore_previous_profile",
         "tools.install_protected_admin.install_protected_admin_profile"
       ],
       "file": "tools/install_protected_admin.py",
       "kind": "function",
-      "line": 267,
+      "line": 268,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 302,
+          "line": 303,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 314,
+          "line": 315,
           "operation": "temporary.unlink",
           "writer_admission_sources": []
         }
@@ -4735,6 +4968,32 @@
       "unsunk_paths": []
     },
     {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "persistent_relay_process_start",
+      "direct_callers": [],
+      "file": "user_relay.py",
+      "kind": "function",
+      "line": 195,
+      "mutation_sites": [
+        {
+          "category": "external_process",
+          "external_control_commands": [],
+          "line": 211,
+          "operation": "subprocess.Popen",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "user_relay.start_user_relay_process",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
       "caller_guard_reason": "byte-pinned vendor method executes only beneath the exact fenced adapter",
       "caller_guard_sources": [
         "phs_raster_png"
@@ -4906,10 +5165,12 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 114,
+    "closure_direct_mutation_function_count": 122,
     "closure_module_count": 87,
+    "external_process_mutation_site_count": 9,
+    "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 159,
+    "sink_function_count": 166,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -4917,7 +5178,8 @@
     "Discovery is syntactic over the shipped local import closure and does not execute code.",
     "SQL mutation detection requires a directly supplied mutating SQL literal or constant-only f-string at the call site.",
     "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
-    "HTTP network mutation detection conservatively treats calls named post or request as writer sites."
+    "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
+    "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands."
   ],
   "entrypoint_derivation": "all root Python files, all Python files under the portable builder's shipped package directories, portable/main.py, frozen/update-archive tool entrypoints parsed from their shipping contracts, and their local import closure",
   "entrypoint_modules": [
@@ -5370,7 +5632,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "d7ee93952f93e4bdc9ee9ea5b5cce8aa96ee4f08616eb854ee64eb9080f18777",
+  "inventory_sha256": "d4708bcaae436cbba313b9c6809b0ea2c8ffc7f2ee6637063720c4d2a2db3062",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -5469,6 +5731,7 @@
       "kind": "python",
       "pass": true,
       "reachable_direct_mutation_functions": [
+        "direct_sync_auto_bootstrap._run_command",
         "direct_sync_auto_bootstrap._write_json",
         "event_log_store._append_event_log_entry_unlocked",
         "event_log_store._interprocess_file_lock"
@@ -5495,6 +5758,7 @@
         "container_audit_product_host._write_json_atomic",
         "current_user_onboarding._write_json_atomic",
         "current_user_onboarding._write_json_atomic_create_new",
+        "direct_sync_auto_bootstrap._run_command",
         "direct_sync_auto_bootstrap._write_json",
         "direct_sync_push._connect_relay_db",
         "direct_sync_push._copy_file_atomic",
@@ -5611,6 +5875,7 @@
       "kind": "python",
       "pass": true,
       "reachable_direct_mutation_functions": [
+        "direct_sync_auto_bootstrap._run_command",
         "user_relay._write_json_atomic"
       ],
       "reachable_sources": [
@@ -5957,7 +6222,47 @@
     "worker_registry.__file_entry__",
     "writer_session_fence.__file_entry__"
   ],
-  "schema_version": "container-audit-writer-sink-inventory-v5",
+  "python_external_control_commands": {
+    "commands": [
+      "Register-ScheduledTask",
+      "schtasks.exe"
+    ],
+    "literal_sites": [
+      {
+        "commands": [
+          "schtasks.exe"
+        ],
+        "file": "tools/direct_sync_relay_install_pack.py",
+        "function": "tools.direct_sync_relay_install_pack._scheduled_task_create_command",
+        "line": 149
+      },
+      {
+        "commands": [
+          "Register-ScheduledTask"
+        ],
+        "file": "tools/direct_sync_relay_install_pack.py",
+        "function": "tools.direct_sync_relay_install_pack._stored_password_task_register_command",
+        "line": 221
+      },
+      {
+        "commands": [
+          "Register-ScheduledTask"
+        ],
+        "file": "tools/direct_sync_relay_install_pack.py",
+        "function": "tools.direct_sync_relay_install_pack._system_service_task_register_command",
+        "line": 249
+      },
+      {
+        "commands": [
+          "schtasks.exe"
+        ],
+        "file": "tools/direct_sync_relay_install_pack.py",
+        "function": "tools.direct_sync_relay_install_pack.build_install_plan",
+        "line": 1136
+      }
+    ]
+  },
+  "schema_version": "container-audit-writer-sink-inventory-v6",
   "trusted_control_plane_mutations": [],
   "uncovered_direct_mutation_functions": [],
   "writer_sink_sources": [
@@ -6070,18 +6375,34 @@
       "source": "bootstrap_status"
     },
     {
-      "direct_mutation_site_count": 0,
+      "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
-      "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 1441,
+      "function": "current_user_onboarding._start_replacement_user_relay_process",
+      "line": 814,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
     {
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
+      "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
+      "line": 1443,
+      "marker_kind": "decorator",
+      "source": "current_user_lifecycle_restore"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "current_user_onboarding.py",
+      "function": "current_user_onboarding._windows_acl_identity",
+      "line": 505,
+      "marker_kind": "decorator",
+      "source": "current_user_onboarding"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.onboard_current_user",
-      "line": 1182,
+      "line": 1184,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -6089,7 +6410,7 @@
       "direct_mutation_site_count": 2,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding._install_replacement_user_relay_autostart",
-      "line": 938,
+      "line": 940,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -6113,7 +6434,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 1371,
+      "line": 1373,
       "marker_kind": "decorator",
       "source": "current_user_setup_removal"
     },
@@ -6130,6 +6451,22 @@
       "file": "tools/direct_sync_relay_install_pack.py",
       "function": "tools.direct_sync_relay_install_pack._apply_task_runtime_acl",
       "line": 559,
+      "marker_kind": "decorator",
+      "source": "direct_sync_install_pack"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "function": "tools.direct_sync_relay_install_pack._python_runtime_import_report",
+      "line": 656,
+      "marker_kind": "decorator",
+      "source": "direct_sync_install_pack"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "tools/direct_sync_relay_install_pack.py",
+      "function": "tools.direct_sync_relay_install_pack._run_command",
+      "line": 1198,
       "marker_kind": "decorator",
       "source": "direct_sync_install_pack"
     },
@@ -6214,10 +6551,18 @@
       "source": "event_interprocess_lock"
     },
     {
+      "direct_mutation_site_count": 1,
+      "file": "kmtech_factory_contracts/build_cli.py",
+      "function": "kmtech_factory_contracts.build_cli._git",
+      "line": 34,
+      "marker_kind": "decorator",
+      "source": "factory_contract_identity"
+    },
+    {
       "direct_mutation_site_count": 2,
       "file": "kmtech_factory_contracts/build_cli.py",
       "function": "kmtech_factory_contracts.build_cli.prepare_identity",
-      "line": 102,
+      "line": 103,
       "marker_kind": "decorator",
       "source": "factory_contract_identity"
     },
@@ -6350,7 +6695,7 @@
       "source": "logistics_profile_install"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 2,
       "file": "tools/install_logistics_runtime_profile.py",
       "function": "tools.install_logistics_runtime_profile._secure_profile_directory",
       "line": 216,
@@ -6438,7 +6783,7 @@
       "source": "parked_tray_save"
     },
     {
-      "direct_mutation_site_count": 0,
+      "direct_mutation_site_count": 1,
       "file": "user_relay.py",
       "function": "user_relay.start_user_relay_process",
       "line": 195,
@@ -6593,7 +6938,15 @@
       "direct_mutation_site_count": 2,
       "file": "tools/install_protected_admin.py",
       "function": "tools.install_protected_admin._atomic_write",
-      "line": 267,
+      "line": 268,
+      "marker_kind": "decorator",
+      "source": "protected_admin_profile"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "tools/install_protected_admin.py",
+      "function": "tools.install_protected_admin._run_powershell",
+      "line": 79,
       "marker_kind": "decorator",
       "source": "protected_admin_profile"
     },
@@ -6878,10 +7231,18 @@
       "source": "runtime_lease_network"
     },
     {
+      "direct_mutation_site_count": 1,
+      "file": "direct_sync_auto_bootstrap.py",
+      "function": "direct_sync_auto_bootstrap._run_command",
+      "line": 160,
+      "marker_kind": "decorator",
+      "source": "session_direct_sync_process"
+    },
+    {
       "direct_mutation_site_count": 0,
       "file": "direct_sync_auto_bootstrap.py",
       "function": "direct_sync_auto_bootstrap.run_session_direct_sync_once",
-      "line": 184,
+      "line": 185,
       "marker_kind": "decorator",
       "source": "session_direct_sync_process"
     },

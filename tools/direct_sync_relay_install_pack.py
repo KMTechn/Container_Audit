@@ -652,6 +652,7 @@ def _python_executable_report(python_exe: str | os.PathLike[str]) -> dict:
     }
 
 
+@writer_sink("direct_sync_install_pack")
 def _python_runtime_import_report(python_exe: str | os.PathLike[str], app_root: str | os.PathLike[str]) -> dict:
     resolved_python = Path(str(python_exe or "")).expanduser().resolve()
     resolved_app_root = Path(app_root).expanduser().resolve()
@@ -1193,6 +1194,7 @@ def build_install_plan(args: argparse.Namespace) -> dict:
     }
 
 
+@writer_sink("direct_sync_install_pack")
 def _run_command(command: Sequence[str]) -> dict:
     try:
         completed = subprocess.run(command, check=False, capture_output=True, text=True)

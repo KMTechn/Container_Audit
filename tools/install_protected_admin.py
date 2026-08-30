@@ -75,6 +75,7 @@ _ACL_SDDL_ENV = "KMTECH_PROTECTED_ADMIN_ACL_SDDL"
 _READER_PRINCIPAL_ENV = "KMTECH_PROTECTED_ADMIN_READER_PRINCIPAL"
 
 
+@writer_sink("protected_admin_profile")
 def _run_powershell(script: str, *, environment: dict[str, str]) -> str:
     if os.name != "nt":
         raise RuntimeError(

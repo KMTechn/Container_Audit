@@ -30,6 +30,7 @@ from .package import (
 )
 
 
+@writer_sink("factory_contract_identity")
 def _git(repository: Path, *args: str) -> str:
     process = subprocess.run(
         ["git", "-C", str(repository), *args],

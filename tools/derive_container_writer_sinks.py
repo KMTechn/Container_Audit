@@ -41,6 +41,55 @@ SCHEDULED_TASK_MUTATION_COMMANDS = (
     "Unregister-ScheduledTask",
     "Set-ScheduledTask",
 )
+SERVICE_MUTATION_COMMANDS = (
+    "New-Service",
+    "Set-Service",
+    "Remove-Service",
+    "Start-Service",
+    "Stop-Service",
+    "Restart-Service",
+    "Suspend-Service",
+    "Resume-Service",
+)
+EXTERNAL_CONTROL_EXECUTABLES = (
+    "schtasks",
+    "schtasks.exe",
+    "sc.exe",
+    "systemctl",
+    "launchctl",
+)
+EXTERNAL_PROCESS_CALLS = frozenset(
+    {
+        "asyncio.create_subprocess_exec",
+        "asyncio.create_subprocess_shell",
+        "os.execl",
+        "os.execle",
+        "os.execlp",
+        "os.execlpe",
+        "os.execv",
+        "os.execve",
+        "os.execvp",
+        "os.execvpe",
+        "os.popen",
+        "os.spawnl",
+        "os.spawnle",
+        "os.spawnlp",
+        "os.spawnlpe",
+        "os.spawnv",
+        "os.spawnve",
+        "os.spawnvp",
+        "os.spawnvpe",
+        "os.startfile",
+        "os.system",
+        "subprocess.Popen",
+        "subprocess.call",
+        "subprocess.check_call",
+        "subprocess.check_output",
+        "subprocess.getoutput",
+        "subprocess.getstatusoutput",
+        "subprocess.run",
+    }
+)
 APPROVED_SCHEDULED_TASK_WRAPPERS = frozenset(
     {
         "Disable-ContainerScheduledTaskUnderWriterFence",
@@ -259,6 +308,31 @@ def _string_literal(node: ast.AST | None) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     return None
+
+
+def _external_control_commands(text: str) -> list[str]:
+    commands: list[str] = []
+    for command in (*SCHEDULED_TASK_MUTATION_COMMANDS, *SERVICE_MUTATION_COMMANDS):
+        if re.search(
+            rf"(?i)(?<![A-Za-z0-9_-]){re.escape(command)}(?![A-Za-z0-9_-])",
+            text,
+        ):
+            commands.append(command)
+    for executable in EXTERNAL_CONTROL_EXECUTABLES:
+        if re.search(
+            rf"(?i)(?<![A-Za-z0-9_.-]){re.escape(executable)}(?![A-Za-z0-9_.-])",
+            text,
+        ):
+            commands.append(executable)
+    return sorted(set(commands), key=str.casefold)
+
+
+def _external_control_commands_in_node(node: ast.AST) -> list[str]:
+    commands: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            commands.update(_external_control_commands(child.value))
+    return sorted(commands, key=str.casefold)
 
 
 def _sql_literal(node: ast.AST | None) -> str | None:
@@ -847,6 +921,13 @@ class _NodeVisitor(ast.NodeVisitor):
 
     def _classify_mutation(self, node: ast.Call) -> dict[str, Any] | None:
         resolved = self._resolve_callable(node.func)
+        if resolved in EXTERNAL_PROCESS_CALLS:
+            return self._mutation_record(
+                node,
+                resolved,
+                "external_process",
+                external_control_commands=_external_control_commands_in_node(node),
+            )
         if resolved in REGISTRY_MUTATORS:
             return self._mutation_record(node, resolved, "registry")
         if resolved in OS_FILE_MUTATORS:
@@ -909,14 +990,25 @@ class _NodeVisitor(ast.NodeVisitor):
         return ""
 
     def _mutation_record(
-        self, node: ast.Call, operation: str, category: str
+        self,
+        node: ast.Call,
+        operation: str,
+        category: str,
+        *,
+        external_control_commands: list[str] | None = None,
     ) -> dict[str, Any]:
-        return {
+        record = {
             "line": node.lineno,
             "operation": operation,
             "category": category,
             "writer_admission_sources": sorted(set(self.writer_admission_stack)),
         }
+        if category == "external_process":
+            record["external_control_commands"] = sorted(
+                set(external_control_commands or ()),
+                key=str.casefold,
+            )
+        return record
 
 
 def _module_import_edges(
@@ -1334,6 +1426,72 @@ class _NamedCallSiteCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+class _ExternalControlLiteralCollector(ast.NodeVisitor):
+    def __init__(self, module_name: str) -> None:
+        self.module_name = module_name
+        self.scope: list[str] = []
+        self.sites: list[dict[str, Any]] = []
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self.scope.append(node.name)
+        self.generic_visit(node)
+        self.scope.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        if not isinstance(node.value, str):
+            return
+        commands = _external_control_commands(node.value)
+        if not commands:
+            return
+        function = (
+            f"{self.module_name}." + ".".join(self.scope)
+            if self.scope
+            else f"{self.module_name}.__module__"
+        )
+        self.sites.append(
+            {
+                "function": function,
+                "line": node.lineno,
+                "commands": commands,
+            }
+        )
+
+
+def _collect_python_external_control_commands(
+    parsed_modules: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    sites: list[dict[str, Any]] = []
+    for module_name, payload in parsed_modules.items():
+        collector = _ExternalControlLiteralCollector(module_name)
+        collector.visit(payload["tree"])
+        sites.extend(
+            {
+                "file": _relative(payload["path"]),
+                **site,
+            }
+            for site in collector.sites
+        )
+    sites.sort(key=lambda site: (site["file"], site["line"], site["function"]))
+    return {
+        "commands": sorted(
+            {
+                command
+                for site in sites
+                for command in site["commands"]
+            },
+            key=str.casefold,
+        ),
+        "literal_sites": sites,
+    }
+
+
 def _caller_fence_reference_failures(
     parsed_modules: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -1564,6 +1722,13 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         row for row in mutation_rows if row["coverage_status"] == "uncovered"
     ]
     caller_fence_failures = _caller_fence_reference_failures(parsed_modules)
+    python_external_control = _collect_python_external_control_commands(parsed_modules)
+    external_process_site_count = sum(
+        1
+        for row in mutation_rows
+        for site in row["mutation_sites"]
+        if site["category"] == "external_process"
+    )
 
     powershell = _collect_powershell_inventory(repo_root)
     guard_failures = [
@@ -1636,7 +1801,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     route_rows.sort(key=lambda row: row["route_id"])
 
     payload: dict[str, Any] = {
-        "schema_version": "container-audit-writer-sink-inventory-v5",
+        "schema_version": "container-audit-writer-sink-inventory-v6",
         "entrypoint_modules": [_relative(path) for path in shipped_application_paths],
         "entrypoint_derivation": (
             "all root Python files, all Python files under the portable builder's "
@@ -1664,6 +1829,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             }
             for node, reason in sorted(TRUSTED_CONTROL_PLANE_MUTATIONS.items())
         ],
+        "python_external_control_commands": python_external_control,
         "powershell_scheduled_task_guards": powershell,
         "powershell_guard_failures": guard_failures,
         "known_route_coverage": route_rows,
@@ -1672,10 +1838,15 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "SQL mutation detection requires a directly supplied mutating SQL literal or constant-only f-string at the call site.",
             "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
             "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
+            "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
         ],
         "coverage_summary": {
             "closure_module_count": len(parsed_modules),
             "closure_direct_mutation_function_count": len(mutation_rows),
+            "external_process_mutation_site_count": external_process_site_count,
+            "python_external_control_literal_site_count": len(
+                python_external_control["literal_sites"]
+            ),
             "sink_function_count": len(sink_rows),
             "scheduled_task_mutation_site_count": len(powershell["mutation_sites"]),
             "trusted_control_plane_mutation_count": len(

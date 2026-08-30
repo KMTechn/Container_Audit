@@ -10,6 +10,7 @@ import pytest
 
 import direct_sync_push
 import isolated_qualification
+import writer_session_fence as writer_fence
 from tools import direct_sync_relay_install_pack as install_pack
 from tools import isolated_qualification_authority as qualification_authority
 from tools.direct_sync_relay_install_pack import (
@@ -2100,6 +2101,75 @@ def test_install_pack_uninstall_other_schtasks_error_still_fails(tmp_path, monke
     report = json.loads(report_path.read_text(encoding="utf-8-sig"))
     assert report["status"] == "FAIL"
     assert report["command_result"].get("already_absent") is not True
+
+
+def test_install_pack_external_task_command_is_denied_before_subprocess_when_fenced(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setattr(
+        writer_fence,
+        "active_fence",
+        lambda *args, **kwargs: {
+            "status": "PREPARING",
+            "delegated_sources": [],
+        },
+    )
+    subprocess_called = False
+
+    def forbidden_run(*args, **kwargs):
+        nonlocal subprocess_called
+        subprocess_called = True
+        raise AssertionError("subprocess must remain behind writer admission")
+
+    monkeypatch.setattr(install_pack.subprocess, "run", forbidden_run)
+
+    with pytest.raises(writer_fence.WriterFencedError) as exc_info:
+        install_pack._run_command(
+            ["schtasks.exe", "/Create", "/TN", "fixture", "/TR", "fixture.exe"]
+        )
+
+    assert exc_info.value.code == "ACTIVE_WRITER_FENCE"
+    assert subprocess_called is False
+
+
+def test_install_pack_external_task_command_keeps_admission_through_subprocess(
+    monkeypatch,
+):
+    admission = {"active": False, "source": ""}
+
+    class TrackingAdmission:
+        def __enter__(self):
+            assert admission["active"] is False
+            admission.update(active=True, source="direct_sync_install_pack")
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            assert admission == {
+                "active": True,
+                "source": "direct_sync_install_pack",
+            }
+            admission.update(active=False, source="")
+
+    def tracking_writer_admission(source):
+        assert source == "direct_sync_install_pack"
+        return TrackingAdmission()
+
+    def admitted_run(command, **kwargs):
+        assert admission == {
+            "active": True,
+            "source": "direct_sync_install_pack",
+        }
+        return subprocess.CompletedProcess(command, 0, stdout="created", stderr="")
+
+    monkeypatch.setattr(writer_fence, "writer_admission", tracking_writer_admission)
+    monkeypatch.setattr(install_pack.subprocess, "run", admitted_run)
+
+    result = install_pack._run_command(
+        ["schtasks.exe", "/Create", "/TN", "fixture", "/TR", "fixture.exe"]
+    )
+
+    assert result == {"returncode": 0, "stdout": "created", "stderr": ""}
+    assert admission == {"active": False, "source": ""}
 
 
 def test_install_pack_run_command_reports_start_failure(monkeypatch):

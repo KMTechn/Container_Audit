@@ -472,7 +472,7 @@ def _assert_writer_sink_inventory(repo_root: Path) -> dict[str, object]:
     if snapshot != derived or snapshot_path.read_bytes() != _writer_inventory_json_bytes(derived):
         raise PortableBuildError("writer sink inventory is stale")
     if (
-        derived.get("schema_version") != "container-audit-writer-sink-inventory-v5"
+        derived.get("schema_version") != "container-audit-writer-sink-inventory-v6"
         or derived.get("uncovered_direct_mutation_functions") != []
         or derived.get("caller_fence_reference_failures") != []
         or derived.get("powershell_guard_failures") != []
