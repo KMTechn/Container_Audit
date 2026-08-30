@@ -26,6 +26,8 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Mapping
 from urllib.parse import urlparse, urlunparse
 
+from writer_session_fence import writer_sink
+
 from vendor.kmtech_zero_pe import (
     generate_public_jwk,
     jwk_thumbprint as _cng_jwk_thumbprint,
@@ -66,6 +68,14 @@ _COORDINATE_RE = re.compile(r"[A-Za-z0-9_-]{43}")
 _DEFAULT_TTL_SECONDS = 15 * 60
 _MAX_RETRY_AFTER_SECONDS = 24 * 60 * 60
 _BUSY_TIMEOUT_MS = 30000
+RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST = (
+    "runtime_lease_metadata_invalid_before_source_post"
+)
+EXPIRED_AUTHORITY_REISSUE_CODES = frozenset(
+    {
+        RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +208,7 @@ def _runtime_endpoint(
     return urlunparse((parsed.scheme, parsed.netloc, ENDPOINT_PATH, "", "", ""))
 
 
+@writer_sink("producer_runtime_storage")
 def init_runtime_schema(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
@@ -388,6 +399,7 @@ def _response_payload(response: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
+@writer_sink("runtime_lease_network")
 def _post_lease_request(
     *,
     request_value: Mapping[str, Any],
@@ -524,6 +536,7 @@ def _state_scope_matches(state: sqlite3.Row, scope: Mapping[str, str]) -> bool:
     return all(str(state[field_name]) == str(scope[field_name]) for field_name in scope)
 
 
+@writer_sink("producer_runtime_storage")
 def _create_state(conn: sqlite3.Connection, scope: Mapping[str, str], now_text: str) -> sqlite3.Row:
     runtime_id, public_jwk = new_runtime_identity()
     authority_scope = _scope_key(scope)
@@ -552,6 +565,7 @@ def _create_state(conn: sqlite3.Connection, scope: Mapping[str, str], now_text: 
     return row
 
 
+@writer_sink("producer_runtime_storage")
 def _replace_expired_identity(
     conn: sqlite3.Connection, state: sqlite3.Row, now_text: str
 ) -> sqlite3.Row:
@@ -581,26 +595,44 @@ def _operator_review_or_recover_exact_clone(
     now_time: datetime,
     ttl_seconds: int,
 ) -> tuple[sqlite3.Row, RuntimePreparation | None]:
-    """Fail-closed on operator review, except EXACT_CLONE after the local TTL.
+    """Fail closed until the prior server authority is provably expired.
 
     The live runtime-lease API is POST-only and does not return the active
-    clone's rotating token. A rejected local identity cannot be reused. After
-    the default lease TTL the previous grant can expire, so this replaces the
-    quarantined identity and lets the next issue take over. Any other review
-    code stays fail-closed.
+    clone's rotating token. A rejected local identity cannot be reused. An
+    exact-clone rejection can reissue only after its conservative local TTL.
+    A generic local upload exception has unknown-commit semantics: the server
+    may have consumed the request and returned a later authority expiry before
+    the client lost the result. It therefore stays fail closed. Only the
+    distinct pre-source-POST metadata-validation code may reissue after the
+    retained exact server expiry. Other review codes stay fail closed.
     """
 
     if str(state["status"] or "") != "OPERATOR_REVIEW":
         return state, None
     code = str(state["last_error_code"] or "runtime_authority_operator_review")
-    recoverable = code == "EXACT_CLONE_RUNTIME_CONFLICT" and not state["assigned_relay_id"]
+    exact_clone_recoverable = (
+        code == "EXACT_CLONE_RUNTIME_CONFLICT" and not state["assigned_relay_id"]
+    )
     reviewed_at = _parse_time(state["updated_at"])
-    due = (
-        recoverable
+    exact_clone_due = (
+        exact_clone_recoverable
         and reviewed_at is not None
         and (now_time - reviewed_at) >= timedelta(seconds=int(ttl_seconds))
     )
-    if due:
+    retained_expiry = _parse_time(state["expires_at"])
+    expired_local_authority_due = (
+        code in EXPIRED_AUTHORITY_REISSUE_CODES
+        and not state["assigned_relay_id"]
+        and not state["pending_request_json"]
+        and not state["pending_issue_idempotency_key"]
+        and retained_expiry is not None
+        and retained_expiry <= now_time
+        and bool(state["lease_id"])
+        and int(state["fence"] or 0) > 0
+        and not state["next_request_token"]
+        and not state["next_request_sequence"]
+    )
+    if exact_clone_due or expired_local_authority_due:
         return _replace_expired_identity(conn, state, now_text), None
     return state, RuntimePreparation(
         operator_review=True,
@@ -669,6 +701,7 @@ def _runtime_liveness_receipt(
     }
 
 
+@writer_sink("producer_runtime_storage")
 def ensure_runtime_authority(
     *,
     db_path: str | os.PathLike[str],
@@ -925,6 +958,7 @@ def ensure_runtime_authority(
     )
 
 
+@writer_sink("producer_runtime_storage")
 def prepare_runtime_metadata(
     *,
     db_path: str | os.PathLike[str],
@@ -962,7 +996,7 @@ def prepare_runtime_metadata(
         if shape_error:
             return RuntimePreparation(
                 operator_review=True,
-                error_code="runtime_lease_metadata_invalid",
+                error_code=RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST,
                 error_message=shape_error,
             )
         return RuntimePreparation(metadata=dict(metadata))
@@ -1008,7 +1042,7 @@ def prepare_runtime_metadata(
                     conn.rollback()
                     return RuntimePreparation(
                         operator_review=True,
-                        error_code="runtime_lease_metadata_invalid",
+                        error_code=RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST,
                         error_message=live_shape_error,
                     )
                 conn.commit()
@@ -1292,6 +1326,7 @@ def runtime_receipt_result(
     return dict(runtime_value), "", ""
 
 
+@writer_sink("producer_runtime_storage")
 def apply_runtime_receipt_in_transaction(
     conn: sqlite3.Connection,
     *,
@@ -1381,6 +1416,7 @@ def apply_runtime_receipt_in_transaction(
     )
 
 
+@writer_sink("producer_runtime_storage")
 def mark_runtime_operator_review_in_transaction(
     conn: sqlite3.Connection,
     *,
@@ -1421,6 +1457,7 @@ def mark_runtime_operator_review_in_transaction(
     )
 
 
+@writer_sink("producer_runtime_storage")
 def release_runtime_request_in_transaction(
     conn: sqlite3.Connection,
     *,
@@ -1483,6 +1520,7 @@ def release_runtime_request_in_transaction(
     )
 
 
+@writer_sink("producer_runtime_storage")
 def disable_runtime_authority_in_transaction(
     conn: sqlite3.Connection,
     *,

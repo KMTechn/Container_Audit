@@ -16,9 +16,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 from direct_sync_operator import (  # noqa: E402
     operator_status,
     pause_relay,
+    resolve_committed_operator_review,
     resume_relay,
     restore_relay_spool_from_server,
     retry_dead_relay_batch,
@@ -26,6 +29,7 @@ from direct_sync_operator import (  # noqa: E402
 from direct_sync_runtime import load_credentials_from_json  # noqa: E402
 
 
+@writer_sink("relay_operator_report")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -57,10 +61,20 @@ def _emit(report: Mapping[str, Any], report_path: str = "") -> int:
     print(f"direct_sync_operator_status={mutable_report.get('status', 'FAIL')}")
     print(f"direct_sync_operator_operation={mutable_report.get('operation', '')}")
     print(f"direct_sync_operator_report_status={report_status}")
+    audit_write_status = str(mutable_report.get("audit_write_status") or "")
+    if audit_write_status:
+        print(f"direct_sync_operator_audit_write_status={audit_write_status}")
+    if mutable_report.get("audit_write_error_code"):
+        print(
+            "direct_sync_operator_audit_write_error_code="
+            f"{mutable_report['audit_write_error_code']}"
+        )
     if report_error_code:
         print(f"direct_sync_operator_report_error_code={report_error_code}")
     status = str(mutable_report.get("status") or "FAIL")
     if report_status == "FAIL":
+        return 1
+    if audit_write_status == "FAIL":
         return 1
     if status == "PASS":
         return 0
@@ -108,6 +122,33 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Retry only when the row's last error matches this approved, resolved cause (repeatable)",
     )
+
+    resolve_parser = subparsers.add_parser(
+        "resolve-review",
+        help="Acknowledge an exactly reconciled committed operator_review receipt without retrying it",
+    )
+    resolve_parser.add_argument("--db-path", required=True)
+    resolve_parser.add_argument("--relay-id", required=True)
+    resolve_parser.add_argument("--operator-id", required=True)
+    resolve_parser.add_argument("--reason", required=True)
+    resolve_parser.add_argument(
+        "--resolution",
+        required=True,
+        choices=("historical_local_only", "historical_superseded", "server_replayed"),
+    )
+    resolve_parser.add_argument("--evidence-path", required=True)
+    resolve_parser.add_argument("--evidence-sha256", required=True)
+    resolve_parser.add_argument("--expected-request-id", required=True)
+    resolve_parser.add_argument("--expected-server-source-file-id", required=True)
+    resolve_parser.add_argument("--expected-relative-path", required=True)
+    resolve_parser.add_argument("--expected-byte-length", required=True, type=int)
+    resolve_parser.add_argument("--expected-inserted-count", required=True, type=int)
+    resolve_parser.add_argument("--expected-replayed-count", required=True, type=int)
+    resolve_parser.add_argument("--expected-error-count", required=True, type=int)
+    resolve_parser.add_argument("--expected-quarantined-count", required=True, type=int)
+    resolve_parser.add_argument("--expected-content-sha256", required=True)
+    resolve_parser.add_argument("--audit-log-path", required=True)
+    resolve_parser.add_argument("--report-path", default="")
 
     restore_parser = subparsers.add_parser("restore-spool", help="Restore an ACKED relay spool file from server raw artifact")
     restore_parser.add_argument("--db-path", required=True)
@@ -161,6 +202,29 @@ def main(argv: list[str] | None = None) -> int:
                     audit_log_path=args.audit_log_path,
                     allow_operator_review=args.allow_operator_review,
                     expected_error_codes=tuple(args.expected_error_code),
+                ),
+                args.report_path,
+            )
+        if args.command == "resolve-review":
+            return _emit(
+                resolve_committed_operator_review(
+                    db_path=args.db_path,
+                    relay_id=args.relay_id,
+                    operator_id=args.operator_id,
+                    reason=args.reason,
+                    resolution=args.resolution,
+                    evidence_path=args.evidence_path,
+                    evidence_sha256=args.evidence_sha256,
+                    expected_request_id=args.expected_request_id,
+                    expected_server_source_file_id=args.expected_server_source_file_id,
+                    expected_relative_path=args.expected_relative_path,
+                    expected_byte_length=args.expected_byte_length,
+                    expected_inserted_count=args.expected_inserted_count,
+                    expected_replayed_count=args.expected_replayed_count,
+                    expected_error_count=args.expected_error_count,
+                    expected_quarantined_count=args.expected_quarantined_count,
+                    expected_content_sha256=args.expected_content_sha256,
+                    audit_log_path=args.audit_log_path,
                 ),
                 args.report_path,
             )

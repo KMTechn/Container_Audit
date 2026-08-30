@@ -24,6 +24,10 @@ if str(REPO_ROOT) not in sys.path:
 from vendor.kmtech_zero_pe.release_signature import (  # noqa: E402
     validate_public_key_config,
 )
+from tools.derive_container_writer_sinks import (  # noqa: E402
+    _canonical_json_bytes as _writer_inventory_json_bytes,
+    derive_inventory as _derive_writer_inventory,
+)
 
 
 EXPECTED_PYTHON = (3, 12, 10)
@@ -52,10 +56,15 @@ PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+    ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
     ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
     (
         "tools/container_writer_session_contract.json",
         "tools/container_writer_session_contract.json",
+    ),
+    (
+        "tools/container_writer_sink_inventory.json",
+        "tools/container_writer_sink_inventory.json",
     ),
 )
 UPDATE_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
@@ -451,6 +460,35 @@ def _assert_clean_source(repo_root: Path) -> None:
         raise PortableBuildError("portable source tree must be clean and committed")
 
 
+def _assert_writer_sink_inventory(repo_root: Path) -> dict[str, object]:
+    snapshot_path = repo_root / "tools" / "container_writer_sink_inventory.json"
+    if not snapshot_path.is_file():
+        raise PortableBuildError("writer sink inventory snapshot is missing")
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PortableBuildError("writer sink inventory snapshot is invalid") from exc
+    derived = _derive_writer_inventory(repo_root)
+    if snapshot != derived or snapshot_path.read_bytes() != _writer_inventory_json_bytes(derived):
+        raise PortableBuildError("writer sink inventory is stale")
+    if (
+        derived.get("schema_version") != "container-audit-writer-sink-inventory-v5"
+        or derived.get("uncovered_direct_mutation_functions") != []
+        or derived.get("caller_fence_reference_failures") != []
+        or derived.get("powershell_guard_failures") != []
+        or not isinstance(derived.get("inventory_sha256"), str)
+    ):
+        raise PortableBuildError("writer sink inventory is not release-admissible")
+    route_rows = derived.get("known_route_coverage")
+    if (
+        not isinstance(route_rows, list)
+        or not route_rows
+        or any(not isinstance(row, dict) or row.get("pass") is not True for row in route_rows)
+    ):
+        raise PortableBuildError("known writer route coverage is not release-admissible")
+    return derived
+
+
 def build(
     repo_root: Path,
     python_home: Path,
@@ -462,6 +500,7 @@ def build(
     python_home = python_home.resolve()
     output = output.resolve()
     _assert_clean_source(repo_root)
+    writer_inventory = _assert_writer_sink_inventory(repo_root)
     if output.exists():
         raise PortableBuildError(f"portable output already exists: {output}")
     output.mkdir(parents=True)
@@ -511,6 +550,10 @@ def build(
         "integrity_helper_sha256": _sha256(
             output / "tools" / "bootstrap_integrity.ps1"
         ),
+        "writer_fence_helper_path": "tools/container_writer_fence.ps1",
+        "writer_fence_helper_sha256": _sha256(
+            output / "tools" / "container_writer_fence.ps1"
+        ),
         "writer_session_adapter_path": "tools/container_writer_session.ps1",
         "writer_session_adapter_sha256": _sha256(
             output / "tools" / "container_writer_session.ps1"
@@ -524,6 +567,13 @@ def build(
         "writer_session_contract_sha256": _sha256(
             output / "tools" / "container_writer_session_contract.json"
         ),
+        "writer_sink_inventory_path": "tools/container_writer_sink_inventory.json",
+        "writer_sink_inventory_sha256": _sha256(
+            output / "tools" / "container_writer_sink_inventory.json"
+        ),
+        "writer_sink_inventory_contract_sha256": writer_inventory[
+            "inventory_sha256"
+        ],
         "third_party_versions": versions,
         "allowed_unsigned_app_pe": native,
         "update_key_config_sha256": update_key_config_sha256,

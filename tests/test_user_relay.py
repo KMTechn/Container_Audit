@@ -33,6 +33,24 @@ def test_hkcu_autostart_uses_hardened_main_and_exact_readback(tmp_path):
     assert "schtasks" not in report["command"].lower()
 
 
+def test_portable_autostart_reenters_isolated_main_before_source_fallback(tmp_path):
+    app_root = tmp_path / "portable" / "app"
+    app_root.mkdir(parents=True)
+    portable_main = app_root / "main.py"
+    portable_main.write_text("# portable entry\n", encoding="utf-8")
+    (app_root / "Container_Audit.py").write_text("# source app\n", encoding="utf-8")
+
+    command = user_relay.build_user_relay_command(app_root)
+
+    assert command == [
+        user_relay.sys.executable,
+        "-I",
+        "-B",
+        str(portable_main.resolve()),
+        "--container-audit-user-relay",
+    ]
+
+
 def test_persistent_loop_maps_missing_cycle_value_to_unknown(tmp_path):
     result = user_relay.run_persistent_relay_loop(
         lambda: None,
@@ -93,6 +111,7 @@ class _OnlineSession:
                 ),
                 "committed": True,
                 "status": "accepted",
+                "projection_disposition": "COMPLETE",
                 "retryable": False,
                 "next_retry_after": None,
                 "totals": {

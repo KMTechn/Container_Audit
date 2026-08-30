@@ -19,6 +19,8 @@ PORTABLE_INSTALLER = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
 INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 WRITER_SESSION_ADAPTER = ROOT / "tools" / "container_writer_session.ps1"
 WRITER_SESSION_CONTRACT = ROOT / "tools" / "container_writer_session_contract.json"
+WRITER_FENCE_HELPER = ROOT / "tools" / "container_writer_fence.ps1"
+WRITER_SINK_INVENTORY = ROOT / "tools" / "container_writer_sink_inventory.json"
 
 
 def _powershell() -> str:
@@ -148,6 +150,14 @@ def _portable_release_fixture(
         WRITER_SESSION_CONTRACT,
         release / "tools" / "container_writer_session_contract.json",
     )
+    shutil.copy2(
+        WRITER_FENCE_HELPER,
+        release / "tools" / "container_writer_fence.ps1",
+    )
+    shutil.copy2(
+        WRITER_SINK_INVENTORY,
+        release / "tools" / "container_writer_sink_inventory.json",
+    )
     files = [path for path in release.rglob("*") if path.is_file()]
     manifest = {
         "schema": "container-audit-portable-tree-v1",
@@ -166,6 +176,10 @@ def _portable_release_fixture(
         "integrity_helper_sha256": hashlib.sha256(
             (release / "tools" / "bootstrap_integrity.ps1").read_bytes()
         ).hexdigest(),
+        "writer_fence_helper_path": "tools/container_writer_fence.ps1",
+        "writer_fence_helper_sha256": hashlib.sha256(
+            (release / "tools" / "container_writer_fence.ps1").read_bytes()
+        ).hexdigest(),
         "writer_session_adapter_path": "tools/container_writer_session.ps1",
         "writer_session_adapter_sha256": hashlib.sha256(
             (release / "tools" / "container_writer_session.ps1").read_bytes()
@@ -177,6 +191,15 @@ def _portable_release_fixture(
         "writer_session_contract_sha256": hashlib.sha256(
             (release / "tools" / "container_writer_session_contract.json").read_bytes()
         ).hexdigest(),
+        "writer_sink_inventory_path": "tools/container_writer_sink_inventory.json",
+        "writer_sink_inventory_sha256": hashlib.sha256(
+            (release / "tools" / "container_writer_sink_inventory.json").read_bytes()
+        ).hexdigest(),
+        "writer_sink_inventory_contract_sha256": json.loads(
+            (release / "tools" / "container_writer_sink_inventory.json").read_text(
+                encoding="utf-8"
+            )
+        )["inventory_sha256"],
         "allowed_unsigned_app_pe": [],
         "forbidden_dependency_paths": [],
         "file_count_before_manifest": len(files),
@@ -213,7 +236,7 @@ def test_bootstrap_is_minimal_code_placement_contract():
     text = INSTALLER.read_text(encoding="utf-8")
     helper = INTEGRITY_HELPER.read_text(encoding="utf-8")
 
-    assert len(text.splitlines()) <= 900
+    assert len(text.splitlines()) <= 1100
     assert ". $BootstrapIntegrityFunctions" in text
     assert "container-audit-bootstrap-integrity-v1" in helper
     assert "Write-BootstrapIntegrityRecord" in text
@@ -668,8 +691,10 @@ def test_portable_installer_fences_canonical_scheduled_writer_around_replacement
         < terminal_status_index
         < final_pass_index
     )
-    assert "Disable-ScheduledTask" in text
-    assert "Enable-ScheduledTask" in text
+    assert "Disable-ScheduledTask" not in text
+    assert "Enable-ScheduledTask" not in text
+    assert "DisableAndStop-ContainerScheduledTaskUnderWriterFence" in text
+    assert "Enable-ContainerScheduledTaskUnderWriterFence" in text
     assert "Start-ScheduledTask" not in text
     assert "CANONICAL_WRITER_STOP_PROOF_FAILED" in text
     assert "CANONICAL_WRITER_RESTORE_NEXT_TRIGGER_NOT_FUTURE" in text

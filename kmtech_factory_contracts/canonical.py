@@ -7,6 +7,8 @@ import json
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
+from writer_session_fence import writer_sink
+
 from .errors import FactoryContractError
 
 
@@ -144,6 +146,7 @@ def contract_set_sha256(contract_set: Mapping[str, Any]) -> str:
     return canonical_sha256(dict(contract_set))
 
 
+@writer_sink("factory_contract_set")
 def write_contract_set(
     bundle_dir: Path,
     *,

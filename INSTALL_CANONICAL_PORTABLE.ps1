@@ -14,6 +14,10 @@ $RunKey = 'Software\Microsoft\Windows\CurrentVersion\Run'
 $RunName = 'KMTech.ContainerAudit.Relay'
 $CanonicalWriterTaskName = 'direct-sync-relay-container-audit'
 $NoncanonicalQualificationTaskName = 'container-audit-isolated-qualification-authority'
+$Script:CanonicalWriterFenceSessionId = ''
+$Script:CanonicalWriterFenceAttemptId = ''
+$Script:CanonicalWriterFenceTransactionId = ''
+$Script:CanonicalWriterFenceDelegationToken = ''
 $testMode = $AllowNoncanonicalLayoutForTest -and
     [string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -ceq '1'
 if ($SkipSignatureValidationForTest -and -not $testMode) {
@@ -67,17 +71,86 @@ function Sha([string]$Path) {
     try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
     finally { $hash.Dispose(); $stream.Dispose() }
 }
-function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha256) {
+function Get-WriterContractSessionMutexName(
+    [string]$SessionId,
+    [string]$AttemptId,
+    [string]$OrchestratorSha256,
+    [string]$ReplacementTransactionId,
+    [string]$WriterContractSha256
+) {
+    $tuple = (@(
+        'container-audit-deployment-session-authority-v1',
+        $SessionId,
+        $AttemptId,
+        $OrchestratorSha256,
+        $ReplacementTransactionId,
+        $WriterContractSha256
+    ) | ForEach-Object { ([string]$_).Normalize([Text.NormalizationForm]::FormC) }) -join "`n"
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($tuple)
+        $digest = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $algorithm.Dispose() }
+    return 'Local\KMTech.ContainerAudit.DeploymentSession.' + $digest
+}
+function Assert-WriterSessionPublicContract(
+    [string]$Path,
+    [string]$ExpectedSha256,
+    [string]$ExpectedWriterInventorySha256
+) {
     if ((Get-Item -LiteralPath $Path -Force).Length -gt 65536) { throw 'Writer session public contract is oversized.' }
     if ((Sha $Path) -cne $ExpectedSha256) { throw 'Writer session public contract hash differs.' }
     try { $contract = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw 'Writer session public contract JSON is invalid.' }
+    $vectors = @($contract.all_writer_fence.verification_vectors)
+    $vectorsExact = ($vectors.Count -eq 2)
+    foreach ($vector in $vectors) {
+        if (
+            $vector.session_id -isnot [string] -or
+            $vector.attempt_id -isnot [string] -or
+            $vector.orchestrator_sha256 -isnot [string] -or
+            $vector.replacement_transaction_id -isnot [string] -or
+            $vector.writer_contract_sha256 -isnot [string] -or
+            $vector.expected_mutex_name -isnot [string] -or
+            [string]$vector.expected_mutex_name -cne (Get-WriterContractSessionMutexName `
+                ([string]$vector.session_id) `
+                ([string]$vector.attempt_id) `
+                ([string]$vector.orchestrator_sha256) `
+                ([string]$vector.replacement_transaction_id) `
+                ([string]$vector.writer_contract_sha256))
+        ) { $vectorsExact = $false }
+    }
     if (
         [string]$contract.schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$contract.app_id -cne 'container_audit' -or
         [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
         (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
         [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
+        [string]$contract.all_writer_fence.active_schema -cne 'container-audit-all-writer-fence-active-v1' -or
+        [string]$contract.all_writer_fence.release_schema -cne 'container-audit-all-writer-fence-release-v1' -or
+        [string]$contract.all_writer_fence.control_root -cne '%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\writer-session' -or
+        [string]$contract.all_writer_fence.active_filename -cne 'active.json' -or
+        [string]$contract.all_writer_fence.release_filename_pattern -cne 'release-{replacement_transaction_id}-{release_authorization_sha256}.json' -or
+        [string]$contract.all_writer_fence.admission_mutex_name -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1' -or
+        [string]$contract.all_writer_fence.noncanonical_mutex_derivation -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1.<first 16 lowercase hex characters of SHA-256 over the absolute control root after slash-to-backslash conversion, trailing-backslash removal, Unicode NFC, and ASCII A-Z to a-z mapping with every other code point unchanged, encoded as UTF-8 without BOM>' -or
+        [string]$contract.all_writer_fence.session_mutex_prefix -cne 'Local\KMTech.ContainerAudit.DeploymentSession.' -or
+        [string]$contract.all_writer_fence.session_tuple_version -cne 'container-audit-deployment-session-authority-v1' -or
+        (@($contract.all_writer_fence.session_tuple_fields) -join ',') -cne 'session_tuple_version,session_id,attempt_id,orchestrator_sha256,replacement_transaction_id,writer_contract_sha256' -or
+        [string]$contract.all_writer_fence.tuple_separator -cne 'LF (U+000A) between ordered fields; no trailing LF' -or
+        [string]$contract.all_writer_fence.tuple_encoding -cne 'UTF-8 without BOM' -or
+        [string]$contract.all_writer_fence.tuple_normalization -cne 'Unicode NFC applied to each field before joining' -or
+        [string]$contract.all_writer_fence.writer_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
+        [string]$contract.all_writer_fence.canonical_installer_delegation_source -cne 'writer_sink_sources from the exact pinned code-derived inventory' -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.scheduled_task_mutation_rule) -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.natural_trigger_phase_rule) -or
+        $ExpectedWriterInventorySha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]$contract.all_writer_fence.writer_inventory_sha256 -cne $ExpectedWriterInventorySha256 -or
+        (@($contract.all_writer_fence.active_statuses) -join ',') -cne 'PREPARING,PREPARED,RESTORING,RESTORE_FAILED,INSTALLING' -or
+        -not $vectorsExact -or
+        -not (Test-JsonTrue $contract.all_writer_fence.writer_admission_fail_closed) -or
+        -not (Test-JsonTrue $contract.all_writer_fence.unknown_or_unobservable_is_denied) -or
+        $contract.all_writer_fence.denial_mutates_state -isnot [bool] -or [bool]$contract.all_writer_fence.denial_mutates_state -or
         [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v3' -or
         [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
         [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
@@ -85,8 +158,34 @@ function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha2
         [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
         -not (Test-JsonTrue $contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore) -or
         -not (Test-JsonTrue $contract.security.active_session_authority_mutex_required) -or
+        -not (Test-JsonTrue $contract.security.all_writer_fence_required) -or
+        -not (Test-JsonTrue $contract.security.all_writer_sinks_require_admission) -or
         -not (Test-JsonTrue $contract.security.evidence_paths_outside_install_parent_required)
     ) { throw 'Writer session public contract semantics differ.' }
+}
+function Assert-WriterSinkInventory(
+    [string]$Path,
+    [string]$ExpectedFileSha256,
+    [string]$ExpectedContractSha256
+) {
+    if ((Get-Item -LiteralPath $Path -Force).Length -gt 1048576) { throw 'Writer sink inventory is oversized.' }
+    if ((Sha $Path) -cne $ExpectedFileSha256) { throw 'Writer sink inventory file hash differs.' }
+    try { $inventory = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'Writer sink inventory JSON is invalid.' }
+    if (
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v5' -or
+        [string]$inventory.inventory_sha256 -cne $ExpectedContractSha256 -or
+        $inventory.writer_sink_sources -isnot [Object[]] -or
+        @($inventory.writer_sink_sources).Count -le 0 -or
+        @($inventory.writer_sink_sources | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$_) }).Count -ne 0 -or
+        (@($inventory.writer_sink_sources | Sort-Object -Unique) -join "`n") -cne (@($inventory.writer_sink_sources) -join "`n") -or
+        @($inventory.uncovered_direct_mutation_functions).Count -ne 0 -or
+        @($inventory.caller_fence_reference_failures).Count -ne 0 -or
+        @($inventory.powershell_guard_failures).Count -ne 0 -or
+        @($inventory.known_route_coverage).Count -le 0 -or
+        @($inventory.known_route_coverage | Where-Object { -not (Test-JsonTrue $_.pass) }).Count -ne 0
+    ) { throw 'Writer sink inventory contract is not release-admissible.' }
+    return $inventory
 }
 function Arg([string]$Value) {
     if ($Value.Contains('"')) { throw 'A command path contains a quote.' }
@@ -108,8 +207,10 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         'INSTALL_CANONICAL_PORTABLE.ps1',
         'INSTALL_THIS_PC.ps1',
         'tools\bootstrap_integrity.ps1',
+        'tools\container_writer_fence.ps1',
         'tools\container_writer_session.ps1',
-        'tools\container_writer_session_contract.json'
+        'tools\container_writer_session_contract.json',
+        'tools\container_writer_sink_inventory.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
             throw "Portable tree is missing $relative."
@@ -126,8 +227,10 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$value.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$value.writer_fence_helper_path -cne 'tools/container_writer_fence.ps1' -or
         [string]$value.writer_session_adapter_path -cne 'tools/container_writer_session.ps1' -or
         [string]$value.writer_session_contract_path -cne 'tools/container_writer_session_contract.json' -or
+        [string]$value.writer_sink_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
         [string]$value.writer_session_contract_schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
@@ -138,8 +241,10 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         (Sha (Join-Path $Root 'INSTALL_CANONICAL_PORTABLE.ps1')) -cne ([string]$value.installer_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'INSTALL_THIS_PC.ps1')) -cne ([string]$value.helper_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'tools\bootstrap_integrity.ps1')) -cne ([string]$value.integrity_helper_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_fence.ps1')) -cne ([string]$value.writer_fence_helper_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'tools\container_writer_session.ps1')) -cne ([string]$value.writer_session_adapter_sha256).ToLowerInvariant() -or
-        (Sha (Join-Path $Root 'tools\container_writer_session_contract.json')) -cne ([string]$value.writer_session_contract_sha256).ToLowerInvariant()) {
+        (Sha (Join-Path $Root 'tools\container_writer_session_contract.json')) -cne ([string]$value.writer_session_contract_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_sink_inventory.json')) -cne ([string]$value.writer_sink_inventory_sha256).ToLowerInvariant()) {
         throw 'Portable manifest readback failed.'
     }
     $filesBeforeManifest = @(
@@ -160,7 +265,11 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
         [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
     ) { throw 'Portable tree metrics differ from the manifest.' }
-    Assert-WriterSessionPublicContract (Join-Path $Root 'tools\container_writer_session_contract.json') ([string]$value.writer_session_contract_sha256).ToLowerInvariant()
+    Assert-WriterSessionPublicContract `
+        (Join-Path $Root 'tools\container_writer_session_contract.json') `
+        ([string]$value.writer_session_contract_sha256).ToLowerInvariant() `
+        ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant()
+    [void](Assert-WriterSinkInventory (Join-Path $Root 'tools\container_writer_sink_inventory.json') ([string]$value.writer_sink_inventory_sha256).ToLowerInvariant() ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant())
     if (-not $UnsignedOk) {
         foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
             if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
@@ -177,8 +286,10 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         'runtime\pythonw.exe',
         'app\main.py',
         'launch-container-audit.cmd',
+        'tools\container_writer_fence.ps1',
         'tools\container_writer_session.ps1',
-        'tools\container_writer_session_contract.json'
+        'tools\container_writer_session_contract.json',
+        'tools\container_writer_sink_inventory.json'
     )) {
         if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
             throw "Installed portable tree is missing $relative."
@@ -195,8 +306,10 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$value.launcher -cne 'launch-container-audit.cmd' -or
+        [string]$value.writer_fence_helper_path -cne 'tools/container_writer_fence.ps1' -or
         [string]$value.writer_session_adapter_path -cne 'tools/container_writer_session.ps1' -or
         [string]$value.writer_session_contract_path -cne 'tools/container_writer_session_contract.json' -or
+        [string]$value.writer_sink_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
         [string]$value.writer_session_contract_schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$value.source_commit -cnotmatch '^[0-9a-f]{40}$' -or
         [string]$value.source_tree -cnotmatch '^[0-9a-f]{40}$' -or
@@ -204,8 +317,10 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         @($value.forbidden_dependency_paths).Count -ne 0 -or
         (Sha (Join-Path $Root 'runtime\pythonw.exe')) -cne ([string]$value.runtime_pythonw_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'launch-container-audit.cmd')) -cne ([string]$value.launcher_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_fence.ps1')) -cne ([string]$value.writer_fence_helper_sha256).ToLowerInvariant() -or
         (Sha (Join-Path $Root 'tools\container_writer_session.ps1')) -cne ([string]$value.writer_session_adapter_sha256).ToLowerInvariant() -or
-        (Sha (Join-Path $Root 'tools\container_writer_session_contract.json')) -cne ([string]$value.writer_session_contract_sha256).ToLowerInvariant()) {
+        (Sha (Join-Path $Root 'tools\container_writer_session_contract.json')) -cne ([string]$value.writer_session_contract_sha256).ToLowerInvariant() -or
+        (Sha (Join-Path $Root 'tools\container_writer_sink_inventory.json')) -cne ([string]$value.writer_sink_inventory_sha256).ToLowerInvariant()) {
         throw 'Installed portable manifest readback failed.'
     }
     $filesBeforeManifest = @(
@@ -223,7 +338,11 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
         [int64]$value.file_count_before_manifest -ne $filesBeforeManifest.Count -or
         [int64]$value.byte_count_before_manifest -ne $bytesBeforeManifest
     ) { throw 'Installed portable tree metrics differ from the manifest.' }
-    Assert-WriterSessionPublicContract (Join-Path $Root 'tools\container_writer_session_contract.json') ([string]$value.writer_session_contract_sha256).ToLowerInvariant()
+    Assert-WriterSessionPublicContract `
+        (Join-Path $Root 'tools\container_writer_session_contract.json') `
+        ([string]$value.writer_session_contract_sha256).ToLowerInvariant() `
+        ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant()
+    [void](Assert-WriterSinkInventory (Join-Path $Root 'tools\container_writer_sink_inventory.json') ([string]$value.writer_sink_inventory_sha256).ToLowerInvariant() ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant())
     if (-not $UnsignedOk) {
         foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
             if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
@@ -257,6 +376,149 @@ function Save([string]$Path, $Value) {
     $temp = "$Path.tmp.$PID"
     [IO.File]::WriteAllText($temp,($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
     Move-Item $temp $Path -Force
+}
+function New-CanonicalWriterFencePreparedReceipt(
+    [string]$Path,
+    [string]$SessionId,
+    [string]$AttemptId,
+    [string]$ReplacementTransactionId,
+    [string]$SessionStartedAtUtc,
+    [string]$OrchestratorSha256,
+    [string]$WriterContractSha256,
+    [string]$SourceManifestSha256
+) {
+    if (Test-Path -LiteralPath $Path) {
+        throw 'CANONICAL_WRITER_PREPARED_RECEIPT_ALREADY_EXISTS'
+    }
+    $payload = [ordered]@{
+        schema='container-audit-canonical-writer-prepared-v1'
+        status='PREPARED'
+        app_id='container_audit'
+        session_id=$SessionId
+        attempt_id=$AttemptId
+        replacement_transaction_id=$ReplacementTransactionId
+        session_started_at_utc=$SessionStartedAtUtc
+        orchestrator_sha256=$OrchestratorSha256
+        writer_contract_sha256=$WriterContractSha256
+        writer_inventory_sha256=$Script:ContainerWriterFenceInventorySha256
+        source_manifest_sha256=$SourceManifestSha256
+        created_at_utc=[DateTime]::UtcNow.ToString('o')
+        secret_values_recorded=$false
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
+    $json = ($payload | ConvertTo-Json -Depth 8) + "`n"
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
+    $stream = New-Object IO.FileStream($Path, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+    try {
+        $stream.Write($bytes, 0, $bytes.Length)
+        $stream.Flush($true)
+    }
+    finally { $stream.Dispose() }
+    try { $actual = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'CANONICAL_WRITER_PREPARED_RECEIPT_JSON_INVALID' }
+    if (
+        -not (Test-ExactPropertySet $actual @(
+            'schema','status','app_id','session_id','attempt_id',
+            'replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
+            'writer_contract_sha256','writer_inventory_sha256','source_manifest_sha256',
+            'created_at_utc','secret_values_recorded'
+        )) -or
+        [string]$actual.schema -cne 'container-audit-canonical-writer-prepared-v1' -or
+        [string]$actual.status -cne 'PREPARED' -or
+        [string]$actual.app_id -cne 'container_audit' -or
+        [string]$actual.session_id -cne $SessionId -or
+        [string]$actual.attempt_id -cne $AttemptId -or
+        [string]$actual.replacement_transaction_id -cne $ReplacementTransactionId -or
+        [string]$actual.session_started_at_utc -cne $SessionStartedAtUtc -or
+        [string]$actual.orchestrator_sha256 -cne $OrchestratorSha256 -or
+        [string]$actual.writer_contract_sha256 -cne $WriterContractSha256 -or
+        [string]$actual.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        [string]$actual.source_manifest_sha256 -cne $SourceManifestSha256 -or
+        $actual.secret_values_recorded -isnot [bool] -or [bool]$actual.secret_values_recorded
+    ) { throw 'CANONICAL_WRITER_PREPARED_RECEIPT_READBACK_FAILED' }
+    return [pscustomobject][ordered]@{
+        path=[IO.Path]::GetFullPath($Path)
+        sha256=Sha $Path
+    }
+}
+function New-CanonicalWriterFenceReleaseAuthorization(
+    [string]$Path,
+    [string]$Phase,
+    [string]$AuditPath,
+    $EnabledBaseline = $null
+) {
+    if ($Phase -cnotin @('PRODUCT_NATURAL_TRIGGER','PRODUCT_COMPLETE','ROLLBACK_NATURAL_TRIGGER','ROLLBACK_COMPLETE')) {
+        throw 'CANONICAL_WRITER_RELEASE_PHASE_INVALID'
+    }
+    if (Test-Path -LiteralPath $Path) { throw 'CANONICAL_WRITER_RELEASE_AUTHORIZATION_ALREADY_EXISTS' }
+    $auditFull = [IO.Path]::GetFullPath($AuditPath)
+    if (-not (Test-Path -LiteralPath $auditFull -PathType Leaf)) {
+        throw 'CANONICAL_WRITER_RELEASE_AUDIT_ABSENT'
+    }
+    $naturalTrigger = $Phase -cin @('PRODUCT_NATURAL_TRIGGER','ROLLBACK_NATURAL_TRIGGER')
+    if ($naturalTrigger -and $null -eq $EnabledBaseline) {
+        throw 'CANONICAL_WRITER_RELEASE_BASELINE_ABSENT'
+    }
+    $readback = if ($naturalTrigger) { $EnabledBaseline.readback } else { $null }
+    $payload = [ordered]@{
+        schema = 'container-audit-writer-release-authorization-v1'
+        status = 'AUTHORIZED'
+        phase = $Phase
+        app_id = 'container_audit'
+        session_id = $Script:CanonicalWriterFenceSessionId
+        attempt_id = $Script:CanonicalWriterFenceAttemptId
+        replacement_transaction_id = $Script:CanonicalWriterFenceTransactionId
+        writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
+        task_name = if ($naturalTrigger) { [string]$readback.task_name } else { '' }
+        task_path = if ($naturalTrigger) { [string]$readback.task_path } else { '' }
+        binding_sha256 = if ($naturalTrigger) { [string]$readback.binding_sha256 } else { '' }
+        future_natural_trigger_utc = if ($naturalTrigger) { [string]$EnabledBaseline.future_natural_trigger_utc } else { '' }
+        install_audit_path = $auditFull
+        install_audit_sha256 = Sha $auditFull
+        created_at_utc = [DateTime]::UtcNow.ToString('o')
+        secret_values_recorded = $false
+    }
+    if ($naturalTrigger -and (
+        [string]::IsNullOrWhiteSpace([string]$payload.task_name) -or
+        [string]::IsNullOrWhiteSpace([string]$payload.task_path) -or
+        [string]$payload.binding_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        [string]::IsNullOrWhiteSpace([string]$payload.future_natural_trigger_utc)
+    )) { throw 'CANONICAL_WRITER_RELEASE_BASELINE_INVALID' }
+    Save $Path $payload
+    $expectedFields = @(
+        'schema','status','phase','app_id','session_id','attempt_id',
+        'replacement_transaction_id','writer_inventory_sha256','task_name','task_path',
+        'binding_sha256','future_natural_trigger_utc','install_audit_path',
+        'install_audit_sha256','created_at_utc','secret_values_recorded'
+    )
+    try { $actual = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'CANONICAL_WRITER_RELEASE_AUTHORIZATION_JSON_INVALID' }
+    if (
+        -not (Test-ExactPropertySet $actual $expectedFields) -or
+        -not (Test-ExactStringProperties $actual @($expectedFields | Where-Object { $_ -cne 'secret_values_recorded' })) -or
+        $actual.secret_values_recorded -isnot [bool] -or [bool]$actual.secret_values_recorded -or
+        [string]$actual.schema -cne 'container-audit-writer-release-authorization-v1' -or
+        [string]$actual.status -cne 'AUTHORIZED' -or
+        [string]$actual.phase -cne $Phase -or
+        [string]$actual.app_id -cne 'container_audit' -or
+        [string]$actual.session_id -cne $Script:CanonicalWriterFenceSessionId -or
+        [string]$actual.attempt_id -cne $Script:CanonicalWriterFenceAttemptId -or
+        [string]$actual.replacement_transaction_id -cne $Script:CanonicalWriterFenceTransactionId -or
+        [string]$actual.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        [string]$actual.install_audit_path -cne $auditFull -or
+        [string]$actual.install_audit_sha256 -cne (Sha $auditFull)
+    ) { throw 'CANONICAL_WRITER_RELEASE_AUTHORIZATION_READBACK_FAILED' }
+    return [ordered]@{ path=[IO.Path]::GetFullPath($Path); sha256=Sha $Path }
+}
+function Set-CanonicalWriterFenceReleaseAuthorization($Authorization) {
+    [void](Set-ContainerWriterFencePrepared `
+        -SessionId $Script:CanonicalWriterFenceSessionId `
+        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+        -PreparedReceiptPath ([string]$Authorization.path) `
+        -PreparedReceiptSha256 ([string]$Authorization.sha256) `
+        -Status 'PREPARED' `
+        -AuthorityLease $canonicalWriterFenceAuthority)
 }
 function Relays {
     return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
@@ -679,11 +941,14 @@ function Get-CanonicalWriterPreimageForQuiesce([string]$InstallRootValue) {
     return $snapshot
 }
 function Disable-CanonicalWriter([string]$InstallRootValue, $Before) {
-    Disable-ScheduledTask -TaskName ([string]$Before.task_name) -TaskPath ([string]$Before.task_path) -ErrorAction Stop | Out-Null
-    $task = Get-ScheduledTask -TaskName ([string]$Before.task_name) -TaskPath ([string]$Before.task_path) -ErrorAction Stop
-    if ([string]$task.State -ceq 'Running') {
-        Stop-ScheduledTask -TaskName ([string]$Before.task_name) -TaskPath ([string]$Before.task_path) -ErrorAction Stop
-    }
+    $task = DisableAndStop-ContainerScheduledTaskUnderWriterFence `
+        -SessionId $Script:CanonicalWriterFenceSessionId `
+        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+        -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+        -AuthorityLease $canonicalWriterFenceAuthority `
+        -TaskName ([string]$Before.task_name) `
+        -TaskPath ([string]$Before.task_path)
     $deadline = (Get-Date).ToUniversalTime().AddSeconds(30)
     do {
         Start-Sleep -Milliseconds 250
@@ -734,7 +999,14 @@ function Confirm-CanonicalWriterStopped([string]$InstallRootValue, $Before, $Dis
     }
 }
 function Enable-CanonicalWriter([string]$InstallRootValue, $Before) {
-    Enable-ScheduledTask -TaskName ([string]$Before.task_name) -TaskPath ([string]$Before.task_path) -ErrorAction Stop | Out-Null
+    [void](Enable-ContainerScheduledTaskUnderWriterFence `
+        -SessionId $Script:CanonicalWriterFenceSessionId `
+        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+        -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+        -AuthorityLease $canonicalWriterFenceAuthority `
+        -TaskName ([string]$Before.task_name) `
+        -TaskPath ([string]$Before.task_path))
     $deadline = (Get-Date).ToUniversalTime().AddSeconds(20)
     do {
         Start-Sleep -Milliseconds 250
@@ -807,6 +1079,15 @@ if (-not (Same $PSCommandPath (Join-Path $source 'INSTALL_CANONICAL_PORTABLE.ps1
     throw 'Top-level installer must execute from the admitted SourceRoot.'
 }
 $sourceManifest = Manifest $source $SkipSignatureValidationForTest
+$sourceWriterInventory = Assert-WriterSinkInventory `
+    (Join-Path $source 'tools\container_writer_sink_inventory.json') `
+    ([string]$sourceManifest.writer_sink_inventory_sha256).ToLowerInvariant() `
+    ([string]$sourceManifest.writer_sink_inventory_contract_sha256).ToLowerInvariant()
+$writerFenceHelperPath = Join-Path $source 'tools\container_writer_fence.ps1'
+if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
+    throw 'Portable tree is missing the all-writer fence helper.'
+}
+. $writerFenceHelperPath
 $sourceManifestSha256 = Sha (Join-Path $source 'portable-manifest.json')
 $sourceHelperSha256 = Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
@@ -831,11 +1112,76 @@ $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $lad 'KMTech\ContainerAudit\install-audit'
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
+$canonicalWriterFencePreparedPath = Join-Path $auditRoot "canonical-portable-$runId-writer-prepared.json"
 $elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"
 $replacementTransactionId = [Guid]::NewGuid().ToString('N')
 $replacementReceiptPath = Join-Path $auditRoot "canonical-portable-$runId-replacement.json"
 $replacementRestoreEvidencePath = Join-Path $auditRoot "canonical-portable-$runId-code-restore.json"
+$productNaturalTriggerAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-product-natural-trigger-release.json"
+$productCompleteAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-product-complete-release.json"
+$rollbackNaturalTriggerAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-rollback-natural-trigger-release.json"
+$rollbackCompleteAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-rollback-complete-release.json"
 $evidenceFull = if ($EvidencePath) { Full $EvidencePath 'EvidencePath' } else { '' }
+$Script:CanonicalWriterFenceSessionId = [Guid]::NewGuid().ToString('N')
+$Script:CanonicalWriterFenceAttemptId = [Guid]::NewGuid().ToString('N')
+$Script:CanonicalWriterFenceTransactionId = $replacementTransactionId
+$canonicalWriterFenceStartedAtUtc = [DateTime]::UtcNow.ToString('o')
+$canonicalWriterFenceOrchestratorSha256 = Sha $PSCommandPath
+$canonicalWriterFenceContractSha256 = ([string]$sourceManifest.writer_session_contract_sha256).ToLowerInvariant()
+$Script:CanonicalWriterFenceDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
+$canonicalWriterFenceEnvironmentNames = @(
+    'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID'
+)
+$canonicalWriterFenceEnvironmentBefore = @{}
+foreach ($name in $canonicalWriterFenceEnvironmentNames) {
+    $canonicalWriterFenceEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+$canonicalWriterFenceAuthority = $null
+$canonicalWriterFenceActive = $false
+$canonicalWriterFenceLastReleaseAuthorizationPath = ''
+$canonicalWriterFenceLastReleaseAuthorizationSha256 = ''
+$canonicalWriterFencePreparedReceipt = $null
+$enteredPlacementTry = $false
+$canonicalWriterFenceDelegatedSources = [Object[]]@($sourceWriterInventory.writer_sink_sources)
+try {
+$canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
+    -SessionId $Script:CanonicalWriterFenceSessionId `
+    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+    -WriterContractSha256 $canonicalWriterFenceContractSha256
+$canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
+    -Path $canonicalWriterFencePreparedPath `
+    -SessionId $Script:CanonicalWriterFenceSessionId `
+    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+    -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+    -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+    -SourceManifestSha256 $sourceManifestSha256
+[void](Start-ContainerWriterFence `
+    -Status 'INSTALLING' `
+    -OwnerKind 'canonical_installer' `
+    -SessionId $Script:CanonicalWriterFenceSessionId `
+    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+    -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+    -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+    -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) `
+    -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+    -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+    -DelegatedSources $canonicalWriterFenceDelegatedSources `
+    -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
+    -AuthorityLease $canonicalWriterFenceAuthority)
+$canonicalWriterFenceActive = $true
+[Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', $Script:CanonicalWriterFenceDelegationToken, 'Process')
+[Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $Script:CanonicalWriterFenceSessionId, 'Process')
+[Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID', $Script:CanonicalWriterFenceAttemptId, 'Process')
+[Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
 $before = Snapshot
 $old = @(Relays)
 $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
@@ -901,7 +1247,7 @@ $runtimeQuiescedForReplacement = $false
 $codeRestoreNeeded = $false
 $replacementReceipt = $null
 $replacementReceiptSha256 = ''
-try {
+$enteredPlacementTry = $true
     if ($writerRestoreNeeded) {
         $writerDisabled = Disable-CanonicalWriter $install $writerBefore
         $audit.scheduled_writer.disable_readback = $writerDisabled
@@ -1054,8 +1400,31 @@ try {
     if ($writerRestoreNeeded) {
         $writerEnabled = Enable-CanonicalWriter $install $writerBefore
         $audit.scheduled_writer.restore_readback = $writerEnabled
+        $audit.status='WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
+        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            -Path $productNaturalTriggerAuthorizationPath `
+            -Phase 'PRODUCT_NATURAL_TRIGGER' `
+            -AuditPath $auditPath `
+            -EnabledBaseline $writerEnabled
+        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        [void](Clear-ContainerWriterFenceDelegation `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        [void](Stop-ContainerWriterFence `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
+            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        $canonicalWriterFenceActive = $false
         $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
         $audit.scheduled_writer.natural_trigger_proof = $writerRunning
         $audit.rollback.scheduled_writer_restored=$true
@@ -1066,6 +1435,29 @@ try {
     $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
+    if ($canonicalWriterFenceActive) {
+        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            -Path $productCompleteAuthorizationPath `
+            -Phase 'PRODUCT_COMPLETE' `
+            -AuditPath $auditPath
+        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        [void](Clear-ContainerWriterFenceDelegation `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        [void](Stop-ContainerWriterFence `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
+            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        $canonicalWriterFenceActive = $false
+    }
     "install_status=$terminalStatus"
     "install_root=$install"
     "code_placement_status=$placement"
@@ -1084,6 +1476,62 @@ try {
 }
 catch {
     $original=$_
+    if (-not $enteredPlacementTry) {
+        $earlyFenceMatches = $false
+        try {
+            $earlyFence = Read-ContainerWriterFence -AllowAbsent
+            $earlyFenceMatches = (
+                $null -ne $earlyFence -and
+                [string]$earlyFence.session_id -ceq $Script:CanonicalWriterFenceSessionId -and
+                [string]$earlyFence.attempt_id -ceq $Script:CanonicalWriterFenceAttemptId -and
+                [string]$earlyFence.replacement_transaction_id -ceq $Script:CanonicalWriterFenceTransactionId
+            )
+        }
+        catch { $earlyFenceMatches = $canonicalWriterFenceActive }
+        if ($earlyFenceMatches) {
+            try {
+                [void](Abort-ContainerWriterFence `
+                    -SessionId $Script:CanonicalWriterFenceSessionId `
+                    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                    -AuthorityLease $canonicalWriterFenceAuthority)
+                $canonicalWriterFenceActive = $false
+            }
+            catch { throw "CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)" }
+        }
+        throw $original
+    }
+    if (-not $canonicalWriterFenceActive) {
+        try {
+            $refenceStatus = 'INSTALLING'
+            $refencePreparedPath = [string]$canonicalWriterFencePreparedReceipt.path
+            $refencePreparedSha256 = [string]$canonicalWriterFencePreparedReceipt.sha256
+            if (-not [string]::IsNullOrWhiteSpace($canonicalWriterFenceLastReleaseAuthorizationPath)) {
+                $refenceStatus = 'RESTORE_FAILED'
+                $refencePreparedPath = $canonicalWriterFenceLastReleaseAuthorizationPath
+                $refencePreparedSha256 = $canonicalWriterFenceLastReleaseAuthorizationSha256
+            }
+            [void](Start-ContainerWriterFence `
+                -Status $refenceStatus `
+                -OwnerKind 'canonical_installer' `
+                -SessionId $Script:CanonicalWriterFenceSessionId `
+                -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+                -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+                -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+                -PreparedReceiptPath $refencePreparedPath `
+                -PreparedReceiptSha256 $refencePreparedSha256 `
+                -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+                -DelegatedSources $canonicalWriterFenceDelegatedSources `
+                -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
+                -AuthorityLease $canonicalWriterFenceAuthority)
+            $canonicalWriterFenceActive = $true
+        }
+        catch {
+            throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
+        }
+    }
     $autostartRollbackFailure=''
     $codeRollbackFailure=''
     if ($codeRestoreNeeded) {
@@ -1168,20 +1616,68 @@ catch {
         try {
             $writerEnabled = Enable-CanonicalWriter $install $writerBefore
             $audit.scheduled_writer.restore_readback = $writerEnabled
+            $audit.status='ROLLBACK_WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
+            $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+                -Path $rollbackNaturalTriggerAuthorizationPath `
+                -Phase 'ROLLBACK_NATURAL_TRIGGER' `
+                -AuditPath $auditPath `
+                -EnabledBaseline $writerEnabled
+            $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+            $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+            Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+            [void](Clear-ContainerWriterFenceDelegation `
+                -SessionId $Script:CanonicalWriterFenceSessionId `
+                -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+                -AuthorityLease $canonicalWriterFenceAuthority)
+            [void](Stop-ContainerWriterFence `
+                -SessionId $Script:CanonicalWriterFenceSessionId `
+                -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
+                -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
+                -AuthorityLease $canonicalWriterFenceAuthority)
+            $canonicalWriterFenceActive = $false
             $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
             $audit.scheduled_writer.natural_trigger_proof = $writerRunning
             $audit.rollback.scheduled_writer_restored=$true
             $writerRestoreNeeded=$false
         }
         catch {
+            $restoreFailure = $_
+            if (-not $canonicalWriterFenceActive) {
+                try {
+                    [void](Start-ContainerWriterFence `
+                        -Status 'RESTORE_FAILED' `
+                        -OwnerKind 'canonical_installer' `
+                        -SessionId $Script:CanonicalWriterFenceSessionId `
+                        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+                        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+                        -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+                        -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+                        -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+                        -PreparedReceiptPath $canonicalWriterFenceLastReleaseAuthorizationPath `
+                        -PreparedReceiptSha256 $canonicalWriterFenceLastReleaseAuthorizationSha256 `
+                        -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+                        -DelegatedSources $canonicalWriterFenceDelegatedSources `
+                        -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
+                        -AuthorityLease $canonicalWriterFenceAuthority)
+                    $canonicalWriterFenceActive = $true
+                    [void](Disable-CanonicalWriter $install $writerBefore)
+                }
+                catch {
+                    throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
+                }
+            }
             $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
             $audit.scheduled_writer.restore_failure_code='CANONICAL_WRITER_RESTORE_FAILED'
             $audit.failure_type=$original.Exception.GetType().Name
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
-            throw "CANONICAL_WRITER_RESTORE_FAILED: $($_.Exception.GetType().Name)"
+            throw "CANONICAL_WRITER_RESTORE_FAILED: $($restoreFailure.Exception.GetType().Name)"
         }
     }
     if (-not [string]::IsNullOrWhiteSpace($autostartRollbackFailure)) {
@@ -1194,5 +1690,36 @@ catch {
     $audit.failure_type=$original.Exception.GetType().Name
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
+    if ($canonicalWriterFenceActive) {
+        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            -Path $rollbackCompleteAuthorizationPath `
+            -Phase 'ROLLBACK_COMPLETE' `
+            -AuditPath $auditPath
+        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        [void](Clear-ContainerWriterFenceDelegation `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        [void](Stop-ContainerWriterFence `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
+            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        $canonicalWriterFenceActive = $false
+    }
     throw $original
+}
+finally {
+    foreach ($name in $canonicalWriterFenceEnvironmentNames) {
+        [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
+    }
+    if ($null -ne $canonicalWriterFenceAuthority) {
+        Exit-ContainerWriterSessionAuthority $canonicalWriterFenceAuthority
+    }
 }

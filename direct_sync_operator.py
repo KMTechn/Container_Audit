@@ -9,6 +9,8 @@ import os
 import re
 import sqlite3
 import uuid
+
+from writer_session_fence import writer_sink
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -32,10 +34,27 @@ PAUSE_SCHEMA_VERSION = "direct-sync-relay-operator-pause-v1"
 AUDIT_SCHEMA_VERSION = "direct-sync-relay-operator-audit-v1"
 OPERATOR_TOOL_VERSION = "container-audit-local-operator-v1"
 RETRYABLE_DEAD_STATUSES = frozenset({RELAY_STATUS_FAILED_PERMANENT})
+COMMITTED_REVIEW_RESOLUTIONS = frozenset(
+    {
+        "historical_local_only",
+        "historical_superseded",
+        "server_replayed",
+    }
+)
+HISTORICAL_LOCAL_ONLY_EVENT_NAMES = frozenset({"RANDOM_TEST_SESSION_START"})
 SHA256_RE = re.compile(r"^[A-Fa-f0-9]{64}$")
+EVENT_IDENTITY_SUFFIX_RE = re.compile(r"^:[1-9][0-9]*:[0-9]+$")
 REASON_REDACTED_RE = re.compile(r"^sha256:[A-Fa-f0-9]{12}$")
 DEAD_LETTER_STATUSES = (RELAY_STATUS_OPERATOR_REVIEW, RELAY_STATUS_FAILED_PERMANENT)
 LEGACY_SOURCE_FILE_KEY_PREFIX = "source-file:"
+RETRY_RUNTIME_METADATA_FIELDS = (
+    "runtime_instance_id",
+    "runtime_public_jwk",
+    "runtime_fence",
+    "runtime_request_token",
+    "runtime_request_sequence",
+    "runtime_request_token_sha256",
+)
 RUNTIME_SENSITIVE_KEY_RE = re.compile(
     r"(?i)(authorization|bearer|credential|hmac|raw_payload|receipt_json|secret|signature|source_file_bytes|source_file_text|token)"
 )
@@ -45,6 +64,7 @@ SENSITIVE_ASSIGNMENT_RE = re.compile(
 )
 
 
+@writer_sink("operator_evidence")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -57,6 +77,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
     os.replace(temp_path, target)
 
 
+@writer_sink("operator_evidence")
 def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +224,191 @@ def _decode_receipt_json(raw_value: Any) -> tuple[dict[str, Any], bool]:
     return (payload, True) if isinstance(payload, dict) else ({}, False)
 
 
+def _manifest_denial_semantics_valid(row: Mapping[str, Any]) -> bool:
+    codes = row.get("codes")
+    return (
+        row.get("reason") == "MANIFEST_EVENT_VALIDATION_FAILED"
+        and row.get("validation_status") == "DENY"
+        and isinstance(codes, list)
+        and "DISPATCH_KEY_NOT_IN_MANIFEST" in codes
+    )
+
+
+def _committed_review_semantics_valid(
+    quarantine_rows: list[Any],
+    *,
+    resolution: str,
+    server_source_file_id: str,
+) -> bool:
+    """Bind an operator disposition to complete, exact quarantine semantics.
+
+    The evidence digest is an audit preimage, not a server signature.  These
+    checks make accidental or shape-only dispositions fail closed by requiring
+    every quarantined identity and its resolution-specific proof to agree.
+    """
+
+    seen_ids: set[int] = set()
+    seen_identities: set[str] = set()
+    seen_resolution_event_ids: set[int] = set()
+    for row in quarantine_rows:
+        if not isinstance(row, dict):
+            return False
+        try:
+            quarantine_id = int(row.get("id"))
+        except (TypeError, ValueError):
+            return False
+        identity = str(row.get("event_identity") or "")
+        identity_suffix = identity.removeprefix(server_source_file_id)
+        event_name = str(row.get("raw_event_name") or "")
+        if (
+            quarantine_id <= 0
+            or quarantine_id in seen_ids
+            or identity in seen_identities
+            or not EVENT_IDENTITY_SUFFIX_RE.fullmatch(identity_suffix)
+            or not event_name
+            or not str(row.get("observed_at") or "")
+        ):
+            return False
+        seen_ids.add(quarantine_id)
+        seen_identities.add(identity)
+
+        is_local_only = row.get("local_only_under_commit_85ae9ed") is True
+        if is_local_only:
+            if (
+                event_name not in HISTORICAL_LOCAL_ONLY_EVENT_NAMES
+                or not _manifest_denial_semantics_valid(row)
+                or row.get("existing_event") not in (None, {})
+                or row.get("resolved_common_event") not in (None, {})
+            ):
+                return False
+            if resolution not in {"historical_local_only", "historical_superseded"}:
+                return False
+            continue
+
+        if resolution == "server_replayed":
+            resolved = row.get("resolved_common_event")
+            resolved_id = _safe_int(resolved.get("id")) if isinstance(resolved, dict) else 0
+            if (
+                not _manifest_denial_semantics_valid(row)
+                or not isinstance(resolved, dict)
+                or resolved_id <= 0
+                or resolved_id in seen_resolution_event_ids
+                or resolved.get("event_identity") != identity
+                or resolved.get("raw_event_name") != event_name
+                or resolved.get("projection_status") not in {"PROJECTED", "NOT_PROJECTED"}
+                or not str(resolved.get("event_projection_class") or "")
+            ):
+                return False
+            if (
+                resolved.get("projection_status") == "NOT_PROJECTED"
+                and not str(resolved.get("raw_only_reason_code") or "")
+            ):
+                return False
+            seen_resolution_event_ids.add(resolved_id)
+            continue
+
+        if resolution == "historical_superseded":
+            existing = row.get("existing_event")
+            existing_identity = str(row.get("existing_event_identity") or "")
+            existing_id = _safe_int(existing.get("id")) if isinstance(existing, dict) else 0
+            if (
+                row.get("reason") != "LEGACY_REPLAY_CONFLICT"
+                or not SHA256_RE.fullmatch(str(row.get("legacy_business_fingerprint") or ""))
+                or not isinstance(existing, dict)
+                or existing_id <= 0
+                or existing_id in seen_resolution_event_ids
+                or existing_identity != str(existing.get("event_identity") or "")
+                or existing_identity == identity
+                or not EVENT_IDENTITY_SUFFIX_RE.fullmatch(
+                    existing_identity.removeprefix(server_source_file_id)
+                )
+                or existing.get("raw_event_name") != event_name
+                or not str(existing.get("actor_id") or "")
+                or not str(existing.get("event_ts") or "")
+                or not SHA256_RE.fullmatch(str(existing.get("payload_hash") or ""))
+                or not SHA256_RE.fullmatch(str(existing.get("row_hash") or ""))
+            ):
+                return False
+            seen_resolution_event_ids.add(existing_id)
+            continue
+
+        return False
+    return bool(quarantine_rows)
+
+
+def _load_committed_review_evidence(
+    evidence_path: str | os.PathLike[str],
+    *,
+    expected_sha256: str,
+    relay_id: str,
+    request_id: str,
+    server_source_file_id: str,
+    relative_path: str,
+    content_sha256: str,
+    byte_length: int,
+    resolution: str,
+    expected_totals: Mapping[str, int],
+) -> tuple[dict[str, Any], str]:
+    candidate = Path(_require_text(str(evidence_path or ""), field_name="evidence_path", max_length=4096))
+    if not candidate.is_absolute():
+        return {}, "operator_review_evidence_path_not_absolute"
+    if candidate.is_symlink() or not candidate.is_file():
+        return {}, "operator_review_evidence_file_invalid"
+    try:
+        if candidate.stat().st_size > 1024 * 1024:
+            return {}, "operator_review_evidence_file_too_large"
+        evidence_bytes = candidate.read_bytes()
+        if len(evidence_bytes) > 1024 * 1024:
+            return {}, "operator_review_evidence_file_too_large"
+        actual_sha256 = hashlib.sha256(evidence_bytes).hexdigest()
+        if actual_sha256 != expected_sha256:
+            return {}, "operator_review_evidence_sha256_mismatch"
+        payload = json.loads(evidence_bytes.decode("utf-8-sig"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {}, "operator_review_evidence_file_unreadable"
+    if not isinstance(payload, dict) or payload.get("schema_version") != (
+        "container-relay-terminal-reconciliation-evidence-v1"
+    ):
+        return {}, "operator_review_evidence_schema_invalid"
+    cases = payload.get("cases")
+    if not isinstance(cases, list):
+        return {}, "operator_review_evidence_cases_invalid"
+    matches = [case for case in cases if isinstance(case, dict) and case.get("relay_id") == relay_id]
+    if len(matches) != 1:
+        return {}, "operator_review_evidence_relay_binding_invalid"
+    case = matches[0]
+    bindings = {
+        "request_id": request_id,
+        "server_source_file_id": server_source_file_id,
+        "relative_path": relative_path,
+        "content_sha256": content_sha256,
+        "byte_length": byte_length,
+    }
+    if any(case.get(field) != expected for field, expected in bindings.items()):
+        return {}, "operator_review_evidence_identity_mismatch"
+    totals = case.get("totals")
+    if not isinstance(totals, dict) or any(
+        totals.get(field) != expected for field, expected in expected_totals.items()
+    ):
+        return {}, "operator_review_evidence_totals_mismatch"
+    quarantine_rows = case.get("quarantine_rows")
+    if not isinstance(quarantine_rows, list) or len(quarantine_rows) != expected_totals["quarantined"]:
+        return {}, "operator_review_evidence_quarantine_cardinality_mismatch"
+    proof_ok = _committed_review_semantics_valid(
+        quarantine_rows,
+        resolution=resolution,
+        server_source_file_id=server_source_file_id,
+    )
+    if not proof_ok:
+        return {}, "operator_review_evidence_resolution_proof_invalid"
+    return {
+        "path": str(candidate.resolve()),
+        "sha256": actual_sha256,
+        "schema_version": str(payload["schema_version"]),
+        "generated_at": str(payload.get("generated_at") or ""),
+    }, ""
+
+
 def _sqlite_error_message(exc: sqlite3.Error) -> str:
     return f"relay queue database error: {exc.__class__.__name__}"
 
@@ -240,6 +446,7 @@ def _with_operator_audit_status(
     return payload
 
 
+@writer_sink("operator_pause")
 def pause_relay(
     *,
     pause_path: str | os.PathLike[str],
@@ -286,6 +493,7 @@ def pause_relay(
     return _with_operator_audit_status(audit_log_path, action="pause", report=report)
 
 
+@writer_sink("operator_resume")
 def resume_relay(
     *,
     pause_path: str | os.PathLike[str],
@@ -479,6 +687,7 @@ def operator_status(
     return report
 
 
+@writer_sink("operator_spool_restore")
 def restore_relay_spool_from_server(
     *,
     db_path: str | os.PathLike[str],
@@ -624,6 +833,7 @@ def restore_relay_spool_from_server(
     return _with_operator_audit_status(audit_log_path, action="restore-spool", report=report)
 
 
+@writer_sink("operator_dead_retry")
 def retry_dead_relay_batch(
     *,
     db_path: str | os.PathLike[str],
@@ -804,6 +1014,51 @@ def retry_dead_relay_batch(
         legacy_key_repair = _repair_legacy_idempotency_key_for_retry(row)
         repaired_metadata_json = str(legacy_key_repair.pop("metadata_json", "") or "")
         metadata_json_value = repaired_metadata_json if legacy_key_repair.get("applied") else str(row["metadata_json"] or "")
+        try:
+            retry_metadata = json.loads(metadata_json_value)
+        except json.JSONDecodeError:
+            conn.rollback()
+            report = {
+                "status": "BLOCKED",
+                "operation": "retry-dead",
+                "relay_id": relay,
+                "operator_id": operator,
+                "tool_version": OPERATOR_TOOL_VERSION,
+                **reason_fields,
+                "previous_status": previous_status,
+                "error_code": "relay_metadata_invalid",
+            }
+            return _with_operator_audit_status(
+                audit_log_path,
+                action="retry-dead-blocked",
+                report=report,
+            )
+        if not isinstance(retry_metadata, dict):
+            conn.rollback()
+            report = {
+                "status": "BLOCKED",
+                "operation": "retry-dead",
+                "relay_id": relay,
+                "operator_id": operator,
+                "tool_version": OPERATOR_TOOL_VERSION,
+                **reason_fields,
+                "previous_status": previous_status,
+                "error_code": "relay_metadata_invalid",
+            }
+            return _with_operator_audit_status(
+                audit_log_path,
+                action="retry-dead-blocked",
+                report=report,
+            )
+        reset_runtime_fields = sorted(
+            field_name
+            for field_name in RETRY_RUNTIME_METADATA_FIELDS
+            if field_name in retry_metadata
+        )
+        for field_name in reset_runtime_fields:
+            retry_metadata.pop(field_name, None)
+        if reset_runtime_fields:
+            metadata_json_value = canonical_json(retry_metadata)
         cursor = conn.execute(
             """
             UPDATE direct_sync_relay_batches
@@ -874,9 +1129,494 @@ def retry_dead_relay_batch(
         "byte_length": expected_bytes,
         "spool_file_name": spool_path.name,
         "legacy_idempotency_key_repair": legacy_key_repair,
+        "reset_runtime_metadata_fields": reset_runtime_fields,
         "queue": read_relay_queue_status_read_only(db_path),
     }
     return _with_operator_audit_status(audit_log_path, action="retry-dead", report=report)
+
+
+@writer_sink("operator_review_resolution")
+def resolve_committed_operator_review(
+    *,
+    db_path: str | os.PathLike[str],
+    relay_id: str,
+    operator_id: str,
+    reason: str,
+    resolution: str,
+    evidence_path: str | os.PathLike[str],
+    evidence_sha256: str,
+    expected_request_id: str,
+    expected_server_source_file_id: str,
+    expected_relative_path: str,
+    expected_byte_length: int,
+    expected_inserted_count: int,
+    expected_replayed_count: int,
+    expected_error_count: int,
+    expected_quarantined_count: int,
+    expected_content_sha256: str,
+    audit_log_path: str | os.PathLike[str] = "",
+) -> dict[str, Any]:
+    """Resolve a committed review without retrying or rewriting its receipt.
+
+    The original receipt remains the immutable server result.  The local ACK is
+    permitted only after an operator supplies exact receipt/file expectations
+    and a digest for the separately retained reconciliation evidence.
+    """
+
+    relay = _require_text(relay_id, field_name="relay_id", max_length=128)
+    operator = _require_text(operator_id, field_name="operator_id", max_length=128)
+    reason_text = _require_text(reason, field_name="reason")
+    resolution_text = _require_text(resolution, field_name="resolution", max_length=64)
+    request_id = _require_text(expected_request_id, field_name="expected_request_id", max_length=128)
+    server_source_file_id = _require_text(
+        expected_server_source_file_id,
+        field_name="expected_server_source_file_id",
+        max_length=1024,
+    )
+    relative_path = _require_text(expected_relative_path, field_name="expected_relative_path", max_length=1024)
+    evidence_hash = _require_text(evidence_sha256, field_name="evidence_sha256", max_length=64).lower()
+    content_hash = _require_text(
+        expected_content_sha256,
+        field_name="expected_content_sha256",
+        max_length=64,
+    ).lower()
+    if resolution_text not in COMMITTED_REVIEW_RESOLUTIONS:
+        raise ValueError("resolution is not an approved committed-review disposition")
+    if not SHA256_RE.fullmatch(evidence_hash):
+        raise ValueError("evidence_sha256 must be a SHA-256 hex digest")
+    if not SHA256_RE.fullmatch(content_hash):
+        raise ValueError("expected_content_sha256 must be a SHA-256 hex digest")
+    try:
+        quarantined_count = int(expected_quarantined_count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("expected_quarantined_count must be an integer") from exc
+    if quarantined_count <= 0:
+        raise ValueError("expected_quarantined_count must be positive")
+    try:
+        byte_length = int(expected_byte_length)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("expected_byte_length must be an integer") from exc
+    if byte_length <= 0:
+        raise ValueError("expected_byte_length must be positive")
+    expected_totals: dict[str, int] = {}
+    for field, value in {
+        "inserted": expected_inserted_count,
+        "replayed": expected_replayed_count,
+        "quarantined": expected_quarantined_count,
+        "errors": expected_error_count,
+    }.items():
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"expected_{field}_count must be an integer") from exc
+        if parsed < 0:
+            raise ValueError(f"expected_{field}_count must not be negative")
+        expected_totals[field] = parsed
+    if expected_totals["quarantined"] <= 0:
+        raise ValueError("expected_quarantined_count must be positive")
+    evidence, evidence_error = _load_committed_review_evidence(
+        evidence_path,
+        expected_sha256=evidence_hash,
+        relay_id=relay,
+        request_id=request_id,
+        server_source_file_id=server_source_file_id,
+        relative_path=relative_path,
+        content_sha256=content_hash,
+        byte_length=byte_length,
+        resolution=resolution_text,
+        expected_totals=expected_totals,
+    )
+    reason_fields = _reason_evidence(reason_text)
+
+    def blocked(error_code: str, **extra: Any) -> dict[str, Any]:
+        report = {
+            "status": "BLOCKED",
+            "operation": "resolve-review",
+            "relay_id": relay,
+            "operator_id": operator,
+            "tool_version": OPERATOR_TOOL_VERSION,
+            **reason_fields,
+            "resolution": resolution_text,
+            "evidence_path": str(evidence.get("path") or Path(str(evidence_path or ""))),
+            "evidence_sha256": evidence_hash,
+            "error_code": error_code,
+        }
+        report.update(extra)
+        return _with_operator_audit_status(
+            audit_log_path,
+            action="resolve-review-blocked",
+            report=report,
+        )
+
+    if evidence_error:
+        return blocked(evidence_error)
+
+    if not Path(db_path).is_file():
+        return blocked("relay_db_not_initialized")
+    now = utc_now_text()
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS direct_sync_operator_resolutions (
+                resolution_id TEXT PRIMARY KEY,
+                relay_id TEXT NOT NULL UNIQUE,
+                previous_status TEXT NOT NULL,
+                new_status TEXT NOT NULL,
+                resolution TEXT NOT NULL,
+                evidence_sha256 TEXT NOT NULL,
+                receipt_sha256 TEXT NOT NULL,
+                request_id TEXT NOT NULL,
+                server_source_file_id TEXT NOT NULL,
+                relative_path TEXT NOT NULL,
+                content_sha256 TEXT NOT NULL,
+                byte_length INTEGER NOT NULL,
+                quarantined_count INTEGER NOT NULL,
+                operator_id TEXT NOT NULL,
+                reason_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        row = conn.execute(
+            """
+            SELECT relay_id, status, lease_owner, lease_expires_at, receipt_json,
+                   relative_path, content_sha256, byte_length, attempt_count,
+                   spooled_file_path, upload_status_path, metadata_json
+            FROM direct_sync_relay_batches
+            WHERE relay_id = ?
+            LIMIT 1
+            """,
+            (relay,),
+        ).fetchone()
+        if row is None:
+            conn.rollback()
+            return blocked("relay_not_found")
+        previous_status = str(row["status"] or "")
+        if previous_status != RELAY_STATUS_OPERATOR_REVIEW:
+            existing = conn.execute(
+                """
+                SELECT resolution, evidence_sha256, request_id,
+                       server_source_file_id, relative_path, content_sha256,
+                       byte_length, quarantined_count, new_status
+                FROM direct_sync_operator_resolutions
+                WHERE relay_id = ?
+                LIMIT 1
+                """,
+                (relay,),
+            ).fetchone()
+            conn.rollback()
+            if (
+                previous_status == RELAY_STATUS_ACKED
+                and existing is not None
+                and str(existing["resolution"] or "") == resolution_text
+                and str(existing["evidence_sha256"] or "") == evidence_hash
+                and str(existing["request_id"] or "") == request_id
+                and str(existing["server_source_file_id"] or "") == server_source_file_id
+                and str(existing["relative_path"] or "") == relative_path
+                and str(existing["content_sha256"] or "") == content_hash
+                and int(existing["byte_length"] or 0) == byte_length
+                and int(existing["quarantined_count"] or 0) == quarantined_count
+                and str(existing["new_status"] or "") == RELAY_STATUS_ACKED
+            ):
+                report = {
+                    "status": "PASS",
+                    "operation": "resolve-review",
+                    "relay_id": relay,
+                    "operator_id": operator,
+                    "tool_version": OPERATOR_TOOL_VERSION,
+                    **reason_fields,
+                    "resolution": resolution_text,
+                    "evidence_path": str(evidence["path"]),
+                    "evidence_sha256": evidence_hash,
+                    "evidence_schema_version": evidence["schema_version"],
+                    "evidence_generated_at": evidence["generated_at"],
+                    "expected_totals": dict(expected_totals),
+                    "previous_status": previous_status,
+                    "new_status": RELAY_STATUS_ACKED,
+                    "already_resolved": True,
+                    "receipt_preserved": True,
+                }
+                return _with_operator_audit_status(
+                    audit_log_path,
+                    action="resolve-review-idempotent",
+                    report=report,
+                )
+            return blocked("relay_status_not_operator_review", previous_status=previous_status)
+        if row["lease_owner"] is not None or row["lease_expires_at"] is not None:
+            conn.rollback()
+            return blocked("relay_review_has_active_lease", previous_status=previous_status)
+        if str(row["relative_path"] or "") != relative_path:
+            conn.rollback()
+            return blocked(
+                "relay_relative_path_mismatch",
+                previous_status=previous_status,
+                actual_relative_path=str(row["relative_path"] or ""),
+            )
+        if int(row["byte_length"] or 0) != byte_length:
+            conn.rollback()
+            return blocked(
+                "relay_byte_length_mismatch",
+                previous_status=previous_status,
+                actual_byte_length=int(row["byte_length"] or 0),
+            )
+        if str(row["content_sha256"] or "").lower() != content_hash:
+            conn.rollback()
+            return blocked(
+                "relay_content_sha256_mismatch",
+                previous_status=previous_status,
+                actual_content_sha256=str(row["content_sha256"] or "").lower(),
+            )
+        spool_path = Path(str(row["spooled_file_path"] or ""))
+        if spool_path.is_symlink() or not spool_path.is_file():
+            conn.rollback()
+            return blocked("operator_review_spool_file_invalid", previous_status=previous_status)
+        try:
+            spool_sha256, spool_byte_length = _read_file_digest(spool_path)
+        except OSError:
+            conn.rollback()
+            return blocked("operator_review_spool_file_unreadable", previous_status=previous_status)
+        if spool_sha256 != content_hash or spool_byte_length != byte_length:
+            conn.rollback()
+            return blocked(
+                "operator_review_spool_identity_mismatch",
+                previous_status=previous_status,
+                actual_spool_sha256=spool_sha256,
+                actual_spool_byte_length=spool_byte_length,
+            )
+        raw_receipt = str(row["receipt_json"] or "")
+        receipt, receipt_valid = _decode_receipt_json(raw_receipt)
+        if not receipt_valid or not receipt:
+            conn.rollback()
+            return blocked("operator_review_receipt_invalid", previous_status=previous_status)
+        if receipt.get("committed") is not True or receipt.get("_local_upload_result_committed") is not True:
+            conn.rollback()
+            return blocked("operator_review_receipt_not_definitively_committed", previous_status=previous_status)
+        if str(receipt.get("status") or "") != "accepted":
+            conn.rollback()
+            return blocked(
+                "operator_review_receipt_not_accepted",
+                previous_status=previous_status,
+                receipt_status=str(receipt.get("status") or ""),
+            )
+        if str(receipt.get("request_id") or "") != request_id:
+            conn.rollback()
+            return blocked(
+                "operator_review_request_id_mismatch",
+                previous_status=previous_status,
+                actual_request_id=str(receipt.get("request_id") or ""),
+            )
+        if str(receipt.get("server_source_file_id") or "") != server_source_file_id:
+            conn.rollback()
+            return blocked(
+                "operator_review_server_source_file_id_mismatch",
+                previous_status=previous_status,
+                actual_server_source_file_id=str(receipt.get("server_source_file_id") or ""),
+            )
+        if str(receipt.get("client_batch_id") or "") != relay or receipt.get("retryable") is not False:
+            conn.rollback()
+            return blocked("operator_review_receipt_binding_invalid", previous_status=previous_status)
+        totals = receipt.get("totals")
+        if not isinstance(totals, Mapping):
+            conn.rollback()
+            return blocked("operator_review_totals_invalid", previous_status=previous_status)
+        try:
+            actual_quarantined = int(totals.get("quarantined"))
+            errors = int(totals.get("errors"))
+            inserted = int(totals.get("inserted"))
+            replayed = int(totals.get("replayed"))
+        except (TypeError, ValueError):
+            conn.rollback()
+            return blocked("operator_review_totals_invalid", previous_status=previous_status)
+        if actual_quarantined != quarantined_count:
+            conn.rollback()
+            return blocked(
+                "operator_review_quarantined_count_mismatch",
+                previous_status=previous_status,
+                actual_quarantined_count=actual_quarantined,
+            )
+        actual_totals = {
+            "inserted": inserted,
+            "replayed": replayed,
+            "quarantined": actual_quarantined,
+            "errors": errors,
+        }
+        if actual_totals != expected_totals:
+            conn.rollback()
+            return blocked(
+                "operator_review_exact_totals_mismatch",
+                previous_status=previous_status,
+                actual_totals=actual_totals,
+            )
+        if errors != 0 or min(inserted, replayed, actual_quarantined) < 0:
+            conn.rollback()
+            return blocked(
+                "operator_review_receipt_not_resolution_eligible",
+                previous_status=previous_status,
+                totals={
+                    "inserted": inserted,
+                    "replayed": replayed,
+                    "quarantined": actual_quarantined,
+                    "errors": errors,
+                },
+            )
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except json.JSONDecodeError:
+            conn.rollback()
+            return blocked("operator_review_metadata_invalid", previous_status=previous_status)
+        receipt_source = receipt.get("source_file")
+        if not isinstance(metadata, dict) or not isinstance(receipt_source, Mapping):
+            conn.rollback()
+            return blocked("operator_review_source_contract_invalid", previous_status=previous_status)
+        conserved_rows = inserted + replayed + actual_quarantined + errors
+        try:
+            metadata_rows = int(metadata.get("row_count"))
+            declared_rows = int(receipt_source.get("declared_row_count"))
+        except (TypeError, ValueError):
+            conn.rollback()
+            return blocked("operator_review_row_count_invalid", previous_status=previous_status)
+        if conserved_rows != metadata_rows or conserved_rows != declared_rows:
+            conn.rollback()
+            return blocked(
+                "operator_review_row_conservation_failed",
+                previous_status=previous_status,
+                conserved_rows=conserved_rows,
+                metadata_row_count=metadata_rows,
+                declared_row_count=declared_rows,
+            )
+        upload_status_path = Path(str(row["upload_status_path"] or ""))
+        if upload_status_path.is_symlink() or not upload_status_path.is_file():
+            conn.rollback()
+            return blocked("operator_review_upload_status_invalid", previous_status=previous_status)
+        try:
+            if upload_status_path.stat().st_size > 1024 * 1024:
+                raise ValueError("too large")
+            upload_status_bytes = upload_status_path.read_bytes()
+            if len(upload_status_bytes) > 1024 * 1024:
+                raise ValueError("too large")
+            upload_status_sha256 = hashlib.sha256(upload_status_bytes).hexdigest()
+            upload_status = json.loads(upload_status_bytes.decode("utf-8-sig"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            conn.rollback()
+            return blocked("operator_review_upload_status_unreadable", previous_status=previous_status)
+        upload_receipt = upload_status.get("receipt") if isinstance(upload_status, dict) else None
+        upload_metadata = upload_status.get("metadata") if isinstance(upload_status, dict) else None
+        if (
+            not isinstance(upload_receipt, Mapping)
+            or not isinstance(upload_metadata, Mapping)
+            or upload_status.get("committed") is not True
+            or upload_status.get("status_code") != 200
+            or upload_receipt.get("request_id") != request_id
+            or upload_receipt.get("server_source_file_id") != server_source_file_id
+            or upload_receipt.get("totals") != actual_totals
+            or upload_metadata.get("relative_path") != relative_path
+            or upload_metadata.get("content_sha256") != content_hash
+            or upload_metadata.get("byte_length") != byte_length
+        ):
+            conn.rollback()
+            return blocked("operator_review_upload_status_mismatch", previous_status=previous_status)
+        receipt_sha256 = hashlib.sha256(raw_receipt.encode("utf-8")).hexdigest()
+        resolution_id = f"operator-resolution-{uuid.uuid4().hex}"
+        conn.execute(
+            """
+            INSERT INTO direct_sync_operator_resolutions (
+                resolution_id, relay_id, previous_status, new_status, resolution,
+                evidence_sha256, receipt_sha256, request_id, server_source_file_id,
+                relative_path, content_sha256, byte_length, quarantined_count,
+                operator_id, reason_sha256, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                resolution_id,
+                relay,
+                previous_status,
+                RELAY_STATUS_ACKED,
+                resolution_text,
+                evidence_hash,
+                receipt_sha256,
+                request_id,
+                server_source_file_id,
+                relative_path,
+                content_hash,
+                byte_length,
+                actual_quarantined,
+                operator,
+                reason_fields["reason_sha256"],
+                now,
+            ),
+        )
+        cursor = conn.execute(
+            """
+            UPDATE direct_sync_relay_batches
+            SET status = ?, updated_at = ?
+            WHERE relay_id = ?
+              AND status = ?
+              AND lease_owner IS NULL
+              AND lease_expires_at IS NULL
+              AND receipt_json = ?
+              AND content_sha256 = ?
+            """,
+            (
+                RELAY_STATUS_ACKED,
+                now,
+                relay,
+                RELAY_STATUS_OPERATOR_REVIEW,
+                raw_receipt,
+                content_hash,
+            ),
+        )
+        if cursor.rowcount != 1:
+            conn.rollback()
+            return blocked("relay_status_changed", previous_status=previous_status)
+        conn.commit()
+    except sqlite3.Error as exc:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                pass
+        return blocked("relay_db_unavailable", error_message=_sqlite_error_message(exc))
+    finally:
+        if conn is not None:
+            conn.close()
+    report = {
+        "status": "PASS",
+        "operation": "resolve-review",
+        "relay_id": relay,
+        "operator_id": operator,
+        "tool_version": OPERATOR_TOOL_VERSION,
+        **reason_fields,
+        "resolution_id": resolution_id,
+        "resolution": resolution_text,
+        "evidence_path": str(evidence["path"]),
+        "evidence_sha256": evidence_hash,
+        "evidence_schema_version": evidence["schema_version"],
+        "evidence_generated_at": evidence["generated_at"],
+        "request_id": request_id,
+        "server_source_file_id": server_source_file_id,
+        "relative_path": relative_path,
+        "content_sha256": content_hash,
+        "byte_length": byte_length,
+        "quarantined_count": actual_quarantined,
+        "exact_totals": dict(actual_totals),
+        "receipt_sha256": receipt_sha256,
+        "spool_sha256": spool_sha256,
+        "spool_byte_length": spool_byte_length,
+        "receipt_preserved": True,
+        "upload_status_path": str(upload_status_path),
+        "upload_status_sha256": upload_status_sha256,
+        "upload_status_path_preserved": True,
+        "previous_status": RELAY_STATUS_OPERATOR_REVIEW,
+        "new_status": RELAY_STATUS_ACKED,
+        "previous_attempt_count": int(row["attempt_count"]),
+        "already_resolved": False,
+        "queue": read_relay_queue_status_read_only(db_path),
+    }
+    return _with_operator_audit_status(audit_log_path, action="resolve-review", report=report)
 
 
 def _repair_legacy_idempotency_key_for_retry(row: sqlite3.Row) -> dict[str, Any]:

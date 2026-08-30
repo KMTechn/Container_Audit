@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping
 
+from writer_session_fence import writer_sink
+
 from .bundle import CONTRACT_BUNDLE_CORRECTIVE_REVISION, MINIMUM_INSTALLER_VERSION
 from .canonical import canonical_sha256, file_sha256, load_json_strict, require_posix_relative_path
 from .errors import FactoryContractError
@@ -416,6 +418,7 @@ def verify_staged_package(
     }
 
 
+@writer_sink("factory_contract_package_json")
 def write_json(path: Path, value: Mapping[str, Any]) -> None:
     path.write_text(
         json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, indent=2) + "\n",

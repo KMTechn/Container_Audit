@@ -143,6 +143,7 @@ class _RelaySession(_LeaseSession):
                 "server_source_file_id": source_file_id,
                 "committed": True,
                 "status": "accepted",
+                "projection_disposition": "COMPLETE",
                 "retryable": False,
                 "next_retry_after": None,
                 "totals": {"inserted": 0, "replayed": 0, "quarantined": 0, "errors": 0},
@@ -230,6 +231,7 @@ class _LegacyReceiptSession(_LeaseSession):
                 "server_source_file_id": source_file_id,
                 "committed": True,
                 "status": "accepted",
+                "projection_disposition": "COMPLETE",
                 "retryable": False,
                 "next_retry_after": None,
                 "totals": {"inserted": 0, "replayed": 0, "quarantined": 0, "errors": 0},
@@ -470,6 +472,174 @@ def test_stale_token_operator_review_stays_fail_closed_after_ttl(tmp_path):
     assert len(session.calls) == 1
 
 
+def test_local_runtime_error_authority_reissues_only_after_retained_server_expiry(
+    tmp_path,
+):
+    local_error_code = "runtime_lease_metadata_invalid_before_source_post"
+    db_path = tmp_path / "relay.sqlite3"
+    session = _LeaseSession()
+    primed = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:00:00Z",
+        ttl_seconds=900,
+    )
+    assert primed.receipt["server_grant_accepted"] is True
+    original_runtime_id = _authority_row(db_path)["runtime_instance_id"]
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE direct_sync_runtime_authority
+            SET status='OPERATOR_REVIEW', last_error_code=?,
+                next_request_token=NULL, next_request_sequence=NULL,
+                assigned_relay_id=NULL, pending_request_json=NULL,
+                pending_issue_idempotency_key=NULL, expires_at=?, updated_at=?
+            """,
+            (
+                local_error_code,
+                "2026-08-19T21:10:00Z",
+                "2026-08-19T21:01:00Z",
+            ),
+        )
+
+    still_blocked = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:09:59Z",
+        ttl_seconds=900,
+    )
+    assert still_blocked.operator_review is True
+    assert still_blocked.error_code == local_error_code
+    assert len(session.calls) == 1
+    assert _authority_row(db_path)["runtime_instance_id"] == original_runtime_id
+
+    recovered = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:10:00Z",
+        ttl_seconds=900,
+    )
+    assert recovered.error_code == ""
+    assert recovered.receipt["server_grant_accepted"] is True
+    assert recovered.receipt["runtime_instance_id"] != original_runtime_id
+    assert "runtime_request_token" not in session.calls[1][1]
+    assert _authority_row(db_path)["status"] == "ACTIVE"
+
+
+@pytest.mark.parametrize(
+    "unknown_commit_code",
+    ["upload_unhandled_exception", "runtime_lease_metadata_invalid"],
+)
+def test_unknown_commit_never_reissues_from_stale_retained_expiry(
+    tmp_path,
+    unknown_commit_code,
+):
+    db_path = tmp_path / "relay.sqlite3"
+    session = _LeaseSession()
+    primed = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:00:00Z",
+        ttl_seconds=900,
+    )
+    assert primed.receipt["server_grant_accepted"] is True
+    original_runtime_id = _authority_row(db_path)["runtime_instance_id"]
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE direct_sync_runtime_authority
+            SET status='OPERATOR_REVIEW', last_error_code=?,
+                next_request_token=NULL, next_request_sequence=NULL,
+                assigned_relay_id=NULL, pending_request_json=NULL,
+                pending_issue_idempotency_key=NULL, expires_at=?, updated_at=?
+            """,
+            (
+                unknown_commit_code,
+                "2026-08-19T21:10:00Z",
+                "2026-08-19T21:01:00Z",
+            ),
+        )
+
+    blocked = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-20T21:10:00Z",
+        ttl_seconds=900,
+    )
+
+    assert blocked.operator_review is True
+    assert blocked.error_code == unknown_commit_code
+    assert len(session.calls) == 1
+    assert _authority_row(db_path)["runtime_instance_id"] == original_runtime_id
+
+
+@pytest.mark.parametrize(
+    ("guard_column", "guard_value"),
+    [
+        ("lease_id", None),
+        ("fence", None),
+        ("assigned_relay_id", "relay-still-assigned"),
+        ("pending_request_json", "{}"),
+        ("pending_issue_idempotency_key", "issue-still-pending"),
+        ("next_request_token", "T" * 43),
+        ("next_request_sequence", 2),
+    ],
+)
+def test_expired_local_runtime_error_reissue_requires_all_safety_guards(
+    tmp_path,
+    guard_column,
+    guard_value,
+):
+    db_path = tmp_path / "relay.sqlite3"
+    session = _LeaseSession()
+    primed = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:00:00Z",
+        ttl_seconds=900,
+    )
+    assert primed.receipt["server_grant_accepted"] is True
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            UPDATE direct_sync_runtime_authority
+            SET status='OPERATOR_REVIEW', last_error_code='runtime_lease_metadata_invalid_before_source_post',
+                next_request_token=NULL, next_request_sequence=NULL,
+                assigned_relay_id=NULL, pending_request_json=NULL,
+                pending_issue_idempotency_key=NULL, expires_at=?, updated_at=?
+            """,
+            ("2026-08-19T21:10:00Z", "2026-08-19T21:01:00Z"),
+        )
+        connection.execute(
+            f"UPDATE direct_sync_runtime_authority SET {guard_column}=?",
+            (guard_value,),
+        )
+
+    blocked = runtime_client.ensure_runtime_authority(
+        db_path=db_path,
+        credentials=_credentials(),
+        producer_install_id="install-test",
+        session=session,
+        now="2026-08-19T21:10:00Z",
+        ttl_seconds=900,
+    )
+    assert blocked.operator_review is True
+    assert blocked.error_code == "runtime_lease_metadata_invalid_before_source_post"
+    assert len(session.calls) == 1
+
+
 def _insert_claimed_row(db_path: Path, relay_id: str, *, owner: str = "worker") -> None:
     init_relay_queue_schema(db_path)
     metadata = _metadata(relay_id)
@@ -618,7 +788,7 @@ def test_partial_runtime_metadata_fails_closed_before_any_network_call(tmp_path)
 
     assert result.metadata is None
     assert result.operator_review is True
-    assert result.error_code == "runtime_lease_metadata_invalid"
+    assert result.error_code == "runtime_lease_metadata_invalid_before_source_post"
     assert session.calls == []
 
 

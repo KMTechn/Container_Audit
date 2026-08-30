@@ -18,6 +18,8 @@ from urllib.parse import urlsplit
 
 import requests
 
+from writer_session_fence import writer_sink
+
 
 logger = logging.getLogger(__name__)
 
@@ -497,6 +499,7 @@ def _is_valid_catalog(path: Path) -> bool:
         return False
 
 
+@writer_sink("item_catalog_atomic_write")
 def _atomic_write(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file() and path.read_bytes() == payload:
@@ -644,6 +647,7 @@ def _same_catalog_cache_authority(stored_url: object, current_url: object) -> bo
     return stored.hostname.lower() == current.hostname.lower()
 
 
+@writer_sink("item_catalog_cache_write")
 def _write_authenticated_cache(
     cache: Path,
     payload: bytes,
@@ -852,6 +856,7 @@ def _hardened_get(url: str, **kwargs: object) -> object:
         return session.get(url, **kwargs)
 
 
+@writer_sink("item_catalog_refresh")
 def refresh_item_catalog(
     bundled_path: str | Path,
     *,

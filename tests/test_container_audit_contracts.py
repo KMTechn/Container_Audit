@@ -4933,10 +4933,16 @@ def test_change_worker_clears_in_memory_tray_after_successful_pause(monkeypatch)
     assert app.current_tray.master_label_code == ""
     assert app.master_label_replace_state is None
     assert app.replacement_context == {}
-    assert [entry["event"] for entry in logged] == ["WORK_PAUSE", "HISTORICAL_REPLACE_CANCEL"]
+    assert [entry["event"] for entry in logged] == [
+        "WORK_PAUSE",
+        "HISTORICAL_REPLACE_CANCEL",
+        "WORK_END",
+    ]
     assert logged[0]["synchronous"] is True
     assert logged[1]["synchronous"] is True
     assert logged[1]["detail"]["reason"] == "worker_change"
+    assert logged[2]["synchronous"] is True
+    assert logged[2]["detail"]["reason"] == "worker_change"
     assert app.cancelled is True
     assert app.showed_login is True
 
@@ -6207,6 +6213,10 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
     app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
     app.show_tray_image_var = DummyToggle()
     app.is_idle = False
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
@@ -6230,7 +6240,10 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
     assert isinstance(saved_start_times[0], datetime.datetime)
     assert app.show_tray_image_var.value is True
     assert app.logged[0][0][0] == "MASTER_LABEL_SCANNED_NEW"
-    assert app.logged[0][1] == {"detail": {"CLC": "AAA2270730100", "QT": "2"}, "synchronous": True}
+    assert app.logged[0][1]["detail"] == {"CLC": "AAA2270730100", "QT": "2"}
+    assert app.logged[0][1]["synchronous"] is True
+    assert app.logged[0][1]["deduplicate"] is True
+    assert app.logged[0][1]["idempotency_key"].startswith("tray-activation:")
 
 
 def test_worker_scanner_full_tray_flow_writes_csv_sequence_before_relay_plan(tmp_path):
@@ -6557,6 +6570,10 @@ def test_process_barcode_keeps_empty_tray_when_master_label_state_save_fails(tmp
     app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
     app.show_tray_image_var = DummyToggle()
     app.is_idle = False
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
@@ -6590,7 +6607,10 @@ def test_process_barcode_keeps_empty_tray_when_master_label_state_save_fails(tmp
     assert messages[0][0].startswith("현품표 상태 저장에 실패")
 
 
-def test_process_barcode_rolls_back_state_when_master_label_audit_log_fails(tmp_path):
+def test_process_barcode_preserves_outbox_state_when_master_label_audit_projection_fails(
+    tmp_path,
+    monkeypatch,
+):
     app = _headless_app()
     app.current_tray = TraySession()
     app.completed_master_labels = set()
@@ -6599,7 +6619,9 @@ def test_process_barcode_rolls_back_state_when_master_label_audit_log_fails(tmp_
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
     app.show_tray_image_var = DummyToggle()
     app.is_idle = False
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
@@ -6619,6 +6641,13 @@ def test_process_barcode_rolls_back_state_when_master_label_audit_log_fails(tmp_
     )
     messages = []
     app.show_status_message = lambda *args, **kwargs: messages.append(args)
+    app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
+    errors = []
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: errors.append(args),
+    )
     app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError("valid JSON master label should not warn")
     )
@@ -6626,9 +6655,15 @@ def test_process_barcode_rolls_back_state_when_master_label_audit_log_fails(tmp_
     app._process_barcode_logic('{"CLC":"AAA2270730100","QT":"2"}')
 
     assert app.current_tray.master_label_code == ""
-    assert not (tmp_path / "current.json").exists()
+    assert (tmp_path / "current.json").exists()
+    persisted = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
+    pending = persisted[tray_state.ACTIVATION_EVENT_STATE_KEY]
+    assert pending["event_type"] == "MASTER_LABEL_SCANNED_NEW"
+    assert pending["master_label_code"] == '{"CLC":"AAA2270730100","QT":"2"}'
+    assert pending["idempotency_key"].startswith("tray-activation:")
     assert app.show_tray_image_var.value is None
-    assert messages[0][0].startswith("현품표 시작 기록 저장에 실패")
+    assert app.showed_worker_input is True
+    assert errors[0][0] == "현품표 시작 기록 대기"
 
 
 def test_process_barcode_starts_tray_from_base64_encoded_json_master_label(tmp_path):
@@ -6639,6 +6674,10 @@ def test_process_barcode_starts_tray_from_base64_encoded_json_master_label(tmp_p
     app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
     app.show_tray_image_var = DummyToggle()
     app.is_idle = False
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
@@ -7728,11 +7767,12 @@ def test_park_current_tray_preserves_current_when_park_audit_log_fails(tmp_path,
     assert errors and "보류 기록" in errors[0][1]
 
 
-def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp_path):
+def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.current_tray = TraySession()
     app.COLOR_PRIMARY = "primary"
@@ -7745,6 +7785,13 @@ def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp
     app._log_event = lambda event, detail=None, synchronous=False, **kwargs: logged.append(
         {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
     ) or True
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected restore error modal")
+        ),
+    )
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -7779,11 +7826,12 @@ def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp
     assert logged[0]["detail"]["tray_capacity"] == 60
 
 
-def test_restore_parked_tray_rolls_back_when_restore_audit_log_fails(tmp_path, monkeypatch):
+def test_restore_parked_tray_preserves_outbox_when_restore_audit_log_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.current_tray = TraySession()
@@ -7801,6 +7849,7 @@ def test_restore_parked_tray_rolls_back_when_restore_audit_log_fails(tmp_path, m
     )
     app.refreshed = False
     app._update_parked_trays_list = lambda: setattr(app, "refreshed", True)
+    app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
     logged = []
     app._log_event = lambda event, detail=None, synchronous=False, **kwargs: logged.append(
         {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
@@ -7830,22 +7879,38 @@ def test_restore_parked_tray_rolls_back_when_restore_audit_log_fails(tmp_path, m
     app.restore_parked_tray(str(parked_file))
 
     assert parked_file.exists()
-    assert not (tmp_path / "current.json").exists()
+    persisted = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
+    pending = persisted[tray_state.PARKED_RESTORE_STATE_KEY]
+    assert persisted["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
+    assert [event["event_type"] for event in pending["projection_events"]] == [
+        "TRAY_RESTORED_FROM_PARK"
+    ]
+    assert pending["projection_events"][0]["projection_log_name"] == "events.csv"
     restored_parked = json.loads(parked_file.read_text(encoding="utf-8"))
     assert restored_parked["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
     assert app.current_tray.master_label_code == ""
+    assert app.worker_name == ""
+    assert app.showed_worker_input is True
     assert app.refreshed is True
     assert logged[0]["event"] == "TRAY_RESTORED_FROM_PARK"
     assert logged[0]["detail"]["canonical_event_name"] == "TRAY_RESTORED"
     assert logged[0]["synchronous"] is True
-    assert errors[0][0] == "작업 기록 실패"
+    assert errors == [
+        (
+            "보류 작업 복구 기록 대기",
+            "복원 상태와 감사 outbox는 안전하게 저장했지만 event 투영 또는 "
+            "source 정리를 끝내지 못했습니다. 다시 로그인해 동일 operation을 "
+            "복구하고 계속되면 관리자에게 문의하세요.",
+        )
+    ]
 
 
-def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(tmp_path, monkeypatch, capsys):
+def test_restore_parked_tray_preserves_outbox_when_parked_delete_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.current_tray = TraySession()
@@ -7861,9 +7926,11 @@ def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(t
     app._update_tray_image_display = lambda: (_ for _ in ()).throw(
         AssertionError("image should not update when parked delete fails")
     )
-    app._log_event = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("restore event should not be logged when parked delete fails")
-    )
+    logged = []
+    app._log_event = lambda event, detail=None, synchronous=False, **kwargs: logged.append(
+        {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
+    ) or True
+    app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
     monkeypatch.setattr(
         parked_tray_store.ParkedTrayStore,
         "delete",
@@ -7894,12 +7961,19 @@ def test_restore_parked_tray_rolls_back_current_state_when_parked_delete_fails(t
     app.restore_parked_tray(str(parked_file))
 
     assert parked_file.exists()
-    assert not (tmp_path / "current.json").exists()
+    persisted = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
+    pending = persisted[tray_state.PARKED_RESTORE_STATE_KEY]
+    assert persisted["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
+    assert [event["event_type"] for event in pending["projection_events"]] == [
+        "TRAY_RESTORED_FROM_PARK"
+    ]
     assert app.current_tray.master_label_code == ""
-    assert errors
-    assert errors[0][1] == "보류 작업을 복원하지 못했습니다. 현재 작업을 유지하고 관리자에게 문의하세요."
-    assert "보류 작업 파일 삭제에 실패" not in errors[0][1]
-    assert "보류 작업 파일 삭제에 실패" in capsys.readouterr().out
+    assert app.worker_name == ""
+    assert app.showed_worker_input is True
+    assert logged[0]["event"] == "TRAY_RESTORED_FROM_PARK"
+    assert logged[0]["synchronous"] is True
+    assert app.last_log_write_error == "보류 복원 source 정리 오류: PermissionError"
+    assert errors[0][0] == "보류 작업 복구 기록 대기"
 
 
 def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path, capsys):
@@ -8124,11 +8198,12 @@ def test_restore_parked_tray_does_not_overwrite_active_work_if_parking_fails(tmp
     assert parked_file.exists()
 
 
-def test_restore_parked_tray_does_not_overwrite_active_work_when_discard_log_fails(tmp_path, monkeypatch):
+def test_restore_parked_tray_preserves_discard_outbox_when_discard_log_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.current_tray = TraySession(
@@ -8138,10 +8213,14 @@ def test_restore_parked_tray_does_not_overwrite_active_work_when_discard_log_fai
         scanned_barcodes=["ACTIVE-BC"],
     )
     assert app._save_current_tray_state() is True
-    app._log_event = lambda *args, **kwargs: False
+    logged = []
+    app._log_event = lambda event, detail=None, synchronous=False, **kwargs: logged.append(
+        {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
+    ) and False
     app.show_status_message = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError("restore status should not be shown when discard audit fails")
     )
+    app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
@@ -8167,14 +8246,25 @@ def test_restore_parked_tray_does_not_overwrite_active_work_when_discard_log_fai
 
     app.restore_parked_tray(str(parked_file))
 
-    assert app.current_tray.master_label_code == "ACTIVE"
-    assert app.current_tray.scanned_barcodes == ["ACTIVE-BC"]
+    assert app.current_tray.master_label_code == ""
+    assert app.worker_name == ""
+    assert app.showed_worker_input is True
     restored_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
-    assert restored_state["master_label_code"] == "ACTIVE"
-    assert restored_state["scanned_barcodes"] == ["ACTIVE-BC"]
+    pending = restored_state[tray_state.PARKED_RESTORE_STATE_KEY]
+    assert restored_state["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
+    assert [event["event_type"] for event in pending["projection_events"]] == [
+        "TRAY_DISCARDED_BY_OPERATOR",
+        "TRAY_RESTORED_FROM_PARK",
+    ]
+    discard = pending["projection_events"][0]
+    assert discard["projection_log_name"] == "events.csv"
+    assert discard["event_detail"]["reason"] == "restore_parked_overwrite_current"
+    assert discard["event_detail"]["master_label_code"] == "ACTIVE"
+    assert discard["event_detail"]["scan_count"] == 1
+    assert logged[0]["event"] == "TRAY_DISCARDED_BY_OPERATOR"
+    assert logged[0]["synchronous"] is True
     assert parked_file.exists()
-    assert errors
-    assert errors[0][0] == "작업 기록 실패"
+    assert errors[0][0] == "보류 작업 복구 기록 대기"
 
 
 def test_restore_parked_tray_keeps_active_work_when_restored_state_save_fails(tmp_path, monkeypatch):
@@ -8233,6 +8323,7 @@ def test_restore_parked_tray_logs_current_work_discard_when_overwritten(tmp_path
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
     app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.COLOR_PRIMARY = "primary"
@@ -8252,6 +8343,13 @@ def test_restore_parked_tray_logs_current_work_discard_when_overwritten(tmp_path
         {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "showerror",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected restore error modal")
+        ),
+    )
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",

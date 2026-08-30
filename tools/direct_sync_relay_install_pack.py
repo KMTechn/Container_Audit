@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 from direct_sync_push import (  # noqa: E402
     DEFAULT_PRODUCER_ROLE,
     DEFAULT_SOURCE_SYSTEM,
@@ -283,6 +285,7 @@ def _local_test_task_environment(args: argparse.Namespace) -> dict[str, str]:
     return values
 
 
+@writer_sink("direct_sync_install_pack")
 def _write_scheduled_task_wrapper(
     path: Path,
     runner_parts: Sequence[str],
@@ -368,6 +371,7 @@ def _apply_container_audit_storage_defaults(args: argparse.Namespace) -> dict:
     }
 
 
+@writer_sink("direct_sync_install_pack")
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -551,6 +555,7 @@ def _task_runtime_acl_plan(args: argparse.Namespace) -> dict:
     }
 
 
+@writer_sink("direct_sync_install_pack")
 def _apply_task_runtime_acl(plan: dict) -> dict:
     if plan.get("status") != "PASS":
         return {

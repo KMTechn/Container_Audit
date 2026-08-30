@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from writer_session_fence import writer_sink
+
 from vendor.kmtech_zero_pe import (
     jwk_thumbprint as _cng_jwk_thumbprint,
     normalize_public_jwk as _cng_normalize_public_jwk,
@@ -718,6 +720,7 @@ class PinnedOperationLeaseKeyring:
             )
         return normalize_keyring(stored.get("keyring"))
 
+    @writer_sink("terminal_operation_lease")
     def _atomic_write(self, keyring: Mapping[str, Any]) -> None:
         document = {
             "contract_version": KEYRING_STORE_CONTRACT_VERSION,
@@ -875,6 +878,7 @@ class PinnedOperationLeaseKeyring:
 class OperationLeaseStore:
     """Append-only client evidence sharing the transfer-seal SQLite file."""
 
+    @writer_sink("terminal_operation_lease")
     def __init__(self, db_path: str | os.PathLike[str]) -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -891,6 +895,7 @@ class OperationLeaseStore:
         finally:
             connection.close()
 
+    @writer_sink("terminal_operation_lease")
     def _initialize(self) -> None:
         with self._connect() as connection:
             connection.execute("PRAGMA journal_mode=WAL")
@@ -1068,6 +1073,7 @@ class OperationLeaseStore:
                 )
             connection.commit()
 
+    @writer_sink("terminal_operation_lease")
     def begin_issue_attempt(
         self,
         *,
@@ -1229,6 +1235,7 @@ class OperationLeaseStore:
                 "authenticated lease differs from durable issue request"
             )
 
+    @writer_sink("terminal_operation_lease")
     def record_authenticated_nonactive(
         self,
         *,
@@ -1311,6 +1318,7 @@ class OperationLeaseStore:
         assert result is not None
         return result
 
+    @writer_sink("terminal_operation_lease")
     def save_prefetched(
         self,
         *,
@@ -1471,6 +1479,7 @@ class OperationLeaseStore:
         return artifact
 
     @staticmethod
+    @writer_sink("terminal_operation_lease")
     def _transition_issue_for_lease(
         connection: sqlite3.Connection,
         *,
@@ -1499,6 +1508,7 @@ class OperationLeaseStore:
             (target_status, utc_text(), attempt["attempt_id"]),
         )
 
+    @writer_sink("terminal_operation_lease")
     def record_rotation(
         self,
         *,
@@ -1796,6 +1806,7 @@ class OperationLeaseStore:
                 (intent_id,),
             ).fetchone()
 
+    @writer_sink("terminal_operation_lease")
     def record_local_completion(
         self,
         *,
@@ -1919,6 +1930,7 @@ class OperationLeaseStore:
                 (lease_id,),
             ).fetchone()
 
+    @writer_sink("terminal_operation_lease")
     def record_receipt(
         self,
         *,
@@ -2015,6 +2027,7 @@ class OperationLeaseStore:
             connection.commit()
         return row
 
+    @writer_sink("terminal_operation_lease")
     def record_review(
         self,
         *,

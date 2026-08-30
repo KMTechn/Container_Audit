@@ -25,6 +25,7 @@ from direct_sync_runtime import (  # noqa: E402
     record_scan_status,
     run_relay_once,
 )
+from writer_session_fence import writer_sink  # noqa: E402
 
 
 ALLOWED_SOURCE_PREFIX = "이적작업이벤트로그_"
@@ -97,6 +98,7 @@ def _file_prefix_sha256(path: Path, byte_count: int) -> str:
     return digest.hexdigest()
 
 
+@writer_sink("raw_relay_storage")
 def _scan_state_connect(db_path: str | Path) -> sqlite3.Connection:
     target = Path(db_path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -373,6 +375,7 @@ def _read_explicit_source_scan_state(conn: sqlite3.Connection, source_file: Path
     return (int(row["sent_byte_count"]), str(row["sent_prefix_sha256"] or "")) if row else (0, "")
 
 
+@writer_sink("raw_relay_storage")
 def _write_source_scan_state(
     conn: sqlite3.Connection,
     source_file: Path,
@@ -503,6 +506,7 @@ def _has_active_source_writer_lock(source_file: Path) -> bool:
     return time.time() - lock_stat.st_mtime <= SOURCE_WRITER_LOCK_STALE_SECONDS
 
 
+@writer_sink("raw_relay_storage")
 def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int, str] | None:
     if _has_active_source_writer_lock(source_file):
         return None
@@ -661,6 +665,7 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
     )
 
 
+@writer_sink("raw_relay_runner")
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay runner")
     parser.add_argument("--db-path", required=True)

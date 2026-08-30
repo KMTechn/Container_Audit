@@ -39,6 +39,7 @@ from producer_runtime_client import (
     runtime_receipt_result,
     scrub_terminal_runtime_metadata,
 )
+from writer_session_fence import writer_sink
 
 
 CONTRACT_VERSION = "producer-ingest-source-file-v1"
@@ -705,6 +706,7 @@ def _restore_error_result(
     )
 
 
+@writer_sink("relay_spool_storage")
 def _publish_restored_temp_file(temp_path: Path, destination: Path, *, overwrite: bool) -> str:
     if overwrite:
         os.replace(temp_path, destination)
@@ -750,6 +752,7 @@ def _publish_restored_temp_file(temp_path: Path, destination: Path, *, overwrite
     return ""
 
 
+@writer_sink("relay_spool_storage")
 def restore_raw_artifact_to_file(
     *,
     credentials: ProducerCredentials,
@@ -884,6 +887,7 @@ def restore_raw_artifact_to_file(
     )
 
 
+@writer_sink("relay_spool_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -1317,6 +1321,7 @@ def _upload_response_result(
     )
 
 
+@writer_sink("relay_network_upload")
 def upload_source_file(
     plan: SourceFilePlan,
     credentials: ProducerCredentials,
@@ -1385,6 +1390,7 @@ def _execute_with_busy_retry(
     raise RuntimeError("unreachable sqlite retry state")
 
 
+@writer_sink("relay_spool_storage")
 def _connect_relay_db(db_path: str | os.PathLike[str]) -> sqlite3.Connection:
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=SQLITE_BUSY_TIMEOUT_MS / 1000)
@@ -1420,6 +1426,7 @@ def _relay_batches_table_exists(conn: sqlite3.Connection) -> bool:
     ).fetchone() is not None
 
 
+@writer_sink("relay_spool_storage")
 def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
     conn = _connect_relay_db(db_path)
     try:
@@ -1471,6 +1478,7 @@ def init_relay_queue_schema(db_path: str | os.PathLike[str]) -> None:
         conn.close()
 
 
+@writer_sink("relay_spool_storage")
 def _ensure_relay_queue_columns(conn: sqlite3.Connection) -> None:
     columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(direct_sync_relay_batches)").fetchall()}
     migrations = {
@@ -1814,6 +1822,7 @@ def acked_relay_retention_candidates(
     return tuple(candidates)
 
 
+@writer_sink("relay_spool_storage")
 def _copy_file_atomic(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     temp_path = destination.with_name(f"{destination.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -1898,6 +1907,7 @@ def _spooled_file_matches_relay_row(row: sqlite3.Row) -> bool:
     return spooled_hash == str(row["content_sha256"]).lower() and spooled_bytes == int(row["byte_length"])
 
 
+@writer_sink("relay_spool_storage")
 def _repair_relay_spool_for_existing_row(
     conn: sqlite3.Connection,
     *,
@@ -1932,6 +1942,7 @@ def _repair_relay_spool_for_existing_row(
     ).fetchone()
 
 
+@writer_sink("relay_spool_enqueue")
 def enqueue_source_file_for_relay(
     *,
     db_path: str | os.PathLike[str],
@@ -2087,6 +2098,7 @@ def enqueue_source_file_for_relay(
         conn.close()
 
 
+@writer_sink("relay_stale_lease_reset")
 def reset_stale_relay_leases(
     *,
     db_path: str | os.PathLike[str],
@@ -2115,6 +2127,7 @@ def reset_stale_relay_leases(
         conn.close()
 
 
+@writer_sink("relay_batch_claim")
 def claim_next_relay_batch(
     *,
     db_path: str | os.PathLike[str],
@@ -2180,6 +2193,7 @@ def claim_next_relay_batch(
         conn.close()
 
 
+@writer_sink("relay_spool_storage")
 def claim_relay_batch_by_id(
     *,
     db_path: str | os.PathLike[str],
@@ -2249,6 +2263,7 @@ def claim_relay_batch_by_id(
         conn.close()
 
 
+@writer_sink("relay_spool_storage")
 def _set_relay_status(
     *,
     db_path: str | os.PathLike[str],
@@ -2443,6 +2458,7 @@ def _relay_status_update_conflict(
     )
 
 
+@writer_sink("relay_operator_pause_release")
 def _release_claimed_relay_after_operator_pause(
     row: RelayQueueRow,
     *,
@@ -2601,6 +2617,7 @@ def _source_file_plan_from_relay_row(row: RelayQueueRow) -> SourceFilePlan:
     )
 
 
+@writer_sink("relay_spool_storage")
 def _persist_legacy_exact_replay_before_source_post(
     *,
     db_path: str | os.PathLike[str],
@@ -2661,6 +2678,7 @@ def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredential
     return "", ""
 
 
+@writer_sink("relay_batch_drain")
 def drain_one_relay_batch(
     *,
     db_path: str | os.PathLike[str],

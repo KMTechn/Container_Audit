@@ -12,6 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from writer_session_fence import writer_sink
+
 from .adapters import BLOCKER_KIND_CATALOG, create_adapter
 from .core import (
     BUILD_IDENTITY_SCHEMA_VERSION,
@@ -101,6 +103,7 @@ def _artifact_path(explicit: Path | None = None) -> Path:
     return require_trusted_path_ancestry(value)
 
 
+@writer_sink("active_work_probe_report")
 def _create_new_fsynced(path: Path, value: Mapping[str, Any]) -> None:
     if not path.is_absolute():
         raise ProbeError("OUTPUT_PATH_INVALID", "output path must be absolute")

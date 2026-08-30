@@ -42,6 +42,7 @@ from user_relay import (
     start_user_relay_process,
     user_relay_stop_path,
 )
+from writer_session_fence import writer_sink
 from vendor.kmtech_zero_pe import (
     ADMIN_RECOVERY_ACTION,
     AdminRecoveryRequired as PossessionKeyAdminRecoveryRequired,
@@ -267,6 +268,7 @@ def resolve_current_user_onboarding_paths(
     )
 
 
+@writer_sink("current_user_onboarding_storage")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -283,6 +285,7 @@ def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
         temporary.unlink(missing_ok=True)
 
 
+@writer_sink("current_user_onboarding_storage")
 def _write_json_atomic_create_new(path: Path, payload: Mapping[str, Any]) -> None:
     """Publish JSON atomically without ever replacing an existing pathname."""
 
@@ -931,6 +934,7 @@ def _inspect_current_process_execution_context() -> dict[str, Any]:
     }
 
 
+@writer_sink("current_user_onboarding_storage")
 def _install_replacement_user_relay_autostart(app_root: Path) -> dict[str, Any]:
     if os.name != "nt":
         raise ValueError("replacement lifecycle HKCU relay requires Windows")
@@ -1174,6 +1178,7 @@ def apply_current_user_runtime_environment(
     values[LOGISTICS_PROFILE_PATH_ENV] = str(paths.logistics_profile_path)
 
 
+@writer_sink("current_user_onboarding")
 def onboard_current_user(
     app_root: str | os.PathLike[str],
     *,
@@ -1362,6 +1367,7 @@ def onboard_current_user(
         ) from exc
 
 
+@writer_sink("current_user_setup_removal")
 def remove_current_user_setup(
     app_root: str | os.PathLike[str],
     *,
@@ -1431,6 +1437,7 @@ def remove_current_user_setup(
         ) from exc
 
 
+@writer_sink("current_user_lifecycle_restore")
 def restore_current_user_lifecycle_after_replacement(
     app_root: str | os.PathLike[str],
     *,

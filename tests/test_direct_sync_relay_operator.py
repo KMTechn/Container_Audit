@@ -1,3 +1,4 @@
+import hashlib
 import json
 import sqlite3
 from dataclasses import replace
@@ -9,7 +10,13 @@ import direct_sync_operator
 import direct_sync_push
 import direct_sync_runtime
 from tools import direct_sync_relay_operator as operator_cli
-from direct_sync_operator import operator_status, pause_relay, resume_relay, retry_dead_relay_batch
+from direct_sync_operator import (
+    operator_status,
+    pause_relay,
+    resolve_committed_operator_review,
+    resume_relay,
+    retry_dead_relay_batch,
+)
 from direct_sync_push import (
     RELAY_STATUS_ACKED,
     RELAY_STATUS_FAILED_PERMANENT,
@@ -22,6 +29,171 @@ from direct_sync_runtime import enqueue_completed_source_file, load_credentials_
 from producer_runtime_client import RuntimePreparation
 from tests.test_direct_sync_runtime import EchoAcceptedSession, FakeResponse, FakeSession, make_config, write_csv
 from tools.direct_sync_relay_operator import main
+
+
+def write_committed_review_evidence(
+    tmp_path,
+    *,
+    relay_id,
+    request_id,
+    server_source_file_id,
+    relative_path,
+    content_sha256,
+    byte_length,
+    totals,
+    resolution="server_replayed",
+):
+    quarantine_rows = []
+    for index in range(totals["quarantined"]):
+        event_identity = f"{server_source_file_id}:{index + 2}:0"
+        quarantine_row = {
+            "id": index + 1,
+            "event_identity": event_identity,
+            "raw_event_name": "TRAY_RESTORE",
+            "observed_at": "2026-08-29T00:00:00Z",
+            "reason": "MANIFEST_EVENT_VALIDATION_FAILED",
+            "validation_status": "DENY",
+            "codes": ["DISPATCH_KEY_NOT_IN_MANIFEST"],
+            "local_only_under_commit_85ae9ed": False,
+            "existing_event": None,
+            "resolved_common_event": {
+                "id": index + 101,
+                "event_identity": event_identity,
+                "raw_event_name": "TRAY_RESTORE",
+                "projection_status": "NOT_PROJECTED",
+                "event_projection_class": "RAW_EVIDENCE_ONLY",
+                "raw_only_reason_code": "NO_STAGE1_REDUCER",
+            },
+        }
+        if resolution == "historical_local_only":
+            quarantine_row.update(
+                {
+                    "raw_event_name": "RANDOM_TEST_SESSION_START",
+                    "local_only_under_commit_85ae9ed": True,
+                    "resolved_common_event": None,
+                }
+            )
+        elif resolution == "historical_superseded":
+            existing_identity = f"{server_source_file_id}:{index + 102}:0"
+            quarantine_row.update(
+                {
+                    "reason": "LEGACY_REPLAY_CONFLICT",
+                    "validation_status": None,
+                    "codes": [],
+                    "legacy_business_fingerprint": "a" * 64,
+                    "existing_event_identity": existing_identity,
+                    "existing_event": {
+                        "id": index + 201,
+                        "event_identity": existing_identity,
+                        "raw_event_name": "TRAY_RESTORE",
+                        "actor_id": "operator-a",
+                        "event_ts": "2026-08-29T00:00:00Z",
+                        "payload_hash": "b" * 64,
+                        "row_hash": "c" * 64,
+                    },
+                    "resolved_common_event": None,
+                }
+            )
+        quarantine_rows.append(quarantine_row)
+    payload = {
+        "schema_version": "container-relay-terminal-reconciliation-evidence-v1",
+        "generated_at": "2026-08-29T00:00:00Z",
+        "cases": [
+            {
+                "relay_id": relay_id,
+                "request_id": request_id,
+                "server_source_file_id": server_source_file_id,
+                "relative_path": relative_path,
+                "content_sha256": content_sha256,
+                "byte_length": byte_length,
+                "totals": totals,
+                "quarantine_rows": quarantine_rows,
+            }
+        ],
+    }
+    evidence_path = tmp_path / f"{relay_id}-evidence.json"
+    evidence_path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    evidence_sha256 = hashlib.sha256(evidence_path.read_bytes()).hexdigest()
+    return evidence_path, evidence_sha256
+
+
+@pytest.mark.parametrize(
+    "resolution",
+    ["server_replayed", "historical_local_only", "historical_superseded"],
+)
+def test_committed_review_evidence_requires_complete_resolution_semantics(tmp_path, resolution):
+    server_source_file_id = "server/source/exact.csv"
+    evidence_path, _ = write_committed_review_evidence(
+        tmp_path,
+        relay_id="relay-proof",
+        request_id="request-proof",
+        server_source_file_id=server_source_file_id,
+        relative_path="d/source.csv",
+        content_sha256="d" * 64,
+        byte_length=123,
+        totals={"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+        resolution=resolution,
+    )
+    rows = json.loads(evidence_path.read_text(encoding="utf-8"))["cases"][0]["quarantine_rows"]
+
+    assert direct_sync_operator._committed_review_semantics_valid(
+        rows,
+        resolution=resolution,
+        server_source_file_id=server_source_file_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("resolution", "mutation"),
+    [
+        ("server_replayed", "empty_resolved_event"),
+        ("server_replayed", "mismatched_resolved_identity"),
+        ("server_replayed", "duplicate_resolved_event_id"),
+        ("historical_local_only", "unapproved_local_event"),
+        ("historical_superseded", "missing_existing_event"),
+    ],
+)
+def test_committed_review_evidence_rejects_shape_only_or_unbound_proof(
+    tmp_path,
+    resolution,
+    mutation,
+):
+    server_source_file_id = "server/source/exact.csv"
+    quarantined_count = 2 if mutation == "duplicate_resolved_event_id" else 1
+    evidence_path, _ = write_committed_review_evidence(
+        tmp_path,
+        relay_id="relay-proof",
+        request_id="request-proof",
+        server_source_file_id=server_source_file_id,
+        relative_path="d/source.csv",
+        content_sha256="d" * 64,
+        byte_length=123,
+        totals={
+            "inserted": 0,
+            "replayed": 0,
+            "quarantined": quarantined_count,
+            "errors": 0,
+        },
+        resolution=resolution,
+    )
+    rows = json.loads(evidence_path.read_text(encoding="utf-8"))["cases"][0]["quarantine_rows"]
+    row = rows[0]
+    if mutation == "empty_resolved_event":
+        row["resolved_common_event"] = {}
+    elif mutation == "mismatched_resolved_identity":
+        row["resolved_common_event"]["event_identity"] = f"{server_source_file_id}:99:0"
+    elif mutation == "duplicate_resolved_event_id":
+        rows[1]["resolved_common_event"]["id"] = row["resolved_common_event"]["id"]
+    elif mutation == "unapproved_local_event":
+        row["raw_event_name"] = "TRAY_COMPLETE"
+    else:
+        row["existing_event"] = {}
+
+    assert not direct_sync_operator._committed_review_semantics_valid(
+        rows,
+        resolution=resolution,
+        server_source_file_id=server_source_file_id,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -434,6 +606,22 @@ def test_operator_pause_preserves_mutation_when_audit_write_fails(tmp_path):
     assert report["audit_write_status"] == "FAIL"
     assert report["audit_write_error_code"] == "operator_audit_write_failed"
     assert Path(config.operator_pause_path).exists()
+
+
+def test_operator_cli_reports_audit_failure_and_exits_nonzero(capsys):
+    exit_code = operator_cli._emit(
+        {
+            "status": "PASS",
+            "operation": "resolve-review",
+            "audit_write_status": "FAIL",
+            "audit_write_error_code": "operator_audit_write_failed",
+        }
+    )
+
+    output = capsys.readouterr().out
+    assert exit_code == 1
+    assert "direct_sync_operator_audit_write_status=FAIL" in output
+    assert "direct_sync_operator_audit_write_error_code=operator_audit_write_failed" in output
 
 
 def test_operator_pause_write_failure_returns_blocked_without_marker(tmp_path):
@@ -978,9 +1166,10 @@ def test_operator_retry_dead_blocks_operator_review_rows(tmp_path):
                     "client_batch_id": relay_id,
                     "committed": True,
                     "status": "accepted",
-                    "retryable": False,
-                    "next_retry_after": None,
-                    "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+                        "retryable": False,
+                        "next_retry_after": None,
+                        "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+                        "source_file": {"declared_row_count": 1},
                 },
             )
         ),
@@ -1005,12 +1194,29 @@ def test_operator_retry_dead_allows_non_committed_operator_review_with_flag(tmp_
     enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
     relay_id = enqueued["last_result"]["relay_id"]
     with sqlite3.connect(config.db_path) as conn:
+        metadata = json.loads(
+            conn.execute(
+                "SELECT metadata_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+                (relay_id,),
+            ).fetchone()[0]
+        )
+        metadata.update(
+            {
+                "runtime_instance_id": "runtime-stale",
+                "runtime_public_jwk": {"kty": "EC"},
+                "runtime_fence": 7,
+                "runtime_request_token": None,
+                "runtime_request_sequence": 3,
+                "runtime_request_token_sha256": "a" * 64,
+            }
+        )
         conn.execute(
             """
             UPDATE direct_sync_relay_batches
             SET status = ?,
                 receipt_json = ?,
                 last_error_code = ?,
+                metadata_json = ?,
                 lease_owner = NULL,
                 lease_expires_at = NULL
             WHERE relay_id = ?
@@ -1019,6 +1225,7 @@ def test_operator_retry_dead_allows_non_committed_operator_review_with_flag(tmp_
                 RELAY_STATUS_OPERATOR_REVIEW,
                 json.dumps({"client_batch_id": relay_id}),
                 "upload_unhandled_exception",
+                json.dumps(metadata),
                 relay_id,
             ),
         )
@@ -1048,6 +1255,24 @@ def test_operator_retry_dead_allows_non_committed_operator_review_with_flag(tmp_
     assert retry_report["status"] == "PASS"
     assert retry_report["previous_status"] == RELAY_STATUS_OPERATOR_REVIEW
     assert retry_report["new_status"] == RELAY_STATUS_PENDING
+    assert retry_report["reset_runtime_metadata_fields"] == [
+        "runtime_fence",
+        "runtime_instance_id",
+        "runtime_public_jwk",
+        "runtime_request_sequence",
+        "runtime_request_token",
+        "runtime_request_token_sha256",
+    ]
+    with sqlite3.connect(config.db_path) as conn:
+        persisted_metadata = json.loads(
+            conn.execute(
+                "SELECT metadata_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+                (relay_id,),
+            ).fetchone()[0]
+        )
+    assert not set(direct_sync_operator.RETRY_RUNTIME_METADATA_FIELDS).intersection(
+        persisted_metadata
+    )
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_PENDING] == 1
 
 
@@ -1086,6 +1311,183 @@ def test_operator_retry_dead_blocks_committed_operator_review_even_with_flag(tmp
     assert retry_report["status"] == "BLOCKED"
     assert retry_report["previous_status"] == RELAY_STATUS_OPERATOR_REVIEW
     assert retry_report["error_code"] == "operator_review_committed_receipt_not_retryable"
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
+
+
+def test_operator_resolve_committed_review_preserves_receipt_and_records_atomic_audit(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    relay_id = enqueued["last_result"]["relay_id"]
+    reviewed = run_relay_once(
+        config,
+        session=FakeSession(
+            FakeResponse(
+                200,
+                {
+                    "request_id": "request-reviewed-exact",
+                    "server_source_file_id": "server/source/exact.csv",
+                    "client_batch_id": relay_id,
+                    "committed": True,
+                    "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
+                    "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+                    "source_file": {"declared_row_count": 1},
+                },
+            )
+        ),
+    )
+    with sqlite3.connect(config.db_path) as conn:
+        before = conn.execute(
+            "SELECT receipt_json, content_sha256, relative_path, byte_length FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+    audit_path = tmp_path / "operator-audit.jsonl"
+    expected_totals = {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0}
+    evidence_path, evidence_sha256 = write_committed_review_evidence(
+        tmp_path,
+        relay_id=relay_id,
+        request_id="request-reviewed-exact",
+        server_source_file_id="server/source/exact.csv",
+        relative_path=before[2],
+        content_sha256=before[1],
+        byte_length=before[3],
+        totals=expected_totals,
+    )
+    report = resolve_committed_operator_review(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="server evidence proves the quarantine was reconciled",
+        resolution="server_replayed",
+        evidence_path=evidence_path,
+        evidence_sha256=evidence_sha256,
+        expected_request_id="request-reviewed-exact",
+        expected_server_source_file_id="server/source/exact.csv",
+        expected_relative_path=before[2],
+        expected_byte_length=before[3],
+        expected_inserted_count=0,
+        expected_replayed_count=0,
+        expected_error_count=0,
+        expected_quarantined_count=1,
+        expected_content_sha256=before[1],
+        audit_log_path=audit_path,
+    )
+    repeated = resolve_committed_operator_review(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="server evidence proves the quarantine was reconciled",
+        resolution="server_replayed",
+        evidence_path=evidence_path,
+        evidence_sha256=evidence_sha256,
+        expected_request_id="request-reviewed-exact",
+        expected_server_source_file_id="server/source/exact.csv",
+        expected_relative_path=before[2],
+        expected_byte_length=before[3],
+        expected_inserted_count=0,
+        expected_replayed_count=0,
+        expected_error_count=0,
+        expected_quarantined_count=1,
+        expected_content_sha256=before[1],
+        audit_log_path=audit_path,
+    )
+    with sqlite3.connect(config.db_path) as conn:
+        after = conn.execute(
+            "SELECT status, receipt_json FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+        resolution = conn.execute(
+            "SELECT resolution, evidence_sha256, request_id, server_source_file_id, relative_path, byte_length, quarantined_count FROM direct_sync_operator_resolutions WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+
+    assert reviewed["status"] == RELAY_STATUS_OPERATOR_REVIEW
+    assert report["status"] == "PASS"
+    assert report["receipt_preserved"] is True
+    assert repeated["status"] == "PASS"
+    assert repeated["already_resolved"] is True
+    assert repeated["receipt_preserved"] is True
+    assert after == (RELAY_STATUS_ACKED, before[0])
+    assert resolution == (
+        "server_replayed",
+        evidence_sha256,
+        "request-reviewed-exact",
+        "server/source/exact.csv",
+        before[2],
+        before[3],
+        1,
+    )
+    assert operator_status(db_path=config.db_path)["status"] == "PASS"
+    audit = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines()]
+    assert len(audit) == 2
+    assert audit[0]["action"] == "resolve-review"
+    assert audit[1]["action"] == "resolve-review-idempotent"
+
+
+def test_operator_resolve_committed_review_blocks_mismatched_exact_evidence(tmp_path):
+    config = make_config(tmp_path)
+    source_file = write_csv(tmp_path)
+    enqueued = enqueue_completed_source_file(config, source_file_path=source_file)
+    relay_id = enqueued["last_result"]["relay_id"]
+    run_relay_once(
+        config,
+        session=FakeSession(
+            FakeResponse(
+                200,
+                {
+                    "request_id": "request-reviewed-exact",
+                    "server_source_file_id": "server/source/exact.csv",
+                    "client_batch_id": relay_id,
+                    "committed": True,
+                    "status": "accepted",
+                    "retryable": False,
+                    "next_retry_after": None,
+                    "totals": {"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+                    "source_file": {"declared_row_count": 1},
+                },
+            )
+        ),
+    )
+    with sqlite3.connect(config.db_path) as conn:
+        content_sha256 = conn.execute(
+            "SELECT content_sha256, relative_path, byte_length FROM direct_sync_relay_batches WHERE relay_id = ?",
+            (relay_id,),
+        ).fetchone()
+
+    evidence_path, evidence_sha256 = write_committed_review_evidence(
+        tmp_path,
+        relay_id=relay_id,
+        request_id="wrong-request",
+        server_source_file_id="server/source/exact.csv",
+        relative_path=content_sha256[1],
+        content_sha256=content_sha256[0],
+        byte_length=content_sha256[2],
+        totals={"inserted": 0, "replayed": 0, "quarantined": 1, "errors": 0},
+    )
+
+    report = resolve_committed_operator_review(
+        db_path=config.db_path,
+        relay_id=relay_id,
+        operator_id="operator-a",
+        reason="incorrect evidence must be rejected",
+        resolution="server_replayed",
+        evidence_path=evidence_path,
+        evidence_sha256=evidence_sha256,
+        expected_request_id="wrong-request",
+        expected_server_source_file_id="server/source/exact.csv",
+        expected_relative_path=content_sha256[1],
+        expected_byte_length=content_sha256[2],
+        expected_inserted_count=0,
+        expected_replayed_count=0,
+        expected_error_count=0,
+        expected_quarantined_count=1,
+        expected_content_sha256=content_sha256[0],
+    )
+
+    assert report["status"] == "BLOCKED"
+    assert report["error_code"] == "operator_review_request_id_mismatch"
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_OPERATOR_REVIEW] == 1
 
 

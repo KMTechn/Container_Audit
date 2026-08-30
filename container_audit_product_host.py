@@ -12,6 +12,8 @@ import sys
 from typing import Iterator, Sequence
 import uuid
 
+from writer_session_fence import writer_sink
+
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 USER_RELAY_MODE = "--container-audit-user-relay"
 ONBOARD_CURRENT_USER_MODE = "--onboard-current-user"
@@ -41,6 +43,7 @@ def _option_value(arguments: Sequence[str], option: str) -> str:
     return ""
 
 
+@writer_sink("hosted_relay_json")
 def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = path.with_name(f"{path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}")
@@ -59,6 +62,7 @@ def _write_json_atomic(path: Path, payload: dict[str, object]) -> None:
         raise
 
 
+@writer_sink("hosted_relay_jsonl")
 def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8", newline="\n") as handle:
@@ -68,6 +72,7 @@ def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
         os.fsync(handle.fileno())
 
 
+@writer_sink("hosted_relay_failure")
 def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> None:
     """Best-effort bounded evidence for a failure outside the relay runtime boundary."""
 

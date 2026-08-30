@@ -211,10 +211,15 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
         ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
         ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
         ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+        ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
         ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
         (
             "tools/container_writer_session_contract.json",
             "tools/container_writer_session_contract.json",
+        ),
+        (
+            "tools/container_writer_sink_inventory.json",
+            "tools/container_writer_sink_inventory.json",
         ),
     }
     for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):

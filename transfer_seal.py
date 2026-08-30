@@ -14,6 +14,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
+from writer_session_fence import writer_sink
+
 from logistics_runtime_profile import (
     LogisticsRuntimeConfigurationError,
     load_logistics_runtime_profile,
@@ -1764,6 +1766,7 @@ class LogisticsTransferClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    @writer_sink("transfer_api_request")
     def _request(
         self,
         method: str,
@@ -1807,6 +1810,7 @@ class LogisticsTransferClient:
         data = body.get("data")
         return dict(data) if isinstance(data, dict) else {}
 
+    @writer_sink("transfer_seal")
     def issue_operation_lease(
         self,
         *,
@@ -1952,6 +1956,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def adopt_phs_label(
         self,
         *,
@@ -1979,6 +1984,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def prepare_phs_label_exchange(
         self,
         *,
@@ -2005,6 +2011,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def prepare_phs_reconciliation_label_exchange(
         self,
         reconciliation_id: str,
@@ -2057,6 +2064,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def request_phs_label_print(
         self,
         exchange_id: str,
@@ -2082,6 +2090,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def complete_phs_label_print(
         self,
         print_attempt_id: str,
@@ -2118,6 +2127,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
     def activate_phs_label_exchange(
         self,
         exchange_id: str,
@@ -2176,6 +2186,7 @@ class LogisticsTransferClient:
             allow_not_found=True,
         )
 
+    @writer_sink("transfer_seal")
     def seal_transfer(self, context: Mapping[str, Any]) -> dict[str, Any]:
         scope_id = str(context.get("authority_scope_id") or "").strip()
         idempotency_key = str(context.get("idempotency_key") or "").strip()
@@ -2217,6 +2228,7 @@ class LogisticsTransferClient:
                 details={"exception_type": exc.__class__.__name__},
             ) from exc
 
+    @writer_sink("transfer_seal")
     def replace_bundle_members(self, context: Mapping[str, Any]) -> dict[str, Any]:
         scope_id = str(context.get("authority_scope_id") or "").strip()
         idempotency_key = str(context.get("idempotency_key") or "").strip()
@@ -2315,6 +2327,7 @@ class SealAttempt:
 class TransferSealStore:
     """Atomic local completion ledger and replayable SQLite transfer outbox."""
 
+    @writer_sink("transfer_seal")
     def __init__(self, db_path: str | os.PathLike[str]) -> None:
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -2359,6 +2372,7 @@ class TransferSealStore:
         return payload
 
     @classmethod
+    @writer_sink("transfer_seal")
     def _ensure_linked_event(
         cls,
         conn: sqlite3.Connection,
@@ -2418,6 +2432,7 @@ class TransferSealStore:
             (intent_id,),
         ).fetchone()
 
+    @writer_sink("transfer_seal")
     def _initialize(self) -> None:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -2721,6 +2736,7 @@ class TransferSealStore:
             "idempotency_key": idempotency_key,
         }
 
+    @writer_sink("transfer_seal")
     def prepare(
         self,
         *,
@@ -2848,6 +2864,7 @@ class TransferSealStore:
             ).fetchall()
         return rows[0] if len(rows) == 1 else None
 
+    @writer_sink("transfer_seal")
     def bind_command(self, intent_id: str, context: Mapping[str, Any]) -> sqlite3.Row:
         command_id = _normalize_identifier(context.get("idempotency_key"), "idempotency_key")
         command_json = _canonical_json(dict(context))
@@ -2884,6 +2901,7 @@ class TransferSealStore:
         return row
 
     @staticmethod
+    @writer_sink("transfer_seal")
     def _ensure_post_review_case(
         conn: sqlite3.Connection,
         row: Mapping[str, Any],
@@ -2987,6 +3005,7 @@ class TransferSealStore:
             raise ValueError("durable post review case was not created")
         return created
 
+    @writer_sink("transfer_seal")
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
         operator_review_codes = {
             "AMBIGUOUS_BUNDLE",
@@ -3045,6 +3064,7 @@ class TransferSealStore:
             conn.commit()
         return row
 
+    @writer_sink("transfer_seal")
     def record_receipt(self, intent_id: str, receipt: Mapping[str, Any], seal_qr_payload: str) -> sqlite3.Row:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -3116,6 +3136,7 @@ class TransferSealStore:
             ).fetchall()
         return list(rows)
 
+    @writer_sink("transfer_seal")
     def record_post_review_projection(
         self,
         review_case_id: str,
@@ -3198,6 +3219,7 @@ class TransferSealStore:
             row = conn.execute("SELECT 1 FROM transfer_seal_intents LIMIT 1").fetchone()
         return row is not None
 
+    @writer_sink("transfer_seal")
     def mark_phs_replacement_waiting(
         self,
         *,
@@ -3389,6 +3411,7 @@ class TransferSealStore:
             ).fetchall()
         return list(rows)
 
+    @writer_sink("transfer_seal")
     def record_replacement_waiting_projection(
         self,
         intent_id: str,
@@ -3468,6 +3491,7 @@ class TransferSealStore:
             conn.commit()
         return receipt
 
+    @writer_sink("transfer_seal")
     def record_exchange_block(self, *, reason_code: str, details: Mapping[str, Any]) -> str:
         created_at = _utc_now()
         material = {

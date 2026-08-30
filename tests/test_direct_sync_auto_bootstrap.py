@@ -51,6 +51,27 @@ def test_frozen_command_uses_hardened_main_in_process_mode(tmp_path):
     ]
 
 
+def test_portable_command_reenters_isolated_main_instead_of_running_tool_script(tmp_path):
+    app_root = _source_app(tmp_path)
+    portable_main = app_root / "main.py"
+    portable_main.write_text("# portable entry\n", encoding="utf-8")
+
+    command = bootstrap.build_session_direct_sync_command(
+        app_root=app_root,
+        direct_sync_root=tmp_path / "state",
+        scan_source_dir=tmp_path / "events",
+    )
+
+    assert command[:5] == [
+        bootstrap.sys.executable,
+        "-I",
+        "-B",
+        str(portable_main.resolve()),
+        "--container-audit-direct-sync-relay",
+    ]
+    assert str(app_root / "tools" / "direct_sync_relay_runner.py") not in command
+
+
 def test_missing_runner_is_fail_closed(tmp_path):
     result = bootstrap.run_session_direct_sync_once(
         app_root=tmp_path / "missing",

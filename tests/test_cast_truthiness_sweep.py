@@ -143,7 +143,12 @@ function Get-FileSha256([string]$Path) {
 function Test-BootstrapJsonInteger($Value) {
     return ($Value -is [int] -or $Value -is [long])
 }
-foreach ($name in @('Assert-WriterSessionPublicContract')) {
+foreach ($name in @(
+    'Test-WriterSessionContractExactPropertySet',
+    'Test-WriterSessionContractExactStringProperties',
+    'Get-WriterSessionContractMutexName',
+    'Assert-WriterSessionPublicContract'
+)) {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and

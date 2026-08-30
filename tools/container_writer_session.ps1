@@ -57,10 +57,53 @@ $Script:SystemMutationAttemptCount = 0
 $Script:AdapterPath = [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path)
 $Script:IntegrityHelperPath = Join-Path $PSScriptRoot 'bootstrap_integrity.ps1'
 $Script:ContractPath = Join-Path $PSScriptRoot 'container_writer_session_contract.json'
+$Script:WriterFenceHelperPath = Join-Path $PSScriptRoot 'container_writer_fence.ps1'
+$Script:WriterSinkInventoryPath = Join-Path $PSScriptRoot 'container_writer_sink_inventory.json'
+$Script:LifecycleDelegatedWriterSources = @(
+    'current_user_lifecycle_restore',
+    'current_user_onboarding_storage',
+    'current_user_setup_removal',
+    'direct_sync_enqueue',
+    'direct_sync_relay_cycle',
+    'direct_sync_scan_drain',
+    'direct_sync_scan_result',
+    'direct_sync_scan_status',
+    'hosted_relay_failure',
+    'hosted_relay_json',
+    'hosted_relay_jsonl',
+    'legacy_state_migration',
+    'legacy_state_storage',
+    'persistent_relay_process_start',
+    'persistent_relay_registry',
+    'persistent_relay_status',
+    'producer_runtime_storage',
+    'raw_relay_runner',
+    'raw_relay_storage',
+    'relay_batch_claim',
+    'relay_batch_drain',
+    'relay_runtime_storage',
+    'relay_spool_enqueue',
+    'relay_spool_storage',
+    'relay_stale_lease_reset',
+    'session_direct_sync_process',
+    'storage_atomic_json',
+    'user_relay_autostart_install',
+    'user_relay_autostart_remove'
+)
+$Script:ContainmentDelegatedWriterSources = @(
+    'current_user_onboarding_storage',
+    'current_user_setup_removal',
+    'persistent_relay_status',
+    'user_relay_autostart_remove'
+)
 if (-not (Test-Path -LiteralPath $Script:IntegrityHelperPath -PathType Leaf)) {
     throw 'Container writer session adapter cannot load its integrity helper.'
 }
 . $Script:IntegrityHelperPath
+if (-not (Test-Path -LiteralPath $Script:WriterFenceHelperPath -PathType Leaf)) {
+    throw 'Container writer session adapter cannot load its all-writer fence helper.'
+}
+. $Script:WriterFenceHelperPath
 $Script:AdapterSha256 = Get-FileSha256 $Script:AdapterPath
 
 function Get-ObjectPropertyValue($Value, [string]$Name, $Default = $null) {
@@ -91,15 +134,7 @@ function Get-ContainerSessionAuthorityMutexName(
     [string]$CurrentReplacementTransactionId,
     [string]$CurrentContractSha256
 ) {
-    $tuple = @(
-        'container-audit-deployment-session-authority-v1',
-        $CurrentSessionId,
-        $CurrentAttemptId,
-        $CurrentOrchestratorSha256,
-        $CurrentReplacementTransactionId,
-        $CurrentContractSha256
-    ) -join "`n"
-    return 'Local\KMTech.ContainerAudit.DeploymentSession.' + (Get-StringSha256 $tuple)
+    return Get-ContainerWriterSessionAuthorityMutexName $CurrentSessionId $CurrentAttemptId $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256
 }
 
 function Test-ContainerSessionAuthorityMutexHeld(
@@ -321,16 +356,37 @@ function Open-PinnedReadLock([string]$Path, [int64]$MaximumBytes, [string]$Expec
 function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
     Assert-Hex $ExpectedSha256 64 'expected writer session contract SHA-256'
     $contract = Read-BoundedJson $Script:ContractPath 65536 $ExpectedSha256
-    $top = @('schema','app_id','cli','identifiers','operations','receipts','lifecycle_restore','security')
+    $top = @('schema','app_id','cli','identifiers','all_writer_fence','operations','receipts','lifecycle_restore','security')
     $cliFields = @('relative_path','public_writer_modes','compatibility_modes','contract_mode','success_exit_code','failure_exit_codes')
     $identifierFields = @('session_id_pattern','attempt_id_pattern','sha256_pattern','commit_pattern','session_max_age_hours','session_authority_mutex_derivation')
     $receiptFields = @('prepared_schema','restored_schema','recovery_schema','replacement_schema','replacement_validation_schema','lifecycle_restore_schema','historical_schema','prepared_required_bindings')
     $restoreFields = @('writer_mode','product_mode','product_execution_tree','product_mode_arguments','transaction_argument','replacement_receipt_argument','replacement_receipt_sha256_argument','code_restore_evidence_argument','code_restore_evidence_sha256_argument','writer_mode_output_argument','recover_writer_output_argument','writer_contract_sha256_argument','order','require_same_session_receipt','require_code_restore_before_writer_restore','require_lifecycle_restore_before_writer_restore','require_live_current_user_lifecycle_before_writer_restore','require_non_elevated_medium_integrity_lifecycle_producer','producer_code_tree_read_locked_through_execution','failure_is_explicit')
-    $securityFields = @('secret_values_recorded','manual_writer_start_allowed','contract_mode_system_mutation','active_session_authority_mutex_required','evidence_paths_outside_install_parent_required','evidence_paths_local_fixed_drive_required','evidence_path_reparse_ancestors_forbidden','evidence_path_aliases_canonicalized')
+    $allWriterFenceFields = @('active_schema','release_schema','control_root','active_filename','release_filename_pattern','admission_mutex_name','noncanonical_mutex_derivation','session_mutex_prefix','session_tuple_version','session_tuple_fields','tuple_separator','tuple_encoding','tuple_normalization','writer_inventory_path','writer_inventory_sha256','canonical_installer_delegation_source','scheduled_task_mutation_rule','natural_trigger_phase_rule','verification_vectors','active_statuses','writer_admission_fail_closed','unknown_or_unobservable_is_denied','denial_mutates_state')
+    $allWriterVectorFields = @('session_id','attempt_id','orchestrator_sha256','replacement_transaction_id','writer_contract_sha256','expected_mutex_name')
+    $securityFields = @('secret_values_recorded','manual_writer_start_allowed','contract_mode_system_mutation','active_session_authority_mutex_required','evidence_paths_outside_install_parent_required','evidence_paths_local_fixed_drive_required','evidence_path_reparse_ancestors_forbidden','evidence_path_aliases_canonicalized','all_writer_fence_required','all_writer_sinks_require_admission')
+    $allWriterVectorsExact = $true
+    foreach ($vector in @($contract.all_writer_fence.verification_vectors)) {
+        foreach ($field in $allWriterVectorFields) {
+            $property = $vector.PSObject.Properties[$field]
+            if ($null -eq $property -or $property.Value -isnot [string]) { $allWriterVectorsExact = $false }
+        }
+        if (
+            -not (Test-ExactPropertySet $vector $allWriterVectorFields) -or
+            [string]$vector.expected_mutex_name -cne (Get-ContainerWriterSessionAuthorityMutexName `
+                ([string]$vector.session_id) `
+                ([string]$vector.attempt_id) `
+                ([string]$vector.orchestrator_sha256) `
+                ([string]$vector.replacement_transaction_id) `
+                ([string]$vector.writer_contract_sha256))
+        ) { $allWriterVectorsExact = $false }
+    }
     if (
         -not (Test-ExactPropertySet $contract $top) -or
         -not (Test-ExactPropertySet $contract.cli $cliFields) -or
         -not (Test-ExactPropertySet $contract.identifiers $identifierFields) -or
+        -not (Test-ExactPropertySet $contract.all_writer_fence $allWriterFenceFields) -or
+        @($contract.all_writer_fence.verification_vectors).Count -ne 2 -or
+        -not $allWriterVectorsExact -or
         -not (Test-ExactPropertySet $contract.receipts $receiptFields) -or
         -not (Test-ExactPropertySet $contract.lifecycle_restore $restoreFields) -or
         -not (Test-ExactPropertySet $contract.security $securityFields)
@@ -376,6 +432,29 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
         [string]$contract.identifiers.commit_pattern -cne '^[0-9a-f]{40}$' -or
         -not (Test-JsonInteger $contract.identifiers.session_max_age_hours) -or [int64]$contract.identifiers.session_max_age_hours -ne 24 -or
         [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
+        [string]$contract.all_writer_fence.active_schema -cne $Script:ContainerWriterFenceActiveSchema -or
+        [string]$contract.all_writer_fence.release_schema -cne $Script:ContainerWriterFenceReleaseSchema -or
+        [string]$contract.all_writer_fence.control_root -cne '%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\writer-session' -or
+        [string]$contract.all_writer_fence.active_filename -cne 'active.json' -or
+        [string]$contract.all_writer_fence.release_filename_pattern -cne 'release-{replacement_transaction_id}-{release_authorization_sha256}.json' -or
+        [string]$contract.all_writer_fence.admission_mutex_name -cne $Script:ContainerWriterFenceAdmissionMutexName -or
+        [string]$contract.all_writer_fence.noncanonical_mutex_derivation -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1.<first 16 lowercase hex characters of SHA-256 over the absolute control root after slash-to-backslash conversion, trailing-backslash removal, Unicode NFC, and ASCII A-Z to a-z mapping with every other code point unchanged, encoded as UTF-8 without BOM>' -or
+        [string]$contract.all_writer_fence.session_mutex_prefix -cne $Script:ContainerWriterFenceSessionMutexPrefix -or
+        [string]$contract.all_writer_fence.session_tuple_version -cne $Script:ContainerWriterFenceTupleVersion -or
+        (@($contract.all_writer_fence.session_tuple_fields) -join ',') -cne 'session_tuple_version,session_id,attempt_id,orchestrator_sha256,replacement_transaction_id,writer_contract_sha256' -or
+        [string]$contract.all_writer_fence.tuple_separator -cne 'LF (U+000A) between ordered fields; no trailing LF' -or
+        [string]$contract.all_writer_fence.tuple_encoding -cne 'UTF-8 without BOM' -or
+        [string]$contract.all_writer_fence.tuple_normalization -cne 'Unicode NFC applied to each field before joining' -or
+        [string]$contract.all_writer_fence.writer_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
+        [string]$contract.all_writer_fence.canonical_installer_delegation_source -cne 'writer_sink_sources from the exact pinned code-derived inventory' -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.scheduled_task_mutation_rule) -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.natural_trigger_phase_rule) -or
+        -not (Test-ContainerWriterFenceHex ([string]$contract.all_writer_fence.writer_inventory_sha256) 64) -or
+        [string]$contract.all_writer_fence.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        (@($contract.all_writer_fence.active_statuses) -join ',') -cne 'PREPARING,PREPARED,RESTORING,RESTORE_FAILED,INSTALLING' -or
+        $contract.all_writer_fence.writer_admission_fail_closed -isnot [bool] -or -not [bool]$contract.all_writer_fence.writer_admission_fail_closed -or
+        $contract.all_writer_fence.unknown_or_unobservable_is_denied -isnot [bool] -or -not [bool]$contract.all_writer_fence.unknown_or_unobservable_is_denied -or
+        $contract.all_writer_fence.denial_mutates_state -isnot [bool] -or [bool]$contract.all_writer_fence.denial_mutates_state -or
         [string]$contract.receipts.prepared_schema -cne $Script:PreparedSchema -or
         [string]$contract.receipts.restored_schema -cne $Script:RestoredSchema -or
         [string]$contract.receipts.recovery_schema -cne $Script:RecoverySchema -or
@@ -408,12 +487,52 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
         $contract.security.manual_writer_start_allowed -isnot [bool] -or [bool]$contract.security.manual_writer_start_allowed -or
         $contract.security.contract_mode_system_mutation -isnot [bool] -or [bool]$contract.security.contract_mode_system_mutation -or
         $contract.security.active_session_authority_mutex_required -isnot [bool] -or -not [bool]$contract.security.active_session_authority_mutex_required -or
+        $contract.security.all_writer_fence_required -isnot [bool] -or -not [bool]$contract.security.all_writer_fence_required -or
+        $contract.security.all_writer_sinks_require_admission -isnot [bool] -or -not [bool]$contract.security.all_writer_sinks_require_admission -or
         $contract.security.evidence_paths_outside_install_parent_required -isnot [bool] -or -not [bool]$contract.security.evidence_paths_outside_install_parent_required -or
         $contract.security.evidence_paths_local_fixed_drive_required -isnot [bool] -or -not [bool]$contract.security.evidence_paths_local_fixed_drive_required -or
         $contract.security.evidence_path_reparse_ancestors_forbidden -isnot [bool] -or -not [bool]$contract.security.evidence_path_reparse_ancestors_forbidden -or
         $contract.security.evidence_path_aliases_canonicalized -isnot [bool] -or -not [bool]$contract.security.evidence_path_aliases_canonicalized
     ) { throw 'Writer session public contract semantic binding differs.' }
     return $contract
+}
+
+function Read-ContainerWriterSinkInventory(
+    $Contract,
+    [string]$ProducerRoot = '',
+    [switch]$SourceTreeSelfTest
+) {
+    $root = if ([string]::IsNullOrWhiteSpace($ProducerRoot)) {
+        Split-Path -Parent $PSScriptRoot
+    }
+    else { Get-StrictFullPath $ProducerRoot 'writer sink inventory producer root' }
+    $manifestPath = Join-Path $root 'portable-manifest.json'
+    $inventoryPath = Join-Path $root ([string]$Contract.all_writer_fence.writer_inventory_path).Replace('/', '\')
+    if ($SourceTreeSelfTest.IsPresent) {
+        $inventory = Read-BoundedJson $inventoryPath 1048576
+    }
+    else {
+        $manifest = Read-BoundedJson $manifestPath 65536
+        if (
+            [string]$manifest.writer_sink_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
+            [string]$manifest.writer_sink_inventory_contract_sha256 -cne [string]$Contract.all_writer_fence.writer_inventory_sha256
+        ) { throw 'Writer sink inventory manifest binding differs.' }
+        $inventory = Read-BoundedJson $inventoryPath 1048576 ([string]$manifest.writer_sink_inventory_sha256).ToLowerInvariant()
+    }
+    $sources = @($inventory.writer_sink_sources)
+    if (
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v5' -or
+        [string]$inventory.inventory_sha256 -cne [string]$Contract.all_writer_fence.writer_inventory_sha256 -or
+        $inventory.writer_sink_sources -isnot [Object[]] -or
+        $sources.Count -le 0 -or
+        @($sources | Where-Object { $_ -isnot [string] -or [string]::IsNullOrWhiteSpace([string]$_) }).Count -ne 0 -or
+        (@($sources | Sort-Object -Unique) -join "`n") -cne ($sources -join "`n") -or
+        @($inventory.uncovered_direct_mutation_functions).Count -ne 0 -or
+        @($inventory.powershell_guard_failures).Count -ne 0 -or
+        @($inventory.known_route_coverage).Count -le 0 -or
+        @($inventory.known_route_coverage | Where-Object { $_.pass -isnot [bool] -or -not [bool]$_.pass }).Count -ne 0
+    ) { throw 'Writer sink inventory contract is not release-admissible.' }
+    return [Object[]]$sources
 }
 
 function Assert-ContainerWriterPublicInvocation(
@@ -788,7 +907,15 @@ function Assert-LiveMatchesHistorical($Live, $Historical, [string]$CanonicalInst
     if (-not $exact) { throw 'Live Container writer identity drifted from the eight-point capability receipt.' }
 }
 
-function Invoke-ContainerWriterSafetyFence([string]$CanonicalInstallRoot, [string]$ExpectedBindingSha256, [string]$Reason) {
+function Invoke-ContainerWriterSafetyFence {
+    param(
+        [string]$CanonicalInstallRoot,
+        [string]$ExpectedBindingSha256,
+        [string]$Reason,
+        [string]$CurrentSessionId,
+        [string]$CurrentAttemptId,
+        [string]$CurrentReplacementTransactionId
+    )
     try {
         $live = Get-ContainerWriterReadback $CanonicalInstallRoot
         if ([string]$live.identity.status -cne 'PASS' -or [string]$live.identity.binding_sha256 -cne $ExpectedBindingSha256) {
@@ -797,7 +924,12 @@ function Invoke-ContainerWriterSafetyFence([string]$CanonicalInstallRoot, [strin
         $mutation = $false
         if ([bool]$live.enabled) {
             Register-ContainerSystemMutationAttempt
-            Disable-ScheduledTask -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop | Out-Null
+            [void](Disable-ContainerScheduledTaskUnderWriterFence `
+                -SessionId $CurrentSessionId `
+                -AttemptId $CurrentAttemptId `
+                -ReplacementTransactionId $CurrentReplacementTransactionId `
+                -TaskName $Script:TaskName `
+                -TaskPath $Script:TaskPath)
             $mutation = $true
         }
         $disabled = Wait-ContainerCondition -TimeoutSeconds 45 -Predicate {
@@ -881,11 +1013,25 @@ function Invoke-ContainerWriterPrepare {
         quiescence = [ordered]@{ status = 'NOT_RUN'; trigger_boundary_utc = ''; stable_baseline = $null; after_trigger = $null; last_run_time_unchanged = $false; log_unchanged = $false; runtime_status_unchanged = $false; exact_writer_process_count = -1 }
         failure = [ordered]@{ status = 'NONE'; stage = ''; code = ''; failure_type = ''; silently_ignored = $false; emergency_restore_attempted = $false; emergency_restore_succeeded = $null; safety_fence = $null; retain_disabled_requested = $RetainDisabled.IsPresent }
     }
-    [void](Write-JsonAtomic $outputFull $receipt)
-    $stage = 'CAPABILITY_VALIDATION'
+    $initialReceiptRecord = Write-JsonAtomic $outputFull $receipt
+    $stage = 'ALL_WRITER_FENCE_ACTIVATION'
     $mutationStarted = $false
+    $writerFenceStarted = $false
     $pre = $null
     try {
+        [void](Start-ContainerWriterFence `
+            -Status 'PREPARING' `
+            -OwnerKind 'session_adapter' `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -SessionStartedAtUtc $CurrentSessionStartedAtUtc `
+            -OrchestratorSha256 $CurrentOrchestratorSha256 `
+            -WriterContractSha256 $CurrentContractSha256 `
+            -PreparedReceiptPath $outputFull `
+            -PreparedReceiptSha256 ([string]$initialReceiptRecord.sha256))
+        $writerFenceStarted = $true
+        $stage = 'CAPABILITY_VALIDATION'
         $historical = Read-ContainerHistoricalCapability $capabilityFull $CapabilitySha256 $root
         $receipt.historical_capability.eight_points_pass = $true
         $receipt.historical_capability.capability_binding_sha256 = [string]$historical.preimage.binding_sha256
@@ -910,7 +1056,12 @@ function Invoke-ContainerWriterPrepare {
         $stage = 'DISABLE'
         $mutationStarted = $true
         Register-ContainerSystemMutationAttempt
-        Disable-ScheduledTask -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop | Out-Null
+        [void](Disable-ContainerScheduledTaskUnderWriterFence `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -TaskName $Script:TaskName `
+            -TaskPath $Script:TaskPath)
         $receipt.disable.status = 'COMMAND_SUCCEEDED'
         $disabled = Wait-ContainerCondition -TimeoutSeconds 45 -Predicate {
             $candidate = Get-ContainerWriterReadback $root
@@ -968,7 +1119,7 @@ function Invoke-ContainerWriterPrepare {
         $receipt.failure.failure_type = $_.Exception.GetType().Name
         if ($mutationStarted -and $null -ne $pre) {
             if ($RetainDisabled.IsPresent) {
-                $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'PREPARE_FAILED_RETAIN_DISABLED'
+                $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'PREPARE_FAILED_RETAIN_DISABLED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
             }
             else {
                 $receipt.failure.emergency_restore_attempted = $true
@@ -980,7 +1131,12 @@ function Invoke-ContainerWriterPrepare {
                         [bool]$beforeEnable.enabled -or [string]$beforeEnable.state -cne 'Disabled'
                     ) { throw 'Emergency restore precondition is not exact.' }
                     Register-ContainerSystemMutationAttempt
-                    Enable-ScheduledTask -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop | Out-Null
+                    [void](Enable-ContainerScheduledTaskUnderWriterFence `
+                        -SessionId $CurrentSessionId `
+                        -AttemptId $CurrentAttemptId `
+                        -ReplacementTransactionId $CurrentReplacementTransactionId `
+                        -TaskName $Script:TaskName `
+                        -TaskPath $Script:TaskPath)
                     $receipt.failure.emergency_restore_succeeded = Wait-ContainerCondition -TimeoutSeconds 45 -Predicate {
                         $candidate = Get-ContainerWriterReadback $root
                         return (
@@ -991,7 +1147,29 @@ function Invoke-ContainerWriterPrepare {
                 }
                 catch { $receipt.failure.emergency_restore_succeeded = $false }
                 if ([bool]$receipt.failure.emergency_restore_succeeded -ne $true) {
-                    $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'EMERGENCY_RESTORE_FAILED'
+                    $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'EMERGENCY_RESTORE_FAILED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
+                }
+            }
+        }
+        $safeToAbortFence = (
+            $writerFenceStarted -and
+            (-not $mutationStarted -or [bool]$receipt.failure.emergency_restore_succeeded -eq $true)
+        )
+        if ($safeToAbortFence) {
+            try {
+                [void](Abort-ContainerWriterFence `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId)
+                $writerFenceStarted = $false
+            }
+            catch {
+                $receipt.failure.safety_fence = [ordered]@{
+                    status = 'FAIL'
+                    reason = 'ALL_WRITER_FENCE_ABORT_FAILED'
+                    task_mutation = $false
+                    live_disabled_exact = $false
+                    failure_type = $_.Exception.GetType().Name
                 }
             }
         }
@@ -999,6 +1177,14 @@ function Invoke-ContainerWriterPrepare {
     $receipt.completed_at_utc = [DateTime]::UtcNow.ToString('o')
     try {
         $record = Write-JsonAtomic $outputFull $receipt -AllowReplace
+        if ([string]$receipt.status -ceq 'PREPARED_DISABLED') {
+            [void](Set-ContainerWriterFencePrepared `
+                -SessionId $CurrentSessionId `
+                -AttemptId $CurrentAttemptId `
+                -ReplacementTransactionId $CurrentReplacementTransactionId `
+                -PreparedReceiptPath $outputFull `
+                -PreparedReceiptSha256 ([string]$record.sha256))
+        }
     }
     catch {
         $persistenceFailureType = $_.Exception.GetType().Name
@@ -1008,7 +1194,7 @@ function Invoke-ContainerWriterPrepare {
         $receipt.failure.code = 'CONTAINER_WRITER_PREPARE_FINAL_EVIDENCE_FAILED'
         $receipt.failure.failure_type = $persistenceFailureType
         if ($null -ne $pre -and -not [string]::IsNullOrWhiteSpace([string]$pre.identity.binding_sha256)) {
-            $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'PREPARE_FINAL_EVIDENCE_FAILED_RETAIN_DISABLED'
+            $receipt.failure.safety_fence = Invoke-ContainerWriterSafetyFence $root ([string]$pre.identity.binding_sha256) 'PREPARE_FINAL_EVIDENCE_FAILED_RETAIN_DISABLED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
         }
         $receipt.completed_at_utc = [DateTime]::UtcNow.ToString('o')
         try { [void](Write-JsonAtomic $outputFull $receipt -AllowReplace) } catch { }
@@ -1136,12 +1322,27 @@ function Test-ContainerPreparedReceipt {
         }
         $receipt = Read-BoundedJson $Path 1048576 $ExpectedSha256
         $exact = Test-PreparedReceiptPayload $receipt $receiptPath $CurrentSessionId $CurrentAttemptId $CurrentSessionStartedAtUtc $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256 $CapabilitySha256 $Script:AdapterSha256
+        $fenceFailureCode = ''
+        if ($exact) {
+            try {
+                [void](Assert-ContainerWriterFencePreparedBinding `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId `
+                    -PreparedReceiptPath $receiptPath `
+                    -PreparedReceiptSha256 $ExpectedSha256)
+            }
+            catch {
+                $exact = $false
+                $fenceFailureCode = 'ALL_WRITER_FENCE_BINDING_INVALID'
+            }
+        }
         if (-not $exact -or -not $RequireLiveDisabled.IsPresent) {
             return [pscustomobject][ordered]@{
                 status = if ($exact) { 'PASS' } else { 'FAIL' }
                 payload = if ($exact) { $receipt } else { $null }
                 live_disabled_exact = $null
-                failure_code = if ($exact) { '' } else { 'PREPARED_RECEIPT_CONTRACT_INVALID' }
+                failure_code = if ($exact) { '' } elseif ($fenceFailureCode) { $fenceFailureCode } else { 'PREPARED_RECEIPT_CONTRACT_INVALID' }
             }
         }
         $live = Get-ContainerWriterReadback $CanonicalInstallRoot
@@ -1591,6 +1792,18 @@ function Invoke-ContainerLifecycleRestoreProduct {
     $currentTreeLocks = $null
     $producerTreeLocks = $null
     $lifecycleMutationAttempted = $false
+    $delegationToken = ''
+    $delegationInstalled = $false
+    $delegationEnvironmentNames = @(
+        'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID'
+    )
+    $delegationEnvironmentBefore = @{}
+    foreach ($name in $delegationEnvironmentNames) {
+        $delegationEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
     try {
         $replacementReceiptLock = Open-PinnedReadLock $ReplacementReceiptPathForBinding 1048576 $ReplacementReceiptSha256ForBinding
         $replacement = Read-BoundedJson $ReplacementReceiptPathForBinding 1048576 $ReplacementReceiptSha256ForBinding
@@ -1612,6 +1825,24 @@ function Invoke-ContainerLifecycleRestoreProduct {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw 'Verified failed-new lifecycle producer is incomplete.' }
             Assert-BootstrapNoReparsePoint $required 'verified failed-new lifecycle producer file'
         }
+        $writerContract = Read-ContainerWriterPublicContract $CurrentContractSha256
+        $knownWriterSources = Read-ContainerWriterSinkInventory $writerContract $producer
+        $missingDelegatedSources = @($Script:LifecycleDelegatedWriterSources | Where-Object { $_ -cnotin $knownWriterSources })
+        if ($missingDelegatedSources.Count -ne 0) { throw 'Lifecycle delegation names are absent from the code-derived writer inventory.' }
+        $delegatedWriterSources = [Object[]]@($Script:LifecycleDelegatedWriterSources)
+        $delegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
+        [void](Set-ContainerWriterFenceDelegation `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -DelegationToken $delegationToken `
+            -DelegatedSources $delegatedWriterSources `
+            -LifetimeSeconds 180)
+        $delegationInstalled = $true
+        [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', $delegationToken, 'Process')
+        [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $CurrentSessionId, 'Process')
+        [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID', $CurrentAttemptId, 'Process')
+        [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $CurrentReplacementTransactionId, 'Process')
         Register-ContainerSystemMutationAttempt
         $lifecycleMutationAttempted = $true
         $lines = @(
@@ -1648,7 +1879,7 @@ function Invoke-ContainerLifecycleRestoreProduct {
         $currentTreeLocks = $null
         if ($null -ne $replacementReceiptLock) { $replacementReceiptLock.Dispose(); $replacementReceiptLock = $null }
         $containment = if ($lifecycleMutationAttempted) {
-            Invoke-ContainerLifecycleFailureContainment $producer $root $ReplacementReceiptPathForBinding $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId
+            Invoke-ContainerLifecycleFailureContainment $producer $root $ReplacementReceiptPathForBinding $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId $CurrentSessionId $CurrentAttemptId $CurrentContractSha256
         } else {
             [pscustomobject][ordered]@{ status = 'NOT_REQUIRED'; child_exit_code = -1; report_path = ''; report_sha256 = ''; failure_type = ''; silently_ignored = $false }
         }
@@ -1666,6 +1897,20 @@ function Invoke-ContainerLifecycleRestoreProduct {
         }
     }
     finally {
+        if ($delegationInstalled) {
+            try {
+                [void](Clear-ContainerWriterFenceDelegation `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId `
+                    -DelegationToken $delegationToken)
+            }
+            finally {
+                foreach ($name in $delegationEnvironmentNames) {
+                    [Environment]::SetEnvironmentVariable($name, $delegationEnvironmentBefore[$name], 'Process')
+                }
+            }
+        }
         Close-ContainerVerifiedTreeReadLocks $producerTreeLocks
         Close-ContainerVerifiedTreeReadLocks $currentTreeLocks
         if ($null -ne $replacementReceiptLock) { $replacementReceiptLock.Dispose() }
@@ -1678,17 +1923,35 @@ function Invoke-ContainerLifecycleFailureContainment {
         [string]$CanonicalInstallRoot,
         [string]$ReplacementReceiptPathForBinding,
         [string]$ReplacementReceiptSha256ForBinding,
-        [string]$CurrentReplacementTransactionId
+        [string]$CurrentReplacementTransactionId,
+        [string]$CurrentSessionId,
+        [string]$CurrentAttemptId,
+        [string]$CurrentContractSha256
     )
     $childExit = -1
     $replacementReceiptLock = $null
     $currentTreeLocks = $null
     $producerTreeLocks = $null
+    $delegationToken = ''
+    $delegationOwned = $false
+    $delegationEnvironmentNames = @(
+        'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID',
+        'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID'
+    )
+    $delegationEnvironmentBefore = @{}
+    foreach ($name in $delegationEnvironmentNames) {
+        $delegationEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+    }
     try {
         $producer = Get-StrictFullPath $ProducerRoot 'verified failed-new producer root'
         $root = Get-StrictFullPath $CanonicalInstallRoot 'Container install root'
         Assert-Hex $ReplacementReceiptSha256ForBinding 64 'replacement receipt SHA-256'
         Assert-Hex $CurrentReplacementTransactionId 32 'replacement transaction id'
+        Assert-Hex $CurrentSessionId 32 'session id'
+        Assert-Hex $CurrentAttemptId 32 'attempt id'
+        Assert-Hex $CurrentContractSha256 64 'writer session contract SHA-256'
         $replacementReceiptLock = Open-PinnedReadLock $ReplacementReceiptPathForBinding 1048576 $ReplacementReceiptSha256ForBinding
         $replacement = Read-BoundedJson $ReplacementReceiptPathForBinding 1048576 $ReplacementReceiptSha256ForBinding
         if (
@@ -1708,6 +1971,38 @@ function Invoke-ContainerLifecycleFailureContainment {
         foreach ($required in @($python, $entry)) {
             if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw 'Verified failed-new containment producer is incomplete.' }
             Assert-BootstrapNoReparsePoint $required 'verified failed-new containment producer file'
+        }
+        $writerContract = Read-ContainerWriterPublicContract $CurrentContractSha256
+        $knownWriterSources = Read-ContainerWriterSinkInventory $writerContract $producer
+        $missingDelegatedSources = @($Script:ContainmentDelegatedWriterSources | Where-Object { $_ -cnotin $knownWriterSources })
+        if ($missingDelegatedSources.Count -ne 0) { throw 'Containment delegation names are absent from the code-derived writer inventory.' }
+        $active = Assert-ContainerWriterFenceOwner `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId
+        $existingToken = [Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', 'Process')
+        if (-not [string]::IsNullOrWhiteSpace([string]$active.delegation_sha256)) {
+            if (
+                [string]::IsNullOrWhiteSpace($existingToken) -or
+                [string]$active.delegation_sha256 -cne (Get-ContainerWriterFenceStringSha256 $existingToken) -or
+                @($Script:ContainmentDelegatedWriterSources | Where-Object { $_ -cnotin @($active.delegated_sources) }).Count -ne 0
+            ) { throw 'Existing containment writer delegation is not current-session exact.' }
+            $delegationToken = $existingToken
+        }
+        else {
+            $delegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
+            [void](Set-ContainerWriterFenceDelegation `
+                -SessionId $CurrentSessionId `
+                -AttemptId $CurrentAttemptId `
+                -ReplacementTransactionId $CurrentReplacementTransactionId `
+                -DelegationToken $delegationToken `
+                -DelegatedSources ([Object[]]@($Script:ContainmentDelegatedWriterSources)) `
+                -LifetimeSeconds 180)
+            $delegationOwned = $true
+            [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', $delegationToken, 'Process')
+            [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $CurrentSessionId, 'Process')
+            [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID', $CurrentAttemptId, 'Process')
+            [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $CurrentReplacementTransactionId, 'Process')
         }
         Register-ContainerSystemMutationAttempt
         $lines = @(& $python -I -B $entry '--remove-current-user-setup' '--app-root' (Join-Path $root 'app') 2>&1)
@@ -1739,6 +2034,20 @@ function Invoke-ContainerLifecycleFailureContainment {
         return [pscustomobject][ordered]@{ status = 'FAIL'; child_exit_code = $childExit; report_path = ''; report_sha256 = ''; failure_type = $_.Exception.GetType().Name; silently_ignored = $false }
     }
     finally {
+        if ($delegationOwned) {
+            try {
+                [void](Clear-ContainerWriterFenceDelegation `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId `
+                    -DelegationToken $delegationToken)
+            }
+            finally {
+                foreach ($name in $delegationEnvironmentNames) {
+                    [Environment]::SetEnvironmentVariable($name, $delegationEnvironmentBefore[$name], 'Process')
+                }
+            }
+        }
         Close-ContainerVerifiedTreeReadLocks $producerTreeLocks
         Close-ContainerVerifiedTreeReadLocks $currentTreeLocks
         if ($null -ne $replacementReceiptLock) { $replacementReceiptLock.Dispose() }
@@ -1824,6 +2133,7 @@ function Invoke-ContainerWriterRestore {
     $producerTrusted = $false
     $containmentAuthorized = $false
     $lifecycleValidated = $false
+    $allWriterFenceReleased = $false
     try {
         $replacementReceipt = Read-BoundedJson $replacementFull 1048576 $ReplacementReceiptSha256ForBinding
         if (
@@ -1858,11 +2168,11 @@ function Invoke-ContainerWriterRestore {
         $safetyResult = $null
         $containmentResult = $null
         if (-not [string]::IsNullOrWhiteSpace($binding)) {
-            $safetyResult = Invoke-ContainerWriterSafetyFence $root $binding 'DIRECT_RESTORE_PREFLIGHT_FAILED_RETAIN_DISABLED'
+            $safetyResult = Invoke-ContainerWriterSafetyFence $root $binding 'DIRECT_RESTORE_PREFLIGHT_FAILED_RETAIN_DISABLED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
             $safetyStatus = [string]$safetyResult.status
         }
         if ($containmentAuthorized -and $producerTrusted -and -not [string]::IsNullOrWhiteSpace($producerRoot)) {
-            $containmentResult = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId
+            $containmentResult = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId $CurrentSessionId $CurrentAttemptId $CurrentContractSha256
             $containmentStatus = [string]$containmentResult.status
         }
         if ($outputPathSafe -and $null -ne $record) {
@@ -1915,6 +2225,13 @@ function Invoke-ContainerWriterRestore {
             -not (Test-ContainerRestoreTemporalOrder $prepared $replacementReceipt $codeRestore.payload $lifecycle.payload)
         ) { throw 'Transaction-bound current-user lifecycle restore receipt or live tree readback is invalid.' }
         $lifecycleValidated = $true
+        [void](Set-ContainerWriterFencePrepared `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -PreparedReceiptPath $preparedFull `
+            -PreparedReceiptSha256 $PreparedSha256 `
+            -Status 'RESTORING')
         $enablePreReadback = Get-ContainerWriterReadback $CanonicalInstallRoot
         $record.enable.pre_readback = $enablePreReadback
         if (-not (Test-ContainerWriterDisabledBeforeEnable $enablePreReadback $binding)) {
@@ -1925,7 +2242,12 @@ function Invoke-ContainerWriterRestore {
         }
         $stage = 'ENABLE'
         Register-ContainerSystemMutationAttempt
-        Enable-ScheduledTask -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop | Out-Null
+        [void](Enable-ContainerScheduledTaskUnderWriterFence `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -TaskName $Script:TaskName `
+            -TaskPath $Script:TaskPath)
         $futureReadback = $null
         $futureReady = Wait-ContainerCondition -TimeoutSeconds 90 -Predicate {
             $candidate = Get-ContainerWriterReadback $CanonicalInstallRoot
@@ -1943,6 +2265,13 @@ function Invoke-ContainerWriterRestore {
         $record.enable.status = 'COMMAND_SUCCEEDED'
         $record.enable.post_readback = $futureReadback
         $record.enable.binding_unchanged = ([string]$futureReadback.identity.binding_sha256 -ceq $binding)
+        [void](Stop-ContainerWriterFence `
+            -SessionId $CurrentSessionId `
+            -AttemptId $CurrentAttemptId `
+            -ReplacementTransactionId $CurrentReplacementTransactionId `
+            -ReleaseAuthorizationPath $preparedFull `
+            -ReleaseAuthorizationSha256 $PreparedSha256)
+        $allWriterFenceReleased = $true
         $nominal = ConvertTo-RoundTripUtc ([string]$futureReadback.next_run_time_utc) 'nominal next run time'
         $record.survival.nominal_next_run_utc = $nominal.ToString('o')
         $stage = 'NATURAL_TRIGGER_SURVIVAL'
@@ -1986,11 +2315,35 @@ function Invoke-ContainerWriterRestore {
         $record.failure.stage = $stage
         $record.failure.code = 'CONTAINER_WRITER_RESTORE_FAILED'
         $record.failure.failure_type = $_.Exception.GetType().Name
-        if (-not [string]::IsNullOrWhiteSpace($binding)) {
-            $record.failure.safety_fence = Invoke-ContainerWriterSafetyFence $CanonicalInstallRoot $binding 'RESTORE_FAILED_RETAIN_DISABLED'
+        if ($allWriterFenceReleased) {
+            try {
+                [void](Start-ContainerWriterFence `
+                    -Status 'RESTORE_FAILED' `
+                    -OwnerKind 'session_adapter' `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId `
+                    -SessionStartedAtUtc $CurrentSessionStartedAtUtc `
+                    -OrchestratorSha256 $CurrentOrchestratorSha256 `
+                    -WriterContractSha256 $CurrentContractSha256 `
+                    -PreparedReceiptPath $preparedFull `
+                    -PreparedReceiptSha256 $PreparedSha256)
+                $allWriterFenceReleased = $false
+            }
+            catch {
+                $record.failure.code = 'CONTAINER_WRITER_REFENCE_FAILED'
+                $record.failure.refence = [ordered]@{
+                    status = 'FAIL'
+                    failure_type = $_.Exception.GetType().Name
+                    silently_ignored = $false
+                }
+            }
         }
-        if ($lifecycleValidated -and -not [string]::IsNullOrWhiteSpace($producerRoot)) {
-            $record.failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId
+        if (-not $allWriterFenceReleased -and -not [string]::IsNullOrWhiteSpace($binding)) {
+            $record.failure.safety_fence = Invoke-ContainerWriterSafetyFence $CanonicalInstallRoot $binding 'RESTORE_FAILED_RETAIN_DISABLED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
+        }
+        if (-not $allWriterFenceReleased -and $lifecycleValidated -and -not [string]::IsNullOrWhiteSpace($producerRoot)) {
+            $record.failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId $CurrentSessionId $CurrentAttemptId $CurrentContractSha256
         }
     }
     $record.completed_at_utc = [DateTime]::UtcNow.ToString('o')
@@ -2004,11 +2357,35 @@ function Invoke-ContainerWriterRestore {
         $record.failure.stage = 'FINAL_EVIDENCE_PERSISTENCE'
         $record.failure.code = 'CONTAINER_WRITER_FINAL_EVIDENCE_FAILED'
         $record.failure.failure_type = $persistenceFailureType
-        if ($null -eq $record.failure.safety_fence -and -not [string]::IsNullOrWhiteSpace($binding)) {
-            $record.failure.safety_fence = Invoke-ContainerWriterSafetyFence $CanonicalInstallRoot $binding 'FINAL_EVIDENCE_FAILED_RETAIN_DISABLED'
+        if ($allWriterFenceReleased) {
+            try {
+                [void](Start-ContainerWriterFence `
+                    -Status 'RESTORE_FAILED' `
+                    -OwnerKind 'session_adapter' `
+                    -SessionId $CurrentSessionId `
+                    -AttemptId $CurrentAttemptId `
+                    -ReplacementTransactionId $CurrentReplacementTransactionId `
+                    -SessionStartedAtUtc $CurrentSessionStartedAtUtc `
+                    -OrchestratorSha256 $CurrentOrchestratorSha256 `
+                    -WriterContractSha256 $CurrentContractSha256 `
+                    -PreparedReceiptPath $preparedFull `
+                    -PreparedReceiptSha256 $PreparedSha256)
+                $allWriterFenceReleased = $false
+            }
+            catch {
+                $record.failure.code = 'CONTAINER_WRITER_REFENCE_FAILED'
+                $record.failure.refence = [ordered]@{
+                    status = 'FAIL'
+                    failure_type = $_.Exception.GetType().Name
+                    silently_ignored = $false
+                }
+            }
         }
-        if ($null -eq $record.failure.lifecycle_containment -and $lifecycleValidated -and -not [string]::IsNullOrWhiteSpace($producerRoot)) {
-            $record.failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId
+        if (-not $allWriterFenceReleased -and $null -eq $record.failure.safety_fence -and -not [string]::IsNullOrWhiteSpace($binding)) {
+            $record.failure.safety_fence = Invoke-ContainerWriterSafetyFence $CanonicalInstallRoot $binding 'FINAL_EVIDENCE_FAILED_RETAIN_DISABLED' $CurrentSessionId $CurrentAttemptId $CurrentReplacementTransactionId
+        }
+        if (-not $allWriterFenceReleased -and $null -eq $record.failure.lifecycle_containment -and $lifecycleValidated -and -not [string]::IsNullOrWhiteSpace($producerRoot)) {
+            $record.failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment $producerRoot $root $replacementFull $ReplacementReceiptSha256ForBinding $CurrentReplacementTransactionId $CurrentSessionId $CurrentAttemptId $CurrentContractSha256
         }
         $record.completed_at_utc = [DateTime]::UtcNow.ToString('o')
         try { [void](Write-JsonAtomic $outputFull $record -AllowReplace) } catch { }
@@ -2266,8 +2643,8 @@ function Invoke-ContainerRecovery {
         }
         catch {
             $preparedBinding = [string]$preparedValidation.payload.pre_readback.identity.binding_sha256
-            $safetyFence = Invoke-ContainerWriterSafetyFence $root $preparedBinding 'WRITER_RESTORE_EXCEPTION_RETAIN_DISABLED'
-            $lifecycleContainment = Invoke-ContainerLifecycleFailureContainment ([string]$replacementValidation.payload.failed_root) $root $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId
+            $safetyFence = Invoke-ContainerWriterSafetyFence $root $preparedBinding 'WRITER_RESTORE_EXCEPTION_RETAIN_DISABLED' $SessionId $AttemptId $ReplacementTransactionId
+            $lifecycleContainment = Invoke-ContainerLifecycleFailureContainment ([string]$replacementValidation.payload.failed_root) $root $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId $SessionId $AttemptId $ExpectedContractSha256
             return [pscustomobject][ordered]@{
                 status = 'FAIL'
                 failure_type = $_.Exception.GetType().Name
@@ -2299,10 +2676,10 @@ function Invoke-ContainerRecovery {
         $combined.persistence_failure.failure_type = $persistenceFailureType
         $preparedBinding = [string]$preparedValidation.payload.pre_readback.identity.binding_sha256
         if (-not [string]::IsNullOrWhiteSpace($preparedBinding)) {
-            $combined.persistence_failure.safety_fence = Invoke-ContainerWriterSafetyFence $root $preparedBinding 'COMBINED_EVIDENCE_FAILED_RETAIN_DISABLED'
+            $combined.persistence_failure.safety_fence = Invoke-ContainerWriterSafetyFence $root $preparedBinding 'COMBINED_EVIDENCE_FAILED_RETAIN_DISABLED' $SessionId $AttemptId $ReplacementTransactionId
         }
         if ([string]$flow.lifecycle_restore.status -ceq 'PASS') {
-            $combined.persistence_failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment ([string]$replacementValidation.payload.failed_root) $root $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId
+            $combined.persistence_failure.lifecycle_containment = Invoke-ContainerLifecycleFailureContainment ([string]$replacementValidation.payload.failed_root) $root $ReplacementReceiptPath $ReplacementReceiptSha256 $ReplacementTransactionId $SessionId $AttemptId $ExpectedContractSha256
         }
         $combined.completed_at_utc = [DateTime]::UtcNow.ToString('o')
         try { [void](Write-JsonAtomic $combinedPath $combined -AllowReplace) } catch { }
@@ -2581,6 +2958,21 @@ finally { `$mutex.ReleaseMutex(); `$mutex.Dispose() }
     $Script:SelfTestLifecycleCalled = $null
     $writerFailure = Invoke-RecoveryStateMachine -CodeRestoreAction { return [pscustomobject]@{ status = 'PASS' } } -LifecycleRestoreAction { return [pscustomobject]@{ status = 'PASS' } } -WriterRestoreAction { return [pscustomobject]@{ status = 'FAIL'; silently_ignored = $false } }
     $writerFailureExplicit = ([string]$writerFailure.status -ceq 'FAIL' -and [string]$writerFailure.failure_code -ceq 'WRITER_RESTORE_FAILED' -and -not [bool]$writerFailure.writer_restore.silently_ignored)
+    $writerInventoryContractAccepted = $false
+    $lifecycleDelegationCovered = $false
+    $containmentDelegationCovered = $false
+    try {
+        $writerContract = Read-ContainerWriterPublicContract $contractSha256
+        $sourceRoot = Split-Path -Parent $PSScriptRoot
+        $writerSources = @(Read-ContainerWriterSinkInventory `
+            -Contract $writerContract `
+            -ProducerRoot $sourceRoot `
+            -SourceTreeSelfTest)
+        $writerInventoryContractAccepted = ($writerSources.Count -gt 0 -and @($writerSources | Sort-Object -Unique).Count -eq $writerSources.Count)
+        $lifecycleDelegationCovered = @($Script:LifecycleDelegatedWriterSources | Where-Object { $_ -cnotin $writerSources }).Count -eq 0
+        $containmentDelegationCovered = @($Script:ContainmentDelegatedWriterSources | Where-Object { $_ -cnotin $writerSources }).Count -eq 0
+    }
+    catch { }
     $checks = @(
         [pscustomobject][ordered]@{ name = 'public_guard_rejects_absent_session_authority'; status = if ($sessionAuthorityAbsentRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'public_guard_accepts_actively_held_session_authority'; status = if ($sessionAuthorityActiveAccepted) { 'PASS' } else { 'FAIL' } },
@@ -2636,7 +3028,10 @@ finally { `$mutex.ReleaseMutex(); `$mutex.Dispose() }
         [pscustomobject][ordered]@{ name = 'reordered_lifecycle_receipt_rejected'; status = if ($reorderedLifecycleRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'code_restore_failure_explicit_and_writer_not_run'; status = if ($codeFailureExplicit) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'lifecycle_restore_failure_explicit_and_writer_not_run'; status = if ($lifecycleFailureExplicit) { 'PASS' } else { 'FAIL' } },
-        [pscustomobject][ordered]@{ name = 'writer_restore_failure_explicit'; status = if ($writerFailureExplicit) { 'PASS' } else { 'FAIL' } }
+        [pscustomobject][ordered]@{ name = 'writer_restore_failure_explicit'; status = if ($writerFailureExplicit) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'code_derived_writer_inventory_contract_exact'; status = if ($writerInventoryContractAccepted) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'lifecycle_delegation_sources_exist_in_inventory'; status = if ($lifecycleDelegationCovered) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'containment_delegation_sources_exist_in_inventory'; status = if ($containmentDelegationCovered) { 'PASS' } else { 'FAIL' } }
     )
     $passed = @($checks | Where-Object status -cne 'PASS').Count -eq 0
     return [pscustomobject][ordered]@{ schema = 'container-audit-writer-session-self-test-v1'; status = if ($passed) { 'PASS' } else { 'FAIL' }; checks = $checks; system_mutation_attempted = ($Script:SystemMutationAttemptCount -ne 0); system_mutation_attempt_count = [int]$Script:SystemMutationAttemptCount; secret_values_recorded = $false }

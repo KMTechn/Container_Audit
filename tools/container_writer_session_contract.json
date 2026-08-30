@@ -28,6 +28,61 @@
     "session_max_age_hours": 24,
     "session_authority_mutex_derivation": "Local\\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>"
   },
+  "all_writer_fence": {
+    "active_schema": "container-audit-all-writer-fence-active-v1",
+    "release_schema": "container-audit-all-writer-fence-release-v1",
+    "control_root": "%LOCALAPPDATA%\\KMTech\\DirectSync\\container_audit\\control\\writer-session",
+    "active_filename": "active.json",
+    "release_filename_pattern": "release-{replacement_transaction_id}-{release_authorization_sha256}.json",
+    "admission_mutex_name": "Local\\KMTech.ContainerAudit.WriterAdmission.v1",
+    "noncanonical_mutex_derivation": "Local\\KMTech.ContainerAudit.WriterAdmission.v1.<first 16 lowercase hex characters of SHA-256 over the absolute control root after slash-to-backslash conversion, trailing-backslash removal, Unicode NFC, and ASCII A-Z to a-z mapping with every other code point unchanged, encoded as UTF-8 without BOM>",
+    "session_mutex_prefix": "Local\\KMTech.ContainerAudit.DeploymentSession.",
+    "session_tuple_version": "container-audit-deployment-session-authority-v1",
+    "session_tuple_fields": [
+      "session_tuple_version",
+      "session_id",
+      "attempt_id",
+      "orchestrator_sha256",
+      "replacement_transaction_id",
+      "writer_contract_sha256"
+    ],
+    "tuple_separator": "LF (U+000A) between ordered fields; no trailing LF",
+    "tuple_encoding": "UTF-8 without BOM",
+    "tuple_normalization": "Unicode NFC applied to each field before joining",
+    "writer_inventory_path": "tools/container_writer_sink_inventory.json",
+    "writer_inventory_sha256": "d7ee93952f93e4bdc9ee9ea5b5cce8aa96ee4f08616eb854ee64eb9080f18777",
+    "canonical_installer_delegation_source": "writer_sink_sources from the exact pinned code-derived inventory",
+    "scheduled_task_mutation_rule": "Every Disable/Enable/Stop/Start/Register/Unregister/Set cmdlet executes only inside an approved container writer wrapper while the admission mutex is held; the exact active fence, live session authority, and immutable prepared-receipt path plus SHA-256 are validated before and after the mutation.",
+    "natural_trigger_phase_rule": "After exact enable readback, an immutable authorization receipt releases the fence under admission; a failed natural-trigger proof must reacquire the fence before any safety or containment mutation.",
+    "verification_vectors": [
+      {
+        "session_id": "00000000000000000000000000000000",
+        "attempt_id": "11111111111111111111111111111111",
+        "orchestrator_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "replacement_transaction_id": "33333333333333333333333333333333",
+        "writer_contract_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+        "expected_mutex_name": "Local\\KMTech.ContainerAudit.DeploymentSession.1121406d92315036b04c14edfea1a09a03938923fa052324623e225d006a7b0c"
+      },
+      {
+        "session_id": "0123456789abcdef0123456789abcdef",
+        "attempt_id": "fedcba9876543210fedcba9876543210",
+        "orchestrator_sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        "replacement_transaction_id": "00112233445566778899aabbccddeeff",
+        "writer_contract_sha256": "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+        "expected_mutex_name": "Local\\KMTech.ContainerAudit.DeploymentSession.7487aff53f2ea39a278e3648037625e8c1484636d80a5177dee05ba06556f071"
+      }
+    ],
+    "active_statuses": [
+      "PREPARING",
+      "PREPARED",
+      "RESTORING",
+      "RESTORE_FAILED",
+      "INSTALLING"
+    ],
+    "writer_admission_fail_closed": true,
+    "unknown_or_unobservable_is_denied": true,
+    "denial_mutates_state": false
+  },
   "operations": {
     "Contract": {
       "mutation_class": "NONE",
@@ -230,6 +285,8 @@
     "manual_writer_start_allowed": false,
     "contract_mode_system_mutation": false,
     "active_session_authority_mutex_required": true,
+    "all_writer_fence_required": true,
+    "all_writer_sinks_require_admission": true,
     "evidence_paths_outside_install_parent_required": true,
     "evidence_paths_local_fixed_drive_required": true,
     "evidence_path_reparse_ancestors_forbidden": true,

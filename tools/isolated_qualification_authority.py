@@ -41,6 +41,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 from direct_sync_push import (  # noqa: E402
     DEFAULT_ENDPOINT_PATH,
     canonical_request_string,
@@ -138,6 +140,7 @@ def _utc_text(value: datetime | None = None) -> str:
     )
 
 
+@writer_sink("qualification_authority_storage")
 def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -565,6 +568,7 @@ def _validate_private_state(payload: Mapping[str, Any], instance_id: str) -> dic
     return dict(payload)
 
 
+@writer_sink("qualification_authority_initialize")
 def initialize_authority(
     *,
     state_root: Path,

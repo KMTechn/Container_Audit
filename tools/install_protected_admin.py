@@ -19,6 +19,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 from logistics_runtime_profile import assert_path_has_no_reparse_components  # noqa: E402
 from protected_admin import (  # noqa: E402
     MAX_PROTECTED_ADMIN_PROFILE_BYTES,
@@ -261,6 +263,7 @@ def _write_and_sync(fd: int, data: bytes) -> None:
         os.fsync(handle.fileno())
 
 
+@writer_sink("protected_admin_profile")
 def _atomic_write(path: Path, data: bytes, reader_sid: str) -> None:
     """Replace *path* from an exclusively created, empty, pre-hardened file."""
     fd = -1

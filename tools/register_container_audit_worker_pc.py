@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 import requests  # noqa: E402
 
 from direct_sync_push import (  # noqa: E402
@@ -962,6 +964,7 @@ def _dpapi_unprotect_current_user(protected: bytes) -> str:
         ctypes.windll.kernel32.LocalFree(ctypes.c_void_p(output_blob.pbData))
 
 
+@writer_sink("worker_pc_registration")
 def _write_dpapi_secret(
     data_dir: str | os.PathLike[str],
     target_name: str,
@@ -1092,6 +1095,7 @@ def _initial_possession_key(
         ) from exc
 
 
+@writer_sink("worker_enrollment_network")
 def _post_enrollment_request(
     enrollment_url: str,
     *,
@@ -1421,6 +1425,7 @@ def _recovery_two_phase_signed_status(
     return _recovery_two_phase_response_payload(response, action="status")
 
 
+@writer_sink("worker_pc_registration")
 def _finalize_server_registration(
     args: argparse.Namespace,
     manifest: dict,
@@ -2680,6 +2685,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     return manifest, credential, report
 
 
+@writer_sink("worker_pc_registration")
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Register local Container_Audit producer identity for this PC")
     parser.add_argument("--app-root", default=_default_app_root())

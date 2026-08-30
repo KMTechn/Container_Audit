@@ -134,16 +134,30 @@ from session_history import load_session_history
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 from tray_state import (
+    ACTIVATION_EVENT_STATE_KEY,
+    ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
     COMPLETION_EVENT_STATE_KEY,
     COMPLETION_EVENT_STATE_SCHEMA_VERSION,
     OPERATOR_REVIEW_STATE_KEY,
     OPERATOR_REVIEW_STATE_SCHEMA_VERSION,
+    PARKED_RESTORE_STATE_KEY,
+    PARKED_RESTORE_STATE_SCHEMA_VERSION,
     TrayStateValidationError,
     quarantine_tray_state_file,
     tray_session_from_state,
     tray_session_to_state,
     validate_tray_state,
+)
+from work_session_state import (
+    WORK_SESSION_PHASE_ACTIVE,
+    WORK_SESSION_PHASE_CLOSED,
+    WORK_SESSION_PHASE_END_PENDING,
+    WORK_SESSION_PHASE_START_PENDING,
+    WORK_SESSION_STATE_SCHEMA_VERSION,
+    WorkSessionStateError,
+    validate_work_session_state,
 )
 from terminal_operation_lease import (
     TRANSFER_OPERATION,
@@ -704,6 +718,7 @@ def _safe_check_update_candidate() -> Optional[Dict[str, Any]]:
         return None
 
 
+@writer_sink("update_download")
 def _write_update_download(response: Any, zip_path: str, *, max_bytes: int = MAX_UPDATE_DOWNLOAD_BYTES) -> None:
     content_length = str(getattr(response, "headers", {}).get("Content-Length") or "").strip()
     if content_length:
@@ -1047,6 +1062,7 @@ class ContainerAudit:
             tuple[str, str, str]
         ] = set()
         self._tray_state_persist_lock = threading.RLock()
+        self._work_session_persist_lock = threading.RLock()
         self._idle_check_epoch = 0
         self.current_exchange_session = ProductExchangeSession()
         self._active_transfer_exchange_mode = False
@@ -1079,6 +1095,10 @@ class ContainerAudit:
         self._responsive_style_refresh_job: Optional[str] = None
         self.warning_presenter = WarningPresenter()
         self._pending_operator_review_snapshot: Optional[CompletionOutcomeSnapshot] = None
+        self._pending_activation_event_contract: Optional[Dict[str, Any]] = None
+        self._pending_parked_restore_contract: Optional[Dict[str, Any]] = None
+        self._work_session_id = ""
+        self._work_session_recovery_blocked = False
         self._warning_beep_active = False
         self.log_write_errors: List[str] = []
         self.last_log_write_error: Optional[str] = None
@@ -1096,6 +1116,8 @@ class ContainerAudit:
                 socket.gethostname().encode("utf-8")
             ).hexdigest()[:16]
         self.CURRENT_TRAY_STATE_FILE = f"_current_tray_state_{self.computer_id}.json"
+        self.WORK_SESSION_STATE_FILE = f"_work_session_state_{self.computer_id}.json"
+        self._work_session_recovery_blocked = not self._reconcile_work_session_state()
         
         self._setup_core_ui_structure()
         self._setup_styles()
@@ -1219,6 +1241,7 @@ class ContainerAudit:
         merged.update(user_settings)
         return _drop_release_disabled_settings(merged)
 
+    @writer_sink("gui_settings_save")
     def save_settings(self):
         try:
             path = os.path.join(self.config_folder, self.SETTINGS_FILE)
@@ -1871,15 +1894,18 @@ class ContainerAudit:
         self._load_current_tray_state()
         if not self.worker_name:
             return
-        self._log_event(
-            'WORK_START',
-            detail={
-                'message': (
-                    f"작업자 '{persistent_operator_name(self.worker_name)}'이(가) "
-                    "작업을 시작했습니다."
-                )
-            },
-        )
+        if not self._begin_or_resume_work_session():
+            self.current_tray = TraySession()
+            self.worker_name = ""
+            self.worker_role = ""
+            messagebox.showerror(
+                "작업 시작 기록 대기",
+                "작업 세션과 감사 outbox를 함께 저장하거나 투영하지 못했습니다. "
+                "상태를 보존했으니 다시 시도하고 계속되면 관리자에게 문의하세요.",
+                parent=self.root,
+            )
+            self.show_worker_input_screen()
+            return
         if not self.root.winfo_exists(): return
         if not self.paned_window.winfo_ismapped():
             self.show_validation_screen()
@@ -1921,6 +1947,13 @@ class ContainerAudit:
                 if not self._cancel_exchange(reason="worker_change"):
                     messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록을 남기지 못해 작업자를 변경하지 않습니다.")
                     return
+            if not self._end_work_session(reason="worker_change"):
+                messagebox.showerror(
+                    "작업 종료 기록 대기",
+                    "작업 세션 종료 상태와 감사 outbox를 함께 저장하거나 투영하지 "
+                    "못해 작업자를 변경하지 않습니다.",
+                )
+                return
             self._cancel_all_jobs()
             self.worker_name = ""
             self.worker_role = ""
@@ -1959,6 +1992,7 @@ class ContainerAudit:
             state = self._current_tray_state_snapshot()
             return self._save_tray_state_snapshot(state)
 
+    @writer_sink("gui_tray_state_save")
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
         lock = getattr(self, "_tray_state_persist_lock", None)
         if lock is None:
@@ -1975,6 +2009,552 @@ class ContainerAudit:
             except Exception as e:
                 print(f"현재 트레이 상태 저장 실패: {e}")
                 return False
+
+    @staticmethod
+    def _activation_event_contract_from_state(
+        state: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        payload = state.get(ACTIVATION_EVENT_STATE_KEY)
+        if payload is None:
+            return None
+        return {
+            "schema_version": int(payload["schema_version"]),
+            "event_type": str(payload["event_type"]),
+            "idempotency_key": str(payload["idempotency_key"]),
+            "observed_at": str(payload["observed_at"]),
+            "projection_log_name": str(payload["projection_log_name"]),
+            "projection_worker_name": str(payload["projection_worker_name"]),
+            "master_label_code": str(payload["master_label_code"]),
+            "event_detail": dict(payload["event_detail"]),
+        }
+
+    def _active_activation_event_contract(self) -> Optional[Dict[str, Any]]:
+        payload = getattr(self, "_pending_activation_event_contract", None)
+        return dict(payload) if isinstance(payload, Mapping) else None
+
+    def _activation_event_contract(
+        self,
+        *,
+        event_type: str,
+        event_detail: Mapping[str, Any],
+        master_label_code: str,
+        observed_at: datetime.datetime,
+    ) -> Dict[str, Any]:
+        projection_worker = persistent_operator_name(self.worker_name)
+        if not projection_worker:
+            raise ValueError("activation projection worker is missing")
+        projection_path = self._completion_projection_log_path()
+        return {
+            "schema_version": ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
+            "event_type": str(event_type),
+            "idempotency_key": f"tray-activation:{uuid.uuid4().hex}",
+            "observed_at": observed_at.isoformat(),
+            "projection_log_name": projection_path.name,
+            "projection_worker_name": projection_worker,
+            "master_label_code": str(master_label_code),
+            "event_detail": dict(sanitize_persistent_value(dict(event_detail))),
+        }
+
+    def _project_activation_event_contract(
+        self,
+        contract: Mapping[str, Any],
+    ) -> bool:
+        try:
+            projection_path = self._completion_projection_log_path(
+                str(contract["projection_log_name"])
+            )
+            return self._log_event(
+                str(contract["event_type"]),
+                detail=dict(contract["event_detail"]),
+                synchronous=True,
+                idempotency_key=str(contract["idempotency_key"]),
+                event_timestamp=str(contract["observed_at"]),
+                log_file_path_override=str(projection_path),
+                deduplicate=True,
+                worker_name_override=str(contract["projection_worker_name"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            self._record_log_write_error(
+                f"현품표 시작 감사 outbox 투영 오류: {exc}"
+            )
+            return False
+
+    def _drain_pending_activation_event(self) -> bool:
+        """Project and clear one activation outbox row without losing it.
+
+        A failed CSV projection leaves the complete contract embedded in the
+        current tray snapshot.  A crash after CSV fsync but before marker clear
+        is reconciled by the idempotent event/key pair on the next start.
+        """
+
+        contract = self._active_activation_event_contract()
+        if contract is None:
+            return True
+        if not self._project_activation_event_contract(contract):
+            return False
+        self._pending_activation_event_contract = None
+        if self._clear_persisted_activation_event(contract):
+            return True
+        self._pending_activation_event_contract = contract
+        print(
+            "현품표 시작 감사 outbox 정리 실패: CSV는 durable 하며 "
+            "다음 저장 또는 재시작에서 idempotent 재확인합니다."
+        )
+        return True
+
+    def _clear_persisted_activation_event(
+        self,
+        contract: Mapping[str, Any],
+    ) -> bool:
+        lock = getattr(self, "_tray_state_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tray_state_persist_lock = lock
+        with lock:
+            try:
+                state_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                with state_path.open("r", encoding="utf-8") as f_handle:
+                    persisted = json.load(f_handle)
+                persisted_contract = self._activation_event_contract_from_state(
+                    persisted
+                )
+                if persisted_contract != dict(contract):
+                    return False
+                persisted.pop(ACTIVATION_EVENT_STATE_KEY, None)
+                validate_tray_state(
+                    persisted,
+                    default_tray_size=self.TRAY_SIZE,
+                )
+                return self._save_tray_state_snapshot(persisted)
+            except (AttributeError, OSError, TypeError, ValueError):
+                return False
+
+    def _reconcile_activation_event_from_state(
+        self,
+        state: Dict[str, Any],
+    ) -> bool:
+        contract = self._activation_event_contract_from_state(state)
+        self._pending_activation_event_contract = contract
+        if contract is None:
+            return True
+        if not self._project_activation_event_contract(contract):
+            return False
+        self._pending_activation_event_contract = None
+        if self._clear_persisted_activation_event(contract):
+            state.pop(ACTIVATION_EVENT_STATE_KEY, None)
+            return True
+        self._pending_activation_event_contract = contract
+        print(
+            "복구된 현품표 시작 감사 outbox 정리 실패: CSV는 durable 하며 "
+            "상태 marker를 보존합니다."
+        )
+        return True
+
+    def _audit_event_contract(
+        self,
+        *,
+        event_type: str,
+        event_detail: Mapping[str, Any],
+        idempotency_key: str,
+        observed_at: datetime.datetime,
+        projection_worker_name: str = "",
+        canonical_event_name: str = "",
+    ) -> Dict[str, Any]:
+        projection_worker = persistent_operator_name(
+            projection_worker_name or self.worker_name
+        )
+        if not projection_worker:
+            raise ValueError("audit projection worker is missing")
+        projection_path = self._completion_projection_log_path()
+        return {
+            "schema_version": 1,
+            "event_type": str(event_type),
+            "canonical_event_name": str(canonical_event_name or ""),
+            "idempotency_key": str(idempotency_key),
+            "observed_at": observed_at.isoformat(),
+            "projection_log_name": projection_path.name,
+            "projection_worker_name": projection_worker,
+            "event_detail": dict(sanitize_persistent_value(dict(event_detail))),
+        }
+
+    def _project_audit_event_contract(self, contract: Mapping[str, Any]) -> bool:
+        try:
+            projection_path = self._completion_projection_log_path(
+                str(contract["projection_log_name"])
+            )
+            canonical_event_name = str(
+                contract.get("canonical_event_name") or ""
+            )
+            return self._log_event(
+                str(contract["event_type"]),
+                detail=dict(contract["event_detail"]),
+                synchronous=True,
+                canonical_event_name=canonical_event_name or None,
+                idempotency_key=str(contract["idempotency_key"]),
+                event_timestamp=str(contract["observed_at"]),
+                log_file_path_override=str(projection_path),
+                deduplicate=True,
+                worker_name_override=str(contract["projection_worker_name"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            self._record_log_write_error(f"감사 outbox 투영 오류: {exc}")
+            return False
+
+    @staticmethod
+    def _parked_restore_contract_from_state(
+        state: Mapping[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        payload = state.get(PARKED_RESTORE_STATE_KEY)
+        if payload is None:
+            return None
+        return {
+            "schema_version": int(payload["schema_version"]),
+            "operation_id": str(payload["operation_id"]),
+            "parked_source_name": str(payload["parked_source_name"]),
+            "parked_source_sha256": str(payload["parked_source_sha256"]),
+            "restored_master_label_code": str(
+                payload["restored_master_label_code"]
+            ),
+            "projection_events": [
+                {
+                    "schema_version": int(event["schema_version"]),
+                    "event_type": str(event["event_type"]),
+                    "canonical_event_name": str(
+                        event.get("canonical_event_name") or ""
+                    ),
+                    "idempotency_key": str(event["idempotency_key"]),
+                    "observed_at": str(event["observed_at"]),
+                    "projection_log_name": str(event["projection_log_name"]),
+                    "projection_worker_name": str(
+                        event["projection_worker_name"]
+                    ),
+                    "event_detail": dict(event["event_detail"]),
+                }
+                for event in payload["projection_events"]
+            ],
+        }
+
+    def _active_parked_restore_contract(self) -> Optional[Dict[str, Any]]:
+        payload = getattr(self, "_pending_parked_restore_contract", None)
+        if not isinstance(payload, Mapping):
+            return None
+        return self._parked_restore_contract_from_state(
+            {PARKED_RESTORE_STATE_KEY: payload}
+        )
+
+    def _build_parked_restore_contract(
+        self,
+        *,
+        parked_path: Path,
+        restored_state: Mapping[str, Any],
+        restore_detail: Mapping[str, Any],
+        discard_detail: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        operation_id = f"parked-restore:{uuid.uuid4().hex}"
+        observed_at = datetime.datetime.now()
+        projection_events: List[Dict[str, Any]] = []
+        if discard_detail is not None:
+            projection_events.append(
+                self._audit_event_contract(
+                    event_type="TRAY_DISCARDED_BY_OPERATOR",
+                    event_detail=discard_detail,
+                    idempotency_key=f"{operation_id}:discard",
+                    observed_at=observed_at,
+                )
+            )
+        projection_events.append(
+            self._audit_event_contract(
+                event_type="TRAY_RESTORED_FROM_PARK",
+                canonical_event_name="TRAY_RESTORED",
+                event_detail=restore_detail,
+                idempotency_key=f"{operation_id}:restore",
+                observed_at=observed_at,
+            )
+        )
+        return {
+            "schema_version": PARKED_RESTORE_STATE_SCHEMA_VERSION,
+            "operation_id": operation_id,
+            "parked_source_name": parked_path.name,
+            "parked_source_sha256": hashlib.sha256(
+                parked_path.read_bytes()
+            ).hexdigest(),
+            "restored_master_label_code": str(
+                restored_state.get("master_label_code") or ""
+            ),
+            "projection_events": projection_events,
+        }
+
+    def _cleanup_parked_restore_source(
+        self,
+        contract: Mapping[str, Any],
+    ) -> bool:
+        try:
+            source_name = str(contract["parked_source_name"])
+            source_path = self._parked_store().directory / source_name
+            if not self._is_parked_tray_path(str(source_path)):
+                return False
+            if not source_path.exists():
+                return True
+            source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            if source_sha256 != str(contract["parked_source_sha256"]):
+                self._record_log_write_error(
+                    "보류 복원 source hash가 outbox와 일치하지 않습니다."
+                )
+                return False
+            ParkedTrayStore.delete(source_path)
+            return True
+        except (KeyError, OSError, TypeError, ValueError) as exc:
+            self._record_log_write_error(
+                f"보류 복원 source 정리 오류: {exc.__class__.__name__}"
+            )
+            return False
+
+    def _clear_persisted_parked_restore(
+        self,
+        contract: Mapping[str, Any],
+    ) -> bool:
+        lock = getattr(self, "_tray_state_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._tray_state_persist_lock = lock
+        with lock:
+            try:
+                state_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                with state_path.open("r", encoding="utf-8") as f_handle:
+                    persisted = json.load(f_handle)
+                persisted_contract = self._parked_restore_contract_from_state(
+                    persisted
+                )
+                if persisted_contract != dict(contract):
+                    return False
+                persisted.pop(PARKED_RESTORE_STATE_KEY, None)
+                validate_tray_state(
+                    persisted,
+                    default_tray_size=self.TRAY_SIZE,
+                )
+                return self._save_tray_state_snapshot(persisted)
+            except (AttributeError, KeyError, OSError, TypeError, ValueError):
+                return False
+
+    def _drain_pending_parked_restore(self) -> bool:
+        contract = self._active_parked_restore_contract()
+        if contract is None:
+            return True
+        for event in contract["projection_events"]:
+            if not self._project_audit_event_contract(event):
+                return False
+        if not self._cleanup_parked_restore_source(contract):
+            return False
+        self._pending_parked_restore_contract = None
+        if self._clear_persisted_parked_restore(contract):
+            return True
+        self._pending_parked_restore_contract = contract
+        print(
+            "보류 복원 감사 outbox 정리 실패: projection/source cleanup은 "
+            "durable 하며 다음 재시작에서 idempotent 재확인합니다."
+        )
+        return True
+
+    def _reconcile_parked_restore_from_state(
+        self,
+        state: Dict[str, Any],
+    ) -> bool:
+        contract = self._parked_restore_contract_from_state(state)
+        self._pending_parked_restore_contract = contract
+        if contract is None:
+            return True
+        if not self._drain_pending_parked_restore():
+            return False
+        if self._active_parked_restore_contract() is None:
+            state.pop(PARKED_RESTORE_STATE_KEY, None)
+        return True
+
+    def _work_session_state_path(self) -> Optional[Path]:
+        save_folder = str(getattr(self, "save_folder", "") or "").strip()
+        state_file = str(
+            getattr(self, "WORK_SESSION_STATE_FILE", "") or ""
+        ).strip()
+        if not save_folder or not state_file:
+            return None
+        return Path(save_folder) / state_file
+
+    def _load_work_session_state(self) -> Optional[Dict[str, Any]]:
+        state_path = self._work_session_state_path()
+        if state_path is None or not state_path.exists():
+            return None
+        if state_path.stat().st_size > 64 * 1024:
+            raise WorkSessionStateError("work session state is too large")
+        with state_path.open("r", encoding="utf-8") as f_handle:
+            state = json.load(f_handle)
+        return validate_work_session_state(state)
+
+    @writer_sink("gui_work_session_save")
+    def _save_work_session_state(self, state: Mapping[str, Any]) -> bool:
+        state_path = self._work_session_state_path()
+        if state_path is None:
+            return False
+        lock = getattr(self, "_work_session_persist_lock", None)
+        if lock is None:
+            lock = threading.RLock()
+            self._work_session_persist_lock = lock
+        with lock:
+            try:
+                normalized = validate_work_session_state(state)
+                atomic_write_json(
+                    state_path,
+                    normalized,
+                    indent=2,
+                    ensure_ascii=False,
+                    trailing_newline=True,
+                )
+                return True
+            except (OSError, TypeError, ValueError) as exc:
+                self._record_log_write_error(
+                    f"작업 세션 journal 저장 오류: {exc.__class__.__name__}"
+                )
+                return False
+
+    def _reconcile_work_session_state(self) -> bool:
+        if self._work_session_state_path() is None:
+            return True
+        try:
+            state = self._load_work_session_state()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkSessionStateError) as exc:
+            self._record_log_write_error(
+                f"작업 세션 journal 검증 오류: {exc.__class__.__name__}"
+            )
+            return False
+        if state is None:
+            self._work_session_id = ""
+            return True
+        phase = state["phase"]
+        if phase in {
+            WORK_SESSION_PHASE_START_PENDING,
+            WORK_SESSION_PHASE_END_PENDING,
+        }:
+            if not self._project_audit_event_contract(state["pending_event"]):
+                return False
+            state["pending_event"] = None
+            state["phase"] = (
+                WORK_SESSION_PHASE_ACTIVE
+                if phase == WORK_SESSION_PHASE_START_PENDING
+                else WORK_SESSION_PHASE_CLOSED
+            )
+            if not self._save_work_session_state(state):
+                return False
+            phase = state["phase"]
+        self._work_session_id = (
+            state["session_id"] if phase == WORK_SESSION_PHASE_ACTIVE else ""
+        )
+        return True
+
+    def _begin_or_resume_work_session(self) -> bool:
+        if self._work_session_state_path() is None:
+            return self._log_event(
+                "WORK_START",
+                detail={
+                    "message": (
+                        f"작업자 '{persistent_operator_name(self.worker_name)}'이(가) "
+                        "작업을 시작했습니다."
+                    )
+                },
+                synchronous=True,
+            )
+        if not self._reconcile_work_session_state():
+            self._work_session_recovery_blocked = True
+            return False
+        try:
+            previous = self._load_work_session_state()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkSessionStateError):
+            self._work_session_recovery_blocked = True
+            return False
+        actor = persistent_operator_name(self.worker_name)
+        if (
+            previous is not None
+            and previous["phase"] == WORK_SESSION_PHASE_ACTIVE
+            and previous["worker_name"] == actor
+        ):
+            self._work_session_id = previous["session_id"]
+            self._work_session_recovery_blocked = False
+            return True
+        session_suffix = uuid.uuid4().hex
+        session_id = f"work-session:{session_suffix}"
+        observed_at = datetime.datetime.now()
+        pending_event = self._audit_event_contract(
+            event_type="WORK_START",
+            event_detail={
+                "message": f"작업자 '{actor}'이(가) 작업을 시작했습니다.",
+                "work_session_id": session_id,
+            },
+            idempotency_key=f"work-session-start:{session_suffix}",
+            observed_at=observed_at,
+            projection_worker_name=actor,
+        )
+        state = {
+            "schema_version": WORK_SESSION_STATE_SCHEMA_VERSION,
+            "session_id": session_id,
+            "previous_session_id": (
+                str(previous.get("session_id") or "") if previous else ""
+            ),
+            "worker_name": actor,
+            "worker_role": str(self.worker_role or "WORKER"),
+            "phase": WORK_SESSION_PHASE_START_PENDING,
+            "started_at": observed_at.isoformat(),
+            "ended_at": "",
+            "pending_event": pending_event,
+        }
+        if not self._save_work_session_state(state):
+            return False
+        if not self._reconcile_work_session_state():
+            self._work_session_recovery_blocked = True
+            return False
+        self._work_session_recovery_blocked = False
+        return True
+
+    def _end_work_session(self, *, reason: str) -> bool:
+        if self._work_session_state_path() is None:
+            return self._log_event(
+                "WORK_END",
+                detail={"message": "User closed the program.", "reason": reason},
+                synchronous=True,
+            )
+        if not self._reconcile_work_session_state():
+            self._work_session_recovery_blocked = True
+            return False
+        try:
+            state = self._load_work_session_state()
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, WorkSessionStateError):
+            self._work_session_recovery_blocked = True
+            return False
+        actor = persistent_operator_name(self.worker_name)
+        if (
+            state is None
+            or state["phase"] != WORK_SESSION_PHASE_ACTIVE
+            or state["worker_name"] != actor
+        ):
+            return True
+        session_suffix = state["session_id"].removeprefix("work-session:")
+        observed_at = datetime.datetime.now()
+        state["phase"] = WORK_SESSION_PHASE_END_PENDING
+        state["ended_at"] = observed_at.isoformat()
+        state["pending_event"] = self._audit_event_contract(
+            event_type="WORK_END",
+            event_detail={
+                "message": "User ended the work session.",
+                "reason": reason,
+                "work_session_id": state["session_id"],
+            },
+            idempotency_key=f"work-session-end:{session_suffix}",
+            observed_at=observed_at,
+            projection_worker_name=actor,
+        )
+        if not self._save_work_session_state(state):
+            return False
+        if not self._reconcile_work_session_state():
+            self._work_session_recovery_blocked = True
+            return False
+        self._work_session_recovery_blocked = False
+        return True
 
     def _active_operator_review_snapshot(self) -> Optional[CompletionOutcomeSnapshot]:
         pending = getattr(self, "_pending_operator_review_snapshot", None)
@@ -2113,6 +2693,12 @@ class ContainerAudit:
 
     def _current_tray_state_snapshot(self) -> Dict[str, Any]:
         state = tray_session_to_state(self.current_tray, worker_name=self.worker_name)
+        activation_event = self._active_activation_event_contract()
+        if activation_event is not None:
+            state[ACTIVATION_EVENT_STATE_KEY] = activation_event
+        parked_restore = self._active_parked_restore_contract()
+        if parked_restore is not None:
+            state[PARKED_RESTORE_STATE_KEY] = parked_restore
         completion_event = self._active_completion_event_contract()
         if completion_event is not None:
             state[COMPLETION_EVENT_STATE_KEY] = completion_event
@@ -2142,6 +2728,25 @@ class ContainerAudit:
                         "이전 작업자 정보를 안전하게 변환하지 못했습니다. 관리자에게 문의하세요.",
                     )
                     return
+            if not self._reconcile_activation_event_from_state(saved_state):
+                self.current_tray = TraySession()
+                self.worker_name = ""
+                messagebox.showerror(
+                    "현품표 시작 기록 복구 실패",
+                    "저장된 현품표 시작 감사 기록을 복구하지 못했습니다. "
+                    "상태와 감사 outbox를 보존했으니 관리자에게 문의하세요.",
+                )
+                return
+            if not self._reconcile_parked_restore_from_state(saved_state):
+                self.current_tray = TraySession()
+                self.worker_name = ""
+                messagebox.showerror(
+                    "보류 작업 복구 기록 대기",
+                    "저장된 보류 작업 복구 기록을 투영하거나 source를 정리하지 "
+                    "못했습니다. 상태와 감사 outbox를 보존했으니 관리자에게 "
+                    "문의하세요.",
+                )
+                return
         except Exception as e:
             print(f"현재 트레이 상태 로드 실패: {e}")
             quarantined_path = self._quarantine_current_tray_state(str(e))
@@ -2388,6 +2993,7 @@ class ContainerAudit:
             synchronous=True,
         )
 
+    @writer_sink("gui_tray_state_delete")
     def _delete_current_tray_state(self) -> bool:
         state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
         if os.path.exists(state_path):
@@ -6241,24 +6847,43 @@ class ContainerAudit:
         )
         self.current_tray.stopwatch_seconds = 0
         self.current_tray.start_time = datetime.datetime.now()
+        try:
+            self._pending_activation_event_contract = self._activation_event_contract(
+                event_type=event_name,
+                event_detail=event_detail,
+                master_label_code=barcode,
+                observed_at=self.current_tray.start_time,
+            )
+        except (TypeError, ValueError) as exc:
+            print(
+                "현품표 시작 감사 계약 생성 실패: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
+            self.current_tray = TraySession()
+            self._pending_activation_event_contract = None
+            self.show_status_message(
+                "현품표 시작 기록을 준비하지 못했습니다. 관리자에게 문의하세요.",
+                self.COLOR_DANGER,
+            )
+            return False
         if not self._save_current_tray_state():
             self.current_tray = TraySession()
+            self._pending_activation_event_contract = None
             self.show_status_message(
                 "현품표 상태 저장에 실패했습니다. 작업을 시작하지 않습니다.",
                 self.COLOR_DANGER,
             )
             return False
-        if not self._log_event(event_name, detail=event_detail, synchronous=True):
-            if not self._delete_current_tray_state():
-                messagebox.showerror(
-                    "작업 상태 정리 실패",
-                    "현품표 시작 기록 실패 후 현재 작업 상태 파일을 삭제하지 못했습니다.",
-                )
+        if not self._drain_pending_activation_event():
             self.current_tray = TraySession()
-            self.show_status_message(
-                "현품표 시작 기록 저장에 실패했습니다. 작업을 시작하지 않습니다.",
-                self.COLOR_DANGER,
+            self.worker_name = ""
+            messagebox.showerror(
+                "현품표 시작 기록 대기",
+                "현품표 상태와 감사 outbox는 안전하게 저장했지만 CSV 투영에 "
+                "실패했습니다. 다시 작업자를 선택하면 같은 기록으로 재시도합니다.",
             )
+            if hasattr(self, "show_worker_input_screen"):
+                self.show_worker_input_screen()
             return False
         self._clear_settled_operator_context()
         self.show_tray_image_var.set(True)
@@ -8439,7 +9064,7 @@ class ContainerAudit:
                 if not self._cancel_exchange(reason="app_close"):
                     return
             if self.worker_name:
-                if not self._log_event('WORK_END', detail={'message': 'User closed the program.'}, synchronous=True):
+                if not self._end_work_session(reason="app_close"):
                     restore_notice = ""
                     if deleted_current_state_for_close and self.current_tray.master_label_code:
                         if self._save_current_tray_state():
@@ -9567,33 +10192,6 @@ class ContainerAudit:
             else:
                 discard_current_for_restore = True
 
-        state_path: Optional[Path] = None
-        previous_state_exists = False
-        previous_state_bytes: Optional[bytes] = None
-        try:
-            state_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-            if state_path.exists():
-                previous_state_exists = True
-                previous_state_bytes = state_path.read_bytes()
-        except (OSError, TypeError, AttributeError):
-            state_path = None
-            previous_state_exists = False
-            previous_state_bytes = None
-
-        def rollback_current_state_file() -> None:
-            if state_path is None:
-                return
-            if previous_state_exists and previous_state_bytes is not None:
-                state_path.parent.mkdir(parents=True, exist_ok=True)
-                rollback_path = state_path.with_name(f"{state_path.name}.rollback.{os.getpid()}.{uuid.uuid4().hex}")
-                rollback_path.write_bytes(previous_state_bytes)
-                os.replace(rollback_path, state_path)
-            else:
-                try:
-                    state_path.unlink()
-                except FileNotFoundError:
-                    pass
-
         try:
             restored_tray = tray_session_from_state(
                 saved_state,
@@ -9605,28 +10203,6 @@ class ContainerAudit:
                 restored_state[OPERATOR_REVIEW_STATE_KEY] = dict(
                     saved_state[OPERATOR_REVIEW_STATE_KEY]
                 )
-            if not self._save_tray_state_snapshot(restored_state):
-                raise RuntimeError("복원한 보류 작업의 현재 상태 저장에 실패했습니다.")
-            if discard_current_for_restore:
-                if not self._log_current_tray_discarded(reason='restore_parked_overwrite_current', synchronous=True):
-                    rollback_errors: List[str] = []
-                    try:
-                        rollback_current_state_file()
-                    except OSError as rollback_error:
-                        rollback_errors.append(f"현재 상태 복원 실패: {rollback_error.__class__.__name__}")
-                    rollback_notice = f"\n\n{'; '.join(rollback_errors)}" if rollback_errors else ""
-                    messagebox.showerror("작업 기록 실패", f"현재 작업 삭제 기록을 남기지 못해 보류 작업을 복원하지 않습니다.{rollback_notice}")
-                    self._update_parked_trays_list()
-                    return
-            try:
-                ParkedTrayStore.delete(filepath)
-            except Exception as delete_error:
-                if state_path is not None:
-                    try:
-                        rollback_current_state_file()
-                    except OSError as rollback_error:
-                        raise RuntimeError("보류 작업 파일 삭제에 실패했고 현재 상태 롤백에도 실패했습니다.") from rollback_error
-                raise RuntimeError("보류 작업 파일 삭제에 실패했습니다. 현재 작업 상태를 복원 전으로 되돌렸습니다.") from delete_error
             restore_detail = {
                 'master_label_code': restored_tray.master_label_code,
                 'item_code': restored_tray.item_code,
@@ -9634,36 +10210,42 @@ class ContainerAudit:
                 'scan_count': len(restored_tray.scanned_barcodes),
                 'tray_capacity': restored_tray.tray_size,
             }
-            if not self._log_event(
-                'TRAY_RESTORED_FROM_PARK',
-                detail=restore_detail,
-                synchronous=True,
-                canonical_event_name='TRAY_RESTORED',
-            ):
-                rollback_errors: List[str] = []
-                if state_path is not None:
-                    try:
-                        rollback_current_state_file()
-                    except OSError as rollback_error:
-                        rollback_errors.append(f"현재 상태 복원 실패: {rollback_error.__class__.__name__}")
-                try:
-                    atomic_write_json(filepath, saved_state, indent=4, ensure_ascii=False)
-                except Exception as restore_error:
-                    rollback_errors.append(f"보류 파일 복구 실패: {restore_error.__class__.__name__}")
-                if rollback_errors:
-                    print("; ".join(rollback_errors))
-                rollback_notice = (
-                    "\n\n기존 상태 복구도 완료하지 못했습니다. 프로그램을 종료하지 말고 "
-                    "관리자에게 문의하세요."
-                    if rollback_errors
-                    else ""
+            discard_detail = None
+            if discard_current_for_restore:
+                discard_detail = {
+                    'reason': 'restore_parked_overwrite_current',
+                    'master_label_code': self.current_tray.master_label_code,
+                    'item_code': self.current_tray.item_code,
+                    'item_name': self.current_tray.item_name,
+                    'scan_count': len(self.current_tray.scanned_barcodes),
+                    'is_partial_submission': self.current_tray.is_partial_submission,
+                }
+            parked_restore = self._build_parked_restore_contract(
+                parked_path=Path(filepath),
+                restored_state=restored_state,
+                restore_detail=restore_detail,
+                discard_detail=discard_detail,
+            )
+            restored_state[PARKED_RESTORE_STATE_KEY] = parked_restore
+            validate_tray_state(restored_state, default_tray_size=self.TRAY_SIZE)
+            self._pending_parked_restore_contract = parked_restore
+            if not self._save_tray_state_snapshot(restored_state):
+                self._pending_parked_restore_contract = None
+                raise RuntimeError(
+                    "복원한 보류 작업과 감사 outbox의 atomic 저장에 실패했습니다."
                 )
+            if not self._drain_pending_parked_restore():
+                self.current_tray = TraySession()
+                self.worker_name = ""
                 messagebox.showerror(
-                    "작업 기록 실패",
-                    "보류 작업 복원 기록을 남기지 못해 복원을 취소했습니다."
-                    f"{rollback_notice}",
+                    "보류 작업 복구 기록 대기",
+                    "복원 상태와 감사 outbox는 안전하게 저장했지만 event 투영 또는 "
+                    "source 정리를 끝내지 못했습니다. 다시 로그인해 동일 operation을 "
+                    "복구하고 계속되면 관리자에게 문의하세요.",
                 )
                 self._update_parked_trays_list()
+                if hasattr(self, "show_worker_input_screen"):
+                    self.show_worker_input_screen()
                 return
             self.current_tray = restored_tray
             self._restore_operator_review_from_state(saved_state)
@@ -11114,6 +11696,7 @@ def _show_item_catalog_cache_warning(context: Mapping[str, object]) -> None:
         pass
 
 
+@writer_sink("gui_startup")
 def main(argv: list[str] | None = None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     hosted_result = dispatch_product_mode(arguments)

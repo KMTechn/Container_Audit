@@ -11,6 +11,8 @@ from typing import Any, Mapping
 from urllib.parse import parse_qsl, unquote, urlparse
 import zipfile
 
+from writer_session_fence import writer_sink
+
 from vendor.kmtech_zero_pe.release_signature import (
     manifest_signature_version,
     verify_release_signature,
@@ -782,6 +784,7 @@ def _validate_windows_archive_path(member_name: str) -> None:
             raise ValueError("업데이트 ZIP에 안전하지 않은 Windows 파일명이 포함되어 있습니다.")
 
 
+@writer_sink("update_zip_extract")
 def safe_extract_update_zip(
     zip_path: str | Path,
     destination: str | Path,

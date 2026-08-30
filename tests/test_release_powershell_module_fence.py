@@ -23,6 +23,12 @@ def _known_folder(csidl):
 
 
 def _module_contract(tmp_path):
+    identity = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:24]
+    analysis_cache_path = (
+        Path(r"E:\KMTech")
+        / f"pytest-release-module-fence-{identity}"
+        / "ModuleAnalysisCache"
+    )
     pwsh_path = Path(PWSH)
     current_user_modules = _known_folder(5) / "PowerShell" / "Modules"
     all_users_modules = _known_folder(38) / "PowerShell" / "Modules"
@@ -43,10 +49,8 @@ def _module_contract(tmp_path):
             sealed_module_path,
         )
     )
-    analysis_cache_path = tmp_path / "module-analysis-cache" / "ModuleAnalysisCache"
     temp_path = tmp_path / "temp"
     tmp_path_value = tmp_path / "tmp"
-    analysis_cache_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path.mkdir(exist_ok=True)
     tmp_path_value.mkdir(exist_ok=True)
     return {

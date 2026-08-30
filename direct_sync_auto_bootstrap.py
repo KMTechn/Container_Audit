@@ -13,6 +13,7 @@ from typing import Any
 import uuid
 
 from storage_policy import path_is_within
+from writer_session_fence import writer_sink
 
 
 DEFAULT_TASK_NAME = "direct-sync-relay-container-audit"
@@ -29,6 +30,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+@writer_sink("bootstrap_status")
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -97,9 +99,23 @@ def build_session_direct_sync_command(
         scan_source_dir=scan_source_dir,
     )
     application_exe = _existing_file(selected_app_root / APPLICATION_EXE_NAME)
+    portable_entrypoint = selected_app_root / "main.py"
     runner_script = selected_app_root / "tools" / "direct_sync_relay_runner.py"
     if application_exe is not None:
         command = [str(application_exe), DIRECT_SYNC_RELAY_MODE]
+    elif portable_entrypoint.is_file() and not getattr(sys, "frozen", False):
+        # The portable runtime is deliberately isolated.  Executing the tool
+        # script directly would put only ``app/tools`` on sys.path and make
+        # its sibling product modules unavailable.  Re-enter through main.py,
+        # which establishes the signed portable app root before dispatching
+        # the hosted relay mode.
+        command = [
+            sys.executable,
+            "-I",
+            "-B",
+            str(portable_entrypoint),
+            DIRECT_SYNC_RELAY_MODE,
+        ]
     elif runner_script.is_file() and not getattr(sys, "frozen", False):
         command = [sys.executable, str(runner_script)]
     else:
@@ -164,6 +180,7 @@ def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     }
 
 
+@writer_sink("session_direct_sync_process")
 def run_session_direct_sync_once(
     *,
     app_root: str | os.PathLike[str],

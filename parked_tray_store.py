@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Mapping
 from label_qr import canonical_master_label_key, parse_new_format_qr
 from protected_admin import persistent_operator_name
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 
 
 def sanitize_filename(filename: str) -> str:
@@ -70,6 +71,7 @@ class ParkedTrayStore:
                 return path
         return None
 
+    @writer_sink("parked_tray_save")
     def save_state(
         self,
         state: Mapping[str, Any],
@@ -120,6 +122,7 @@ class ParkedTrayStore:
         return summaries
 
     @staticmethod
+    @writer_sink("parked_tray_load_normalize")
     def load(path: str | os.PathLike[str]) -> Dict[str, Any]:
         source = Path(path)
         with source.open("r", encoding="utf-8") as handle:
@@ -134,5 +137,6 @@ class ParkedTrayStore:
         return payload
 
     @staticmethod
+    @writer_sink("parked_tray_delete")
     def delete(path: str | os.PathLike[str]) -> None:
         Path(path).unlink()

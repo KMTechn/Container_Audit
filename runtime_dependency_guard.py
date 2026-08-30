@@ -9,6 +9,8 @@ import os
 from pathlib import Path
 import sys
 
+from writer_session_fence import writer_sink
+
 
 class _CharsetNormalizerBlocker(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
@@ -32,6 +34,7 @@ def install_charset_normalizer_block() -> None:
         sys.meta_path.insert(0, _BLOCKER)
 
 
+@writer_sink("runtime_dependency_report")
 def _write_module_report() -> None:
     raw_path = os.getenv(_MODULE_REPORT_ENV, "").strip()
     if not raw_path:

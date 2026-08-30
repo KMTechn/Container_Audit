@@ -15,7 +15,10 @@ if str(APP_ROOT) not in sys.path:
 if str(SITE_PACKAGES) not in sys.path:
     sys.path.insert(1, str(SITE_PACKAGES))
 
+from writer_session_fence import writer_sink  # noqa: E402
 
+
+@writer_sink("portable_smoke_marker")
 def _portable_smoke() -> int:
     if str(os.environ.get("CONTAINER_AUDIT_AUTOMATED_TEST") or "").strip().lower() not in {
         "1",

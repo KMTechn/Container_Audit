@@ -22,6 +22,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
+from writer_session_fence import writer_sink
+
 from label_qr import parse_new_format_qr
 from transfer_seal import (
     TransferSealError,
@@ -41,6 +43,7 @@ from vendor.kmtech_zero_pe.raster import (
     FontSpec,
     RasterCanvas,
     RasterError,
+    RasterImage,
 )
 
 
@@ -143,6 +146,7 @@ class PHSLabelExchangeJournal:
             )
         return dict(loaded["state"])
 
+    @writer_sink("phs_label_workflow")
     def save(self, state: Mapping[str, Any]) -> dict[str, Any]:
         bounded = dict(state or {})
         bounded["updated_at"] = _utc_now()
@@ -236,6 +240,7 @@ class WindowsGDIPhysicalLabelPrinter:
             )
         return printer_name
 
+    @writer_sink("phs_label_workflow")
     def print_png(
         self,
         filepath: str,
@@ -275,12 +280,23 @@ class RenderedPHSLabel:
     sha256: str
 
 
+@writer_sink("phs_raster_png")
+def _save_raster_png(
+    image: RasterImage,
+    path: str | os.PathLike[str],
+) -> Mapping[str, Any]:
+    """Keep the byte-pinned raster vendor behind the common writer fence."""
+
+    return RasterImage.save_png(image, path, dpi=(300, 300))
+
+
 class PHSLabelRenderer:
     """Render the server-issued QR with central date and worker code."""
 
     def __init__(self, output_root: str | os.PathLike[str]):
         self.output_root = Path(output_root)
 
+    @writer_sink("phs_label_workflow")
     def render(
         self,
         tray: Any,
@@ -366,7 +382,7 @@ class PHSLabelRenderer:
                     font=FontSpec(18),
                 )
                 label_image = canvas.snapshot()
-            saved = label_image.save_png(output_path, dpi=(300, 300))
+            saved = _save_raster_png(label_image, output_path)
         except (RasterError, OSError, ValueError) as exc:
             raise PHSPhysicalPrintError(
                 f"현품표 PNG 생성에 필요한 GDI 렌더링에 실패했습니다: {exc}"

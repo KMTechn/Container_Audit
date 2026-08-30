@@ -9,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
+from writer_session_fence import writer_admission, writer_sink
+
 
 EVENT_LOG_HEADERS = ["timestamp", "worker_name", "event", "details"]
 LOCK_TIMEOUT_SECONDS = 10.0
@@ -33,44 +35,46 @@ def _lock_file_path(log_file_path: str) -> str:
 
 @contextmanager
 def _interprocess_file_lock(log_file_path: str):
-    lock_path = _lock_file_path(log_file_path)
-    Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
-    deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
-    fd: int | None = None
-    while fd is None:
-        try:
-            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            os.write(fd, str(os.getpid()).encode("ascii", errors="ignore"))
-        except (FileExistsError, PermissionError):
-            if not os.path.exists(lock_path):
-                if time.monotonic() >= deadline:
-                    raise
-                time.sleep(0.01)
-                continue
+    with writer_admission("event_interprocess_lock"):
+        lock_path = _lock_file_path(log_file_path)
+        Path(lock_path).parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
+        fd: int | None = None
+        while fd is None:
             try:
-                age = time.time() - os.path.getmtime(lock_path)
-                if age > LOCK_STALE_SECONDS:
-                    try:
-                        os.unlink(lock_path)
-                    except (FileNotFoundError, PermissionError):
-                        pass
+                fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+                os.write(fd, str(os.getpid()).encode("ascii", errors="ignore"))
+            except (FileExistsError, PermissionError):
+                if not os.path.exists(lock_path):
+                    if time.monotonic() >= deadline:
+                        raise
+                    time.sleep(0.01)
                     continue
-            except FileNotFoundError:
-                continue
-            if time.monotonic() >= deadline:
-                raise TimeoutError(f"event log lock timeout: {lock_path}")
-            time.sleep(0.01)
-    try:
-        yield
-    finally:
-        if fd is not None:
-            os.close(fd)
+                try:
+                    age = time.time() - os.path.getmtime(lock_path)
+                    if age > LOCK_STALE_SECONDS:
+                        try:
+                            os.unlink(lock_path)
+                        except (FileNotFoundError, PermissionError):
+                            pass
+                        continue
+                except FileNotFoundError:
+                    continue
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(f"event log lock timeout: {lock_path}")
+                time.sleep(0.01)
         try:
-            os.unlink(lock_path)
-        except FileNotFoundError:
-            pass
+            yield
+        finally:
+            if fd is not None:
+                os.close(fd)
+            try:
+                os.unlink(lock_path)
+            except FileNotFoundError:
+                pass
 
 
+@writer_sink("event_csv_append")
 def append_event_log_entry(
     log_file_path: str,
     log_entry: Dict[str, Any],
@@ -86,6 +90,7 @@ def append_event_log_entry(
             )
 
 
+@writer_sink("event_csv_unlocked_append")
 def _append_event_log_entry_unlocked(
     log_file_path: str,
     log_entry: Dict[str, Any],
@@ -103,6 +108,7 @@ def _append_event_log_entry_unlocked(
             os.fsync(f_handle.fileno())
 
 
+@writer_sink("event_csv_idempotent_append")
 def append_event_log_entry_idempotent(
     log_file_path: str,
     log_entry: Dict[str, Any],

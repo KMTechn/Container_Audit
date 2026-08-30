@@ -22,6 +22,8 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from urllib.parse import quote, urlencode
 
+from writer_session_fence import writer_sink
+
 from label_qr import parse_new_format_qr
 from terminal_operation_lease import (
     ROTATION_REQUEST_CONTRACT_VERSION,
@@ -271,6 +273,7 @@ class MemberExchangeAttempt:
 class TransferMemberExchangeStore:
     """SQLite outbox for a central member exchange and its local application."""
 
+    @writer_sink("transfer_member_exchange")
     def __init__(self, db_path: str | os.PathLike[str]) -> None:
         self.db_path = str(db_path)
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -287,6 +290,7 @@ class TransferMemberExchangeStore:
         finally:
             conn.close()
 
+    @writer_sink("transfer_member_exchange")
     def _initialize(self) -> None:
         with self._connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -379,6 +383,7 @@ class TransferMemberExchangeStore:
                 """
             )
 
+    @writer_sink("transfer_member_exchange")
     def prepare(
         self,
         *,
@@ -565,6 +570,7 @@ class TransferMemberExchangeStore:
             ).fetchone()
         return row is not None
 
+    @writer_sink("transfer_member_exchange")
     def bind_command(self, intent_id: str, command: Mapping[str, Any]) -> sqlite3.Row:
         command_id = _identifier(command.get("idempotency_key"), "idempotency_key")
         command_json = _canonical_json(dict(command))
@@ -614,6 +620,7 @@ class TransferMemberExchangeStore:
         assert row is not None
         return row
 
+    @writer_sink("transfer_member_exchange")
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
         operator_review_codes = {
             "CAPABILITY_UNAVAILABLE",
@@ -677,6 +684,7 @@ class TransferMemberExchangeStore:
         assert row is not None
         return row
 
+    @writer_sink("transfer_member_exchange")
     def record_receipt(self, intent_id: str, receipt: Mapping[str, Any]) -> sqlite3.Row:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -695,6 +703,7 @@ class TransferMemberExchangeStore:
         assert row is not None
         return row
 
+    @writer_sink("transfer_member_exchange")
     def mark_local_applied(
         self, intent_id: str, evidence: Mapping[str, Any]
     ) -> sqlite3.Row:
@@ -727,6 +736,7 @@ class TransferMemberExchangeStore:
         assert row is not None
         return row
 
+    @writer_sink("transfer_member_exchange")
     def mark_local_review(self, intent_id: str, reason: str) -> sqlite3.Row:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -764,6 +774,7 @@ class TransferMemberExchangeStore:
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
 
+    @writer_sink("transfer_member_exchange")
     def dismiss_without_durable_command(
         self, intent_id: str, reason: str
     ) -> sqlite3.Row:

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 
 
 JOURNAL_SCHEMA_VERSION = "kmtech-recovery-2pc-client-journal-v1"
@@ -111,6 +112,7 @@ def _contains_forbidden_key(value: Any) -> bool:
     return False
 
 
+@writer_sink("recovery_two_phase")
 def _atomic_write_bytes(path: Path, payload: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(
@@ -183,6 +185,7 @@ class RecoveryTwoPhaseJournal:
             )
         return payload
 
+    @writer_sink("recovery_two_phase")
     def initialize(self, bindings: Mapping[str, str]) -> dict[str, Any]:
         normalized = {str(key): str(value or "").strip() for key, value in bindings.items()}
         if set(normalized) != _REQUIRED_BINDING_FIELDS or not all(
@@ -447,6 +450,7 @@ class RecoveryTwoPhaseJournal:
             terminal_observed_at=_utc_now(),
         )
 
+    @writer_sink("recovery_two_phase")
     def remove_sealed_package_after_expiry(self) -> None:
         payload = self.load()
         if payload is None or payload["state"] != STATE_EXPIRED:
@@ -459,6 +463,7 @@ class RecoveryTwoPhaseJournal:
                 "expired sealed package cleanup failed"
             )
 
+    @writer_sink("recovery_two_phase")
     def remove_sealed_package_after_terminal(self) -> None:
         payload = self.load()
         if payload is None or payload["state"] not in TERMINAL_STATES:
@@ -471,6 +476,7 @@ class RecoveryTwoPhaseJournal:
                 "terminal sealed package cleanup failed"
             )
 
+    @writer_sink("recovery_two_phase")
     def remove_sealed_package_after_complete(self) -> None:
         payload = self.load()
         if payload is None or payload["state"] != STATE_COMPLETE:
@@ -483,6 +489,7 @@ class RecoveryTwoPhaseJournal:
                 "sealed package cleanup failed"
             )
 
+    @writer_sink("recovery_two_phase")
     def _write(self, payload: Mapping[str, Any]) -> None:
         if _contains_forbidden_key(payload):
             raise RecoveryTwoPhaseStateError(

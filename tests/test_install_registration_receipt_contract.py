@@ -66,6 +66,7 @@ class _AcceptedUploadSession:
                 ),
                 "committed": True,
                 "status": "accepted",
+                "projection_disposition": "COMPLETE",
                 "retryable": False,
                 "next_retry_after": None,
                 "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},

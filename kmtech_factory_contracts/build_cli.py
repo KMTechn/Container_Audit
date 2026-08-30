@@ -11,6 +11,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from writer_session_fence import writer_sink
+
 from .bundle import (
     CONTRACT_BUNDLE_CORRECTIVE_REVISION,
     CONTRACT_BUNDLE_SHA256,
@@ -96,6 +98,7 @@ def _coinstall_rows(app_id: str) -> list[dict[str, str]]:
     return rows
 
 
+@writer_sink("factory_contract_identity")
 def prepare_identity(
     *,
     repository: Path,

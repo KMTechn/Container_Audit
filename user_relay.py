@@ -21,6 +21,7 @@ from storage_policy import (
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
 )
+from writer_session_fence import writer_sink
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -40,6 +41,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+@writer_sink("persistent_relay_status")
 def _write_json_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
@@ -77,6 +79,15 @@ def build_user_relay_command(app_root: str | os.PathLike[str]) -> list[str]:
     application_exe = root / "Container_Audit.exe"
     if application_exe.is_file():
         return [str(application_exe), USER_RELAY_MODE]
+    portable_entrypoint = root / "main.py"
+    if portable_entrypoint.is_file() and not getattr(sys, "frozen", False):
+        return [
+            sys.executable,
+            "-I",
+            "-B",
+            str(portable_entrypoint),
+            USER_RELAY_MODE,
+        ]
     source_entrypoint = root / "Container_Audit.py"
     if source_entrypoint.is_file() and not getattr(sys, "frozen", False):
         return [sys.executable, str(source_entrypoint), USER_RELAY_MODE]
@@ -87,6 +98,7 @@ def user_relay_command_line(app_root: str | os.PathLike[str]) -> str:
     return subprocess.list2cmdline(build_user_relay_command(app_root))
 
 
+@writer_sink("persistent_relay_registry")
 def _registry_set(value: str) -> None:
     if os.name != "nt":
         raise UserRelayError("HKCU relay persistence is available only on Windows")
@@ -121,6 +133,7 @@ def _registry_get() -> str:
     return str(value)
 
 
+@writer_sink("persistent_relay_registry")
 def _registry_delete() -> None:
     if os.name != "nt":
         raise UserRelayError("HKCU relay persistence is available only on Windows")
@@ -138,6 +151,7 @@ def _registry_delete() -> None:
         return
 
 
+@writer_sink("user_relay_autostart_install")
 def install_user_relay_autostart(
     app_root: str | os.PathLike[str],
     *,
@@ -159,6 +173,7 @@ def install_user_relay_autostart(
     }
 
 
+@writer_sink("user_relay_autostart_remove")
 def remove_user_relay_autostart(
     *,
     deleter: Callable[[], None] | None = None,
@@ -176,6 +191,7 @@ def remove_user_relay_autostart(
     }
 
 
+@writer_sink("persistent_relay_process_start")
 def start_user_relay_process(
     app_root: str | os.PathLike[str],
     *,
@@ -365,6 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+@writer_sink("persistent_relay_status")
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     app_root = Path(

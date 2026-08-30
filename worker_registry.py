@@ -11,6 +11,7 @@ from protected_admin import (
     is_protected_admin_candidate,
 )
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 
 FORMULA_PREFIX_CHARS = ("=", "+", "-", "@")
 CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -85,6 +86,7 @@ class WorkerRegistry:
             self._write_payload(sanitized_payload)
         return {"workers": sanitized_workers}
 
+    @writer_sink("worker_registry_quarantine")
     def _quarantine_registry_file(self) -> str:
         source = Path(self.registry_path)
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
@@ -134,6 +136,7 @@ class WorkerRegistry:
                         by_name[name][key] = incoming_value
         return [by_name[name] for name in order]
 
+    @writer_sink("worker_registry_write")
     def _write_payload(self, payload: Dict[str, Any]) -> None:
         atomic_write_json(self.registry_path, payload, indent=2, ensure_ascii=False, trailing_newline=True)
 

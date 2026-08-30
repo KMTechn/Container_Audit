@@ -272,7 +272,9 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
     assert result["system_mutation_attempted"] is False
     assert result["system_mutation_attempt_count"] == 0
     assert result["secret_values_recorded"] is False
-    assert {item["name"]: item["status"] for item in result["checks"]} == {
+    checks = {item["name"]: item["status"] for item in result["checks"]}
+    assert len(checks) == 58
+    assert checks == {
         "public_guard_rejects_absent_session_authority": "PASS",
         "public_guard_accepts_actively_held_session_authority": "PASS",
         "public_guard_rejects_released_session_authority": "PASS",
@@ -328,6 +330,9 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
         "code_restore_failure_explicit_and_writer_not_run": "PASS",
         "lifecycle_restore_failure_explicit_and_writer_not_run": "PASS",
         "writer_restore_failure_explicit": "PASS",
+        "code_derived_writer_inventory_contract_exact": "PASS",
+        "lifecycle_delegation_sources_exist_in_inventory": "PASS",
+        "containment_delegation_sources_exist_in_inventory": "PASS",
     }
 
 
@@ -798,8 +803,11 @@ def test_writer_session_adapter_exposes_only_natural_trigger_restore():
     recovery = source[source.index("function Invoke-ContainerRecovery") :]
 
     assert "Start-ScheduledTask" not in source
-    assert "Enable-ScheduledTask" in source
-    assert "Disable-ScheduledTask" in source
+    assert "Enable-ScheduledTask" not in source
+    assert "Disable-ScheduledTask" not in source
+    assert "Stop-ScheduledTask" not in source
+    assert "Enable-ContainerScheduledTaskUnderWriterFence" in source
+    assert "Disable-ContainerScheduledTaskUnderWriterFence" in source
     assert "natural trigger survival was not observed" in source
     assert "CODE_RESTORE_FAILED" in source
     assert "WRITER_RESTORE_FAILED" in source

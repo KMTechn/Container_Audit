@@ -46,6 +46,7 @@ from direct_sync_push import (
 from direct_sync_operator import read_operator_pause
 from producer_runtime_client import ensure_runtime_authority
 from storage_policy import current_user_data_home, is_legacy_syncthing_path
+from writer_session_fence import writer_sink
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
@@ -90,6 +91,7 @@ class DirectSyncRuntimeConfig:
     max_active_queue_age_seconds: int = 0
 
 
+@writer_sink("relay_runtime_storage")
 def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -109,6 +111,7 @@ def _write_json_atomic(path: str | os.PathLike[str], payload: Mapping[str, Any])
         raise
 
 
+@writer_sink("relay_runtime_storage")
 def _append_jsonl(path: str | os.PathLike[str], payload: Mapping[str, Any]) -> None:
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -480,6 +483,7 @@ def load_credentials_from_json(path: str | os.PathLike[str]) -> ProducerCredenti
     )
 
 
+@writer_sink("relay_runtime_storage")
 def _disk_pressure_report(config: DirectSyncRuntimeConfig) -> dict[str, Any]:
     spool_dir = Path(config.spool_dir)
     min_free = max(0, int(config.min_free_bytes or 0))
@@ -804,6 +808,7 @@ def _queue_backpressure_event(backpressure: Mapping[str, Any]) -> str:
     return "queue_backpressure_warning"
 
 
+@writer_sink("direct_sync_enqueue")
 def enqueue_completed_source_file(
     config: DirectSyncRuntimeConfig,
     *,
@@ -922,6 +927,7 @@ def enqueue_completed_source_file(
     )
 
 
+@writer_sink("direct_sync_scan_status")
 def record_scan_status(
     config: DirectSyncRuntimeConfig,
     *,
@@ -957,6 +963,7 @@ def record_scan_status(
     return _append_runtime_event_with_status(config, "source_scan_status", payload)
 
 
+@writer_sink("direct_sync_scan_result")
 def record_scan_result_status(
     config: DirectSyncRuntimeConfig,
     *,
@@ -992,6 +999,7 @@ def record_scan_result_status(
     return _append_runtime_event_with_status(config, "source_scan_result_status", payload)
 
 
+@writer_sink("direct_sync_scan_drain")
 def record_scan_drain_status(
     config: DirectSyncRuntimeConfig,
     *,
@@ -1030,6 +1038,7 @@ def record_scan_drain_status(
     return _append_runtime_event_with_status(config, "source_scan_drain_status", payload)
 
 
+@writer_sink("direct_sync_relay_cycle")
 def run_relay_once(
     config: DirectSyncRuntimeConfig,
     *,

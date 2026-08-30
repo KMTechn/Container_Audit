@@ -6,7 +6,10 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from writer_session_fence import writer_sink
 
+
+@writer_sink("storage_atomic_json")
 def atomic_write_json(
     path: str | os.PathLike[str],
     payload: Any,

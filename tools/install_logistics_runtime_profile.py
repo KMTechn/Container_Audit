@@ -22,6 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from writer_session_fence import writer_sink  # noqa: E402
+
 from logistics_runtime_profile import (  # noqa: E402
     DEFAULT_TOKEN_REF,
     LogisticsRuntimeConfigurationError,
@@ -210,6 +212,7 @@ def _resolve_tls_ca_bundle(
     )
 
 
+@writer_sink("logistics_profile_install")
 def _secure_profile_directory(path: Path, reader_principal: str) -> None:
     reader = str(reader_principal or "").strip()
     if not reader or not re.fullmatch(r"\*?[A-Za-z0-9가-힣 _.-]+(?:\\[A-Za-z0-9가-힣 _.$-]+)?", reader):
@@ -230,6 +233,7 @@ def _secure_profile_directory(path: Path, reader_principal: str) -> None:
     )
 
 
+@writer_sink("logistics_profile_install")
 def _atomic_write(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(

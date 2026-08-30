@@ -1,9 +1,11 @@
 import datetime
+import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
 from label_qr import inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
 from protected_admin import persistent_operator_name
+from writer_session_fence import writer_sink
 
 
 class TrayStateValidationError(ValueError):
@@ -15,6 +17,22 @@ OPERATOR_REVIEW_STATE_KEY = "pending_operator_review"
 OPERATOR_REVIEW_STATE_SCHEMA_VERSION = 1
 COMPLETION_EVENT_STATE_KEY = "pending_completion_event"
 COMPLETION_EVENT_STATE_SCHEMA_VERSION = 1
+ACTIVATION_EVENT_STATE_KEY = "pending_activation_event"
+ACTIVATION_EVENT_STATE_SCHEMA_VERSION = 1
+ACTIVATION_EVENT_TYPES = frozenset(
+    {
+        "MASTER_LABEL_SCANNED_NEW",
+        "MASTER_LABEL_SCANNED_OLD",
+    }
+)
+PARKED_RESTORE_STATE_KEY = "pending_parked_restore"
+PARKED_RESTORE_STATE_SCHEMA_VERSION = 1
+PARKED_RESTORE_EVENT_TYPES = frozenset(
+    {
+        "TRAY_DISCARDED_BY_OPERATOR",
+        "TRAY_RESTORED_FROM_PARK",
+    }
+)
 
 
 def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
@@ -332,6 +350,287 @@ def _validate_pending_completion_event(
         )
 
 
+def _validate_pending_activation_event(
+    state: Mapping[str, Any],
+    *,
+    now: datetime.datetime,
+    future_clock_skew_seconds: float,
+) -> None:
+    """Validate the durable outbox row paired with a new active tray.
+
+    The event payload lives in the same atomically replaced JSON document as
+    the tray state.  CSV is only an idempotent projection of this row, so a
+    process crash cannot leave an active tray without the information needed
+    to reproduce its exact audit event.
+    """
+
+    payload = state.get(ACTIVATION_EVENT_STATE_KEY)
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY} must be a JSON object"
+        )
+    if payload.get("schema_version") != ACTIVATION_EVENT_STATE_SCHEMA_VERSION:
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY} has an unsupported schema version"
+        )
+    for key in (
+        "event_type",
+        "idempotency_key",
+        "observed_at",
+        "projection_log_name",
+        "projection_worker_name",
+        "master_label_code",
+    ):
+        value = payload.get(key)
+        if not isinstance(value, str) or not value.strip():
+            raise TrayStateValidationError(
+                f"{ACTIVATION_EVENT_STATE_KEY}.{key} must be non-empty text"
+            )
+    event_type = payload["event_type"].strip()
+    if event_type not in ACTIVATION_EVENT_TYPES:
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.event_type is unsupported"
+        )
+    idempotency_key = payload["idempotency_key"].strip()
+    key_prefix = "tray-activation:"
+    key_suffix = idempotency_key[len(key_prefix) :] if idempotency_key.startswith(key_prefix) else ""
+    if len(key_suffix) != 32 or any(character not in "0123456789abcdef" for character in key_suffix):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.idempotency_key is invalid"
+        )
+    if payload["master_label_code"] != state.get("master_label_code"):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.master_label_code does not match tray state"
+        )
+    log_name = payload["projection_log_name"].strip()
+    if (
+        log_name != Path(log_name).name
+        or "/" in log_name
+        or "\\" in log_name
+        or not log_name.lower().endswith(".csv")
+    ):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.projection_log_name is invalid"
+        )
+    projection_worker_name = payload["projection_worker_name"].strip()
+    if (
+        len(projection_worker_name) > 128
+        or any(ord(character) < 32 for character in projection_worker_name)
+    ):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.projection_worker_name is invalid"
+        )
+    observed_at = _parse_iso_datetime(
+        payload["observed_at"],
+        key=f"{ACTIVATION_EVENT_STATE_KEY}.observed_at",
+    )
+    _reject_future_datetime(
+        observed_at,
+        key=f"{ACTIVATION_EVENT_STATE_KEY}.observed_at",
+        now=now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
+    )
+    event_detail = payload.get("event_detail")
+    if not isinstance(event_detail, Mapping):
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.event_detail must be a JSON object"
+        )
+    if len(event_detail) > 128:
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.event_detail is too large"
+        )
+    try:
+        json.dumps(event_detail, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TrayStateValidationError(
+            f"{ACTIVATION_EVENT_STATE_KEY}.event_detail is not canonical JSON"
+        ) from exc
+
+
+def _validate_parked_restore_projection_event(
+    payload: Any,
+    *,
+    operation_id: str,
+    restored_master_label_code: str,
+    now: datetime.datetime,
+    future_clock_skew_seconds: float,
+) -> str:
+    key_root = f"{PARKED_RESTORE_STATE_KEY}.projection_events"
+    if not isinstance(payload, Mapping):
+        raise TrayStateValidationError(f"{key_root} entries must be JSON objects")
+    for key in (
+        "event_type",
+        "canonical_event_name",
+        "idempotency_key",
+        "observed_at",
+        "projection_log_name",
+        "projection_worker_name",
+    ):
+        value = payload.get(key)
+        if not isinstance(value, str):
+            raise TrayStateValidationError(f"{key_root}.{key} must be text")
+    event_type = payload["event_type"].strip()
+    if event_type not in PARKED_RESTORE_EVENT_TYPES:
+        raise TrayStateValidationError(f"{key_root}.event_type is unsupported")
+    expected_suffix = (
+        "discard"
+        if event_type == "TRAY_DISCARDED_BY_OPERATOR"
+        else "restore"
+    )
+    if payload["idempotency_key"] != f"{operation_id}:{expected_suffix}":
+        raise TrayStateValidationError(f"{key_root}.idempotency_key is invalid")
+    canonical_event_name = payload["canonical_event_name"].strip()
+    if event_type == "TRAY_RESTORED_FROM_PARK":
+        if canonical_event_name != "TRAY_RESTORED":
+            raise TrayStateValidationError(
+                f"{key_root}.canonical_event_name is invalid"
+            )
+    elif canonical_event_name:
+        raise TrayStateValidationError(
+            f"{key_root}.canonical_event_name must be empty"
+        )
+    log_name = payload["projection_log_name"].strip()
+    if (
+        not log_name
+        or log_name != Path(log_name).name
+        or "/" in log_name
+        or "\\" in log_name
+        or not log_name.lower().endswith(".csv")
+    ):
+        raise TrayStateValidationError(
+            f"{key_root}.projection_log_name is invalid"
+        )
+    projection_worker_name = payload["projection_worker_name"].strip()
+    if (
+        not projection_worker_name
+        or len(projection_worker_name) > 128
+        or any(ord(character) < 32 for character in projection_worker_name)
+    ):
+        raise TrayStateValidationError(
+            f"{key_root}.projection_worker_name is invalid"
+        )
+    observed_at = _parse_iso_datetime(
+        payload["observed_at"],
+        key=f"{key_root}.observed_at",
+    )
+    _reject_future_datetime(
+        observed_at,
+        key=f"{key_root}.observed_at",
+        now=now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
+    )
+    event_detail = payload.get("event_detail")
+    if not isinstance(event_detail, Mapping):
+        raise TrayStateValidationError(f"{key_root}.event_detail must be a JSON object")
+    if len(event_detail) > 128:
+        raise TrayStateValidationError(f"{key_root}.event_detail is too large")
+    try:
+        json.dumps(event_detail, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise TrayStateValidationError(
+            f"{key_root}.event_detail is not canonical JSON"
+        ) from exc
+    if (
+        event_type == "TRAY_RESTORED_FROM_PARK"
+        and str(event_detail.get("master_label_code") or "")
+        != restored_master_label_code
+    ):
+        raise TrayStateValidationError(
+            f"{key_root}.event_detail does not match restored tray"
+        )
+    return event_type
+
+
+def _validate_pending_parked_restore(
+    state: Mapping[str, Any],
+    *,
+    now: datetime.datetime,
+    future_clock_skew_seconds: float,
+) -> None:
+    payload = state.get(PARKED_RESTORE_STATE_KEY)
+    if payload is None:
+        return
+    if not isinstance(payload, Mapping):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY} must be a JSON object"
+        )
+    if payload.get("schema_version") != PARKED_RESTORE_STATE_SCHEMA_VERSION:
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY} has an unsupported schema version"
+        )
+    operation_id = payload.get("operation_id")
+    operation_prefix = "parked-restore:"
+    if not isinstance(operation_id, str) or not operation_id.startswith(
+        operation_prefix
+    ):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.operation_id is invalid"
+        )
+    operation_suffix = operation_id[len(operation_prefix) :]
+    if len(operation_suffix) != 32 or any(
+        character not in "0123456789abcdef" for character in operation_suffix
+    ):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.operation_id is invalid"
+        )
+    source_name = payload.get("parked_source_name")
+    if (
+        not isinstance(source_name, str)
+        or not source_name
+        or source_name != Path(source_name).name
+        or not source_name.startswith("parked_")
+        or not source_name.lower().endswith(".json")
+    ):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.parked_source_name is invalid"
+        )
+    source_sha256 = payload.get("parked_source_sha256")
+    if (
+        not isinstance(source_sha256, str)
+        or len(source_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in source_sha256)
+    ):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.parked_source_sha256 is invalid"
+        )
+    restored_master_label_code = str(
+        payload.get("restored_master_label_code") or ""
+    )
+    if (
+        not restored_master_label_code
+        or restored_master_label_code != str(state.get("master_label_code") or "")
+    ):
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.restored_master_label_code does not match tray state"
+        )
+    projection_events = payload.get("projection_events")
+    if not isinstance(projection_events, list) or len(projection_events) not in {1, 2}:
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.projection_events is invalid"
+        )
+    event_types = [
+        _validate_parked_restore_projection_event(
+            event,
+            operation_id=operation_id,
+            restored_master_label_code=restored_master_label_code,
+            now=now,
+            future_clock_skew_seconds=future_clock_skew_seconds,
+        )
+        for event in projection_events
+    ]
+    expected = (
+        ["TRAY_RESTORED_FROM_PARK"]
+        if len(event_types) == 1
+        else ["TRAY_DISCARDED_BY_OPERATOR", "TRAY_RESTORED_FROM_PARK"]
+    )
+    if event_types != expected:
+        raise TrayStateValidationError(
+            f"{PARKED_RESTORE_STATE_KEY}.projection_events order is invalid"
+        )
+
+
 def _parse_iso_datetime(value: str, *, key: str) -> datetime.datetime:
     try:
         return datetime.datetime.fromisoformat(value)
@@ -461,10 +760,21 @@ def validate_tray_state(
         now=validation_now,
         future_clock_skew_seconds=future_clock_skew_seconds,
     )
+    _validate_pending_activation_event(
+        state,
+        now=validation_now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
+    )
+    _validate_pending_parked_restore(
+        state,
+        now=validation_now,
+        future_clock_skew_seconds=future_clock_skew_seconds,
+    )
 
     return state
 
 
+@writer_sink("tray_state_quarantine")
 def quarantine_tray_state_file(path: str | Path, *, now: datetime.datetime | None = None) -> Path:
     source = Path(path)
     timestamp = (now or datetime.datetime.now()).strftime("%Y%m%d%H%M%S")

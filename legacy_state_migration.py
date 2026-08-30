@@ -19,6 +19,7 @@ from storage_policy import (
     path_is_within,
 )
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 
 
 MIGRATION_SCHEMA = "container-audit-code-state-migration-v1"
@@ -40,6 +41,7 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+@writer_sink("legacy_state_storage")
 def _copy_file_once(source: Path, destination: Path) -> dict[str, Any]:
     """Copy one bounded regular file without ever changing or deleting *source*."""
 
@@ -172,6 +174,7 @@ def _seed_legacy_ui_settings_once(
     }
 
 
+@writer_sink("legacy_state_migration")
 def migrate_legacy_code_root_state(
     *,
     application_path: str | os.PathLike[str],

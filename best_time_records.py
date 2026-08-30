@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from storage_utils import atomic_write_json
+from writer_session_fence import writer_sink
 
 
 class BestTimeRecordStore:
@@ -26,6 +27,7 @@ class BestTimeRecordStore:
             self.save(records)
         return records
 
+    @writer_sink("best_time_records")
     def save(self, records: Mapping[str, float]) -> None:
         atomic_write_json(self.path, dict(records), indent=4)
 
