@@ -7,6 +7,7 @@ import subprocess
 import sys
 
 import native_audio
+import pytest
 from tools import build_portable_release_candidate as portable_builder
 from tools.stage_pure_python_charset_normalizer import stage
 
@@ -31,7 +32,7 @@ def _portable_production_imports(roots: set[str]) -> list[tuple[str, str]]:
     paths = list(ROOT.glob("*.py"))
     for package in portable_builder.APP_PACKAGE_DIRS:
         paths.extend((ROOT / package).rglob("*.py"))
-    paths.extend(ROOT / "tools" / name for name in portable_builder.APP_TOOL_FILES)
+    paths.extend(portable_builder._discover_portable_tool_sources(ROOT))
     matches: list[tuple[str, str]] = []
     for path in sorted(paths):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -199,10 +200,12 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
     assert portable_builder.ALLOWED_APP_NATIVE_NAMES == set()
     assert "config" not in portable_builder.APP_DATA_DIRS
     assert "config/container_audit_settings.json" in portable_builder.APP_DATA_FILES
-    assert set(portable_builder.APP_TOOL_FILES) == {
-        "direct_sync_relay_runner.py",
-        "install_logistics_runtime_profile.py",
-        "register_container_audit_worker_pc.py",
+    assert portable_builder.EXTERNAL_TOOL_MODULES == ()
+    tool_sources = portable_builder._discover_portable_tool_sources(ROOT)
+    assert {path.relative_to(ROOT).as_posix() for path in tool_sources} == {
+        "tools/direct_sync_relay_runner.py",
+        "tools/install_logistics_runtime_profile.py",
+        "tools/register_container_audit_worker_pc.py",
     }
     assert set(portable_builder.PORTABLE_INSTALL_ASSETS) == {
         ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
@@ -216,6 +219,94 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
     }
     for forbidden in ("cffi", "cryptography", "pillow", "pygame", "pycparser"):
         assert forbidden not in portable_builder.THIRD_PARTY
+
+
+def test_portable_tool_dependency_closure_is_recursive_and_fail_closed(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    entrypoint = tmp_path / "entrypoint.py"
+    first = tools / "first.py"
+    second = tools / "second.py"
+    entrypoint.write_text("from tools import first\n", encoding="utf-8")
+    first.write_text("from tools import second\n", encoding="utf-8")
+    second.write_text("VALUE = 1\n", encoding="utf-8")
+
+    discovered = portable_builder._discover_portable_tool_sources(
+        tmp_path,
+        initial_sources=[entrypoint],
+        external_modules=(),
+    )
+    assert [path.name for path in discovered] == ["first.py", "second.py"]
+
+    second.unlink()
+    with pytest.raises(
+        portable_builder.PortableBuildError,
+        match="required portable tool module is missing: tools.second",
+    ):
+        portable_builder._discover_portable_tool_sources(
+            tmp_path,
+            initial_sources=[entrypoint],
+            external_modules=(),
+        )
+
+
+def test_portable_packet_copies_and_imports_derived_tool_closure(
+    monkeypatch,
+    tmp_path,
+):
+    repo_root = tmp_path / "source"
+    tools_root = repo_root / "tools"
+    portable_root = repo_root / "portable"
+    tools_root.mkdir(parents=True)
+    portable_root.mkdir()
+    for module_name in (
+        "Container_Audit",
+        "container_audit_product_host",
+        "current_user_onboarding",
+    ):
+        (repo_root / f"{module_name}.py").write_text(
+            "VALUE = 1\n",
+            encoding="utf-8",
+        )
+    (repo_root / "entrypoint.py").write_text(
+        "from tools import first\n",
+        encoding="utf-8",
+    )
+    (portable_root / "main.py").write_text("VALUE = 1\n", encoding="utf-8")
+    first = tools_root / "first.py"
+    second = tools_root / "second.py"
+    first.write_text("from tools import second\n", encoding="utf-8")
+    second.write_text("VALUE = 1\n", encoding="utf-8")
+    monkeypatch.setattr(portable_builder, "APP_PACKAGE_DIRS", ())
+    monkeypatch.setattr(portable_builder, "APP_DATA_DIRS", ())
+    monkeypatch.setattr(portable_builder, "APP_DATA_FILES", ())
+
+    output = tmp_path / "packet"
+    app_root = output / "app"
+    tool_sources = portable_builder._copy_application(repo_root, app_root)
+
+    assert [path.name for path in tool_sources] == ["first.py", "second.py"]
+    assert (app_root / "tools" / "first.py").is_file()
+    assert (app_root / "tools" / "second.py").is_file()
+    portable_builder._assert_portable_import_closure(
+        output,
+        repo_root,
+        tool_sources,
+        python_executable=Path(sys.executable),
+    )
+
+    (app_root / "tools" / "second.py").unlink()
+    with pytest.raises(
+        portable_builder.PortableBuildError,
+        match="portable runtime import closure failed",
+    ):
+        portable_builder._assert_portable_import_closure(
+            output,
+            repo_root,
+            tool_sources,
+            python_executable=Path(sys.executable),
+        )
+    assert list(output.rglob("__pycache__")) == []
 
 
 def test_portable_launcher_uses_pythonw_source_entrypoint_without_focus():
