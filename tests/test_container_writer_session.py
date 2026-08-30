@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from contextlib import contextmanager
 import ctypes
 import hashlib
 import json
@@ -21,24 +22,75 @@ def _powershell() -> str:
     return executable
 
 
-def _run_adapter(*arguments: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [
-            _powershell(),
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(ADAPTER),
-            *arguments,
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
+def _argument_value(arguments: tuple[str, ...], name: str) -> str | None:
+    try:
+        return arguments[arguments.index(name) + 1]
+    except (ValueError, IndexError):
+        return None
+
+
+def _session_authority_name(arguments: tuple[str, ...]) -> str | None:
+    values = [
+        _argument_value(arguments, "-SessionId"),
+        _argument_value(arguments, "-AttemptId"),
+        _argument_value(arguments, "-OrchestratorSha256"),
+        _argument_value(arguments, "-ReplacementTransactionId"),
+        _argument_value(arguments, "-ExpectedContractSha256"),
+    ]
+    lengths = [32, 32, 64, 32, 64]
+    if any(value is None for value in values):
+        return None
+    if any(
+        len(value) != length or any(char not in "0123456789abcdef" for char in value)
+        for value, length in zip(values, lengths, strict=True)
+    ):
+        return None
+    canonical = "\n".join(
+        ["container-audit-deployment-session-authority-v1", *values]
     )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"Local\\KMTech.ContainerAudit.DeploymentSession.{digest}"
+
+
+@contextmanager
+def _held_session_authority(name: str | None):
+    if name is None:
+        yield
+        return
+    kernel32 = ctypes.windll.kernel32
+    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    handle = kernel32.CreateMutexW(None, True, name)
+    if not handle:
+        raise ctypes.WinError()
+    try:
+        yield
+    finally:
+        assert kernel32.ReleaseMutex(handle)
+        assert kernel32.CloseHandle(handle)
+
+
+def _run_adapter(
+    *arguments: str, session_authority: bool = True
+) -> subprocess.CompletedProcess[str]:
+    authority_name = _session_authority_name(arguments) if session_authority else None
+    with _held_session_authority(authority_name):
+        return subprocess.run(
+            [
+                _powershell(),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ADAPTER),
+                *arguments,
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
 
 
 def _contract_sha256() -> str:
@@ -107,6 +159,109 @@ def _production_arguments(mode: str, tmp_path: Path, *, session_id: str) -> list
     return arguments
 
 
+def _valid_prepared_payload(path: Path, arguments: list[str]) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    identity = {
+        "status": "PASS",
+        "task_name": "direct-sync-relay-container-audit",
+        "task_path": "\\",
+        "execute": r"C:\KMTech\Apps\Container_Audit\current\runtime\python.exe",
+        "working_directory": r"C:\KMTech\Apps\Container_Audit\current\app",
+        "arguments_sha256": "6" * 64,
+        "expected_main_bound": True,
+        "expected_mode_bound": True,
+        "raw_arguments_recorded": False,
+        "principal_user": "operator",
+        "principal_sid": "S-1-5-21-1-2-3-1001",
+        "logon_type": "Interactive",
+        "run_level": "Limited",
+        "trigger_type": "MSFT_TaskTimeTrigger",
+        "trigger_start_boundary": now.isoformat(),
+        "trigger_repetition_interval": "PT1M",
+        "start_when_available": True,
+        "multiple_instances": "IgnoreNew",
+        "definition_sha256": "7" * 64,
+        "binding_sha256": "5" * 64,
+    }
+    pre = {
+        "captured_at_utc": now.isoformat(),
+        "enabled": True,
+        "state": "Ready",
+        "last_task_result": 0,
+        "last_run_time_utc": now.isoformat(),
+        "next_run_time_utc": now.isoformat(),
+        "exact_writer_process_count": 0,
+        "identity": identity,
+    }
+    post = json.loads(json.dumps(pre))
+    post["enabled"] = False
+    post["state"] = "Disabled"
+    fingerprint = {
+        "path": str(path.parent / "effect.json"),
+        "bytes": 1,
+        "mtime_utc": now.isoformat(),
+        "sha256": "8" * 64,
+        "contents_recorded": False,
+    }
+    session_id = _argument_value(tuple(arguments), "-SessionId")
+    attempt_id = _argument_value(tuple(arguments), "-AttemptId")
+    orchestrator = _argument_value(tuple(arguments), "-OrchestratorSha256")
+    transaction = _argument_value(tuple(arguments), "-ReplacementTransactionId")
+    contract_sha = _argument_value(tuple(arguments), "-ExpectedContractSha256")
+    authority = _session_authority_name(tuple(arguments))
+    assert all((session_id, attempt_id, orchestrator, transaction, contract_sha, authority))
+    return {
+        "schema": "container-audit-writer-session-prepared-v3",
+        "status": "PREPARED_DISABLED",
+        "app_id": "container_audit",
+        "session_id": session_id,
+        "attempt_id": attempt_id,
+        "replacement_transaction_id": transaction,
+        "session_started_at_utc": _argument_value(tuple(arguments), "-SessionStartedAtUtc"),
+        "orchestrator_sha256": orchestrator,
+        "session_authority_mutex_name": authority,
+        "adapter_sha256": hashlib.sha256(ADAPTER.read_bytes()).hexdigest(),
+        "contract_sha256": contract_sha,
+        "evidence_path": str(path),
+        "started_at_utc": now.isoformat(),
+        "completed_at_utc": now.isoformat(),
+        "secret_values_recorded": False,
+        "historical_capability": {
+            "schema": "container-audit-canonical-writer-lifecycle-v1",
+            "receipt_sha256": _argument_value(tuple(arguments), "-HistoricalReceiptSha256"),
+            "eight_points_pass": True,
+            "capability_binding_sha256": "5" * 64,
+        },
+        "pre_readback": pre,
+        "disable": {
+            "status": "COMMAND_SUCCEEDED",
+            "post_readback": post,
+            "binding_unchanged": True,
+        },
+        "quiescence": {
+            "status": "PASS",
+            "trigger_boundary_utc": now.isoformat(),
+            "stable_baseline": {"log": fingerprint, "runtime_status": fingerprint},
+            "after_trigger": {"log": fingerprint, "runtime_status": fingerprint},
+            "last_run_time_unchanged": True,
+            "log_unchanged": True,
+            "runtime_status_unchanged": True,
+            "exact_writer_process_count": 0,
+        },
+        "failure": {
+            "status": "NONE",
+            "stage": "",
+            "code": "",
+            "failure_type": "",
+            "silently_ignored": False,
+            "emergency_restore_attempted": False,
+            "emergency_restore_succeeded": None,
+            "safety_fence": None,
+            "retain_disabled_requested": False,
+        },
+    }
+
+
 def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
     completed = _run_adapter("-Mode", "SelfTest")
 
@@ -118,14 +273,22 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
     assert result["system_mutation_attempt_count"] == 0
     assert result["secret_values_recorded"] is False
     assert {item["name"]: item["status"] for item in result["checks"]} == {
+        "public_guard_rejects_absent_session_authority": "PASS",
+        "public_guard_accepts_actively_held_session_authority": "PASS",
+        "public_guard_rejects_released_session_authority": "PASS",
         "valid_current_session_prepared_receipt": "PASS",
         "stale_session_rejected": "PASS",
         "wrong_transaction_rejected": "PASS",
         "wrong_contract_rejected": "PASS",
         "historical_binding_mismatch_rejected": "PASS",
         "prepared_string_boolean_rejected": "PASS",
+        "prepared_string_integer_rejected": "PASS",
+        "prepared_nested_extra_field_rejected": "PASS",
+        "prepared_wrong_session_authority_rejected": "PASS",
         "expired_session_rejected": "PASS",
         "invalid_replacement_receipt_rejected": "PASS",
+        "replacement_receipt_accepts_exact_types": "PASS",
+        "replacement_receipt_rejects_string_integer": "PASS",
         "historical_boolean_contract_accepts_exact_types": "PASS",
         "historical_string_boolean_rejected": "PASS",
         "base64url_possession_fingerprint_accepted": "PASS",
@@ -146,6 +309,7 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
         "live_relay_readback_rejects_extra_runtime_process": "PASS",
         "live_relay_readback_rejects_wrong_owner": "PASS",
         "live_relay_readback_rejects_stale_process": "PASS",
+        "live_relay_readback_rejects_observation_query_failure": "PASS",
         "code_restore_structural_guard_accepts_exact_boolean_types": "PASS",
         "code_restore_string_boolean_rejected": "PASS",
         "code_restore_extra_field_rejected": "PASS",
@@ -154,6 +318,7 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
         "pre_enable_guard_rejects_string_boolean": "PASS",
         "pre_enable_guard_rejects_binding_drift": "PASS",
         "pre_enable_guard_rejects_live_process": "PASS",
+        "pre_enable_guard_rejects_string_integer": "PASS",
         "prepared_before_replacement_accepted": "PASS",
         "reordered_replacement_rejected_before_restore": "PASS",
         "replacement_before_code_accepted": "PASS",
@@ -164,6 +329,19 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
         "lifecycle_restore_failure_explicit_and_writer_not_run": "PASS",
         "writer_restore_failure_explicit": "PASS",
     }
+
+
+def test_selftest_uses_common_live_readback_guard_not_private_value_validator():
+    text = ADAPTER.read_text(encoding="utf-8")
+    selftest = text[
+        text.index("function Invoke-ContainerWriterSessionSelfTest") : text.index(
+            "if ($Mode -ceq 'selftest')"
+        )
+    ]
+
+    assert "Test-ContainerUserRelayLiveReadbackValues" not in selftest
+    assert selftest.count("Test-ContainerUserRelayLiveReadback ") >= 7
+    assert "live_relay_readback_rejects_observation_query_failure" in selftest
 
 
 def test_public_contract_mode_is_pinned_machine_readable_and_nonmutating():
@@ -195,7 +373,7 @@ def test_public_contract_mode_is_pinned_machine_readable_and_nonmutating():
         "LIFECYCLE_FAILURE_CONTAINMENT"
     )
     assert result["receipt_schemas"] == {
-        "prepared": "container-audit-writer-session-prepared-v2",
+        "prepared": "container-audit-writer-session-prepared-v3",
         "restored": "container-audit-writer-session-restored-v2",
         "recovery": "container-audit-window-recovery-v1",
         "replacement": "container-audit-verified-replacement-v1",
@@ -293,6 +471,87 @@ def test_public_modes_accept_valid_hex_and_reach_fail_closed_boundary(
         assert evidence["status"] == "FAIL"
     assert not list(tmp_path.glob("*.tmp.*"))
     assert not list(tmp_path.glob("*.bak.*"))
+
+
+def test_public_mode_rejects_self_consistent_tuple_without_live_session_authority(
+    tmp_path: Path,
+):
+    arguments = _production_arguments("ValidatePrepared", tmp_path, session_id="a" * 32)
+    started_index = arguments.index("-SessionStartedAtUtc") + 1
+    arguments[started_index] = datetime.fromtimestamp(
+        datetime.now(timezone.utc).timestamp() - 2 * 60 * 60,
+        tz=timezone.utc,
+    ).isoformat()
+
+    completed = _run_adapter(*arguments, session_authority=False)
+
+    combined = _squash_whitespace(completed.stdout + completed.stderr)
+    assert completed.returncode != 0
+    assert "sessionauthoritymutexisabsentornotactivelyheld" in combined
+    assert "writer_session_validation_status=" not in completed.stdout
+    assert not list(tmp_path.rglob("*"))
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("quiescence", "log_unchanged"), "false"),
+        (("quiescence", "exact_writer_process_count"), "0"),
+        (("pre_readback", "last_task_result"), "0"),
+    ],
+)
+def test_public_validate_prepared_rejects_string_coercion_before_live_readback(
+    tmp_path: Path, path: tuple[str, str], value: str
+):
+    arguments = _production_arguments(
+        "ValidatePrepared", tmp_path, session_id="a" * 32
+    )
+    prepared_path = Path(
+        _argument_value(tuple(arguments), "-PreparedReceiptPath") or ""
+    )
+    payload = _valid_prepared_payload(prepared_path, arguments)
+    parent, field = path
+    assert isinstance(payload[parent], dict)
+    payload[parent][field] = value
+    prepared_path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt_hash_index = arguments.index("-PreparedReceiptSha256") + 1
+    arguments[receipt_hash_index] = hashlib.sha256(prepared_path.read_bytes()).hexdigest()
+
+    completed = _run_adapter(*arguments)
+
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode == 20, combined
+    assert "writer_session_validation_status=FAIL" in combined
+    assert (
+        "writer_session_validation_failure_code=PREPARED_RECEIPT_CONTRACT_INVALID"
+        in combined
+    )
+    assert not (tmp_path / "code-restore.json").exists()
+    assert not (tmp_path / "writer-restore.json").exists()
+
+
+def test_public_validate_prepared_exact_types_pass_contract_guard_before_readback(
+    tmp_path: Path,
+):
+    arguments = _production_arguments(
+        "ValidatePrepared", tmp_path, session_id="a" * 32
+    )
+    prepared_path = Path(
+        _argument_value(tuple(arguments), "-PreparedReceiptPath") or ""
+    )
+    payload = _valid_prepared_payload(prepared_path, arguments)
+    prepared_path.write_text(json.dumps(payload), encoding="utf-8")
+    receipt_hash_index = arguments.index("-PreparedReceiptSha256") + 1
+    arguments[receipt_hash_index] = hashlib.sha256(prepared_path.read_bytes()).hexdigest()
+
+    completed = _run_adapter(*arguments)
+
+    combined = completed.stdout + completed.stderr
+    assert completed.returncode == 20, combined
+    assert "writer_session_validation_status=FAIL" in combined
+    assert "PREPARED_RECEIPT_CONTRACT_INVALID" not in combined
+    assert not (tmp_path / "code-restore.json").exists()
+    assert not (tmp_path / "writer-restore.json").exists()
 
 
 @pytest.mark.parametrize(

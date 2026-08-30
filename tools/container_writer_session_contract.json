@@ -25,7 +25,8 @@
     "attempt_id_pattern": "^[0-9a-f]{32}$",
     "sha256_pattern": "^[0-9a-f]{64}$",
     "commit_pattern": "^[0-9a-f]{40}$",
-    "session_max_age_hours": 24
+    "session_max_age_hours": 24,
+    "session_authority_mutex_derivation": "Local\\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>"
   },
   "operations": {
     "Contract": {
@@ -161,7 +162,7 @@
     }
   },
   "receipts": {
-    "prepared_schema": "container-audit-writer-session-prepared-v2",
+    "prepared_schema": "container-audit-writer-session-prepared-v3",
     "restored_schema": "container-audit-writer-session-restored-v2",
     "recovery_schema": "container-audit-window-recovery-v1",
     "replacement_schema": "container-audit-verified-replacement-v1",
@@ -174,6 +175,7 @@
       "replacement_transaction_id",
       "session_started_at_utc",
       "orchestrator_sha256",
+      "session_authority_mutex_name",
       "adapter_sha256",
       "contract_sha256",
       "evidence_path",
@@ -227,6 +229,7 @@
     "secret_values_recorded": false,
     "manual_writer_start_allowed": false,
     "contract_mode_system_mutation": false,
+    "active_session_authority_mutex_required": true,
     "evidence_paths_outside_install_parent_required": true,
     "evidence_paths_local_fixed_drive_required": true,
     "evidence_path_reparse_ancestors_forbidden": true,

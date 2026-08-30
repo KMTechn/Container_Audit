@@ -37,7 +37,7 @@ $Script:TaskName = 'direct-sync-relay-container-audit'
 $Script:TaskPath = '\'
 $Script:RelayMode = '--container-audit-direct-sync-relay'
 $Script:UserRelayMode = '--container-audit-user-relay'
-$Script:PreparedSchema = 'container-audit-writer-session-prepared-v2'
+$Script:PreparedSchema = 'container-audit-writer-session-prepared-v3'
 $Script:RestoredSchema = 'container-audit-writer-session-restored-v2'
 $Script:RecoverySchema = 'container-audit-window-recovery-v1'
 $Script:ReplacementSchema = 'container-audit-verified-replacement-v1'
@@ -46,6 +46,10 @@ $Script:LifecycleRestoreSchema = 'container-audit-replacement-lifecycle-restore-
 $Script:ContractSchema = 'container-audit-writer-session-cli-contract-v1'
 $Script:ContractReadbackSchema = 'container-audit-writer-session-contract-readback-v1'
 $Script:LifecycleReceiptTopFields = @('schema','report_version','status','action','app_id','captured_at','state_scope','registration_attempted','network_attempted','ledger_opened','identity_or_credential_copied','secret_values_recorded','session_id','attempt_id','session_started_at_utc','orchestrator_sha256','producer_code_root','replacement_transaction_id','replacement_receipt_path','replacement_receipt_sha256','writer_contract_sha256','owner_artifact_count','owner_artifact_paths','owner_state_preserved_exact','containment_status','failure_code','failure','owner_artifact_fingerprints_before','execution_context','code_root','restored_code_identity','failed_new_code_identity','bootstrap_integrity','release_layout','writer_contract_verified','owner_state_readback','owner_artifact_fingerprints_after','completed_at','relay_autostart','relay_start','persistent_relay_principal','system_scheduled_task_required')
+$Script:PreparedReceiptTopFields = @('schema','status','app_id','session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','session_authority_mutex_name','adapter_sha256','contract_sha256','evidence_path','started_at_utc','completed_at_utc','secret_values_recorded','historical_capability','pre_readback','disable','quiescence','failure')
+$Script:WriterReadbackFields = @('captured_at_utc','enabled','state','last_task_result','last_run_time_utc','next_run_time_utc','exact_writer_process_count','identity')
+$Script:WriterIdentityFields = @('status','task_name','task_path','execute','working_directory','arguments_sha256','expected_main_bound','expected_mode_bound','raw_arguments_recorded','principal_user','principal_sid','logon_type','run_level','trigger_type','trigger_start_boundary','trigger_repetition_interval','start_when_available','multiple_instances','definition_sha256','binding_sha256')
+$Script:FileFingerprintFields = @('path','bytes','mtime_utc','sha256','contents_recorded')
 $Script:MaximumSessionAge = [TimeSpan]::FromHours(24)
 $Script:EvidenceClockTolerance = [TimeSpan]::FromSeconds(2)
 $Script:PlainLocalDriveCache = @{}
@@ -74,6 +78,51 @@ function Test-ExactPropertySet($Value, [string[]]$Expected) {
         if ($name -cnotin $actual) { return $false }
     }
     return $true
+}
+
+function Test-JsonInteger($Value) {
+    return ($Value -is [int] -or $Value -is [long])
+}
+
+function Get-ContainerSessionAuthorityMutexName(
+    [string]$CurrentSessionId,
+    [string]$CurrentAttemptId,
+    [string]$CurrentOrchestratorSha256,
+    [string]$CurrentReplacementTransactionId,
+    [string]$CurrentContractSha256
+) {
+    $tuple = @(
+        'container-audit-deployment-session-authority-v1',
+        $CurrentSessionId,
+        $CurrentAttemptId,
+        $CurrentOrchestratorSha256,
+        $CurrentReplacementTransactionId,
+        $CurrentContractSha256
+    ) -join "`n"
+    return 'Local\KMTech.ContainerAudit.DeploymentSession.' + (Get-StringSha256 $tuple)
+}
+
+function Test-ContainerSessionAuthorityMutexHeld(
+    [string]$CurrentSessionId,
+    [string]$CurrentAttemptId,
+    [string]$CurrentOrchestratorSha256,
+    [string]$CurrentReplacementTransactionId,
+    [string]$CurrentContractSha256
+) {
+    $mutex = $null
+    try {
+        $name = Get-ContainerSessionAuthorityMutexName $CurrentSessionId $CurrentAttemptId $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256
+        $mutex = [Threading.Mutex]::OpenExisting($name)
+        try { $acquired = $mutex.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { return $false }
+        if ($acquired) {
+            $mutex.ReleaseMutex()
+            return $false
+        }
+        return $true
+    }
+    catch { return $false }
+    finally { if ($null -ne $mutex) { $mutex.Dispose() } }
 }
 
 function Register-ContainerSystemMutationAttempt {
@@ -274,10 +323,10 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
     $contract = Read-BoundedJson $Script:ContractPath 65536 $ExpectedSha256
     $top = @('schema','app_id','cli','identifiers','operations','receipts','lifecycle_restore','security')
     $cliFields = @('relative_path','public_writer_modes','compatibility_modes','contract_mode','success_exit_code','failure_exit_codes')
-    $identifierFields = @('session_id_pattern','attempt_id_pattern','sha256_pattern','commit_pattern','session_max_age_hours')
+    $identifierFields = @('session_id_pattern','attempt_id_pattern','sha256_pattern','commit_pattern','session_max_age_hours','session_authority_mutex_derivation')
     $receiptFields = @('prepared_schema','restored_schema','recovery_schema','replacement_schema','replacement_validation_schema','lifecycle_restore_schema','historical_schema','prepared_required_bindings')
     $restoreFields = @('writer_mode','product_mode','product_execution_tree','product_mode_arguments','transaction_argument','replacement_receipt_argument','replacement_receipt_sha256_argument','code_restore_evidence_argument','code_restore_evidence_sha256_argument','writer_mode_output_argument','recover_writer_output_argument','writer_contract_sha256_argument','order','require_same_session_receipt','require_code_restore_before_writer_restore','require_lifecycle_restore_before_writer_restore','require_live_current_user_lifecycle_before_writer_restore','require_non_elevated_medium_integrity_lifecycle_producer','producer_code_tree_read_locked_through_execution','failure_is_explicit')
-    $securityFields = @('secret_values_recorded','manual_writer_start_allowed','contract_mode_system_mutation','evidence_paths_outside_install_parent_required','evidence_paths_local_fixed_drive_required','evidence_path_reparse_ancestors_forbidden','evidence_path_aliases_canonicalized')
+    $securityFields = @('secret_values_recorded','manual_writer_start_allowed','contract_mode_system_mutation','active_session_authority_mutex_required','evidence_paths_outside_install_parent_required','evidence_paths_local_fixed_drive_required','evidence_path_reparse_ancestors_forbidden','evidence_path_aliases_canonicalized')
     if (
         -not (Test-ExactPropertySet $contract $top) -or
         -not (Test-ExactPropertySet $contract.cli $cliFields) -or
@@ -308,7 +357,7 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
             (@($operation.success_output_keys) -join ',') -cne (@($expectedOperation.success_output_keys) -join ',')
         ) { throw "Writer session public operation contract differs: $operationName" }
     }
-    $bindings = @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','adapter_sha256','contract_sha256','evidence_path','historical_capability.receipt_sha256','historical_capability.capability_binding_sha256')
+    $bindings = @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','session_authority_mutex_name','adapter_sha256','contract_sha256','evidence_path','historical_capability.receipt_sha256','historical_capability.capability_binding_sha256')
     $restoreOrder = @('validate_current_session_prepared_receipt','validate_transaction_bound_replacement_receipt','restore_code','restore_current_user_product_lifecycle','validate_lifecycle_restore_receipt','restore_writer','write_combined_recovery_receipt')
     $productArguments = @('--app-root','--code-root','--replacement-transaction-id','--replacement-receipt-path','--replacement-receipt-sha256','--writer-contract-sha256','--report-path','--session-id','--attempt-id','--session-started-at-utc','--orchestrator-sha256')
     if (
@@ -316,7 +365,8 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
         [string]$contract.app_id -cne 'container_audit' -or
         [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
         [string]$contract.cli.contract_mode -cne 'Contract' -or
-        [int]$contract.cli.success_exit_code -ne 0 -or
+        -not (Test-JsonInteger $contract.cli.success_exit_code) -or [int64]$contract.cli.success_exit_code -ne 0 -or
+        @($contract.cli.failure_exit_codes | Where-Object { -not (Test-JsonInteger $_) }).Count -ne 0 -or
         (@($contract.cli.failure_exit_codes) -join ',') -cne '1,20' -or
         (@($contract.cli.public_writer_modes) -join ',') -cne ($publicModes -join ',') -or
         (@($contract.cli.compatibility_modes) -join ',') -cne ($compatibilityModes -join ',') -or
@@ -324,7 +374,8 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
         [string]$contract.identifiers.attempt_id_pattern -cne '^[0-9a-f]{32}$' -or
         [string]$contract.identifiers.sha256_pattern -cne '^[0-9a-f]{64}$' -or
         [string]$contract.identifiers.commit_pattern -cne '^[0-9a-f]{40}$' -or
-        [int]$contract.identifiers.session_max_age_hours -ne 24 -or
+        -not (Test-JsonInteger $contract.identifiers.session_max_age_hours) -or [int64]$contract.identifiers.session_max_age_hours -ne 24 -or
+        [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
         [string]$contract.receipts.prepared_schema -cne $Script:PreparedSchema -or
         [string]$contract.receipts.restored_schema -cne $Script:RestoredSchema -or
         [string]$contract.receipts.recovery_schema -cne $Script:RecoverySchema -or
@@ -356,11 +407,33 @@ function Read-ContainerWriterPublicContract([string]$ExpectedSha256) {
         $contract.security.secret_values_recorded -isnot [bool] -or [bool]$contract.security.secret_values_recorded -or
         $contract.security.manual_writer_start_allowed -isnot [bool] -or [bool]$contract.security.manual_writer_start_allowed -or
         $contract.security.contract_mode_system_mutation -isnot [bool] -or [bool]$contract.security.contract_mode_system_mutation -or
+        $contract.security.active_session_authority_mutex_required -isnot [bool] -or -not [bool]$contract.security.active_session_authority_mutex_required -or
         $contract.security.evidence_paths_outside_install_parent_required -isnot [bool] -or -not [bool]$contract.security.evidence_paths_outside_install_parent_required -or
         $contract.security.evidence_paths_local_fixed_drive_required -isnot [bool] -or -not [bool]$contract.security.evidence_paths_local_fixed_drive_required -or
         $contract.security.evidence_path_reparse_ancestors_forbidden -isnot [bool] -or -not [bool]$contract.security.evidence_path_reparse_ancestors_forbidden -or
         $contract.security.evidence_path_aliases_canonicalized -isnot [bool] -or -not [bool]$contract.security.evidence_path_aliases_canonicalized
     ) { throw 'Writer session public contract semantic binding differs.' }
+    return $contract
+}
+
+function Assert-ContainerWriterPublicInvocation(
+    [string]$CurrentSessionId,
+    [string]$CurrentAttemptId,
+    [string]$CurrentSessionStartedAtUtc,
+    [string]$CurrentOrchestratorSha256,
+    [string]$CurrentReplacementTransactionId,
+    [string]$CurrentContractSha256
+) {
+    Assert-Hex $CurrentSessionId 32 'session id'
+    Assert-Hex $CurrentAttemptId 32 'attempt id'
+    Assert-Hex $CurrentOrchestratorSha256 64 'orchestrator SHA-256'
+    Assert-Hex $CurrentReplacementTransactionId 32 'replacement transaction id'
+    Assert-Hex $CurrentContractSha256 64 'expected writer session contract SHA-256'
+    [void](Assert-CurrentSessionWindow $CurrentSessionStartedAtUtc)
+    $contract = Read-ContainerWriterPublicContract $CurrentContractSha256
+    if (-not (Test-ContainerSessionAuthorityMutexHeld $CurrentSessionId $CurrentAttemptId $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256)) {
+        throw 'Current deployment session authority mutex is absent or not actively held by another execution context.'
+    }
     return $contract
 }
 
@@ -437,11 +510,50 @@ function Get-StableFileFingerprint([string]$Path, [string]$Purpose) {
 
 function Test-FingerprintEqual($Left, $Right) {
     return (
-        $null -ne $Left -and $null -ne $Right -and
+        (Test-StableFileFingerprintPayload $Left) -and
+        (Test-StableFileFingerprintPayload $Right) -and
         [int64]$Left.bytes -eq [int64]$Right.bytes -and
         [string]$Left.mtime_utc -ceq [string]$Right.mtime_utc -and
         [string]$Left.sha256 -ceq [string]$Right.sha256
     )
+}
+
+function Test-StableFileFingerprintPayload($Value) {
+    try {
+        [void](ConvertTo-RoundTripUtc ([string]$Value.mtime_utc) 'file fingerprint mtime')
+        return (
+            $null -ne $Value -and
+            (Test-ExactPropertySet $Value $Script:FileFingerprintFields) -and
+            -not [string]::IsNullOrWhiteSpace([string]$Value.path) -and
+            (Test-JsonInteger $Value.bytes) -and [int64]$Value.bytes -ge 0 -and
+            [string]$Value.sha256 -cmatch '^[0-9a-f]{64}$' -and
+            $Value.contents_recorded -is [bool] -and -not [bool]$Value.contents_recorded
+        )
+    }
+    catch { return $false }
+}
+
+function Test-ContainerWriterReadbackPayload($Readback) {
+    try {
+        [void](ConvertTo-RoundTripUtc ([string]$Readback.captured_at_utc) 'writer readback capture')
+        [void](ConvertTo-RoundTripUtc ([string]$Readback.last_run_time_utc) 'writer last run')
+        [void](ConvertTo-RoundTripUtc ([string]$Readback.next_run_time_utc) 'writer next run')
+        return (
+            (Test-ExactPropertySet $Readback $Script:WriterReadbackFields) -and
+            (Test-ExactPropertySet $Readback.identity $Script:WriterIdentityFields) -and
+            $Readback.enabled -is [bool] -and
+            (Test-JsonInteger $Readback.last_task_result) -and
+            (Test-JsonInteger $Readback.exact_writer_process_count) -and [int64]$Readback.exact_writer_process_count -ge 0 -and
+            $Readback.identity.expected_main_bound -is [bool] -and
+            $Readback.identity.expected_mode_bound -is [bool] -and
+            $Readback.identity.raw_arguments_recorded -is [bool] -and -not [bool]$Readback.identity.raw_arguments_recorded -and
+            $Readback.identity.start_when_available -is [bool] -and
+            [string]$Readback.identity.arguments_sha256 -cmatch '^[0-9a-f]{64}$' -and
+            [string]$Readback.identity.definition_sha256 -cmatch '^[0-9a-f]{64}$' -and
+            [string]$Readback.identity.binding_sha256 -cmatch '^[0-9a-f]{64}$'
+        )
+    }
+    catch { return $false }
 }
 
 function Wait-ContainerCondition([scriptblock]$Predicate, [int]$TimeoutSeconds, [int]$PollMilliseconds = 1000) {
@@ -594,9 +706,10 @@ function Test-ContainerWriterDisabledBeforeEnable($Readback, [string]$ExpectedBi
     try {
         Assert-Hex $ExpectedBindingSha256 64 'expected Container writer binding SHA-256'
         return (
+            (Test-ContainerWriterReadbackPayload $Readback) -and
             $Readback.enabled -is [bool] -and -not [bool]$Readback.enabled -and
             [string]$Readback.state -ceq 'Disabled' -and
-            [int]$Readback.exact_writer_process_count -eq 0 -and
+            (Test-JsonInteger $Readback.exact_writer_process_count) -and [int64]$Readback.exact_writer_process_count -eq 0 -and
             [string]$Readback.identity.status -ceq 'PASS' -and
             [string]$Readback.identity.binding_sha256 -ceq $ExpectedBindingSha256
         )
@@ -755,6 +868,7 @@ function Invoke-ContainerWriterPrepare {
         replacement_transaction_id = $CurrentReplacementTransactionId
         session_started_at_utc = $CurrentSessionStartedAtUtc
         orchestrator_sha256 = $CurrentOrchestratorSha256
+        session_authority_mutex_name = Get-ContainerSessionAuthorityMutexName $CurrentSessionId $CurrentAttemptId $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256
         adapter_sha256 = $Script:AdapterSha256
         contract_sha256 = $CurrentContractSha256
         evidence_path = $outputFull
@@ -918,12 +1032,32 @@ function Test-PreparedReceiptPayload {
         [string]$ExpectedAdapterSha256
     )
     try {
-        $top = @('schema','status','app_id','session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','adapter_sha256','contract_sha256','evidence_path','started_at_utc','completed_at_utc','secret_values_recorded','historical_capability','pre_readback','disable','quiescence','failure')
-        if (-not (Test-ExactPropertySet $Receipt $top)) { return $false }
+        $historicalFields = @('schema','receipt_sha256','eight_points_pass','capability_binding_sha256')
+        $disableFields = @('status','post_readback','binding_unchanged')
+        $quiescenceFields = @('status','trigger_boundary_utc','stable_baseline','after_trigger','last_run_time_unchanged','log_unchanged','runtime_status_unchanged','exact_writer_process_count')
+        $effectsFields = @('log','runtime_status')
+        $failureFields = @('status','stage','code','failure_type','silently_ignored','emergency_restore_attempted','emergency_restore_succeeded','safety_fence','retain_disabled_requested')
+        if (
+            -not (Test-ExactPropertySet $Receipt $Script:PreparedReceiptTopFields) -or
+            -not (Test-ExactPropertySet $Receipt.historical_capability $historicalFields) -or
+            -not (Test-ContainerWriterReadbackPayload $Receipt.pre_readback) -or
+            -not (Test-ExactPropertySet $Receipt.disable $disableFields) -or
+            -not (Test-ContainerWriterReadbackPayload $Receipt.disable.post_readback) -or
+            -not (Test-ExactPropertySet $Receipt.quiescence $quiescenceFields) -or
+            -not (Test-ExactPropertySet $Receipt.quiescence.stable_baseline $effectsFields) -or
+            -not (Test-ExactPropertySet $Receipt.quiescence.after_trigger $effectsFields) -or
+            -not (Test-StableFileFingerprintPayload $Receipt.quiescence.stable_baseline.log) -or
+            -not (Test-StableFileFingerprintPayload $Receipt.quiescence.stable_baseline.runtime_status) -or
+            -not (Test-StableFileFingerprintPayload $Receipt.quiescence.after_trigger.log) -or
+            -not (Test-StableFileFingerprintPayload $Receipt.quiescence.after_trigger.runtime_status) -or
+            -not (Test-ExactPropertySet $Receipt.failure $failureFields)
+        ) { return $false }
         $sessionStart = ConvertTo-RoundTripUtc ([string]$Receipt.session_started_at_utc) 'receipt session start'
         $expectedSessionStart = Assert-CurrentSessionWindow $ExpectedSessionStartedAtUtc
         $started = ConvertTo-RoundTripUtc ([string]$Receipt.started_at_utc) 'receipt start'
         $completed = ConvertTo-RoundTripUtc ([string]$Receipt.completed_at_utc) 'receipt completion'
+        [void](ConvertTo-RoundTripUtc ([string]$Receipt.quiescence.trigger_boundary_utc) 'receipt trigger boundary')
+        $expectedMutexName = Get-ContainerSessionAuthorityMutexName $ExpectedSessionId $ExpectedAttemptId $ExpectedOrchestratorSha256 $ExpectedReplacementTransactionId $ExpectedContractSha256
         return (
             [string]$Receipt.schema -ceq $Script:PreparedSchema -and
             [string]$Receipt.status -ceq 'PREPARED_DISABLED' -and
@@ -933,6 +1067,7 @@ function Test-PreparedReceiptPayload {
             [string]$Receipt.replacement_transaction_id -ceq $ExpectedReplacementTransactionId -and
             [string]$Receipt.session_started_at_utc -ceq $ExpectedSessionStartedAtUtc -and
             [string]$Receipt.orchestrator_sha256 -ceq $ExpectedOrchestratorSha256 -and
+            [string]$Receipt.session_authority_mutex_name -ceq $expectedMutexName -and
             [string]$Receipt.adapter_sha256 -ceq $ExpectedAdapterSha256 -and
             [string]$Receipt.contract_sha256 -ceq $ExpectedContractSha256 -and
             (Test-BootstrapSamePath ([string]$Receipt.evidence_path) $ExpectedPath) -and
@@ -948,14 +1083,29 @@ function Test-PreparedReceiptPayload {
             [string]$Receipt.pre_readback.identity.binding_sha256 -cmatch '^[0-9a-f]{64}$' -and
             [string]$Receipt.pre_readback.identity.binding_sha256 -ceq [string]$Receipt.historical_capability.capability_binding_sha256 -and
             $Receipt.pre_readback.enabled -is [bool] -and [bool]$Receipt.pre_readback.enabled -and [string]$Receipt.pre_readback.state -ceq 'Ready' -and
-            [int64]$Receipt.pre_readback.last_task_result -eq 0 -and [int]$Receipt.pre_readback.exact_writer_process_count -eq 0 -and
+            (Test-JsonInteger $Receipt.pre_readback.last_task_result) -and [int64]$Receipt.pre_readback.last_task_result -eq 0 -and
+            (Test-JsonInteger $Receipt.pre_readback.exact_writer_process_count) -and [int64]$Receipt.pre_readback.exact_writer_process_count -eq 0 -and
             [string]$Receipt.disable.status -ceq 'COMMAND_SUCCEEDED' -and $Receipt.disable.binding_unchanged -is [bool] -and [bool]$Receipt.disable.binding_unchanged -and
+            [string]$Receipt.disable.post_readback.identity.binding_sha256 -ceq [string]$Receipt.pre_readback.identity.binding_sha256 -and
+            $Receipt.disable.post_readback.enabled -is [bool] -and -not [bool]$Receipt.disable.post_readback.enabled -and
+            [string]$Receipt.disable.post_readback.state -ceq 'Disabled' -and
+            (Test-JsonInteger $Receipt.disable.post_readback.exact_writer_process_count) -and [int64]$Receipt.disable.post_readback.exact_writer_process_count -eq 0 -and
             [string]$Receipt.quiescence.status -ceq 'PASS' -and
             $Receipt.quiescence.last_run_time_unchanged -is [bool] -and [bool]$Receipt.quiescence.last_run_time_unchanged -and
             $Receipt.quiescence.log_unchanged -is [bool] -and [bool]$Receipt.quiescence.log_unchanged -and
             $Receipt.quiescence.runtime_status_unchanged -is [bool] -and [bool]$Receipt.quiescence.runtime_status_unchanged -and
-            [int]$Receipt.quiescence.exact_writer_process_count -eq 0 -and
-            $Receipt.failure.silently_ignored -is [bool] -and -not [bool]$Receipt.failure.silently_ignored
+            (Test-JsonInteger $Receipt.quiescence.exact_writer_process_count) -and [int64]$Receipt.quiescence.exact_writer_process_count -eq 0 -and
+            (Test-FingerprintEqual $Receipt.quiescence.stable_baseline.log $Receipt.quiescence.after_trigger.log) -and
+            (Test-FingerprintEqual $Receipt.quiescence.stable_baseline.runtime_status $Receipt.quiescence.after_trigger.runtime_status) -and
+            [string]$Receipt.failure.status -ceq 'NONE' -and
+            [string]$Receipt.failure.stage -ceq '' -and
+            [string]$Receipt.failure.code -ceq '' -and
+            [string]$Receipt.failure.failure_type -ceq '' -and
+            $Receipt.failure.silently_ignored -is [bool] -and -not [bool]$Receipt.failure.silently_ignored -and
+            $Receipt.failure.emergency_restore_attempted -is [bool] -and -not [bool]$Receipt.failure.emergency_restore_attempted -and
+            $null -eq $Receipt.failure.emergency_restore_succeeded -and
+            $null -eq $Receipt.failure.safety_fence -and
+            $Receipt.failure.retain_disabled_requested -is [bool]
         )
     }
     catch { return $false }
@@ -986,7 +1136,14 @@ function Test-ContainerPreparedReceipt {
         }
         $receipt = Read-BoundedJson $Path 1048576 $ExpectedSha256
         $exact = Test-PreparedReceiptPayload $receipt $receiptPath $CurrentSessionId $CurrentAttemptId $CurrentSessionStartedAtUtc $CurrentOrchestratorSha256 $CurrentReplacementTransactionId $CurrentContractSha256 $CapabilitySha256 $Script:AdapterSha256
-        if (-not $exact -or -not $RequireLiveDisabled.IsPresent) { return [pscustomobject][ordered]@{ status = if ($exact) { 'PASS' } else { 'FAIL' }; payload = if ($exact) { $receipt } else { $null }; live_disabled_exact = $null } }
+        if (-not $exact -or -not $RequireLiveDisabled.IsPresent) {
+            return [pscustomobject][ordered]@{
+                status = if ($exact) { 'PASS' } else { 'FAIL' }
+                payload = if ($exact) { $receipt } else { $null }
+                live_disabled_exact = $null
+                failure_code = if ($exact) { '' } else { 'PREPARED_RECEIPT_CONTRACT_INVALID' }
+            }
+        }
         $live = Get-ContainerWriterReadback $CanonicalInstallRoot
         $effects = Get-ContainerWriterEffects
         $liveExact = (
@@ -997,9 +1154,9 @@ function Test-ContainerPreparedReceipt {
             (Test-FingerprintEqual $effects.log $receipt.quiescence.after_trigger.log) -and
             (Test-FingerprintEqual $effects.runtime_status $receipt.quiescence.after_trigger.runtime_status)
         )
-        return [pscustomobject][ordered]@{ status = if ($liveExact) { 'PASS' } else { 'FAIL' }; payload = $receipt; live_disabled_exact = $liveExact }
+        return [pscustomobject][ordered]@{ status = if ($liveExact) { 'PASS' } else { 'FAIL' }; payload = $receipt; live_disabled_exact = $liveExact; failure_code = if ($liveExact) { '' } else { 'LIVE_DISABLED_READBACK_INVALID' } }
     }
-    catch { return [pscustomobject][ordered]@{ status = 'FAIL'; payload = $null; live_disabled_exact = $false; failure_type = $_.Exception.GetType().Name } }
+    catch { return [pscustomobject][ordered]@{ status = 'FAIL'; payload = $null; live_disabled_exact = $false; failure_code = 'PREPARED_RECEIPT_VALIDATION_EXCEPTION'; failure_type = $_.Exception.GetType().Name } }
 }
 
 function Test-ReplacementReceiptShape($Receipt) {
@@ -1017,7 +1174,13 @@ function Test-ReplacementReceiptShape($Receipt) {
             [string]$Receipt.helper_sha256 -cmatch '^[0-9a-f]{64}$' -and
             [string]$Receipt.integrity_helper_sha256 -cmatch '^[0-9a-f]{64}$' -and
             $Receipt.identity_or_credential_copied -is [bool] -and -not [bool]$Receipt.identity_or_credential_copied -and
-            [int]$Receipt.old.reparse_count -eq 0 -and [int]$Receipt.new.reparse_count -eq 0
+            (Test-JsonInteger $Receipt.old.file_count) -and [int64]$Receipt.old.file_count -gt 0 -and
+            (Test-JsonInteger $Receipt.new.file_count) -and [int64]$Receipt.new.file_count -gt 0 -and
+            (Test-JsonInteger $Receipt.old.reparse_count) -and [int64]$Receipt.old.reparse_count -eq 0 -and
+            (Test-JsonInteger $Receipt.new.reparse_count) -and [int64]$Receipt.new.reparse_count -eq 0 -and
+            $Receipt.old.access_rules_protected -is [bool] -and
+            $Receipt.new.access_rules_protected -is [bool] -and
+            $Receipt.parent_acl.access_rules_protected -is [bool]
         )
     }
     catch { return $false }
@@ -1086,38 +1249,65 @@ function Test-ContainerUserRelayLiveReadbackValues($Receipt, [string]$ExpectedCo
     catch { return $false }
 }
 
-function Test-ContainerUserRelayLiveReadback($Receipt, [string]$ExpectedCodeRoot) {
+function Test-ContainerUserRelayLiveReadback {
+    param(
+        $Receipt,
+        [string]$ExpectedCodeRoot,
+        [scriptblock]$ObservationProvider = $null
+    )
     try {
-        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $false)
-        if ($null -eq $key) { return $false }
-        try {
-            $registryKind = $key.GetValueKind('KMTech.ContainerAudit.Relay').ToString()
-            $registryCommand = [string]$key.GetValue(
-                'KMTech.ContainerAudit.Relay',
-                $null,
-                [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
-            )
+        if ($null -ne $ObservationProvider) {
+            $observation = & $ObservationProvider
         }
-        finally { $key.Dispose() }
-        $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
-        $runtime = Join-Path $root 'runtime\pythonw.exe'
+        else {
+            $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Software\Microsoft\Windows\CurrentVersion\Run', $false)
+            if ($null -eq $key) { return $false }
+            try {
+                $registryKind = $key.GetValueKind('KMTech.ContainerAudit.Relay').ToString()
+                $registryCommand = [string]$key.GetValue(
+                    'KMTech.ContainerAudit.Relay',
+                    $null,
+                    [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames
+                )
+            }
+            finally { $key.Dispose() }
+            $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
+            $runtime = Join-Path $root 'runtime\pythonw.exe'
+            $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+            $runtimeWql = $runtime.Replace('\', '\\').Replace("'", "''")
+            $observedCandidates = @()
+            foreach ($candidate in @(Get-CimInstance -ClassName Win32_Process -Filter "ExecutablePath = '$runtimeWql'" -ErrorAction Stop)) {
+                $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
+                if ($owner.ReturnValue -isnot [uint32] -or [uint32]$owner.ReturnValue -ne 0) { return $false }
+                $observedCandidates += [pscustomobject][ordered]@{
+                    ProcessId = $candidate.ProcessId
+                    ExecutablePath = [string]$candidate.ExecutablePath
+                    CommandLine = [string]$candidate.CommandLine
+                    CreationDate = $candidate.CreationDate
+                    OwnerSid = [string]$owner.Sid
+                }
+            }
+            $observation = [pscustomobject][ordered]@{
+                registry_command = $registryCommand
+                registry_value_kind = $registryKind
+                current_user_sid = $currentSid
+                candidates = @($observedCandidates)
+            }
+        }
+        if (-not (Test-ExactPropertySet $observation @('registry_command','registry_value_kind','current_user_sid','candidates'))) { return $false }
+        $registryCommand = [string]$observation.registry_command
+        $registryKind = [string]$observation.registry_value_kind
+        $currentSid = [string]$observation.current_user_sid
+        $candidates = @($observation.candidates)
+        foreach ($candidate in $candidates) {
+            if (-not (Test-ExactPropertySet $candidate @('ProcessId','ExecutablePath','CommandLine','CreationDate','OwnerSid'))) { return $false }
+        }
         $expectedCommand = [string]$Receipt.relay_autostart.command
-        $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-        $runtimeWql = $runtime.Replace('\', '\\').Replace("'", "''")
-        $candidates = @(Get-CimInstance -ClassName Win32_Process -Filter "ExecutablePath = '$runtimeWql'" -ErrorAction Stop)
         $matching = @()
         foreach ($candidate in $candidates) {
             if ([string]$candidate.CommandLine -cne $expectedCommand) { continue }
-            $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
-            if ([uint32]$owner.ReturnValue -ne 0) { return $false }
-            if ([string]$owner.Sid -cne $currentSid) { continue }
-            $matching += [pscustomobject][ordered]@{
-                ProcessId = $candidate.ProcessId
-                ExecutablePath = [string]$candidate.ExecutablePath
-                CommandLine = [string]$candidate.CommandLine
-                CreationDate = $candidate.CreationDate
-                OwnerSid = [string]$owner.Sid
-            }
+            if ([string]$candidate.OwnerSid -cne $currentSid) { continue }
+            $matching += $candidate
         }
         if ($candidates.Count -ne 1 -or $matching.Count -ne 1) { return $false }
         return Test-ContainerUserRelayLiveReadbackValues $Receipt $ExpectedCodeRoot $registryCommand $registryKind $matching[0] $candidates.Count $matching.Count $currentSid
@@ -2130,6 +2320,61 @@ function Invoke-ContainerWriterSessionSelfTest {
     $contractSha256 = Get-FileSha256 $Script:ContractPath
     $startedAt = [DateTime]::UtcNow.AddMinutes(-1).ToString('o')
     $receiptPath = 'E:\selftest\prepared.json'
+    $mutexName = Get-ContainerSessionAuthorityMutexName $session $attempt $orchestrator $transaction $contractSha256
+    $sessionAuthorityAbsentRejected = $false
+    try { [void](Assert-ContainerWriterPublicInvocation $session $attempt $startedAt $orchestrator $transaction $contractSha256) }
+    catch { $sessionAuthorityAbsentRejected = ($_.Exception.Message -clike '*session authority mutex*') }
+    $holderSource = @"
+`$mutex = [Threading.Mutex]::new(`$true, '$mutexName')
+try { Start-Sleep -Seconds 15 }
+finally { `$mutex.ReleaseMutex(); `$mutex.Dispose() }
+"@
+    $holderEncoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($holderSource))
+    $holderExecutable = (Get-Process -Id $PID -ErrorAction Stop).Path
+    $holder = Start-Process -FilePath $holderExecutable -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand',$holderEncoded) -WindowStyle Hidden -PassThru
+    $sessionAuthorityActiveAccepted = $false
+    try {
+        $authorityReady = Wait-ContainerCondition -TimeoutSeconds 5 -PollMilliseconds 50 -Predicate {
+            Test-ContainerSessionAuthorityMutexHeld $session $attempt $orchestrator $transaction $contractSha256
+        }
+        if ($authorityReady) {
+            [void](Assert-ContainerWriterPublicInvocation $session $attempt $startedAt $orchestrator $transaction $contractSha256)
+            $sessionAuthorityActiveAccepted = $true
+        }
+    }
+    finally {
+        if (-not $holder.HasExited) { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
+        [void]$holder.WaitForExit(5000)
+        $holder.Dispose()
+    }
+    $sessionAuthorityReleasedRejected = $false
+    try { [void](Assert-ContainerWriterPublicInvocation $session $attempt $startedAt $orchestrator $transaction $contractSha256) }
+    catch { $sessionAuthorityReleasedRejected = ($_.Exception.Message -clike '*session authority mutex*') }
+    $identity = [pscustomobject][ordered]@{
+        status = 'PASS'; task_name = $Script:TaskName; task_path = $Script:TaskPath
+        execute = 'C:\KMTech\Apps\Container_Audit\current\runtime\python.exe'
+        working_directory = 'C:\KMTech\Apps\Container_Audit\current\app'
+        arguments_sha256 = '6' * 64; expected_main_bound = $true; expected_mode_bound = $true
+        raw_arguments_recorded = $false; principal_user = 'operator'; principal_sid = 'S-1-5-21-1-2-3-1001'
+        logon_type = 'Interactive'; run_level = 'Limited'; trigger_type = 'MSFT_TaskTimeTrigger'
+        trigger_start_boundary = [DateTime]::UtcNow.AddMinutes(1).ToString('o'); trigger_repetition_interval = 'PT1M'
+        start_when_available = $true; multiple_instances = 'IgnoreNew'; definition_sha256 = '7' * 64; binding_sha256 = '5' * 64
+    }
+    $preReadback = [pscustomobject][ordered]@{
+        captured_at_utc = [DateTime]::UtcNow.AddSeconds(-50).ToString('o'); enabled = $true; state = 'Ready'
+        last_task_result = [int64]0; last_run_time_utc = [DateTime]::UtcNow.AddMinutes(-2).ToString('o')
+        next_run_time_utc = [DateTime]::UtcNow.AddMinutes(1).ToString('o'); exact_writer_process_count = [int]0
+        identity = $identity
+    }
+    $disabledReadback = $preReadback | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $disabledReadback.captured_at_utc = [DateTime]::UtcNow.AddSeconds(-40).ToString('o')
+    $disabledReadback.enabled = $false
+    $disabledReadback.state = 'Disabled'
+    $fingerprint = [pscustomobject][ordered]@{
+        path = 'E:\selftest\effect.json'; bytes = [int64]1; mtime_utc = [DateTime]::UtcNow.AddMinutes(-1).ToString('o')
+        sha256 = 'b' * 64; contents_recorded = $false
+    }
+    $effects = [pscustomobject][ordered]@{ log = $fingerprint; runtime_status = ($fingerprint | ConvertTo-Json -Depth 4 | ConvertFrom-Json) }
     $payload = [pscustomobject][ordered]@{
         schema = $Script:PreparedSchema
         status = 'PREPARED_DISABLED'
@@ -2139,6 +2384,7 @@ function Invoke-ContainerWriterSessionSelfTest {
         replacement_transaction_id = $transaction
         session_started_at_utc = $startedAt
         orchestrator_sha256 = $orchestrator
+        session_authority_mutex_name = $mutexName
         adapter_sha256 = $Script:AdapterSha256
         contract_sha256 = $contractSha256
         evidence_path = $receiptPath
@@ -2146,10 +2392,17 @@ function Invoke-ContainerWriterSessionSelfTest {
         completed_at_utc = [DateTime]::UtcNow.AddSeconds(-20).ToString('o')
         secret_values_recorded = $false
         historical_capability = [pscustomobject][ordered]@{ schema = $Script:HistoricalSchema; receipt_sha256 = $capability; eight_points_pass = $true; capability_binding_sha256 = '5' * 64 }
-        pre_readback = [pscustomobject][ordered]@{ enabled = $true; state = 'Ready'; last_task_result = 0; exact_writer_process_count = 0; last_run_time_utc = [DateTime]::UtcNow.AddMinutes(-2).ToString('o'); identity = [pscustomobject][ordered]@{ status = 'PASS'; binding_sha256 = '5' * 64 } }
-        disable = [pscustomobject][ordered]@{ status = 'COMMAND_SUCCEEDED'; binding_unchanged = $true }
-        quiescence = [pscustomobject][ordered]@{ status = 'PASS'; last_run_time_unchanged = $true; log_unchanged = $true; runtime_status_unchanged = $true; exact_writer_process_count = 0 }
-        failure = [pscustomobject][ordered]@{ silently_ignored = $false }
+        pre_readback = $preReadback
+        disable = [pscustomobject][ordered]@{ status = 'COMMAND_SUCCEEDED'; post_readback = $disabledReadback; binding_unchanged = $true }
+        quiescence = [pscustomobject][ordered]@{
+            status = 'PASS'; trigger_boundary_utc = [DateTime]::UtcNow.AddSeconds(-35).ToString('o')
+            stable_baseline = $effects; after_trigger = ($effects | ConvertTo-Json -Depth 8 | ConvertFrom-Json)
+            last_run_time_unchanged = $true; log_unchanged = $true; runtime_status_unchanged = $true; exact_writer_process_count = [int]0
+        }
+        failure = [pscustomobject][ordered]@{
+            status = 'NONE'; stage = ''; code = ''; failure_type = ''; silently_ignored = $false
+            emergency_restore_attempted = $false; emergency_restore_succeeded = $null; safety_fence = $null; retain_disabled_requested = $false
+        }
     }
     $validPrepared = Test-PreparedReceiptPayload $payload $receiptPath $session $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256
     $staleSessionRejected = -not (Test-PreparedReceiptPayload $payload $receiptPath ('7' * 32) $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256)
@@ -2161,6 +2414,15 @@ function Invoke-ContainerWriterSessionSelfTest {
     $preparedStringBooleanPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     $preparedStringBooleanPayload.quiescence.log_unchanged = 'false'
     $preparedStringBooleanRejected = -not (Test-PreparedReceiptPayload $preparedStringBooleanPayload $receiptPath $session $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256)
+    $preparedStringIntegerPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $preparedStringIntegerPayload.quiescence.exact_writer_process_count = '0'
+    $preparedStringIntegerRejected = -not (Test-PreparedReceiptPayload $preparedStringIntegerPayload $receiptPath $session $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256)
+    $preparedNestedExtraPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $preparedNestedExtraPayload.quiescence | Add-Member -NotePropertyName observation_status -NotePropertyValue 'SNAPSHOT_ERROR'
+    $preparedNestedExtraRejected = -not (Test-PreparedReceiptPayload $preparedNestedExtraPayload $receiptPath $session $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256)
+    $preparedWrongAuthorityPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $preparedWrongAuthorityPayload.session_authority_mutex_name = 'Local\KMTech.ContainerAudit.DeploymentSession.' + ('0' * 64)
+    $preparedWrongAuthorityRejected = -not (Test-PreparedReceiptPayload $preparedWrongAuthorityPayload $receiptPath $session $attempt $startedAt $orchestrator $transaction $contractSha256 $capability $Script:AdapterSha256)
     $expiredStartedAt = [DateTime]::UtcNow.Subtract($Script:MaximumSessionAge).AddMinutes(-1).ToString('o')
     $expiredPayload = $payload | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     $expiredPayload.session_started_at_utc = $expiredStartedAt
@@ -2171,6 +2433,11 @@ function Invoke-ContainerWriterSessionSelfTest {
         schema_version = $Script:ReplacementSchema; status = 'WRONG'; app_id = 'container_audit'; transaction_id = '8' * 32; created_at = [DateTime]::UtcNow.ToString('o'); helper_sha256 = '9' * 64; integrity_helper_sha256 = 'a' * 64; receipt_path = 'E:\r.json'; install_root = 'C:\KMTech\Apps\Container_Audit\current'; install_parent = 'C:\KMTech\Apps\Container_Audit'; rollback_root = 'C:\KMTech\Apps\Container_Audit\.current.rollback.' + ('8' * 32); failed_root = 'C:\KMTech\Apps\Container_Audit\.current.failed.' + ('8' * 32); parent_acl = [pscustomobject][ordered]@{ owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; sddl_sha256 = 'b' * 64 }; old = [pscustomobject][ordered]@{ file_count = 1; aggregate_sha256 = 'c' * 64; integrity_sha256 = 'd' * 64; manifest_sha256 = 'e' * 64; source_commit = 'f' * 40; source_tree = '1' * 40; owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; acl_sddl_sha256 = '2' * 64; reparse_count = 0 }; new = [pscustomobject][ordered]@{ file_count = 1; aggregate_sha256 = '3' * 64; integrity_sha256 = '4' * 64; manifest_sha256 = '5' * 64; source_commit = '6' * 40; source_tree = '7' * 40; owner_sid = 'S-1-5-32-544'; access_rules_protected = $true; acl_sddl_sha256 = '8' * 64; reparse_count = 0 }; identity_or_credential_copied = $false
     }
     $invalidReplacementRejected = -not (Test-ReplacementReceiptShape $replacement)
+    $replacement.status = 'OLD_PRESERVED_NEW_VERIFIED'
+    $replacementExactTypesAccepted = Test-ReplacementReceiptShape $replacement
+    $replacementStringInteger = $replacement | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $replacementStringInteger.old.reparse_count = '0'
+    $replacementStringIntegerRejected = -not (Test-ReplacementReceiptShape $replacementStringInteger)
     $historicalPreimage = [pscustomobject][ordered]@{ present = $true; restore_required = $true; start_when_available = $true }
     $historicalBooleanTypesAccepted = Test-ContainerHistoricalPreimageBooleanContract $historicalPreimage
     $historicalStringBoolean = $historicalPreimage | ConvertTo-Json -Depth 4 | ConvertFrom-Json
@@ -2222,14 +2489,34 @@ function Invoke-ContainerWriterSessionSelfTest {
     $relayStringPidRejected = -not (Test-ContainerLifecycleMutationEvidence $relayStringPid $canonicalRoot)
     $currentSid = 'S-1-5-21-1-2-3-1001'
     $liveRelay = [pscustomobject][ordered]@{ ProcessId = [int]123; ExecutablePath = "$canonicalRoot\runtime\pythonw.exe"; CommandLine = $relayCommand; CreationDate = $relayNow.AddSeconds(-1); OwnerSid = $currentSid }
-    $liveRelayAccepted = Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'String' $liveRelay 1 1 $currentSid
-    $liveRelayWrongKindRejected = -not (Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'ExpandString' $liveRelay 1 1 $currentSid)
-    $liveRelayDuplicateRejected = -not (Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'String' $liveRelay 2 2 $currentSid)
-    $liveRelayExtraRuntimeRejected = -not (Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'String' $liveRelay 2 1 $currentSid)
+    $liveObservation = [pscustomobject][ordered]@{ registry_command = $relayCommand; registry_value_kind = 'String'; current_user_sid = $currentSid; candidates = @($liveRelay) }
+    $liveObservationProvider = { return $liveObservation }.GetNewClosure()
+    $liveRelayAccepted = Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $liveObservationProvider
+    $wrongKindObservation = $liveObservation | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $wrongKindObservation.registry_value_kind = 'ExpandString'
+    $wrongKindProvider = { return $wrongKindObservation }.GetNewClosure()
+    $liveRelayWrongKindRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $wrongKindProvider)
+    $duplicateObservation = $liveObservation | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $duplicateObservation.candidates = @($duplicateObservation.candidates[0], $duplicateObservation.candidates[0])
+    $duplicateProvider = { return $duplicateObservation }.GetNewClosure()
+    $liveRelayDuplicateRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $duplicateProvider)
+    $extraRuntimeObservation = $liveObservation | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+    $extraRuntime = $liveRelay | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+    $extraRuntime.ProcessId = [int]124
+    $extraRuntime.CommandLine = "$canonicalRoot\runtime\pythonw.exe -I -B other.py"
+    $extraRuntimeObservation.candidates = @($extraRuntimeObservation.candidates[0], $extraRuntime)
+    $extraRuntimeProvider = { return $extraRuntimeObservation }.GetNewClosure()
+    $liveRelayExtraRuntimeRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $extraRuntimeProvider)
     $liveRelayWrongOwner = [pscustomobject][ordered]@{ ProcessId = [int]123; ExecutablePath = "$canonicalRoot\runtime\pythonw.exe"; CommandLine = $relayCommand; CreationDate = $relayNow.AddSeconds(-1); OwnerSid = 'S-1-5-21-9-9-9-1001' }
-    $liveRelayWrongOwnerRejected = -not (Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'String' $liveRelayWrongOwner 1 1 $currentSid)
+    $wrongOwnerObservation = [pscustomobject][ordered]@{ registry_command = $relayCommand; registry_value_kind = 'String'; current_user_sid = $currentSid; candidates = @($liveRelayWrongOwner) }
+    $wrongOwnerProvider = { return $wrongOwnerObservation }.GetNewClosure()
+    $liveRelayWrongOwnerRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $wrongOwnerProvider)
     $liveRelayStale = [pscustomobject][ordered]@{ ProcessId = [int]123; ExecutablePath = "$canonicalRoot\runtime\pythonw.exe"; CommandLine = $relayCommand; CreationDate = $relayNow.AddMinutes(-5); OwnerSid = $currentSid }
-    $liveRelayStaleRejected = -not (Test-ContainerUserRelayLiveReadbackValues $relayReceipt $canonicalRoot $relayCommand 'String' $liveRelayStale 1 1 $currentSid)
+    $staleObservation = [pscustomobject][ordered]@{ registry_command = $relayCommand; registry_value_kind = 'String'; current_user_sid = $currentSid; candidates = @($liveRelayStale) }
+    $staleProvider = { return $staleObservation }.GetNewClosure()
+    $liveRelayStaleRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $staleProvider)
+    $queryFailureProvider = { throw 'injected observation failure' }
+    $liveRelayQueryFailureRejected = -not (Test-ContainerUserRelayLiveReadback $relayReceipt $canonicalRoot $queryFailureProvider)
     $failedNewRoot = 'C:\KMTech\Apps\Container_Audit\.current.failed.' + $transaction
     $restoreEvidence = [pscustomobject][ordered]@{
         schema_version = 'container-audit-verified-replacement-code-restore-v1'
@@ -2248,7 +2535,7 @@ function Invoke-ContainerWriterSessionSelfTest {
     }
     $restoreEvidenceStructuralValid = Test-RestoreEvidencePayload $restoreEvidence $transaction $replacementPath ('a' * 64) $canonicalRoot $failedNewRoot $startedAt
     $restoreStringBoolean = $restoreEvidence | ConvertTo-Json -Depth 4 | ConvertFrom-Json
-    $restoreStringBoolean.failed_new_preserved = 'true'
+    $restoreStringBoolean.failed_new_preserved = 'false'
     $restoreStringBooleanRejected = -not (Test-RestoreEvidencePayload $restoreStringBoolean $transaction $replacementPath ('a' * 64) $canonicalRoot $failedNewRoot $startedAt)
     $restoreExtraField = $restoreEvidence | ConvertTo-Json -Depth 4 | ConvertFrom-Json
     $restoreExtraField | Add-Member -NotePropertyName unexpected -NotePropertyValue 'value'
@@ -2256,7 +2543,7 @@ function Invoke-ContainerWriterSessionSelfTest {
     $restoreWrongFailedRoot = $restoreEvidence | ConvertTo-Json -Depth 4 | ConvertFrom-Json
     $restoreWrongFailedRoot.failed_new_root = 'C:\KMTech\Apps\Container_Audit\.current.failed.' + ('9' * 32)
     $restoreWrongFailedRootRejected = -not (Test-RestoreEvidencePayload $restoreWrongFailedRoot $transaction $replacementPath ('a' * 64) $canonicalRoot $failedNewRoot $startedAt)
-    $preEnableReadback = [pscustomobject][ordered]@{ enabled = $false; state = 'Disabled'; exact_writer_process_count = 0; identity = [pscustomobject][ordered]@{ status = 'PASS'; binding_sha256 = '5' * 64 } }
+    $preEnableReadback = $disabledReadback | ConvertTo-Json -Depth 12 | ConvertFrom-Json
     $preEnableExactAccepted = Test-ContainerWriterDisabledBeforeEnable $preEnableReadback ('5' * 64)
     $preEnableStringBoolean = $preEnableReadback | ConvertTo-Json -Depth 4 | ConvertFrom-Json
     $preEnableStringBoolean.enabled = 'false'
@@ -2267,6 +2554,9 @@ function Invoke-ContainerWriterSessionSelfTest {
     $preEnableProcess = $preEnableReadback | ConvertTo-Json -Depth 4 | ConvertFrom-Json
     $preEnableProcess.exact_writer_process_count = 1
     $preEnableProcessRejected = -not (Test-ContainerWriterDisabledBeforeEnable $preEnableProcess ('5' * 64))
+    $preEnableStringInteger = $preEnableReadback | ConvertTo-Json -Depth 12 | ConvertFrom-Json
+    $preEnableStringInteger.exact_writer_process_count = '0'
+    $preEnableStringIntegerRejected = -not (Test-ContainerWriterDisabledBeforeEnable $preEnableStringInteger ('5' * 64))
     $temporalNow = [DateTime]::UtcNow
     $temporalPrepared = [pscustomobject]@{ completed_at_utc = $temporalNow.AddSeconds(-30).ToString('o') }
     $temporalReplacement = [pscustomobject]@{ created_at = $temporalNow.AddSeconds(-20).ToString('o') }
@@ -2292,14 +2582,22 @@ function Invoke-ContainerWriterSessionSelfTest {
     $writerFailure = Invoke-RecoveryStateMachine -CodeRestoreAction { return [pscustomobject]@{ status = 'PASS' } } -LifecycleRestoreAction { return [pscustomobject]@{ status = 'PASS' } } -WriterRestoreAction { return [pscustomobject]@{ status = 'FAIL'; silently_ignored = $false } }
     $writerFailureExplicit = ([string]$writerFailure.status -ceq 'FAIL' -and [string]$writerFailure.failure_code -ceq 'WRITER_RESTORE_FAILED' -and -not [bool]$writerFailure.writer_restore.silently_ignored)
     $checks = @(
+        [pscustomobject][ordered]@{ name = 'public_guard_rejects_absent_session_authority'; status = if ($sessionAuthorityAbsentRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'public_guard_accepts_actively_held_session_authority'; status = if ($sessionAuthorityActiveAccepted) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'public_guard_rejects_released_session_authority'; status = if ($sessionAuthorityReleasedRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'valid_current_session_prepared_receipt'; status = if ($validPrepared) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'stale_session_rejected'; status = if ($staleSessionRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'wrong_transaction_rejected'; status = if ($wrongTransactionRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'wrong_contract_rejected'; status = if ($wrongContractRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'historical_binding_mismatch_rejected'; status = if ($bindingMismatchRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'prepared_string_boolean_rejected'; status = if ($preparedStringBooleanRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'prepared_string_integer_rejected'; status = if ($preparedStringIntegerRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'prepared_nested_extra_field_rejected'; status = if ($preparedNestedExtraRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'prepared_wrong_session_authority_rejected'; status = if ($preparedWrongAuthorityRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'expired_session_rejected'; status = if ($expiredSessionRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'invalid_replacement_receipt_rejected'; status = if ($invalidReplacementRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'replacement_receipt_accepts_exact_types'; status = if ($replacementExactTypesAccepted) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'replacement_receipt_rejects_string_integer'; status = if ($replacementStringIntegerRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'historical_boolean_contract_accepts_exact_types'; status = if ($historicalBooleanTypesAccepted) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'historical_string_boolean_rejected'; status = if ($historicalStringBooleanRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'base64url_possession_fingerprint_accepted'; status = if ($base64UrlFingerprintAccepted) { 'PASS' } else { 'FAIL' } },
@@ -2320,6 +2618,7 @@ function Invoke-ContainerWriterSessionSelfTest {
         [pscustomobject][ordered]@{ name = 'live_relay_readback_rejects_extra_runtime_process'; status = if ($liveRelayExtraRuntimeRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'live_relay_readback_rejects_wrong_owner'; status = if ($liveRelayWrongOwnerRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'live_relay_readback_rejects_stale_process'; status = if ($liveRelayStaleRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'live_relay_readback_rejects_observation_query_failure'; status = if ($liveRelayQueryFailureRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'code_restore_structural_guard_accepts_exact_boolean_types'; status = if ($restoreEvidenceStructuralValid) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'code_restore_string_boolean_rejected'; status = if ($restoreStringBooleanRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'code_restore_extra_field_rejected'; status = if ($restoreExtraFieldRejected) { 'PASS' } else { 'FAIL' } },
@@ -2328,6 +2627,7 @@ function Invoke-ContainerWriterSessionSelfTest {
         [pscustomobject][ordered]@{ name = 'pre_enable_guard_rejects_string_boolean'; status = if ($preEnableStringBooleanRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'pre_enable_guard_rejects_binding_drift'; status = if ($preEnableDriftRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'pre_enable_guard_rejects_live_process'; status = if ($preEnableProcessRejected) { 'PASS' } else { 'FAIL' } },
+        [pscustomobject][ordered]@{ name = 'pre_enable_guard_rejects_string_integer'; status = if ($preEnableStringIntegerRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'prepared_before_replacement_accepted'; status = if ($preparedBeforeReplacementAccepted) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'reordered_replacement_rejected_before_restore'; status = if ($reorderedReplacementRejected) { 'PASS' } else { 'FAIL' } },
         [pscustomobject][ordered]@{ name = 'replacement_before_code_accepted'; status = if ($replacementBeforeCodeAccepted) { 'PASS' } else { 'FAIL' } },
@@ -2379,13 +2679,7 @@ if ($Mode -ceq 'contract') {
     exit 0
 }
 
-Assert-Hex $SessionId 32 'session id'
-Assert-Hex $AttemptId 32 'attempt id'
-Assert-Hex $OrchestratorSha256 64 'orchestrator SHA-256'
-Assert-Hex $ReplacementTransactionId 32 'replacement transaction id'
-Assert-Hex $ExpectedContractSha256 64 'expected writer session contract SHA-256'
-[void](Assert-CurrentSessionWindow $SessionStartedAtUtc)
-[void](Read-ContainerWriterPublicContract $ExpectedContractSha256)
+[void](Assert-ContainerWriterPublicInvocation $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $ReplacementTransactionId $ExpectedContractSha256)
 
 if ($Mode -in @('prepare','validateprepared','validatereplacement','restorewriter','recover')) {
     Assert-Hex $HistoricalReceiptSha256 64 'historical capability receipt SHA-256'
@@ -2418,6 +2712,7 @@ if ($Mode -ceq 'prepare') {
 if ($Mode -ceq 'validateprepared') {
     $validation = Test-ContainerPreparedReceipt $InstallRoot $PreparedReceiptPath $PreparedReceiptSha256 $SessionId $AttemptId $SessionStartedAtUtc $OrchestratorSha256 $ReplacementTransactionId $ExpectedContractSha256 $HistoricalReceiptSha256 -RequireLiveDisabled
     Write-Output "writer_session_validation_status=$($validation.status)"
+    if ([string]$validation.status -cne 'PASS') { Write-Output "writer_session_validation_failure_code=$($validation.failure_code)" }
     if ([string]$validation.status -ceq 'PASS') { exit 0 }
     exit 20
 }
