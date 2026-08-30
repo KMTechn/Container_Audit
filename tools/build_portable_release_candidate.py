@@ -54,6 +54,7 @@ PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+    ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
 )
 UPDATE_KEY_CONFIG_FILENAME = "update-manifest-key-config.json"
 UPDATE_KEY_CONFIG_SCHEMA = "container-audit-update-key-config-v1"
@@ -363,6 +364,9 @@ def build(
         "helper_sha256": _sha256(output / "INSTALL_THIS_PC.ps1"),
         "integrity_helper_sha256": _sha256(
             output / "tools" / "bootstrap_integrity.ps1"
+        ),
+        "writer_session_adapter_sha256": _sha256(
+            output / "tools" / "container_writer_session.ps1"
         ),
         "third_party_versions": versions,
         "allowed_unsigned_app_pe": native,

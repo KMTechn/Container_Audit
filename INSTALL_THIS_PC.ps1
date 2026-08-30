@@ -109,7 +109,8 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         'launch-container-audit.cmd',
         'INSTALL_CANONICAL_PORTABLE.ps1',
         'INSTALL_THIS_PC.ps1',
-        'tools\bootstrap_integrity.ps1'
+        'tools\bootstrap_integrity.ps1',
+        'tools\container_writer_session.ps1'
     )
     $frozen = @($frozenFiles | Where-Object {
         Test-Path -LiteralPath (Join-Path $Root $_) -PathType Leaf
@@ -149,6 +150,7 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     $installerPath = Join-Path $Root 'INSTALL_CANONICAL_PORTABLE.ps1'
     $helperPath = Join-Path $Root 'INSTALL_THIS_PC.ps1'
     $integrityHelperPath = Join-Path $Root 'tools\bootstrap_integrity.ps1'
+    $writerSessionAdapterPath = Join-Path $Root 'tools\container_writer_session.ps1'
     if (
         (Get-FileSha256 $pythonwPath) -cne
             ([string]$manifest.runtime_pythonw_sha256).ToLowerInvariant() -or
@@ -159,7 +161,9 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         (Get-FileSha256 $helperPath) -cne
             ([string]$manifest.helper_sha256).ToLowerInvariant() -or
         (Get-FileSha256 $integrityHelperPath) -cne
-            ([string]$manifest.integrity_helper_sha256).ToLowerInvariant()
+            ([string]$manifest.integrity_helper_sha256).ToLowerInvariant() -or
+        (Get-FileSha256 $writerSessionAdapterPath) -cne
+            ([string]$manifest.writer_session_adapter_sha256).ToLowerInvariant()
     ) {
         throw "Portable release manifest hash readback failed."
     }
