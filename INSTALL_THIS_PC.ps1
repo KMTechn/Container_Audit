@@ -86,17 +86,39 @@ function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha2
     }
     try { $contract = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw "Writer session public contract JSON is invalid." }
+    $bindings = @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','session_authority_mutex_name','adapter_sha256','contract_sha256','evidence_path','historical_capability.receipt_sha256','historical_capability.capability_binding_sha256')
+    $requiredTrue = @(
+        $contract.lifecycle_restore.require_same_session_receipt,
+        $contract.lifecycle_restore.require_code_restore_before_writer_restore,
+        $contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore,
+        $contract.lifecycle_restore.require_live_current_user_lifecycle_before_writer_restore,
+        $contract.lifecycle_restore.require_non_elevated_medium_integrity_lifecycle_producer,
+        $contract.lifecycle_restore.producer_code_tree_read_locked_through_execution,
+        $contract.lifecycle_restore.failure_is_explicit,
+        $contract.security.active_session_authority_mutex_required,
+        $contract.security.evidence_paths_outside_install_parent_required,
+        $contract.security.evidence_paths_local_fixed_drive_required,
+        $contract.security.evidence_path_reparse_ancestors_forbidden,
+        $contract.security.evidence_path_aliases_canonicalized
+    )
+    $requiredFalse = @($contract.security.secret_values_recorded, $contract.security.manual_writer_start_allowed, $contract.security.contract_mode_system_mutation)
     if (
         [string]$contract.schema -cne 'container-audit-writer-session-cli-contract-v1' -or
         [string]$contract.app_id -cne 'container_audit' -or
         [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
         (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
-        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v2' -or
+        -not (Test-BootstrapJsonInteger $contract.cli.success_exit_code) -or [int64]$contract.cli.success_exit_code -ne 0 -or
+        @($contract.cli.failure_exit_codes | Where-Object { -not (Test-BootstrapJsonInteger $_) }).Count -ne 0 -or
+        (@($contract.cli.failure_exit_codes) -join ',') -cne '1,20' -or
+        -not (Test-BootstrapJsonInteger $contract.identifiers.session_max_age_hours) -or [int64]$contract.identifiers.session_max_age_hours -ne 24 -or
+        [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
+        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v3' -or
         [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
         [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
+        (@($contract.receipts.prepared_required_bindings) -join ',') -cne ($bindings -join ',') -or
         [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
-        -not [bool]$contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore -or
-        -not [bool]$contract.security.evidence_paths_outside_install_parent_required
+        @($requiredTrue | Where-Object { $_ -isnot [bool] -or -not $_ }).Count -ne 0 -or
+        @($requiredFalse | Where-Object { $_ -isnot [bool] -or $_ }).Count -ne 0
     ) { throw "Writer session public contract semantics differ." }
 }
 
@@ -208,7 +230,9 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
     )
     if (
+        -not (Test-BootstrapJsonInteger $manifest.file_count_before_manifest) -or
         [int64]$manifest.file_count_before_manifest -ne $filesBeforeManifest.Count -or
+        -not (Test-BootstrapJsonInteger $manifest.byte_count_before_manifest) -or
         [int64]$manifest.byte_count_before_manifest -ne $bytesBeforeManifest
     ) {
         throw "Portable release tree metrics differ from the manifest."
@@ -517,6 +541,12 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             -ExpectedTransactionId $ReplacementTransactionId `
             -ExpectedHelperSha256 (Get-FileSha256 $BootstrapScriptPath) `
             -InjectFailureAfterDisplace:$InjectRestoreFailureAfterDisplaceForTest.IsPresent
+        if (
+            $result.prior_code_exact -isnot [bool] -or
+            -not $result.prior_code_exact -or
+            $result.failed_new_preserved -isnot [bool] -or
+            -not $result.failed_new_preserved
+        ) { throw 'Replacement restore result Boolean evidence is invalid.' }
         $evidence = [ordered]@{
             schema_version = 'container-audit-verified-replacement-code-restore-v1'
             status = 'PASS'
@@ -527,8 +557,8 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             receipt_sha256 = $ReplacementReceiptSha256
             install_root = $installRootFull
             failed_new_root = [string]$result.failed_new_root
-            prior_code_exact = [bool]$result.prior_code_exact
-            failed_new_preserved = [bool]$result.failed_new_preserved
+            prior_code_exact = $result.prior_code_exact
+            failed_new_preserved = $result.failed_new_preserved
             identity_or_credential_copied = $false
             completed_at = (Get-Date).ToUniversalTime().ToString('o')
         }

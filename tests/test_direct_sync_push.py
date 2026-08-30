@@ -294,6 +294,37 @@ def test_restore_raw_artifact_downloads_verified_payload(tmp_path):
     )
 
 
+def test_restore_raw_artifact_rejects_string_false_retryable_classification(tmp_path):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    plan = build_source_file_plan(
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    session = FakeRestoreSession(
+        FakeRestoreResponse(
+            409,
+            payload={
+                "retryable": "false",
+                "error": {"code": "RESTORE_CONFLICT", "message": "terminal conflict"},
+            },
+        )
+    )
+
+    result = restore_raw_artifact_to_file(
+        credentials=credentials,
+        metadata=plan.metadata,
+        destination_path=tmp_path / "spool" / "must-not-exist.csv",
+        session=session,
+    )
+
+    assert result.success is False
+    assert result.retryable is False
+    assert result.error_code == "RESTORE_CONFLICT"
+
+
 def test_restore_raw_artifact_falls_back_when_hardlink_is_unavailable(tmp_path, monkeypatch):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)

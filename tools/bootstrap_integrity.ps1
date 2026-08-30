@@ -120,13 +120,19 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
         throw "Bootstrap integrity record code root is invalid."
     }
     $inventory = @(Get-CodeInventory $rootFull)
-    if ([int]$record.file_count -ne $inventory.Count -or @($record.files).Count -ne $inventory.Count) {
+    if (
+        -not (Test-BootstrapJsonInteger $record.file_count) -or
+        [int64]$record.file_count -ne $inventory.Count -or
+        @($record.files).Count -ne $inventory.Count
+    ) {
         throw "Bootstrap integrity record file count is invalid."
     }
     for ($index = 0; $index -lt $inventory.Count; $index += 1) {
         $actual = $inventory[$index]
         $expected = @($record.files)[$index]
         if (
+            -not (Test-BootstrapJsonInteger $expected.size) -or
+            -not (Test-BootstrapJsonInteger $actual.size) -or
             [string]$expected.path -cne [string]$actual.path -or
             [int64]$expected.size -ne [int64]$actual.size -or
             [string]$expected.sha256 -cne [string]$actual.sha256
@@ -158,6 +164,10 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
         file_count = $inventory.Count
         aggregate_sha256 = $aggregate
     }
+}
+
+function Test-BootstrapJsonInteger($Value) {
+    return ($Value -is [int] -or $Value -is [long])
 }
 
 function Get-BootstrapStringSha256([string]$Value) {
@@ -207,9 +217,12 @@ function Get-BootstrapAclIdentity([string]$Path) {
     }
     $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     $sddl = $acl.GetSecurityDescriptorSddlForm($sections)
+    if ($acl.AreAccessRulesProtected -isnot [bool]) {
+        throw 'Bootstrap ACL protection readback type is invalid.'
+    }
     return [pscustomobject][ordered]@{
         owner_sid = [string]$owner
-        access_rules_protected = [bool]$acl.AreAccessRulesProtected
+        access_rules_protected = $acl.AreAccessRulesProtected
         sddl_sha256 = Get-BootstrapStringSha256 $sddl
     }
 }
@@ -238,7 +251,8 @@ function Assert-BootstrapRelocatedIntegrityRecord(
     $inventory = @(Get-CodeInventory $rootFull)
     $aggregate = Get-InventoryAggregate $inventory
     if (
-        [int]$record.file_count -ne $inventory.Count -or
+        -not (Test-BootstrapJsonInteger $record.file_count) -or
+        [int64]$record.file_count -ne $inventory.Count -or
         @($record.files).Count -ne $inventory.Count -or
         [string]$record.aggregate_sha256 -cne $aggregate
     ) {
@@ -253,6 +267,8 @@ function Assert-BootstrapRelocatedIntegrityRecord(
         }
         $actual = $actualByPath[$path]
         if (
+            -not (Test-BootstrapJsonInteger $expected.size) -or
+            -not (Test-BootstrapJsonInteger $actual.size) -or
             [int64]$expected.size -ne [int64]$actual.size -or
             [string]$expected.sha256 -cne [string]$actual.sha256
         ) {
@@ -296,24 +312,36 @@ function Get-BootstrapReplacementTreeIdentity(
     }
     $acl = Get-BootstrapAclIdentity $rootFull
     return [pscustomobject][ordered]@{
-        file_count = [int]$integrity.file_count
+        file_count = $integrity.file_count
         aggregate_sha256 = [string]$integrity.aggregate_sha256
         integrity_sha256 = [string]$integrity.integrity_sha256
         manifest_sha256 = Get-FileSha256 $manifestPath
         source_commit = [string]$manifest.source_commit
         source_tree = [string]$manifest.source_tree
         owner_sid = [string]$acl.owner_sid
-        access_rules_protected = [bool]$acl.access_rules_protected
+        access_rules_protected = $acl.access_rules_protected
         acl_sddl_sha256 = [string]$acl.sddl_sha256
         reparse_count = 0
     }
 }
 
 function Test-BootstrapReplacementTreeIdentity($Expected, $Actual) {
+    if ($null -eq $Expected -or $null -eq $Actual) { return $false }
+    foreach ($name in @('file_count', 'reparse_count')) {
+        if (
+            -not (Test-BootstrapJsonInteger $Expected.$name) -or
+            -not (Test-BootstrapJsonInteger $Actual.$name) -or
+            [int64]$Expected.$name -ne [int64]$Actual.$name
+        ) { return $false }
+    }
+    if (
+        $Expected.access_rules_protected -isnot [bool] -or
+        $Actual.access_rules_protected -isnot [bool] -or
+        $Expected.access_rules_protected -ne $Actual.access_rules_protected
+    ) { return $false }
     foreach ($name in @(
-        'file_count', 'aggregate_sha256', 'integrity_sha256', 'manifest_sha256',
-        'source_commit', 'source_tree', 'owner_sid', 'access_rules_protected',
-        'acl_sddl_sha256', 'reparse_count'
+        'aggregate_sha256', 'integrity_sha256', 'manifest_sha256', 'source_commit',
+        'source_tree', 'owner_sid', 'acl_sddl_sha256'
     )) {
         if ([string]$Expected.$name -cne [string]$Actual.$name) { return $false }
     }
@@ -397,7 +425,9 @@ function Invoke-BootstrapVerifiedReplacementRestore(
     $parentAcl = Get-BootstrapAclIdentity $parent
     if (
         [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
-        [string]$Receipt.parent_acl.access_rules_protected -cne [string]$parentAcl.access_rules_protected -or
+        $Receipt.parent_acl.access_rules_protected -isnot [bool] -or
+        $parentAcl.access_rules_protected -isnot [bool] -or
+        $Receipt.parent_acl.access_rules_protected -ne $parentAcl.access_rules_protected -or
         [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
     ) { throw 'Replacement restore parent ACL identity differs.' }
     $siblings = @(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object {

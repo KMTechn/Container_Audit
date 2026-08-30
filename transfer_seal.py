@@ -1793,14 +1793,14 @@ class LogisticsTransferClient:
             ) from exc
         if allow_not_found and status_code == 404:
             return None
-        if not 200 <= status_code < 300 or not isinstance(body, dict) or body.get("ok") is False:
+        if not 200 <= status_code < 300 or not isinstance(body, dict) or body.get("ok") is not True:
             error = body.get("error") if isinstance(body, dict) else {}
             error = error if isinstance(error, dict) else {}
             raise TransferSealError(
                 str(error.get("code") or "LOGISTICS_SERVER_REJECTED"),
                 str(error.get("message") or "물류 서버 요청이 거부되었습니다."),
                 status_code=status_code,
-                retryable=bool(body.get("retryable")) if isinstance(body, dict) else False,
+                retryable=body.get("retryable") is True if isinstance(body, dict) else False,
                 committed=body.get("committed") if isinstance(body, dict) else None,
                 details=error.get("details") if isinstance(error.get("details"), dict) else {},
             )

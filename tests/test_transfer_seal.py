@@ -891,6 +891,42 @@ def _work_group_client(handler):
     ), session
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"ok": "false", "data": {"receipt_id": "must-not-be-accepted"}},
+        {"data": {"receipt_id": "missing-ok-must-not-be-accepted"}},
+    ],
+    ids=("string-false", "missing"),
+)
+def test_logistics_client_requires_exact_true_success_envelope(body):
+    client, _session = _client(lambda _call: FakeResponse(200, body))
+
+    with pytest.raises(TransferSealError) as exc_info:
+        client._request("GET", "/test/exact-success-envelope")
+
+    assert exc_info.value.code == "LOGISTICS_SERVER_REJECTED"
+
+
+def test_logistics_client_rejects_string_false_retryable_classification():
+    client, _session = _client(
+        lambda _call: FakeResponse(
+            409,
+            {
+                "ok": False,
+                "retryable": "false",
+                "error": {"code": "CONFLICT", "message": "terminal conflict"},
+            },
+        )
+    )
+
+    with pytest.raises(TransferSealError) as exc_info:
+        client._request("POST", "/test/exact-retryable")
+
+    assert exc_info.value.code == "CONFLICT"
+    assert exc_info.value.retryable is False
+
+
 def _prepare(coordinator, barcodes=("BC-1", "BC-2", "BC-3"), *, include_bundle=True):
     fields = {
         "ITG": "ITAG-001",

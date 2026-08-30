@@ -45,6 +45,14 @@ function Get-FileSha256 {
     return (Get-FileHash -LiteralPath $LiteralPath -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Test-JsonInteger($Value) {
+    return ($Value -is [int] -or $Value -is [long])
+}
+
+function Test-ExactBooleanValue($Value, [bool]$Expected) {
+    return ($Value -is [bool] -and $Value -eq $Expected)
+}
+
 function Assert-LocalArchiveGate {
     param(
         [Parameter(Mandatory = $true)][string]$ZipPath,
@@ -168,12 +176,14 @@ function Assert-ReleaseMatchesState {
     )
     $body = ([string]$Release.body).Replace("`r`n", "`n").TrimEnd([char[]]"`n")
     if (
-        [string]$Release.id -cne [string]$State.release_id -or
+        -not (Test-JsonInteger $Release.id) -or
+        -not (Test-JsonInteger $State.release_id) -or
+        [int64]$Release.id -ne [int64]$State.release_id -or
         $Release.tag_name -cne $Tag -or
         $Release.name -cne "Release $Tag" -or
-        [bool]$Release.draft -ne $ExpectedDraft -or
-        [bool]$Release.prerelease -ne $true -or
-        [bool]$Release.immutable -ne $ExpectedImmutable -or
+        -not (Test-ExactBooleanValue $Release.draft $ExpectedDraft) -or
+        -not (Test-ExactBooleanValue $Release.prerelease $true) -or
+        -not (Test-ExactBooleanValue $Release.immutable $ExpectedImmutable) -or
         [string]$Release.target_commitish -cne [string]$State.target_commitish -or
         $body -cne [string]$State.body
     ) {
@@ -188,7 +198,11 @@ function Assert-ReleaseMatchesState {
         $actual = @($assets | Where-Object { $_.name -ceq [string]$expected.name })
         if (
             $actual.Count -ne 1 -or
-            [string]$actual[0].id -cne [string]$expected.id -or
+            -not (Test-JsonInteger $actual[0].id) -or
+            -not (Test-JsonInteger $expected.id) -or
+            [int64]$actual[0].id -ne [int64]$expected.id -or
+            -not (Test-JsonInteger $actual[0].size) -or
+            -not (Test-JsonInteger $expected.size) -or
             [int64]$actual[0].size -ne [int64]$expected.size -or
             [string]$actual[0].digest -cne [string]$expected.digest -or
             [string]$actual[0].state -cne "uploaded"
@@ -234,16 +248,21 @@ if ($Mode -ceq "AcquireDraft") {
             $checksumAsset = @($assets | Where-Object { $_.name -ceq $ChecksumName -and $_.state -ceq "uploaded" })
             $target = [string]$candidate.target_commitish
             if (
+                (Test-JsonInteger $candidate.id) -and
                 $candidate.tag_name -ceq $Tag -and
                 $candidate.name -ceq "Release $Tag" -and
-                $candidate.draft -eq $true -and
-                $candidate.prerelease -eq $true -and
-                $candidate.immutable -ne $true -and
+                (Test-ExactBooleanValue $candidate.draft $true) -and
+                (Test-ExactBooleanValue $candidate.prerelease $true) -and
+                (Test-ExactBooleanValue $candidate.immutable $false) -and
                 ($target -ceq $expectedCommitLower -or $target -ceq "main") -and
                 $null -ne $candidateEvidence -and
                 $assets.Count -eq 2 -and
                 $zipAsset.Count -eq 1 -and
                 $checksumAsset.Count -eq 1 -and
+                (Test-JsonInteger $zipAsset[0].id) -and
+                (Test-JsonInteger $checksumAsset[0].id) -and
+                (Test-JsonInteger $zipAsset[0].size) -and
+                (Test-JsonInteger $checksumAsset[0].size) -and
                 $zipAsset[0].digest -cmatch '^sha256:[0-9a-f]{64}$' -and
                 $checksumAsset[0].digest -cmatch '^sha256:[0-9a-f]{64}$' -and
                 [int64]$zipAsset[0].size -eq $candidateEvidence.zip_size -and
@@ -274,6 +293,8 @@ if ($Mode -ceq "AcquireDraft") {
     $zipAsset = @($release.assets | Where-Object { $_.name -ceq $ZipName })[0]
     $checksumAsset = @($release.assets | Where-Object { $_.name -ceq $ChecksumName })[0]
     if (
+        -not (Test-JsonInteger $zipAsset.size) -or
+        -not (Test-JsonInteger $checksumAsset.size) -or
         $local.zip_sha256 -cne $evidence.zip_sha256 -or
         $local.zip_size -ne $evidence.zip_size -or
         $local.zip_sha256 -cne $zipAsset.digest.Substring(7) -or
@@ -345,6 +366,8 @@ if (
 }
 $local = Assert-LocalArchiveGate -ZipPath $zipPath -ChecksumPath $checksumPath
 if (
+    -not (Test-JsonInteger $state.zip_size) -or
+    -not (Test-JsonInteger $state.checksum_size) -or
     $local.zip_sha256 -cne [string]$state.zip_sha256 -or
     $local.zip_size -ne [int64]$state.zip_size -or
     $local.checksum_sha256 -cne [string]$state.checksum_sha256 -or
@@ -365,8 +388,10 @@ if ($LASTEXITCODE -ne 0) {
 $published = $null
 for ($attempt = 1; $attempt -le 30; $attempt++) {
     $candidate = Get-Release
-    if ($null -ne $candidate -and $candidate.draft -eq $false -and
-        $candidate.prerelease -eq $true -and $candidate.immutable -eq $true) {
+    if ($null -ne $candidate -and
+        (Test-ExactBooleanValue $candidate.draft $false) -and
+        (Test-ExactBooleanValue $candidate.prerelease $true) -and
+        (Test-ExactBooleanValue $candidate.immutable $true)) {
         $published = $candidate
         break
     }
