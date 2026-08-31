@@ -6,6 +6,12 @@ from types import SimpleNamespace
 import pytest
 from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
+from preflight_scan_hold import (
+    HOLD_DRAINING,
+    HOLD_LOOKUP_FAILED,
+    HeldScan,
+    PreflightHoldSnapshot,
+)
 from terminal_operation_lease import (
     OperationLeaseManager,
     OperationLeaseStore,
@@ -56,6 +62,26 @@ class ScheduledRoot:
     def run_next(self):
         _job, _delay, callback, args = self.jobs.pop(0)
         callback(*args)
+
+
+def _pump_until(root, predicate, *, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        if root.jobs:
+            root.run_next()
+        time.sleep(0.005)
+    assert predicate()
+
+
+def _pump_for(root, *, duration=0.35):
+    deadline = time.monotonic() + duration
+    while time.monotonic() < deadline:
+        if root.jobs:
+            root.run_next()
+        else:
+            time.sleep(0.005)
 
 
 class Toggle:
@@ -333,6 +359,10 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     gate = threading.Event()
     client = BlockingClient(_resolved(count=15), gate=gate)
     app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
 
     started = time.perf_counter()
     app._process_barcode_logic(COMPACT_QR)
@@ -344,12 +374,16 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert app.current_tray.master_label_code == ""
     assert len(app.root.jobs) == 1
 
-    app._process_barcode_logic(f"{ITEM}-SHOULD-NOT-BE-ACCEPTED-YET")
+    held_product = f"{ITEM}-HELD-DURING-PREFLIGHT"
+    app._process_barcode_logic(held_product)
     assert app.current_tray.scanned_barcodes == []
 
     gate.set()
     app._master_preflight_thread.join(timeout=2.0)
-    app.root.run_next()
+    _pump_until(
+        app.root,
+        lambda: app.current_tray.scanned_barcodes == [held_product],
+    )
 
     assert app._master_preflight_pending is False
     assert app.current_tray.master_label_code == COMPACT_QR
@@ -363,12 +397,20 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
         "container-operation-lease-issue:"
     )
     assert app.current_tray.operation_lease_id == "operation-lease-fixture-01"
-    event_name, detail, kwargs = app.events[-1]
+    assert app.current_tray.scanned_barcodes == [held_product]
+    assert not app._preflight_hold_store().exists()
+    event_name, detail, kwargs = next(
+        event for event in app.events if event[0] == "MASTER_LABEL_SCANNED_NEW"
+    )
     assert event_name == "MASTER_LABEL_SCANNED_NEW"
     assert kwargs["synchronous"] is True
     assert detail["resolved_tray_quantity"] == 15
     assert detail["central_source_preflight"]["quantity_basis"] == "CENTRAL_EXACT_MEMBERSHIP"
     assert "QT" not in detail
+    assert any(
+        event_name == "SCAN_OK" and kwargs["synchronous"] is True
+        for event_name, _detail, kwargs in app.events
+    )
 
 
 def test_admin_released_prefetch_uses_fresh_durable_key_for_same_physical_qr(
@@ -476,12 +518,15 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
 
     app._process_barcode_logic(COMPACT_QR)
     app._master_preflight_thread.join(timeout=2.0)
-    app.root.run_next()
+    _pump_until(app.root, lambda: not app._master_preflight_pending)
     assert app.current_tray.master_label_code == ""
 
     app._process_barcode_logic(COMPACT_QR)
     app._master_preflight_thread.join(timeout=2.0)
-    app.root.run_next()
+    _pump_until(
+        app.root,
+        lambda: app.current_tray.master_label_code == COMPACT_QR,
+    )
 
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.operation_lease_id == (
@@ -498,6 +543,191 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
             "SELECT status FROM terminal_operation_lease_issue_attempts"
         ).fetchall()
     assert [row["status"] for row in attempts] == ["PREFETCHED"]
+
+
+def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path):
+    gate = threading.Event()
+    client = BlockingClient(
+        _resolved(count=4),
+        gate=gate,
+        error=ConnectionError("fixture preflight failure"),
+    )
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    held = [f"{ITEM}-HELD-A", f"{ITEM}-HELD-B"]
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    for barcode in held:
+        app._process_barcode_logic(barcode)
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(
+        app.root,
+        lambda: (
+            not app._master_preflight_pending
+            and app._preflight_hold_store().exists()
+            and app._preflight_hold_store().load().state == "LOOKUP_FAILED"
+        ),
+    )
+
+    failed = app._preflight_hold_store().load()
+    assert [item.raw_barcode for item in failed.items] == held
+    assert app.current_tray.master_label_code == ""
+
+    client.error = None
+    client.gate = None
+    app._process_barcode_logic(COMPACT_QR)
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(
+        app.root,
+        lambda: app.current_tray.scanned_barcodes == held,
+    )
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.scanned_barcodes == held
+    assert not app._preflight_hold_store().exists()
+
+
+def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=2), gate=gate)
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    scan_ok_results = [False, True]
+    scan_ok_attempts = []
+
+    def log_event(event, detail=None, **kwargs):
+        app.events.append((event, detail, kwargs))
+        if event != "SCAN_OK":
+            return True
+        scan_ok_attempts.append(kwargs)
+        return scan_ok_results.pop(0)
+
+    app._log_event = log_event
+    held_product = f"{ITEM}-HELD-AUDIT"
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    app._process_barcode_logic(held_product)
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(
+        app.root,
+        lambda: app.current_tray.scanned_barcodes == [held_product],
+    )
+    _pump_for(app.root)
+
+    store = app._preflight_hold_store()
+    assert store.exists()
+    assert [item.raw_barcode for item in store.load().items] == [held_product]
+
+    app.root.after(0, app._drain_preflight_hold_head)
+    _pump_until(app.root, lambda: not store.exists())
+    assert len(scan_ok_attempts) == 2
+    assert scan_ok_attempts[0]["idempotency_key"] == scan_ok_attempts[1]["idempotency_key"]
+    assert scan_ok_attempts[1]["deduplicate"] is True
+
+
+def test_preflight_final_held_scan_completes_only_after_hold_ack(tmp_path):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=1), gate=gate)
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    completion_hold_states = []
+    app.complete_tray = lambda: completion_hold_states.append(
+        app._preflight_hold_store().exists()
+    ) or True
+    held_product = f"{ITEM}-HELD-FINAL"
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    app._process_barcode_logic(held_product)
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(app.root, lambda: bool(completion_hold_states))
+
+    assert completion_hold_states == [False]
+    assert not app._preflight_hold_store().exists()
+
+
+@pytest.mark.parametrize(
+    ("hold_state", "expected_callback"),
+    [
+        (HOLD_DRAINING, "drain"),
+        (HOLD_LOOKUP_FAILED, "retry"),
+    ],
+)
+def test_preflight_warning_ack_resumes_drain_or_same_master_retry(
+    hold_state,
+    expected_callback,
+):
+    class Presenter:
+        def __init__(self):
+            self.state = SimpleNamespace(is_blocking=True)
+
+        def acknowledge(self):
+            self.state.is_blocking = False
+
+    root = ScheduledRoot()
+    presenter = Presenter()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app.current_tray = (
+        TraySession(master_label_code=COMPACT_QR)
+        if hold_state == HOLD_DRAINING
+        else TraySession()
+    )
+    app._preflight_hold_snapshot = PreflightHoldSnapshot(
+        preflight_id="preflight-warning-resume",
+        scan_epoch=1,
+        worker="tester",
+        master_raw=COMPACT_QR,
+        created_at="2026-09-01T00:00:00+00:00",
+        updated_at="2026-09-01T00:00:00+00:00",
+        state=hold_state,
+        items=(
+            HeldScan(
+                "held-warning-resume",
+                1,
+                f"{ITEM}-HELD-WARNING",
+                "2026-09-01T00:00:01+00:00",
+            ),
+        ),
+        error_code=(
+            "PHS2_PREFLIGHT_UNAVAILABLE"
+            if hold_state == HOLD_LOOKUP_FAILED
+            else ""
+        ),
+    )
+    app._preflight_hold_draining = hold_state == HOLD_DRAINING
+    app._master_preflight_pending = False
+    app._preflight_scan_input_locked = True
+    callbacks = []
+    app._precommand_operator_review_retry_context = lambda: None
+    app._warning_state_presenter = lambda: presenter
+    app._stop_warning_beep = lambda: None
+    app._update_center_display = lambda: None
+    app._schedule_focus_return = lambda: callbacks.append("focus")
+    app._drain_preflight_hold_head = lambda: callbacks.append("drain")
+    app._process_barcode_logic = lambda raw: callbacks.append(("retry", raw))
+
+    app._acknowledge_active_notice()
+    root.run_next()
+
+    if expected_callback == "drain":
+        assert callbacks == ["drain"]
+    else:
+        assert callbacks == [("retry", COMPACT_QR)]
 
 
 def test_active_tray_exact_phs2_is_never_routed_as_product(tmp_path, monkeypatch):

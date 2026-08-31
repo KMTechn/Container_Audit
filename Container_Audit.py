@@ -43,8 +43,15 @@ from current_user_onboarding import (
     resolve_current_user_onboarding_paths,
 )
 from direct_sync_auto_bootstrap import (
+    DirectSyncWakeResult,
     start_direct_sync_auto_bootstrap,
     start_session_direct_sync,
+)
+from direct_sync_health import (
+    RelayHealth,
+    read_relay_health,
+    relay_health_card_model,
+    relay_health_detail_model,
 )
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import (
@@ -86,6 +93,17 @@ from label_qr import (
     parse_positive_quantity,
 )
 from parked_tray_store import ParkedTrayStore, sanitize_filename
+from preflight_scan_hold import (
+    HOLD_DRAINING,
+    HOLD_LOOKUP,
+    HOLD_LOOKUP_FAILED,
+    PreflightHoldConflict,
+    PreflightHoldError,
+    PreflightHoldFull,
+    PreflightHoldSnapshot,
+    PreflightScanHoldStore,
+    PreflightScanHoldWriter,
+)
 from phs_label_workflow import (
     PHSLabelExchangeCoordinator,
     PHSLabelExchangeJournal,
@@ -134,6 +152,11 @@ from session_history import load_session_history
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
 from storage_utils import atomic_write_json
+from tk_serial_ui_lane import (
+    DRAIN_TO_DURABLE_HANDOFF,
+    LaneTask,
+    TkSerialUiLane,
+)
 from writer_session_fence import writer_sink
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
@@ -1051,6 +1074,24 @@ class ContainerAudit:
         self._master_preflight_pending = False
         self._master_preflight_queue: queue.Queue = queue.Queue(maxsize=1)
         self._master_preflight_poll_job: Optional[str] = None
+        self._ui_lane: Optional[TkSerialUiLane] = None
+        self._completion_lane_busy = False
+        self._completion_task_handle = None
+        self._preflight_hold_store_instance: Optional[PreflightScanHoldStore] = None
+        self._preflight_hold_writer_instance: Optional[PreflightScanHoldWriter] = None
+        self._preflight_hold_snapshot: Optional[PreflightHoldSnapshot] = None
+        self._preflight_hold_draining = False
+        self._preflight_completion_due = False
+        self._preflight_scan_input_locked = False
+        self._ui_close_requested = False
+        self._direct_sync_health_generation = 0
+        self._direct_sync_health_pending = False
+        self._direct_sync_health_queue: queue.Queue = queue.Queue(maxsize=1)
+        self._direct_sync_health_job: Optional[str] = None
+        self._direct_sync_health_poll_job: Optional[str] = None
+        self._direct_sync_health: Optional[RelayHealth] = None
+        self._direct_sync_wake_results: queue.Queue = queue.Queue()
+        self._direct_sync_wake_error_code = ""
         self._phs_label_refresh_pending = False
         self._phs_label_exchange_pending = False
         self._phs_label_candidate_pending = False
@@ -1117,6 +1158,9 @@ class ContainerAudit:
             ).hexdigest()[:16]
         self.CURRENT_TRAY_STATE_FILE = f"_current_tray_state_{self.computer_id}.json"
         self.WORK_SESSION_STATE_FILE = f"_work_session_state_{self.computer_id}.json"
+        self.PREFLIGHT_SCAN_HOLD_FILE = (
+            f"_preflight_scan_hold_{self.computer_id}.json"
+        )
         self._work_session_recovery_blocked = not self._reconcile_work_session_state()
         
         self._setup_core_ui_structure()
@@ -1326,6 +1370,88 @@ class ContainerAudit:
             self.parked_tray_store = store
         return store
 
+    def _handle_ui_lane_fault(self, exc: BaseException) -> None:
+        print(f"UI lane failure: {exc.__class__.__name__}")
+        try:
+            self.show_status_message(
+                "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self._update_action_button_states()
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _ui_task_lane(self) -> TkSerialUiLane:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is None or getattr(lane, "state", "") == "CLOSED":
+            lane = TkSerialUiLane(
+                self.root,
+                poll_ms=15,
+                on_runner_fault=self._handle_ui_lane_fault,
+            )
+            self._ui_lane = lane
+        return lane
+
+    def _preflight_hold_store(self) -> PreflightScanHoldStore:
+        filename = str(
+            getattr(
+                self,
+                "PREFLIGHT_SCAN_HOLD_FILE",
+                f"_preflight_scan_hold_{getattr(self, 'computer_id', 'host')}.json",
+            )
+        )
+        save_root = str(getattr(self, "save_folder", "") or "").strip()
+        if not save_root:
+            save_root = str(
+                Path(str(getattr(self, "log_file_path", "") or ".")).parent
+            )
+        path = Path(save_root) / filename
+        capacity = max(1, int(getattr(self, "TRAY_SIZE", 60) or 60) + 8)
+        store = getattr(self, "_preflight_hold_store_instance", None)
+        if (
+            store is None
+            or Path(getattr(store, "path", "")) != path
+            or int(getattr(store, "capacity", 0)) != capacity
+        ):
+            store = PreflightScanHoldStore(path, capacity=capacity)
+            self._preflight_hold_store_instance = store
+        return store
+
+    def _preflight_hold_writer(self) -> PreflightScanHoldWriter:
+        writer = getattr(self, "_preflight_hold_writer_instance", None)
+        if writer is None:
+            writer = PreflightScanHoldWriter(
+                self.root,
+                queue_capacity=max(4, int(getattr(self, "TRAY_SIZE", 60) or 60) + 12),
+                poll_ms=10,
+            )
+            self._preflight_hold_writer_instance = writer
+        return writer
+
+    def _set_preflight_scan_input_locked(self, locked: bool) -> None:
+        self._preflight_scan_input_locked = bool(locked)
+        entry = getattr(self, "scan_entry", None)
+        if entry is None:
+            return
+        should_disable = bool(
+            locked
+            or getattr(self, "_completion_lane_busy", False)
+            or getattr(self, "_ui_close_requested", False)
+        )
+        try:
+            entry.configure(state=tk.DISABLED if should_disable else tk.NORMAL)
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _preflight_context_blocks_mutation(self) -> bool:
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        return bool(
+            getattr(self, "_master_preflight_pending", False)
+            or getattr(self, "_preflight_hold_draining", False)
+            or isinstance(snapshot, PreflightHoldSnapshot)
+        )
+
     def _remember_completed_master_label(self, master_label: str) -> None:
         if not master_label:
             return
@@ -1493,6 +1619,7 @@ class ContainerAudit:
         self.style.configure('Card.TFrame', background=self.COLOR_CARD_BG, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
         self.style.configure('SecondaryCard.TFrame', background=self.COLOR_SURFACE_ALT, relief='solid', borderwidth=1, bordercolor=self.COLOR_BORDER)
         self.style.configure('Idle.TFrame', background=self.COLOR_IDLE_BG, relief='solid', borderwidth=1, bordercolor="#FED7AA")
+        self.style.configure('RelayAttention.TFrame', background=self.COLOR_IDLE_BG, relief='solid', borderwidth=1, bordercolor="#F59E0B")
         self.style.configure('TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, m))
         self.style.configure('Sidebar.TLabel', background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.sidebar))
         self.style.configure('Idle.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, m))
@@ -1500,10 +1627,12 @@ class ContainerAudit:
         self.style.configure('Card.Subtle.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
         self.style.configure('SecondaryCard.Subtle.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT_SUBTLE, font=(self.DEFAULT_FONT, s))
         self.style.configure('Idle.Subtle.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, s))
+        self.style.configure('RelayAttention.Subtle.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, s))
         self.style.configure('Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
         self.style.configure('Card.Value.TLabel', background=self.COLOR_CARD_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
         self.style.configure('SecondaryCard.Value.TLabel', background=self.COLOR_SURFACE_ALT, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('Idle.Value.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.section_title, 'bold'))
+        self.style.configure('RelayAttention.Value.TLabel', background=self.COLOR_IDLE_BG, foreground=self.COLOR_IDLE_TEXT, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('Title.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, xl, 'bold'))
         self.style.configure('Stage.TLabel', background=self.COLOR_BG, foreground=self.COLOR_PRIMARY, font=(self.DEFAULT_FONT, tokens.fonts.body, 'bold'))
         self.style.configure('ItemInfo.TLabel', background=self.COLOR_BG, foreground=self.COLOR_TEXT, font=(self.DEFAULT_FONT, l, 'bold'))
@@ -1894,6 +2023,12 @@ class ContainerAudit:
         self._load_current_tray_state()
         if not self.worker_name:
             return
+        if not self._restore_preflight_scan_hold():
+            self.current_tray = TraySession()
+            self.worker_name = ""
+            self.worker_role = ""
+            self.show_worker_input_screen()
+            return
         if not self._begin_or_resume_work_session():
             self.current_tray = TraySession()
             self.worker_name = ""
@@ -1912,6 +2047,13 @@ class ContainerAudit:
         self._refresh_transfer_post_review_state()
 
     def change_worker(self):
+        if self._preflight_context_blocks_mutation():
+            self.show_status_message(
+                "중앙 조회 보류 묶음을 먼저 재확인해야 작업자를 변경할 수 있습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
@@ -2795,12 +2937,28 @@ class ContainerAudit:
                     return
                 return
             if saved_worker == current_worker_persistent:
-                msg = f"이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n· 품목: {saved_state.get('item_name', '알 수 없음')}\n· 스캔 수: {len(saved_state.get('scanned_barcodes', []))}개"
+                msg = (
+                    "이전에 마치지 못한 트레이 작업을 이어서 시작하시겠습니까?\n\n"
+                    f"· 품목: {saved_state.get('item_name', '알 수 없음')}\n"
+                    f"· 스캔 수: {len(saved_state.get('scanned_barcodes', []))}개\n\n"
+                    "예: 계속 작업 / 아니오: 보류하고 새 작업 / 취소: 로그인 화면"
+                )
                 restore_required = (
                     saved_operator_review is not None
                     or saved_completion_event is not None
                 )
-                if restore_required or messagebox.askyesno("이전 작업 복구", msg):
+                recovery_choice = (
+                    True
+                    if restore_required
+                    else messagebox.askyesnocancel("이전 작업 복구", msg)
+                )
+                if recovery_choice is None:
+                    self.current_tray = TraySession()
+                    self.worker_name = ""
+                    self.worker_role = ""
+                    self._authenticated_protected_admin = False
+                    return
+                if recovery_choice is True:
                     restore_detail = {
                         'message': 'Same worker restored their session.',
                     }
@@ -2816,17 +2974,20 @@ class ContainerAudit:
                         return
                     self._restore_tray_from_state(saved_state)
                 else:
-                    if not self._log_saved_tray_discarded(
-                        saved_state,
-                        reason='restore_declined_same_worker',
-                        discarded_worker_name=str(saved_worker or ""),
-                    ):
-                        messagebox.showerror("작업 기록 실패", "이전 작업 삭제 기록을 남기지 못해 상태 파일을 보존합니다.")
+                    if not self._defer_saved_recovery_state(saved_state):
+                        messagebox.showerror(
+                            "작업 보류 실패",
+                            "이전 작업을 보류 상태로 안전하게 옮기지 못했습니다. "
+                            "현재 상태를 보존했으니 다시 복구하거나 관리자에게 문의하세요.",
+                        )
                         return
-                    if not self._delete_current_tray_state():
-                        messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못했습니다.")
-                        return
-                    self.current_tray = TraySession()
+                    if hasattr(self, "_update_parked_trays_list"):
+                        self._update_parked_trays_list()
+                    if hasattr(self, "show_status_message"):
+                        self.show_status_message(
+                            "이전 작업을 보류했습니다. 보류 목록에서 다시 복구할 수 있습니다.",
+                            self.COLOR_PRIMARY,
+                        )
             else:
                 saved_worker_display = display_operator_name(saved_worker)
                 msg = f"이전 작업자 '{saved_worker_display}'님이 마치지 않은 작업이 있습니다.\n\n이 작업을 이어서 진행하시겠습니까?"
@@ -3697,9 +3858,38 @@ class ContainerAudit:
             else:
                 labels["submit"] = "서버 재확인" if not compact_labels else "재확인"
 
+        if bool(getattr(self, "_completion_lane_busy", False)):
+            labels["submit"] = "완료 처리 중"
+            for key, widget_name in (
+                ("reset", "reset_button"),
+                ("undo", "undo_button"),
+                ("park", "park_button"),
+                ("submit", "submit_tray_button"),
+                ("operations", "operations_button"),
+                ("replace", "replace_master_label_button"),
+                ("exchange", "exchange_button"),
+            ):
+                self._configure_widget_options(
+                    getattr(self, widget_name, None),
+                    text=labels[key],
+                    state=tk.DISABLED,
+                )
+            for widget_name in (
+                "change_worker_button",
+                "phs_label_exchange_button",
+                "phs_label_legacy_fallback_button",
+                "phs_label_candidate_load_button",
+            ):
+                self._configure_widget_options(
+                    getattr(self, widget_name, None),
+                    state=tk.DISABLED,
+                )
+            return
+
+        preflight_context_locked = self._preflight_context_blocks_mutation()
         mutation_state = (
             tk.DISABLED
-            if operator_review or phs_transition_blocked
+            if operator_review or phs_transition_blocked or preflight_context_locked
             else tk.NORMAL
         )
         self._configure_widget_options(
@@ -3724,6 +3914,7 @@ class ContainerAudit:
                 if active_tray
                 and scanned_count
                 and not phs_transition_blocked
+                and not preflight_context_locked
                 and (not operator_review or retryable_completion or precommand_retry)
                 else tk.DISABLED
             ),
@@ -3740,7 +3931,7 @@ class ContainerAudit:
             text=labels["operations"],
             state=(
                 tk.DISABLED
-                if operator_review or phs_transition_blocked
+                if operator_review or phs_transition_blocked or preflight_context_locked
                 else tk.NORMAL
             ),
         )
@@ -3748,7 +3939,7 @@ class ContainerAudit:
             getattr(self, "change_worker_button", None),
             state=(
                 tk.DISABLED
-                if operator_review or phs_transition_blocked
+                if operator_review or phs_transition_blocked or preflight_context_locked
                 else tk.NORMAL
             ),
         )
@@ -3758,7 +3949,11 @@ class ContainerAudit:
                 getattr(self, "replace_master_label_button", None),
                 text=labels["replace"],
                 style='Danger.TButton',
-                state=tk.DISABLED if operator_review else tk.NORMAL,
+                state=(
+                    tk.DISABLED
+                    if operator_review or preflight_context_locked
+                    else tk.NORMAL
+                ),
             )
         else:
             self._configure_widget_options(
@@ -3768,6 +3963,7 @@ class ContainerAudit:
                 state=(
                     tk.DISABLED
                     if operator_review
+                    or preflight_context_locked
                     or active_tray
                     or exchange_dialog_open
                     or (exact_exchange_blocked and not replacement_active)
@@ -3782,9 +3978,14 @@ class ContainerAudit:
                 tk.NORMAL
                 if active_transfer_exchange_available
                 and not operator_review
+                and not preflight_context_locked
                 and not replacement_active
                 else tk.DISABLED
-                if operator_review or active_tray or replacement_active or exact_exchange_blocked
+                if operator_review
+                or preflight_context_locked
+                or active_tray
+                or replacement_active
+                or exact_exchange_blocked
                 else tk.NORMAL
             ),
         )
@@ -3803,7 +4004,10 @@ class ContainerAudit:
             text="현품표 교체",
             state=(
                 tk.NORMAL
-                if phs_available and not operator_review and not phs_busy
+                if phs_available
+                and not operator_review
+                and not preflight_context_locked
+                and not phs_busy
                 else tk.DISABLED
             ),
         )
@@ -3814,6 +4018,7 @@ class ContainerAudit:
                 if single_available
                 and reconciliation_available
                 and not operator_review
+                and not preflight_context_locked
                 and not phs_busy
                 and not phs_transition_blocked
                 else tk.DISABLED
@@ -3823,7 +4028,10 @@ class ContainerAudit:
             getattr(self, "phs_label_candidate_load_button", None),
             state=(
                 tk.NORMAL
-                if phs_available and not operator_review and not phs_busy
+                if phs_available
+                and not operator_review
+                and not preflight_context_locked
+                and not phs_busy
                 else tk.DISABLED
             ),
         )
@@ -5018,7 +5226,7 @@ class ContainerAudit:
                     and tray is self.current_tray
                     and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
                 ):
-                    self.root.after(0, self.complete_tray)
+                    self.root.after(0, self.request_complete_tray)
 
             try:
                 self.root.after(0, finish)
@@ -5344,7 +5552,7 @@ class ContainerAudit:
                     and tray is self.current_tray
                     and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
                 ):
-                    self.root.after(0, self.complete_tray)
+                    self.root.after(0, self.request_complete_tray)
 
             try:
                 self.root.after(0, finish)
@@ -5375,6 +5583,11 @@ class ContainerAudit:
         )
 
         menu = tk.Menu(self.root, tearoff=False)
+        menu.add_command(
+            label="전송 상태 상세",
+            command=self._show_direct_sync_status_details,
+        )
+        menu.add_separator()
         menu.add_command(
             label="현재 작업 리셋",
             command=self.reset_current_work,
@@ -5722,7 +5935,7 @@ class ContainerAudit:
             return
         try:
             parent_frame.configure(padding=(metrics["outer_padding"], metrics["outer_padding"]))
-            parent_frame.grid_rowconfigure(6, weight=0 if metrics["short_large_text"] else 1)
+            parent_frame.grid_rowconfigure(6, weight=0)
             date_label = getattr(self, "date_label", None)
             if date_label is not None:
                 date_label.configure(font=(self.DEFAULT_FONT, metrics["date_font"], 'bold'))
@@ -5731,16 +5944,16 @@ class ContainerAudit:
             if clock_label is not None:
                 clock_label.configure(font=(self.DEFAULT_FONT, metrics["clock_font"], 'bold'))
                 clock_label.grid_configure(pady=(0, metrics["clock_gap"]))
-            for row in (2, 3):
+            for row in (2, 3, 4):
                 parent_frame.grid_rowconfigure(
                     row,
                     weight=1,
                     minsize=metrics["primary_card_minsize"],
                     uniform="primary_info_cards",
                 )
-            parent_frame.grid_rowconfigure(4, weight=1, minsize=metrics["follow_up_minsize"])
-            parent_frame.grid_rowconfigure(5, weight=0, minsize=metrics["secondary_card_minsize"])
-            for key in ("status", "stopwatch"):
+            parent_frame.grid_rowconfigure(5, weight=1, minsize=metrics["follow_up_minsize"])
+            parent_frame.grid_rowconfigure(6, weight=0, minsize=metrics["secondary_card_minsize"])
+            for key in ("status", "direct_sync", "stopwatch"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
                     card["frame"].configure(padding=metrics["card_padding"])
@@ -5750,6 +5963,11 @@ class ContainerAudit:
                         anchor='center',
                         justify='center',
                     )
+            direct_sync_card = getattr(self, "info_cards", {}).get("direct_sync")
+            if direct_sync_card:
+                direct_sync_card["value"].configure(
+                    font=(self.DEFAULT_FONT, metrics["secondary_value_font"], 'bold')
+                )
             context_frame = getattr(self, "_right_context_frame", None)
             if context_frame is not None:
                 context_frame.configure(padding=metrics["context_padding"])
@@ -6593,14 +6811,25 @@ class ContainerAudit:
         self.clock_label.grid(row=1, column=0, pady=(0,20))
         self.info_cards = {
             'status': self._create_info_card(parent_frame, "현재 작업 상태"),
+            'direct_sync': self._create_info_card(parent_frame, "저장 전송"),
             'stopwatch': self._create_info_card(parent_frame, "트레이 소요"),
         }
         self.info_cards['status']['frame'].grid(row=2, column=0, sticky='nsew', pady=(0, 10))
-        self.info_cards['stopwatch']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))
+        self.info_cards['direct_sync']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))
+        self.info_cards['stopwatch']['frame'].grid(row=4, column=0, sticky='nsew', pady=(0, 10))
+        self.info_cards['direct_sync']['value'].configure(
+            text="대기 0 · 최근 성공 없음\n전송 상태 확인 중",
+        )
+        for widget in self.info_cards['direct_sync'].values():
+            try:
+                widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
+                widget.configure(cursor='hand2')
+            except (AttributeError, tk.TclError):
+                pass
 
         context_frame = ttk.Frame(parent_frame, style='Card.TFrame', padding=16)
         self._right_context_frame = context_frame
-        context_frame.grid(row=4, column=0, sticky='nsew', pady=(0, 10))
+        context_frame.grid(row=5, column=0, sticky='nsew', pady=(0, 10))
         context_frame.grid_columnconfigure(0, weight=1)
         ttk.Label(
             context_frame,
@@ -6638,7 +6867,7 @@ class ContainerAudit:
 
         secondary_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         self._secondary_stats_frame = secondary_frame
-        secondary_frame.grid(row=5, column=0, sticky='ew')
+        secondary_frame.grid(row=6, column=0, sticky='ew')
         for column in (0, 1):
             secondary_frame.grid_columnconfigure(column, weight=1, uniform="secondary_stats")
         self.info_cards['avg_time'] = self._create_info_card(secondary_frame, "평균")
@@ -6651,7 +6880,6 @@ class ContainerAudit:
         self.info_cards['best_time']['value'].configure(style='SecondaryCard.Value.TLabel')
         self.info_cards['avg_time']['frame'].grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         self.info_cards['best_time']['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
-        parent_frame.grid_rowconfigure(6, weight=1)
         legend_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame', padding=(0,15))
         self._legend_frame = legend_frame
         legend_frame.grid(row=7, column=0, sticky='sew')
@@ -6676,6 +6904,8 @@ class ContainerAudit:
         )
         self._apply_right_sidebar_layout(generation=right_generation)
         self._render_warning_state()
+        if hasattr(self.root, "tk"):
+            self._schedule_direct_sync_health_refresh(delay_ms=0)
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
         card = ttk.Frame(parent, style='Card.TFrame', padding=20)
@@ -6785,7 +7015,15 @@ class ContainerAudit:
             self.current_item_label['foreground'] = self.COLOR_DANGER
             return
         elif getattr(self, "_master_preflight_pending", False):
-            self.current_item_label['text'] = "중앙 검사 완료 수량을 확인하고 있습니다."
+            snapshot = getattr(self, "_preflight_hold_snapshot", None)
+            held_count = (
+                len(snapshot.items)
+                if isinstance(snapshot, PreflightHoldSnapshot)
+                else 0
+            )
+            self.current_item_label['text'] = (
+                f"중앙 검사 완료 수량 확인 중 · 보류 {held_count}건"
+            )
             self.current_item_label['foreground'] = self.COLOR_PRIMARY
             return
 
@@ -6807,7 +7045,6 @@ class ContainerAudit:
 
     def _cancel_master_preflight(self) -> None:
         self._master_preflight_epoch = int(getattr(self, "_master_preflight_epoch", 0)) + 1
-        self._master_preflight_pending = False
         poll_job = getattr(self, "_master_preflight_poll_job", None)
         if poll_job:
             try:
@@ -6815,6 +7052,8 @@ class ContainerAudit:
             except (tk.TclError, AttributeError):
                 pass
         self._master_preflight_poll_job = None
+        if not getattr(self, "_master_preflight_pending", False):
+            self._master_preflight_pending = False
 
     def _activate_master_label_tray(
         self,
@@ -6910,10 +7149,17 @@ class ContainerAudit:
             )
             return False
 
-        self._cancel_master_preflight()
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return False
+        self._master_preflight_epoch = int(
+            getattr(self, "_master_preflight_epoch", 0)
+        ) + 1
         token = self._master_preflight_epoch
-        result_queue: queue.Queue = queue.Queue(maxsize=1)
-        self._master_preflight_queue = result_queue
         self._master_preflight_pending = True
         self.show_status_message(
             "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
@@ -6922,7 +7168,59 @@ class ContainerAudit:
         )
         self._update_current_item_label("중앙 검사 완료 정보를 확인 중입니다.")
 
-        def worker() -> None:
+        hold_store = self._preflight_hold_store()
+        hold_worker = persistent_operator_name(self.worker_name)
+
+        def prepare_hold() -> PreflightHoldSnapshot:
+            if hold_store.exists():
+                existing = hold_store.load()
+                if (
+                    existing.worker != hold_worker
+                    or existing.master_raw != barcode
+                ):
+                    raise PreflightHoldConflict(
+                        "another preflight hold is already active"
+                    )
+                if existing.state == HOLD_LOOKUP_FAILED:
+                    snapshot = hold_store.resume(
+                        master_raw=barcode,
+                        worker=hold_worker,
+                    )
+                elif existing.state == HOLD_LOOKUP:
+                    snapshot = existing
+                else:
+                    raise PreflightHoldConflict(
+                        "the existing preflight hold is already draining"
+                    )
+            else:
+                snapshot = hold_store.start(
+                    worker=hold_worker,
+                    master_raw=barcode,
+                    scan_epoch=token,
+                )
+            return snapshot
+
+        def worker() -> tuple[
+            bool,
+            Any,
+            str,
+            Optional[TransferSealError],
+            Optional[PreflightHoldSnapshot],
+        ]:
+            try:
+                hold_snapshot = prepare_hold()
+            except BaseException:
+                return (
+                    False,
+                    None,
+                    "",
+                    TransferSealError(
+                        "PHS2_HOLD_DURABILITY_FAILED",
+                        "사전조회 보류 상태를 저장하지 못했습니다.",
+                        retryable=True,
+                    ),
+                    None,
+                )
             try:
                 coordinator = self._transfer_seal_runtime()
                 client = coordinator.client
@@ -7016,15 +7314,17 @@ class ContainerAudit:
                     preflight,
                     normalized_artifact["lease_id"],
                     None,
+                    hold_snapshot,
                 )
             except TransferSealError as exc:
-                result = (False, None, "", exc)
+                result = (False, None, "", exc, hold_snapshot)
             except OperationLeaseError as exc:
                 result = (
                     False,
                     None,
                     "",
                     TransferSealError(exc.code, exc.message),
+                    hold_snapshot,
                 )
             except Exception as exc:
                 result = (
@@ -7037,31 +7337,61 @@ class ContainerAudit:
                         retryable=True,
                         committed=None,
                     ),
+                    hold_snapshot,
                 )
-            try:
-                result_queue.put_nowait(result)
-            except queue.Full:
-                pass
+            return result
 
-        self._master_preflight_thread = threading.Thread(
-            target=worker,
-            name="container-audit-phs2-preflight",
-            daemon=True,
-        )
-        self._master_preflight_thread.start()
-        try:
-            self._master_preflight_poll_job = self.root.after(
-                25,
-                self._poll_compact_phs2_preflight,
+        def finish(result: tuple[Any, ...]) -> None:
+            result_queue: queue.Queue = queue.Queue(maxsize=1)
+            result_queue.put_nowait(result)
+            self._master_preflight_queue = result_queue
+            self._poll_compact_phs2_preflight(
                 token,
                 barcode,
                 canonical_fields,
                 matched_item,
                 result_queue,
             )
-        except (tk.TclError, AttributeError):
-            self._cancel_master_preflight()
+
+        def fail(exc: BaseException) -> None:
+            finish(
+                (
+                    False,
+                    None,
+                    "",
+                    TransferSealError(
+                        "PHS2_PREFLIGHT_UNAVAILABLE",
+                        "중앙 PHS=2 확인 중 처리 오류가 발생했습니다.",
+                        retryable=True,
+                        committed=None,
+                    ),
+                )
+            )
+
+        admission = lane.submit(
+            LaneTask(
+                name="phs2-master-preflight",
+                generation=token,
+                work=worker,
+                finish=finish,
+                fail=fail,
+                on_idle=(
+                    (lambda: lane.close_idle())
+                    if not hasattr(self.root, "tk")
+                    else None
+                ),
+            )
+        )
+        if not admission.accepted or admission.handle is None:
+            self._master_preflight_pending = False
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 현품표 입력을 다시 시도하세요.",
+                self.COLOR_DANGER,
+            )
             return False
+        self._set_preflight_scan_input_locked(False)
+        self._update_action_button_states()
+        self._master_preflight_thread = admission.handle
         return True
 
     def _poll_compact_phs2_preflight(
@@ -7075,7 +7405,7 @@ class ContainerAudit:
         if token != getattr(self, "_master_preflight_epoch", 0):
             return
         try:
-            success, preflight, operation_lease_id, error = result_queue.get_nowait()
+            result = result_queue.get_nowait()
         except queue.Empty:
             try:
                 self._master_preflight_poll_job = self.root.after(
@@ -7091,15 +7421,20 @@ class ContainerAudit:
                 self._cancel_master_preflight()
             return
 
+        success, preflight, operation_lease_id, error = result[:4]
+        if len(result) > 4 and isinstance(result[4], PreflightHoldSnapshot):
+            self._preflight_hold_snapshot = result[4]
+
         self._master_preflight_poll_job = None
-        self._master_preflight_pending = False
         if getattr(self.current_tray, "master_label_code", ""):
+            self._master_preflight_pending = False
             return
         if not success or preflight is None:
             failure = error if isinstance(error, TransferSealError) else TransferSealError(
                 "PHS2_PREFLIGHT_FAILED",
                 "중앙 PHS=2 확인에 실패했습니다.",
             )
+            self._mark_preflight_hold_failed(failure.code)
             self._update_current_item_label()
             try:
                 self._log_event(
@@ -7123,6 +7458,8 @@ class ContainerAudit:
             self._schedule_focus_return()
             return
 
+        self._master_preflight_pending = False
+        self._set_preflight_scan_input_locked(True)
         detail = dict(canonical_fields)
         detail["central_source_preflight"] = preflight.audit_detail()
         detail["resolved_tray_quantity"] = preflight.member_count
@@ -7150,6 +7487,9 @@ class ContainerAudit:
                 )
             )
             if not marker_ready:
+                self._mark_preflight_hold_failed(
+                    "PHS2_REPLACEMENT_MARKER_DURABILITY_FAILED"
+                )
                 self._update_current_item_label()
                 self._update_action_button_states()
                 self._schedule_focus_return()
@@ -7168,9 +7508,320 @@ class ContainerAudit:
             active_label_worker_code=preflight.active_label_worker_code,
             operation_lease_id=operation_lease_id,
         )
-        if activated and marker_new:
-            self._show_phs_replacement_required_notice()
+        if activated:
+            self._begin_preflight_hold_drain()
+            if marker_new:
+                self._show_phs_replacement_required_notice()
+        else:
+            self._mark_preflight_hold_failed("PHS2_ACTIVATION_DURABILITY_FAILED")
         self._update_action_button_states()
+
+    def _mark_preflight_hold_failed(self, error_code: str) -> None:
+        store = self._preflight_hold_store()
+        if not store.exists():
+            self._master_preflight_pending = False
+            return
+
+        def finish(snapshot: PreflightHoldSnapshot) -> None:
+            self._preflight_hold_snapshot = snapshot
+            self._master_preflight_pending = False
+            self._set_preflight_scan_input_locked(True)
+            self._update_action_button_states()
+            self.show_status_message(
+                f"중앙 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self.show_fullscreen_warning(
+                "중앙 조회 재시도",
+                (
+                    f"보류 스캔 {len(snapshot.items)}건은 삭제되지 않았습니다. "
+                    "확인을 누르면 같은 현품표로 다시 조회합니다."
+                ),
+                self.COLOR_DANGER,
+            )
+
+        admission = self._preflight_hold_writer().submit(
+            lambda: store.mark_failed(error_code=error_code),
+            finish,
+            lambda exc: self.show_status_message(
+                "중앙 조회는 실패했고 보류 상태 갱신도 지연 중입니다. 현재 파일은 삭제하지 마세요.",
+                self.COLOR_DANGER,
+                duration=0,
+            ),
+        )
+        if not admission.accepted:
+            self._set_preflight_scan_input_locked(True)
+            self.show_status_message(
+                "중앙 조회 실패 · 보류 상태 저장 대기 중 (삭제되지 않음)",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+
+    def _begin_preflight_hold_drain(self) -> None:
+        self._set_preflight_scan_input_locked(True)
+        store = self._preflight_hold_store()
+        if not store.exists():
+            self._preflight_hold_snapshot = None
+            self._preflight_hold_draining = False
+            self._set_preflight_scan_input_locked(False)
+            return
+
+        def finish(snapshot: Optional[PreflightHoldSnapshot]) -> None:
+            self._preflight_hold_snapshot = snapshot
+            self._preflight_hold_draining = snapshot is not None
+            if snapshot is None:
+                self._set_preflight_scan_input_locked(False)
+                self.show_status_message(
+                    "중앙 확인 완료 · 보류 스캔 없음",
+                    self.COLOR_SUCCESS,
+                )
+                return
+            self.show_status_message(
+                f"중앙 확인 완료 · 보류 {len(snapshot.items)}건 순서대로 처리 중",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+            self.root.after(0, self._drain_preflight_hold_head)
+
+        admission = self._preflight_hold_writer().submit(
+            store.mark_draining,
+            finish,
+            lambda exc: self.show_status_message(
+                "보류 스캔 재생 상태를 저장하지 못했습니다. 보류 파일을 유지합니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            ),
+        )
+        if not admission.accepted:
+            self.show_status_message(
+                "보류 스캔 재생 준비가 지연 중입니다. 입력은 삭제되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+
+    def _drain_preflight_hold_head(self) -> None:
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if not isinstance(snapshot, PreflightHoldSnapshot) or not snapshot.items:
+            self._preflight_hold_draining = False
+            self._complete_after_preflight_hold_drain()
+            return
+        if snapshot.state != HOLD_DRAINING:
+            return
+        head = snapshot.items[0]
+        current_barcodes = list(
+            getattr(getattr(self, "current_tray", None), "scanned_barcodes", [])
+            or []
+        )
+        already_durable = head.raw_barcode in current_barcodes
+        audit_durable = False
+        if not already_durable:
+            before_count = len(current_barcodes)
+            audit_durable = bool(
+                self._process_barcode_logic(
+                    head.raw_barcode,
+                    _durable_scan_log=True,
+                    _durable_scan_id=head.scan_id,
+                )
+            )
+            current_barcodes = list(
+                getattr(getattr(self, "current_tray", None), "scanned_barcodes", [])
+                or []
+            )
+            already_durable = (
+                len(current_barcodes) == before_count + 1
+                and current_barcodes[-1] == head.raw_barcode
+            )
+        else:
+            audit_durable = self._persist_existing_held_scan_audit(
+                head.raw_barcode,
+                scan_id=head.scan_id,
+                scan_position=current_barcodes.index(head.raw_barcode) + 1,
+            )
+        if not already_durable or not audit_durable:
+            self.show_status_message(
+                f"보류 스캔 저장 확인 필요 · 남은 {len(snapshot.items)}건",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return
+
+        store = self._preflight_hold_store()
+
+        def finish(updated: Optional[PreflightHoldSnapshot]) -> None:
+            self._preflight_hold_snapshot = updated
+            if updated is None:
+                self._preflight_hold_draining = False
+                self._complete_after_preflight_hold_drain()
+                return
+            self.root.after(0, self._drain_preflight_hold_head)
+
+        admission = self._preflight_hold_writer().submit(
+            lambda: store.ack_head(head.scan_id),
+            finish,
+            lambda exc: self.show_status_message(
+                "제품은 저장됐지만 보류 목록 확인을 마치지 못했습니다. 재시작 시 자동 대조합니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            ),
+        )
+        if not admission.accepted:
+            self.show_status_message(
+                "제품은 저장됐지만 보류 목록 갱신이 지연 중입니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+
+    def _persist_existing_held_scan_audit(
+        self,
+        raw_barcode: str,
+        *,
+        scan_id: str,
+        scan_position: int,
+    ) -> bool:
+        scan_times = list(getattr(self.current_tray, "scan_times", []) or [])
+        index = max(0, int(scan_position) - 1)
+        interval = 0.0
+        if index > 0 and index < len(scan_times):
+            current_time = scan_times[index]
+            previous_time = scan_times[index - 1]
+            if isinstance(current_time, datetime.datetime) and isinstance(
+                previous_time, datetime.datetime
+            ):
+                interval = max(0.0, (current_time - previous_time).total_seconds())
+        return bool(
+            self._log_event(
+                "SCAN_OK",
+                detail=build_scan_ok_detail(
+                    raw_barcode,
+                    interval_sec=interval,
+                    scan_position=int(scan_position),
+                    scan_contract_version=self.SCAN_CONTRACT_VERSION,
+                ),
+                synchronous=True,
+                idempotency_key=f"preflight-held-scan:{scan_id}",
+                deduplicate=True,
+            )
+        )
+
+    def _complete_after_preflight_hold_drain(self) -> None:
+        tray = getattr(self, "current_tray", None)
+        full = bool(
+            getattr(tray, "master_label_code", "")
+            and int(getattr(tray, "tray_size", 0) or 0) > 0
+            and len(getattr(tray, "scanned_barcodes", []) or [])
+            >= int(getattr(tray, "tray_size", 0) or 0)
+        )
+        completion_due = bool(
+            getattr(self, "_preflight_completion_due", False) or full
+        )
+        self._preflight_completion_due = False
+        if not completion_due:
+            self._set_preflight_scan_input_locked(False)
+            self._update_action_button_states()
+            return
+        callback = (
+            self.request_complete_tray
+            if hasattr(getattr(self, "root", None), "tk")
+            else self.complete_tray
+        )
+
+        def complete_after_release() -> None:
+            self._set_preflight_scan_input_locked(False)
+            callback()
+
+        self.root.after(0, complete_after_release)
+
+    def _hold_scan_during_preflight(
+        self,
+        raw_barcode: str,
+        *,
+        clear_entry_after_ack: bool = False,
+    ) -> bool:
+        raw = str(raw_barcode or "").strip()
+        if not raw:
+            return False
+        store = self._preflight_hold_store()
+
+        def persist() -> tuple[Any, PreflightHoldSnapshot]:
+            item = store.append(raw)
+            return item, store.load()
+
+        def finish(result: tuple[Any, PreflightHoldSnapshot]) -> None:
+            _item, snapshot = result
+            self._preflight_hold_snapshot = snapshot
+            if clear_entry_after_ack:
+                entry = getattr(self, "scan_entry", None)
+                try:
+                    if entry is not None and entry.get().strip() == raw:
+                        entry.delete(0, tk.END)
+                except (AttributeError, tk.TclError):
+                    pass
+            self.show_status_message(
+                f"중앙 확인 중 · 보류 스캔 {len(snapshot.items)}건",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+
+        def fail(exc: BaseException) -> None:
+            self._set_preflight_scan_input_locked(True)
+            if isinstance(exc, PreflightHoldFull):
+                message = "보류 한도 초과 — 이번 스캔은 접수되지 않았습니다."
+            else:
+                message = "보류 스캔을 저장하지 못해 이번 스캔은 접수되지 않았습니다."
+            self.show_status_message(message, self.COLOR_DANGER, duration=0)
+
+        admission = self._preflight_hold_writer().submit(persist, finish, fail)
+        if not admission.accepted:
+            self._set_preflight_scan_input_locked(True)
+            self.show_status_message(
+                "보류 저장 대기열이 가득 차 이번 스캔은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+        return True
+
+    def _restore_preflight_scan_hold(self) -> bool:
+        store = self._preflight_hold_store()
+        if not store.exists():
+            self._preflight_hold_snapshot = None
+            return True
+        try:
+            snapshot = store.load()
+        except PreflightHoldError:
+            messagebox.showerror(
+                "보류 스캔 확인 필요",
+                "사전조회 보류 파일을 읽지 못했습니다. 파일을 보존하고 관리자에게 문의하세요.",
+            )
+            return False
+        if snapshot.worker != persistent_operator_name(self.worker_name):
+            messagebox.showwarning(
+                "보류 스캔 작업자 확인",
+                "다른 작업자의 중앙 조회 보류 묶음이 남아 있어 작업자를 변경할 수 없습니다.",
+            )
+            return False
+        self._preflight_hold_snapshot = snapshot
+        self._set_preflight_scan_input_locked(True)
+        if (
+            snapshot.state == HOLD_DRAINING
+            and str(getattr(self.current_tray, "master_label_code", "") or "")
+            == snapshot.master_raw
+        ):
+            self._preflight_hold_draining = True
+            self.root.after(0, self._drain_preflight_hold_head)
+        else:
+            self.show_status_message(
+                f"중앙 조회 재확인 필요 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self.show_fullscreen_warning(
+                "중앙 조회 재확인 필요",
+                "보류 스캔은 삭제되지 않았습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
+                self.COLOR_DANGER,
+            )
+        return True
 
     def _begin_active_phs_label_refresh(self, raw_barcode: str) -> None:
         """Resolve a PHS2 rescan without disturbing the active tray."""
@@ -7427,7 +8078,20 @@ class ContainerAudit:
     
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
+        if getattr(self, "_ui_close_requested", False):
+            self.show_status_message(
+                "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return
         raw_barcode = self.scan_entry.get().strip()
+        if getattr(self, "_master_preflight_pending", False):
+            self._hold_scan_during_preflight(
+                raw_barcode,
+                clear_entry_after_ack=True,
+            )
+            return
         self.scan_entry.delete(0, tk.END)
         # Use after(0) to allow the UI to update before potentially blocking logic
         scan_epoch = getattr(self, "_scan_callback_epoch", 0)
@@ -7442,13 +8106,36 @@ class ContainerAudit:
             return
         self._process_barcode_logic(raw_barcode)
 
-    def _process_barcode_logic(self, raw_barcode: str):
+    def _process_barcode_logic(
+        self,
+        raw_barcode: str,
+        *,
+        _durable_scan_log: bool = False,
+        _durable_scan_id: str = "",
+    ):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
-        if getattr(self, "_master_preflight_pending", False):
+        if getattr(self, "_ui_close_requested", False):
             self.show_status_message(
-                "중앙 PHS=2 검사 완료 정보를 확인 중입니다. 잠시 기다려 주세요.",
-                self.COLOR_PRIMARY,
+                "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return
+        if getattr(self, "_master_preflight_pending", False):
+            self._hold_scan_during_preflight(raw_barcode)
+            return
+        hold_snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if (
+            not getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            and isinstance(hold_snapshot, PreflightHoldSnapshot)
+            and hold_snapshot.state == HOLD_LOOKUP_FAILED
+            and normalize_master_label_input(raw_barcode)
+            != normalize_master_label_input(hold_snapshot.master_raw)
+        ):
+            self.show_status_message(
+                f"중앙 조회 실패 · 보류 {len(hold_snapshot.items)}건. 같은 현품표로 재시도하세요. 이번 스캔은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
                 duration=0,
             )
             return
@@ -7668,7 +8355,19 @@ class ContainerAudit:
         presenter.clear()
         self._stop_warning_beep()
         self._render_warning_state()
-        self._log_event(
+        scan_log_kwargs: Dict[str, Any] = {
+            "synchronous": _durable_scan_log,
+        }
+        if _durable_scan_id:
+            scan_log_kwargs.update(
+                {
+                    "idempotency_key": (
+                        f"preflight-held-scan:{_durable_scan_id}"
+                    ),
+                    "deduplicate": True,
+                }
+            )
+        scan_audit_durable = bool(self._log_event(
             'SCAN_OK',
             detail=build_scan_ok_detail(
                 raw_barcode,
@@ -7676,10 +8375,22 @@ class ContainerAudit:
                 scan_position=len(self.current_tray.scanned_barcodes),
                 scan_contract_version=self.SCAN_CONTRACT_VERSION,
             ),
-        )
+            **scan_log_kwargs,
+        ))
         
         if len(self.current_tray.scanned_barcodes) >= self.current_tray.tray_size:
-            self.complete_tray()
+            if _durable_scan_log:
+                # The durable hold owns ordering until its head is audit-ACKed
+                # and removed.  Completion is scheduled by the final hold ACK.
+                self._preflight_completion_due = True
+            elif hasattr(getattr(self, "root", None), "tk"):
+                self.request_complete_tray()
+            else:
+                # Preserve the deterministic headless/domain seam used by
+                # qualification while all live Tk entrypoints use the lane.
+                self.complete_tray()
+        if _durable_scan_log:
+            return scan_audit_durable
 
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
         if self.success_sound: self.success_sound.play()
@@ -7814,7 +8525,284 @@ class ContainerAudit:
             "transfer_detail": dict(transfer_detail),
         }
 
-    def complete_tray(self):
+    def _completion_lane_identity(self) -> tuple[Any, ...]:
+        tray = self.current_tray
+        return (
+            id(tray),
+            str(getattr(tray, "master_label_code", "") or ""),
+            tuple(getattr(tray, "scanned_barcodes", []) or ()),
+            str(getattr(tray, "operation_lease_id", "") or ""),
+            int(getattr(self, "_scan_callback_epoch", 0) or 0),
+        )
+
+    def _set_completion_lane_busy(self, busy: bool) -> None:
+        self._completion_lane_busy = bool(busy)
+        entry = getattr(self, "scan_entry", None)
+        if entry is not None:
+            try:
+                entry.configure(
+                    state=(
+                        tk.DISABLED
+                        if busy
+                        or getattr(self, "_preflight_scan_input_locked", False)
+                        or getattr(self, "_ui_close_requested", False)
+                        else tk.NORMAL
+                    )
+                )
+            except (AttributeError, tk.TclError):
+                pass
+        try:
+            self._update_action_button_states()
+        except (AttributeError, tk.TclError):
+            pass
+        if busy:
+            self.show_status_message(
+                "완료 처리 중",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+        else:
+            self._schedule_focus_return()
+
+    def _persist_prepared_completion_contract(
+        self,
+        prepared_attempt: SealAttempt,
+        *,
+        existing_event_contract: Optional[Mapping[str, Any]],
+        completion_observed_at: datetime.datetime,
+        projection_log_path: Path,
+        completion_projection_worker: str,
+        completion_was_restored: bool,
+        master_label: str,
+    ) -> None:
+        prepared_intent_id = str(prepared_attempt.intent_id or "").strip()
+        if existing_event_contract is not None:
+            if prepared_intent_id != str(
+                existing_event_contract.get("transfer_intent_id") or ""
+            ).strip():
+                raise TransferSealError(
+                    "TRAY_COMPLETE_RETRY_INTENT_MISMATCH",
+                    "저장된 완료 기록과 새 이적 의도가 다릅니다.",
+                )
+            prepared_contract = dict(existing_event_contract)
+        else:
+            prepared_contract = self._completion_event_contract(
+                observed_at=completion_observed_at,
+                projection_log_path=projection_log_path,
+                projection_worker_name=completion_projection_worker,
+                transfer_attempt=prepared_attempt,
+                was_restored_session=completion_was_restored,
+                transfer_detail={},
+                log_may_have_been_attempted=False,
+            )
+        self._pending_completion_event_contract = prepared_contract
+        if self._save_current_tray_state():
+            return
+        self._present_completion_outcome(
+            CompletionOutcome.RETRY_WAIT,
+            item_name=self.current_tray.item_name,
+            master_label=master_label,
+            scan_count=len(self.current_tray.scanned_barcodes),
+            target_count=self.current_tray.tray_size,
+            message=(
+                "이적 요청은 준비됐지만 완료 복구 계약을 저장하지 못했습니다. "
+                "트레이를 잠근 채 프로그램을 종료하지 말고 담당자에게 알리세요."
+            ),
+            error_code="TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
+        )
+        raise TransferSealError(
+            "TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
+            "이적 요청 전 완료 복구 계약을 저장하지 못했습니다.",
+            retryable=True,
+        )
+
+    def request_complete_tray(
+        self,
+        *,
+        completion_callback: Optional[Callable[[bool], None]] = None,
+    ) -> bool:
+        """Submit the GUI completion transport to the shared foreground lane."""
+
+        if getattr(self.current_tray, "is_test_tray", False):
+            completed = bool(self.complete_tray())
+            if completion_callback is not None:
+                completion_callback(completed)
+            return completed
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+        blocking_completion = self._active_blocking_completion_snapshot()
+        if (
+            blocking_completion is not None
+            and not blocking_completion.operator_retryable
+            and self._operator_review_blocks_mutation()
+        ):
+            self._render_warning_state()
+            return False
+        if self._phs_label_exchange_blocks_tray_transition("이적 봉인 및 완료"):
+            return False
+        if self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
+            return False
+        master_label = str(self.current_tray.master_label_code or "")
+        master_label_fields = self._parse_new_format_qr(master_label) or {}
+        if (
+            str(master_label_fields.get("PHS") or "").strip() == "2"
+            and len(self.current_tray.scanned_barcodes)
+            != int(self.current_tray.tray_size or 0)
+        ):
+            self.show_status_message(
+                "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+        existing_event_contract = self._active_completion_event_contract()
+        try:
+            if existing_event_contract is not None:
+                completion_observed_at = datetime.datetime.fromisoformat(
+                    str(existing_event_contract["observed_at"])
+                )
+                completion_was_restored = bool(
+                    existing_event_contract["was_restored_session"]
+                )
+                completion_projection_worker = str(
+                    existing_event_contract["projection_worker_name"]
+                )
+                projection_log_path = self._completion_projection_log_path(
+                    str(existing_event_contract["projection_log_name"])
+                )
+            else:
+                completion_observed_at = datetime.datetime.now()
+                completion_was_restored = bool(self.current_tray.is_restored_session)
+                completion_projection_worker = persistent_operator_name(
+                    self.worker_name
+                )
+                projection_log_path = self._completion_projection_log_path()
+            log_detail = build_tray_complete_detail(
+                self.current_tray,
+                master_label_fields=master_label_fields,
+                end_time=completion_observed_at,
+            )
+            log_detail["is_restored_session"] = completion_was_restored
+            source_label_payload = str(
+                getattr(self.current_tray, "active_label_qr_payload", "")
+                or master_label
+            )
+            source_label_fields = self._parse_new_format_qr(source_label_payload)
+            if not source_label_fields:
+                raise TransferSealError(
+                    "PHS2_ACTIVE_LABEL_INVALID",
+                    "현재 사용 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
+                )
+            operation_lease_id = str(
+                getattr(self.current_tray, "operation_lease_id", "") or ""
+            ).strip()
+            if (
+                str(source_label_fields.get("PHS") or "").strip() == "2"
+                and not operation_lease_id
+            ):
+                raise TransferSealError(
+                    "OPERATION_LEASE_REQUIRED",
+                    "이 트레이의 오프라인 이적 확인 정보가 없어 완료할 수 없습니다.",
+                )
+        except Exception as exc:
+            print(f"트레이 완료 lane 준비 실패: {exc.__class__.__name__}")
+            self.show_status_message(
+                "완료 요청을 안전하게 준비하지 못했습니다. 현재 작업을 보존합니다.",
+                self.COLOR_DANGER,
+            )
+            return False
+
+        identity = self._completion_lane_identity()
+        coordinator = self._transfer_seal_runtime()
+        item_code = str(self.current_tray.item_code or "")
+        scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
+        operator = persistent_operator_name(self.worker_name)
+        relay_log_path = str(getattr(self, "log_file_path", "") or "")
+        existing_contract_snapshot = (
+            dict(existing_event_contract)
+            if existing_event_contract is not None
+            else None
+        )
+
+        def work() -> SealAttempt:
+            return self._prepare_and_attempt_transfer_seal_snapshot(
+                coordinator=coordinator,
+                source_label_payload=source_label_payload,
+                source_label_fields=dict(source_label_fields),
+                item_code=item_code,
+                operator=operator,
+                scanned_barcodes=scanned_barcodes,
+                relay_log_file_path=relay_log_path,
+                operation_lease_id=operation_lease_id,
+                on_prepared=lambda attempt: lane.call_ui_sync(
+                    self._persist_prepared_completion_contract,
+                    attempt,
+                    existing_event_contract=existing_contract_snapshot,
+                    completion_observed_at=completion_observed_at,
+                    projection_log_path=projection_log_path,
+                    completion_projection_worker=completion_projection_worker,
+                    completion_was_restored=completion_was_restored,
+                    master_label=master_label,
+                ),
+            )
+
+        def finish(attempt: SealAttempt) -> None:
+            completed = False
+            try:
+                if self._completion_lane_identity() != identity:
+                    self.show_status_message(
+                        "완료 결과는 저장됐지만 화면 작업이 바뀌어 자동 초기화하지 않았습니다.",
+                        self.COLOR_DANGER,
+                        duration=0,
+                    )
+                    return
+                completed = bool(
+                    self.complete_tray(_prepared_transfer_attempt=attempt)
+                )
+            finally:
+                self._set_completion_lane_busy(False)
+                if completion_callback is not None:
+                    completion_callback(completed)
+
+        def fail(exc: BaseException) -> None:
+            print(f"트레이 완료 lane 실패: {exc.__class__.__name__}")
+            self._set_completion_lane_busy(False)
+            self.show_status_message(
+                "완료 처리를 마치지 못했습니다. 현재 트레이와 복구 계약을 보존합니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            if completion_callback is not None:
+                completion_callback(False)
+
+        self._set_completion_lane_busy(True)
+        admission = lane.submit(
+            LaneTask(
+                name="tray-completion",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+            )
+        )
+        if not admission.accepted:
+            self._set_completion_lane_busy(False)
+            return False
+        self._completion_task_handle = admission.handle
+        return True
+
+    def complete_tray(
+        self,
+        *,
+        _prepared_transfer_attempt: Optional[SealAttempt] = None,
+    ):
         blocking_completion = self._active_blocking_completion_snapshot()
         if (
             blocking_completion is not None
@@ -7893,45 +8881,14 @@ class ContainerAudit:
         def persist_prepared_completion_contract(
             prepared_attempt: SealAttempt,
         ) -> None:
-            prepared_intent_id = str(prepared_attempt.intent_id or "").strip()
-            if existing_event_contract is not None:
-                if prepared_intent_id != str(
-                    existing_event_contract.get("transfer_intent_id") or ""
-                ).strip():
-                    raise TransferSealError(
-                        "TRAY_COMPLETE_RETRY_INTENT_MISMATCH",
-                        "저장된 완료 기록과 새 이적 의도가 다릅니다.",
-                    )
-                prepared_contract = dict(existing_event_contract)
-            else:
-                prepared_contract = self._completion_event_contract(
-                    observed_at=completion_observed_at,
-                    projection_log_path=projection_log_path,
-                    projection_worker_name=completion_projection_worker,
-                    transfer_attempt=prepared_attempt,
-                    was_restored_session=completion_was_restored,
-                    transfer_detail={},
-                    log_may_have_been_attempted=False,
-                )
-            self._pending_completion_event_contract = prepared_contract
-            if self._save_current_tray_state():
-                return
-            self._present_completion_outcome(
-                CompletionOutcome.RETRY_WAIT,
-                item_name=self.current_tray.item_name,
+            self._persist_prepared_completion_contract(
+                prepared_attempt,
+                existing_event_contract=existing_event_contract,
+                completion_observed_at=completion_observed_at,
+                projection_log_path=projection_log_path,
+                completion_projection_worker=completion_projection_worker,
+                completion_was_restored=completion_was_restored,
                 master_label=master_label,
-                scan_count=len(self.current_tray.scanned_barcodes),
-                target_count=self.current_tray.tray_size,
-                message=(
-                    "이적 요청은 준비됐지만 완료 복구 계약을 저장하지 못했습니다. "
-                    "트레이를 잠근 채 프로그램을 종료하지 말고 담당자에게 알리세요."
-                ),
-                error_code="TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
-            )
-            raise TransferSealError(
-                "TRAY_COMPLETE_PREPARED_CONTRACT_PERSIST_FAILED",
-                "이적 요청 전 완료 복구 계약을 저장하지 못했습니다.",
-                retryable=True,
             )
 
         if is_test:
@@ -7947,6 +8904,8 @@ class ContainerAudit:
                 intent_id=f"test-transfer-seal-skipped-{test_intent_suffix}",
                 status="TEST_SKIPPED",
             )
+        elif _prepared_transfer_attempt is not None:
+            transfer_attempt = _prepared_transfer_attempt
         else:
             try:
                 transfer_attempt = self._prepare_and_attempt_transfer_seal(
@@ -8398,7 +9357,10 @@ class ContainerAudit:
             and blocking_completion.operator_retryable
         ):
             self._update_last_activity_time()
-            self.complete_tray()
+            if hasattr(getattr(self, "root", None), "tk"):
+                self.request_complete_tray()
+            else:
+                self.complete_tray()
             return
         if blocking_completion is not None:
             self._render_warning_state()
@@ -8428,6 +9390,15 @@ class ContainerAudit:
     def _complete_current_tray_as_partial(self) -> bool:
         was_partial = self.current_tray.is_partial_submission
         self.current_tray.is_partial_submission = True
+        if hasattr(getattr(self, "root", None), "tk"):
+            def settle(completed: bool) -> None:
+                if not completed and not self._operator_review_blocks_mutation():
+                    self.current_tray.is_partial_submission = was_partial
+
+            admitted = self.request_complete_tray(completion_callback=settle)
+            if not admitted:
+                self.current_tray.is_partial_submission = was_partial
+            return admitted
         if self.complete_tray():
             return True
         if self._operator_review_blocks_mutation():
@@ -8884,6 +9855,27 @@ class ContainerAudit:
         # such as "중복 확인" stale in the right-side status card.
         self._update_center_display()
         if not presenter.state.is_blocking:
+            snapshot = getattr(self, "_preflight_hold_snapshot", None)
+            if (
+                isinstance(snapshot, PreflightHoldSnapshot)
+                and snapshot.state == HOLD_DRAINING
+                and getattr(self, "_preflight_hold_draining", False)
+            ):
+                self.root.after(0, self._drain_preflight_hold_head)
+                return
+            if (
+                isinstance(snapshot, PreflightHoldSnapshot)
+                and snapshot.state in {HOLD_LOOKUP, HOLD_LOOKUP_FAILED}
+                and not getattr(
+                    getattr(self, "current_tray", None),
+                    "master_label_code",
+                    "",
+                )
+                and not getattr(self, "_master_preflight_pending", False)
+            ):
+                self._set_preflight_scan_input_locked(False)
+                self.root.after(0, self._process_barcode_logic, snapshot.master_raw)
+                return
             self._schedule_focus_return()
 
     def _cancel_status_message_timer(self) -> None:
@@ -9027,6 +10019,14 @@ class ContainerAudit:
 
     def _cancel_all_jobs(self):
         self._cancel_master_preflight()
+        for attribute in ("_direct_sync_health_job", "_direct_sync_health_poll_job"):
+            job = getattr(self, attribute, None)
+            if job:
+                try:
+                    self.root.after_cancel(job)
+                except (tk.TclError, AttributeError):
+                    pass
+                setattr(self, attribute, None)
         if self.clock_job: self.root.after_cancel(self.clock_job); self.clock_job = None
         self._cancel_status_message_timer()
         if self.stopwatch_job: self._stop_stopwatch()
@@ -9034,8 +10034,27 @@ class ContainerAudit:
         if self.focus_return_job: self.root.after_cancel(self.focus_return_job); self.focus_return_job = None
         self._stop_warning_beep()
 
-    def on_closing(self):
-        if messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
+    def on_closing(self, *, _confirmed: bool = False):
+        if _confirmed or messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
+            lane = getattr(self, "_ui_lane", None)
+            if lane is not None and lane.is_busy():
+                if getattr(self, "_ui_close_requested", False):
+                    return
+                self._ui_close_requested = True
+                entry = getattr(self, "scan_entry", None)
+                try:
+                    if entry is not None:
+                        entry.configure(state=tk.DISABLED)
+                except (AttributeError, tk.TclError):
+                    pass
+                self.show_status_message(
+                    "진행 중인 처리를 안전하게 마친 뒤 종료합니다.",
+                    self.COLOR_PRIMARY,
+                    duration=0,
+                )
+                lane.drain_then(lambda: self.on_closing(_confirmed=True))
+                return
+            self._ui_close_requested = False
             deleted_current_state_for_close = False
             if self.worker_name and self.current_tray.master_label_code:
                 if self._operator_review_blocks_mutation():
@@ -9078,10 +10097,29 @@ class ContainerAudit:
                     num_panes = len(self.paned_window.panes())
                     if num_panes > 1: self.paned_window_sash_positions = {str(i): self.paned_window.sashpos(i) for i in range(num_panes - 1)}
                 except tk.TclError as e: print(f"종료 시 sash 위치 저장 오류: {e}")
-            self.save_settings(); self._cancel_all_jobs(); self.log_queue.put(None)
-            if self.log_thread.is_alive(): self.log_thread.join(timeout=1.0)
-            stop_all_sounds()
-            self.root.destroy()
+            self._ui_close_requested = True
+            hold_writer = getattr(self, "_preflight_hold_writer_instance", None)
+            if hold_writer is not None:
+                self.show_status_message(
+                    "보류 입력 저장을 마친 뒤 종료합니다.",
+                    self.COLOR_PRIMARY,
+                    duration=0,
+                )
+                hold_writer.drain_then(self._finalize_application_close)
+                return
+            self._finalize_application_close()
+
+    def _finalize_application_close(self) -> None:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None:
+            lane.close_idle()
+        self.save_settings()
+        self._cancel_all_jobs()
+        self.log_queue.put(None)
+        if self.log_thread.is_alive():
+            self.log_thread.join(timeout=1.0)
+        stop_all_sounds()
+        self.root.destroy()
 
     def _event_log_writer(self):
         while True:
@@ -9120,6 +10158,57 @@ class ContainerAudit:
         self.last_log_write_error = error_message
         self.log_write_errors.append(error_message)
 
+    def _defer_saved_recovery_state(self, saved_state: Dict[str, Any]) -> bool:
+        """Park a declined same-worker recovery before releasing current state."""
+
+        try:
+            validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
+            deferred = self._parked_store().defer_recovery_state(
+                saved_state,
+                worker_name=persistent_operator_name(
+                    saved_state.get("worker_name") or self.worker_name
+                ),
+                computer_id=str(getattr(self, "computer_id", "") or ""),
+            )
+        except Exception as exc:
+            print(
+                "이전 작업 보류 사본 저장 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            return False
+
+        try:
+            parked_logged = bool(
+                self._log_event(
+                    "TRAY_PARKED",
+                    detail={
+                        "reason": "restore_declined_same_worker",
+                        "defer_id": deferred.defer_id,
+                        "state_hash": deferred.state_hash,
+                        "master_label_code": saved_state.get("master_label_code"),
+                        "item_code": saved_state.get("item_code"),
+                        "item_name": saved_state.get("item_name"),
+                        "scan_count": len(saved_state.get("scanned_barcodes") or []),
+                        "tray_capacity": saved_state.get("tray_size"),
+                    },
+                    synchronous=True,
+                    idempotency_key=f"tray-parked-recovery:{deferred.defer_id}",
+                    deduplicate=True,
+                )
+            )
+        except Exception as exc:
+            print(
+                "이전 작업 보류 감사 기록 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            parked_logged = False
+        if not parked_logged:
+            return False
+        if not self._delete_current_tray_state():
+            return False
+        self.current_tray = TraySession()
+        return True
+
     def _log_event(
         self,
         event_type: str,
@@ -9146,6 +10235,7 @@ class ContainerAudit:
             str(event_type or "").strip() in LOCAL_ONLY_EVENT_TYPES
             or bool(getattr(getattr(self, "current_tray", None), "is_test_tray", False))
         )
+
         if local_only:
             target_log_file_path = str(
                 local_only_event_log_path(
@@ -9224,6 +10314,176 @@ class ContainerAudit:
         self.log_queue.put({'log_file_path': target_log_file_path, 'log_entry': log_entry})
         return True
 
+    def _schedule_direct_sync_health_refresh(self, *, delay_ms: int = 5000) -> None:
+        if getattr(self, "_direct_sync_health_job", None) is not None:
+            return
+        try:
+            self._direct_sync_health_job = self.root.after(
+                max(0, int(delay_ms)),
+                self._start_direct_sync_health_refresh,
+            )
+        except (tk.TclError, AttributeError):
+            self._direct_sync_health_job = None
+
+    def _start_direct_sync_health_refresh(self) -> None:
+        self._direct_sync_health_job = None
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and lane.is_busy():
+            self._schedule_direct_sync_health_refresh(delay_ms=5000)
+            return
+        if getattr(self, "_direct_sync_health_pending", False):
+            self._schedule_direct_sync_health_refresh(delay_ms=5000)
+            return
+
+        direct_sync_root = Path(
+            str(getattr(self, "direct_sync_program_data_root", "") or "")
+        )
+        generation = int(getattr(self, "_direct_sync_health_generation", 0)) + 1
+        self._direct_sync_health_generation = generation
+        self._direct_sync_health_pending = True
+        result_queue = getattr(self, "_direct_sync_health_queue", None)
+        if result_queue is None:
+            result_queue = queue.Queue(maxsize=1)
+            self._direct_sync_health_queue = result_queue
+        db_path = direct_sync_root / "queue" / "direct_sync_relay.sqlite3"
+        runtime_status_path = direct_sync_root / "status" / "direct_sync_relay_status.json"
+
+        def reader() -> None:
+            reader_thread_id = threading.get_ident()
+            try:
+                health = read_relay_health(
+                    db_path=db_path,
+                    runtime_status_path=runtime_status_path,
+                )
+            except BaseException:
+                health = RelayHealth(
+                    state="blocked",
+                    pending_count=0,
+                    failed_permanent_count=0,
+                    operator_review_count=0,
+                    last_acked_at="",
+                    oldest_pending_at="",
+                    observed_at=datetime.datetime.now(datetime.timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                    error_code="relay_health_read_failed",
+                )
+            result_queue.put((generation, health, reader_thread_id))
+
+        threading.Thread(
+            target=reader,
+            name="container-audit-direct-sync-health",
+            daemon=True,
+        ).start()
+        self._poll_direct_sync_health_result()
+
+    def _poll_direct_sync_health_result(self) -> None:
+        self._direct_sync_health_poll_job = None
+        result_queue = getattr(self, "_direct_sync_health_queue", None)
+        if result_queue is None:
+            self._direct_sync_health_pending = False
+            self._schedule_direct_sync_health_refresh(delay_ms=5000)
+            return
+        try:
+            result = result_queue.get_nowait()
+        except queue.Empty:
+            try:
+                self._direct_sync_health_poll_job = self.root.after(
+                    25,
+                    self._poll_direct_sync_health_result,
+                )
+            except (tk.TclError, AttributeError):
+                self._direct_sync_health_pending = False
+            return
+
+        result_queue.task_done()
+        generation, health = result[:2]
+        if len(result) > 2:
+            self._direct_sync_health_reader_thread_id = result[2]
+        self._direct_sync_health_pending = False
+        if generation == getattr(self, "_direct_sync_health_generation", 0):
+            self._apply_direct_sync_health(health)
+        self._schedule_direct_sync_health_refresh(delay_ms=5000)
+
+    def _consume_direct_sync_wake_results(self) -> str:
+        wake_queue = getattr(self, "_direct_sync_wake_results", None)
+        if wake_queue is None:
+            return str(getattr(self, "_direct_sync_wake_error_code", "") or "")
+        latest = None
+        while True:
+            try:
+                latest = wake_queue.get_nowait()
+            except queue.Empty:
+                break
+            else:
+                wake_queue.task_done()
+        if isinstance(latest, DirectSyncWakeResult):
+            self._direct_sync_wake_error_code = (
+                "" if latest.status == "PASS" else latest.error_category or "relay_wake_unknown"
+            )
+        return str(getattr(self, "_direct_sync_wake_error_code", "") or "")
+
+    def _apply_direct_sync_health(self, health: RelayHealth) -> None:
+        if not isinstance(health, RelayHealth):
+            return
+        self._direct_sync_health_apply_thread_id = threading.get_ident()
+        wake_error = self._consume_direct_sync_wake_results()
+        if wake_error:
+            health = RelayHealth(
+                state="blocked",
+                pending_count=health.pending_count,
+                failed_permanent_count=health.failed_permanent_count,
+                operator_review_count=health.operator_review_count,
+                last_acked_at=health.last_acked_at,
+                oldest_pending_at=health.oldest_pending_at,
+                observed_at=health.observed_at,
+                error_code=wake_error,
+            )
+        self._direct_sync_health = health
+        card = getattr(self, "info_cards", {}).get("direct_sync")
+        if not card:
+            return
+        model = relay_health_card_model(health)
+        attention = model["tone"] == "amber"
+        card["frame"].configure(
+            style="RelayAttention.TFrame" if attention else "Card.TFrame"
+        )
+        card["label"].configure(
+            style=(
+                "RelayAttention.Subtle.TLabel"
+                if attention
+                else "Card.Subtle.TLabel"
+            )
+        )
+        card["value"].configure(
+            text=f"{model['summary']}\n{model['detail']}",
+            style=(
+                "RelayAttention.Value.TLabel"
+                if attention
+                else "Card.Value.TLabel"
+            ),
+        )
+
+    def _show_direct_sync_status_details(self) -> None:
+        health = getattr(self, "_direct_sync_health", None)
+        if not isinstance(health, RelayHealth):
+            health = RelayHealth(
+                state="blocked",
+                pending_count=0,
+                failed_permanent_count=0,
+                operator_review_count=0,
+                last_acked_at="",
+                oldest_pending_at="",
+                observed_at="",
+                error_code="relay_health_not_loaded",
+            )
+        detail = relay_health_detail_model(health)
+        messagebox.showinfo(
+            "전송 상태 상세",
+            "\n".join(f"{label}: {value}" for label, value in detail.items()),
+            parent=getattr(self, "root", None),
+        )
+
     def _trigger_session_direct_sync(self, reason: str) -> None:
         app_root = getattr(self, "application_path", "")
         direct_sync_root = getattr(self, "direct_sync_program_data_root", "")
@@ -9231,14 +10491,28 @@ class ContainerAudit:
         if not (app_root and direct_sync_root and scan_source_dir):
             return
         try:
+            wake_results = getattr(self, "_direct_sync_wake_results", None)
+            if wake_results is None:
+                wake_results = queue.Queue()
+                self._direct_sync_wake_results = wake_results
             start_session_direct_sync(
                 app_root=app_root,
                 direct_sync_root=direct_sync_root,
                 scan_source_dir=scan_source_dir,
                 reason=reason,
+                result_queue=wake_results,
             )
         except Exception as exc:
-            print(f"direct-sync session trigger failed: {exc}")
+            wake_results.put_nowait(
+                DirectSyncWakeResult(
+                    "UNKNOWN",
+                    "relay_wake_start_failed",
+                    datetime.datetime.now(datetime.timezone.utc)
+                    .replace(microsecond=0)
+                    .isoformat(),
+                )
+            )
+            print(f"direct-sync session trigger failed: {exc.__class__.__name__}")
 
     def _transfer_seal_runtime(self):
         coordinator = getattr(self, "transfer_seal_coordinator", None)
@@ -9466,6 +10740,39 @@ class ContainerAudit:
             duration=0,
         )
 
+        def restore_previous_lock() -> bool:
+            if self._active_blocking_completion_snapshot() is not None:
+                return False
+            self._pending_operator_review_snapshot = previous_pending or snapshot
+            presenter.present_completion(snapshot)
+            state_restored = self._save_current_tray_state()
+            self._start_warning_beep()
+            self._render_warning_state()
+            self._update_action_button_states()
+            message = "이적 사전검증을 완료하지 못해 기존 담당자 확인 잠금을 복원했습니다."
+            if not state_restored:
+                message += "\n잠금 상태 재저장에도 실패했으므로 프로그램을 종료하지 마세요."
+            messagebox.showerror(
+                "사전검증 재시도 실패",
+                message,
+                parent=getattr(self, "root", None),
+            )
+            return False
+
+        if hasattr(getattr(self, "root", None), "tk"):
+            try:
+                admitted = self.request_complete_tray(
+                    completion_callback=(
+                        lambda completed: None
+                        if completed
+                        else restore_previous_lock()
+                    )
+                )
+            except Exception as exc:
+                print(f"이적 사전검증 재시도 실패: {exc.__class__.__name__}")
+                admitted = False
+            return True if admitted else restore_previous_lock()
+
         try:
             completed = bool(self.complete_tray())
         except Exception as exc:
@@ -9473,24 +10780,52 @@ class ContainerAudit:
             completed = False
         if completed:
             return True
-        if self._active_blocking_completion_snapshot() is not None:
-            return False
+        return restore_previous_lock()
 
-        self._pending_operator_review_snapshot = previous_pending or snapshot
-        presenter.present_completion(snapshot)
-        state_restored = self._save_current_tray_state()
-        self._start_warning_beep()
-        self._render_warning_state()
-        self._update_action_button_states()
-        message = "이적 사전검증을 완료하지 못해 기존 담당자 확인 잠금을 복원했습니다."
-        if not state_restored:
-            message += "\n잠금 상태 재저장에도 실패했으므로 프로그램을 종료하지 마세요."
-        messagebox.showerror(
-            "사전검증 재시도 실패",
-            message,
-            parent=getattr(self, "root", None),
+    def _prepare_and_attempt_transfer_seal_snapshot(
+        self,
+        *,
+        coordinator: Any,
+        source_label_payload: str,
+        source_label_fields: Mapping[str, Any],
+        item_code: str,
+        operator: str,
+        scanned_barcodes: Sequence[str],
+        relay_log_file_path: str,
+        operation_lease_id: str,
+        on_prepared: Optional[Callable[[SealAttempt], None]] = None,
+    ) -> SealAttempt:
+        prepare_arguments = {
+            "master_label": source_label_payload,
+            "master_label_fields": dict(source_label_fields),
+            "item_id": item_code,
+            "scanned_barcodes": tuple(scanned_barcodes),
+            "operation_lease_id": operation_lease_id,
+        }
+        previewed = coordinator.preview(**prepare_arguments)
+        if on_prepared is not None:
+            on_prepared(previewed)
+        prepared = coordinator.prepare(
+            master_label=source_label_payload,
+            master_label_fields=dict(source_label_fields),
+            item_id=item_code,
+            operator=operator,
+            scanned_barcodes=tuple(scanned_barcodes),
+            relay_log_file_path=relay_log_file_path,
+            operation_lease_id=operation_lease_id,
         )
-        return False
+        if prepared.intent_id != previewed.intent_id:
+            raise TransferSealError(
+                "TRANSFER_INTENT_PREVIEW_MISMATCH",
+                "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
+            )
+        drain_through = getattr(coordinator, "drain_pending_through", None)
+        if callable(drain_through):
+            results = drain_through(prepared.intent_id)
+            for result in reversed(results):
+                if result.intent_id == prepared.intent_id:
+                    return result
+        return coordinator.attempt(prepared.intent_id)
 
     def _prepare_and_attempt_transfer_seal(
         self,
@@ -9521,39 +10856,17 @@ class ContainerAudit:
                 "OPERATION_LEASE_REQUIRED",
                 "이 트레이의 오프라인 이적 확인 정보가 없어 완료할 수 없습니다.",
             )
-        prepare_arguments = {
-            "master_label": source_label_payload,
-            "master_label_fields": source_label_fields,
-            "item_id": self.current_tray.item_code,
-            "scanned_barcodes": log_detail.get("product_barcodes") or (),
-            "operation_lease_id": operation_lease_id,
-        }
-        previewed = coordinator.preview(**prepare_arguments)
-        if on_prepared is not None:
-            on_prepared(previewed)
-        prepared = coordinator.prepare(
-            master_label=source_label_payload,
-            master_label_fields=source_label_fields,
-            item_id=self.current_tray.item_code,
+        return self._prepare_and_attempt_transfer_seal_snapshot(
+            coordinator=coordinator,
+            source_label_payload=source_label_payload,
+            source_label_fields=source_label_fields,
+            item_code=str(self.current_tray.item_code or ""),
             operator=persistent_operator_name(self.worker_name),
-            scanned_barcodes=log_detail.get("product_barcodes") or (),
-            relay_log_file_path=str(
-                getattr(self, "log_file_path", "") or ""
-            ),
+            scanned_barcodes=tuple(log_detail.get("product_barcodes") or ()),
+            relay_log_file_path=str(getattr(self, "log_file_path", "") or ""),
             operation_lease_id=operation_lease_id,
+            on_prepared=on_prepared,
         )
-        if prepared.intent_id != previewed.intent_id:
-            raise TransferSealError(
-                "TRANSFER_INTENT_PREVIEW_MISMATCH",
-                "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
-            )
-        drain_through = getattr(coordinator, "drain_pending_through", None)
-        if callable(drain_through):
-            results = drain_through(prepared.intent_id)
-            for result in reversed(results):
-                if result.intent_id == prepared.intent_id:
-                    return result
-        return coordinator.attempt(prepared.intent_id)
 
     @staticmethod
     def _attach_transfer_seal_detail(log_detail: Dict[str, Any], attempt: SealAttempt) -> None:

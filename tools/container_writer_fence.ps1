@@ -6,7 +6,7 @@ $Script:ContainerWriterFenceAppId = 'container_audit'
 $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-authority-v1'
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
-$Script:ContainerWriterFenceInventorySha256 = 'd45398eefc8404f0aaff4f89e414b303723bd7b902626005c693ba532c6dfd55'
+$Script:ContainerWriterFenceInventorySha256 = 'ebc6c3b628ed08c0b1498ef8eed5d237ae2cd5c53bdad7f83e1a2b5c9fcadd9b'
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
     'schema','status','app_id','session_id','attempt_id','replacement_transaction_id',

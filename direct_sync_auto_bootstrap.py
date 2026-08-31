@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import queue
 import subprocess
 import sys
 import threading
@@ -24,6 +26,15 @@ APPLICATION_EXE_NAME = "Container_Audit.exe"
 DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 
 _STARTED_ROOTS: set[str] = set()
+
+
+@dataclass(frozen=True)
+class DirectSyncWakeResult:
+    """Sanitized one-shot result safe for the Tk status channel."""
+
+    status: str
+    error_category: str
+    observed_at: str
 
 
 def _now() -> str:
@@ -221,6 +232,7 @@ def start_session_direct_sync(
     scan_source_dir: str | os.PathLike[str],
     reason: str = "TRAY_COMPLETE",
     task_name: str | None = None,
+    result_queue: queue.Queue[DirectSyncWakeResult] | None = None,
 ) -> threading.Thread | None:
     if not _session_sync_trigger_enabled():
         return None
@@ -228,27 +240,40 @@ def start_session_direct_sync(
     root = Path(direct_sync_root).expanduser().resolve()
 
     def worker() -> None:
-        result = run_session_direct_sync_once(
-            app_root=app_root,
-            direct_sync_root=root,
-            scan_source_dir=scan_source_dir,
-            task_name=selected_task_name,
-            reason=reason,
-        )
-        _write_json(
-            root / "status" / "container_audit_session_direct_sync_trigger.json",
-            {
-                "report_version": "container-audit-session-direct-sync-trigger-v2",
-                "captured_at": _now(),
-                "reason": reason,
-                "principal": "current_user",
-                "system_scheduled_task": False,
-                "scan_source_dir": str(
-                    Path(scan_source_dir).expanduser().resolve()
-                ),
-                "result": result,
-            },
-        )
+        wake = DirectSyncWakeResult("UNKNOWN", "relay_wake_unknown", _now())
+        try:
+            result = run_session_direct_sync_once(
+                app_root=app_root,
+                direct_sync_root=root,
+                scan_source_dir=scan_source_dir,
+                task_name=selected_task_name,
+                reason=reason,
+            )
+            _write_json(
+                root / "status" / "container_audit_session_direct_sync_trigger.json",
+                {
+                    "report_version": "container-audit-session-direct-sync-trigger-v2",
+                    "captured_at": _now(),
+                    "reason": reason,
+                    "principal": "current_user",
+                    "system_scheduled_task": False,
+                    "scan_source_dir": str(
+                        Path(scan_source_dir).expanduser().resolve()
+                    ),
+                    "result": result,
+                },
+            )
+            status = str(result.get("status") or "UNKNOWN").upper()
+            wake = DirectSyncWakeResult(
+                status if status in {"PASS", "FAIL", "UNKNOWN"} else "UNKNOWN",
+                "" if status == "PASS" else "relay_wake_failed" if status == "FAIL" else "relay_wake_unknown",
+                _now(),
+            )
+        except BaseException:
+            wake = DirectSyncWakeResult("UNKNOWN", "relay_wake_exception", _now())
+        finally:
+            if result_queue is not None:
+                result_queue.put_nowait(wake)
 
     thread = threading.Thread(
         target=worker,

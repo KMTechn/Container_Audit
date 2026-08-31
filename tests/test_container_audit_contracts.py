@@ -1839,6 +1839,7 @@ def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_wr
             "direct_sync_root": app.direct_sync_program_data_root,
             "scan_source_dir": app.direct_sync_scan_source_dir,
             "reason": "TRAY_COMPLETE",
+            "result_queue": app._direct_sync_wake_results,
         }
     ]
 
@@ -3757,7 +3758,7 @@ def test_close_save_restore_then_auto_complete_marks_restored_session(tmp_path, 
     app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
         AssertionError(f"valid restored scanner flow should not warn: {args}")
     )
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
 
     app._load_current_tray_state()
     assert app.current_tray.is_restored_session is True
@@ -4052,7 +4053,7 @@ def test_load_current_tray_state_same_worker_restore_preserves_state_when_restor
             "is_partial_submission": False,
         },
     )
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
     app._load_current_tray_state()
@@ -4075,6 +4076,8 @@ def test_load_current_tray_state_decline_clears_stale_memory(tmp_path, monkeypat
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.computer_id = "host-fixture"
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.completed_master_labels = set()
@@ -4101,19 +4104,24 @@ def test_load_current_tray_state_decline_clears_stale_memory(tmp_path, monkeypat
     )
     logged = []
     app._log_event = lambda event, detail=None, **kwargs: logged.append({"event": event, "detail": detail}) or True
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
 
     app._load_current_tray_state()
 
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
-    assert logged[0]["event"] == "TRAY_DISCARDED_BY_OPERATOR"
+    assert logged[0]["event"] == "TRAY_PARKED"
+    parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
+    assert len(parked) == 1
+    assert json.loads(parked[0].read_text(encoding="utf-8"))["scanned_barcodes"] == ["BC-1"]
 
 
 def test_load_current_tray_state_decline_preserves_file_when_discard_log_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.computer_id = "host-fixture"
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.TRAY_SIZE = 60
     app.completed_master_labels = set()
@@ -4143,15 +4151,70 @@ def test_load_current_tray_state_decline_preserves_file_when_discard_log_fails(t
         AssertionError("state file should not be deleted when discard log fails")
     )
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
     app._load_current_tray_state()
 
     assert (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == "STALE"
+    assert len(list((tmp_path / "parked").glob("parked_recovery_*.json"))) == 1
     assert errors
-    assert errors[0][0] == "작업 기록 실패"
+    assert errors[0][0] == "작업 보류 실패"
+
+
+def test_load_current_tray_state_cancel_preserves_every_copy_and_returns_to_login(
+    tmp_path,
+    monkeypatch,
+):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.worker_role = "WORKER"
+    app.save_folder = str(tmp_path)
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.computer_id = "host-fixture"
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.TRAY_SIZE = 60
+    app.completed_master_labels = set()
+    app.current_tray = TraySession(master_label_code="STALE", item_code="OLD")
+    storage_utils.atomic_write_json(
+        tmp_path / "current.json",
+        {
+            "worker_name": "홍길동",
+            "master_label_code": "PHS=1|CLC=AAA2270730100|QT=60",
+            "item_code": "AAA2270730100",
+            "item_name": "fixture item",
+            "item_spec": "fixture spec",
+            "scanned_barcodes": ["BC-1"],
+            "scan_times": [
+                datetime.datetime(2026, 6, 22, 9, 1, 0).isoformat()
+            ],
+            "tray_size": 60,
+            "mismatch_error_count": 0,
+            "total_idle_seconds": 0.0,
+            "stopwatch_seconds": 30.0,
+            "start_time": datetime.datetime(2026, 6, 22, 9, 0, 0).isoformat(),
+            "has_error_or_reset": False,
+            "is_test_tray": False,
+            "is_partial_submission": False,
+        },
+    )
+    app._log_event = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("cancel must not emit an audit mutation")
+    )
+    monkeypatch.setattr(
+        container_audit_module.messagebox,
+        "askyesnocancel",
+        lambda *args, **kwargs: None,
+    )
+
+    app._load_current_tray_state()
+
+    assert (tmp_path / "current.json").exists()
+    assert not (tmp_path / "parked").exists()
+    assert app.current_tray.master_label_code == ""
+    assert app.worker_name == ""
+    assert app.worker_role == ""
 
 
 def test_load_current_tray_state_takeover_rewrites_worker_owner(tmp_path, monkeypatch):

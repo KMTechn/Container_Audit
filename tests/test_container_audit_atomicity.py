@@ -165,7 +165,7 @@ def test_load_current_tray_state_reconciles_activation_before_restore_event(
     restarted.completed_master_labels = set()
     monkeypatch.setattr(
         container_audit_module.messagebox,
-        "askyesno",
+        "askyesnocancel",
         lambda *args, **kwargs: True,
     )
     restarted._load_current_tray_state()

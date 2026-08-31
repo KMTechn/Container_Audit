@@ -30,6 +30,14 @@ class ParkedTraySummary:
     scan_count: int
 
 
+@dataclass(frozen=True)
+class ParkedRecoveryDeferResult:
+    path: Path
+    defer_id: str
+    state_hash: str
+    replayed: bool
+
+
 class ParkedTrayStore:
     def __init__(self, directory: str | os.PathLike[str]):
         self.directory = Path(directory)
@@ -70,6 +78,65 @@ class ParkedTrayStore:
             if parked_label and canonical_master_label_key(parked_label) == target_key:
                 return path
         return None
+
+    @staticmethod
+    def _canonical_state_hash(state: Mapping[str, Any]) -> str:
+        encoded = json.dumps(
+            dict(state),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    @writer_sink("parked_recovery_defer")
+    def defer_recovery_state(
+        self,
+        state: Mapping[str, Any],
+        *,
+        worker_name: str,
+        computer_id: str,
+    ) -> ParkedRecoveryDeferResult:
+        """Promote a recovery snapshot to an idempotent parked owner.
+
+        This method never deletes the current recovery slot.  The caller must
+        durably audit the ownership change before releasing that slot.
+        """
+
+        payload = dict(state)
+        payload["worker_name"] = persistent_operator_name(
+            payload.get("worker_name") or worker_name
+        )
+        safe_worker = _safe_worker_filename(payload["worker_name"] or worker_name)
+        host = str(computer_id or "").strip()
+        if not host:
+            raise ValueError("computer_id is required for recovery defer")
+        state_hash = self._canonical_state_hash(payload)
+        defer_id = "tray-recovery-defer-" + hashlib.sha256(
+            f"{host}:{payload['worker_name']}:{state_hash}".encode("utf-8")
+        ).hexdigest()[:32]
+        path = self.directory / f"parked_recovery_{safe_worker}_{state_hash[:16]}.json"
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+        replayed = False
+        if path.exists():
+            existing = self.load(path)
+            if self._canonical_state_hash(existing) != state_hash:
+                raise FileExistsError("parked recovery identity collision")
+            replayed = True
+        else:
+            atomic_write_json(path, payload, indent=4, ensure_ascii=False)
+
+        readback = self.load(path)
+        if self._canonical_state_hash(readback) != state_hash or readback != payload:
+            raise OSError("parked recovery readback verification failed")
+        return ParkedRecoveryDeferResult(
+            path=path,
+            defer_id=defer_id,
+            state_hash=state_hash,
+            replayed=replayed,
+        )
 
     @writer_sink("parked_tray_save")
     def save_state(

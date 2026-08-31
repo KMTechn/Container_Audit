@@ -835,7 +835,7 @@ def test_stage_label_tracks_master_then_product_scan_flow(operator_view):
 
 def test_right_sidebar_primary_and_secondary_information_hierarchy(operator_view):
     app, _center, right = operator_view
-    primary_keys = ("status", "stopwatch")
+    primary_keys = ("status", "direct_sync", "stopwatch")
     secondary_keys = ("avg_time", "best_time")
 
     assert set(primary_keys + secondary_keys) <= set(app.info_cards)
@@ -860,7 +860,7 @@ def test_right_sidebar_primary_and_secondary_information_hierarchy(operator_view
 
     app._apply_right_sidebar_layout()
     metrics = app._get_right_sidebar_layout_metrics(right.winfo_height())
-    for key in ("status", "stopwatch", "last_normal_scan"):
+    for key in ("status", "direct_sync", "stopwatch", "last_normal_scan"):
         frame = app.info_cards[key]["frame"] if key in app.info_cards else app._right_context_frame
         row = frame.grid_options["row"]
         assert right.grid_rows[row]["minsize"] >= metrics["primary_card_minsize"]
@@ -899,6 +899,7 @@ def test_short_large_text_sidebar_values_fit_and_legend_restores_on_round_trip(o
 
     for value_label in (
         app.info_cards["status"]["value"],
+        app.info_cards["direct_sync"]["value"],
         app.info_cards["stopwatch"]["value"],
         app.last_scan_value_label,
         app.follow_up_label,

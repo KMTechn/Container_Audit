@@ -1782,8 +1782,22 @@ class LogisticsTransferClient:
             headers=self._headers(idempotency_key),
             json=dict(payload) if payload is not None else None,
             timeout=self.timeout_seconds,
+            allow_redirects=False,
         )
         status_code = int(getattr(response, "status_code", 0) or 0)
+        if 300 <= status_code < 400:
+            read_only_method = str(method or "").strip().upper() in {
+                "GET",
+                "HEAD",
+                "OPTIONS",
+            }
+            raise TransferSealError(
+                "LOGISTICS_REDIRECT_BLOCKED",
+                "물류 인증 요청의 redirect를 차단했습니다. 관리자에게 설정을 확인하세요.",
+                status_code=status_code,
+                retryable=False,
+                committed=False if read_only_method else None,
+            )
         try:
             body = response.json()
         except Exception as exc:
@@ -3022,6 +3036,7 @@ class TransferSealStore:
             "AUTHORITY_PROFILE_MISMATCH",
             "RESOLVER_CONTRACT_INVALID",
             "TRANSFER_COMMAND_INTEGRITY_MISMATCH",
+            "LOGISTICS_REDIRECT_BLOCKED",
         }
         terminal_cas_conflict = error.status_code in {409, 412}
         terminal_client_error = (

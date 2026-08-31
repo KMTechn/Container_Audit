@@ -558,7 +558,12 @@ def resume_relay(
 def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[str, Any]:
     path = Path(db_path)
     if not path.is_file():
-        return {"status": "not_initialized", "counts": {}, "oldest_active_created_at": ""}
+        return {
+            "status": "not_initialized",
+            "counts": {},
+            "oldest_active_created_at": "",
+            "last_acked_at": "",
+        }
     uri = f"file:{path.resolve().as_posix()}?mode=ro"
     try:
         conn = sqlite3.connect(uri, uri=True)
@@ -568,6 +573,7 @@ def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[s
             "status": "blocked",
             "counts": {},
             "oldest_active_created_at": "",
+            "last_acked_at": "",
             "error_code": "relay_db_open_failed",
             "error_message": _sqlite_error_message(exc),
         }
@@ -587,16 +593,27 @@ def read_relay_queue_status_read_only(db_path: str | os.PathLike[str]) -> dict[s
             LIMIT 1
             """
         ).fetchone()
+        last_acked = conn.execute(
+            """
+            SELECT MAX(updated_at) AS last_acked_at
+            FROM direct_sync_relay_batches
+            WHERE status='acked'
+            """
+        ).fetchone()
         return {
             "status": "PASS",
             "counts": counts,
             "oldest_active_created_at": oldest["created_at"] if oldest else "",
+            "last_acked_at": (
+                str(last_acked["last_acked_at"] or "") if last_acked else ""
+            ),
         }
     except sqlite3.Error as exc:
         return {
             "status": "blocked",
             "counts": {},
             "oldest_active_created_at": "",
+            "last_acked_at": "",
             "error_code": "relay_db_schema_unavailable",
             "error_message": _sqlite_error_message(exc),
         }
