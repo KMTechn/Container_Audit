@@ -37,7 +37,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     payload = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     module = _load_module()
 
-    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v7"
+    assert payload["schema_version"] == "container-audit-writer-sink-inventory-v8"
     assert payload["inventory_sha256"] == module._inventory_sha256(payload)
     assert payload["entrypoint_modules"] == [
         path.as_posix() for path in module._discover_shipped_application_paths(ROOT)
@@ -49,6 +49,49 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["entrypoint_derivation"].startswith("all root Python files")
     assert payload["powershell_guard_failures"] == []
     assert payload["caller_fence_reference_failures"] == []
+    powershell_files = {
+        row["file"]: row
+        for row in payload["powershell_execution_inventory"]["files"]
+    }
+    assert powershell_files["INSTALL_CANONICAL_PORTABLE.ps1"]["entry_guard"][
+        "release_name"
+    ] == "Exit-ContainerWriterSessionAuthority"
+    assert powershell_files["INSTALL_CANONICAL_PORTABLE.ps1"]["entry_guard"][
+        "release_line"
+    ] > powershell_files["INSTALL_CANONICAL_PORTABLE.ps1"]["entry_guard"][
+        "guard_line"
+    ]
+    assert powershell_files["INSTALL_THIS_PC.ps1"]["entry_guard"][
+        "release_name"
+    ] == "Exit-ContainerWriterAdmission"
+    assert powershell_files["INSTALL_THIS_PC.ps1"]["entry_guard"][
+        "release_line"
+    ] > powershell_files["INSTALL_THIS_PC.ps1"]["entry_guard"]["guard_line"]
+    assert powershell_files["tools/container_writer_session.ps1"]["entry_guard"][
+        "release_name"
+    ] == ""
+    assert powershell_files["tools/container_writer_session.ps1"]["entry_guard"][
+        "release_line"
+    ] is None
+    function_proofs = {
+        (row["file"], row["function"]): row
+        for row in payload["powershell_execution_inventory"][
+            "function_guard_proofs"
+        ]
+    }
+    selftest_proof = function_proofs[
+        (
+            "tools/container_writer_session.ps1",
+            "Invoke-ContainerWriterSessionSelfTest",
+        )
+    ]
+    assert selftest_proof["non_production_only"] is True
+    assert selftest_proof["guard_name"] == "non_production_mode"
+    assert all(
+        proof["guarded"] is True
+        for proof in function_proofs.values()
+        if proof["production_reachable"] is True
+    )
     assert payload["coverage_summary"]["uncovered_mutation_function_count"] == len(
         payload["uncovered_direct_mutation_functions"]
     )
@@ -127,7 +170,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
         "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
         "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
-        "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
+        "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
         "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
     ]
 
@@ -169,6 +212,14 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
             "guard_name": "Enter-ContainerPlacementWriterFence",
             "guard_line": next(
                 row["guard_line"]
+                for row in payload["powershell_execution_inventory"][
+                    "script_entrypoints"
+                ]
+                if row["file"] == "INSTALL_THIS_PC.ps1"
+            ),
+            "release_name": "Exit-ContainerWriterAdmission",
+            "release_line": next(
+                row["release_line"]
                 for row in payload["powershell_execution_inventory"][
                     "script_entrypoints"
                 ]
@@ -777,7 +828,39 @@ def _fenced_powershell_fixture(injected_line: str) -> str:
         "    return Enter-ContainerWriterDelegatedOperation -Source canonical_code_placement\n"
         "}\n"
         "$lease = Enter-ContainerPlacementWriterFence\n"
+        "try {\n"
         + injected_line
+        + "}\n"
+        "finally {\n"
+        "    Exit-ContainerWriterAdmission $lease\n"
+        "}\n"
+    )
+
+
+def _run_inventory_release_gate(
+    root: Path,
+    payload: dict,
+) -> subprocess.CompletedProcess[str]:
+    snapshot = root / "tools" / "container_writer_sink_inventory.json"
+    module = _load_module()
+    snapshot.write_bytes(module._canonical_json_bytes(payload))
+    return subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import pathlib,sys; "
+                "from tools.build_portable_release_candidate import "
+                "_assert_writer_sink_inventory; "
+                "_assert_writer_sink_inventory(pathlib.Path(sys.argv[1]))"
+            ),
+            str(root),
+        ],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
 
 
@@ -801,26 +884,7 @@ def test_each_static_powershell_execution_form_breaks_release_gate_when_unfenced
         row["kind"] for row in rejected["powershell_guard_failures"]
     }
     assert expected_failure_kind in failure_kinds, case_name
-    snapshot = tmp_path / "tools" / "container_writer_sink_inventory.json"
-    snapshot.write_bytes(module._canonical_json_bytes(rejected))
-    gate = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            (
-                "import pathlib,sys; "
-                "from tools.build_portable_release_candidate import "
-                "_assert_writer_sink_inventory; "
-                "_assert_writer_sink_inventory(pathlib.Path(sys.argv[1]))"
-            ),
-            str(tmp_path),
-        ],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    gate = _run_inventory_release_gate(tmp_path, rejected)
     assert gate.returncode == 1, (case_name, gate.stdout, gate.stderr)
     assert "writer sink inventory is not release-admissible" in gate.stderr
 
@@ -832,3 +896,60 @@ def test_each_static_powershell_execution_form_breaks_release_gate_when_unfenced
         f"case={case_name} kind={expected_failure_kind} "
         f"gate_exit={gate.returncode} reverted_guard_failures=0"
     )
+
+
+def test_powershell_mutation_function_called_before_guard_fails_release_gate(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "def main():\n    pass\n")
+    helper = tmp_path / "INSTALL_THIS_PC.ps1"
+    helper.write_text(
+        "function Invoke-EarlyWriter {\n"
+        "    Remove-Item -LiteralPath 'fixture' -Force\n"
+        "}\n"
+        "Invoke-EarlyWriter\n"
+        + _fenced_powershell_fixture(""),
+        encoding="utf-8",
+    )
+
+    rejected = module.derive_inventory(tmp_path)
+    assert any(
+        row["function"] == "Invoke-EarlyWriter"
+        and row["kind"] == "filesystem_mutation"
+        for row in rejected["powershell_guard_failures"]
+    )
+    gate = _run_inventory_release_gate(tmp_path, rejected)
+    assert gate.returncode == 1, (gate.stdout, gate.stderr)
+    assert "writer sink inventory is not release-admissible" in gate.stderr
+    print(f"EARLY_FUNCTION_GATE gate_exit={gate.returncode}")
+
+
+def test_powershell_post_release_mutation_fails_release_gate(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "def main():\n    pass\n")
+    helper = tmp_path / "INSTALL_THIS_PC.ps1"
+    helper.write_text(
+        _fenced_powershell_fixture("")
+        + "Remove-Item -LiteralPath 'post-release-fixture' -Force\n",
+        encoding="utf-8",
+    )
+
+    rejected = module.derive_inventory(tmp_path)
+    release_line = next(
+        entry["entry_guard"]["release_line"]
+        for entry in rejected["powershell_execution_inventory"]["files"]
+        if entry["file"] == "INSTALL_THIS_PC.ps1"
+    )
+    assert any(
+        row["function"] == ""
+        and row["kind"] == "filesystem_mutation"
+        and row["line"] > int(release_line)
+        for row in rejected["powershell_guard_failures"]
+    )
+    gate = _run_inventory_release_gate(tmp_path, rejected)
+    assert gate.returncode == 1, (gate.stdout, gate.stderr)
+    assert "writer sink inventory is not release-admissible" in gate.stderr
+    print(f"POST_RELEASE_GATE gate_exit={gate.returncode}")

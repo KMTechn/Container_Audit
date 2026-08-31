@@ -173,7 +173,7 @@ function Assert-WriterSinkInventory(
     try { $inventory = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
     catch { throw 'Writer sink inventory JSON is invalid.' }
     if (
-        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v7' -or
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v8' -or
         [string]$inventory.inventory_sha256 -cne $ExpectedContractSha256 -or
         $inventory.writer_sink_sources -isnot [Object[]] -or
         @($inventory.writer_sink_sources).Count -le 0 -or

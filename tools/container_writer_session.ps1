@@ -521,7 +521,7 @@ function Read-ContainerWriterSinkInventory(
     }
     $sources = @($inventory.writer_sink_sources)
     if (
-        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v7' -or
+        [string]$inventory.schema_version -cne 'container-audit-writer-sink-inventory-v8' -or
         [string]$inventory.inventory_sha256 -cne [string]$Contract.all_writer_fence.writer_inventory_sha256 -or
         $inventory.writer_sink_sources -isnot [Object[]] -or
         $sources.Count -le 0 -or

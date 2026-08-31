@@ -5194,7 +5194,7 @@
     "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
     "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
     "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
-    "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
+    "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
     "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review."
   ],
   "entrypoint_derivation": "all root Python files, all Python files under the portable builder's shipped package directories, portable/main.py, frozen/update-archive tool entrypoints parsed from their shipping contracts, and their local import closure",
@@ -5648,7 +5648,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "7b9e73b17fe047bad4450be5350b4b3752793be416df6c85e64edff4b5cbe81d",
+  "inventory_sha256": "d45398eefc8404f0aaff4f89e414b303723bd7b902626005c693ba532c6dfd55",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6954,8 +6954,8 @@
         "command": "Start-Process",
         "file": "tools/container_writer_session.ps1",
         "function": "Invoke-ContainerWriterSessionSelfTest",
-        "guard_line": 3129,
-        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
         "guarded": true,
         "kind": "start_process",
         "line": 2763,
@@ -7963,8 +7963,8 @@
         "command": "Start-Process",
         "file": "tools/container_writer_session.ps1",
         "function": "Invoke-ContainerWriterSessionSelfTest",
-        "guard_line": 3129,
-        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
         "guarded": true,
         "kind": "start_process",
         "line": 2763,
@@ -7978,6 +7978,9 @@
           "guard_kind": "session_authority",
           "guard_line": 1150,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
+          "lifetime_end_line": 1735,
+          "release_line": 1735,
+          "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
           "writer_source": ""
@@ -8135,6 +8138,9 @@
           "guard_kind": "delegated_operation",
           "guard_line": 709,
           "guard_name": "Enter-ContainerPlacementWriterFence",
+          "lifetime_end_line": 1081,
+          "release_line": 1081,
+          "release_name": "Exit-ContainerWriterAdmission",
           "required": true,
           "valid": true,
           "writer_source": "canonical_code_placement"
@@ -8496,6 +8502,9 @@
           "guard_kind": "",
           "guard_line": null,
           "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
           "required": false,
           "valid": false,
           "writer_source": ""
@@ -8593,6 +8602,9 @@
           "guard_kind": "",
           "guard_line": null,
           "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
           "required": false,
           "valid": false,
           "writer_source": ""
@@ -8810,6 +8822,9 @@
           "guard_kind": "session_contract",
           "guard_line": 3129,
           "guard_name": "Assert-ContainerWriterPublicInvocation",
+          "lifetime_end_line": 3225,
+          "release_line": null,
+          "release_name": "",
           "required": true,
           "valid": true,
           "writer_source": ""
@@ -9024,8 +9039,8 @@
             "command": "Start-Process",
             "file": "tools/container_writer_session.ps1",
             "function": "Invoke-ContainerWriterSessionSelfTest",
-            "guard_line": 3129,
-            "guard_name": "Assert-ContainerWriterPublicInvocation",
+            "guard_line": 3093,
+            "guard_name": "non_production_mode",
             "guarded": true,
             "kind": "start_process",
             "line": 2763,
@@ -9033,6 +9048,1087 @@
             "target_static": false
           }
         ]
+      }
+    ],
+    "function_guard_proofs": [
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1156,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "New-CanonicalWriterFencePreparedReceipt",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1293,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1372,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1377,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1545,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1597,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Product",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "New-CanonicalWriterFenceReleaseAuthorization",
+            "guarded_top_level": false,
+            "line": 487,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1241,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1242,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1254,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1255,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1258,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1259,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1282,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1283,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1303,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1304,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1368,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1369,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1403,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1404,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1410,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1411,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1442,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1443,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1581,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1582,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1589,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1590,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1624,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1625,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1632,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1633,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1690,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1691,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1703,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1704,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Save",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1602,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "StartRaw",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 709,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Enter-ContainerPlacementWriterFence",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1024,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Install-CurrentUserTlsCaBootstrap",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Enter-ContainerPlacementWriterFence",
+            "guarded_top_level": false,
+            "line": 280,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Invoke-SelfElevated",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 803,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 804,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Remove-OwnedLegacyTask",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 866,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 890,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 976,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Set-HardenedCodeAcl",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 726,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 766,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 784,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 791,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1040,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1045,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Write-ElevationLog",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Invoke-BootstrapVerifiedReplacementRestore",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Write-BootstrapReplacementReceipt",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Write-BootstrapIntegrityRecord",
+            "guarded_top_level": false,
+            "line": 99,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Write-BootstrapReplacementReceipt",
+            "guarded_top_level": false,
+            "line": 363,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Write-Utf8Json",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Abort-ContainerWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Disable-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Enable-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Disable-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 748,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Enable-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 774,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Stop-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 800,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 829,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Remove-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 861,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Invoke-ContainerWriterFenceMutation",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Remove-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Stop-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Stop-ContainerWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Start-ContainerWriterFence",
+            "guarded_top_level": false,
+            "line": 532,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Set-ContainerWriterFencePrepared",
+            "guarded_top_level": false,
+            "line": 561,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Set-ContainerWriterFenceDelegation",
+            "guarded_top_level": false,
+            "line": 592,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Clear-ContainerWriterFenceDelegation",
+            "guarded_top_level": false,
+            "line": 619,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Write-ContainerWriterFenceAtomic",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Test-PathInside",
+            "guarded_top_level": false,
+            "line": 263,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Test-PathInside",
+            "guarded_top_level": false,
+            "line": 264,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Test-CanonicalSamePath",
+            "guarded_top_level": false,
+            "line": 269,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Get-CanonicalLocalPath",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerLifecycleRestoreProduct",
+            "guarded_top_level": false,
+            "line": 1882,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2175,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2346,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2388,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2699,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2734,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerLifecycleFailureContainment",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2688,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerLifecycleRestoreProduct",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 3216,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerRecovery",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": false,
+            "line": 3093,
+            "non_production_mode": "selftest"
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerWriterSessionSelfTest",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
+        "guarded": true,
+        "non_production_only": true,
+        "non_production_reachable": true,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2596,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3005,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3007,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3011,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-RecoveryStateMachine",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Test-ContainerLifecycleRestoreReceipt",
+            "guarded_top_level": false,
+            "line": 1692,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2240,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2923,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2927,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2931,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2938,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2942,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2946,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2948,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Test-ContainerUserRelayLiveReadback",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerWriterSafetyFence",
+            "guarded_top_level": false,
+            "line": 935,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1039,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1066,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1080,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1140,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2252,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2766,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Wait-ContainerCondition",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1016,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1179,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1200,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2162,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2188,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2351,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2391,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2576,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2580,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2586,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2591,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2721,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2737,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 3198,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Write-JsonAtomic",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
       }
     ],
     "guard_failures": [],
@@ -9408,6 +10504,8 @@
         "guard_line": 1150,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
+        "release_line": 1735,
+        "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 11,
         "writer_site_kinds": [
           "call_operator",
@@ -9423,6 +10521,8 @@
         "guard_line": 709,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
+        "release_line": 1081,
+        "release_name": "Exit-ContainerWriterAdmission",
         "writer_site_count": 26,
         "writer_site_kinds": [
           "call_operator",
@@ -9437,6 +10537,8 @@
         "guard_line": 3129,
         "guard_name": "Assert-ContainerWriterPublicInvocation",
         "guarded": true,
+        "release_line": null,
+        "release_name": "",
         "writer_site_count": 16,
         "writer_site_kinds": [
           "call_operator",
@@ -9460,6 +10562,8 @@
         "guard_line": 709,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
+        "release_line": 1081,
+        "release_name": "Exit-ContainerWriterAdmission",
         "source": "canonical_code_placement",
         "writer_site_count": 26,
         "writer_site_kinds": [
@@ -10461,8 +11565,8 @@
         "command": "Start-Process",
         "file": "tools/container_writer_session.ps1",
         "function": "Invoke-ContainerWriterSessionSelfTest",
-        "guard_line": 3129,
-        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
         "guarded": true,
         "kind": "start_process",
         "line": 2763,
@@ -11470,8 +12574,8 @@
         "command": "Start-Process",
         "file": "tools/container_writer_session.ps1",
         "function": "Invoke-ContainerWriterSessionSelfTest",
-        "guard_line": 3129,
-        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
         "guarded": true,
         "kind": "start_process",
         "line": 2763,
@@ -11485,6 +12589,9 @@
           "guard_kind": "session_authority",
           "guard_line": 1150,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
+          "lifetime_end_line": 1735,
+          "release_line": 1735,
+          "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
           "writer_source": ""
@@ -11642,6 +12749,9 @@
           "guard_kind": "delegated_operation",
           "guard_line": 709,
           "guard_name": "Enter-ContainerPlacementWriterFence",
+          "lifetime_end_line": 1081,
+          "release_line": 1081,
+          "release_name": "Exit-ContainerWriterAdmission",
           "required": true,
           "valid": true,
           "writer_source": "canonical_code_placement"
@@ -12003,6 +13113,9 @@
           "guard_kind": "",
           "guard_line": null,
           "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
           "required": false,
           "valid": false,
           "writer_source": ""
@@ -12100,6 +13213,9 @@
           "guard_kind": "",
           "guard_line": null,
           "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
           "required": false,
           "valid": false,
           "writer_source": ""
@@ -12317,6 +13433,9 @@
           "guard_kind": "session_contract",
           "guard_line": 3129,
           "guard_name": "Assert-ContainerWriterPublicInvocation",
+          "lifetime_end_line": 3225,
+          "release_line": null,
+          "release_name": "",
           "required": true,
           "valid": true,
           "writer_source": ""
@@ -12531,8 +13650,8 @@
             "command": "Start-Process",
             "file": "tools/container_writer_session.ps1",
             "function": "Invoke-ContainerWriterSessionSelfTest",
-            "guard_line": 3129,
-            "guard_name": "Assert-ContainerWriterPublicInvocation",
+            "guard_line": 3093,
+            "guard_name": "non_production_mode",
             "guarded": true,
             "kind": "start_process",
             "line": 2763,
@@ -12540,6 +13659,1087 @@
             "target_static": false
           }
         ]
+      }
+    ],
+    "function_guard_proofs": [
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1156,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "New-CanonicalWriterFencePreparedReceipt",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1293,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1372,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1377,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1545,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1597,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Product",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "New-CanonicalWriterFenceReleaseAuthorization",
+            "guarded_top_level": false,
+            "line": 487,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1241,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1242,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1254,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1255,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1258,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1259,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1282,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1283,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1303,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1304,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1368,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1369,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1403,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1404,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1410,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1411,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1442,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1443,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1581,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1582,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1589,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1590,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1624,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1625,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1632,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1633,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1690,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1691,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1703,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1704,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "Save",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1602,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_CANONICAL_PORTABLE.ps1",
+        "function": "StartRaw",
+        "guard_line": 1150,
+        "guard_name": "Enter-ContainerWriterSessionAuthority",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 709,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Enter-ContainerPlacementWriterFence",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1024,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Install-CurrentUserTlsCaBootstrap",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Enter-ContainerPlacementWriterFence",
+            "guarded_top_level": false,
+            "line": 280,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Invoke-SelfElevated",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 803,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 804,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Remove-OwnedLegacyTask",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 866,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 890,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 976,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Set-HardenedCodeAcl",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 726,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 766,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 784,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 791,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1040,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 1045,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "INSTALL_THIS_PC.ps1",
+        "function": "Write-ElevationLog",
+        "guard_line": 709,
+        "guard_name": "Enter-ContainerPlacementWriterFence",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Invoke-BootstrapVerifiedReplacementRestore",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Write-BootstrapReplacementReceipt",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Write-BootstrapIntegrityRecord",
+            "guarded_top_level": false,
+            "line": 99,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Write-BootstrapReplacementReceipt",
+            "guarded_top_level": false,
+            "line": 363,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/bootstrap_integrity.ps1",
+        "function": "Write-Utf8Json",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Abort-ContainerWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Disable-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Enable-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Disable-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 748,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Enable-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 774,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Stop-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 800,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 829,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Remove-ContainerScheduledTaskUnderWriterFence",
+            "guarded_top_level": false,
+            "line": 861,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Invoke-ContainerWriterFenceMutation",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Remove-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Stop-ContainerScheduledTaskUnderWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Stop-ContainerWriterFence",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Start-ContainerWriterFence",
+            "guarded_top_level": false,
+            "line": 532,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Set-ContainerWriterFencePrepared",
+            "guarded_top_level": false,
+            "line": 561,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Set-ContainerWriterFenceDelegation",
+            "guarded_top_level": false,
+            "line": 592,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Clear-ContainerWriterFenceDelegation",
+            "guarded_top_level": false,
+            "line": 619,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_fence.ps1",
+        "function": "Write-ContainerWriterFenceAtomic",
+        "guard_line": null,
+        "guard_name": "",
+        "guarded": false,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Test-PathInside",
+            "guarded_top_level": false,
+            "line": 263,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Test-PathInside",
+            "guarded_top_level": false,
+            "line": 264,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Test-CanonicalSamePath",
+            "guarded_top_level": false,
+            "line": 269,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Get-CanonicalLocalPath",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerLifecycleRestoreProduct",
+            "guarded_top_level": false,
+            "line": 1882,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2175,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2346,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2388,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2699,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2734,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerLifecycleFailureContainment",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2688,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerLifecycleRestoreProduct",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 3216,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerRecovery",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "__script__",
+            "guarded_top_level": false,
+            "line": 3093,
+            "non_production_mode": "selftest"
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-ContainerWriterSessionSelfTest",
+        "guard_line": 3093,
+        "guard_name": "non_production_mode",
+        "guarded": true,
+        "non_production_only": true,
+        "non_production_reachable": true,
+        "production_reachable": false,
+        "safe_reachable": false,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2596,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3005,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3007,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 3011,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Invoke-RecoveryStateMachine",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Test-ContainerLifecycleRestoreReceipt",
+            "guarded_top_level": false,
+            "line": 1692,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2240,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2923,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2927,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2931,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2938,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2942,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2946,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2948,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Test-ContainerUserRelayLiveReadback",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerWriterSafetyFence",
+            "guarded_top_level": false,
+            "line": 935,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1039,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1066,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1080,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1140,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2252,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterSessionSelfTest",
+            "guarded_top_level": false,
+            "line": 2766,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Wait-ContainerCondition",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": true,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
+      },
+      {
+        "call_sites": [
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1016,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1179,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterPrepare",
+            "guarded_top_level": false,
+            "line": 1200,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2162,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2188,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2351,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerWriterRestore",
+            "guarded_top_level": false,
+            "line": 2391,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2576,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2580,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2586,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2591,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2721,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "Invoke-ContainerRecovery",
+            "guarded_top_level": false,
+            "line": 2737,
+            "non_production_mode": ""
+          },
+          {
+            "caller": "__script__",
+            "guarded_top_level": true,
+            "line": 3198,
+            "non_production_mode": ""
+          }
+        ],
+        "file": "tools/container_writer_session.ps1",
+        "function": "Write-JsonAtomic",
+        "guard_line": 3129,
+        "guard_name": "Assert-ContainerWriterPublicInvocation",
+        "guarded": true,
+        "non_production_only": false,
+        "non_production_reachable": false,
+        "production_reachable": true,
+        "safe_reachable": true,
+        "unsafe_reachable": false
       }
     ],
     "guard_failures": [],
@@ -12915,6 +15115,8 @@
         "guard_line": 1150,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
+        "release_line": 1735,
+        "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 11,
         "writer_site_kinds": [
           "call_operator",
@@ -12930,6 +15132,8 @@
         "guard_line": 709,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
+        "release_line": 1081,
+        "release_name": "Exit-ContainerWriterAdmission",
         "writer_site_count": 26,
         "writer_site_kinds": [
           "call_operator",
@@ -12944,6 +15148,8 @@
         "guard_line": 3129,
         "guard_name": "Assert-ContainerWriterPublicInvocation",
         "guarded": true,
+        "release_line": null,
+        "release_name": "",
         "writer_site_count": 16,
         "writer_site_kinds": [
           "call_operator",
@@ -12967,6 +15173,8 @@
         "guard_line": 709,
         "guard_name": "Enter-ContainerPlacementWriterFence",
         "guarded": true,
+        "release_line": 1081,
+        "release_name": "Exit-ContainerWriterAdmission",
         "source": "canonical_code_placement",
         "writer_site_count": 26,
         "writer_site_kinds": [
@@ -12983,6 +15191,8 @@
       "guard_line": 709,
       "guard_name": "Enter-ContainerPlacementWriterFence",
       "guarded": true,
+      "release_line": 1081,
+      "release_name": "Exit-ContainerWriterAdmission",
       "source": "canonical_code_placement",
       "writer_site_count": 26,
       "writer_site_kinds": [
@@ -13125,7 +15335,7 @@
       }
     ]
   },
-  "schema_version": "container-audit-writer-sink-inventory-v7",
+  "schema_version": "container-audit-writer-sink-inventory-v8",
   "trusted_control_plane_mutations": [],
   "uncovered_direct_mutation_functions": [],
   "writer_sink_sources": [

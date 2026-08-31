@@ -34,11 +34,13 @@ POWERSHELL_PLACEMENT_SOURCE = "canonical_code_placement"
 POWERSHELL_ENTRYPOINT_GUARDS: dict[Path, dict[str, Any]] = {
     Path("INSTALL_CANONICAL_PORTABLE.ps1"): {
         "entry_guard": "Enter-ContainerWriterSessionAuthority",
+        "release_guard": "Exit-ContainerWriterSessionAuthority",
         "guard_kind": "session_authority",
         "writer_source": "",
     },
     Path("INSTALL_THIS_PC.ps1"): {
         "entry_guard": "Enter-ContainerPlacementWriterFence",
+        "release_guard": "Exit-ContainerWriterAdmission",
         "guard_kind": "delegated_operation",
         "internal_guard_function": "Enter-ContainerPlacementWriterFence",
         "internal_guard": "Enter-ContainerWriterDelegatedOperation",
@@ -47,8 +49,14 @@ POWERSHELL_ENTRYPOINT_GUARDS: dict[Path, dict[str, Any]] = {
     },
     Path("tools/container_writer_session.ps1"): {
         "entry_guard": "Assert-ContainerWriterPublicInvocation",
+        "release_guard": "",
         "guard_kind": "session_contract",
         "writer_source": "",
+    },
+}
+POWERSHELL_NON_PRODUCTION_FUNCTION_MODES: dict[Path, dict[str, str]] = {
+    Path("tools/container_writer_session.ps1"): {
+        "Invoke-ContainerWriterSessionSelfTest": "selftest",
     },
 }
 POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
@@ -1824,6 +1832,9 @@ def _powershell_entry_guard(
             "guard_name": "",
             "guard_kind": "",
             "guard_line": None,
+            "release_name": "",
+            "release_line": None,
+            "lifetime_end_line": None,
             "valid": False,
             "writer_source": "",
         }
@@ -1835,7 +1846,25 @@ def _powershell_entry_guard(
         and _powershell_function_at_line(function_ranges, index) is None
         and not re.match(r"^\s*function\b", line, re.IGNORECASE)
     ]
-    valid = bool(guard_lines)
+    release_guard = str(contract.get("release_guard", ""))
+    release_lines = (
+        [
+            index
+            for index, line in enumerate(lines, start=1)
+            if _powershell_command_present(_powershell_code_only(line), release_guard)
+            and _powershell_function_at_line(function_ranges, index) is None
+            and not re.match(r"^\s*function\b", line, re.IGNORECASE)
+        ]
+        if release_guard
+        else []
+    )
+    valid = len(guard_lines) == 1
+    if release_guard:
+        valid = bool(
+            valid
+            and len(release_lines) == 1
+            and release_lines[0] > guard_lines[0]
+        )
     internal_function_name = str(contract.get("internal_guard_function", ""))
     internal_guard = str(contract.get("internal_guard", ""))
     prelaunch_boundary = str(contract.get("prelaunch_boundary", ""))
@@ -1879,9 +1908,206 @@ def _powershell_entry_guard(
         "guard_name": entry_guard,
         "guard_kind": str(contract["guard_kind"]),
         "guard_line": guard_lines[0] if guard_lines else None,
+        "release_name": release_guard,
+        "release_line": release_lines[0] if len(release_lines) == 1 else None,
+        "lifetime_end_line": (
+            release_lines[0] if len(release_lines) == 1 else len(lines) + 1
+        ),
         "valid": valid,
         "writer_source": str(contract.get("writer_source", "")),
     }
+
+
+def _powershell_line_in_guard_lifetime(
+    entry_guard: dict[str, Any], line: int
+) -> bool:
+    """Return whether a top-level line is strictly inside the held lifetime."""
+    guard_line = entry_guard.get("guard_line")
+    lifetime_end_line = entry_guard.get("lifetime_end_line")
+    return bool(
+        entry_guard.get("valid")
+        and isinstance(guard_line, int)
+        and isinstance(lifetime_end_line, int)
+        and guard_line < line < lifetime_end_line
+    )
+
+
+def _powershell_mode_ranges(
+    lines: list[str], function_ranges: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """Find exact top-level ``if ($Mode -ceq '<mode>')`` blocks."""
+    ranges: list[dict[str, Any]] = []
+    for index, line in enumerate(lines, start=1):
+        if _powershell_function_at_line(function_ranges, index) is not None:
+            continue
+        match = re.match(
+            r'''(?i)^\s*if\s*\(\s*\$Mode\s+-ceq\s*(['"])([A-Za-z0-9_-]+)\1\s*\)\s*\{''',
+            line,
+        )
+        if match is None:
+            continue
+        depth = 0
+        opened = False
+        end = index
+        while end <= len(lines):
+            delta = _powershell_code_brace_delta(lines[end - 1])
+            if delta > 0:
+                opened = True
+            depth += delta
+            if opened and depth == 0:
+                break
+            end += 1
+        if not opened or end > len(lines):
+            raise InventoryError(
+                f"PowerShell mode boundary is invalid: {match.group(2)}"
+            )
+        ranges.append(
+            {
+                "mode": match.group(2).casefold(),
+                "start": index,
+                "end": end,
+            }
+        )
+    return ranges
+
+
+def _powershell_function_guard_proofs(
+    relative_path: Path,
+    lines: list[str],
+    function_ranges: list[dict[str, Any]],
+    entry_guard: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    """Prove every direct intra-file caller chain starts inside the lifetime.
+
+    Safe, unsafe, and explicitly non-production roots are propagated separately.
+    A function reached from any unsafe top-level call remains unguarded even when
+    another caller reaches it after admission.
+    """
+    functions = {str(row["name"]): row for row in function_ranges}
+    call_sites: dict[str, list[dict[str, Any]]] = {
+        name: [] for name in functions
+    }
+    mode_ranges = _powershell_mode_ranges(lines, function_ranges)
+    non_production_modes = POWERSHELL_NON_PRODUCTION_FUNCTION_MODES.get(
+        relative_path, {}
+    )
+    for line_number, line in enumerate(lines, start=1):
+        code = _powershell_code_only(line)
+        if not code.strip():
+            continue
+        caller = _powershell_function_at_line(function_ranges, line_number)
+        for name, function in functions.items():
+            if line_number == int(function["start"]) and re.match(
+                rf"^\s*function\s+{re.escape(name)}\b", line, re.IGNORECASE
+            ):
+                continue
+            if not _powershell_command_present(code, name):
+                continue
+            expected_mode = str(non_production_modes.get(name, "")).casefold()
+            actual_mode = next(
+                (
+                    str(row["mode"])
+                    for row in mode_ranges
+                    if int(row["start"]) <= line_number <= int(row["end"])
+                ),
+                "",
+            )
+            call_sites[name].append(
+                {
+                    "caller": (
+                        "__script__" if caller is None else str(caller["name"])
+                    ),
+                    "line": line_number,
+                    "guarded_top_level": bool(
+                        caller is None
+                        and (
+                            _powershell_line_in_guard_lifetime(
+                                entry_guard, line_number
+                            )
+                            or (
+                                name == entry_guard.get("guard_name")
+                                and line_number == entry_guard.get("guard_line")
+                            )
+                        )
+                    ),
+                    "non_production_mode": (
+                        actual_mode
+                        if caller is None
+                        and expected_mode
+                        and actual_mode == expected_mode
+                        else ""
+                    ),
+                }
+            )
+
+    safe_reachable: set[str] = set()
+    unsafe_reachable: set[str] = set()
+    non_production_reachable: set[str] = set()
+    for name, sites in call_sites.items():
+        for site in sites:
+            if site["caller"] != "__script__":
+                continue
+            if site["non_production_mode"]:
+                non_production_reachable.add(name)
+            elif site["guarded_top_level"]:
+                safe_reachable.add(name)
+            else:
+                unsafe_reachable.add(name)
+
+    changed = True
+    while changed:
+        changed = False
+        for name, sites in call_sites.items():
+            callers = {
+                str(site["caller"])
+                for site in sites
+                if site["caller"] != "__script__"
+            }
+            for reachable in (
+                safe_reachable,
+                unsafe_reachable,
+                non_production_reachable,
+            ):
+                if name not in reachable and callers & reachable:
+                    reachable.add(name)
+                    changed = True
+
+    proofs: dict[str, dict[str, Any]] = {}
+    for name in sorted(functions):
+        production_reachable = name in safe_reachable or name in unsafe_reachable
+        guarded = bool(name in safe_reachable and name not in unsafe_reachable)
+        non_production_only = bool(
+            name in non_production_reachable and not production_reachable
+        )
+        proofs[name] = {
+            "function": name,
+            "call_sites": call_sites[name],
+            "production_reachable": production_reachable,
+            "safe_reachable": name in safe_reachable,
+            "unsafe_reachable": name in unsafe_reachable,
+            "non_production_reachable": name in non_production_reachable,
+            "non_production_only": non_production_only,
+            "guarded": guarded or non_production_only,
+            "guard_name": (
+                str(entry_guard.get("guard_name", ""))
+                if guarded
+                else ("non_production_mode" if non_production_only else "")
+            ),
+            "guard_line": (
+                entry_guard.get("guard_line")
+                if guarded
+                else (
+                    min(
+                        int(site["line"])
+                        for site in call_sites[name]
+                        if site["non_production_mode"]
+                    )
+                    if non_production_only
+                    else None
+                )
+            ),
+        }
+    return proofs
 
 
 def _powershell_target(fragment: str) -> tuple[str, bool]:
@@ -1994,7 +2220,7 @@ def _powershell_line_sites(
             for api in POWERSHELL_NATIVE_PROCESS_APIS
             if re.search(
                 rf"(?i)(?<![A-Za-z0-9_-]){re.escape(api)}(?:A|W)?(?![A-Za-z0-9_-])",
-                context,
+                code,
             )
         ),
         "",
@@ -2058,12 +2284,12 @@ def _powershell_line_sites(
     reflective_boundary = bool(
         (
             any(
-                marker.casefold() in context_folded
+                marker.casefold() in code.casefold()
                 for marker in POWERSHELL_REFLECTION_COMMANDS
             )
             and (
                 re.search(r"(?i)\.(?:Invoke|InvokeMember)\s*\(", code)
-                or "getmethod" in context_folded
+                or "getmethod" in code.casefold()
             )
         )
         or re.search(r"(?i)\.Invoke(?:ReturnAsIs)?\s*\(", code)
@@ -2143,6 +2369,7 @@ def _powershell_site_guard(
     site: dict[str, Any],
     function: dict[str, Any] | None,
     entry_guard: dict[str, Any],
+    function_guards: dict[str, dict[str, Any]],
 ) -> tuple[bool, str, int | None]:
     function_name = "" if function is None else str(function["name"])
     if site["kind"] == "scheduled_task_cmdlet":
@@ -2168,9 +2395,22 @@ def _powershell_site_guard(
         if site["target"] in approved:
             return True, "byte_pinned_function_library", int(site["line"])
     if entry_guard["valid"]:
-        guard_line = int(entry_guard["guard_line"])
-        if function is not None or int(site["line"]) >= guard_line:
-            return True, str(entry_guard["guard_name"]), guard_line
+        if function is None and _powershell_line_in_guard_lifetime(
+            entry_guard, int(site["line"])
+        ):
+            return (
+                True,
+                str(entry_guard["guard_name"]),
+                int(entry_guard["guard_line"]),
+            )
+        if function is not None:
+            proof = function_guards.get(function_name, {})
+            if proof.get("guarded"):
+                return (
+                    True,
+                    str(proof["guard_name"]),
+                    int(proof["guard_line"]),
+                )
     return False, "", None
 
 
@@ -2181,12 +2421,19 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
     execution_sites: list[dict[str, Any]] = []
     direct_mutation_sites: list[dict[str, Any]] = []
     script_entrypoints: list[dict[str, Any]] = []
+    function_guard_rows: list[dict[str, Any]] = []
     mutation_scopes: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     delegated_sources: list[str] = []
     for relative_path in powershell_paths:
         lines = (root / relative_path).read_text(encoding="utf-8").splitlines()
         function_ranges = _powershell_function_ranges(lines)
         entry_guard = _powershell_entry_guard(relative_path, lines, function_ranges)
+        function_guards = _powershell_function_guard_proofs(
+            relative_path,
+            lines,
+            function_ranges,
+            entry_guard,
+        )
         if relative_path.name == "INSTALL_CANONICAL_PORTABLE.ps1":
             delegated_sources = _extract_ps_delegated_sources(lines)
         per_file_sites: list[dict[str, Any]] = []
@@ -2205,6 +2452,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
                     site,
                     function,
                     entry_guard,
+                    function_guards,
                 )
                 site.update(
                     {
@@ -2262,6 +2510,12 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
                         else "unregistered_shipped_asset"
                     ),
                     "guard_line": entry_guard["guard_line"] if registered else None,
+                    "release_name": (
+                        str(entry_guard["release_name"]) if registered else ""
+                    ),
+                    "release_line": (
+                        entry_guard["release_line"] if registered else None
+                    ),
                     "guarded": bool(entry_guard["valid"]) if registered else False,
                     "writer_site_count": len(writer_sites),
                     "writer_site_kinds": sorted(
@@ -2269,6 +2523,16 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
                     ),
                 }
             )
+        function_guard_rows.extend(
+            {"file": _relative(relative_path), **function_guards[name]}
+            for name in sorted(
+                {
+                    str(site["function"])
+                    for site in per_file_sites
+                    if site["function"]
+                }
+            )
+        )
         files.append(
             {
                 "file": _relative(relative_path),
@@ -2377,6 +2641,8 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
             "source": entry["writer_source"],
             "guard_name": entry["guard_name"],
             "guard_line": entry["guard_line"],
+            "release_name": entry["release_name"],
+            "release_line": entry["release_line"],
             "guarded": entry["guarded"],
             "writer_site_count": entry["writer_site_count"],
             "writer_site_kinds": entry["writer_site_kinds"],
@@ -2389,6 +2655,7 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
         "asset_derivation": "portable_builder.PORTABLE_INSTALL_ASSETS",
         "asset_paths": [_relative(path) for path in powershell_paths],
         "files": files,
+        "function_guard_proofs": function_guard_rows,
         "mutation_sites": scheduled_sites,
         "all_sites": all_sites,
         "execution_sites": execution_sites,
@@ -2521,7 +2788,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
     route_rows.sort(key=lambda row: row["route_id"])
 
     payload: dict[str, Any] = {
-        "schema_version": "container-audit-writer-sink-inventory-v7",
+        "schema_version": "container-audit-writer-sink-inventory-v8",
         "entrypoint_modules": [_relative(path) for path in shipped_application_paths],
         "entrypoint_derivation": (
             "all root Python files, all Python files under the portable builder's "
@@ -2564,7 +2831,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
             "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
             "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
-            "PowerShell guard attribution is lexical and does not prove a complete dynamic call graph, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
+            "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
             "Runtime-generated aliases, imported command redefinitions, encrypted or downloaded code, native exports reached through computed reflection, and process creation hidden behind unknown modules remain unobservable statically and require runtime admission plus review.",
         ],
         "coverage_summary": {
