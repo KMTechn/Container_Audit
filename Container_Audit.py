@@ -1650,6 +1650,10 @@ class ContainerAudit:
                     error_code="PHS2_QUARANTINE_RESTORE_REVIEW"
                 )
         except (OSError, PreflightHoldError) as exc:
+            self._set_preflight_scan_input_locked(
+                self._preflight_context_blocks_mutation()
+            )
+            self._update_action_button_states()
             print(f"사전조회 보류 복원 실패: {exc.__class__.__name__}")
             messagebox.showerror(
                 "보류 묶음 복원 실패",
@@ -1691,6 +1695,10 @@ class ContainerAudit:
                     "사전조회 보류 복원 감사 롤백 실패: "
                     f"{rollback_error.__class__.__name__}"
                 )
+            self._set_preflight_scan_input_locked(
+                self._preflight_context_blocks_mutation()
+            )
+            self._update_action_button_states()
             messagebox.showerror(
                 "보류 묶음 복원 기록 실패",
                 "복원 감사 기록을 남기지 못해 격리 상태를 유지합니다.",
@@ -1748,11 +1756,19 @@ class ContainerAudit:
 
     def _preflight_context_blocks_mutation(self) -> bool:
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
-        return bool(
+        memory_gate = bool(
             getattr(self, "_master_preflight_pending", False)
             or getattr(self, "_preflight_hold_draining", False)
             or isinstance(snapshot, PreflightHoldSnapshot)
         )
+        if memory_gate:
+            return True
+        try:
+            return self._preflight_hold_store().exists()
+        except (OSError, PreflightHoldError, TypeError, ValueError):
+            # If the durable ownership check itself cannot be completed, do
+            # not let a mutation race an unreadable active-hold location.
+            return True
 
     def _remember_completed_master_label(self, master_label: str) -> None:
         if not master_label:
@@ -7366,8 +7382,11 @@ class ContainerAudit:
 
         self._master_preflight_pending = False
         store = self._preflight_hold_store()
-        if not store.exists():
+        if not self._preflight_context_blocks_mutation():
             return
+        self._set_preflight_scan_input_locked(True)
+        if not getattr(self, "_ui_close_requested", False):
+            self._update_action_button_states()
 
         def settle() -> PreflightHoldSnapshot:
             snapshot = store.load()
@@ -7378,7 +7397,6 @@ class ContainerAudit:
         def finish(snapshot: PreflightHoldSnapshot) -> None:
             self._preflight_hold_snapshot = snapshot
             self._preflight_hold_draining = snapshot.state == HOLD_DRAINING
-            self._set_preflight_scan_input_locked(True)
             if not getattr(self, "_ui_close_requested", False):
                 self.show_status_message(
                     f"늦은 중앙 조회 결과를 보류 상태로 정리했습니다 · "
@@ -7387,18 +7405,21 @@ class ContainerAudit:
                     duration=0,
                 )
 
+        def fail(_exc: BaseException) -> None:
+            if not getattr(self, "_ui_close_requested", False):
+                self.show_status_message(
+                    "늦은 중앙 조회 결과를 정리하지 못했습니다. 보류 파일을 유지하고 "
+                    "관리자에게 문의하세요.",
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
+
         admission = self._preflight_hold_writer().submit(
             settle,
             finish,
-            lambda exc: self.show_status_message(
-                "늦은 중앙 조회 결과를 정리하지 못했습니다. 보류 파일을 유지하고 "
-                "관리자에게 문의하세요.",
-                self.COLOR_DANGER,
-                duration=0,
-            ),
+            fail,
         )
         if not admission.accepted:
-            self._set_preflight_scan_input_locked(True)
             if not getattr(self, "_ui_close_requested", False):
                 self.show_status_message(
                     "늦은 중앙 조회 결과의 보류 정리가 대기 중입니다. 입력은 "

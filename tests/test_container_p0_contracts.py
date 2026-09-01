@@ -149,6 +149,55 @@ def _hold_symbols():
     return module, module.PreflightScanHoldStore
 
 
+def _preflight_hold_ownership_app(tmp_path, monkeypatch):
+    module, _PreflightScanHoldStore = _hold_symbols()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "tester"
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    app.current_tray = TraySession()
+    app.save_folder = str(tmp_path / "events")
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 4
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.action_state_refreshes = 0
+    app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+    app.show_fullscreen_warning = lambda *args, **kwargs: None
+    app._update_parked_trays_list = lambda: None
+    app._update_action_button_states = lambda: setattr(
+        app,
+        "action_state_refreshes",
+        app.action_state_refreshes + 1,
+    )
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._ui_close_requested = False
+    app._log_event = lambda *args, **kwargs: True
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showwarning",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showinfo",
+        lambda *args, **kwargs: None,
+    )
+    return module, app, app._preflight_hold_store()
+
+
 def test_preflight_hold_is_restart_durable_fifo_and_exactly_once(tmp_path):
     module, PreflightScanHoldStore = _hold_symbols()
     path = tmp_path / "_preflight_scan_hold_host-01.json"
@@ -289,6 +338,173 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
     assert quarantined[0].path.exists() is False
     assert audits[1][0] == "PHS2_PREFLIGHT_HOLD_RESTORED"
+
+
+def test_restore_mark_failed_error_keeps_durable_hold_inside_mutation_gate(
+    tmp_path,
+    monkeypatch,
+):
+    module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_draining()
+    quarantined = store.quarantine(
+        app._preflight_hold_quarantine_directory(),
+        reason="fixture",
+    )
+
+    def fail_mark_failed(*, error_code):
+        assert error_code == "PHS2_QUARANTINE_RESTORE_REVIEW"
+        raise module.PreflightHoldError("forced mark-failed error")
+
+    monkeypatch.setattr(store, "mark_failed", fail_mark_failed)
+
+    assert app.restore_quarantined_preflight_hold(str(quarantined.path)) is False
+    assert store.exists() is True
+    assert quarantined.path.exists() is False
+    assert store.snapshot_hash(store.load()) == quarantined.snapshot_hash
+    assert app._preflight_hold_snapshot is None
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
+
+
+def test_restore_audit_rollback_error_keeps_durable_hold_inside_mutation_gate(
+    tmp_path,
+    monkeypatch,
+):
+    module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    quarantined = store.quarantine(
+        app._preflight_hold_quarantine_directory(),
+        reason="fixture",
+    )
+    app._log_event = lambda *args, **kwargs: False
+
+    def fail_quarantine(*args, **kwargs):
+        raise module.PreflightHoldError("forced restore rollback error")
+
+    monkeypatch.setattr(store, "quarantine", fail_quarantine)
+
+    assert app.restore_quarantined_preflight_hold(str(quarantined.path)) is False
+    assert store.exists() is True
+    assert quarantined.path.exists() is False
+    assert store.snapshot_hash(store.load()) == quarantined.snapshot_hash
+    assert app._preflight_hold_snapshot is None
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
+
+
+def test_stale_settlement_write_error_keeps_durable_hold_inside_mutation_gate(
+    tmp_path,
+    monkeypatch,
+):
+    module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    expected_hash = store.snapshot_hash(store.load())
+
+    class FailingWriter:
+        def submit(self, work, _finish, fail):
+            try:
+                work()
+            except BaseException as exc:
+                fail(exc)
+            return SimpleNamespace(accepted=True)
+
+    def fail_mark_failed(*, error_code):
+        assert error_code == "PHS2_PREFLIGHT_STALE_RESULT"
+        raise module.PreflightHoldError("forced stale settlement error")
+
+    monkeypatch.setattr(store, "mark_failed", fail_mark_failed)
+    app._preflight_hold_writer = lambda: FailingWriter()
+
+    app._settle_stale_preflight_result((), reason="fixture")
+
+    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+    assert store.snapshot_hash(store.load()) == expected_hash
+    assert app._preflight_hold_snapshot is None
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
+
+
+def test_stale_settlement_accepted_work_locks_mutation_until_callback(
+    tmp_path,
+    monkeypatch,
+):
+    _module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+
+    class DeferredWriter:
+        def submit(self, work, finish, fail):
+            self.task = (work, finish, fail)
+            return SimpleNamespace(accepted=True)
+
+    writer = DeferredWriter()
+    app._preflight_hold_writer = lambda: writer
+
+    app._settle_stale_preflight_result((), reason="fixture")
+
+    assert writer.task
+    assert app._preflight_hold_snapshot is None
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
+
+
+def test_stale_settlement_presence_probe_error_fails_closed(
+    tmp_path,
+    monkeypatch,
+):
+    _module, app, _store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+
+    class UnreadableStore:
+        def exists(self):
+            raise OSError("forced durable presence probe error")
+
+        def load(self):
+            raise OSError("forced durable load error")
+
+    class DeferredWriter:
+        def submit(self, work, finish, fail):
+            self.task = (work, finish, fail)
+            return SimpleNamespace(accepted=True)
+
+    writer = DeferredWriter()
+    app._preflight_hold_store = lambda: UnreadableStore()
+    app._preflight_hold_writer = lambda: writer
+
+    app._settle_stale_preflight_result((), reason="fixture")
+
+    assert writer.task
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
+
+
+def test_stale_settlement_rejected_admission_refreshes_durable_mutation_gate(
+    tmp_path,
+    monkeypatch,
+):
+    _module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    app._preflight_hold_writer = lambda: SimpleNamespace(
+        submit=lambda *_args: SimpleNamespace(accepted=False)
+    )
+
+    app._settle_stale_preflight_result((), reason="fixture")
+
+    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+    assert app._preflight_hold_snapshot is None
+    assert app._preflight_scan_input_locked is True
+    assert app._preflight_context_blocks_mutation() is True
+    assert app.action_state_refreshes == 1
 
 
 def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
