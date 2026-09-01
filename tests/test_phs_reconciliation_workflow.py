@@ -810,6 +810,32 @@ class _ImmediateThread:
         self.target()
 
 
+class _ImmediateLane:
+    state = "IDLE"
+
+    def __init__(self):
+        self.task = None
+
+    def is_busy(self):
+        return self.task is not None
+
+    def submit(self, task):
+        self.task = task
+        self.state = "BUSY"
+        try:
+            value = task.work()
+        except BaseException as exc:
+            task.fail(exc)
+        else:
+            task.finish(value)
+        self.task = None
+        self.state = "IDLE"
+        return SimpleNamespace(accepted=True, handle=SimpleNamespace())
+
+    def close_idle(self):
+        self.state = "CLOSED"
+
+
 class _Value:
     def __init__(self, value=False):
         self.value = value
@@ -1594,6 +1620,7 @@ def test_reconciliation_execute_rechecks_lookup_snapshot_before_worker_start():
     app._phs_reconciliation_execution_guard = (
         app._capture_phs_reconciliation_progress()
     )
+    app._reject_mutation_during_preflight_hold = lambda: False
     app._phs_label_exchange_pending = False
     app._phs_label_refresh_pending = False
     app.show_status_message = lambda message, *_args, **_kwargs: calls.append(
@@ -1623,6 +1650,7 @@ def test_f8_executes_resolved_reconciliation_without_mouse():
     app = ContainerAudit.__new__(ContainerAudit)
     app._phs_label_exchange_pending = False
     app._phs_reconciliation_context = {"selection": {}}
+    app._reject_mutation_during_preflight_hold = lambda: False
     app._execute_selected_phs_label_exchange = lambda: calls.append(
         "execute"
     )
@@ -1671,6 +1699,7 @@ def test_reconciliation_ui_execution_preserves_tray_scan_progress_and_focus(
     )()
     context = {"expected_exchange_kind": "SPLIT"}
     app._phs_reconciliation_context = context
+    app._reject_mutation_during_preflight_hold = lambda: False
     app._phs_label_exchange_pending = False
     app._phs_label_refresh_pending = False
     app.phs_label_reprint_confirm_var = _Value(False)
@@ -1688,9 +1717,11 @@ def test_reconciliation_ui_execution_preserves_tray_scan_progress_and_focus(
     app._log_event = lambda event, **_kwargs: calls.append(("event", event))
     app._update_current_item_label = lambda: None
     app._update_center_display = lambda: None
+    lane = _ImmediateLane()
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
     tray = app.current_tray
     scans = tray.scanned_barcodes
-    monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)
 
     app._execute_phs_reconciliation_exchange()
 
@@ -1761,6 +1792,7 @@ def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
         },
     )()
     app._phs_reconciliation_context = None
+    app._reject_mutation_during_preflight_hold = lambda: False
     app._phs_label_exchange_pending = False
     app._phs_label_refresh_pending = False
     app.phs_label_reprint_confirm_var = _Value(False)
@@ -1778,8 +1810,10 @@ def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
     app._log_event = lambda event, **_kwargs: calls.append(("event", event))
     app._update_current_item_label = lambda: None
     app._update_center_display = lambda: None
+    lane = _ImmediateLane()
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
     monkeypatch.setattr(container_module.messagebox, "askyesno", askyesno)
-    monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)
 
     app._schedule_phs_label_exchange_recovery()
 

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import Container_Audit as container_module
 from Container_Audit import ContainerAudit, TraySession
 from direct_sync_push import init_relay_queue_schema
 from parked_tray_store import ParkedTrayStore
@@ -60,6 +61,176 @@ def _saved_tray_state():
             "transfer_detail": {},
         },
     }
+
+
+class _DeferredUiLane:
+    def __init__(self):
+        self.state = "IDLE"
+        self.task = None
+        self.drain_callbacks = []
+
+    def is_busy(self):
+        return self.task is not None
+
+    def submit(self, task):
+        if self.task is not None:
+            return SimpleNamespace(accepted=False, handle=None, reason="busy")
+        self.task = task
+        self.state = "BUSY"
+        return SimpleNamespace(accepted=True, handle=SimpleNamespace(), reason="")
+
+    def drain_then(self, callback):
+        if self.task is None:
+            callback()
+            return
+        self.state = "DRAINING"
+        self.drain_callbacks.append(callback)
+
+    def complete(self):
+        task = self.task
+        assert task is not None
+        value = task.work()
+        task.finish(value)
+        self.task = None
+        callbacks = list(self.drain_callbacks)
+        self.drain_callbacks.clear()
+        self.state = "IDLE"
+        for callback in callbacks:
+            callback()
+
+
+class _ImmediateRoot:
+    tk = object()
+
+    @staticmethod
+    def after(_delay, callback, *args):
+        return callback(*args)
+
+
+class _OptionWidget:
+    def __init__(self):
+        self.options = {}
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+
+
+def _set_durable_preflight_hold(app, *, active):
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_store = lambda: SimpleNamespace(
+        exists=lambda: active,
+    )
+
+
+def _phs_lane_app(*, reconciliation=False):
+    calls = []
+    lane = _DeferredUiLane()
+    result = SimpleNamespace(
+        success=True,
+        status="COMMITTED",
+        message="done",
+        error_code="",
+        retryable=False,
+        exchange_id="PHSX-1",
+        journal_state={"status": "COMMITTED"},
+    )
+
+    class Journal:
+        @staticmethod
+        def load():
+            return {}
+
+        @staticmethod
+        def save(state):
+            calls.append(("journal-save", dict(state)))
+            return dict(state)
+
+    class SingleCoordinator:
+        journal = Journal()
+
+        @staticmethod
+        def execute_single(tray, candidate, **kwargs):
+            calls.append(("single", tray, candidate, kwargs))
+            tray.active_label_qr_payload = "ACTIVE-NEW"
+            tray.active_label_id = "LBL-NEW"
+            tray.active_label_business_date = "2026-09-02"
+            tray.active_label_worker_code = "WORKER-NEW"
+            return result
+
+        @staticmethod
+        def confirm_local_refresh_applied(*, exchange_id):
+            calls.append(("confirm-local-refresh", exchange_id))
+            return {"status": "COMMITTED"}
+
+    class ReconciliationCoordinator:
+        available = True
+
+        @staticmethod
+        def execute(context, **kwargs):
+            calls.append(("reconciliation", context, kwargs))
+            return result
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(
+        master_label_code="MASTER",
+        canonical_input_tag_qr="MASTER",
+        active_label_qr_payload="ACTIVE-OLD",
+        active_label_id="LBL-OLD",
+        active_label_business_date="2026-09-01",
+        active_label_worker_code="WORKER-OLD",
+        item_code="ITEM",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    coordinator = SingleCoordinator()
+    coordinator.reconciliation = ReconciliationCoordinator()
+    app.phs_label_exchange_coordinator = coordinator
+    app._phs_reconciliation_context = (
+        {"selection": {"action_ids": ["A-1"]}}
+        if reconciliation
+        else None
+    )
+    app._phs_reconciliation_execution_guard = None
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app._phs_label_candidate_pending = False
+    app._scan_callback_epoch = 7
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
+    app._phs_label_exchange_available_for_tray = lambda: not reconciliation
+    app._selected_phs_label_candidate = lambda: {
+        "instruction_id": "INSTRUCTION-1",
+    }
+    app._confirm_phs_reconciliation_ambiguous_reprint = (
+        lambda **_kwargs: False
+    )
+    app.phs_label_reprint_confirm_var = SimpleNamespace(
+        get=lambda: False,
+        set=lambda _value: None,
+    )
+    app._set_phs_label_candidates = lambda _values: None
+    app._set_phs_reconciliation_context = lambda value: setattr(
+        app,
+        "_phs_reconciliation_context",
+        value,
+    )
+    app._save_current_tray_state = lambda: calls.append(("persist",)) or True
+    app._update_action_button_states = lambda: calls.append(("buttons",))
+    app.show_status_message = lambda message, *_args, **_kwargs: calls.append(
+        ("status", message)
+    )
+    app._schedule_focus_return = lambda: calls.append(("focus",))
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    app._log_event = lambda event, **_kwargs: calls.append(("event", event))
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_DANGER = "danger"
+    _set_durable_preflight_hold(app, active=False)
+    return app, lane, calls
 
 
 def test_recovery_decline_moves_full_state_to_idempotent_parked_owner(tmp_path):
@@ -505,6 +676,292 @@ def test_stale_settlement_rejected_admission_refreshes_durable_mutation_gate(
     assert app._preflight_scan_input_locked is True
     assert app._preflight_context_blocks_mutation() is True
     assert app.action_state_refreshes == 1
+
+
+def test_active_hold_blocks_ordinary_parked_restore_before_current_tray_swap(
+    tmp_path,
+    monkeypatch,
+):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "홍길동"
+    app.current_tray = TraySession()
+    original_tray = app.current_tray
+    app.TRAY_SIZE = 60
+    app.COLOR_DANGER = "danger"
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SUCCESS = "success"
+    app.statuses = []
+    app.show_status_message = lambda message, *_args, **_kwargs: (
+        app.statuses.append(message)
+    )
+    app._schedule_focus_return = lambda: None
+    app._operator_review_blocks_mutation = lambda: False
+    app._is_parked_tray_path = lambda _path: True
+    app._is_completed_master_label = lambda _master: False
+    app._build_parked_restore_contract = lambda **_kwargs: {}
+    saved = []
+    app._save_tray_state_snapshot = lambda state: saved.append(state) or True
+    app._drain_pending_parked_restore = lambda: True
+    app._restore_operator_review_from_state = lambda _state: None
+    app._invalidate_pending_scan_callbacks = lambda: None
+    app.show_validation_screen = lambda: None
+    app.show_tray_image_var = SimpleNamespace(set=lambda _value: None)
+    app._update_tray_image_display = lambda: None
+    app._update_parked_trays_list = lambda: None
+    _set_durable_preflight_hold(app, active=True)
+    monkeypatch.setattr(
+        container_module.ParkedTrayStore,
+        "load",
+        staticmethod(lambda _path: _saved_tray_state()),
+    )
+    monkeypatch.setattr(container_module, "validate_tray_state", lambda *_args, **_kwargs: None)
+
+    app.restore_parked_tray(str(tmp_path / "parked.json"))
+
+    assert app.current_tray is original_tray
+    assert app.current_tray.master_label_code == ""
+    assert saved == []
+    assert any("보류" in message and "접수되지 않았습니다" in message for message in app.statuses)
+
+
+def test_active_hold_blocks_direct_phs_execute_and_f8_shortcut(
+    monkeypatch,
+):
+    central_calls = []
+
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    class Coordinator:
+        journal = SimpleNamespace(load=lambda: {})
+
+        @staticmethod
+        def execute_single(*args, **kwargs):
+            central_calls.append((args, kwargs))
+            return SimpleNamespace(
+                success=False,
+                exchange_id="",
+                journal_state={},
+            )
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(master_label_code="MASTER", tray_size=2)
+    app.phs_label_exchange_coordinator = Coordinator()
+    app._phs_reconciliation_context = None
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app._selected_phs_label_candidate = lambda: {"instruction_id": "I-1"}
+    app.phs_label_reprint_confirm_var = SimpleNamespace(
+        get=lambda: False,
+        set=lambda _value: None,
+    )
+    app._save_current_tray_state = lambda: True
+    app._set_phs_label_candidates = lambda _values: None
+    app._update_action_button_states = lambda: None
+    app._update_current_item_label = lambda: None
+    app._update_center_display = lambda: None
+    app._schedule_focus_return = lambda: None
+    app._log_event = lambda *_args, **_kwargs: True
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_SUCCESS = "success"
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.show_status_message = lambda message, *_args, **_kwargs: (
+        app.statuses.append(message)
+    )
+    _set_durable_preflight_hold(app, active=True)
+    monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
+
+    app._execute_selected_phs_label_exchange()
+    assert central_calls == []
+
+    shortcut_calls = []
+    app._warning_state_presenter = lambda: SimpleNamespace(
+        state=SimpleNamespace(is_blocking=False)
+    )
+    app._phs_reconciliation_context = {"selection": {}}
+    app._execute_selected_phs_label_exchange = lambda: shortcut_calls.append(
+        "execute"
+    )
+    assert app._on_phs_label_exchange_shortcut() == "break"
+    assert shortcut_calls == []
+    assert any("보류" in message and "접수되지 않았습니다" in message for message in app.statuses)
+
+
+def test_active_hold_disables_phs_execute_button():
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.current_tray = TraySession(master_label_code="MASTER")
+    app._active_blocking_completion_snapshot = lambda: None
+    app._precommand_operator_review_retry_context = lambda: None
+    app.master_label_replace_state = None
+    app.exchange_dialog = None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._use_compact_action_labels = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: True
+    app._phs_reconciliation_exchange_available = lambda: False
+    app._refresh_phs_active_label_info = lambda: None
+    app._completion_lane_busy = False
+    app._phs_label_exchange_pending = False
+    app._phs_label_candidate_pending = False
+    app._phs_label_refresh_pending = False
+    app.phs_label_exchange_coordinator = None
+    app.phs_label_candidate_var = SimpleNamespace(get=lambda: "candidate")
+    for widget_name in (
+        "reset_button",
+        "park_button",
+        "undo_button",
+        "submit_tray_button",
+        "operations_button",
+        "change_worker_button",
+        "replace_master_label_button",
+        "exchange_button",
+        "phs_label_exchange_button",
+        "phs_label_legacy_fallback_button",
+        "phs_label_candidate_load_button",
+        "phs_label_exchange_execute_button",
+    ):
+        setattr(app, widget_name, _OptionWidget())
+    _set_durable_preflight_hold(app, active=True)
+
+    app._update_action_button_states()
+
+    assert app.phs_label_exchange_execute_button.options["state"] == container_module.tk.DISABLED
+
+
+@pytest.mark.parametrize(
+    ("reconciliation", "task_name", "call_name"),
+    (
+        (False, "phs-label-exchange", "single"),
+        (True, "phs-reconciliation-exchange", "reconciliation"),
+    ),
+)
+def test_phs_execute_uses_shared_lane_with_captured_worker_input(
+    reconciliation,
+    task_name,
+    call_name,
+):
+    app, lane, calls = _phs_lane_app(reconciliation=reconciliation)
+    live_tray = app.current_tray
+    original_context = app._phs_reconciliation_context
+
+    app._execute_selected_phs_label_exchange()
+
+    assert lane.task is not None
+    assert lane.task.name == task_name
+    outcome = lane.task.work()
+    lane.task.finish(outcome)
+    worker_call = next(call for call in calls if call[0] == call_name)
+    if reconciliation:
+        assert worker_call[1] == original_context
+        assert worker_call[1] is not original_context
+        assert worker_call[2]["status_callback"] is None
+        assert app._phs_reconciliation_context is None
+    else:
+        assert worker_call[1] is not live_tray
+        assert worker_call[3]["persist_tray"] is None
+        assert worker_call[3]["defer_local_refresh"] is True
+        assert worker_call[3]["status_callback"] is None
+        assert app.current_tray is live_tray
+        assert app.current_tray.active_label_id == "LBL-NEW"
+        assert ("persist",) in calls
+        assert ("confirm-local-refresh", "PHSX-1") in calls
+
+
+@pytest.mark.parametrize("reconciliation", (False, True))
+def test_close_waits_for_inflight_phs_execute_on_shared_lane(reconciliation):
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    app, _deferred_lane, calls = _phs_lane_app(
+        reconciliation=reconciliation,
+    )
+    root = FakeTkRoot()
+    root.tk = object()
+    lane = TkSerialUiLane(root, poll_ms=1)
+    app.root = root
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
+    app._scan_callback_pending = False
+    app._ui_close_requested = False
+    app._ui_close_lane_drained = False
+    app._preflight_hold_writer_instance = None
+    app.master_label_replace_state = None
+    app.current_exchange_session = SimpleNamespace(
+        defective_barcodes=[],
+        good_barcodes=[],
+    )
+    app.worker_name = ""
+    app._preserve_preflight_hold_for_close = lambda: calls.append(
+        ("preserve",)
+    ) or (True, False)
+    app._finalize_application_close = lambda: calls.append(
+        ("finalize", lane.state, lane.worker_thread.is_alive())
+    )
+    if not reconciliation:
+        app.current_tray.scanned_barcodes.append("UNIT-2")
+        app.request_complete_tray = lambda: calls.append(("complete",))
+    started = threading.Event()
+    release = threading.Event()
+    if reconciliation:
+        original_set_context = app._set_phs_reconciliation_context
+        app._set_phs_reconciliation_context = lambda value: calls.append(
+            ("reconciliation-finish",)
+        ) or original_set_context(value)
+        original_execute = (
+            app.phs_label_exchange_coordinator.reconciliation.execute
+        )
+    else:
+        original_execute = app.phs_label_exchange_coordinator.execute_single
+
+    def blocking_execute(*args, **kwargs):
+        started.set()
+        assert release.wait(timeout=2.0)
+        return original_execute(*args, **kwargs)
+
+    if reconciliation:
+        app.phs_label_exchange_coordinator.reconciliation.execute = (
+            blocking_execute
+        )
+    else:
+        app.phs_label_exchange_coordinator.execute_single = blocking_execute
+
+    try:
+        app._execute_selected_phs_label_exchange()
+        assert started.wait(timeout=1.0)
+
+        app.on_closing(_confirmed=True)
+
+        assert not any(call[0] == "finalize" for call in calls)
+        assert lane.state == "DRAINING"
+        release.set()
+        root.run_until(
+            lambda: any(call[0] == "finalize" for call in calls),
+        )
+        finish_marker = (
+            ("reconciliation-finish",)
+            if reconciliation
+            else ("persist",)
+        )
+        assert finish_marker in calls
+        assert ("preserve",) in calls
+        final = next(call for call in calls if call[0] == "finalize")
+        assert final == ("finalize", "CLOSED", False)
+        assert calls.index(finish_marker) < calls.index(("preserve",))
+        while root.run_one():
+            pass
+        assert ("complete",) not in calls
+    finally:
+        release.set()
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
 
 
 def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(

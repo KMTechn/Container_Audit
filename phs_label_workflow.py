@@ -991,6 +991,7 @@ class PHSLabelExchangeCoordinator:
         target_instruction: Mapping[str, Any] | None,
         *,
         persist_tray: Callable[[], bool] | None = None,
+        defer_local_refresh: bool = False,
         confirm_ambiguous_reprint: bool = False,
         status_callback: Callable[[str], None] | None = None,
     ) -> PHSLabelExchangeResult:
@@ -1007,6 +1008,7 @@ class PHSLabelExchangeCoordinator:
                 tray,
                 target_instruction,
                 persist_tray=persist_tray,
+                defer_local_refresh=defer_local_refresh,
                 confirm_ambiguous_reprint=confirm_ambiguous_reprint,
                 status_callback=status_callback,
             )
@@ -1058,6 +1060,7 @@ class PHSLabelExchangeCoordinator:
         target_instruction: Mapping[str, Any] | None,
         *,
         persist_tray: Callable[[], bool] | None,
+        defer_local_refresh: bool,
         confirm_ambiguous_reprint: bool,
         status_callback: Callable[[str], None] | None,
     ) -> PHSLabelExchangeResult:
@@ -1322,7 +1325,11 @@ class PHSLabelExchangeCoordinator:
                 raise
             committed = self._save(
                 state,
-                status="COMMITTED",
+                status=(
+                    "COMMITTED_LOCAL_REFRESH_PENDING"
+                    if defer_local_refresh
+                    else "COMMITTED"
+                ),
                 committed_ack=dict(central),
             )
             return self._result(
@@ -1659,7 +1666,11 @@ class PHSLabelExchangeCoordinator:
             raise
         committed = self._save(
             state,
-            status="COMMITTED",
+            status=(
+                "COMMITTED_LOCAL_REFRESH_PENDING"
+                if defer_local_refresh
+                else "COMMITTED"
+            ),
             committed_ack=dict(activated),
         )
         return self._result(
@@ -1673,11 +1684,44 @@ class PHSLabelExchangeCoordinator:
             ),
         )
 
+    def confirm_local_refresh_applied(
+        self,
+        *,
+        exchange_id: str,
+    ) -> dict[str, Any]:
+        if not self._execution_lock.acquire(blocking=False):
+            raise PHSLabelWorkflowError(
+                "PHS_LABEL_EXCHANGE_BUSY",
+                "현품표 날짜 교환이 이미 진행 중입니다.",
+                retryable=True,
+            )
+        try:
+            state = self.journal.load()
+            status = str(state.get("status") or "").strip().upper()
+            expected_exchange_id = str(exchange_id or "").strip()
+            actual_exchange_id = str(state.get("exchange_id") or "").strip()
+            if status == "COMMITTED" and actual_exchange_id == expected_exchange_id:
+                return state
+            if (
+                status != "COMMITTED_LOCAL_REFRESH_PENDING"
+                or not expected_exchange_id
+                or actual_exchange_id != expected_exchange_id
+            ):
+                raise PHSLabelWorkflowError(
+                    "PHS_LOCAL_REFRESH_CONFIRMATION_INVALID",
+                    "현품표 local refresh 완료 대상을 확인할 수 없습니다.",
+                    retryable=True,
+                )
+            return self._save(state, status="COMMITTED")
+        finally:
+            self._execution_lock.release()
+
     def recover_for_tray(
         self,
         tray: Any,
         *,
         persist_tray: Callable[[], bool] | None = None,
+        defer_local_refresh: bool = False,
         status_callback: Callable[[str], None] | None = None,
     ) -> PHSLabelExchangeResult | None:
         state = self.journal.load()
@@ -1698,6 +1742,7 @@ class PHSLabelExchangeCoordinator:
             tray,
             target,
             persist_tray=persist_tray,
+            defer_local_refresh=defer_local_refresh,
             status_callback=status_callback,
         )
 

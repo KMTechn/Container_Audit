@@ -512,6 +512,33 @@ def test_mid_session_exchange_preserves_exact_local_tray_state(tmp_path):
     assert len(client.activate_calls) == 1
 
 
+def test_deferred_local_refresh_stays_recoverable_until_tk_finish_confirms(
+    tmp_path,
+):
+    tray = _tray()
+    coordinator = _coordinator(tmp_path, FakeCentral())
+
+    result = coordinator.execute_single(
+        tray,
+        _target_candidate(),
+        defer_local_refresh=True,
+    )
+
+    assert result.success is True
+    assert result.status == "COMMITTED_LOCAL_REFRESH_PENDING"
+    assert coordinator.journal.load()["status"] == (
+        "COMMITTED_LOCAL_REFRESH_PENDING"
+    )
+    assert tray.active_label_id == TARGET_LABEL
+
+    committed = coordinator.confirm_local_refresh_applied(
+        exchange_id=result.exchange_id,
+    )
+
+    assert committed["status"] == "COMMITTED"
+    assert coordinator.journal.load()["status"] == "COMMITTED"
+
+
 def test_promoted_authoritative_scope_accepts_shadow_candidate_plane(
     tmp_path,
 ):
