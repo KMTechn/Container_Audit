@@ -964,6 +964,343 @@ def test_close_waits_for_inflight_phs_execute_on_shared_lane(reconciliation):
             root.run_until(lambda: lane.state == "CLOSED")
 
 
+def test_show_validation_screen_defers_automatic_phs_recovery_during_active_hold(
+    monkeypatch,
+):
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    class QueuedRoot:
+        tk = object()
+
+        def __init__(self):
+            self.jobs = []
+
+        def after(self, delay, callback, *args):
+            self.jobs.append((delay, callback, args))
+            return f"job-{len(self.jobs)}"
+
+        def run_delay(self, delay):
+            index = next(
+                index
+                for index, job in enumerate(self.jobs)
+                if job[0] == delay
+            )
+            _delay, callback, args = self.jobs.pop(index)
+            callback(*args)
+
+    class EmptyPane:
+        @staticmethod
+        def winfo_children():
+            return []
+
+    app, lane, calls = _phs_lane_app(reconciliation=False)
+    root = QueuedRoot()
+    app.root = root
+    app.paned_window = SimpleNamespace(pack=lambda **_kwargs: None)
+    app.left_pane = EmptyPane()
+    app.center_pane = EmptyPane()
+    app.right_pane = EmptyPane()
+    app._clear_main_frames = lambda: None
+    app._create_left_sidebar_content = lambda _pane: None
+    app._create_center_content = lambda _pane: None
+    app._create_right_sidebar_content = lambda _pane: None
+    app._set_initial_sash_positions = lambda: None
+    app._start_clock = lambda: None
+    app._start_idle_checker = lambda: None
+    app._update_all_summaries = lambda: None
+    app._update_parked_trays_list = lambda: None
+    app._reconcile_pending_local_member_exchanges = lambda: None
+    app.scanned_listbox = SimpleNamespace(
+        delete=lambda *_args: None,
+        insert=lambda *_args: None,
+    )
+    app.undo_button = {}
+    app._format_scanned_list_row = lambda index, barcode: f"{index}:{barcode}"
+    app._sync_last_normal_scan_from_active_tray = lambda: None
+    app._start_stopwatch = lambda **_kwargs: None
+    app.scan_entry = SimpleNamespace(focus=lambda: None)
+
+    recovery = {
+        "status": "COMMITTED_LOCAL_REFRESH_PENDING",
+        "workflow_kind": "SINGLE",
+        "canonical_input_tag_qr": app.current_tray.master_label_code,
+        "target_instruction": {"instruction_id": "INSTRUCTION-1"},
+    }
+    app.phs_label_exchange_coordinator.journal.load = lambda: dict(recovery)
+    result = SimpleNamespace(
+        success=True,
+        status="COMMITTED_LOCAL_REFRESH_PENDING",
+        exchange_id="PHSX-RECOVERY-1",
+        journal_state=dict(recovery),
+    )
+
+    def recover_for_tray(tray, **kwargs):
+        calls.append(("recover", tray, kwargs))
+        tray.active_label_qr_payload = "ACTIVE-RECOVERED"
+        tray.active_label_id = "LBL-RECOVERED"
+        tray.active_label_business_date = "2026-09-02"
+        tray.active_label_worker_code = "WORKER-RECOVERED"
+        if kwargs.get("persist_tray") is not None:
+            kwargs["persist_tray"]()
+        return result
+
+    app.phs_label_exchange_coordinator.recover_for_tray = recover_for_tray
+    hold = {"active": True}
+    app._preflight_hold_store = lambda: SimpleNamespace(
+        exists=lambda: hold["active"],
+    )
+    live_tray = app.current_tray
+    monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
+
+    app.show_validation_screen()
+    root.run_delay(100)
+
+    assert not any(call[0] == "recover" for call in calls)
+    assert lane.task is None
+    assert live_tray.active_label_id == "LBL-OLD"
+    assert ("persist",) not in calls
+    assert any(
+        call[0] == "status"
+        and "보류" in call[1]
+        and "접수되지 않았습니다" in call[1]
+        for call in calls
+    )
+
+    hold["active"] = False
+    root.run_delay(100)
+
+    assert lane.task is not None
+    assert lane.task.name == "phs-label-recovery"
+    assert not any(call[0] == "recover" for call in calls)
+    outcome = lane.task.work()
+    worker_call = next(call for call in calls if call[0] == "recover")
+    assert worker_call[1] is not live_tray
+    assert worker_call[2]["persist_tray"] is None
+    assert worker_call[2]["defer_local_refresh"] is True
+    assert worker_call[2]["status_callback"] is None
+    assert live_tray.active_label_id == "LBL-OLD"
+    assert ("persist",) not in calls
+
+    lane.task.finish(outcome)
+
+    assert live_tray.active_label_id == "LBL-RECOVERED"
+    assert ("persist",) in calls
+    assert ("confirm-local-refresh", "PHSX-RECOVERY-1") in calls
+
+
+def test_close_waits_for_inflight_automatic_phs_recovery_on_shared_lane():
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    app, _deferred_lane, calls = _phs_lane_app(reconciliation=False)
+    root = FakeTkRoot()
+    root.tk = object()
+    lane = TkSerialUiLane(root, poll_ms=1)
+    app.root = root
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
+    app._scan_callback_pending = False
+    app._ui_close_requested = False
+    app._ui_close_lane_drained = False
+    app._preflight_hold_writer_instance = None
+    app.master_label_replace_state = None
+    app.current_exchange_session = SimpleNamespace(
+        defective_barcodes=[],
+        good_barcodes=[],
+    )
+    app.worker_name = ""
+    app._preserve_preflight_hold_for_close = lambda: calls.append(
+        ("preserve",)
+    ) or (True, False)
+    app._finalize_application_close = lambda: calls.append(
+        ("finalize", lane.state, lane.worker_thread.is_alive())
+    )
+    recovery = {
+        "status": "COMMITTED_LOCAL_REFRESH_PENDING",
+        "workflow_kind": "SINGLE",
+        "canonical_input_tag_qr": app.current_tray.master_label_code,
+        "target_instruction": {"instruction_id": "INSTRUCTION-1"},
+    }
+    app.phs_label_exchange_coordinator.journal.load = lambda: dict(recovery)
+    result = SimpleNamespace(
+        success=True,
+        status="COMMITTED_LOCAL_REFRESH_PENDING",
+        exchange_id="PHSX-RECOVERY-CLOSE",
+        journal_state=dict(recovery),
+    )
+    started = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+
+    def blocking_recovery(tray, **kwargs):
+        calls.append(("recover", tray, kwargs))
+        started.set()
+        assert release.wait(timeout=2.0)
+        tray.active_label_id = "LBL-RECOVERED"
+        completed.set()
+        return result
+
+    app.phs_label_exchange_coordinator.recover_for_tray = blocking_recovery
+
+    try:
+        app._schedule_phs_label_exchange_recovery()
+        assert started.wait(timeout=1.0)
+
+        app.on_closing(_confirmed=True)
+
+        assert not any(call[0] == "finalize" for call in calls)
+        assert lane.state == "DRAINING"
+        release.set()
+        root.run_until(
+            lambda: any(call[0] == "finalize" for call in calls),
+        )
+
+        assert ("persist",) in calls
+        assert ("confirm-local-refresh", "PHSX-RECOVERY-CLOSE") in calls
+        assert ("preserve",) in calls
+        final = next(call for call in calls if call[0] == "finalize")
+        assert final == ("finalize", "CLOSED", False)
+        assert calls.index(("persist",)) < calls.index(("preserve",))
+    finally:
+        release.set()
+        completed.wait(timeout=1.0)
+        while root.run_one():
+            pass
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_active_hold_blocks_phs_reconciliation_resolve_before_state_marker(
+    monkeypatch,
+):
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    central_calls = []
+
+    class Reconciliation:
+        available = True
+
+        @staticmethod
+        def resolve(_payload):
+            central_calls.append("resolve")
+            raise RuntimeError("must not run during hold")
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(
+        master_label_code="MASTER",
+        item_code="ITEM",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app.phs_label_exchange_coordinator = SimpleNamespace(
+        reconciliation=Reconciliation(),
+    )
+    app._phs_reconciliation_scan_armed = True
+    app._phs_label_candidate_pending = False
+    app._phs_label_exchange_pending = False
+    app._parse_new_format_qr = lambda _payload: {"PHS": "2"}
+    app._set_phs_reconciliation_context = lambda _context: None
+    app._update_action_button_states = lambda: None
+    app._schedule_focus_return = lambda: None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.show_status_message = lambda message, *_args, **_kwargs: (
+        app.statuses.append(message)
+    )
+    _set_durable_preflight_hold(app, active=True)
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_fields",
+        lambda fields: dict(fields),
+    )
+    monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
+
+    assert app._intercept_phs_reconciliation_scan("PHS2") is True
+
+    assert central_calls == []
+    assert app._phs_reconciliation_scan_armed is True
+    assert any(
+        "보류" in message and "접수되지 않았습니다" in message
+        for message in app.statuses
+    )
+
+
+def test_active_hold_blocks_phs_active_refresh_before_current_tray_mutation(
+    monkeypatch,
+):
+    class ImmediateThread:
+        def __init__(self, *, target, **_kwargs):
+            self.target = target
+
+        def start(self):
+            self.target()
+
+    central_calls = []
+
+    class Client:
+        @staticmethod
+        def resolve_source(_identity):
+            central_calls.append("refresh")
+            raise RuntimeError("must not run during hold")
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = _ImmediateRoot()
+    app.current_tray = TraySession(
+        master_label_code="MASTER",
+        item_code="ITEM",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    app.phs_label_exchange_coordinator = SimpleNamespace(client=Client())
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._parse_new_format_qr = lambda _payload: {
+        "PHS": "2",
+        "ITG": "ITAG-1",
+        "CLC": "ITEM",
+        "LBL": "LBL-1",
+        "HSH": "0123456789abcdef",
+    }
+    app._update_action_button_states = lambda: None
+    app._schedule_focus_return = lambda: None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.show_status_message = lambda message, *_args, **_kwargs: (
+        app.statuses.append(message)
+    )
+    _set_durable_preflight_hold(app, active=True)
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_fields",
+        lambda fields: dict(fields),
+    )
+    monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
+
+    app._begin_active_phs_label_refresh("PHS2")
+
+    assert central_calls == []
+    assert app._phs_label_refresh_pending is False
+    assert any(
+        "보류" in message and "접수되지 않았습니다" in message
+        for message in app.statuses
+    )
+
+
 def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
     tmp_path,
 ):

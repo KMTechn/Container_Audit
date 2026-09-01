@@ -1110,6 +1110,7 @@ class ContainerAudit:
         self._direct_sync_wake_error_code = ""
         self._phs_label_refresh_pending = False
         self._phs_label_exchange_pending = False
+        self._phs_label_recovery_deferred = False
         self._phs_label_candidate_pending = False
         self._phs_label_candidates: List[Dict[str, Any]] = []
         self._phs_reconciliation_scan_armed = False
@@ -5318,6 +5319,8 @@ class ContainerAudit:
             )
             self._schedule_focus_return()
             return True
+        if self._reject_mutation_during_preflight_hold():
+            return True
         # F8 arms exactly one reconciliation scan.  Leaving this armed after a
         # valid capture would steal later, ordinary PHS2 scans from the normal
         # transfer workflow.
@@ -5941,10 +5944,14 @@ class ContainerAudit:
         self._phs_label_exchange_task_handle = admission.handle
 
     def _schedule_phs_label_exchange_recovery(self) -> None:
-        if getattr(self, "_phs_label_exchange_pending", False):
+        if (
+            getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_ui_close_requested", False)
+        ):
             return
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
         if coordinator is None:
+            self._phs_label_recovery_deferred = False
             return
         try:
             recovery = coordinator.journal.load()
@@ -5959,6 +5966,7 @@ class ContainerAudit:
                 self.COLOR_DANGER,
                 duration=10000,
             )
+            self._phs_label_recovery_deferred = False
             return
         if (
             recovery
@@ -5967,6 +5975,7 @@ class ContainerAudit:
             and str(recovery.get("workflow_kind") or "")
             == "RECONCILIATION"
         ):
+            self._phs_label_recovery_deferred = False
             context = recovery.get("reconciliation_context")
             if isinstance(context, Mapping):
                 self._set_phs_reconciliation_context(context)
@@ -5975,6 +5984,7 @@ class ContainerAudit:
             )
             return
         if not self._phs_label_exchange_available_for_tray():
+            self._phs_label_recovery_deferred = False
             return
         if (
             not recovery
@@ -5983,8 +5993,22 @@ class ContainerAudit:
             or str(recovery.get("canonical_input_tag_qr") or "").strip()
             != str(self.current_tray.master_label_code or "").strip()
         ):
+            self._phs_label_recovery_deferred = False
             return
+        if self._preflight_context_blocks_mutation():
+            if not getattr(self, "_phs_label_recovery_deferred", False):
+                self._reject_mutation_during_preflight_hold()
+            self._phs_label_recovery_deferred = True
+            try:
+                self.root.after(100, self._schedule_phs_label_exchange_recovery)
+            except (tk.TclError, AttributeError):
+                pass
+            return
+        self._phs_label_recovery_deferred = False
         tray = self.current_tray
+        captured_master_label = str(tray.master_label_code or "")
+        tray_snapshot = copy.deepcopy(tray)
+        lane = self._ui_task_lane()
         self._phs_label_exchange_pending = True
         self._update_action_button_states()
         self.show_status_message(
@@ -5993,47 +6017,112 @@ class ContainerAudit:
             duration=0,
         )
 
-        def worker() -> None:
+        def work() -> tuple[Any, TraySession]:
             result = coordinator.recover_for_tray(
-                tray,
-                persist_tray=self._save_current_tray_state,
-                status_callback=self._phs_exchange_status_from_worker,
+                tray_snapshot,
+                persist_tray=None,
+                defer_local_refresh=True,
+                status_callback=None,
             )
+            return result, tray_snapshot
 
-            def finish() -> None:
-                self._phs_label_exchange_pending = False
-                if result is not None:
-                    self.show_status_message(
-                        (
-                            "이전 현품표 교체를 복구했습니다. 현재 트레이 진행은 유지됩니다."
-                            if result.success
-                            else "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요."
-                        ),
-                        self.COLOR_SUCCESS if result.success else self.COLOR_DANGER,
-                        duration=10000,
+        def finish(outcome: tuple[Any, TraySession]) -> None:
+            result, updated_tray = outcome
+            self._phs_label_exchange_pending = False
+            local_ready = False
+            refresh_confirmed = False
+            if result is not None:
+                local_ready = self._apply_phs_label_exchange_snapshot(
+                    captured_tray=tray,
+                    captured_master_label=captured_master_label,
+                    updated_tray=updated_tray,
+                    force_persist=bool(result.success),
+                )
+                if result.success and local_ready:
+                    try:
+                        coordinator.confirm_local_refresh_applied(
+                            exchange_id=result.exchange_id,
+                        )
+                        refresh_confirmed = True
+                    except Exception as exc:
+                        print(
+                            "현품표 교체 복구 local refresh 완료 기록 실패: "
+                            f"{exc.__class__.__name__}"
+                        )
+                success = bool(
+                    result.success and local_ready and refresh_confirmed
+                )
+                self.show_status_message(
+                    (
+                        "이전 현품표 교체를 복구했습니다. 현재 트레이 진행은 유지됩니다."
+                        if success
+                        else "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요."
+                    ),
+                    self.COLOR_SUCCESS if success else self.COLOR_DANGER,
+                    duration=10000,
+                )
+            else:
+                success = False
+            self._update_current_item_label()
+            self._update_center_display()
+            self._update_action_button_states()
+            self._schedule_focus_return()
+            if (
+                success
+                and tray is self.current_tray
+                and not getattr(self, "_ui_close_requested", False)
+                and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
+            ):
+                self.root.after(0, self.request_complete_tray)
+
+        def fail(exc: BaseException) -> None:
+            print(f"현품표 교체 복구 lane 실패: {exc.__class__.__name__}")
+            self._phs_label_exchange_pending = False
+            self.show_status_message(
+                "이전 현품표 교체를 복구하지 못했습니다. 관리자에게 문의하세요.",
+                self.COLOR_DANGER,
+                duration=10000,
+            )
+            self._update_action_button_states()
+            self._schedule_focus_return()
+
+        admission = lane.submit(
+            LaneTask(
+                name="phs-label-recovery",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                on_idle=(
+                    (lambda: lane.close_idle())
+                    if not hasattr(self.root, "tk")
+                    else None
+                ),
+            )
+        )
+        if not admission.accepted:
+            self._phs_label_exchange_pending = False
+            self._update_action_button_states()
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self._schedule_focus_return()
+            if (
+                admission.reason == "busy"
+                and not getattr(self, "_ui_close_requested", False)
+            ):
+                self._phs_label_recovery_deferred = True
+                try:
+                    self.root.after(
+                        100,
+                        self._schedule_phs_label_exchange_recovery,
                     )
-                self._update_current_item_label()
-                self._update_center_display()
-                self._update_action_button_states()
-                self._schedule_focus_return()
-                if (
-                    result is not None
-                    and result.success
-                    and tray is self.current_tray
-                    and len(tray.scanned_barcodes) >= int(tray.tray_size or 0)
-                ):
-                    self.root.after(0, self.request_complete_tray)
-
-            try:
-                self.root.after(0, finish)
-            except (tk.TclError, AttributeError):
-                self._phs_label_exchange_pending = False
-
-        threading.Thread(
-            target=worker,
-            name="container-audit-phs-label-recovery",
-            daemon=True,
-        ).start()
+                except (tk.TclError, AttributeError):
+                    pass
+            return
+        self._phs_label_exchange_task_handle = admission.handle
 
     def _show_operations_menu(self) -> None:
         """Show secondary and destructive actions without growing the center pane."""
@@ -8526,6 +8615,8 @@ class ContainerAudit:
     def _begin_active_phs_label_refresh(self, raw_barcode: str) -> None:
         """Resolve a PHS2 rescan without disturbing the active tray."""
 
+        if self._reject_mutation_during_preflight_hold():
+            return
         if (
             getattr(self, "_phs_label_exchange_pending", False)
             or self._phs_label_exchange_transition_pending()
@@ -8761,6 +8852,8 @@ class ContainerAudit:
             self._schedule_focus_return()
             return True
 
+        if self._reject_mutation_during_preflight_hold():
+            return True
         current_fields = self._parse_new_format_qr(
             normalize_master_label_input(self.current_tray.master_label_code)
         ) or {}
