@@ -1058,6 +1058,31 @@ def inspect_current_user_state(
         }
         if not all(required_identity.values()):
             raise ValueError("producer identity is incomplete")
+        from tools.register_container_audit_worker_pc import (
+            _default_secret_ref,
+            derive_install_bound_identity_id,
+        )
+
+        expected_source_host_id = derive_install_bound_identity_id(
+            required_identity["producer_install_id"],
+            purpose="source_host_id",
+            prefix="container-audit-source",
+        )
+        expected_pc_id = derive_install_bound_identity_id(
+            required_identity["producer_install_id"],
+            purpose="pc_id",
+            prefix="container-audit-pc",
+        )
+        expected_secret_ref = _default_secret_ref(
+            required_identity["producer_install_id"]
+        )
+        if (
+            required_identity["source_host_id"] != expected_source_host_id
+            or required_identity["producer_id"] != expected_source_host_id
+        ):
+            raise CurrentUserPossessionRecoveryRequired(
+                "hostname-era producer identity requires audited install-identity migration"
+            )
         pc_identity = manifest.get("pc_identity")
         if not isinstance(pc_identity, Mapping):
             raise ValueError("producer manifest identity is absent")
@@ -1066,8 +1091,17 @@ def inspect_current_user_state(
             != required_identity["source_host_id"]
             or str(pc_identity.get("producer_install_id") or "")
             != required_identity["producer_install_id"]
+            or str(pc_identity.get("pc_id") or "") != expected_pc_id
         ):
             raise ValueError("producer identity and manifest binding differ")
+        if (
+            str(credential.get("producer_id") or "")
+            != required_identity["producer_id"]
+            or str(credential.get("secret_ref") or "") != expected_secret_ref
+        ):
+            raise CurrentUserPossessionRecoveryRequired(
+                "producer credential requires audited install-identity migration"
+            )
         expected_manifest_hash = str(registration.get("manifest_hash") or "").lower()
         if (
             registration.get("server_registration_verified") is not True

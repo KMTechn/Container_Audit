@@ -158,7 +158,20 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert report["raw_secret_written"] is False
     assert report["secret_bootstrap_verified"] is False
     assert manifest["schema_version"] == "producer-onboarding-manifest-v1"
-    assert manifest["pc_identity"]["source_host_id"] == "container-audit-pc-01"
+    expected_source_host_id = registration.derive_install_bound_identity_id(
+        report["producer_install_id"],
+        purpose="source_host_id",
+        prefix="container-audit-source",
+    )
+    expected_pc_id = registration.derive_install_bound_identity_id(
+        report["producer_install_id"],
+        purpose="pc_id",
+        prefix="container-audit-pc",
+    )
+    assert manifest["pc_identity"]["source_host_id"] == expected_source_host_id
+    assert manifest["pc_identity"]["pc_id"] == expected_pc_id
+    assert manifest["pc_identity"]["display_hostname"] == "PC-01"
+    assert report["pc_id"] == expected_pc_id
     raw_event_names = manifest["streams"][0]["raw_event_names"]
     catalog_names = _catalog_container_audit_raw_event_names()
     assert len(catalog_names) == 18
@@ -292,7 +305,13 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     assert captured["headers"]["X-Producer-Enrollment-Token"] == "install-token"
     assert captured["json"]["contract_version"] == "producer-self-enrollment-v2"
     assert captured["json"]["possession_public_jwk"] == TEST_POSSESSION_PUBLIC_JWK
-    assert captured["json"]["producer_id"] == "container-audit-pc-02"
+    assert captured["json"]["producer_id"] == (
+        registration.derive_install_bound_identity_id(
+            report["producer_install_id"],
+            purpose="source_host_id",
+            prefix="container-audit-source",
+        )
+    )
     assert captured["json"]["key_id"] == "install-request-key-pc-02"
     assert captured["json"]["manifest"]["schema_version"] == "producer-onboarding-manifest-v1"
     assert captured["wincred_target"] == "KMTech.DirectSync.ContainerAudit.PC-02"
@@ -373,12 +392,16 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert captured["headers"] == {}
     assert credential["producer_id"] == "producer-pc-ip"
     assert credential["key_id"] == "server-key-pc-ip"
-    assert credential["secret_ref"] == "dpapi:KMTech.DirectSync.ContainerAudit.pc-ip"
+    expected_secret_ref = registration._default_secret_ref(
+        report["producer_install_id"]
+    )
+    expected_secret_target = expected_secret_ref.split(":", 1)[1]
+    assert credential["secret_ref"] == expected_secret_ref
     expected_direct_sync_root = local_app_data / "KMTech" / "DirectSync" / "container_audit"
     assert credential["secret_data_dir"] == str(expected_direct_sync_root)
     assert "secret" not in credential
     assert captured["dpapi_data_dir"] == str(expected_direct_sync_root)
-    assert captured["dpapi_target"] == "KMTech.DirectSync.ContainerAudit.pc-ip"
+    assert captured["dpapi_target"] == expected_secret_target
     assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
 
 
@@ -799,6 +822,289 @@ def test_worker_pc_registration_generated_install_id_ignores_app_and_state_paths
     assert first == second == recreated == _generated_install_id()
 
 
+def _run_generated_identity_probe(
+    tmp_path,
+    monkeypatch,
+    *,
+    name,
+    hostname,
+    machine_guid,
+    user_sid,
+):
+    local_app_data = tmp_path / name / "LocalAppData"
+    report_path = tmp_path / name / "registration.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("LOCALAPPDATA", str(local_app_data))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / name / "ProgramData"))
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / name / "state"))
+    monkeypatch.setattr(registration, "_current_machine_guid", lambda: machine_guid)
+    monkeypatch.setattr(registration, "_current_user_sid", lambda: user_sid)
+
+    assert registration.main(
+        [
+            "--hostname",
+            hostname,
+            "--report-path",
+            str(report_path),
+        ]
+    ) == 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    manifest = json.loads(
+        Path(report["producer_manifest_path"]).read_text(encoding="utf-8")
+    )
+    credential = json.loads(
+        Path(report["credential_path"]).read_text(encoding="utf-8")
+    )
+    return report, manifest, credential
+
+
+def test_generated_runtime_identities_do_not_collide_on_same_hostname(
+    tmp_path,
+    monkeypatch,
+):
+    first = _run_generated_identity_probe(
+        tmp_path,
+        monkeypatch,
+        name="machine-a",
+        hostname="SHARED-PC-NAME",
+        machine_guid="00112233-4455-6677-8899-aabbccddeeff",
+        user_sid="S-1-5-21-100-200-300-1001",
+    )
+    second = _run_generated_identity_probe(
+        tmp_path,
+        monkeypatch,
+        name="machine-b",
+        hostname="SHARED-PC-NAME",
+        machine_guid="10112233-4455-6677-8899-aabbccddeeff",
+        user_sid="S-1-5-21-100-200-300-1002",
+    )
+
+    for report, manifest, credential in (first, second):
+        install_id = report["producer_install_id"]
+        expected_source = registration.derive_install_bound_identity_id(
+            install_id,
+            purpose="source_host_id",
+            prefix="container-audit-source",
+        )
+        expected_pc = registration.derive_install_bound_identity_id(
+            install_id,
+            purpose="pc_id",
+            prefix="container-audit-pc",
+        )
+        assert report["source_host_id"] == expected_source
+        assert report["producer_id"] == expected_source
+        assert report["pc_id"] == expected_pc
+        assert manifest["pc_identity"] == {
+            "pc_id": expected_pc,
+            "display_hostname": "SHARED-PC-NAME",
+            "source_host_id": expected_source,
+            "producer_install_id": install_id,
+        }
+        assert credential["producer_id"] == expected_source
+        assert credential["secret_ref"] == registration._default_secret_ref(
+            install_id
+        )
+        assert report["secret_ref_target"] == credential["secret_ref"].split(
+            ":", 1
+        )[1]
+    assert first[0]["producer_install_id"] != second[0]["producer_install_id"]
+    assert first[0]["source_host_id"] != second[0]["source_host_id"]
+    assert first[0]["producer_id"] != second[0]["producer_id"]
+    assert first[0]["pc_id"] != second[0]["pc_id"]
+    assert first[2]["secret_ref"] != second[2]["secret_ref"]
+
+
+def test_generated_runtime_identities_survive_hostname_rename(
+    tmp_path,
+    monkeypatch,
+):
+    first = _run_generated_identity_probe(
+        tmp_path,
+        monkeypatch,
+        name="before-rename",
+        hostname="LINE-PC-OLD",
+        machine_guid=TEST_MACHINE_GUID,
+        user_sid=TEST_USER_SID,
+    )
+    second = _run_generated_identity_probe(
+        tmp_path,
+        monkeypatch,
+        name="after-rename",
+        hostname="LINE-PC-NEW",
+        machine_guid=TEST_MACHINE_GUID,
+        user_sid=TEST_USER_SID,
+    )
+
+    assert first[0]["hostname"] == "LINE-PC-OLD"
+    assert second[0]["hostname"] == "LINE-PC-NEW"
+    for field in ("producer_install_id", "source_host_id", "producer_id", "pc_id"):
+        assert first[0][field] == second[0][field]
+    assert first[0]["key_id"] == second[0]["key_id"]
+    assert first[2]["secret_ref"] == second[2]["secret_ref"]
+    assert first[1]["pc_identity"]["display_hostname"] == "LINE-PC-OLD"
+    assert second[1]["pc_identity"]["display_hostname"] == "LINE-PC-NEW"
+
+
+def test_existing_hostname_identity_fails_closed_without_overwriting_registration(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / "state"))
+    storage_paths = registration.build_container_audit_storage_paths(
+        application_path=tmp_path / "app"
+    )
+    registration.ensure_container_audit_storage_dirs(storage_paths)
+    identity_path = (
+        storage_paths.direct_sync_root / registration.PRODUCER_IDENTITY_FILENAME
+    )
+    identity_path.write_text(
+        json.dumps(
+            {
+                "schema_version": registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
+                "producer_id": "factory-pc-01",
+                "source_host_id": "factory-pc-01",
+                "producer_install_id": _generated_install_id(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    manifest_before = b'{"legacy":"manifest"}\n'
+    credential_before = b'{"legacy":"credential"}\n'
+    storage_paths.producer_manifest_path.write_bytes(manifest_before)
+    storage_paths.credential_path.write_bytes(credential_before)
+    report_path = tmp_path / "blocked-report.json"
+
+    result = registration.main(
+        [
+            "--app-root",
+            str(tmp_path / "app"),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert result == 2
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert (
+        report["enrollment_error_code"]
+        == "install_bound_identity_migration_required"
+    )
+    assert storage_paths.producer_manifest_path.read_bytes() == manifest_before
+    assert storage_paths.credential_path.read_bytes() == credential_before
+
+
+def test_hostname_identity_file_alone_cannot_seed_mixed_install_artifacts(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / "state"))
+    storage_paths = registration.build_container_audit_storage_paths(
+        application_path=tmp_path / "app"
+    )
+    registration.ensure_container_audit_storage_dirs(storage_paths)
+    identity_path = (
+        storage_paths.direct_sync_root / registration.PRODUCER_IDENTITY_FILENAME
+    )
+    identity_before = json.dumps(
+        {
+            "schema_version": registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
+            "producer_id": "factory-pc-identity-only",
+            "source_host_id": "factory-pc-identity-only",
+            "producer_install_id": _generated_install_id(),
+        },
+        indent=2,
+    ).encode("utf-8")
+    identity_path.write_bytes(identity_before)
+    report_path = tmp_path / "identity-only-blocked-report.json"
+
+    result = registration.main(
+        [
+            "--app-root",
+            str(tmp_path / "app"),
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    assert result == 2
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == registration.ADMIN_RECOVERY_ACTION
+    assert (
+        report["enrollment_error_code"]
+        == "install_bound_identity_migration_required"
+    )
+    assert identity_path.read_bytes() == identity_before
+    assert not storage_paths.producer_manifest_path.exists()
+    assert not storage_paths.credential_path.exists()
+
+
+def test_audited_legacy_migration_rebinds_source_and_producer_to_install_id(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.setenv(DATA_ROOT_ENV, str(tmp_path / "state"))
+    storage_paths = registration.build_container_audit_storage_paths(
+        application_path=tmp_path / "app"
+    )
+    registration.ensure_container_audit_storage_dirs(storage_paths)
+    identity_path = (
+        storage_paths.direct_sync_root / registration.PRODUCER_IDENTITY_FILENAME
+    )
+    install_id = _generated_install_id()
+    identity_path.write_text(
+        json.dumps(
+            {
+                "schema_version": registration.PRODUCER_IDENTITY_SCHEMA_VERSION,
+                "producer_id": "factory-pc-01",
+                "source_host_id": "factory-pc-01",
+                "producer_install_id": install_id,
+            }
+        ),
+        encoding="utf-8",
+    )
+    storage_paths.producer_manifest_path.write_text("{}", encoding="utf-8")
+    storage_paths.credential_path.write_text("{}", encoding="utf-8")
+    args = SimpleNamespace(
+        producer_identity_path="",
+        manifest_path="",
+        credential_path="",
+        source_host_id="",
+        producer_install_id="",
+        producer_id="",
+        migrate_install_bound_identity=True,
+        admin_recovery_secret_file=str(tmp_path / "authorization.json"),
+    )
+
+    identity = registration._resolve_producer_identity(
+        args,
+        storage_paths,
+        hostname="RENAMED-PC",
+    )
+    expected_source = registration.derive_install_bound_identity_id(
+        install_id,
+        purpose="source_host_id",
+        prefix="container-audit-source",
+    )
+
+    assert identity["source_host_id"] == expected_source
+    assert identity["producer_id"] == expected_source
+    assert identity["pc_id"] == registration.derive_install_bound_identity_id(
+        install_id,
+        purpose="pc_id",
+        prefix="container-audit-pc",
+    )
+    assert identity["identity_source"] == (
+        "admin_recovery_install_identity_migration"
+    )
+
+
 def _identity_payload(
     producer_id,
     source_host_id,
@@ -960,6 +1266,12 @@ def test_worker_pc_registration_admin_recovery_is_explicit_signed_and_cleans_sec
         [
             "--hostname",
             "RECOVERY",
+            "--producer-id",
+            producer_id,
+            "--source-host-id",
+            producer_id,
+            "--producer-install-id",
+            "container-audit-install-recovery",
             "--admin-recovery-secret-file",
             str(recovery_secret_path),
             "--endpoint-url",
@@ -1014,7 +1326,7 @@ def test_worker_pc_registration_admin_recovery_is_explicit_signed_and_cleans_sec
         "expires_at": "2999-01-01T00:00:00Z",
         "audience": registration.ADMIN_RECOVERY_AUDIENCE,
         "producer_id": producer_id,
-        "producer_install_id": _generated_install_id(),
+        "producer_install_id": "container-audit-install-recovery",
         "source_host_id": producer_id,
         "manifest_hash": registration.manifest_hash(captured["json"]["manifest"]),
         "new_possession_key_fingerprint": TEST_POSSESSION_FINGERPRINT,
@@ -1056,6 +1368,12 @@ def test_worker_pc_registration_rejected_admin_recovery_retains_protected_secret
         [
             "--hostname",
             "RECOVERY-BAD",
+            "--producer-id",
+            "container-audit-recovery-bad",
+            "--source-host-id",
+            "container-audit-recovery-bad",
+            "--producer-install-id",
+            "container-audit-install-recovery-bad",
             "--admin-recovery-secret-file",
             str(recovery_secret_path),
             "--endpoint-url",
@@ -1840,6 +2158,11 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     identity_path = local_app_data / "KMTech" / "DirectSync" / "container_audit" / "producer_identity.json"
     identity = json.loads(identity_path.read_text(encoding="utf-8"))
     generated_install_id = _generated_install_id()
+    generated_source_host_id = registration.derive_install_bound_identity_id(
+        generated_install_id,
+        purpose="source_host_id",
+        prefix="container-audit-source",
+    )
 
     assert exit_code == 0
     assert report["status"] == "SELF_ENROLLMENT_REGISTERED"
@@ -1850,19 +2173,19 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     assert report["producer_identity_persisted"] is True
     assert Path(report["producer_identity_path"]) == identity_path.resolve()
     assert identity == _identity_payload(
-        "container-audit-pc-persist",
-        "container-audit-pc-persist",
+        generated_source_host_id,
+        generated_source_host_id,
         generated_install_id,
         possession_bound=True,
     )
-    assert captured["json"]["producer_id"] == "container-audit-pc-persist"
+    assert captured["json"]["producer_id"] == generated_source_host_id
     assert captured["json"]["manifest"]["pc_identity"]["producer_install_id"] == generated_install_id
     assert captured["json"]["manifest"]["streams"][0]["raw_event_names"] == (
         registration._container_audit_catalog_raw_event_names()
     )
 
 
-def test_worker_pc_registration_preserves_legacy_identity_without_key_or_http(
+def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
     tmp_path, monkeypatch
 ):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
@@ -1926,12 +2249,13 @@ def test_worker_pc_registration_preserves_legacy_identity_without_key_or_http(
     assert exit_code == 2
     assert report["status"] == registration.ADMIN_RECOVERY_ACTION
     assert report["recovery_action"] == registration.ADMIN_RECOVERY_ACTION
-    assert report["enrollment_error_code"] == (
-        "legacy_producer_admin_recovery_required"
+    assert (
+        report["enrollment_error_code"]
+        == "install_bound_identity_migration_required"
     )
     assert report["automatic_key_replacement"] is False
     assert report["automatic_legacy_migration"] is False
-    assert "existing legacy producer identity" in report["blocked_reason"]
+    assert "existing hostname-era producer identity" in report["blocked_reason"]
     assert calls == []
     assert persisted == pinned
 

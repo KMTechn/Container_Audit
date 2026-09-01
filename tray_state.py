@@ -43,7 +43,7 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
     active_label_qr_payload = str(
         getattr(tray, "active_label_qr_payload", "") or master_label
     )
-    return {
+    state = {
         "worker_name": persistent_operator_name(worker_name),
         "master_label_code": master_label,
         "canonical_input_tag_qr": canonical_input_tag_qr,
@@ -72,6 +72,20 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "is_test_tray": tray.is_test_tray,
         "is_partial_submission": tray.is_partial_submission,
     }
+    scanned_barcodes = set(state["scanned_barcodes"])
+    raw_receipts = getattr(tray, "preflight_scan_receipts", {})
+    if isinstance(raw_receipts, Mapping):
+        receipts = {
+            str(barcode): str(scan_id)
+            for barcode, scan_id in raw_receipts.items()
+            if isinstance(barcode, str)
+            and barcode in scanned_barcodes
+            and isinstance(scan_id, str)
+            and scan_id.strip()
+        }
+        if receipts:
+            state["preflight_scan_receipts"] = receipts
+    return state
 
 
 def _require_mapping(state: Any) -> Mapping[str, Any]:
@@ -701,6 +715,22 @@ def validate_tray_state(
     if len(scanned_barcodes) != len(set(scanned_barcodes)):
         raise TrayStateValidationError("scanned_barcodes must not contain duplicates")
 
+    preflight_scan_receipts = state.get("preflight_scan_receipts", {})
+    if not isinstance(preflight_scan_receipts, Mapping) or not all(
+        isinstance(barcode, str)
+        and barcode in scanned_barcodes
+        and isinstance(scan_id, str)
+        and bool(scan_id.strip())
+        for barcode, scan_id in preflight_scan_receipts.items()
+    ):
+        raise TrayStateValidationError(
+            "preflight_scan_receipts must map scanned barcodes to non-empty scan ids"
+        )
+    if len(set(preflight_scan_receipts.values())) != len(preflight_scan_receipts):
+        raise TrayStateValidationError(
+            "preflight_scan_receipts scan ids must be unique"
+        )
+
     scan_times = state.get("scan_times")
     if not isinstance(scan_times, list) or not all(isinstance(value, str) for value in scan_times):
         raise TrayStateValidationError("scan_times must be a list of ISO timestamp strings")
@@ -817,6 +847,7 @@ def tray_session_from_state(
         item_spec=state["item_spec"],
         scanned_barcodes=list(state["scanned_barcodes"]),
         scan_times=[datetime.datetime.fromisoformat(dt) for dt in state["scan_times"]],
+        preflight_scan_receipts=dict(state.get("preflight_scan_receipts", {})),
         tray_size=state.get("tray_size", default_tray_size),
         mismatch_error_count=state["mismatch_error_count"],
         total_idle_seconds=state["total_idle_seconds"],

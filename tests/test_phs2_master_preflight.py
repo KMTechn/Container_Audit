@@ -24,6 +24,7 @@ from transfer_seal import (
     membership_hash,
 )
 from tests.operation_lease_fixtures import signed_transfer_artifact
+from warning_presenter import Notice, NoticeSeverity, WarningPresenter
 
 
 ITEM = "AAA2270730100"
@@ -382,7 +383,8 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     app._master_preflight_thread.join(timeout=2.0)
     _pump_until(
         app.root,
-        lambda: app.current_tray.scanned_barcodes == [held_product],
+        lambda: app.current_tray.scanned_barcodes == [held_product]
+        and not app._preflight_hold_store().exists(),
     )
 
     assert app._master_preflight_pending is False
@@ -584,12 +586,113 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path)
     app._master_preflight_thread.join(timeout=2.0)
     _pump_until(
         app.root,
-        lambda: app.current_tray.scanned_barcodes == held,
+        lambda: app.current_tray.scanned_barcodes == held
+        and not app._preflight_hold_store().exists(),
     )
 
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.scanned_barcodes == held
     assert not app._preflight_hold_store().exists()
+
+
+def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
+    tmp_path,
+):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=3), gate=gate)
+    app = _app(tmp_path, client)
+    held_product = f"{ITEM}-HELD-STALE"
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    app._process_barcode_logic(held_product)
+    app._cancel_master_preflight()
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(
+        app.root,
+        lambda: (
+            app._preflight_hold_store().exists()
+            and app._preflight_hold_store().load().state == HOLD_LOOKUP_FAILED
+            and getattr(app, "_preflight_hold_snapshot", None) is not None
+        ),
+    )
+
+    settled = app._preflight_hold_store().load()
+    assert settled.error_code == "PHS2_PREFLIGHT_STALE_RESULT"
+    assert [item.raw_barcode for item in settled.items] == [held_product]
+    assert app.current_tray.master_label_code == ""
+    assert app._master_preflight_pending is False
+    assert app._preflight_hold_snapshot == settled
+
+
+def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ack(
+    tmp_path,
+):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=3), gate=gate)
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    app.warning_presenter = WarningPresenter()
+
+    def present_warning(title, message, _color):
+        app.warnings.append((title, message))
+        app.warning_presenter.present(
+            Notice(
+                code=f"held.{len(app.warnings)}",
+                title=title,
+                message=message,
+                severity=NoticeSeverity.ERROR,
+                blocking=True,
+            )
+        )
+
+    app.show_fullscreen_warning = present_warning
+    first = f"{ITEM}-HELD-A"
+    tail = f"{ITEM}-HELD-B"
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    for barcode in (first, first, tail):
+        app._process_barcode_logic(barcode)
+    _pump_until(
+        app.root,
+        lambda: (
+            app._preflight_hold_store().exists()
+            and len(app._preflight_hold_store().load().items) == 3
+        ),
+    )
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(
+        app.root,
+        lambda: (
+            app.warning_presenter.state.is_blocking
+            and app._preflight_hold_store().exists()
+            and [
+                item.raw_barcode
+                for item in app._preflight_hold_store().load().items
+            ]
+            == [tail]
+        ),
+    )
+
+    assert app.current_tray.scanned_barcodes == [first]
+    reject = next(event for event in app.events if event[0] == "SCAN_FAIL_DUPLICATE")
+    assert reject[2]["synchronous"] is True
+    assert reject[2]["deduplicate"] is True
+    assert reject[2]["idempotency_key"].startswith("preflight-held-reject:")
+
+    app.warning_presenter.acknowledge()
+    app.root.after(0, app._drain_preflight_hold_head)
+    _pump_until(
+        app.root,
+        lambda: app.current_tray.scanned_barcodes == [first, tail]
+        and not app._preflight_hold_store().exists(),
+    )
 
 
 def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path):

@@ -306,7 +306,7 @@ def _validate_producer_registration(
     if report_app is not None and report.get("app") != report_app:
         raise ProbeError("REGISTRATION_REPORT_INVALID", "registration report app identity differs")
     if (
-        report.get("hostname") != identity_values["pc_id"]
+        report.get("pc_id") != identity_values["pc_id"]
         or report.get("source_host_id") != identity_values["source_host_id"]
         or report.get("producer_install_id") != identity_values["producer_install_id"]
         or report.get("endpoint_url") != expected_endpoint

@@ -18,6 +18,7 @@ from parked_tray_store import ParkedTrayStore
 from storage_utils import atomic_write_json
 from transfer_seal import (
     LogisticsTransferClient,
+    SealAttempt,
     TransferSealError,
     TransferSealStore,
 )
@@ -191,6 +192,360 @@ def test_preflight_hold_overflow_preserves_existing_items(tmp_path):
         store.append("PRODUCT-B")
 
     assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+
+
+def test_preflight_hold_quarantine_and_restore_transfer_exactly_one_owner(
+    tmp_path,
+):
+    module, PreflightScanHoldStore = _hold_symbols()
+    active_path = tmp_path / "active" / "hold.json"
+    quarantine_dir = tmp_path / "parked" / "preflight_hold_quarantine"
+    store = PreflightScanHoldStore(active_path, capacity=4)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    failed = store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+
+    quarantined = store.quarantine(quarantine_dir, reason="supervisor_new_work")
+
+    assert active_path.exists() is False
+    assert quarantined.path.is_file()
+    assert quarantined.snapshot_hash == store.snapshot_hash(failed)
+    assert quarantined.snapshot.state == module.HOLD_LOOKUP_FAILED
+
+    # A replay with an already verified quarantine copy still releases the
+    # duplicate active owner instead of reporting success with two owners.
+    atomic_write_json(active_path, failed.to_payload(), ensure_ascii=False)
+    replayed = store.quarantine(quarantine_dir, reason="supervisor_new_work")
+    assert replayed.path == quarantined.path
+    assert active_path.exists() is False
+
+    restored = store.restore_quarantined(quarantined.path)
+    assert restored == failed
+    assert active_path.is_file()
+    assert quarantined.path.exists() is False
+
+
+def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
+    tmp_path,
+    monkeypatch,
+):
+    module, _PreflightScanHoldStore = _hold_symbols()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "tester"
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    app.current_tray = TraySession()
+    app.save_folder = str(tmp_path / "events")
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 4
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+    app.show_fullscreen_warning = lambda *args, **kwargs: None
+    app._update_parked_trays_list = lambda: None
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    audits = []
+    app._log_event = lambda event, detail=None, **kwargs: audits.append(
+        (event, detail, kwargs)
+    ) or True
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showerror",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showwarning",
+        lambda *args, **kwargs: None,
+    )
+
+    store = app._preflight_hold_store()
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+
+    assert app._quarantine_preflight_hold_for_supervisor(
+        reason="supervisor_new_work_required",
+        confirm=False,
+    ) is True
+    quarantined = app._quarantined_preflight_holds()
+    assert len(quarantined) == 1
+    assert store.exists() is False
+    assert audits[0][0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED"
+    assert audits[0][1]["held_scan_count"] == 1
+    assert audits[0][2]["synchronous"] is True
+
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    assert app.restore_quarantined_preflight_hold(str(quarantined[0].path)) is True
+    assert store.exists() is True
+    assert store.load().state == module.HOLD_LOOKUP_FAILED
+    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+    assert quarantined[0].path.exists() is False
+    assert audits[1][0] == "PHS2_PREFLIGHT_HOLD_RESTORED"
+
+
+def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
+    tmp_path,
+):
+    module, _PreflightScanHoldStore = _hold_symbols()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "tester"
+    app.worker_role = "WORKER"
+    app.current_tray = TraySession(master_label_code="MASTER", item_code="ITEM")
+    app.save_folder = str(tmp_path)
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 4
+    app._ui_lane = None
+    app._preflight_hold_writer_instance = None
+    app._scan_callback_pending = False
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_draining = False
+    app._master_preflight_pending = False
+    app.master_label_replace_state = None
+    app.current_exchange_session = SimpleNamespace(
+        defective_barcodes=[],
+        good_barcodes=[],
+    )
+    calls = []
+    app._save_current_tray_state = lambda: calls.append("save-current") or True
+    app._delete_current_tray_state = lambda: (_ for _ in ()).throw(
+        AssertionError("hold-owned current tray must not be deleted on close")
+    )
+    app._log_event = lambda event, **kwargs: calls.append(event) or True
+    app._end_work_session = lambda **kwargs: calls.append("end-session") or True
+    app._finalize_application_close = lambda: calls.append("destroy")
+
+    store = app._preflight_hold_store()
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_draining()
+
+    app.on_closing(_confirmed=True)
+
+    assert store.exists() is True
+    assert store.load().state == module.HOLD_DRAINING
+    assert calls == [
+        "save-current",
+        "PHS2_PREFLIGHT_HOLD_CLOSE_HANDOFF",
+        "end-session",
+        "destroy",
+    ]
+
+
+def test_scan_entry_is_preserved_until_idle_lane_admits_callback():
+    class Entry:
+        def __init__(self, value):
+            self.value = value
+            self.state = "normal"
+
+        def get(self):
+            return self.value
+
+        def delete(self, *_args):
+            self.value = ""
+
+        def configure(self, **kwargs):
+            self.state = kwargs.get("state", self.state)
+
+    class Root:
+        def __init__(self):
+            self.jobs = []
+
+        def after(self, _delay, callback, *args):
+            self.jobs.append((callback, args))
+
+    class BusyLane:
+        state = "BUSY"
+
+        @staticmethod
+        def is_busy():
+            return True
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.scan_entry = Entry("PRODUCT-A")
+    app.root = Root()
+    app._ui_lane = BusyLane()
+    app._ui_close_requested = False
+    app._master_preflight_pending = False
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._scan_callback_pending = False
+    app._scan_callback_epoch = 1
+    app.COLOR_DANGER = "danger"
+    app.statuses = []
+    app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+
+    app.process_barcode()
+    assert app.scan_entry.value == "PRODUCT-A"
+    assert app.root.jobs == []
+
+    app._ui_lane = None
+    app._warning_state_presenter = lambda: SimpleNamespace(
+        state=SimpleNamespace(is_blocking=False)
+    )
+    accepted = []
+    app._process_barcode_logic = accepted.append
+    app.process_barcode()
+    assert app.scan_entry.value == "PRODUCT-A"
+    assert len(app.root.jobs) == 1
+
+    callback, args = app.root.jobs.pop(0)
+    callback(*args)
+    assert accepted == ["PRODUCT-A"]
+    assert app.scan_entry.value == ""
+
+
+def test_preflight_entry_allows_only_one_durable_append_before_clear(tmp_path):
+    module, PreflightScanHoldStore = _hold_symbols()
+
+    class Entry:
+        def __init__(self, value):
+            self.value = value
+            self.state = "normal"
+
+        def get(self):
+            return self.value
+
+        def delete(self, _start, _end):
+            self.value = ""
+
+        def configure(self, *, state):
+            self.state = state
+
+    class DeferredWriter:
+        def __init__(self):
+            self.submissions = []
+
+        def submit(self, work, finish, fail):
+            self.submissions.append((work, finish, fail))
+            return SimpleNamespace(accepted=True)
+
+    store = PreflightScanHoldStore(tmp_path / "hold.json", capacity=4)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    writer = DeferredWriter()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.scan_entry = Entry("PRODUCT-A")
+    app._master_preflight_pending = True
+    app._preflight_hold_append_pending = False
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._ui_close_requested = False
+    app.COLOR_DANGER = "danger"
+    app.COLOR_PRIMARY = "primary"
+    app.statuses = []
+    app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+    app._preflight_hold_store = lambda: store
+    app._preflight_hold_writer = lambda: writer
+
+    app.process_barcode()
+    app.process_barcode()
+
+    assert len(writer.submissions) == 1
+    assert app.scan_entry.value == "PRODUCT-A"
+    assert app.scan_entry.state == "disabled"
+    work, finish, _fail = writer.submissions[0]
+    finish(work())
+
+    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+    assert app.scan_entry.value == ""
+    assert app.scan_entry.state == "normal"
+    assert app._preflight_hold_append_pending is False
+
+
+def test_tray_state_round_trips_preflight_scan_receipt_ownership():
+    from tray_state import tray_session_from_state, validate_tray_state
+
+    state = _saved_tray_state()
+    barcode = state["scanned_barcodes"][0]
+    state["preflight_scan_receipts"] = {barcode: "held-scan-1"}
+
+    validate_tray_state(state, default_tray_size=60)
+    restored = tray_session_from_state(
+        state,
+        session_factory=TraySession,
+        default_tray_size=60,
+    )
+
+    assert restored.preflight_scan_receipts == {barcode: "held-scan-1"}
+
+
+def test_completion_local_prepare_precedes_checkpoint_and_any_http_attempt():
+    calls = []
+    preview = SealAttempt("intent-order", "PREVIEW")
+    prepared = SealAttempt("intent-order", "PREPARED")
+    acked = SealAttempt("intent-order", "ACKED")
+
+    class Coordinator:
+        def preview(self, **_kwargs):
+            calls.append("preview")
+            return preview
+
+        def prepare(self, **_kwargs):
+            assert _kwargs["require_completion_checkpoint"] is True
+            calls.append("local-prepare")
+            return prepared
+
+        def confirm_completion_checkpoint(self, intent_id):
+            assert intent_id == prepared.intent_id
+            calls.append("checkpoint-dispatch-enabled")
+            return prepared
+
+        def attempt(self, intent_id):
+            assert intent_id == prepared.intent_id
+            calls.append("http-attempt")
+            return acked
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    result = app._prepare_and_attempt_transfer_seal_snapshot(
+        coordinator=Coordinator(),
+        source_label_payload="MASTER",
+        source_label_fields={"PHS": "1"},
+        item_code="ITEM",
+        operator="tester",
+        scanned_barcodes=("PRODUCT-A",),
+        relay_log_file_path="events.csv",
+        operation_lease_id="",
+        on_prepared=lambda attempt: calls.append(
+            f"durable-checkpoint:{attempt.status}"
+        ),
+    )
+
+    assert result is acked
+    assert calls == [
+        "preview",
+        "local-prepare",
+        "durable-checkpoint:PREPARED",
+        "checkpoint-dispatch-enabled",
+        "http-attempt",
+    ]
+
+    calls.clear()
+
+    def fail_checkpoint(_attempt):
+        calls.append("durable-checkpoint-failed")
+        raise OSError("checkpoint unavailable")
+
+    with pytest.raises(OSError, match="checkpoint unavailable"):
+        app._prepare_and_attempt_transfer_seal_snapshot(
+            coordinator=Coordinator(),
+            source_label_payload="MASTER",
+            source_label_fields={"PHS": "1"},
+            item_code="ITEM",
+            operator="tester",
+            scanned_barcodes=("PRODUCT-A",),
+            relay_log_file_path="events.csv",
+            operation_lease_id="",
+            on_prepared=fail_checkpoint,
+        )
+    assert calls == ["preview", "local-prepare", "durable-checkpoint-failed"]
 
 
 def _insert_relay_row(db_path: Path, *, relay_id: str, status: str, created_at: str, updated_at: str):

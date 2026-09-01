@@ -2476,6 +2476,8 @@ class TransferSealStore:
                     last_error_code TEXT,
                     last_error_message TEXT,
                     attempt_count INTEGER NOT NULL DEFAULT 0,
+                    completion_checkpoint_confirmed INTEGER NOT NULL DEFAULT 1
+                        CHECK(completion_checkpoint_confirmed IN (0,1)),
                     relay_log_file_path TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -2516,6 +2518,12 @@ class TransferSealStore:
                 conn.execute(
                     "ALTER TABLE transfer_seal_intents "
                     "ADD COLUMN operation_lease_id TEXT NOT NULL DEFAULT ''"
+                )
+            if "completion_checkpoint_confirmed" not in columns:
+                conn.execute(
+                    "ALTER TABLE transfer_seal_intents "
+                    "ADD COLUMN completion_checkpoint_confirmed "
+                    "INTEGER NOT NULL DEFAULT 1"
                 )
             conn.execute(
                 """UPDATE transfer_seal_intents
@@ -2761,6 +2769,7 @@ class TransferSealStore:
         scanned_barcodes: Iterable[str],
         relay_log_file_path: str = "",
         operation_lease_id: str = "",
+        require_completion_checkpoint: bool = False,
     ) -> sqlite3.Row:
         preview = self.preview_intent(
             master_label=master_label,
@@ -2775,6 +2784,9 @@ class TransferSealStore:
         digest = preview["intent_hash"]
         intent_id = preview["intent_id"]
         idempotency_key = preview["idempotency_key"]
+        completion_checkpoint_confirmed = (
+            0 if bool(require_completion_checkpoint) else 1
+        )
         normalized_relay_log_path = (
             os.path.abspath(str(relay_log_file_path).strip())
             if str(relay_log_file_path or "").strip()
@@ -2788,8 +2800,8 @@ class TransferSealStore:
                        intent_id,schema_version,status,master_label,source_identity_json,
                        item_id,operator,scanned_barcodes_json,scan_count,intent_hash,
                        idempotency_key,operation_lease_id,relay_log_file_path,
-                       created_at,updated_at
-                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                       completion_checkpoint_confirmed,created_at,updated_at
+                   ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     intent_id,
                     SCHEMA_VERSION,
@@ -2804,6 +2816,7 @@ class TransferSealStore:
                     idempotency_key,
                     normalized_operation_lease_id,
                     normalized_relay_log_path,
+                    completion_checkpoint_confirmed,
                     now,
                     now,
                 ),
@@ -2890,6 +2903,10 @@ class TransferSealStore:
             ).fetchone()
             if row is None:
                 raise KeyError(intent_id)
+            if not bool(row["completion_checkpoint_confirmed"]):
+                raise ValueError(
+                    "completion checkpoint must be confirmed before command binding"
+                )
             if row["idempotency_key"] != command_id:
                 raise ValueError(
                     "server command id differs from durable transfer idempotency key"
@@ -2912,6 +2929,32 @@ class TransferSealStore:
             row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
+        return row
+
+    @writer_sink("transfer_seal")
+    def confirm_completion_checkpoint(self, intent_id: str) -> sqlite3.Row:
+        """Make one GUI completion intent eligible for command/HTTP dispatch."""
+
+        normalized_intent = _normalize_identifier(intent_id, "intent_id")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = self._load_in_connection(conn, normalized_intent)
+            if row is None:
+                raise KeyError(normalized_intent)
+            if not bool(row["completion_checkpoint_confirmed"]):
+                if row["status"] != "PREPARED":
+                    raise ValueError(
+                        "unconfirmed completion checkpoint is no longer PREPARED"
+                    )
+                conn.execute(
+                    """UPDATE transfer_seal_intents
+                          SET completion_checkpoint_confirmed=1,updated_at=?
+                        WHERE intent_id=? AND completion_checkpoint_confirmed=0""",
+                    (_utc_now(), normalized_intent),
+                )
+                row = self._load_in_connection(conn, normalized_intent)
+                assert row is not None
+            conn.commit()
         return row
 
     @staticmethod
@@ -3099,7 +3142,9 @@ class TransferSealStore:
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT intent_id FROM transfer_seal_intents
-                    WHERE status IN (?,?,?) ORDER BY created_at, rowid""",
+                    WHERE status IN (?,?,?)
+                      AND completion_checkpoint_confirmed=1
+                    ORDER BY created_at, rowid""",
                 PENDING_STATUSES,
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
@@ -3658,6 +3703,7 @@ class TransferSealCoordinator:
         scanned_barcodes: Iterable[str],
         relay_log_file_path: str = "",
         operation_lease_id: str = "",
+        require_completion_checkpoint: bool = False,
     ) -> SealAttempt:
         scans = list(scanned_barcodes)
         identity = source_identity_from_label(master_label_fields)
@@ -3680,6 +3726,7 @@ class TransferSealCoordinator:
             scanned_barcodes=scans,
             relay_log_file_path=relay_log_file_path,
             operation_lease_id=normalized_lease_id,
+            require_completion_checkpoint=require_completion_checkpoint,
         )
         if normalized_lease_id:
             assert self.operation_lease_manager is not None
@@ -3711,6 +3758,11 @@ class TransferSealCoordinator:
                     "오프라인 이적 완료 정보를 안전하게 저장하지 못했습니다.",
                 ) from exc
         return self._attempt_from_row(row)
+
+    def confirm_completion_checkpoint(self, intent_id: str) -> SealAttempt:
+        return self._attempt_from_row(
+            self.store.confirm_completion_checkpoint(intent_id)
+        )
 
     @staticmethod
     def _result_data(receipt: Mapping[str, Any]) -> dict[str, Any]:
@@ -4828,6 +4880,12 @@ class TransferSealCoordinator:
 
     def attempt(self, intent_id: str) -> SealAttempt:
         row = self.store.load(intent_id)
+        if not bool(row["completion_checkpoint_confirmed"]):
+            raise TransferSealError(
+                "DURABLE_COMPLETION_CHECKPOINT_REQUIRED",
+                "완료 복구 checkpoint가 확인되기 전에는 중앙 이적을 시작할 수 없습니다.",
+                retryable=True,
+            )
         if row["status"] == "ACKED":
             return self._attempt_from_row(row)
         if row["status"] == "OPERATOR_REVIEW":

@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import re
 import threading
 from typing import Any, Callable, Mapping
 
@@ -148,6 +149,13 @@ class PreflightHoldSnapshot:
         }
 
 
+@dataclass(frozen=True)
+class QuarantinedPreflightHold:
+    path: Path
+    snapshot: PreflightHoldSnapshot
+    snapshot_hash: str
+
+
 class PreflightScanHoldStore:
     def __init__(self, path: str | os.PathLike[str], *, capacity: int) -> None:
         self.path = Path(path)
@@ -157,15 +165,48 @@ class PreflightScanHoldStore:
     def exists(self) -> bool:
         return self.path.is_file()
 
+    @staticmethod
+    def load_path(path: str | os.PathLike[str]) -> PreflightHoldSnapshot:
+        try:
+            payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PreflightHoldError("preflight hold cannot be read") from exc
+        if not isinstance(payload, dict):
+            raise PreflightHoldError("preflight hold must be an object")
+        return PreflightHoldSnapshot.from_payload(payload)
+
     def load(self) -> PreflightHoldSnapshot:
         with self._lock:
+            return self.load_path(self.path)
+
+    @staticmethod
+    def snapshot_hash(snapshot: PreflightHoldSnapshot) -> str:
+        if not isinstance(snapshot, PreflightHoldSnapshot):
+            raise TypeError("preflight hold snapshot is required")
+        return _hash(snapshot.to_payload())
+
+    @classmethod
+    def list_quarantined(
+        cls,
+        directory: str | os.PathLike[str],
+    ) -> tuple[QuarantinedPreflightHold, ...]:
+        root = Path(directory)
+        if not root.is_dir():
+            return ()
+        quarantined: list[QuarantinedPreflightHold] = []
+        for path in sorted(root.glob("preflight_hold_*.json")):
             try:
-                payload = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise PreflightHoldError("preflight hold cannot be read") from exc
-            if not isinstance(payload, dict):
-                raise PreflightHoldError("preflight hold must be an object")
-            return PreflightHoldSnapshot.from_payload(payload)
+                snapshot = cls.load_path(path)
+            except PreflightHoldError:
+                continue
+            quarantined.append(
+                QuarantinedPreflightHold(
+                    path=path,
+                    snapshot=snapshot,
+                    snapshot_hash=cls.snapshot_hash(snapshot),
+                )
+            )
+        return tuple(quarantined)
 
     @writer_sink("preflight_scan_hold")
     def _write(self, snapshot: PreflightHoldSnapshot) -> PreflightHoldSnapshot:
@@ -322,20 +363,63 @@ class PreflightScanHoldStore:
             )
 
     @writer_sink("preflight_scan_hold_quarantine")
-    def quarantine(self, target_directory: str | os.PathLike[str], *, reason: str) -> Path:
+    def quarantine(
+        self,
+        target_directory: str | os.PathLike[str],
+        *,
+        reason: str,
+    ) -> QuarantinedPreflightHold:
         with self._lock:
             snapshot = self.load()
             target_root = Path(target_directory)
             target_root.mkdir(parents=True, exist_ok=True)
-            suffix = _hash(snapshot.to_payload())[:16]
-            target = target_root / f"preflight_hold_{snapshot.preflight_id}_{suffix}.json"
+            snapshot_hash = self.snapshot_hash(snapshot)
+            timestamp = re.sub(r"[^0-9A-Za-z]", "", snapshot.updated_at)[:15]
+            suffix = snapshot_hash[:16]
+            target = target_root / (
+                f"preflight_hold_{snapshot.preflight_id}_{timestamp}_{suffix}.json"
+            )
             if target.exists():
-                existing = json.loads(target.read_text(encoding="utf-8"))
-                if not isinstance(existing, dict) or _hash(existing) != _hash(snapshot.to_payload()):
+                existing = self.load_path(target)
+                if self.snapshot_hash(existing) != snapshot_hash:
                     raise PreflightHoldConflict("preflight quarantine identity collision")
+                try:
+                    self.path.unlink()
+                except FileNotFoundError:
+                    pass
             else:
                 os.replace(self.path, target)
-            return target
+            readback = self.load_path(target)
+            if self.snapshot_hash(readback) != snapshot_hash:
+                raise PreflightHoldError("preflight quarantine readback mismatch")
+            return QuarantinedPreflightHold(target, readback, snapshot_hash)
+
+    @writer_sink("preflight_scan_hold_quarantine_restore")
+    def restore_quarantined(
+        self,
+        quarantined_path: str | os.PathLike[str],
+    ) -> PreflightHoldSnapshot:
+        with self._lock:
+            source = Path(quarantined_path)
+            snapshot = self.load_path(source)
+            snapshot_hash = self.snapshot_hash(snapshot)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            if self.exists():
+                existing = self.load()
+                if self.snapshot_hash(existing) != snapshot_hash:
+                    raise PreflightHoldConflict(
+                        "another preflight hold is already active"
+                    )
+                try:
+                    source.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                os.replace(source, self.path)
+            readback = self.load()
+            if self.snapshot_hash(readback) != snapshot_hash:
+                raise PreflightHoldError("restored preflight hold readback mismatch")
+            return readback
 
 
 @dataclass(frozen=True)
@@ -491,4 +575,5 @@ __all__ = [
     "PreflightHoldSnapshot",
     "PreflightScanHoldStore",
     "PreflightScanHoldWriter",
+    "QuarantinedPreflightHold",
 ]

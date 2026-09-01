@@ -103,6 +103,7 @@ from preflight_scan_hold import (
     PreflightHoldSnapshot,
     PreflightScanHoldStore,
     PreflightScanHoldWriter,
+    QuarantinedPreflightHold,
 )
 from phs_label_workflow import (
     PHSLabelExchangeCoordinator,
@@ -110,7 +111,15 @@ from phs_label_workflow import (
     PHSLabelRenderer,
     PHSLabelWorkflowError,
 )
-from product_scan import SCAN_DUPLICATE, SCAN_FORMAT_ERROR, SCAN_MISMATCH, SCAN_TRAY_FULL, decide_product_scan
+from product_scan import (
+    SCAN_ACCEPTED,
+    SCAN_DUPLICATE,
+    SCAN_FORMAT_ERROR,
+    SCAN_MISMATCH,
+    SCAN_TRAY_FULL,
+    ProductScanDecision,
+    decide_product_scan,
+)
 from product_exchange import (
     ProductExchangeSession,
     apply_exchange_scan,
@@ -154,6 +163,10 @@ from storage_policy import build_container_audit_storage_paths, ensure_container
 from storage_utils import atomic_write_json
 from tk_serial_ui_lane import (
     DRAIN_TO_DURABLE_HANDOFF,
+    LANE_BROKEN,
+    LANE_BUSY,
+    LANE_CLOSED,
+    LANE_DRAINING,
     LaneTask,
     TkSerialUiLane,
 )
@@ -895,6 +908,7 @@ class TraySession:
     item_spec: str = ""
     scanned_barcodes: List[str] = field(default_factory=list)
     scan_times: List[datetime.datetime] = field(default_factory=list)
+    preflight_scan_receipts: Dict[str, str] = field(default_factory=dict)
     tray_size: int = 60
     mismatch_error_count: int = 0
     total_idle_seconds: float = 0.0
@@ -1081,6 +1095,7 @@ class ContainerAudit:
         self._preflight_hold_writer_instance: Optional[PreflightScanHoldWriter] = None
         self._preflight_hold_snapshot: Optional[PreflightHoldSnapshot] = None
         self._preflight_hold_draining = False
+        self._preflight_hold_append_pending = False
         self._preflight_completion_due = False
         self._preflight_scan_input_locked = False
         self._ui_close_requested = False
@@ -1418,9 +1433,296 @@ class ContainerAudit:
             self._preflight_hold_store_instance = store
         return store
 
+    def _preflight_hold_quarantine_directory(self) -> Path:
+        return Path(str(getattr(self, "parked_trays_dir", "") or ".")) / (
+            "preflight_hold_quarantine"
+        )
+
+    def _is_preflight_hold_supervisor(self) -> bool:
+        return bool(
+            str(getattr(self, "worker_role", "") or "").upper() == "ADMIN"
+            or getattr(self, "_authenticated_protected_admin", False)
+        )
+
+    def _is_preflight_hold_quarantine_path(self, filepath: str) -> bool:
+        try:
+            quarantine_root = self._preflight_hold_quarantine_directory().resolve()
+            candidate = Path(filepath).resolve()
+        except (OSError, RuntimeError, ValueError):
+            return False
+        return candidate.is_relative_to(quarantine_root)
+
+    def _quarantined_preflight_holds(
+        self,
+    ) -> tuple[QuarantinedPreflightHold, ...]:
+        current_worker = persistent_operator_name(
+            str(getattr(self, "worker_name", "") or "")
+        )
+        supervisor = self._is_preflight_hold_supervisor()
+        return tuple(
+            held
+            for held in PreflightScanHoldStore.list_quarantined(
+                self._preflight_hold_quarantine_directory()
+            )
+            if supervisor or held.snapshot.worker == current_worker
+        )
+
+    @staticmethod
+    def _preflight_hold_ownership_detail(
+        snapshot: PreflightHoldSnapshot,
+        *,
+        snapshot_hash: str,
+        reason: str,
+        quarantine_path: Optional[Path] = None,
+    ) -> Dict[str, Any]:
+        detail: Dict[str, Any] = {
+            "contract_version": "container-audit-preflight-hold-ownership-v1",
+            "preflight_id": snapshot.preflight_id,
+            "scan_epoch": snapshot.scan_epoch,
+            "worker": snapshot.worker,
+            "master_raw": snapshot.master_raw,
+            "state": snapshot.state,
+            "held_scan_count": len(snapshot.items),
+            "snapshot_hash": snapshot_hash,
+            "reason": str(reason or "").strip(),
+        }
+        if quarantine_path is not None:
+            detail["quarantine_file"] = quarantine_path.name
+        return detail
+
+    def _quarantine_preflight_hold_for_supervisor(
+        self,
+        *,
+        reason: str,
+        confirm: bool = True,
+    ) -> bool:
+        if not self._is_preflight_hold_supervisor():
+            messagebox.showwarning(
+                "보류 묶음 격리 권한",
+                "사전조회 보류 묶음 격리는 관리자 확인이 필요합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        store = self._preflight_hold_store()
+        try:
+            snapshot = store.load()
+        except PreflightHoldError:
+            messagebox.showerror(
+                "보류 묶음 확인 필요",
+                "사전조회 보류 파일을 읽지 못해 격리하지 않습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        current_master = str(
+            getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            or ""
+        )
+        if current_master:
+            messagebox.showerror(
+                "보류 묶음 격리 차단",
+                "제품 반영이 시작된 보류 묶음은 현재 트레이와 함께 복구해야 합니다. "
+                "현재 작업을 저장하고 같은 작업자로 다시 시작하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if confirm and not messagebox.askyesno(
+            "보류 묶음 격리 확인",
+            f"중앙 조회 보류 {len(snapshot.items)}건을 복원 가능한 격리 목록으로 "
+            "옮기고 새 작업을 시작하시겠습니까?",
+            parent=getattr(self, "root", None),
+        ):
+            return False
+        try:
+            quarantined = store.quarantine(
+                self._preflight_hold_quarantine_directory(),
+                reason=reason,
+            )
+        except (OSError, PreflightHoldError) as exc:
+            print(f"사전조회 보류 격리 실패: {exc.__class__.__name__}")
+            messagebox.showerror(
+                "보류 묶음 격리 실패",
+                "보류 묶음을 안전하게 옮기지 못했습니다. 기존 보류 상태를 유지합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        detail = self._preflight_hold_ownership_detail(
+            quarantined.snapshot,
+            snapshot_hash=quarantined.snapshot_hash,
+            reason=reason,
+            quarantine_path=quarantined.path,
+        )
+        audit_key = (
+            "preflight-hold-quarantine:"
+            f"{quarantined.snapshot.preflight_id}:{quarantined.snapshot_hash}"
+        )
+        try:
+            audited = bool(
+                self._log_event(
+                    "PHS2_PREFLIGHT_HOLD_QUARANTINED",
+                    detail=detail,
+                    synchronous=True,
+                    idempotency_key=audit_key,
+                    deduplicate=True,
+                )
+            )
+        except Exception:
+            audited = False
+        if not audited:
+            try:
+                store.restore_quarantined(quarantined.path)
+            except Exception as rollback_error:
+                print(
+                    "사전조회 보류 격리 감사 롤백 실패: "
+                    f"{rollback_error.__class__.__name__}"
+                )
+            messagebox.showerror(
+                "보류 묶음 격리 기록 실패",
+                "격리 감사 기록을 남기지 못해 새 작업을 시작하지 않습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        self._preflight_hold_snapshot = None
+        self._preflight_hold_draining = False
+        self._master_preflight_pending = False
+        self._set_preflight_scan_input_locked(False)
+        if hasattr(self, "_update_parked_trays_list"):
+            self._update_parked_trays_list()
+        self.show_status_message(
+            "사전조회 보류 묶음을 복원 가능한 목록으로 옮겼습니다.",
+            self.COLOR_PRIMARY,
+            duration=0,
+        )
+        return True
+
+    def restore_quarantined_preflight_hold(self, filepath: str) -> bool:
+        if not self._is_preflight_hold_quarantine_path(filepath):
+            messagebox.showwarning(
+                "보류 묶음 복원 실패",
+                "격리 목록 폴더 밖의 파일은 복원할 수 없습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        store = self._preflight_hold_store()
+        try:
+            snapshot = PreflightScanHoldStore.load_path(filepath)
+        except PreflightHoldError:
+            messagebox.showerror(
+                "보류 묶음 복원 실패",
+                "선택한 격리 보류 파일을 읽지 못했습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        current_worker = persistent_operator_name(
+            str(getattr(self, "worker_name", "") or "")
+        )
+        if snapshot.worker != current_worker and not self._is_preflight_hold_supervisor():
+            messagebox.showwarning(
+                "보류 묶음 작업자 확인",
+                "원래 작업자 또는 관리자로 로그인해야 복원할 수 있습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if store.exists() or self._preflight_context_blocks_mutation():
+            messagebox.showwarning(
+                "보류 묶음 복원 차단",
+                "현재 사전조회 보류 묶음을 먼저 해결해야 합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if getattr(getattr(self, "current_tray", None), "master_label_code", ""):
+            messagebox.showwarning(
+                "보류 묶음 복원 차단",
+                "현재 트레이를 먼저 보류하거나 완료해야 합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if not messagebox.askyesno(
+            "보류 묶음 복원 확인",
+            f"격리된 중앙 조회 보류 {len(snapshot.items)}건을 활성 보류 상태로 "
+            "되돌리시겠습니까?",
+            parent=getattr(self, "root", None),
+        ):
+            return False
+        try:
+            restored = store.restore_quarantined(filepath)
+            if restored.state == HOLD_DRAINING:
+                restored = store.mark_failed(
+                    error_code="PHS2_QUARANTINE_RESTORE_REVIEW"
+                )
+        except (OSError, PreflightHoldError) as exc:
+            print(f"사전조회 보류 복원 실패: {exc.__class__.__name__}")
+            messagebox.showerror(
+                "보류 묶음 복원 실패",
+                "격리 보류 묶음을 활성 상태로 되돌리지 못했습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        restored_hash = store.snapshot_hash(restored)
+        detail = self._preflight_hold_ownership_detail(
+            restored,
+            snapshot_hash=restored_hash,
+            reason="supervisor_restore",
+            quarantine_path=Path(filepath),
+        )
+        audit_key = (
+            "preflight-hold-restore:"
+            f"{restored.preflight_id}:{restored_hash}"
+        )
+        try:
+            audited = bool(
+                self._log_event(
+                    "PHS2_PREFLIGHT_HOLD_RESTORED",
+                    detail=detail,
+                    synchronous=True,
+                    idempotency_key=audit_key,
+                    deduplicate=True,
+                )
+            )
+        except Exception:
+            audited = False
+        if not audited:
+            try:
+                store.quarantine(
+                    self._preflight_hold_quarantine_directory(),
+                    reason="restore_audit_failed",
+                )
+            except Exception as rollback_error:
+                print(
+                    "사전조회 보류 복원 감사 롤백 실패: "
+                    f"{rollback_error.__class__.__name__}"
+                )
+            messagebox.showerror(
+                "보류 묶음 복원 기록 실패",
+                "복원 감사 기록을 남기지 못해 격리 상태를 유지합니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if restored.worker != current_worker:
+            self._preflight_hold_snapshot = None
+            self._preflight_hold_draining = False
+            self._master_preflight_pending = False
+            self._set_preflight_scan_input_locked(True)
+            messagebox.showinfo(
+                "보류 묶음 복원 완료",
+                f"원래 작업자 '{display_operator_name(restored.worker)}'로 다시 로그인해 "
+                "같은 현품표를 재확인하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return True
+        self._preflight_hold_snapshot = restored
+        self._set_preflight_scan_input_locked(True)
+        self.show_fullscreen_warning(
+            "중앙 조회 재확인 필요",
+            "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
+            self.COLOR_DANGER,
+        )
+        if hasattr(self, "_update_parked_trays_list"):
+            self._update_parked_trays_list()
+        return True
+
     def _preflight_hold_writer(self) -> PreflightScanHoldWriter:
         writer = getattr(self, "_preflight_hold_writer_instance", None)
-        if writer is None:
+        if writer is None or getattr(writer, "_closed", False):
             writer = PreflightScanHoldWriter(
                 self.root,
                 queue_capacity=max(4, int(getattr(self, "TRAY_SIZE", 60) or 60) + 12),
@@ -5691,7 +5993,7 @@ class ContainerAudit:
         title = getattr(self, "parked_title_label", None)
         if title is not None:
             try:
-                title.configure(text=f"보류 중인 트레이 {count}건 (더블클릭으로 복원)")
+                title.configure(text=f"보류 작업 {count}건 (더블클릭으로 복원)")
             except (tk.TclError, AttributeError):
                 pass
         self._parked_tray_count = count
@@ -6407,7 +6709,7 @@ class ContainerAudit:
 
         self.parked_title_label = ttk.Label(
             top_frame,
-            text="보류 중인 트레이 (더블클릭으로 복원)",
+            text="보류 작업 (더블클릭으로 복원)",
             style='Subtle.TLabel',
             font=(self.DEFAULT_FONT, int(12*self.scale_factor),'bold'),
             justify='left',
@@ -7052,8 +7354,58 @@ class ContainerAudit:
             except (tk.TclError, AttributeError):
                 pass
         self._master_preflight_poll_job = None
-        if not getattr(self, "_master_preflight_pending", False):
-            self._master_preflight_pending = False
+        self._master_preflight_pending = False
+
+    def _settle_stale_preflight_result(
+        self,
+        result: Sequence[Any],
+        *,
+        reason: str,
+    ) -> None:
+        """Preserve durable hold ownership when a late lookup may not render."""
+
+        self._master_preflight_pending = False
+        store = self._preflight_hold_store()
+        if not store.exists():
+            return
+
+        def settle() -> PreflightHoldSnapshot:
+            snapshot = store.load()
+            if snapshot.state == HOLD_DRAINING:
+                return snapshot
+            return store.mark_failed(error_code="PHS2_PREFLIGHT_STALE_RESULT")
+
+        def finish(snapshot: PreflightHoldSnapshot) -> None:
+            self._preflight_hold_snapshot = snapshot
+            self._preflight_hold_draining = snapshot.state == HOLD_DRAINING
+            self._set_preflight_scan_input_locked(True)
+            if not getattr(self, "_ui_close_requested", False):
+                self.show_status_message(
+                    f"늦은 중앙 조회 결과를 보류 상태로 정리했습니다 · "
+                    f"보류 {len(snapshot.items)}건",
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
+
+        admission = self._preflight_hold_writer().submit(
+            settle,
+            finish,
+            lambda exc: self.show_status_message(
+                "늦은 중앙 조회 결과를 정리하지 못했습니다. 보류 파일을 유지하고 "
+                "관리자에게 문의하세요.",
+                self.COLOR_DANGER,
+                duration=0,
+            ),
+        )
+        if not admission.accepted:
+            self._set_preflight_scan_input_locked(True)
+            if not getattr(self, "_ui_close_requested", False):
+                self.show_status_message(
+                    "늦은 중앙 조회 결과의 보류 정리가 대기 중입니다. 입력은 "
+                    "접수되지 않았습니다.",
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
 
     def _activate_master_label_tray(
         self,
@@ -7403,6 +7755,14 @@ class ContainerAudit:
         result_queue: queue.Queue,
     ) -> None:
         if token != getattr(self, "_master_preflight_epoch", 0):
+            try:
+                result = result_queue.get_nowait()
+            except queue.Empty:
+                result = ()
+            self._settle_stale_preflight_result(
+                result,
+                reason="scan_epoch_changed",
+            )
             return
         try:
             result = result_queue.get_nowait()
@@ -7427,7 +7787,10 @@ class ContainerAudit:
 
         self._master_preflight_poll_job = None
         if getattr(self.current_tray, "master_label_code", ""):
-            self._master_preflight_pending = False
+            self._settle_stale_preflight_result(
+                result,
+                reason="active_tray_changed",
+            )
             return
         if not success or preflight is None:
             failure = error if isinstance(error, TransferSealError) else TransferSealError(
@@ -7608,30 +7971,50 @@ class ContainerAudit:
             return
         if snapshot.state != HOLD_DRAINING:
             return
+        if self._warning_state_presenter().state.is_blocking:
+            return
         head = snapshot.items[0]
         current_barcodes = list(
             getattr(getattr(self, "current_tray", None), "scanned_barcodes", [])
             or []
         )
-        already_durable = head.raw_barcode in current_barcodes
+        receipts = self._preflight_scan_receipts()
+        already_durable = bool(
+            head.raw_barcode in current_barcodes
+            and receipts.get(head.raw_barcode) == head.scan_id
+        )
         audit_durable = False
         if not already_durable:
-            before_count = len(current_barcodes)
-            audit_durable = bool(
-                self._process_barcode_logic(
-                    head.raw_barcode,
-                    _durable_scan_log=True,
-                    _durable_scan_id=head.scan_id,
+            decision = self._preflight_held_scan_decision(head.raw_barcode)
+            if decision.status != SCAN_ACCEPTED:
+                already_durable = self._durably_reject_preflight_hold_head(
+                    head,
+                    decision,
                 )
-            )
-            current_barcodes = list(
-                getattr(getattr(self, "current_tray", None), "scanned_barcodes", [])
-                or []
-            )
-            already_durable = (
-                len(current_barcodes) == before_count + 1
-                and current_barcodes[-1] == head.raw_barcode
-            )
+                audit_durable = already_durable
+            else:
+                before_count = len(current_barcodes)
+                audit_durable = bool(
+                    self._process_barcode_logic(
+                        head.raw_barcode,
+                        _durable_scan_log=True,
+                        _durable_scan_id=head.scan_id,
+                    )
+                )
+                current_barcodes = list(
+                    getattr(
+                        getattr(self, "current_tray", None),
+                        "scanned_barcodes",
+                        [],
+                    )
+                    or []
+                )
+                receipts = self._preflight_scan_receipts()
+                already_durable = (
+                    len(current_barcodes) == before_count + 1
+                    and current_barcodes[-1] == head.raw_barcode
+                    and receipts.get(head.raw_barcode) == head.scan_id
+                )
         else:
             audit_durable = self._persist_existing_held_scan_audit(
                 head.raw_barcode,
@@ -7671,6 +8054,101 @@ class ContainerAudit:
                 self.COLOR_DANGER,
                 duration=0,
             )
+
+    def _preflight_scan_receipts(self) -> Dict[str, str]:
+        tray = getattr(self, "current_tray", None)
+        scanned = set(getattr(tray, "scanned_barcodes", []) or [])
+        raw_receipts = getattr(tray, "preflight_scan_receipts", {})
+        receipts = (
+            {
+                str(barcode): str(scan_id)
+                for barcode, scan_id in raw_receipts.items()
+                if isinstance(barcode, str)
+                and barcode in scanned
+                and isinstance(scan_id, str)
+                and scan_id.strip()
+            }
+            if isinstance(raw_receipts, Mapping)
+            else {}
+        )
+        if tray is not None:
+            tray.preflight_scan_receipts = receipts
+        return receipts
+
+    def _preflight_held_scan_decision(
+        self,
+        raw_barcode: str,
+    ) -> ProductScanDecision:
+        decision = decide_product_scan(
+            self.current_tray,
+            raw_barcode,
+            item_code_length=self.ITEM_CODE_LENGTH,
+        )
+        if decision.status != SCAN_ACCEPTED:
+            return decision
+        matching_codes = list(
+            dict.fromkeys(
+                self._item_catalog().matching_codes_in_barcode(raw_barcode)
+            )
+        )
+        if len(matching_codes) > 1:
+            return ProductScanDecision(
+                status=SCAN_MISMATCH,
+                event_name="SCAN_FAIL_AMBIGUOUS_ITEM_CODE",
+                event_detail={
+                    "expected": self.current_tray.item_code,
+                    "scanned": raw_barcode,
+                    "matching_item_codes": matching_codes,
+                },
+            )
+        if len(matching_codes) == 1 and (
+            matching_codes[0] != self.current_tray.item_code
+        ):
+            return ProductScanDecision(
+                status=SCAN_MISMATCH,
+                event_name="SCAN_FAIL_MISMATCH",
+                event_detail={
+                    "expected": self.current_tray.item_code,
+                    "scanned": raw_barcode,
+                    "matched_item_code": matching_codes[0],
+                },
+            )
+        return decision
+
+    def _durably_reject_preflight_hold_head(
+        self,
+        head: Any,
+        decision: ProductScanDecision,
+    ) -> bool:
+        title = "보류 스캔 확인"
+        message = "보류 중 접수된 제품 바코드를 반영하지 않았습니다."
+        if decision.status == SCAN_FORMAT_ERROR:
+            title = "바코드 형식 오류"
+            message = "보류 중 접수된 제품 바코드 형식이 올바르지 않습니다."
+        elif decision.status == SCAN_DUPLICATE:
+            title = "바코드 중복"
+            message = "보류 중 같은 제품 바코드가 중복 접수되어 두 번째 입력을 반영하지 않았습니다."
+        elif decision.status == SCAN_TRAY_FULL:
+            title = "트레이 수량 초과"
+            message = "목표 수량을 넘는 보류 스캔을 반영하지 않았습니다."
+        elif decision.event_name == "SCAN_FAIL_AMBIGUOUS_ITEM_CODE":
+            title = "품목 코드 모호"
+            message = "여러 품목 코드가 포함된 보류 스캔을 반영하지 않았습니다."
+        elif decision.status == SCAN_MISMATCH:
+            title = "품목 코드 불일치"
+            message = "현재 트레이와 품목 코드가 다른 보류 스캔을 반영하지 않았습니다."
+        self.show_fullscreen_warning(title, message, self.COLOR_DANGER)
+        if not decision.event_name:
+            return False
+        return bool(
+            self._log_event(
+                decision.event_name,
+                detail=dict(decision.event_detail),
+                synchronous=True,
+                idempotency_key=f"preflight-held-reject:{head.scan_id}",
+                deduplicate=True,
+            )
+        )
 
     def _persist_existing_held_scan_audit(
         self,
@@ -7741,6 +8219,18 @@ class ContainerAudit:
         raw = str(raw_barcode or "").strip()
         if not raw:
             return False
+        if clear_entry_after_ack and getattr(
+            self, "_preflight_hold_append_pending", False
+        ):
+            self.show_status_message(
+                "이전 보류 스캔을 저장하는 중입니다. 입력값을 유지합니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+        if clear_entry_after_ack:
+            self._preflight_hold_append_pending = True
+            self._set_scan_callback_pending(True)
         store = self._preflight_hold_store()
 
         def persist() -> tuple[Any, PreflightHoldSnapshot]:
@@ -7748,6 +8238,8 @@ class ContainerAudit:
             return item, store.load()
 
         def finish(result: tuple[Any, PreflightHoldSnapshot]) -> None:
+            if clear_entry_after_ack:
+                self._preflight_hold_append_pending = False
             _item, snapshot = result
             self._preflight_hold_snapshot = snapshot
             if clear_entry_after_ack:
@@ -7757,6 +8249,7 @@ class ContainerAudit:
                         entry.delete(0, tk.END)
                 except (AttributeError, tk.TclError):
                     pass
+                self._set_scan_callback_pending(False)
             self.show_status_message(
                 f"중앙 확인 중 · 보류 스캔 {len(snapshot.items)}건",
                 self.COLOR_PRIMARY,
@@ -7764,7 +8257,11 @@ class ContainerAudit:
             )
 
         def fail(exc: BaseException) -> None:
+            if clear_entry_after_ack:
+                self._preflight_hold_append_pending = False
             self._set_preflight_scan_input_locked(True)
+            if clear_entry_after_ack:
+                self._set_scan_callback_pending(False)
             if isinstance(exc, PreflightHoldFull):
                 message = "보류 한도 초과 — 이번 스캔은 접수되지 않았습니다."
             else:
@@ -7773,7 +8270,11 @@ class ContainerAudit:
 
         admission = self._preflight_hold_writer().submit(persist, finish, fail)
         if not admission.accepted:
+            if clear_entry_after_ack:
+                self._preflight_hold_append_pending = False
             self._set_preflight_scan_input_locked(True)
+            if clear_entry_after_ack:
+                self._set_scan_callback_pending(False)
             self.show_status_message(
                 "보류 저장 대기열이 가득 차 이번 스캔은 접수되지 않았습니다.",
                 self.COLOR_DANGER,
@@ -7795,7 +8296,18 @@ class ContainerAudit:
                 "사전조회 보류 파일을 읽지 못했습니다. 파일을 보존하고 관리자에게 문의하세요.",
             )
             return False
-        if snapshot.worker != persistent_operator_name(self.worker_name):
+        current_worker = persistent_operator_name(self.worker_name)
+        if snapshot.worker != current_worker:
+            if self._is_preflight_hold_supervisor() and messagebox.askyesno(
+                "다른 작업자 보류 묶음",
+                "다른 작업자의 중앙 조회 보류 묶음이 남아 있습니다. 복원 가능한 "
+                "격리 목록으로 옮겨 새 작업을 허용하시겠습니까?",
+                parent=getattr(self, "root", None),
+            ):
+                return self._quarantine_preflight_hold_for_supervisor(
+                    reason="supervisor_worker_boundary",
+                    confirm=False,
+                )
             messagebox.showwarning(
                 "보류 스캔 작업자 확인",
                 "다른 작업자의 중앙 조회 보류 묶음이 남아 있어 작업자를 변경할 수 없습니다.",
@@ -7803,13 +8315,28 @@ class ContainerAudit:
             return False
         self._preflight_hold_snapshot = snapshot
         self._set_preflight_scan_input_locked(True)
-        if (
-            snapshot.state == HOLD_DRAINING
-            and str(getattr(self.current_tray, "master_label_code", "") or "")
-            == snapshot.master_raw
-        ):
-            self._preflight_hold_draining = True
-            self.root.after(0, self._drain_preflight_hold_head)
+        if snapshot.state == HOLD_DRAINING:
+            if self._preflight_hold_matches_current_tray(snapshot):
+                self._preflight_hold_draining = True
+                self.root.after(0, self._drain_preflight_hold_head)
+            else:
+                if self._is_preflight_hold_supervisor() and messagebox.askyesno(
+                    "보류 묶음 소유권 확인",
+                    "제품 반영 중 상태와 현재 트레이가 일치하지 않습니다. 보류 "
+                    "묶음을 복원 가능한 격리 목록으로 옮기시겠습니까?",
+                    parent=getattr(self, "root", None),
+                ):
+                    return self._quarantine_preflight_hold_for_supervisor(
+                        reason="supervisor_orphaned_draining",
+                        confirm=False,
+                    )
+                messagebox.showerror(
+                    "보류 묶음 소유권 확인 필요",
+                    "제품 반영 중인 보류 묶음과 현재 트레이가 일치하지 않습니다. "
+                    "두 상태를 보존하고 관리자에게 문의하세요.",
+                    parent=getattr(self, "root", None),
+                )
+                return False
         else:
             self.show_status_message(
                 f"중앙 조회 재확인 필요 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
@@ -8075,36 +8602,105 @@ class ContainerAudit:
         )
         self._begin_active_phs_label_refresh(raw_barcode)
         return True
+
+    def _scan_entry_admission_block_reason(self) -> str:
+        if getattr(self, "_ui_close_requested", False):
+            return "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다."
+        if getattr(self, "_scan_callback_pending", False):
+            return "이전 스캔 입력을 접수하는 중입니다. 입력값을 유지합니다."
+        if getattr(self, "_preflight_scan_input_locked", False):
+            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 입력값을 유지합니다."
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None:
+            state = str(getattr(lane, "state", "") or "")
+            if lane.is_busy() or state in {
+                LANE_BUSY,
+                LANE_DRAINING,
+                LANE_BROKEN,
+                LANE_CLOSED,
+            }:
+                return "이전 중앙 작업 처리 중입니다. 입력값을 유지합니다."
+        try:
+            if self._warning_state_presenter().state.is_blocking:
+                return "현재 경고를 먼저 확인해야 합니다. 입력값을 유지합니다."
+        except (AttributeError, TypeError):
+            pass
+        return ""
+
+    def _set_scan_callback_pending(self, pending: bool) -> None:
+        self._scan_callback_pending = bool(pending)
+        entry = getattr(self, "scan_entry", None)
+        if entry is None:
+            return
+        disabled = bool(
+            pending
+            or getattr(self, "_preflight_scan_input_locked", False)
+            or getattr(self, "_completion_lane_busy", False)
+            or getattr(self, "_ui_close_requested", False)
+        )
+        try:
+            entry.configure(state=tk.DISABLED if disabled else tk.NORMAL)
+        except (AttributeError, tk.TclError):
+            pass
     
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
-        if getattr(self, "_ui_close_requested", False):
-            self.show_status_message(
-                "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다.",
-                self.COLOR_DANGER,
-                duration=0,
-            )
-            return
         raw_barcode = self.scan_entry.get().strip()
+        if not raw_barcode:
+            return
         if getattr(self, "_master_preflight_pending", False):
             self._hold_scan_during_preflight(
                 raw_barcode,
                 clear_entry_after_ack=True,
             )
             return
-        self.scan_entry.delete(0, tk.END)
-        # Use after(0) to allow the UI to update before potentially blocking logic
+        block_reason = self._scan_entry_admission_block_reason()
+        if block_reason:
+            self.show_status_message(
+                block_reason,
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return
+        # Keep the raw scanner value until the scheduled callback owns it.
         scan_epoch = getattr(self, "_scan_callback_epoch", 0)
+        self._set_scan_callback_pending(True)
         self.root.after(0, self._process_barcode_if_current, raw_barcode, scan_epoch)
 
     def _invalidate_pending_scan_callbacks(self) -> None:
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
+        self._set_scan_callback_pending(False)
         self._cancel_master_preflight()
 
     def _process_barcode_if_current(self, raw_barcode: str, scan_epoch: int) -> None:
-        if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
-            return
-        self._process_barcode_logic(raw_barcode)
+        self._scan_callback_pending = False
+        try:
+            if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
+                return
+            block_reason = self._scan_entry_admission_block_reason()
+            if block_reason:
+                self.show_status_message(
+                    block_reason,
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
+                return
+            entry = getattr(self, "scan_entry", None)
+            if entry is not None:
+                try:
+                    if entry.get().strip() != raw_barcode:
+                        self.show_status_message(
+                            "스캐너 입력이 바뀌어 이전 입력을 접수하지 않았습니다.",
+                            self.COLOR_DANGER,
+                            duration=0,
+                        )
+                        return
+                    entry.delete(0, tk.END)
+                except (AttributeError, tk.TclError):
+                    pass
+            self._process_barcode_logic(raw_barcode)
+        finally:
+            self._set_scan_callback_pending(False)
 
     def _process_barcode_logic(
         self,
@@ -8339,7 +8935,17 @@ class ContainerAudit:
         now = datetime.datetime.now()
         interval = max(0.0, (now - self.current_tray.scan_times[-1]).total_seconds()) if self.current_tray.scan_times else 0.0
         self.add_scanned_barcode(raw_barcode, now, interval)
+        if _durable_scan_id:
+            self._preflight_scan_receipts()[raw_barcode] = _durable_scan_id
         if not self._save_current_tray_state():
+            if _durable_scan_id:
+                receipts = getattr(
+                    self.current_tray,
+                    "preflight_scan_receipts",
+                    {},
+                )
+                if receipts.get(raw_barcode) == _durable_scan_id:
+                    receipts.pop(raw_barcode, None)
             self.current_tray.scanned_barcodes.pop()
             self.current_tray.scan_times.pop()
             self.scanned_listbox.delete(0)
@@ -10034,80 +10640,295 @@ class ContainerAudit:
         if self.focus_return_job: self.root.after_cancel(self.focus_return_job); self.focus_return_job = None
         self._stop_warning_beep()
 
+    def _preflight_hold_matches_current_tray(
+        self,
+        snapshot: PreflightHoldSnapshot,
+    ) -> bool:
+        tray = getattr(self, "current_tray", None)
+        candidates = (
+            str(getattr(tray, "master_label_code", "") or ""),
+            str(getattr(tray, "canonical_input_tag_qr", "") or ""),
+            str(getattr(tray, "active_label_qr_payload", "") or ""),
+        )
+        master = normalize_master_label_input(snapshot.master_raw)
+        if any(normalize_master_label_input(value) == master for value in candidates if value):
+            return True
+        master_fields = self._parse_new_format_qr(master) or {}
+        if not master_fields:
+            return False
+        for value in candidates:
+            candidate_fields = self._parse_new_format_qr(
+                normalize_master_label_input(value)
+            ) or {}
+            if (
+                str(candidate_fields.get("ITG") or "").strip()
+                == str(master_fields.get("ITG") or "").strip()
+                and str(candidate_fields.get("CLC") or "").strip()
+                == str(master_fields.get("CLC") or "").strip()
+                and str(master_fields.get("ITG") or "").strip()
+            ):
+                return True
+        return False
+
+    def _preserve_preflight_hold_for_close(self) -> tuple[bool, bool]:
+        store = self._preflight_hold_store()
+        if not store.exists():
+            self._preflight_hold_snapshot = None
+            self._preflight_hold_draining = False
+            return True, False
+        try:
+            snapshot = store.load()
+        except PreflightHoldError:
+            messagebox.showerror(
+                "보류 입력 확인 필요",
+                "사전조회 보류 파일을 읽지 못해 프로그램을 종료하지 않습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False, True
+        self._preflight_hold_snapshot = snapshot
+        current_master = str(
+            getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            or ""
+        )
+        if snapshot.state == HOLD_DRAINING:
+            if not current_master or not self._preflight_hold_matches_current_tray(
+                snapshot
+            ):
+                messagebox.showerror(
+                    "보류 입력 소유권 확인 필요",
+                    "제품 반영 중인 보류 묶음과 현재 트레이가 일치하지 않아 "
+                    "프로그램을 종료하지 않습니다. 파일을 보존하고 관리자에게 "
+                    "문의하세요.",
+                    parent=getattr(self, "root", None),
+                )
+                return False, True
+            if not self._save_current_tray_state():
+                messagebox.showerror(
+                    "보류 입력 저장 실패",
+                    "제품 반영 중인 현재 트레이를 저장하지 못해 프로그램을 "
+                    "종료하지 않습니다.",
+                    parent=getattr(self, "root", None),
+                )
+                return False, True
+            self._preflight_hold_draining = True
+        elif current_master:
+            messagebox.showerror(
+                "보류 입력 소유권 충돌",
+                "중앙 조회 보류 묶음과 별도의 현재 트레이가 함께 있어 프로그램을 "
+                "종료하지 않습니다. 두 상태를 보존하고 관리자에게 문의하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False, True
+        snapshot_hash = store.snapshot_hash(snapshot)
+        detail = self._preflight_hold_ownership_detail(
+            snapshot,
+            snapshot_hash=snapshot_hash,
+            reason="app_close_durable_handoff",
+        )
+        try:
+            audited = bool(
+                self._log_event(
+                    "PHS2_PREFLIGHT_HOLD_CLOSE_HANDOFF",
+                    detail=detail,
+                    synchronous=True,
+                    idempotency_key=(
+                        "preflight-hold-close:"
+                        f"{snapshot.preflight_id}:{snapshot_hash}"
+                    ),
+                    deduplicate=True,
+                )
+            )
+        except Exception:
+            audited = False
+        if not audited:
+            messagebox.showerror(
+                "보류 입력 종료 기록 실패",
+                "보류 묶음의 종료 인계 기록을 남기지 못해 프로그램을 종료하지 "
+                "않습니다.",
+                parent=getattr(self, "root", None),
+            )
+            return False, True
+        return True, True
+
+    def _abort_application_close(self) -> None:
+        self._ui_close_requested = False
+        self._ui_close_lane_drained = False
+        self._preflight_close_writer_draining = False
+        self._preflight_close_writer_drained = False
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and str(getattr(lane, "state", "") or "") == LANE_CLOSED:
+            self._ui_lane = None
+        self._set_scan_callback_pending(False)
+        self._set_preflight_scan_input_locked(
+            self._preflight_context_blocks_mutation()
+        )
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if (
+            isinstance(snapshot, PreflightHoldSnapshot)
+            and snapshot.state == HOLD_DRAINING
+            and getattr(self, "_preflight_hold_draining", False)
+            and self._preflight_hold_matches_current_tray(snapshot)
+        ):
+            self.root.after(0, self._drain_preflight_hold_head)
+
     def on_closing(self, *, _confirmed: bool = False):
-        if _confirmed or messagebox.askokcancel("종료", "프로그램을 종료하시겠습니까?"):
-            lane = getattr(self, "_ui_lane", None)
-            if lane is not None and lane.is_busy():
-                if getattr(self, "_ui_close_requested", False):
-                    return
-                self._ui_close_requested = True
-                entry = getattr(self, "scan_entry", None)
-                try:
-                    if entry is not None:
-                        entry.configure(state=tk.DISABLED)
-                except (AttributeError, tk.TclError):
-                    pass
-                self.show_status_message(
-                    "진행 중인 처리를 안전하게 마친 뒤 종료합니다.",
-                    self.COLOR_PRIMARY,
-                    duration=0,
-                )
-                lane.drain_then(lambda: self.on_closing(_confirmed=True))
+        if not _confirmed and not messagebox.askokcancel(
+            "종료",
+            "프로그램을 종료하시겠습니까?",
+        ):
+            return
+        if (
+            getattr(self, "_scan_callback_pending", False)
+            and not getattr(self, "_ui_close_requested", False)
+        ):
+            self.show_status_message(
+                "접수 중인 스캔을 먼저 정리한 뒤 종료합니다.",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+            self.root.after(0, lambda: self.on_closing(_confirmed=True))
+            return
+
+        self._ui_close_requested = True
+        self._set_scan_callback_pending(False)
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and not getattr(self, "_ui_close_lane_drained", False):
+            self.show_status_message(
+                "진행 중인 처리를 안전하게 마친 뒤 종료합니다.",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+
+            def resume_after_lane() -> None:
+                self._ui_close_lane_drained = True
+                self.on_closing(_confirmed=True)
+
+            lane.drain_then(resume_after_lane)
+            return
+
+        hold_writer = getattr(self, "_preflight_hold_writer_instance", None)
+        if (
+            hold_writer is not None
+            and not getattr(self, "_preflight_close_writer_drained", False)
+        ):
+            if getattr(self, "_preflight_close_writer_draining", False):
                 return
-            self._ui_close_requested = False
-            deleted_current_state_for_close = False
-            if self.worker_name and self.current_tray.master_label_code:
-                if self._operator_review_blocks_mutation():
-                    if not self._save_current_tray_state():
-                        messagebox.showerror("작업 저장 실패", "담당자 확인이 필요한 트레이를 저장하지 못해 프로그램을 종료하지 않습니다.")
-                        return
-                elif messagebox.askyesno("작업 저장", "진행 중인 트레이를 저장하고 종료할까요?"):
-                    if not self._save_current_tray_state():
-                        messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 프로그램을 종료하지 않습니다.")
-                        return
+            self._preflight_close_writer_draining = True
+            self.show_status_message(
+                "보류 입력 저장을 마친 뒤 종료합니다.",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+
+            def resume_after_hold_writer() -> None:
+                self._preflight_close_writer_draining = False
+                self._preflight_close_writer_drained = True
+                self.on_closing(_confirmed=True)
+
+            hold_writer.drain_then(resume_after_hold_writer)
+            return
+
+        hold_safe, hold_owned = self._preserve_preflight_hold_for_close()
+        if not hold_safe:
+            self._abort_application_close()
+            return
+
+        if getattr(self, "master_label_replace_state", None):
+            if not self._log_master_label_replacement_cancel(reason="app_close"):
+                messagebox.showerror(
+                    "교체 취소 기록 실패",
+                    "현품표 교체 취소 기록을 남기지 못해 프로그램을 종료하지 "
+                    "않습니다.",
+                )
+                self._abort_application_close()
+                return
+            self._reset_master_label_replacement_state()
+        exchange_session = getattr(
+            self,
+            "current_exchange_session",
+            ProductExchangeSession(),
+        )
+        if exchange_session.defective_barcodes or exchange_session.good_barcodes:
+            if not self._cancel_exchange(reason="app_close"):
+                self._abort_application_close()
+                return
+
+        deleted_current_state_for_close = False
+        if (
+            self.worker_name
+            and self.current_tray.master_label_code
+            and not hold_owned
+        ):
+            if self._operator_review_blocks_mutation():
+                if not self._save_current_tray_state():
+                    messagebox.showerror(
+                        "작업 저장 실패",
+                        "담당자 확인이 필요한 트레이를 저장하지 못해 프로그램을 "
+                        "종료하지 않습니다.",
+                    )
+                    self._abort_application_close()
+                    return
+            elif messagebox.askyesno(
+                "작업 저장",
+                "진행 중인 트레이를 저장하고 종료할까요?",
+            ):
+                if not self._save_current_tray_state():
+                    messagebox.showerror(
+                        "작업 저장 실패",
+                        "진행 중인 트레이 상태를 저장하지 못해 프로그램을 종료하지 "
+                        "않습니다.",
+                    )
+                    self._abort_application_close()
+                    return
+            else:
+                if not self._log_current_tray_discarded(
+                    reason="close_without_saving",
+                    synchronous=True,
+                ):
+                    messagebox.showerror(
+                        "작업 기록 실패",
+                        "저장하지 않고 종료한 작업 기록을 남기지 못해 프로그램을 "
+                        "종료하지 않습니다.",
+                    )
+                    self._abort_application_close()
+                    return
+                if not self._delete_current_tray_state():
+                    messagebox.showerror(
+                        "작업 삭제 실패",
+                        "현재 트레이 상태 파일을 삭제하지 못해 프로그램을 종료하지 "
+                        "않습니다.",
+                    )
+                    self._abort_application_close()
+                    return
+                deleted_current_state_for_close = True
+        if self.worker_name and not self._end_work_session(reason="app_close"):
+            restore_notice = ""
+            if deleted_current_state_for_close and self.current_tray.master_label_code:
+                if self._save_current_tray_state():
+                    restore_notice = "\n\n삭제했던 현재 트레이 상태 파일을 복구했습니다."
                 else:
-                    if not self._log_current_tray_discarded(reason='close_without_saving', synchronous=True):
-                        messagebox.showerror("작업 기록 실패", "저장하지 않고 종료한 작업 기록을 남기지 못해 프로그램을 종료하지 않습니다.")
-                        return
-                    if not self._delete_current_tray_state():
-                        messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못해 프로그램을 종료하지 않습니다.")
-                        return
-                    deleted_current_state_for_close = True
-            if getattr(self, "master_label_replace_state", None):
-                if not self._log_master_label_replacement_cancel(reason="app_close"):
-                    messagebox.showerror("교체 취소 기록 실패", "현품표 교체 취소 기록을 남기지 못해 프로그램을 종료하지 않습니다.")
-                    return
-                self._reset_master_label_replacement_state()
-            exchange_session = getattr(self, "current_exchange_session", ProductExchangeSession())
-            if exchange_session.defective_barcodes or exchange_session.good_barcodes:
-                if not self._cancel_exchange(reason="app_close"):
-                    return
-            if self.worker_name:
-                if not self._end_work_session(reason="app_close"):
-                    restore_notice = ""
-                    if deleted_current_state_for_close and self.current_tray.master_label_code:
-                        if self._save_current_tray_state():
-                            restore_notice = "\n\n삭제했던 현재 트레이 상태 파일을 복구했습니다."
-                        else:
-                            restore_notice = "\n\n삭제했던 현재 트레이 상태 파일 복구에도 실패했습니다. 상태 폴더를 확인하세요."
-                    messagebox.showerror("작업 종료 기록 실패", f"작업 종료 기록을 남기지 못해 프로그램을 종료하지 않습니다.{restore_notice}")
-                    return
-            if hasattr(self, 'paned_window') and self.paned_window.winfo_exists():
-                try:
-                    num_panes = len(self.paned_window.panes())
-                    if num_panes > 1: self.paned_window_sash_positions = {str(i): self.paned_window.sashpos(i) for i in range(num_panes - 1)}
-                except tk.TclError as e: print(f"종료 시 sash 위치 저장 오류: {e}")
-            self._ui_close_requested = True
-            hold_writer = getattr(self, "_preflight_hold_writer_instance", None)
-            if hold_writer is not None:
-                self.show_status_message(
-                    "보류 입력 저장을 마친 뒤 종료합니다.",
-                    self.COLOR_PRIMARY,
-                    duration=0,
-                )
-                hold_writer.drain_then(self._finalize_application_close)
-                return
-            self._finalize_application_close()
+                    restore_notice = (
+                        "\n\n삭제했던 현재 트레이 상태 파일 복구에도 실패했습니다. "
+                        "상태 폴더를 확인하세요."
+                    )
+            messagebox.showerror(
+                "작업 종료 기록 실패",
+                "작업 종료 기록을 남기지 못해 프로그램을 종료하지 않습니다."
+                f"{restore_notice}",
+            )
+            self._abort_application_close()
+            return
+        if hasattr(self, "paned_window") and self.paned_window.winfo_exists():
+            try:
+                num_panes = len(self.paned_window.panes())
+                if num_panes > 1:
+                    self.paned_window_sash_positions = {
+                        str(i): self.paned_window.sashpos(i)
+                        for i in range(num_panes - 1)
+                    }
+            except tk.TclError as exc:
+                print(f"종료 시 sash 위치 저장 오류: {exc}")
+        self._finalize_application_close()
 
     def _finalize_application_close(self) -> None:
         lane = getattr(self, "_ui_lane", None)
@@ -10793,7 +11614,7 @@ class ContainerAudit:
         scanned_barcodes: Sequence[str],
         relay_log_file_path: str,
         operation_lease_id: str,
-        on_prepared: Optional[Callable[[SealAttempt], None]] = None,
+        on_prepared: Callable[[SealAttempt], None],
     ) -> SealAttempt:
         prepare_arguments = {
             "master_label": source_label_payload,
@@ -10803,8 +11624,6 @@ class ContainerAudit:
             "operation_lease_id": operation_lease_id,
         }
         previewed = coordinator.preview(**prepare_arguments)
-        if on_prepared is not None:
-            on_prepared(previewed)
         prepared = coordinator.prepare(
             master_label=source_label_payload,
             master_label_fields=dict(source_label_fields),
@@ -10813,12 +11632,15 @@ class ContainerAudit:
             scanned_barcodes=tuple(scanned_barcodes),
             relay_log_file_path=relay_log_file_path,
             operation_lease_id=operation_lease_id,
+            require_completion_checkpoint=True,
         )
         if prepared.intent_id != previewed.intent_id:
             raise TransferSealError(
                 "TRANSFER_INTENT_PREVIEW_MISMATCH",
                 "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
             )
+        on_prepared(prepared)
+        coordinator.confirm_completion_checkpoint(prepared.intent_id)
         drain_through = getattr(coordinator, "drain_pending_through", None)
         if callable(drain_through):
             results = drain_through(prepared.intent_id)
@@ -10832,7 +11654,7 @@ class ContainerAudit:
         *,
         master_label_fields: Dict[str, Any],
         log_detail: Dict[str, Any],
-        on_prepared: Optional[Callable[[SealAttempt], None]] = None,
+        on_prepared: Callable[[SealAttempt], None],
     ) -> SealAttempt:
         coordinator = self._transfer_seal_runtime()
         source_label_payload = str(
@@ -11295,6 +12117,20 @@ class ContainerAudit:
 
     def park_current_tray(self, *, confirm: bool = True) -> bool:
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
+        hold_store = self._preflight_hold_store()
+        if hold_store.exists() or self._preflight_context_blocks_mutation():
+            if not getattr(self.current_tray, "master_label_code", ""):
+                return self._quarantine_preflight_hold_for_supervisor(
+                    reason="supervisor_new_work_required",
+                    confirm=confirm,
+                )
+            self.show_status_message(
+                "제품 반영 중인 보류 묶음은 현재 트레이와 함께 완료하거나 다시 "
+                "시작해야 합니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
         if self._phs_label_exchange_blocks_tray_transition("현재 트레이 보류"):
             return False
         if self._operator_review_blocks_mutation():
@@ -11383,9 +12219,24 @@ class ContainerAudit:
 
         try:
             self._quarantine_invalid_parked_tray_files()
-            for row_index, summary in enumerate(self._parked_store().list_for_worker(self.worker_name)):
+            row_index = 0
+            for summary in self._parked_store().list_for_worker(self.worker_name):
                 tag = 'even' if row_index % 2 == 0 else 'odd'
                 self._insert_tree_row(self.parked_tree, '', 'end', values=(summary.item_name, str(summary.scan_count)), iid=str(summary.path), tags=(tag,))
+                row_index += 1
+            for held in self._quarantined_preflight_holds():
+                fields = self._parse_new_format_qr(held.snapshot.master_raw) or {}
+                item_code = str(fields.get("CLC") or "현품표")
+                tag = "even" if row_index % 2 == 0 else "odd"
+                self._insert_tree_row(
+                    self.parked_tree,
+                    "",
+                    "end",
+                    values=(f"사전조회 격리 · {item_code}", str(len(held.snapshot.items))),
+                    iid=str(held.path),
+                    tags=(tag,),
+                )
+                row_index += 1
         except Exception as e:
             print(f"보류 목록 갱신 중 오류: {e}")
         finally:
@@ -11424,6 +12275,9 @@ class ContainerAudit:
         selected_item_iid = self.parked_tree.focus()
         if not selected_item_iid: return
         filepath = selected_item_iid
+        if self._is_preflight_hold_quarantine_path(filepath):
+            self.restore_quarantined_preflight_hold(filepath)
+            return
         self.restore_parked_tray(filepath)
 
     def _is_parked_tray_path(self, filepath: str) -> bool:

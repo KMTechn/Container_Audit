@@ -5278,7 +5278,11 @@ def test_on_closing_logs_partial_exchange_cancel_before_shutdown(monkeypatch):
 def test_on_closing_keeps_app_open_when_exchange_cancel_log_fails(monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
-    app.current_tray = TraySession()
+    app.current_tray = TraySession(
+        master_label_code="ACTIVE",
+        item_code="AAA2270730100",
+        scanned_barcodes=["AAA2270730100-GOOD-1"],
+    )
     app.current_exchange_session = ProductExchangeSession(
         item_code="AAA2270730100",
         target_quantity=1,
@@ -5286,14 +5290,23 @@ def test_on_closing_keeps_app_open_when_exchange_cancel_log_fails(monkeypatch):
         defective_barcodes=["AAA2270730100-BAD-1"],
     )
     app.root = type("DummyRoot", (), {"destroy": lambda root: setattr(app, "destroyed", True)})()
-    app._log_event = lambda *args, **kwargs: False
+    app._delete_current_tray_state = lambda: setattr(
+        app,
+        "state_deleted",
+        True,
+    ) or True
+    app._log_event = lambda event, *args, **kwargs: (
+        event != "PRODUCT_EXCHANGE_CANCELLED"
+    )
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
     assert not hasattr(app, "destroyed")
+    assert not hasattr(app, "state_deleted")
     assert app.current_exchange_session.defective_barcodes == ["AAA2270730100-BAD-1"]
     assert errors[0][0] == "교환 취소 기록 실패"
 
@@ -5523,7 +5536,7 @@ def test_process_barcode_runs_delayed_scan_when_epoch_is_current():
     assert processed == ["AAA2270730100-001"]
 
 
-def test_process_barcode_discards_delayed_scan_after_session_epoch_changes():
+def test_process_barcode_preserves_delayed_scan_after_session_epoch_changes():
     app = _headless_app()
     app.root = CapturingRoot()
     app.scan_entry = DummyScanEntry("AAA2270730100-001")
@@ -5536,7 +5549,8 @@ def test_process_barcode_discards_delayed_scan_after_session_epoch_changes():
     callback, args = app.root.calls[0]
     callback(*args)
 
-    assert app.scan_entry.deleted is True
+    assert app.scan_entry.deleted is False
+    assert app.scan_entry.get() == "AAA2270730100-001"
     assert processed == []
 
 
@@ -6914,6 +6928,10 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
                 status="PREPARED",
             )
 
+        def confirm_completion_checkpoint(self, intent_id):
+            assert intent_id == "intent-physical-label"
+            captured["checkpoint_confirmed"] = True
+
         def attempt(self, intent_id):
             assert intent_id == "intent-physical-label"
             return container_audit_module.SealAttempt(
@@ -6927,6 +6945,7 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
     result = app._prepare_and_attempt_transfer_seal(
         master_label_fields=fields,
         log_detail={"product_barcodes": ["AAA2270730100GOAL29P003"]},
+        on_prepared=lambda _attempt: captured.update(checkpoint_saved=True),
     )
 
     assert result.status == "ACKED"
@@ -6936,6 +6955,9 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
         "2222222222222222" if active_label else "1111111111111111"
     )
     assert captured["operation_lease_id"] == "operation-lease-physical-label"
+    assert captured["require_completion_checkpoint"] is True
+    assert captured["checkpoint_saved"] is True
+    assert captured["checkpoint_confirmed"] is True
 
 
 @pytest.mark.parametrize(

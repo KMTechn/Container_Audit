@@ -127,6 +127,9 @@ PRODUCER_IDENTITY_SCHEMA_VERSION = "container-audit-producer-identity-v1"
 PRODUCER_IDENTITY_FILENAME = "producer_identity.json"
 PRODUCER_IDENTITY_REQUIRED_FIELDS = ("producer_id", "source_host_id", "producer_install_id")
 INSTALL_IDENTITY_DERIVATION_VERSION = "container-audit-install-identity-v1"
+INSTALL_BOUND_IDENTITY_DERIVATION_VERSION = (
+    "container-audit-install-bound-identities-v1"
+)
 INSTALL_IDENTITY_APP_ID = "container_audit"
 INSTALL_IDENTITY_HASH_HEX_LENGTH = 32
 POSSESSION_IDENTITY_FIELDS = (
@@ -390,8 +393,42 @@ def derive_path_independent_install_id(
     return f"container-audit-install-{digest}"
 
 
-def _default_secret_ref(hostname: str) -> str:
-    return f"dpapi:KMTech.DirectSync.ContainerAudit.{_slug(hostname)}"
+def derive_install_bound_identity_id(
+    producer_install_id: str,
+    *,
+    purpose: str,
+    prefix: str,
+) -> str:
+    install_id = str(producer_install_id or "").strip()
+    normalized_purpose = str(purpose or "").strip().lower()
+    normalized_prefix = _slug(prefix)
+    if not install_id:
+        raise DirectSyncPushError("producer_install_id is required")
+    if not re.fullmatch(r"[a-z][a-z0-9_]{1,63}", normalized_purpose):
+        raise DirectSyncPushError("install-bound identity purpose is invalid")
+    canonical = {
+        "producer_install_id": install_id,
+        "purpose": normalized_purpose,
+        "version": INSTALL_BOUND_IDENTITY_DERIVATION_VERSION,
+    }
+    digest = hashlib.sha256(
+        json.dumps(
+            canonical,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()[:INSTALL_IDENTITY_HASH_HEX_LENGTH]
+    return f"{normalized_prefix}-{digest}"
+
+
+def _default_secret_ref(producer_install_id: str) -> str:
+    target_id = derive_install_bound_identity_id(
+        producer_install_id,
+        purpose="secret_target",
+        prefix="install",
+    )
+    return f"dpapi:KMTech.DirectSync.ContainerAudit.{target_id}"
 
 
 def _validate_secret_ref(secret_ref: str) -> tuple[str, str]:
@@ -656,14 +693,26 @@ def _persist_producer_identity_file(
     )
 
 
+def _registration_target_paths(args: argparse.Namespace, storage_paths) -> tuple[Path, Path]:
+    manifest_path = (
+        Path(str(getattr(args, "manifest_path", "") or "")).expanduser()
+        if str(getattr(args, "manifest_path", "") or "").strip()
+        else Path(storage_paths.producer_manifest_path)
+    )
+    credential_path = (
+        Path(str(getattr(args, "credential_path", "") or "")).expanduser()
+        if str(getattr(args, "credential_path", "") or "").strip()
+        else Path(storage_paths.credential_path)
+    )
+    return manifest_path, credential_path
+
+
 def _resolve_producer_identity(
     args: argparse.Namespace,
     storage_paths,
     *,
     hostname: str,
-    host_slug: str,
 ) -> dict[str, str]:
-    generated_source_host_id = f"container-audit-{host_slug}"
     explicit_identity_path = str(getattr(args, "producer_identity_path", "") or "").strip()
     default_identity_path = _default_producer_identity_path(args, storage_paths)
     loaded: dict[str, str] | None = None
@@ -679,7 +728,6 @@ def _resolve_producer_identity(
     cli_source_host_id = str(args.source_host_id or "").strip()
     cli_producer_install_id = str(args.producer_install_id or "").strip()
     cli_producer_id = str(args.producer_id or "").strip()
-    source_host_id = cli_source_host_id or (loaded or {}).get("source_host_id") or generated_source_host_id
     producer_install_id = cli_producer_install_id or (loaded or {}).get("producer_install_id")
     if cli_producer_install_id:
         producer_install_id_derivation = "cli"
@@ -691,9 +739,49 @@ def _resolve_producer_identity(
             user_sid=_current_user_sid(),
         )
         producer_install_id_derivation = INSTALL_IDENTITY_DERIVATION_VERSION
-    producer_id = cli_producer_id or (loaded or {}).get("producer_id") or source_host_id
+    generated_source_host_id = derive_install_bound_identity_id(
+        producer_install_id,
+        purpose="source_host_id",
+        prefix="container-audit-source",
+    )
+    loaded_source_host_id = str((loaded or {}).get("source_host_id") or "").strip()
+    loaded_producer_id = str((loaded or {}).get("producer_id") or "").strip()
+    migration_requested = bool(
+        getattr(args, "migrate_install_bound_identity", False)
+    )
+    migration_authorized = bool(
+        migration_requested
+        and str(getattr(args, "admin_recovery_secret_file", "") or "").strip()
+    )
+    legacy_loaded_identity = bool(
+        loaded is not None
+        and (
+            loaded_source_host_id != generated_source_host_id
+            or loaded_producer_id != generated_source_host_id
+        )
+    )
+    complete_explicit_identity = bool(
+        cli_source_host_id and cli_producer_install_id and cli_producer_id
+    )
+    if legacy_loaded_identity and not complete_explicit_identity:
+        if not migration_authorized:
+            raise EnrollmentAdminRecoveryRequired(
+                "existing hostname-era producer identity requires explicit "
+                "--migrate-install-bound-identity with audited administrator recovery",
+                error_code="install_bound_identity_migration_required",
+            )
+        loaded_source_host_id = generated_source_host_id
+        loaded_producer_id = generated_source_host_id
+    source_host_id = (
+        cli_source_host_id
+        or loaded_source_host_id
+        or generated_source_host_id
+    )
+    producer_id = cli_producer_id or loaded_producer_id or source_host_id
     if cli_source_host_id or cli_producer_install_id or cli_producer_id:
         identity_source = "cli"
+    elif migration_authorized and legacy_loaded_identity:
+        identity_source = "admin_recovery_install_identity_migration"
     elif loaded is not None:
         identity_source = "identity_file"
     else:
@@ -703,6 +791,19 @@ def _resolve_producer_identity(
         "source_host_id": source_host_id,
         "producer_install_id": producer_install_id,
         "producer_id": producer_id,
+        "pc_id": derive_install_bound_identity_id(
+            producer_install_id,
+            purpose="pc_id",
+            prefix="container-audit-pc",
+        ),
+        "pending_key_id": derive_install_bound_identity_id(
+            producer_install_id,
+            purpose="pending_key_id",
+            prefix="pending-server-key",
+        ),
+        "install_bound_identity_derivation": (
+            INSTALL_BOUND_IDENTITY_DERIVATION_VERSION
+        ),
         "identity_source": identity_source,
         "identity_loaded_from": loaded_from,
         "identity_persist_path": str(default_identity_path),
@@ -716,9 +817,55 @@ def _resolve_producer_identity(
     }
 
 
+def _require_explicit_existing_identity_migration(
+    args: argparse.Namespace,
+    storage_paths,
+    *,
+    identity: dict[str, str],
+    secret_ref: str,
+) -> None:
+    manifest_path, credential_path = _registration_target_paths(args, storage_paths)
+    if not manifest_path.is_file() and not credential_path.is_file():
+        return
+    compatible = manifest_path.is_file() and credential_path.is_file()
+    if compatible:
+        try:
+            manifest = load_json_no_duplicate_keys(manifest_path.read_bytes())
+            credential = load_json_no_duplicate_keys(credential_path.read_bytes())
+            pc_identity = manifest.get("pc_identity") if isinstance(manifest, dict) else None
+            compatible = bool(
+                isinstance(pc_identity, dict)
+                and isinstance(credential, dict)
+                and str(pc_identity.get("pc_id") or "") == identity["pc_id"]
+                and str(pc_identity.get("source_host_id") or "")
+                == identity["source_host_id"]
+                and str(pc_identity.get("producer_install_id") or "")
+                == identity["producer_install_id"]
+                and str(credential.get("producer_id") or "")
+                == identity["producer_id"]
+                and str(credential.get("secret_ref") or "") == secret_ref
+            )
+        except (OSError, TypeError, ValueError):
+            compatible = False
+    if compatible:
+        return
+    migration_authorized = bool(
+        getattr(args, "migrate_install_bound_identity", False)
+        and str(getattr(args, "admin_recovery_secret_file", "") or "").strip()
+    )
+    if migration_authorized:
+        return
+    raise EnrollmentAdminRecoveryRequired(
+        "existing registration identity differs from the MachineGuid+SID "
+        "install identity; explicit audited migration is required",
+        error_code="install_bound_identity_migration_required",
+    )
+
+
 def _build_container_audit_manifest(
     *,
     hostname: str,
+    pc_id: str,
     source_host_id: str,
     producer_install_id: str,
     endpoint_url: str,
@@ -780,7 +927,8 @@ def _build_container_audit_manifest(
     return {
         "schema_version": "producer-onboarding-manifest-v1",
         "pc_identity": {
-            "pc_id": hostname,
+            "pc_id": pc_id,
+            "display_hostname": hostname,
             "source_host_id": source_host_id,
             "producer_install_id": producer_install_id,
         },
@@ -2517,6 +2665,12 @@ def _admin_recover_two_phase(
 
 
 def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, dict]:
+    if bool(getattr(args, "migrate_install_bound_identity", False)) and not str(
+        getattr(args, "admin_recovery_secret_file", "") or ""
+    ).strip():
+        raise DirectSyncPushError(
+            "--migrate-install-bound-identity requires --admin-recovery-secret-file"
+        )
     if bool(getattr(args, "admin_recovery_two_phase", False)) and not str(
         getattr(args, "admin_recovery_secret_file", "") or ""
     ).strip():
@@ -2524,20 +2678,25 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
             "--admin-recovery-two-phase requires --admin-recovery-secret-file"
         )
     hostname = args.hostname or socket.gethostname()
-    host_slug = _slug(hostname)
     storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
     ensure_container_audit_storage_dirs(storage_paths)
     identity = _resolve_producer_identity(
         args,
         storage_paths,
         hostname=hostname,
-        host_slug=host_slug,
     )
     source_host_id = identity["source_host_id"]
     producer_install_id = identity["producer_install_id"]
     producer_id = identity["producer_id"]
-    key_id = args.key_id or f"pending-server-key-{host_slug}"
-    secret_ref = args.secret_ref or _default_secret_ref(hostname)
+    pc_id = identity["pc_id"]
+    key_id = args.key_id or identity["pending_key_id"]
+    secret_ref = args.secret_ref or _default_secret_ref(producer_install_id)
+    _require_explicit_existing_identity_migration(
+        args,
+        storage_paths,
+        identity=identity,
+        secret_ref=secret_ref,
+    )
     endpoint_url = args.endpoint_url or DEFAULT_ENDPOINT_URL
     isolated_context = None
     isolated_context_path = str(
@@ -2563,6 +2722,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
 
     manifest = _build_container_audit_manifest(
         hostname=hostname,
+        pc_id=pc_id,
         source_host_id=source_host_id,
         producer_install_id=producer_install_id,
         endpoint_url=endpoint_url,
@@ -2597,6 +2757,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "status": "LOCAL_REGISTRATION_WRITTEN_PENDING_SECRET",
         "captured_at": captured_at,
         "hostname": hostname,
+        "pc_id": pc_id,
         "source_host_id": source_host_id,
         "producer_install_id": producer_install_id,
         "producer_id": producer_id,
@@ -2619,6 +2780,9 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         "producer_identity_loaded_from": identity["identity_loaded_from"],
         "producer_identity_path": identity["identity_persist_path"],
         "producer_install_id_derivation": identity["producer_install_id_derivation"],
+        "install_bound_identity_derivation": identity[
+            "install_bound_identity_derivation"
+        ],
         "local_storage": {
             "data_root": str(storage_paths.data_root),
             "events_dir": str(storage_paths.events_dir),
@@ -2695,6 +2859,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--producer-install-id", default="")
     parser.add_argument("--producer-identity-path", default="")
     parser.add_argument("--producer-id", default="")
+    parser.add_argument(
+        "--migrate-install-bound-identity",
+        action="store_true",
+        help=(
+            "Migrate an existing hostname-era identity only through the "
+            "audited administrator recovery flow."
+        ),
+    )
     parser.add_argument("--key-id", default="")
     parser.add_argument("--secret-ref", default="")
     parser.add_argument(

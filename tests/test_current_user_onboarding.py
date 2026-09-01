@@ -18,8 +18,15 @@ from current_user_onboarding import (
     verify_bootstrap_integrity,
 )
 from direct_sync_push import manifest_hash
+from tools import register_container_audit_worker_pc as registration
 
 TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
+TEST_INSTALL_ID = "container-audit-install-1"
+TEST_SOURCE_HOST_ID = registration.derive_install_bound_identity_id(
+    TEST_INSTALL_ID,
+    purpose="source_host_id",
+    prefix="container-audit-source",
+)
 
 
 class _FakeExistingPossessionKey:
@@ -103,12 +110,12 @@ def test_pinned_json_rejects_duplicate_keys_and_oversized_input(tmp_path):
         )
 
 
-def _ready_state(paths, *, source_host_id="container-audit-user-1"):
+def _ready_state(paths, *, source_host_id=TEST_SOURCE_HOST_ID):
     identity = {
         "schema_version": "container-audit-producer-identity-v1",
         "producer_id": source_host_id,
         "source_host_id": source_host_id,
-        "producer_install_id": "container-audit-install-1",
+        "producer_install_id": TEST_INSTALL_ID,
         "enrollment_contract_version": (
             onboarding_module.SELF_ENROLLMENT_CONTRACT_VERSION
         ),
@@ -120,7 +127,11 @@ def _ready_state(paths, *, source_host_id="container-audit-user-1"):
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
         "pc_identity": {
-            "pc_id": "CONTAINER-PC01",
+            "pc_id": registration.derive_install_bound_identity_id(
+                TEST_INSTALL_ID,
+                purpose="pc_id",
+                prefix="container-audit-pc",
+            ),
             "source_host_id": source_host_id,
             "producer_install_id": identity["producer_install_id"],
         },
@@ -134,6 +145,12 @@ def _ready_state(paths, *, source_host_id="container-audit-user-1"):
         {
             "credential_schema_version": "producer-ingest-credential-reference-v1",
             "producer_id": source_host_id,
+            "key_id": registration.derive_install_bound_identity_id(
+                TEST_INSTALL_ID,
+                purpose="pending_key_id",
+                prefix="pending-server-key",
+            ),
+            "secret_ref": registration._default_secret_ref(TEST_INSTALL_ID),
             "dpapi_scope": "current_user",
         },
     )
@@ -960,9 +977,45 @@ def test_state_absent_partial_and_existing_are_distinguished(tmp_path):
         credential_loader=_credential_loader,
     )
     assert ready["status"] == "READY"
-    assert ready["source_host_id"] == "container-audit-user-1"
+    assert ready["source_host_id"] == TEST_SOURCE_HOST_ID
     assert ready["possession_key"]["scope"] == "current_user"
     assert ready["possession_key"]["fingerprint"] == (TEST_POSSESSION_FINGERPRINT)
+
+
+def test_hostname_era_complete_state_is_blocked_for_audited_identity_migration(
+    tmp_path,
+):
+    paths = resolve_current_user_onboarding_paths(
+        tmp_path / "app",
+        environ={"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")},
+    )
+    _ready_state(paths)
+    identity = json.loads(paths.identity_path.read_text(encoding="utf-8"))
+    manifest = json.loads(paths.producer_manifest_path.read_text(encoding="utf-8"))
+    credential = json.loads(paths.credential_path.read_text(encoding="utf-8"))
+    registration_report = json.loads(
+        paths.registration_report_path.read_text(encoding="utf-8")
+    )
+    identity["producer_id"] = "factory-pc-01"
+    identity["source_host_id"] = "factory-pc-01"
+    manifest["pc_identity"]["pc_id"] = "factory-pc-01"
+    manifest["pc_identity"]["source_host_id"] = "factory-pc-01"
+    credential["producer_id"] = "factory-pc-01"
+    registration_report["manifest_hash"] = manifest_hash(manifest)
+    _write_json(paths.identity_path, identity)
+    _write_json(paths.producer_manifest_path, manifest)
+    _write_json(paths.credential_path, credential)
+    _write_json(paths.registration_report_path, registration_report)
+
+    state = inspect_current_user_state(
+        paths,
+        profile_loader=_profile_loader,
+        credential_loader=_credential_loader,
+    )
+
+    assert state["status"] == "RECOVERY_REQUIRED"
+    assert state["recovery_action"] == onboarding_module.ADMIN_RECOVERY_ACTION
+    assert "install-identity migration" in state["reason"]
 
 
 def test_admin_recovery_report_is_terminal_not_retryable(tmp_path):

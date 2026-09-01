@@ -927,7 +927,13 @@ def test_logistics_client_rejects_string_false_retryable_classification():
     assert exc_info.value.retryable is False
 
 
-def _prepare(coordinator, barcodes=("BC-1", "BC-2", "BC-3"), *, include_bundle=True):
+def _prepare(
+    coordinator,
+    barcodes=("BC-1", "BC-2", "BC-3"),
+    *,
+    include_bundle=True,
+    require_completion_checkpoint=False,
+):
     fields = {
         "ITG": "ITAG-001",
         "LBL": "INPUT-LABEL-001",
@@ -943,6 +949,7 @@ def _prepare(coordinator, barcodes=("BC-1", "BC-2", "BC-3"), *, include_bundle=T
         item_id=ITEM,
         operator="tester",
         scanned_barcodes=barcodes,
+        require_completion_checkpoint=require_completion_checkpoint,
     )
 
 
@@ -1342,6 +1349,41 @@ def test_coordinator_preview_is_side_effect_free_and_matches_prepared_intent(
         assert conn.execute(
             "SELECT COUNT(*) FROM transfer_completion_ledger"
         ).fetchone()[0] == 1
+
+
+def test_unconfirmed_completion_checkpoint_cannot_replay_or_attempt_http(tmp_path):
+    db_path = tmp_path / "completion-checkpoint.db"
+    offline = TransferSealCoordinator(TransferSealStore(db_path), None)
+    prepared = _prepare(offline, require_completion_checkpoint=True)
+
+    assert offline.store.load(prepared.intent_id)[
+        "completion_checkpoint_confirmed"
+    ] == 0
+    assert offline.store.pending_ids() == []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        if call["method"] == "POST":
+            return FakeResponse(200, {"ok": True, "data": _receipt(call["json"])})
+        raise AssertionError(call)
+
+    client, session = _client(handler)
+    restarted = TransferSealCoordinator(TransferSealStore(db_path), client)
+
+    assert restarted.drain_pending() == []
+    assert session.calls == []
+    with pytest.raises(TransferSealError) as exc_info:
+        restarted.attempt(prepared.intent_id)
+    assert exc_info.value.code == "DURABLE_COMPLETION_CHECKPOINT_REQUIRED"
+    assert session.calls == []
+
+    restarted.confirm_completion_checkpoint(prepared.intent_id)
+    assert restarted.store.pending_ids() == [prepared.intent_id]
+    replayed = restarted.drain_pending()
+
+    assert [attempt.status for attempt in replayed] == ["ACKED"]
+    assert [call["method"] for call in session.calls] == ["GET", "POST"]
 
 
 def test_offline_multi_event_keeps_linked_ledger_and_fifo_outbox(tmp_path):

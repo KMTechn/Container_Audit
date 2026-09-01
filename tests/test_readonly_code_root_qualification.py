@@ -22,6 +22,7 @@ from current_user_onboarding import (
 from direct_sync_push import manifest_hash
 from event_log_store import append_event_log_entry
 from parked_tray_store import ParkedTrayStore
+from tools import register_container_audit_worker_pc as registration
 from worker_registry import WorkerRegistry
 
 
@@ -107,8 +108,12 @@ def _icacls(path: Path, *arguments: str) -> None:
 
 
 def _ready_state(paths) -> None:
-    source_host_id = "container-audit-readonly-user"
     producer_install_id = "container-audit-readonly-install"
+    source_host_id = registration.derive_install_bound_identity_id(
+        producer_install_id,
+        purpose="source_host_id",
+        prefix="container-audit-source",
+    )
     identity = {
         "schema_version": "container-audit-producer-identity-v1",
         "producer_id": source_host_id,
@@ -123,7 +128,11 @@ def _ready_state(paths) -> None:
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
         "pc_identity": {
-            "pc_id": "CONTAINER-READONLY-PC",
+            "pc_id": registration.derive_install_bound_identity_id(
+                producer_install_id,
+                purpose="pc_id",
+                prefix="container-audit-pc",
+            ),
             "source_host_id": source_host_id,
             "producer_install_id": producer_install_id,
         },
@@ -137,6 +146,14 @@ def _ready_state(paths) -> None:
         {
             "credential_schema_version": "producer-ingest-credential-reference-v1",
             "producer_id": source_host_id,
+            "key_id": registration.derive_install_bound_identity_id(
+                producer_install_id,
+                purpose="pending_key_id",
+                prefix="pending-server-key",
+            ),
+            "secret_ref": registration._default_secret_ref(
+                producer_install_id
+            ),
             "dpapi_scope": "current_user",
         },
     )
