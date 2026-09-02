@@ -1475,9 +1475,12 @@ def test_master_activation_does_not_start_after_marker_gate_failure():
     app._master_preflight_epoch = 7
     app._master_preflight_pending = True
     app._master_preflight_poll_job = "poll"
-    app._ensure_phs_replacement_waiting_marked = (
-        lambda *_args, **_kwargs: (False, False)
-    )
+    app._work_phs_replacement_waiting_marker = lambda *_args, **_kwargs: {
+        "ready": False,
+        "pair": ("LBL-OLD", "LBL-ACTIVE"),
+        "error": OSError("marker unavailable"),
+        "context": None,
+    }
     app._activate_master_label_tray = lambda **_kwargs: (_ for _ in ()).throw(
         AssertionError("activation must remain untouched")
     )
@@ -1556,6 +1559,7 @@ def test_active_refresh_does_not_mutate_tray_after_marker_gate_failure(
     )
     app._update_action_button_states = lambda: None
     app.show_status_message = lambda *_args, **_kwargs: None
+    app.show_fullscreen_warning = lambda *_args, **_kwargs: None
     app._schedule_focus_return = lambda: None
     monkeypatch.setattr(
         container_module,
@@ -1580,6 +1584,12 @@ def test_reconciliation_context_is_not_published_after_marker_gate_failure(
         "topology_hash": "d" * 64,
         "_scanned_payload": payload,
     }
+    resolved["scan"] = {
+        **dict(resolution["scan"]),
+        "replacement_required": True,
+        "scanned_label_id": "LBL-OLD",
+        "active_label_id": "LBL-ACTIVE",
+    }
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = _ImmediateRoot()
     lane = _ImmediateLane()
@@ -1602,11 +1612,15 @@ def test_reconciliation_context_is_not_published_after_marker_gate_failure(
     app._set_phs_reconciliation_context = lambda context: setattr(
         app, "_phs_reconciliation_context", context
     )
-    app._ensure_phs_replacement_waiting_marked = (
-        lambda *_args, **_kwargs: (False, False)
-    )
+    app._work_phs_replacement_waiting_marker = lambda *_args, **_kwargs: {
+        "ready": False,
+        "pair": ("LBL-OLD", "LBL-ACTIVE"),
+        "error": OSError("marker unavailable"),
+        "context": resolved,
+    }
     app._update_action_button_states = lambda: None
     app.show_status_message = lambda *_args, **_kwargs: None
+    app.show_fullscreen_warning = lambda *_args, **_kwargs: None
     app._schedule_focus_return = lambda: None
     app._log_event = lambda *_args, **_kwargs: True
     monkeypatch.setattr(container_module.threading, "Thread", _ImmediateThread)

@@ -24,12 +24,17 @@ from warning_presenter import (
 
 _TransferSealStore = TransferSealStore
 _TransferSealCoordinator = TransferSealCoordinator
+_TEST_TRANSFER_OWNER_THREAD_ID = threading.get_ident()
+
+
+def _test_transfer_owner_thread_id():
+    return _TEST_TRANSFER_OWNER_THREAD_ID
 
 
 def TransferSealStore(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferSealStore(*args, **kwargs)
 
@@ -37,7 +42,7 @@ def TransferSealStore(*args, **kwargs):
 def TransferSealCoordinator(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferSealCoordinator(*args, **kwargs)
 
@@ -345,6 +350,12 @@ def _commandless_successor_review_app(tmp_path):
         ),
     )
     app.transfer_seal_coordinator = TransferSealCoordinator(store, None)
+    app._apply_transfer_coordinator_ui_snapshot(
+        app._work_transfer_coordinator_ui_snapshot(
+            master_label=canonical_label,
+            precommand_query=app._precommand_operator_review_query(),
+        )
+    )
     return app, prepared["intent_id"]
 
 

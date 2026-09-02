@@ -21,12 +21,17 @@ from transfer_seal import LogisticsTransferClient, TransferSealError, membership
 
 _TransferMemberExchangeStore = TransferMemberExchangeStore
 _TransferMemberExchangeCoordinator = TransferMemberExchangeCoordinator
+_TEST_TRANSFER_OWNER_THREAD_ID = threading.get_ident()
+
+
+def _test_transfer_owner_thread_id():
+    return _TEST_TRANSFER_OWNER_THREAD_ID
 
 
 def TransferMemberExchangeStore(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferMemberExchangeStore(*args, **kwargs)
 
@@ -34,7 +39,7 @@ def TransferMemberExchangeStore(*args, **kwargs):
 def TransferMemberExchangeCoordinator(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferMemberExchangeCoordinator(*args, **kwargs)
 

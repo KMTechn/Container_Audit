@@ -1053,6 +1053,15 @@ class ContainerAudit:
             getattr(self.transfer_seal_coordinator, "operation_lease_manager", None),
             owner_thread_id_provider=self._transfer_coordinator_owner_thread_id,
         )
+        self._exact_transfer_exchange_history_snapshot: Optional[bool] = None
+        self._transfer_member_exchange_attempt_snapshot: Dict[str, Any] = {
+            "known": False,
+            "master_label": "",
+            "attempt": None,
+        }
+        self._precommand_operator_review_store_snapshot: Optional[
+            Dict[str, Any]
+        ] = None
         self.phs_label_exchange_coordinator = PHSLabelExchangeCoordinator(
             PHSLabelExchangeJournal(
                 Path(self.data_root)
@@ -1062,9 +1071,9 @@ class ContainerAudit:
             self.transfer_seal_coordinator.client,
             renderer=PHSLabelRenderer(Path(self.data_root) / "labels"),
         )
-        self._startup_transfer_recovery_pending = bool(
-            self.transfer_seal_coordinator.client is not None
-        )
+        # The first lane checkpoint also publishes read-only UI snapshots and
+        # replays replacement receipts, even when no central client is active.
+        self._startup_transfer_recovery_pending = True
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_waiting_for_hold = False
         self._startup_transfer_recovery_task_handle = None
@@ -2497,11 +2506,6 @@ class ContainerAudit:
         self.worker_name = worker_name
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
         self._load_session_state()
-        try:
-            self._drain_phs_replacement_waiting_projections()
-        except Exception:
-            self._show_phs_replacement_waiting_storage_block()
-            return
         self._load_current_tray_state()
         if not self.worker_name:
             return
@@ -4322,10 +4326,15 @@ class ContainerAudit:
         )
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
+        lane = getattr(self, "_ui_lane", None)
+        transfer_lane_busy = bool(lane is not None and lane.is_busy())
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
         phs_transition_blocked = self._phs_label_exchange_transition_pending()
         active_transfer_exchange_available = bool(
-            exact_exchange_blocked and active_tray and scanned_count
+            exact_exchange_blocked
+            and active_tray
+            and scanned_count
+            and not transfer_lane_busy
         )
         compact_labels = self._use_compact_action_labels()
         labels = self._action_button_labels(
@@ -4416,7 +4425,10 @@ class ContainerAudit:
             text=labels["operations"],
             state=(
                 tk.DISABLED
-                if operator_review or phs_transition_blocked or preflight_context_locked
+                if operator_review
+                or phs_transition_blocked
+                or preflight_context_locked
+                or transfer_lane_busy
                 else tk.NORMAL
             ),
         )
@@ -4452,6 +4464,7 @@ class ContainerAudit:
                     or active_tray
                     or exchange_dialog_open
                     or (exact_exchange_blocked and not replacement_active)
+                    or transfer_lane_busy
                     else tk.NORMAL
                 ),
             )
@@ -4471,6 +4484,7 @@ class ContainerAudit:
                 or active_tray
                 or replacement_active
                 or exact_exchange_blocked
+                or transfer_lane_busy
                 else tk.NORMAL
             ),
         )
@@ -4680,6 +4694,8 @@ class ContainerAudit:
         pair: tuple[str, str],
         *,
         master_label: str = "",
+        operator: Optional[str] = None,
+        projection_log_file_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         session_id = self._phs_replacement_waiting_session_id(context)
         if not session_id:
@@ -4690,10 +4706,13 @@ class ContainerAudit:
             else "transfer"
         )
         tray = getattr(self, "current_tray", None)
-        projection_log_file_path = str(
-            getattr(self, "log_file_path", "") or ""
+        normalized_projection_path = str(
+            projection_log_file_path
+            if projection_log_file_path is not None
+            else getattr(self, "log_file_path", "")
+            or ""
         ).strip()
-        if not projection_log_file_path:
+        if not normalized_projection_path:
             raise OSError("replacement waiting event log is unavailable")
         row = self._transfer_seal_runtime().store.mark_phs_replacement_waiting(
             session_id=session_id,
@@ -4702,14 +4721,16 @@ class ContainerAudit:
             process_context=process_context,
             location_codes=self._phs_replacement_waiting_locations(context),
             operator=persistent_operator_name(
-                getattr(self, "worker_name", "")
+                operator
+                if operator is not None
+                else getattr(self, "worker_name", "")
             ),
             master_label=str(
                 master_label
                 or getattr(tray, "master_label_code", "")
                 or ""
             ),
-            projection_log_file_path=projection_log_file_path,
+            projection_log_file_path=normalized_projection_path,
         )
         result = dict(row)
         self._project_phs_replacement_waiting_row(result)
@@ -4790,6 +4811,87 @@ class ContainerAudit:
             self._project_phs_replacement_waiting_row(dict(row))
         return len(pending)
 
+    def _work_phs_replacement_waiting_marker(
+        self,
+        context: Optional[Mapping[str, Any]],
+        *,
+        master_label: str = "",
+        operator: str = "",
+        projection_log_file_path: str = "",
+    ) -> Dict[str, Any]:
+        """Persist one marker on the shared lane without touching Tk state."""
+
+        pair = self._phs_replacement_notice_pair(context)
+        if pair is None:
+            return {
+                "ready": True,
+                "notice_key": None,
+                "context": dict(context) if isinstance(context, Mapping) else None,
+            }
+        session_id = self._phs_replacement_waiting_session_id(context)
+        notice_key = (session_id, pair[0], pair[1])
+        try:
+            self._mark_phs_replacement_waiting(
+                context,
+                pair,
+                master_label=master_label,
+                operator=operator,
+                projection_log_file_path=projection_log_file_path,
+            )
+        except Exception as exc:
+            return {
+                "ready": False,
+                "notice_key": notice_key,
+                "context": dict(context) if isinstance(context, Mapping) else None,
+                "pair": pair,
+                "error": exc,
+            }
+        return {
+            "ready": True,
+            "notice_key": notice_key,
+            "context": dict(context) if isinstance(context, Mapping) else None,
+        }
+
+    def _finish_phs_replacement_waiting_marker(
+        self,
+        outcome: Optional[Mapping[str, Any]],
+    ) -> tuple[bool, bool]:
+        """Publish a lane marker result and show any Tk-only failure notice."""
+
+        if not isinstance(outcome, Mapping):
+            return False, False
+        if not bool(outcome.get("ready")):
+            pair = outcome.get("pair")
+            error = outcome.get("error")
+            if (
+                isinstance(pair, tuple)
+                and len(pair) == 2
+                and isinstance(error, Exception)
+            ):
+                self._log_phs_replacement_waiting_failure(
+                    context=(
+                        outcome.get("context")
+                        if isinstance(outcome.get("context"), Mapping)
+                        else None
+                    ),
+                    pair=(str(pair[0]), str(pair[1])),
+                    error=error,
+                )
+            self._show_phs_replacement_waiting_storage_block()
+            return False, False
+        notice_key = outcome.get("notice_key")
+        if notice_key is None:
+            return True, False
+        if not isinstance(notice_key, tuple) or len(notice_key) != 3:
+            return False, False
+        seen = getattr(self, "_phs_replacement_notice_pairs", None)
+        if not isinstance(seen, set):
+            seen = set()
+            self._phs_replacement_notice_pairs = seen
+        newly_marked = notice_key not in seen
+        seen.add(notice_key)
+        return True, newly_marked
+
     def _show_phs_replacement_waiting_storage_block(self) -> None:
         self.show_fullscreen_warning(
             "현품표 교체 대기 저장 실패",
@@ -4808,32 +4910,24 @@ class ContainerAudit:
         """Return ``(ready, newly_marked)`` without mutating workflow state."""
 
         pair = self._phs_replacement_notice_pair(context)
-        if pair is None:
-            return True, False
-        seen = getattr(self, "_phs_replacement_notice_pairs", None)
-        if not isinstance(seen, set):
-            seen = set()
-            self._phs_replacement_notice_pairs = seen
-        session_id = self._phs_replacement_waiting_session_id(context)
-        notice_key = (session_id, pair[0], pair[1])
-        if notice_key in seen:
-            return True, False
-        try:
-            self._mark_phs_replacement_waiting(
-                context,
-                pair,
-                master_label=master_label,
+        if pair is not None:
+            notice_key = (
+                self._phs_replacement_waiting_session_id(context),
+                pair[0],
+                pair[1],
             )
-        except Exception as exc:
-            self._log_phs_replacement_waiting_failure(
-                context=context,
-                pair=pair,
-                error=exc,
-            )
-            self._show_phs_replacement_waiting_storage_block()
-            return False, False
-        seen.add(notice_key)
-        return True, True
+            seen = getattr(self, "_phs_replacement_notice_pairs", None)
+            if isinstance(seen, set) and notice_key in seen:
+                return True, False
+        outcome = self._work_phs_replacement_waiting_marker(
+            context,
+            master_label=master_label,
+            operator=str(getattr(self, "worker_name", "") or ""),
+            projection_log_file_path=str(
+                getattr(self, "log_file_path", "") or ""
+            ),
+        )
+        return self._finish_phs_replacement_waiting_marker(outcome)
 
     def _show_phs_replacement_required_notice(self) -> None:
         self.show_status_message(
@@ -5535,6 +5629,11 @@ class ContainerAudit:
         progress_before = self._capture_phs_reconciliation_progress()
         finish_identity = self._capture_mutation_finish_identity()
         payload_snapshot = str(payload)
+        marker_master_label = str(
+            getattr(self.current_tray, "master_label_code", "") or ""
+        )
+        marker_operator = str(getattr(self, "worker_name", "") or "")
+        marker_log_path = str(getattr(self, "log_file_path", "") or "")
         lane = self._ui_task_lane()
         self._set_phs_reconciliation_context(None)
         self.show_status_message(
@@ -5545,9 +5644,35 @@ class ContainerAudit:
         self._schedule_focus_return()
 
         def work() -> Dict[str, Any]:
-            return reconciliation.resolve(payload_snapshot)
+            context = reconciliation.resolve(payload_snapshot)
+            marker_outcome = None
+            if self._phs_replacement_notice_pair(context) is not None:
+                apply_ready = self._call_transfer_ui_sync(
+                    lambda: self._mutation_finish_can_apply(
+                        finish_identity,
+                        operation="phs-reconciliation-resolve",
+                    )
+                )
+                if apply_ready:
+                    marker_outcome = (
+                        self._work_phs_replacement_waiting_marker(
+                            context,
+                            master_label=marker_master_label,
+                            operator=marker_operator,
+                            projection_log_file_path=marker_log_path,
+                        )
+                    )
+            else:
+                marker_outcome = {"ready": True, "notice_key": None}
+            return {
+                "context": context,
+                "marker_outcome": marker_outcome,
+            }
 
-        def finish(context: Dict[str, Any]) -> None:
+        def finish(outcome: Dict[str, Any]) -> None:
+            context = outcome.get("context")
+            if not isinstance(context, dict):
+                raise TypeError("reconciliation lane result has no context")
             preserved = self._phs_reconciliation_progress_unchanged(
                 progress_before
             )
@@ -5569,16 +5694,8 @@ class ContainerAudit:
                 self._schedule_focus_return()
                 return
             marker_ready, marker_new = (
-                self._ensure_phs_replacement_waiting_marked(
-                    context,
-                    master_label=str(
-                        getattr(
-                            self.current_tray,
-                            "master_label_code",
-                            "",
-                        )
-                        or ""
-                    ),
+                self._finish_phs_replacement_waiting_marker(
+                    outcome.get("marker_outcome")
                 )
             )
             if not marker_ready:
@@ -6373,12 +6490,17 @@ class ContainerAudit:
         active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
         replacement_active = bool(getattr(self, "master_label_replace_state", None))
         exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
+        lane = getattr(self, "_ui_lane", None)
+        transfer_lane_busy = bool(lane is not None and lane.is_busy())
         exact_exchange_blocked = self._exact_transfer_exchange_blocked()
         scanned_count = len(
             getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or []
         )
         active_transfer_exchange_available = bool(
-            exact_exchange_blocked and active_tray and scanned_count
+            exact_exchange_blocked
+            and active_tray
+            and scanned_count
+            and not transfer_lane_busy
         )
 
         menu = tk.Menu(self.root, tearoff=False)
@@ -6409,6 +6531,7 @@ class ContainerAudit:
                 if replacement_active
                 or (
                     not exact_exchange_blocked
+                    and not transfer_lane_busy
                     and not active_tray
                     and not exchange_dialog_open
                 )
@@ -6428,7 +6551,10 @@ class ContainerAudit:
                 tk.NORMAL
                 if active_transfer_exchange_available and not replacement_active
                 else tk.DISABLED
-                if active_tray or replacement_active or exact_exchange_blocked
+                if active_tray
+                or replacement_active
+                or exact_exchange_blocked
+                or transfer_lane_busy
                 else tk.NORMAL
             ),
         )
@@ -8030,6 +8156,7 @@ class ContainerAudit:
 
         hold_store = self._preflight_hold_store()
         hold_worker = persistent_operator_name(self.worker_name)
+        marker_log_path = str(getattr(self, "log_file_path", "") or "")
         finish_identity = self._capture_mutation_finish_identity()
 
         def prepare_hold() -> PreflightHoldSnapshot:
@@ -8170,12 +8297,44 @@ class ContainerAudit:
                         "OPERATION_LEASE_NOT_ACTIVE",
                         "no ACTIVE operation lease was durably prefetched",
                     )
+                marker_outcome = None
+                if preflight.replaced_scan:
+                    replacement_context = {
+                        "process_context": "transfer",
+                        "scan": {
+                            "replacement_required": True,
+                            "scanned_label_id": preflight.scanned_label_id,
+                            "active_label_id": preflight.active_label_id,
+                            "active_qr_payload": (
+                                preflight.active_label_qr_payload
+                            ),
+                        },
+                    }
+                    apply_ready = self._call_transfer_ui_sync(
+                        lambda: self._mutation_finish_can_apply(
+                            finish_identity,
+                            operation="phs2-master-preflight",
+                            expected_preflight_hold=hold_snapshot,
+                        )
+                    )
+                    if apply_ready:
+                        marker_outcome = (
+                            self._work_phs_replacement_waiting_marker(
+                                replacement_context,
+                                master_label=(
+                                    preflight.canonical_input_tag_qr
+                                ),
+                                operator=hold_worker,
+                                projection_log_file_path=marker_log_path,
+                            )
+                        )
                 result = (
                     True,
                     preflight,
                     normalized_artifact["lease_id"],
                     None,
                     hold_snapshot,
+                    marker_outcome,
                 )
             except TransferSealError as exc:
                 result = (False, None, "", exc, hold_snapshot)
@@ -8372,9 +8531,8 @@ class ContainerAudit:
         marker_new = False
         if preflight.replaced_scan:
             marker_ready, marker_new = (
-                self._ensure_phs_replacement_waiting_marked(
-                    replacement_context,
-                    master_label=preflight.canonical_input_tag_qr,
+                self._finish_phs_replacement_waiting_marker(
+                    result[5] if len(result) > 5 else None
                 )
             )
             if not marker_ready:
@@ -8959,6 +9117,8 @@ class ContainerAudit:
         source_identity = copy.deepcopy(
             source_identity_from_label(canonical_snapshot)
         )
+        marker_operator = str(getattr(self, "worker_name", "") or "")
+        marker_log_path = str(getattr(self, "log_file_path", "") or "")
         lane = self._ui_task_lane()
         self._update_action_button_states()
         self.show_status_message(
@@ -8967,14 +9127,45 @@ class ContainerAudit:
             duration=0,
         )
 
-        def work() -> Any:
+        def work() -> Dict[str, Any]:
             resolved = client.resolve_source(source_identity)
-            return validate_compact_phs2_preflight(
+            preflight = validate_compact_phs2_preflight(
                 canonical_snapshot,
                 resolved,
             )
+            marker_outcome = None
+            if preflight.replaced_scan:
+                replacement_context = {
+                    "process_context": "transfer",
+                    "scan": {
+                        "replacement_required": True,
+                        "scanned_label_id": preflight.scanned_label_id,
+                        "active_label_id": preflight.active_label_id,
+                        "active_qr_payload": preflight.active_label_qr_payload,
+                    },
+                }
+                apply_ready = self._call_transfer_ui_sync(
+                    lambda: self._mutation_finish_can_apply(
+                        finish_identity,
+                        operation="phs-label-active-refresh",
+                    )
+                )
+                if apply_ready:
+                    marker_outcome = (
+                        self._work_phs_replacement_waiting_marker(
+                            replacement_context,
+                            master_label=tray_master,
+                            operator=marker_operator,
+                            projection_log_file_path=marker_log_path,
+                        )
+                    )
+            return {
+                "preflight": preflight,
+                "marker_outcome": marker_outcome,
+            }
 
-        def finish(preflight: Any) -> None:
+        def finish(outcome: Mapping[str, Any]) -> None:
+            preflight = outcome.get("preflight")
             apply_ready = self._mutation_finish_can_apply(
                 finish_identity,
                 operation="phs-label-active-refresh",
@@ -9016,9 +9207,8 @@ class ContainerAudit:
             marker_new = False
             if preflight.replaced_scan:
                 marker_ready, marker_new = (
-                    self._ensure_phs_replacement_waiting_marked(
-                        replacement_context,
-                        master_label=tray.master_label_code,
+                    self._finish_phs_replacement_waiting_marker(
+                        outcome.get("marker_outcome")
                     )
                 )
                 if not marker_ready:
@@ -9928,8 +10118,8 @@ class ContainerAudit:
             else None
         )
 
-        def work() -> SealAttempt:
-            return self._prepare_and_attempt_transfer_seal_snapshot(
+        def work() -> Dict[str, Any]:
+            attempt = self._prepare_and_attempt_transfer_seal_snapshot(
                 coordinator=coordinator,
                 source_label_payload=source_label_payload,
                 source_label_fields=dict(source_label_fields),
@@ -9950,10 +10140,46 @@ class ContainerAudit:
                     mutation_identity=finish_identity,
                 ),
             )
+            precommand_query = None
+            if attempt.status == "OPERATOR_REVIEW" and attempt.error_code:
+                precommand_query = {
+                    "master_label": master_label,
+                    "scanned_barcodes": scanned_barcodes,
+                    "error_code": attempt.error_code,
+                }
+            try:
+                ui_snapshot = self._work_transfer_coordinator_ui_snapshot(
+                    master_label=master_label,
+                    precommand_query=precommand_query,
+                )
+            except Exception as exc:
+                print(
+                    "완료 UI snapshot 갱신 실패: "
+                    f"{exc.__class__.__name__}"
+                )
+                ui_snapshot = {
+                    "exact_history": True,
+                    "member": {
+                        "known": False,
+                        "master_label": master_label,
+                        "attempt": None,
+                    },
+                    "precommand": None,
+                }
+            return {
+                "attempt": attempt,
+                "ui_snapshot": ui_snapshot,
+            }
 
-        def finish(attempt: SealAttempt) -> None:
+        def finish(outcome: Mapping[str, Any]) -> None:
             completed = False
             try:
+                self._apply_transfer_coordinator_ui_snapshot(
+                    outcome.get("ui_snapshot")
+                )
+                attempt = outcome.get("attempt")
+                if not isinstance(attempt, SealAttempt):
+                    return
                 if not self._mutation_finish_can_apply(
                     finish_identity,
                     operation="tray-completion",
@@ -12029,16 +12255,125 @@ class ContainerAudit:
         self.transfer_member_exchange_coordinator = coordinator
         return coordinator
 
+    def _work_transfer_coordinator_ui_snapshot(
+        self,
+        *,
+        master_label: str = "",
+        precommand_query: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Copy shared-store state on the coordinator owner for Tk consumers."""
+
+        seal_coordinator = getattr(self, "transfer_seal_coordinator", None)
+        exact_history = False
+        precommand_snapshot: Optional[Dict[str, Any]] = None
+        if seal_coordinator is not None:
+            exact_history = bool(
+                seal_coordinator.client is not None
+                or seal_coordinator.store.has_exact_history()
+            )
+            if isinstance(precommand_query, Mapping):
+                row = seal_coordinator.store.precommand_operator_review(
+                    master_label=str(
+                        precommand_query.get("master_label") or ""
+                    ),
+                    scanned_barcodes=tuple(
+                        precommand_query.get("scanned_barcodes") or ()
+                    ),
+                    error_code=str(
+                        precommand_query.get("error_code") or ""
+                    ),
+                )
+                precommand_snapshot = {
+                    "query": {
+                        "master_label": str(
+                            precommand_query.get("master_label") or ""
+                        ),
+                        "scanned_barcodes": tuple(
+                            precommand_query.get("scanned_barcodes") or ()
+                        ),
+                        "error_code": str(
+                            precommand_query.get("error_code") or ""
+                        ),
+                    },
+                    "row": dict(row) if row is not None else None,
+                }
+
+        normalized_master = str(master_label or "").strip()
+        member_coordinator = getattr(
+            self,
+            "transfer_member_exchange_coordinator",
+            None,
+        )
+        member_attempt = None
+        member_known = not normalized_master or member_coordinator is not None
+        if member_coordinator is not None and normalized_master:
+            rows = member_coordinator.store.blocking_rows(
+                master_label=normalized_master
+            )
+            if rows:
+                member_attempt = copy.deepcopy(
+                    member_coordinator._attempt(rows[-1])
+                )
+
+        return {
+            "exact_history": exact_history,
+            "member": {
+                "known": member_known,
+                "master_label": normalized_master,
+                "attempt": member_attempt,
+            },
+            "precommand": precommand_snapshot,
+        }
+
+    def _apply_transfer_coordinator_ui_snapshot(
+        self,
+        snapshot: Optional[Mapping[str, Any]],
+    ) -> None:
+        """Publish only copied values; Tk never follows the snapshot to SQLite."""
+
+        if not isinstance(snapshot, Mapping):
+            return
+        exact_history = bool(snapshot.get("exact_history"))
+        self._exact_transfer_exchange_history_snapshot = exact_history
+        if exact_history:
+            self._exact_exchange_mode_active = True
+        member = snapshot.get("member")
+        if isinstance(member, Mapping):
+            self._transfer_member_exchange_attempt_snapshot = {
+                "known": bool(member.get("known")),
+                "master_label": str(member.get("master_label") or ""),
+                "attempt": copy.deepcopy(member.get("attempt")),
+            }
+        if "precommand" in snapshot:
+            precommand = snapshot.get("precommand")
+            self._precommand_operator_review_store_snapshot = (
+                copy.deepcopy(precommand)
+                if isinstance(precommand, Mapping)
+                else None
+            )
+
     def _current_transfer_member_exchange_attempt(self):
-        coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
         tray = getattr(self, "current_tray", None)
         master_label = str(getattr(tray, "master_label_code", "") or "").strip()
-        if coordinator is None or not master_label:
+        if not master_label:
             return None
-        rows = coordinator.store.blocking_rows(master_label=master_label)
-        if not rows:
+        snapshot = getattr(
+            self,
+            "_transfer_member_exchange_attempt_snapshot",
+            None,
+        )
+        if (
+            not isinstance(snapshot, Mapping)
+            or not bool(snapshot.get("known"))
+            or str(snapshot.get("master_label") or "") != master_label
+        ):
             return None
-        return coordinator._attempt(rows[-1])
+        attempt = snapshot.get("attempt")
+        return (
+            copy.deepcopy(attempt)
+            if isinstance(attempt, MemberExchangeAttempt)
+            else None
+        )
 
     def _transfer_member_exchange_blocks_local_action(self, action: str) -> bool:
         lane = getattr(self, "_ui_lane", None)
@@ -12050,6 +12385,27 @@ class ContainerAudit:
             return True
         attempt = self._current_transfer_member_exchange_attempt()
         if attempt is None:
+            if getattr(self, "transfer_member_exchange_coordinator", None) is None:
+                return False
+            tray = getattr(self, "current_tray", None)
+            master_label = str(
+                getattr(tray, "master_label_code", "") or ""
+            ).strip()
+            snapshot = getattr(
+                self,
+                "_transfer_member_exchange_attempt_snapshot",
+                None,
+            )
+            if master_label and (
+                not isinstance(snapshot, Mapping)
+                or not bool(snapshot.get("known"))
+                or str(snapshot.get("master_label") or "") != master_label
+            ):
+                self.show_status_message(
+                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    self.COLOR_DANGER,
+                )
+                return True
             return False
         if attempt.status == "ACKED" and attempt.local_apply_status == "PENDING":
             self._reconcile_pending_local_member_exchanges()
@@ -12110,10 +12466,10 @@ class ContainerAudit:
             return False
         return True
 
-    def _precommand_operator_review_retry_context(
+    def _precommand_operator_review_query(
         self,
-    ) -> Optional[Dict[str, str]]:
-        """Prove that the saved review can only retry a never-posted preflight."""
+    ) -> Optional[Dict[str, Any]]:
+        """Build a Tk-owned identity for a lane-produced review snapshot."""
 
         snapshot = self._active_operator_review_snapshot()
         if (
@@ -12162,25 +12518,48 @@ class ContainerAudit:
         ).strip()
         if not active_label_id or active_label_id != active_fields.get("LBL"):
             return None
-        coordinator = getattr(self, "transfer_seal_coordinator", None)
-        store = getattr(coordinator, "store", None)
-        if store is None:
+        return {
+            "master_label": canonical_label,
+            "scanned_barcodes": tuple(scanned_barcodes),
+            "error_code": str(snapshot.error_code or "").strip(),
+            "canonical_label_id": str(canonical_fields.get("LBL") or ""),
+            "active_label_id": str(active_fields.get("LBL") or ""),
+        }
+
+    def _precommand_operator_review_retry_context(
+        self,
+    ) -> Optional[Dict[str, str]]:
+        """Use only a copied lane snapshot for a never-posted preflight."""
+
+        query = self._precommand_operator_review_query()
+        snapshot = getattr(
+            self,
+            "_precommand_operator_review_store_snapshot",
+            None,
+        )
+        if query is None or not isinstance(snapshot, Mapping):
             return None
-        try:
-            row = store.precommand_operator_review(
-                master_label=canonical_label,
-                scanned_barcodes=scanned_barcodes,
-                error_code=str(snapshot.error_code or "").strip(),
-            )
-        except (OSError, sqlite3.Error, TypeError, ValueError):
+        snapshot_query = snapshot.get("query")
+        if not isinstance(snapshot_query, Mapping) or {
+            "master_label": str(snapshot_query.get("master_label") or ""),
+            "scanned_barcodes": tuple(
+                snapshot_query.get("scanned_barcodes") or ()
+            ),
+            "error_code": str(snapshot_query.get("error_code") or ""),
+        } != {
+            "master_label": query["master_label"],
+            "scanned_barcodes": tuple(query["scanned_barcodes"]),
+            "error_code": query["error_code"],
+        }:
             return None
-        if row is None:
+        row = snapshot.get("row")
+        if not isinstance(row, Mapping):
             return None
         return {
             "intent_id": str(row["intent_id"]),
             "error_code": str(row["last_error_code"]),
-            "canonical_label_id": str(canonical_fields.get("LBL") or ""),
-            "active_label_id": str(active_fields.get("LBL") or ""),
+            "canonical_label_id": str(query["canonical_label_id"]),
+            "active_label_id": str(query["active_label_id"]),
         }
 
     def _retry_precommand_operator_review_completion(self) -> bool:
@@ -12539,9 +12918,15 @@ class ContainerAudit:
         refresh_requested = bool(
             getattr(self, "_post_review_refresh_required", False)
         )
+        tray = getattr(self, "current_tray", None)
+        snapshot_master_label = str(
+            getattr(tray, "master_label_code", "") or ""
+        ).strip()
+        precommand_query = self._precommand_operator_review_query()
 
         def work() -> Dict[str, Any]:
             replay_failed = False
+            ui_snapshot = None
             try:
                 self._drain_transfer_post_review_projections()
             except Exception:
@@ -12554,14 +12939,25 @@ class ContainerAudit:
             except Exception:
                 cases = ()
                 replay_failed = True
+            try:
+                ui_snapshot = self._work_transfer_coordinator_ui_snapshot(
+                    master_label=snapshot_master_label,
+                    precommand_query=precommand_query,
+                )
+            except Exception:
+                replay_failed = True
             return {
                 "cases": cases,
                 "refresh_requested": refresh_requested,
                 "replay_failed": replay_failed,
+                "ui_snapshot": ui_snapshot,
             }
 
         def finish(outcome: Mapping[str, Any]) -> None:
             self._transfer_post_review_refresh_inflight = False
+            self._apply_transfer_coordinator_ui_snapshot(
+                outcome.get("ui_snapshot")
+            )
             self._finish_transfer_post_review_refresh(outcome)
 
         def fail(exc: BaseException) -> None:
@@ -12676,6 +13072,11 @@ class ContainerAudit:
             return False
 
         self._startup_transfer_recovery_inflight = True
+        tray = getattr(self, "current_tray", None)
+        snapshot_master_label = str(
+            getattr(tray, "master_label_code", "") or ""
+        ).strip()
+        precommand_query = self._precommand_operator_review_query()
 
         def fail(exc: BaseException) -> None:
             self._startup_transfer_recovery_inflight = False
@@ -12688,7 +13089,10 @@ class ContainerAudit:
             LaneTask(
                 name="startup-transfer-recovery",
                 generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
-                work=self._retry_pending_transfer_seals,
+                work=lambda: self._retry_pending_transfer_seals(
+                    master_label=snapshot_master_label,
+                    precommand_query=precommand_query,
+                ),
                 finish=self._finish_startup_transfer_recovery,
                 fail=fail,
                 on_idle=self._schedule_pending_transfer_coordinator_work,
@@ -12706,6 +13110,11 @@ class ContainerAudit:
     ) -> None:
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_task_handle = None
+        self._apply_transfer_coordinator_ui_snapshot(
+            outcome.get("ui_snapshot")
+        )
+        if bool(outcome.get("replacement_projection_failed")):
+            self._show_phs_replacement_waiting_storage_block()
         for result in outcome.get("seal_results", ()):
             if result.status == "OPERATOR_REVIEW":
                 self._post_review_refresh_required = True
@@ -12719,9 +13128,17 @@ class ContainerAudit:
             self._preflight_context_blocks_mutation()
         )
         self._startup_transfer_recovery_waiting_for_hold = blocked_by_hold
-        self._startup_transfer_recovery_pending = blocked_by_hold
+        self._startup_transfer_recovery_pending = bool(
+            blocked_by_hold
+            or outcome.get("replacement_projection_failed")
+        )
 
-    def _retry_pending_transfer_seals(self) -> Dict[str, Any]:
+    def _retry_pending_transfer_seals(
+        self,
+        *,
+        master_label: str = "",
+        precommand_query: Optional[Mapping[str, Any]] = None,
+    ) -> Dict[str, Any]:
         lane = getattr(self, "_ui_lane", None)
         if (
             lane is None
@@ -12732,6 +13149,8 @@ class ContainerAudit:
             "seal_results": (),
             "member_results": (),
             "blocked_by_hold": False,
+            "replacement_projection_failed": False,
+            "ui_snapshot": None,
         }
 
         def can_attempt() -> bool:
@@ -12740,6 +13159,29 @@ class ContainerAudit:
                 outcome["blocked_by_hold"] = True
             return not blocked
 
+        try:
+            outcome["ui_snapshot"] = (
+                self._work_transfer_coordinator_ui_snapshot(
+                    master_label=master_label,
+                    precommand_query=precommand_query,
+                )
+            )
+        except Exception as exc:
+            print(
+                "이적 UI snapshot 갱신 실패: "
+                f"{exc.__class__.__name__}"
+            )
+        if not can_attempt():
+            return outcome
+        try:
+            self._drain_phs_replacement_waiting_projections()
+        except Exception as exc:
+            outcome["replacement_projection_failed"] = True
+            print(
+                "현품표 교체 대기 replay 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            return outcome
         if not can_attempt():
             return outcome
         try:
@@ -12758,6 +13200,18 @@ class ContainerAudit:
             )
         except Exception as exc:
             print(f"중앙 제품 교체 재시작 복구 실패: {exc.__class__.__name__}")
+        try:
+            outcome["ui_snapshot"] = (
+                self._work_transfer_coordinator_ui_snapshot(
+                    master_label=master_label,
+                    precommand_query=precommand_query,
+                )
+            )
+        except Exception as exc:
+            print(
+                "이적 UI snapshot 갱신 실패: "
+                f"{exc.__class__.__name__}"
+            )
         return outcome
 
     def _exact_transfer_exchange_blocked(self) -> bool:
@@ -12766,7 +13220,22 @@ class ContainerAudit:
         coordinator = getattr(self, "transfer_seal_coordinator", None)
         if coordinator is None:
             return False
-        blocked = coordinator.client is not None or coordinator.store.has_exact_history()
+        if coordinator.client is not None:
+            self._exact_exchange_mode_active = True
+            return True
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and lane.is_busy():
+            # A false snapshot can become true during an in-flight writer, so
+            # action admission is conservative until the next lane checkpoint.
+            return True
+        history_snapshot = getattr(
+            self,
+            "_exact_transfer_exchange_history_snapshot",
+            None,
+        )
+        if history_snapshot is None:
+            return True
+        blocked = bool(history_snapshot)
         if blocked:
             self._exact_exchange_mode_active = True
         return blocked
@@ -13882,6 +14351,10 @@ class ContainerAudit:
 
     def _schedule_exchange_dialog_admission(self) -> bool:
         coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
+        tray = getattr(self, "current_tray", None)
+        snapshot_master_label = str(
+            getattr(tray, "master_label_code", "") or ""
+        ).strip()
         owner_source = coordinator or getattr(
             self,
             "transfer_seal_coordinator",
@@ -13897,7 +14370,15 @@ class ContainerAudit:
             and owner_provider() == threading.get_ident()
             and getattr(self, "_ui_lane", None) is None
         ):
-            if not self._dismiss_transfer_exchange_preflight_for_explicit_retry():
+            admitted = (
+                self._dismiss_transfer_exchange_preflight_for_explicit_retry()
+            )
+            self._apply_transfer_coordinator_ui_snapshot(
+                self._work_transfer_coordinator_ui_snapshot(
+                    master_label=snapshot_master_label
+                )
+            )
+            if not admitted:
                 messagebox.showerror(
                     "교체 다시 시작 실패",
                     "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
@@ -13916,8 +14397,24 @@ class ContainerAudit:
             )
             return False
 
-        def finish(admitted: bool) -> None:
-            self._exchange_dialog_admission_result = bool(admitted)
+        def work() -> Dict[str, Any]:
+            admitted = (
+                self._dismiss_transfer_exchange_preflight_for_explicit_retry()
+            )
+            return {
+                "admitted": admitted,
+                "ui_snapshot": self._work_transfer_coordinator_ui_snapshot(
+                    master_label=snapshot_master_label
+                ),
+            }
+
+        def finish(outcome: Mapping[str, Any]) -> None:
+            self._apply_transfer_coordinator_ui_snapshot(
+                outcome.get("ui_snapshot")
+            )
+            self._exchange_dialog_admission_result = bool(
+                outcome.get("admitted")
+            )
 
         def on_idle() -> None:
             try:
@@ -13936,9 +14433,9 @@ class ContainerAudit:
             LaneTask(
                 name="transfer-exchange-dialog-admission",
                 generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
-                work=self._dismiss_transfer_exchange_preflight_for_explicit_retry,
+                work=work,
                 finish=finish,
-                fail=lambda exc: finish(False),
+                fail=lambda exc: finish({"admitted": False}),
                 on_idle=on_idle,
             )
         )
@@ -14524,15 +15021,25 @@ class ContainerAudit:
             "_owner_thread_id_provider",
             None,
         )
+
+        def work() -> Dict[str, Any]:
+            outcome = dict(
+                self._work_member_exchange_reconcile(master_label)
+            )
+            outcome["ui_snapshot"] = (
+                self._work_transfer_coordinator_ui_snapshot(
+                    master_label=master_label
+                )
+            )
+            return outcome
+
         if (
             callable(owner_provider)
             and owner_provider() == threading.get_ident()
             and getattr(self, "_ui_lane", None) is None
         ):
             self._member_exchange_reconcile_pending = False
-            self._finish_member_exchange_reconcile(
-                self._work_member_exchange_reconcile(master_label)
-            )
+            self._finish_member_exchange_reconcile(work())
             return True
 
         lane = self._ui_task_lane()
@@ -14543,6 +15050,9 @@ class ContainerAudit:
 
         def finish(outcome: Mapping[str, Any]) -> None:
             self._member_exchange_reconcile_inflight = False
+            self._apply_transfer_coordinator_ui_snapshot(
+                outcome.get("ui_snapshot")
+            )
             self._finish_member_exchange_reconcile(outcome)
 
         def fail(exc: BaseException) -> None:
@@ -14557,7 +15067,7 @@ class ContainerAudit:
             LaneTask(
                 name="transfer-member-local-reconcile",
                 generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
-                work=lambda: self._work_member_exchange_reconcile(master_label),
+                work=work,
                 finish=finish,
                 fail=fail,
                 on_idle=self._schedule_pending_transfer_coordinator_work,
@@ -14694,6 +15204,9 @@ class ContainerAudit:
         self,
         outcome: Mapping[str, Any],
     ) -> None:
+        self._apply_transfer_coordinator_ui_snapshot(
+            outcome.get("ui_snapshot")
+        )
         status = str(outcome.get("status") or "failed")
         if status == "conflict":
             messagebox.showerror(
@@ -14722,8 +15235,12 @@ class ContainerAudit:
 
     def _schedule_exchange_cancel(self, intent_id: str, reason: str) -> bool:
         coordinator = self._transfer_member_exchange_runtime()
+        tray = getattr(self, "current_tray", None)
+        snapshot_master_label = str(
+            getattr(tray, "master_label_code", "") or ""
+        ).strip()
 
-        def work() -> Dict[str, str]:
+        def mutate() -> Dict[str, str]:
             if self._call_transfer_ui_sync(
                 self._preflight_context_blocks_mutation
             ):
@@ -14755,7 +15272,19 @@ class ContainerAudit:
                 return {"status": "command_pending"}
             return {"status": "allowed"}
 
+        def work() -> Dict[str, Any]:
+            outcome = dict(mutate())
+            outcome["ui_snapshot"] = (
+                self._work_transfer_coordinator_ui_snapshot(
+                    master_label=snapshot_master_label
+                )
+            )
+            return outcome
+
         def finish(outcome: Mapping[str, Any]) -> None:
+            self._apply_transfer_coordinator_ui_snapshot(
+                outcome.get("ui_snapshot")
+            )
             status = str(outcome.get("status") or "failed")
             if status == "allowed":
                 self._finish_exchange_cancel_ui(reason)
@@ -14982,7 +15511,7 @@ class ContainerAudit:
                 "operation_lease_id": operation_lease_id,
             }
 
-            def work() -> Dict[str, Any]:
+            def mutate() -> Dict[str, Any]:
                 if self._call_transfer_ui_sync(
                     self._preflight_context_blocks_mutation
                 ):
@@ -14999,7 +15528,19 @@ class ContainerAudit:
                     "applied": applied,
                 }
 
+            def work() -> Dict[str, Any]:
+                outcome = dict(mutate())
+                outcome["ui_snapshot"] = (
+                    self._work_transfer_coordinator_ui_snapshot(
+                        master_label=str(prepare_arguments["master_label"])
+                    )
+                )
+                return outcome
+
             def finish(outcome: Mapping[str, Any]) -> None:
+                self._apply_transfer_coordinator_ui_snapshot(
+                    outcome.get("ui_snapshot")
+                )
                 if str(outcome.get("status") or "") == "hold":
                     if hasattr(self, "exchange_complete_button"):
                         self.exchange_complete_button.config(state=tk.NORMAL)

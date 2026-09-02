@@ -36,12 +36,17 @@ from transfer_seal import (
 
 _TransferSealStore = TransferSealStore
 _TransferSealCoordinator = TransferSealCoordinator
+_TEST_TRANSFER_OWNER_THREAD_ID = threading.get_ident()
+
+
+def _test_transfer_owner_thread_id():
+    return _TEST_TRANSFER_OWNER_THREAD_ID
 
 
 def TransferSealStore(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferSealStore(*args, **kwargs)
 
@@ -49,7 +54,7 @@ def TransferSealStore(*args, **kwargs):
 def TransferSealCoordinator(*args, **kwargs):
     kwargs.setdefault(
         "owner_thread_id_provider",
-        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+        _test_transfer_owner_thread_id,
     )
     return _TransferSealCoordinator(*args, **kwargs)
 from tray_state import (

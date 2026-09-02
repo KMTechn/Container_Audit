@@ -1050,6 +1050,7 @@ def test_left_tree_headings_choose_scale_aware_compact_wording(operator_view):
     )
 
 
+@pytest.mark.real_gui
 def test_summary_tree_columns_follow_real_tk_compact_wide_compact_round_trip():
     try:
         root = container_audit_module.tk.Tk()
@@ -1381,6 +1382,7 @@ def _assert_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact(
         root.update_idletasks()
 
 
+@pytest.mark.real_gui
 def test_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact():
     try:
         root = container_audit_module.tk.Tk()
@@ -1400,6 +1402,7 @@ def test_sidebar_tree_exact_rows_fit_real_tk_compact_wide_compact():
         root.destroy()
 
 
+@pytest.mark.real_gui
 def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_widths():
     try:
         root = container_audit_module.tk.Tk()
@@ -1507,6 +1510,7 @@ def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_width
         root.destroy()
 
 
+@pytest.mark.real_gui
 def test_real_root_configure_refreshes_button_styles_compact_wide_compact(monkeypatch):
     try:
         root = container_audit_module.tk.Tk()
@@ -1571,6 +1575,7 @@ def test_real_root_configure_refreshes_button_styles_compact_wide_compact(monkey
         root.destroy()
 
 
+@pytest.mark.real_gui
 def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_round_trip(
     monkeypatch,
 ):
@@ -1690,6 +1695,7 @@ def test_right_context_real_tk_wide_geometry_is_deterministic_after_compact_roun
         root.destroy()
 
 
+@pytest.mark.real_gui
 def test_notice_message_real_tk_tracks_actual_column_through_blocking_round_trip():
     try:
         root = container_audit_module.tk.Tk()

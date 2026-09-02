@@ -153,6 +153,17 @@ class TransferCoordinatorOwnerError(TransferSealError):
         )
 
 
+class TransferCoordinatorOwnerBindingError(TransferSealError):
+    """Reject attempts to replace an already-declared coordinator owner."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TRANSFER_COORDINATOR_OWNER_REBIND",
+            "transfer coordinator owner provider is already bound",
+            retryable=False,
+        )
+
+
 def _assert_transfer_coordinator_owner(
     owner_thread_id_provider: Callable[[], int | None] | None,
 ) -> None:
@@ -2380,6 +2391,9 @@ class TransferSealStore:
         # construction requires an explicit owner, even without a coordinator.
         self._coordinator_owner_bound = True
         self._owner_thread_id_provider = owner_thread_id_provider
+        self._owner_thread_id_provider_bound = (
+            owner_thread_id_provider is not None
+        )
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -2387,7 +2401,14 @@ class TransferSealStore:
         self,
         owner_thread_id_provider: Callable[[], int | None] | None,
     ) -> None:
+        if getattr(self, "_owner_thread_id_provider_bound", False):
+            if owner_thread_id_provider is not self._owner_thread_id_provider:
+                raise TransferCoordinatorOwnerBindingError()
+            return
         self._owner_thread_id_provider = owner_thread_id_provider
+        self._owner_thread_id_provider_bound = (
+            owner_thread_id_provider is not None
+        )
         self._coordinator_owner_bound = True
 
     def _assert_coordinator_owner(self) -> None:
@@ -3349,6 +3370,7 @@ class TransferSealStore:
     ) -> sqlite3.Row:
         """Atomically append one replacement-waiting fact and replay record."""
 
+        self._assert_coordinator_owner()
         normalized_session = _normalize_identifier(session_id, "session_id")
         normalized_old = _normalize_identifier(old_label_id, "old_label_id")
         normalized_new = _normalize_identifier(new_label_id, "new_label_id")
@@ -3535,6 +3557,7 @@ class TransferSealStore:
     ) -> sqlite3.Row:
         """Append one immutable receipt after the idempotent CSV projection."""
 
+        self._assert_coordinator_owner()
         normalized_intent = _normalize_identifier(intent_id, "intent_id")
         normalized_projection_path = os.path.abspath(
             _normalize_identifier(
@@ -3640,6 +3663,12 @@ class TransferSealCoordinator:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        if owner_thread_id_provider is None:
+            owner_thread_id_provider = getattr(
+                store,
+                "_owner_thread_id_provider",
+                None,
+            )
         self._owner_thread_id_provider = owner_thread_id_provider
         self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
 
@@ -5288,6 +5317,7 @@ __all__ = [
     "SealAttempt",
     "TransferSourcePreflight",
     "TransferSealCoordinator",
+    "TransferCoordinatorOwnerBindingError",
     "TransferCoordinatorOwnerError",
     "TransferSealError",
     "TransferSealStore",

@@ -35,6 +35,7 @@ from terminal_operation_lease import (
 from transfer_seal import (
     CONTRACT_VERSION,
     LogisticsTransferClient,
+    TransferCoordinatorOwnerBindingError,
     TransferSealError,
     _assert_transfer_coordinator_owner,
     membership_hash,
@@ -284,6 +285,9 @@ class TransferMemberExchangeStore:
         self.db_path = str(db_path)
         self._coordinator_owner_bound = True
         self._owner_thread_id_provider = owner_thread_id_provider
+        self._owner_thread_id_provider_bound = (
+            owner_thread_id_provider is not None
+        )
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
 
@@ -291,7 +295,14 @@ class TransferMemberExchangeStore:
         self,
         owner_thread_id_provider: Callable[[], int | None] | None,
     ) -> None:
+        if getattr(self, "_owner_thread_id_provider_bound", False):
+            if owner_thread_id_provider is not self._owner_thread_id_provider:
+                raise TransferCoordinatorOwnerBindingError()
+            return
         self._owner_thread_id_provider = owner_thread_id_provider
+        self._owner_thread_id_provider_bound = (
+            owner_thread_id_provider is not None
+        )
         self._coordinator_owner_bound = True
 
     def _assert_coordinator_owner(self) -> None:
@@ -893,6 +904,12 @@ class TransferMemberExchangeCoordinator:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        if owner_thread_id_provider is None:
+            owner_thread_id_provider = getattr(
+                store,
+                "_owner_thread_id_provider",
+                None,
+            )
         self._owner_thread_id_provider = owner_thread_id_provider
         self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
 

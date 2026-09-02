@@ -20,7 +20,6 @@ from storage_utils import atomic_write_json
 from transfer_seal import (
     LogisticsTransferClient,
     SealAttempt,
-    TransferCoordinatorOwnerError,
     TransferSealCoordinator,
     TransferSealError,
     TransferSealStore,
@@ -33,6 +32,11 @@ from transfer_member_exchange import (
 
 _TransferSealStore = TransferSealStore
 _TransferMemberExchangeStore = TransferMemberExchangeStore
+
+
+def _transfer_coordinator_owner_error_type():
+    module = importlib.import_module("transfer_seal")
+    return getattr(module, "TransferCoordinatorOwnerError", RuntimeError)
 
 
 def TransferSealStore(*args, **kwargs):
@@ -472,7 +476,7 @@ def _exercise_actual_coordinator_lane_ownership(
 
     _module, PreflightScanHoldStore = _hold_symbols()
     denied_seal_store = _TransferSealStore(tmp_path / "denied-seal.db")
-    with pytest.raises(TransferCoordinatorOwnerError):
+    with pytest.raises(_transfer_coordinator_owner_error_type()):
         denied_seal_store.prepare(
             master_label="MASTER",
             source_identity={"source_bundle_id": "PHS-DENIED"},
@@ -487,7 +491,7 @@ def _exercise_actual_coordinator_lane_ownership(
         denied_member_store,
         None,
     )
-    with pytest.raises(TransferCoordinatorOwnerError):
+    with pytest.raises(_transfer_coordinator_owner_error_type()):
         denied_member.attempt("missing-intent")
 
     root = _cross_thread_fake_root()
@@ -501,8 +505,8 @@ def _exercise_actual_coordinator_lane_ownership(
             root.run_until(lambda: lane.state == "CLOSED", timeout=12.0)
 
     request.addfinalizer(close_lane)
-    seal_store = TransferSealStore(tmp_path / "actual-transfer.db")
-    seal_row = seal_store.prepare(
+    seed_seal_store = TransferSealStore(tmp_path / "actual-transfer.db")
+    seal_row = seed_seal_store.prepare(
         master_label="PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1",
         source_identity={
             "source_bundle_id": "PHS-ACTUAL",
@@ -512,9 +516,9 @@ def _exercise_actual_coordinator_lane_ownership(
         operator="tester",
         scanned_barcodes=("AAA2270730100-OLD",),
     )
-    member_store = TransferMemberExchangeStore(seal_store.db_path)
+    seed_member_store = TransferMemberExchangeStore(seed_seal_store.db_path)
     member_rows = [
-        member_store.prepare(
+        seed_member_store.prepare(
             master_label="PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1",
             source_identity={
                 "source_bundle_id": "PHS-ACTUAL",
@@ -527,15 +531,24 @@ def _exercise_actual_coordinator_lane_ownership(
         )
         for index in (1, 2)
     ]
+    lane_owner_provider = lambda: lane.worker_thread_id
+    seal_store = _TransferSealStore(
+        seed_seal_store.db_path,
+        owner_thread_id_provider=lane_owner_provider,
+    )
+    member_store = _TransferMemberExchangeStore(
+        seed_seal_store.db_path,
+        owner_thread_id_provider=lane_owner_provider,
+    )
     seal = TransferSealCoordinator(
         seal_store,
         None,
-        owner_thread_id_provider=lambda: lane.worker_thread_id,
+        owner_thread_id_provider=lane_owner_provider,
     )
     member = TransferMemberExchangeCoordinator(
         member_store,
         None,
-        owner_thread_id_provider=lambda: lane.worker_thread_id,
+        owner_thread_id_provider=lane_owner_provider,
     )
     hold_store = PreflightScanHoldStore(
         tmp_path / "actual-hold.json",
@@ -636,9 +649,9 @@ def _exercise_actual_coordinator_lane_ownership(
         assert app._schedule_startup_transfer_recovery() is True
         assert entered_write.wait(timeout=2.0)
         assert lane.is_busy() is True
-        with pytest.raises(TransferCoordinatorOwnerError):
+        with pytest.raises(_transfer_coordinator_owner_error_type()):
             seal.attempt(str(seal_row["intent_id"]))
-        with pytest.raises(TransferCoordinatorOwnerError):
+        with pytest.raises(_transfer_coordinator_owner_error_type()):
             member.attempt(str(member_rows[0]["intent_id"]))
 
         app._refresh_transfer_post_review_state()

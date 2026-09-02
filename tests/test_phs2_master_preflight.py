@@ -980,7 +980,19 @@ def test_replaced_master_label_preflight_shows_exact_yellow_notice(tmp_path):
         audit_detail=lambda: {"replaced_scan": True},
     )
     result_queue = queue.Queue(maxsize=1)
-    result_queue.put((True, preflight, "operation-lease-fixture-01", None))
+    result_queue.put(
+        (
+            True,
+            preflight,
+            "operation-lease-fixture-01",
+            None,
+            None,
+            {
+                "ready": True,
+                "notice_key": (INPUT_TAG, LABEL_ID, active_label_id),
+            },
+        )
+    )
 
     app._poll_compact_phs2_preflight(
         0,

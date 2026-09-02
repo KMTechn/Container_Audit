@@ -52,11 +52,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3643,
+      "line": 3647,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3647,
+          "line": 3651,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -4073,11 +4073,11 @@
       ],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 278,
+      "line": 279,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 287,
+          "line": 291,
           "operation": "parent.mkdir",
           "writer_admission_sources": []
         }
@@ -4108,17 +4108,17 @@
       ],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 315,
+      "line": 326,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 319,
+          "line": 330,
           "operation": "conn.executescript",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 388,
+          "line": 399,
           "operation": "conn.executescript",
           "writer_admission_sources": []
         }
@@ -4143,29 +4143,29 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 408,
+      "line": 419,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 470,
+          "line": 481,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 482,
+          "line": 493,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 550,
+          "line": 561,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 554,
+          "line": 565,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4186,17 +4186,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 596,
+      "line": 607,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 602,
+          "line": 613,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 631,
+          "line": 642,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4217,17 +4217,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 647,
+      "line": 658,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 695,
+          "line": 706,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 696,
+          "line": 707,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4248,17 +4248,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 712,
+      "line": 723,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 715,
+          "line": 726,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 716,
+          "line": 727,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4279,17 +4279,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 732,
+      "line": 743,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 738,
+          "line": 749,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 751,
+          "line": 762,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4310,17 +4310,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 766,
+      "line": 777,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 769,
+          "line": 780,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 770,
+          "line": 781,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4341,17 +4341,17 @@
       "direct_callers": [],
       "file": "transfer_member_exchange.py",
       "kind": "function",
-      "line": 805,
+      "line": 816,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 815,
+          "line": 826,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 831,
+          "line": 842,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4391,11 +4391,11 @@
       ],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 1797,
+      "line": 1808,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 1806,
+          "line": 1817,
           "operation": "self.session.request",
           "writer_admission_sources": []
         }
@@ -4424,11 +4424,11 @@
       ],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2372,
+      "line": 2383,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 2383,
+          "line": 2397,
           "operation": "parent.mkdir",
           "writer_admission_sources": []
         }
@@ -4460,11 +4460,11 @@
       ],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2439,
+      "line": 2460,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2455,
+          "line": 2476,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4495,65 +4495,65 @@
       ],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2499,
+      "line": 2520,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2503,
+          "line": 2524,
           "operation": "conn.executescript",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2558,
+          "line": 2579,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2562,
+          "line": 2583,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2567,
+          "line": 2588,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2572,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 2577,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 2592,
+          "line": 2593,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
           "line": 2598,
-          "operation": "conn.executescript",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 2762,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2766,
+          "line": 2613,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 2619,
+          "operation": "conn.executescript",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 2783,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 2787,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4578,23 +4578,23 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2811,
+      "line": 2832,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2847,
+          "line": 2868,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2848,
+          "line": 2869,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2885,
+          "line": 2906,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4615,17 +4615,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2945,
+      "line": 2966,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2951,
+          "line": 2972,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2973,
+          "line": 2994,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4646,17 +4646,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 2986,
+      "line": 3007,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2992,
+          "line": 3013,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3001,
+          "line": 3022,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4679,17 +4679,17 @@
       ],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3014,
+      "line": 3035,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3075,
+          "line": 3096,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3094,
+          "line": 3115,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4710,17 +4710,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3118,
+      "line": 3139,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3163,
+          "line": 3184,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3164,
+          "line": 3185,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4741,17 +4741,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3179,
+      "line": 3200,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3182,
+          "line": 3203,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3183,
+          "line": 3204,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4772,17 +4772,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3254,
+      "line": 3275,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3272,
+          "line": 3293,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3300,
+          "line": 3321,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4803,23 +4803,23 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3338,
+      "line": 3359,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3408,
+          "line": 3430,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3409,
+          "line": 3431,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3449,
+          "line": 3471,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4840,17 +4840,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3530,
+      "line": 3552,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3546,
+          "line": 3569,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3574,
+          "line": 3597,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -4871,17 +4871,17 @@
       "direct_callers": [],
       "file": "transfer_seal.py",
       "kind": "function",
-      "line": 3610,
+      "line": 3633,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 3620,
+          "line": 3643,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 3621,
+          "line": 3644,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -5767,7 +5767,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "61e60de616f559a5f563aeaa4e409150465cd74fc7abebb112e8792b8960fe5b",
+  "inventory_sha256": "6417e71f1717f4aedce2ac8204bb0ac6b04f1b562aa24c1191ed58bead6f032f",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -15790,7 +15790,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1316,
+      "line": 1325,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -15798,7 +15798,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.main",
-      "line": 15215,
+      "line": 15756,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -15806,7 +15806,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3643,
+      "line": 3647,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -15814,7 +15814,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2623,
+      "line": 2627,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -15822,7 +15822,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3019,
+      "line": 3023,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -16590,7 +16590,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient._request",
-      "line": 1797,
+      "line": 1808,
       "marker_kind": "decorator",
       "source": "transfer_api_request"
     },
@@ -16598,7 +16598,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.__init__",
-      "line": 278,
+      "line": 279,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16606,7 +16606,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore._initialize",
-      "line": 315,
+      "line": 326,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16614,7 +16614,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.bind_command",
-      "line": 596,
+      "line": 607,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16622,7 +16622,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.dismiss_without_durable_command",
-      "line": 805,
+      "line": 816,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16630,7 +16630,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.mark_local_applied",
-      "line": 732,
+      "line": 743,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16638,7 +16638,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.mark_local_review",
-      "line": 766,
+      "line": 777,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16646,7 +16646,7 @@
       "direct_mutation_site_count": 4,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.prepare",
-      "line": 408,
+      "line": 419,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16654,7 +16654,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.record_error",
-      "line": 647,
+      "line": 658,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16662,7 +16662,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_member_exchange.py",
       "function": "transfer_member_exchange.TransferMemberExchangeStore.record_receipt",
-      "line": 712,
+      "line": 723,
       "marker_kind": "decorator",
       "source": "transfer_member_exchange"
     },
@@ -16670,7 +16670,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.activate_phs_label_exchange",
-      "line": 2172,
+      "line": 2183,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16678,7 +16678,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.adopt_phs_label",
-      "line": 2001,
+      "line": 2012,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16686,7 +16686,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.complete_phs_label_print",
-      "line": 2135,
+      "line": 2146,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16694,7 +16694,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.issue_operation_lease",
-      "line": 1855,
+      "line": 1866,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16702,7 +16702,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.prepare_phs_label_exchange",
-      "line": 2029,
+      "line": 2040,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16710,7 +16710,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.prepare_phs_reconciliation_label_exchange",
-      "line": 2056,
+      "line": 2067,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16718,7 +16718,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.replace_bundle_members",
-      "line": 2273,
+      "line": 2284,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16726,7 +16726,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.request_phs_label_print",
-      "line": 2109,
+      "line": 2120,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16734,7 +16734,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_seal.py",
       "function": "transfer_seal.LogisticsTransferClient.seal_transfer",
-      "line": 2231,
+      "line": 2242,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16742,7 +16742,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.__init__",
-      "line": 2372,
+      "line": 2383,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16750,7 +16750,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore._ensure_linked_event",
-      "line": 2439,
+      "line": 2460,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16758,7 +16758,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore._ensure_post_review_case",
-      "line": 3014,
+      "line": 3035,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16766,7 +16766,7 @@
       "direct_mutation_site_count": 10,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore._initialize",
-      "line": 2499,
+      "line": 2520,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16774,7 +16774,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.bind_command",
-      "line": 2945,
+      "line": 2966,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16782,7 +16782,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.confirm_completion_checkpoint",
-      "line": 2986,
+      "line": 3007,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16790,7 +16790,7 @@
       "direct_mutation_site_count": 3,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.mark_phs_replacement_waiting",
-      "line": 3338,
+      "line": 3359,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16798,7 +16798,7 @@
       "direct_mutation_site_count": 3,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.prepare",
-      "line": 2811,
+      "line": 2832,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16806,7 +16806,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.record_error",
-      "line": 3118,
+      "line": 3139,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16814,7 +16814,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.record_exchange_block",
-      "line": 3610,
+      "line": 3633,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16822,7 +16822,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.record_post_review_projection",
-      "line": 3254,
+      "line": 3275,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16830,7 +16830,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.record_receipt",
-      "line": 3179,
+      "line": 3200,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -16838,7 +16838,7 @@
       "direct_mutation_site_count": 2,
       "file": "transfer_seal.py",
       "function": "transfer_seal.TransferSealStore.record_replacement_waiting_projection",
-      "line": 3530,
+      "line": 3552,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
