@@ -93,6 +93,453 @@ def _call_name(call: ast.Call) -> str:
         return ""
 
 
+def _binding_name(node: ast.AST) -> str:
+    if not isinstance(node, (ast.Name, ast.Attribute)):
+        return ""
+    try:
+        return ast.unparse(node)
+    except (AttributeError, ValueError):
+        return ""
+
+
+class _TkDirectStoreReadAnalyzer:
+    """Follow store aliases and synchronous local helpers from Tk roots."""
+
+    _FUNCTION_NODES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+    def __init__(self, tree: ast.Module, class_name: str):
+        self._class_node = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef) and node.name == class_name
+        )
+        self._methods = {
+            node.name: node
+            for node in self._class_node.body
+            if isinstance(node, self._FUNCTION_NODES)
+        }
+        self._module_functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, self._FUNCTION_NODES)
+        }
+        self._active_calls = set()
+
+    def find_reads(self, root_names):
+        reads = set()
+        for root_name in root_names:
+            self._analyze_function(
+                ("method", root_name),
+                set(),
+                (root_name,),
+                reads,
+            )
+        return sorted(reads)
+
+    def _definition(self, key):
+        kind, name = key
+        return self._methods[name] if kind == "method" else self._module_functions[name]
+
+    def _resolve_call(self, call: ast.Call):
+        func = call.func
+        if (
+            isinstance(func, ast.Attribute)
+            and isinstance(func.value, ast.Name)
+            and func.value.id == "self"
+            and func.attr in self._methods
+        ):
+            return ("method", func.attr)
+        if isinstance(func, ast.Name) and func.id in self._module_functions:
+            return ("module", func.id)
+        return None
+
+    @staticmethod
+    def _parameter_names(function, *, bound_method):
+        positional = list(function.args.posonlyargs) + list(function.args.args)
+        if bound_method and positional:
+            positional = positional[1:]
+        return positional, list(function.args.kwonlyargs)
+
+    def _tainted_call_parameters(
+        self,
+        function,
+        *,
+        bound_method,
+        positional_taints,
+        keyword_taints,
+    ):
+        positional, keyword_only = self._parameter_names(
+            function,
+            bound_method=bound_method,
+        )
+        tainted = {
+            parameter.arg
+            for parameter, is_store in zip(positional, positional_taints)
+            if is_store
+        }
+        known_keywords = {
+            parameter.arg for parameter in positional + keyword_only
+        }
+        tainted.update(
+            name
+            for name, is_store in keyword_taints.items()
+            if name in known_keywords and is_store
+        )
+        if function.args.vararg is not None and any(
+            positional_taints[len(positional) :]
+        ):
+            tainted.add(function.args.vararg.arg)
+        if function.args.kwarg is not None and any(
+            is_store
+            for name, is_store in keyword_taints.items()
+            if name not in known_keywords
+        ):
+            tainted.add(function.args.kwarg.arg)
+        return tainted
+
+    def _analyze_function(self, key, tainted_parameters, path, reads):
+        context = (key, tuple(sorted(tainted_parameters)))
+        if context in self._active_calls:
+            return False
+        self._active_calls.add(context)
+        try:
+            function = self._definition(key)
+            environment = set(tainted_parameters)
+            _, returns_store = self._analyze_block(
+                function.body,
+                environment,
+                path,
+                reads,
+            )
+            return returns_store
+        finally:
+            self._active_calls.remove(context)
+
+    def _record_store_call(self, call, path, reads):
+        reads.add(
+            f"{' -> '.join(path)}:{_call_name(call)}@{getattr(call, 'lineno', '?')}"
+        )
+
+    def _expression_is_store(self, node, environment, path, reads):
+        if node is None:
+            return False
+        binding = _binding_name(node)
+        if binding and binding in environment:
+            return True
+        if isinstance(node, ast.Name):
+            return node.id in environment
+        if isinstance(node, ast.Attribute):
+            owner_is_store = self._expression_is_store(
+                node.value,
+                environment,
+                path,
+                reads,
+            )
+            return node.attr == "store" or owner_is_store
+        if isinstance(node, ast.Call):
+            receiver_is_store = False
+            if isinstance(node.func, ast.Attribute):
+                receiver_is_store = self._expression_is_store(
+                    node.func.value,
+                    environment,
+                    path,
+                    reads,
+                )
+            elif self._expression_is_store(
+                node.func,
+                environment,
+                path,
+                reads,
+            ):
+                receiver_is_store = True
+            if receiver_is_store:
+                self._record_store_call(node, path, reads)
+
+            positional_taints = [
+                self._expression_is_store(arg, environment, path, reads)
+                for arg in node.args
+            ]
+            keyword_taints = {
+                keyword.arg: self._expression_is_store(
+                    keyword.value,
+                    environment,
+                    path,
+                    reads,
+                )
+                for keyword in node.keywords
+                if keyword.arg is not None
+            }
+            expanded_keyword_taints = [
+                self._expression_is_store(
+                    keyword.value,
+                    environment,
+                    path,
+                    reads,
+                )
+                for keyword in node.keywords
+                if keyword.arg is None
+            ]
+            target = self._resolve_call(node)
+            if target is None:
+                return False
+            function = self._definition(target)
+            tainted_parameters = self._tainted_call_parameters(
+                function,
+                bound_method=target[0] == "method",
+                positional_taints=positional_taints,
+                keyword_taints=keyword_taints,
+            )
+            if function.args.kwarg is not None and any(expanded_keyword_taints):
+                tainted_parameters.add(function.args.kwarg.arg)
+            return self._analyze_function(
+                target,
+                tainted_parameters,
+                path + (target[1],),
+                reads,
+            )
+        if isinstance(node, ast.NamedExpr):
+            is_store = self._expression_is_store(
+                node.value,
+                environment,
+                path,
+                reads,
+            )
+            self._bind(node.target, is_store, environment)
+            return is_store
+        if isinstance(node, ast.IfExp):
+            self._expression_is_store(node.test, environment, path, reads)
+            return any(
+                self._expression_is_store(branch, environment, path, reads)
+                for branch in (node.body, node.orelse)
+            )
+        if isinstance(node, ast.BoolOp):
+            return any(
+                self._expression_is_store(value, environment, path, reads)
+                for value in node.values
+            )
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return any(
+                self._expression_is_store(value, environment, path, reads)
+                for value in node.elts
+            )
+        if isinstance(node, ast.Dict):
+            key_taints = [
+                self._expression_is_store(key, environment, path, reads)
+                for key in node.keys
+                if key is not None
+            ]
+            value_taints = [
+                self._expression_is_store(value, environment, path, reads)
+                for value in node.values
+            ]
+            return any(key_taints + value_taints)
+        if isinstance(node, ast.Subscript):
+            value_is_store = self._expression_is_store(
+                node.value,
+                environment,
+                path,
+                reads,
+            )
+            self._expression_is_store(node.slice, environment, path, reads)
+            return value_is_store
+
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.expr):
+                self._expression_is_store(child, environment, path, reads)
+        return False
+
+    @staticmethod
+    def _bind(target, is_store, environment):
+        if isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                _TkDirectStoreReadAnalyzer._bind(
+                    element,
+                    is_store,
+                    environment,
+                )
+            return
+        binding = _binding_name(target)
+        if not binding:
+            return
+        if is_store:
+            environment.add(binding)
+        else:
+            environment.discard(binding)
+
+    def _analyze_block(self, statements, environment, path, reads):
+        returns_store = False
+        for statement in statements:
+            if isinstance(statement, ast.Assign):
+                is_store = self._expression_is_store(
+                    statement.value,
+                    environment,
+                    path,
+                    reads,
+                )
+                for target in statement.targets:
+                    self._bind(target, is_store, environment)
+            elif isinstance(statement, ast.AnnAssign):
+                is_store = self._expression_is_store(
+                    statement.value,
+                    environment,
+                    path,
+                    reads,
+                )
+                self._bind(statement.target, is_store, environment)
+            elif isinstance(statement, ast.AugAssign):
+                is_store = self._expression_is_store(
+                    statement.target,
+                    environment,
+                    path,
+                    reads,
+                ) or self._expression_is_store(
+                    statement.value,
+                    environment,
+                    path,
+                    reads,
+                )
+                self._bind(statement.target, is_store, environment)
+            elif isinstance(statement, ast.Expr):
+                self._expression_is_store(
+                    statement.value,
+                    environment,
+                    path,
+                    reads,
+                )
+            elif isinstance(statement, ast.Return):
+                returns_store = self._expression_is_store(
+                    statement.value,
+                    environment,
+                    path,
+                    reads,
+                ) or returns_store
+            elif isinstance(statement, ast.If):
+                self._expression_is_store(
+                    statement.test,
+                    environment,
+                    path,
+                    reads,
+                )
+                body_environment, body_returns = self._analyze_block(
+                    statement.body,
+                    set(environment),
+                    path,
+                    reads,
+                )
+                else_environment, else_returns = self._analyze_block(
+                    statement.orelse,
+                    set(environment),
+                    path,
+                    reads,
+                )
+                environment.clear()
+                environment.update(body_environment | else_environment)
+                returns_store = returns_store or body_returns or else_returns
+            elif isinstance(statement, (ast.For, ast.AsyncFor)):
+                iterator_is_store = self._expression_is_store(
+                    statement.iter,
+                    environment,
+                    path,
+                    reads,
+                )
+                body_environment = set(environment)
+                self._bind(statement.target, iterator_is_store, body_environment)
+                body_environment, body_returns = self._analyze_block(
+                    statement.body,
+                    body_environment,
+                    path,
+                    reads,
+                )
+                else_environment, else_returns = self._analyze_block(
+                    statement.orelse,
+                    set(environment),
+                    path,
+                    reads,
+                )
+                environment.update(body_environment | else_environment)
+                returns_store = returns_store or body_returns or else_returns
+            elif isinstance(statement, ast.While):
+                self._expression_is_store(
+                    statement.test,
+                    environment,
+                    path,
+                    reads,
+                )
+                body_environment, body_returns = self._analyze_block(
+                    statement.body,
+                    set(environment),
+                    path,
+                    reads,
+                )
+                else_environment, else_returns = self._analyze_block(
+                    statement.orelse,
+                    set(environment),
+                    path,
+                    reads,
+                )
+                environment.update(body_environment | else_environment)
+                returns_store = returns_store or body_returns or else_returns
+            elif isinstance(statement, (ast.With, ast.AsyncWith)):
+                body_environment = set(environment)
+                for item in statement.items:
+                    is_store = self._expression_is_store(
+                        item.context_expr,
+                        environment,
+                        path,
+                        reads,
+                    )
+                    if item.optional_vars is not None:
+                        self._bind(item.optional_vars, is_store, body_environment)
+                body_environment, body_returns = self._analyze_block(
+                    statement.body,
+                    body_environment,
+                    path,
+                    reads,
+                )
+                environment.update(body_environment)
+                returns_store = returns_store or body_returns
+            elif isinstance(statement, ast.Try):
+                branch_environments = []
+                branch_returns = []
+                for branch in (
+                    statement.body,
+                    statement.orelse,
+                    statement.finalbody,
+                    *(handler.body for handler in statement.handlers),
+                ):
+                    branch_environment, branch_return = self._analyze_block(
+                        branch,
+                        set(environment),
+                        path,
+                        reads,
+                    )
+                    branch_environments.append(branch_environment)
+                    branch_returns.append(branch_return)
+                for branch_environment in branch_environments:
+                    environment.update(branch_environment)
+                returns_store = returns_store or any(branch_returns)
+            elif isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            else:
+                for child in ast.iter_child_nodes(statement):
+                    if isinstance(child, ast.expr):
+                        self._expression_is_store(
+                            child,
+                            environment,
+                            path,
+                            reads,
+                        )
+        return environment, returns_store
+
+
+def _tk_direct_store_read_paths(filename, class_name, root_names):
+    tree = ast.parse(
+        (ROOT / filename).read_text(encoding="utf-8"),
+        filename=filename,
+    )
+    return _TkDirectStoreReadAnalyzer(tree, class_name).find_reads(root_names)
+
+
 def _constant_sql_writes(method: ast.FunctionDef):
     writes = []
     for node in ast.walk(method):
@@ -353,24 +800,17 @@ def test_tk_exact_history_uses_lane_snapshot_during_post_review_work(
 
 
 def test_tk_state_consumers_have_no_direct_store_call():
-    class_node = _classes("Container_Audit.py")["ContainerAudit"]
-    methods = _public_methods(class_node)
-    for method_name in (
+    root_names = (
         "_update_action_button_states",
         "_show_operations_menu",
         "_exact_transfer_exchange_blocked",
         "_current_transfer_member_exchange_attempt",
         "_precommand_operator_review_retry_context",
         "_transfer_member_exchange_blocks_local_action",
-    ):
-        method = next(
-            node
-            for node in class_node.body
-            if isinstance(node, ast.FunctionDef) and node.name == method_name
-        )
-        direct_store_calls = [
-            _call_name(node)
-            for node in ast.walk(method)
-            if isinstance(node, ast.Call) and ".store." in _call_name(node)
-        ]
-        assert direct_store_calls == [], (method_name, direct_store_calls)
+    )
+    direct_store_reads = _tk_direct_store_read_paths(
+        "Container_Audit.py",
+        "ContainerAudit",
+        root_names,
+    )
+    assert direct_store_reads == [], direct_store_reads

@@ -2583,6 +2583,26 @@ class HealthCardWidget:
         self.options.update(kwargs)
 
 
+class CompletionActionStateWidget:
+    def __init__(self, app, updates):
+        self.app = app
+        self.updates = updates
+        self.options = {}
+
+    def configure(self, **kwargs):
+        self.options.update(kwargs)
+        if "state" in kwargs:
+            lane = self.app._ui_lane
+            self.updates.append(
+                {
+                    "completion_busy": bool(self.app._completion_lane_busy),
+                    "lane_busy": lane.is_busy(),
+                    "lane_state": lane.state,
+                    "action_state": kwargs["state"],
+                }
+            )
+
+
 def _health_card():
     return {
         "frame": HealthCardWidget(),
@@ -2771,6 +2791,115 @@ def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
         assert app._completion_lane_busy is False
     finally:
         app._ui_lane.close_idle()
+
+
+@pytest.mark.parametrize("terminal_path", ["finish", "fail"])
+def test_gui_completion_recomputes_actions_after_lane_becomes_idle(
+    tmp_path,
+    terminal_path,
+):
+    root = HealthPumpRoot()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    master = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-IDLE-REFRESH|"
+        "CLC=AAA2270730100|LBL=LBL-IDLE-REFRESH|HSH=0123456789abcdef"
+    )
+    now = datetime.datetime(2026, 9, 2, 8, 0, 0)
+    app.current_tray = TraySession(
+        master_label_code=master,
+        canonical_input_tag_qr=master,
+        active_label_qr_payload=master,
+        active_label_id="LBL-IDLE-REFRESH",
+        active_label_business_date="2026-09-02",
+        active_label_worker_code="fixture-worker",
+        operation_lease_id="operation-lease-idle-refresh",
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        scanned_barcodes=["AAA2270730100-PRODUCT-1"],
+        scan_times=[now],
+        tray_size=1,
+        start_time=now - datetime.timedelta(seconds=30),
+    )
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app._scan_callback_epoch = 10
+    app._ui_lane = None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app._active_blocking_completion_snapshot = lambda: None
+    app._active_completion_event_contract = lambda: None
+    app._operator_review_blocks_mutation = lambda: False
+    app._phs_label_exchange_blocks_tray_transition = lambda _action: False
+    app._transfer_member_exchange_blocks_local_action = lambda _action: False
+    app._precommand_operator_review_retry_context = lambda: None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._preflight_context_blocks_mutation = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: False
+    app._phs_reconciliation_exchange_available = lambda: False
+    app._refresh_phs_active_label_info = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app._schedule_focus_return = lambda *_args, **_kwargs: None
+    app.transfer_seal_coordinator = SimpleNamespace()
+    updates = []
+    app.operations_button = CompletionActionStateWidget(app, updates)
+    attempt = SealAttempt(
+        "intent-idle-refresh",
+        "ACKED",
+        operation_lease_id="operation-lease-idle-refresh",
+    )
+
+    def prepare_snapshot(**_kwargs):
+        if terminal_path == "fail":
+            raise RuntimeError("injected completion failure")
+        return attempt
+
+    app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
+    app.complete_tray = lambda *, _prepared_transfer_attempt=None: (
+        _prepared_transfer_attempt is attempt
+    )
+
+    try:
+        assert app.request_complete_tray() is True
+        app._completion_task_handle.join(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while (
+            len(updates) < 3 or app._ui_lane.is_busy()
+        ) and time.monotonic() < deadline:
+            if root.jobs:
+                root.run_next()
+            else:
+                time.sleep(0.005)
+
+        assert updates[0] == {
+            "completion_busy": True,
+            "lane_busy": False,
+            "lane_state": "IDLE",
+            "action_state": container_module.tk.DISABLED,
+        }
+        assert updates[1] == {
+            "completion_busy": False,
+            "lane_busy": True,
+            "lane_state": "BUSY",
+            "action_state": container_module.tk.DISABLED,
+        }
+        post_idle_refresh_seen = any(
+            not update["completion_busy"]
+            and not update["lane_busy"]
+            and update["lane_state"] == "IDLE"
+            for update in updates[2:]
+        )
+        assert post_idle_refresh_seen is True
+        assert updates[-1] == {
+            "completion_busy": False,
+            "lane_busy": False,
+            "lane_state": "IDLE",
+            "action_state": container_module.tk.NORMAL,
+        }
+    finally:
+        if app._ui_lane is not None:
+            app._ui_lane.close_idle()
 
 
 class RedirectResponse:

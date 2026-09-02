@@ -10219,6 +10219,7 @@ class ContainerAudit:
                 work=work,
                 finish=finish,
                 fail=fail,
+                on_idle=self._update_action_button_states,
                 shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
             )
         )
