@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import threading
 import time
 
 import pytest
@@ -478,6 +479,10 @@ def test_durable_transfer_stores_receive_display_alias_only(
         (),
         {"client": object(), "store": Store()},
     )()
+    owner_thread_id = threading.get_ident()
+    app.transfer_seal_coordinator._owner_thread_id_provider = (
+        lambda: owner_thread_id
+    )
     app._exact_transfer_exchange_blocked = lambda: True
     app.log_file_path = ""
     monkeypatch.setattr(

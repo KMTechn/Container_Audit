@@ -964,6 +964,8 @@ class ContainerAudit:
     SOURCE_TRANSPORT_OR_DATASET = "legacy_transfer_csv"
     SCAN_CONTRACT_VERSION = "container_audit_legacy_v1"
     AUDIO_ENABLED_ENV = "CONTAINER_AUDIT_AUDIO_ENABLED"
+    EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
+    EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -1027,6 +1029,8 @@ class ContainerAudit:
         
         self._setup_paths_and_dirs()
         self._post_review_refresh_required = False
+        self._transfer_post_review_refresh_pending = False
+        self._transfer_post_review_refresh_inflight = False
         self._presented_post_review_case_ids: set[str] = set()
         transfer_seal_db_path = (
             Path(self.data_root) / "transfer_seal" / "transfer_seal.db"
@@ -1041,11 +1045,13 @@ class ContainerAudit:
             TransferSealStore(transfer_seal_db_path),
             startup_logistics_client,
             operation_lease_manager,
+            owner_thread_id_provider=self._transfer_coordinator_owner_thread_id,
         )
         self.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
             TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
             self.transfer_seal_coordinator.client,
             getattr(self.transfer_seal_coordinator, "operation_lease_manager", None),
+            owner_thread_id_provider=self._transfer_coordinator_owner_thread_id,
         )
         self.phs_label_exchange_coordinator = PHSLabelExchangeCoordinator(
             PHSLabelExchangeJournal(
@@ -1062,6 +1068,8 @@ class ContainerAudit:
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_waiting_for_hold = False
         self._startup_transfer_recovery_task_handle = None
+        self._member_exchange_reconcile_pending = False
+        self._member_exchange_reconcile_inflight = False
         self._direct_sync_bootstrap_thread = start_direct_sync_auto_bootstrap(
             app_root=self.application_path,
             direct_sync_root=self.direct_sync_program_data_root,
@@ -1400,6 +1408,22 @@ class ContainerAudit:
             self._update_action_button_states()
         except (AttributeError, tk.TclError):
             pass
+
+    def _transfer_coordinator_owner_thread_id(self) -> Optional[int]:
+        lane = getattr(self, "_ui_lane", None)
+        return getattr(lane, "worker_thread_id", None)
+
+    def _transfer_coordinator_owner_provider(
+        self,
+    ) -> Callable[[], Optional[int]]:
+        explicit_provider = getattr(
+            self,
+            "_explicit_transfer_coordinator_owner_thread_id_provider",
+            None,
+        )
+        if callable(explicit_provider):
+            return explicit_provider
+        return self._transfer_coordinator_owner_thread_id
 
     def _ui_task_lane(self) -> TkSerialUiLane:
         lane = getattr(self, "_ui_lane", None)
@@ -11373,6 +11397,8 @@ class ContainerAudit:
             "프로그램을 종료하시겠습니까?",
         ):
             return
+        if not _confirmed:
+            self._event_log_close_join_attempts = 0
         if (
             getattr(self, "_scan_callback_pending", False)
             and not getattr(self, "_ui_close_requested", False)
@@ -11536,13 +11562,44 @@ class ContainerAudit:
             self.log_queue.put(None)
             self._event_log_close_requested = True
         if self.log_thread.is_alive():
-            self.log_thread.join(timeout=1.0)
+            attempts = int(
+                getattr(self, "_event_log_close_join_attempts", 0) or 0
+            )
+            self.log_thread.join(
+                timeout=self.EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS
+            )
+            attempts += 1
+            self._event_log_close_join_attempts = attempts
         if self.log_thread.is_alive():
+            if attempts < self.EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS:
+                try:
+                    self.root.after(
+                        0,
+                        lambda: self.on_closing(_confirmed=True),
+                    )
+                except (AttributeError, tk.TclError):
+                    pass
+                return
+            if lane is not None:
+                try:
+                    lane.mark_broken(
+                        RuntimeError(
+                            "event log writer exceeded the bounded close budget"
+                        )
+                    )
+                except (AttributeError, RuntimeError):
+                    pass
+            self._ui_close_requested = False
             try:
-                self.root.after(0, self._finalize_application_close)
+                self.show_status_message(
+                    "종료 정리 지연 · 현재 상태를 유지합니다. 다시 종료해 주세요.",
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
             except (AttributeError, tk.TclError):
                 pass
             return
+        self._event_log_close_join_attempts = 0
         stop_all_sounds()
         self.root.destroy()
 
@@ -11948,7 +12005,8 @@ class ContainerAudit:
             log_path = str(getattr(self, "log_file_path", "") or "").strip()
             data_root = str(Path(log_path).parent if log_path else Path(tempfile.gettempdir()) / "ContainerAudit")
         coordinator = transfer_seal_coordinator_from_env(
-            Path(data_root) / "transfer_seal" / "transfer_seal.db"
+            Path(data_root) / "transfer_seal" / "transfer_seal.db",
+            owner_thread_id_provider=self._transfer_coordinator_owner_provider(),
         )
         self.transfer_seal_coordinator = coordinator
         return coordinator
@@ -11962,6 +12020,11 @@ class ContainerAudit:
             TransferMemberExchangeStore(seal_coordinator.store.db_path),
             seal_coordinator.client,
             getattr(seal_coordinator, "operation_lease_manager", None),
+            owner_thread_id_provider=getattr(
+                seal_coordinator,
+                "_owner_thread_id_provider",
+                self._transfer_coordinator_owner_thread_id,
+            ),
         )
         self.transfer_member_exchange_coordinator = coordinator
         return coordinator
@@ -11978,14 +12041,18 @@ class ContainerAudit:
         return coordinator._attempt(rows[-1])
 
     def _transfer_member_exchange_blocks_local_action(self, action: str) -> bool:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return True
         attempt = self._current_transfer_member_exchange_attempt()
         if attempt is None:
             return False
         if attempt.status == "ACKED" and attempt.local_apply_status == "PENDING":
             self._reconcile_pending_local_member_exchanges()
-            attempt = self._current_transfer_member_exchange_attempt()
-            if attempt is None:
-                return False
         if (
             attempt.status == "OPERATOR_REVIEW"
             or attempt.local_apply_status == "OPERATOR_REVIEW"
@@ -12040,11 +12107,6 @@ class ContainerAudit:
                     "operator_retry_after_preflight",
                 )
         except (KeyError, TypeError, ValueError, sqlite3.Error):
-            messagebox.showerror(
-                "교체 다시 시작 실패",
-                "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
-                parent=getattr(self, "root", None),
-            )
             return False
         return True
 
@@ -12462,22 +12524,116 @@ class ContainerAudit:
         return presented
 
     def _refresh_transfer_post_review_state(self) -> bool:
-        """Replay review projections and surface one safe queued notice."""
+        """Queue review projection replay behind the shared coordinator lane."""
 
+        self._transfer_post_review_refresh_pending = True
+        return self._schedule_transfer_post_review_refresh()
+
+    def _schedule_transfer_post_review_refresh(self) -> bool:
+        if (
+            not getattr(self, "_transfer_post_review_refresh_pending", False)
+            or getattr(self, "_transfer_post_review_refresh_inflight", False)
+            or getattr(self, "_ui_close_requested", False)
+        ):
+            return False
         refresh_requested = bool(
             getattr(self, "_post_review_refresh_required", False)
         )
-        replay_failed = False
-        try:
-            self._drain_transfer_post_review_projections()
-        except Exception:
-            replay_failed = True
 
+        def work() -> Dict[str, Any]:
+            replay_failed = False
+            try:
+                self._drain_transfer_post_review_projections()
+            except Exception:
+                replay_failed = True
+            try:
+                cases = tuple(
+                    dict(row)
+                    for row in self._transfer_seal_runtime().store.post_review_cases()
+                )
+            except Exception:
+                cases = ()
+                replay_failed = True
+            return {
+                "cases": cases,
+                "refresh_requested": refresh_requested,
+                "replay_failed": replay_failed,
+            }
+
+        def finish(outcome: Mapping[str, Any]) -> None:
+            self._transfer_post_review_refresh_inflight = False
+            self._finish_transfer_post_review_refresh(outcome)
+
+        def fail(exc: BaseException) -> None:
+            self._transfer_post_review_refresh_inflight = False
+            self._post_review_refresh_required = True
+            print(
+                "이적 사후 확인 replay lane 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            self._present_transfer_post_review_required_notice()
+
+        owner_source = getattr(self, "transfer_seal_coordinator", None)
+        owner_provider = getattr(
+            owner_source,
+            "_owner_thread_id_provider",
+            self._transfer_coordinator_owner_provider(),
+        )
+        if (
+            callable(owner_provider)
+            and owner_provider() == threading.get_ident()
+            and getattr(self, "_ui_lane", None) is None
+        ):
+            self._transfer_post_review_refresh_pending = False
+            self._transfer_post_review_refresh_inflight = True
+            try:
+                finish(work())
+            except Exception as exc:
+                fail(exc)
+            return True
+
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return False
+        self._transfer_post_review_refresh_pending = False
+        self._transfer_post_review_refresh_inflight = True
+
+        admission = lane.submit(
+            LaneTask(
+                name="transfer-post-review-refresh",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                on_idle=self._schedule_pending_transfer_coordinator_work,
+                shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+            )
+        )
+        if not admission.accepted:
+            self._transfer_post_review_refresh_inflight = False
+            self._transfer_post_review_refresh_pending = True
+            return False
+        return True
+
+    def _schedule_pending_transfer_coordinator_work(self) -> None:
         try:
-            cases = list(self._transfer_seal_runtime().store.post_review_cases())
-        except Exception:
-            cases = []
-            replay_failed = True
+            self.root.after(0, self._admit_pending_transfer_coordinator_work)
+        except (AttributeError, tk.TclError):
+            pass
+
+    def _admit_pending_transfer_coordinator_work(self) -> None:
+        if getattr(self, "_member_exchange_reconcile_pending", False):
+            if self._schedule_member_exchange_reconcile():
+                return
+        self._schedule_transfer_post_review_refresh()
+
+    def _finish_transfer_post_review_refresh(
+        self,
+        outcome: Mapping[str, Any],
+    ) -> bool:
+        refresh_requested = bool(outcome.get("refresh_requested"))
+        replay_failed = bool(outcome.get("replay_failed"))
+        cases = tuple(outcome.get("cases") or ())
 
         presented_ids = getattr(
             self,
@@ -12535,6 +12691,7 @@ class ContainerAudit:
                 work=self._retry_pending_transfer_seals,
                 finish=self._finish_startup_transfer_recovery,
                 fail=fail,
+                on_idle=self._schedule_pending_transfer_coordinator_work,
             )
         )
         if not admission.accepted:
@@ -12615,12 +12772,19 @@ class ContainerAudit:
         return blocked
 
     def _block_unsafe_exact_exchange(self) -> bool:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return True
         if not self._exact_transfer_exchange_blocked():
             return False
         coordinator = getattr(self, "transfer_seal_coordinator", None)
-        receipt_id = ""
         if coordinator is not None:
-            receipt_id = coordinator.store.record_exchange_block(
+            self._schedule_transfer_exchange_block_receipt(
+                coordinator=coordinator,
                 reason_code="BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
                 details={
                     "operator": persistent_operator_name(
@@ -12631,16 +12795,8 @@ class ContainerAudit:
                     "missing_client_contract": "exact_good_barcode_source_bundle_resolver",
                     "post_seal_policy": "POST_SEAL_REPLACEMENT_UNSUPPORTED",
                 },
-            )
-        if getattr(self, "worker_name", "") and getattr(self, "log_file_path", ""):
-            self._log_event(
-                "PRODUCT_EXCHANGE_BLOCKED_EXACT_MEMBERSHIP",
-                detail={
-                    "reason_code": "BLOCKED_REQUIRES_TWO_BUNDLE_CAS",
-                    "restriction_receipt_id": receipt_id,
-                    "message": "target/source PHS resolution and multi-bundle CAS are required",
-                },
-                synchronous=True,
+                event_type="PRODUCT_EXCHANGE_BLOCKED_EXACT_MEMBERSHIP",
+                event_message="target/source PHS resolution and multi-bundle CAS are required",
             )
         messagebox.showwarning(
             "관리자 교체 절차 필요",
@@ -12651,12 +12807,19 @@ class ContainerAudit:
         return True
 
     def _block_unsafe_exact_master_label_replacement(self) -> bool:
+        lane = getattr(self, "_ui_lane", None)
+        if lane is not None and lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return True
         if not self._exact_transfer_exchange_blocked():
             return False
         coordinator = getattr(self, "transfer_seal_coordinator", None)
-        receipt_id = ""
         if coordinator is not None:
-            receipt_id = coordinator.store.record_exchange_block(
+            self._schedule_transfer_exchange_block_receipt(
+                coordinator=coordinator,
                 reason_code="BLOCKED_REQUIRES_REPLACE_BUNDLE_MEMBERS_CAS",
                 details={
                     "operator": persistent_operator_name(
@@ -12665,16 +12828,8 @@ class ContainerAudit:
                     "operation": "completed_master_label_replacement",
                     "policy": "physical_open_reseal_and_exact_bundle_cas_required",
                 },
-            )
-        if getattr(self, "worker_name", "") and getattr(self, "log_file_path", ""):
-            self._log_event(
-                "MASTER_LABEL_REPLACEMENT_BLOCKED_EXACT_MEMBERSHIP",
-                detail={
-                    "reason_code": "BLOCKED_REQUIRES_REPLACE_BUNDLE_MEMBERS_CAS",
-                    "restriction_receipt_id": receipt_id,
-                    "message": "physical open/reseal policy and exact bundle CAS are required",
-                },
-                synchronous=True,
+                event_type="MASTER_LABEL_REPLACEMENT_BLOCKED_EXACT_MEMBERSHIP",
+                event_message="physical open/reseal policy and exact bundle CAS are required",
             )
         messagebox.showwarning(
             "관리자 교체 절차 필요",
@@ -12682,6 +12837,78 @@ class ContainerAudit:
             "이적 완료 현품표, 교체 제품의 원래 소속, 개봉·재봉인 여부를 함께 "
             "확인하는 관리자 교체 절차를 이용하세요.",
         )
+        return True
+
+    def _schedule_transfer_exchange_block_receipt(
+        self,
+        *,
+        coordinator: Any,
+        reason_code: str,
+        details: Mapping[str, Any],
+        event_type: str,
+        event_message: str,
+    ) -> bool:
+        def work() -> str:
+            return coordinator.store.record_exchange_block(
+                reason_code=reason_code,
+                details=dict(details),
+            )
+
+        def finish(receipt_id: str) -> None:
+            if getattr(self, "worker_name", "") and getattr(
+                self,
+                "log_file_path",
+                "",
+            ):
+                self._log_event(
+                    event_type,
+                    detail={
+                        "reason_code": reason_code,
+                        "restriction_receipt_id": receipt_id,
+                        "message": event_message,
+                    },
+                    synchronous=True,
+                )
+
+        owner_provider = getattr(
+            coordinator,
+            "_owner_thread_id_provider",
+            None,
+        )
+        if (
+            callable(owner_provider)
+            and owner_provider() == threading.get_ident()
+            and getattr(self, "_ui_lane", None) is None
+        ):
+            finish(work())
+            return True
+
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return False
+        admission = lane.submit(
+            LaneTask(
+                name="transfer-exchange-block-receipt",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=lambda exc: print(
+                    "이적 차단 기록 lane 실패: "
+                    f"{exc.__class__.__name__}"
+                ),
+                shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+            )
+        )
+        if not admission.accepted:
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return False
         return True
 
     def _plan_b_event_detail(
@@ -13650,8 +13877,81 @@ class ContainerAudit:
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
-        if not self._dismiss_transfer_exchange_preflight_for_explicit_retry():
+        if not self._schedule_exchange_dialog_admission():
             return
+
+    def _schedule_exchange_dialog_admission(self) -> bool:
+        coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
+        owner_source = coordinator or getattr(
+            self,
+            "transfer_seal_coordinator",
+            None,
+        )
+        owner_provider = getattr(
+            owner_source,
+            "_owner_thread_id_provider",
+            self._transfer_coordinator_owner_provider(),
+        )
+        if (
+            callable(owner_provider)
+            and owner_provider() == threading.get_ident()
+            and getattr(self, "_ui_lane", None) is None
+        ):
+            if not self._dismiss_transfer_exchange_preflight_for_explicit_retry():
+                messagebox.showerror(
+                    "교체 다시 시작 실패",
+                    "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+                    parent=getattr(self, "root", None),
+                )
+                return False
+            self._show_exchange_dialog_after_coordinator_admission()
+            return True
+
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+
+        def finish(admitted: bool) -> None:
+            self._exchange_dialog_admission_result = bool(admitted)
+
+        def on_idle() -> None:
+            try:
+                if bool(getattr(self, "_exchange_dialog_admission_result", False)):
+                    self._show_exchange_dialog_after_coordinator_admission()
+                    return
+                messagebox.showerror(
+                    "교체 다시 시작 실패",
+                    "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+                    parent=getattr(self, "root", None),
+                )
+            finally:
+                self._schedule_pending_transfer_coordinator_work()
+
+        admission = lane.submit(
+            LaneTask(
+                name="transfer-exchange-dialog-admission",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=self._dismiss_transfer_exchange_preflight_for_explicit_retry,
+                finish=finish,
+                fail=lambda exc: finish(False),
+                on_idle=on_idle,
+            )
+        )
+        if not admission.accepted:
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
+        return True
+
+    def _show_exchange_dialog_after_coordinator_admission(self) -> None:
         if self._transfer_member_exchange_blocks_local_action("다음 스캔"):
             return
         exact_mode = self._exact_transfer_exchange_blocked()
@@ -14055,8 +14355,6 @@ class ContainerAudit:
     def _apply_acked_member_exchange(
         self, attempt: MemberExchangeAttempt, *, recovery: bool = False
     ) -> bool:
-        if self._reject_mutation_during_preflight_hold():
-            return False
         coordinator = self._transfer_member_exchange_runtime()
         try:
             successor_lease_id = coordinator.ensure_local_rotation(attempt.intent_id)
@@ -14080,11 +14378,56 @@ class ContainerAudit:
                 "central exchange receipt has no durable successor operation lease",
             )
             return False
+
+        outcome = self._call_transfer_ui_sync(
+            self._apply_acked_member_exchange_ui,
+            attempt,
+            successor_lease_id,
+            recovery,
+        )
+        review_reason = str(outcome.get("review_reason") or "")
+        if review_reason:
+            coordinator.store.mark_local_review(attempt.intent_id, review_reason)
+        if not bool(outcome.get("applied")):
+            return False
+        evidence = dict(outcome.get("evidence") or {})
+        try:
+            coordinator.store.mark_local_applied(attempt.intent_id, evidence)
+        except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+            # The state and append-only event are already durable. Leave the
+            # intent PENDING so restart reconciliation can idempotently close it.
+            print(f"중앙 제품 교체 local receipt 저장 실패: {exc.__class__.__name__}")
+        return True
+
+    def _call_transfer_ui_sync(
+        self,
+        callback: Callable[..., Any],
+        *args: Any,
+    ) -> Any:
+        lane = getattr(self, "_ui_lane", None)
+        if (
+            lane is not None
+            and threading.get_ident() == getattr(lane, "worker_thread_id", None)
+        ):
+            return lane.call_ui_sync(callback, *args)
+        return callback(*args)
+
+    def _apply_acked_member_exchange_ui(
+        self,
+        attempt: MemberExchangeAttempt,
+        successor_lease_id: str,
+        recovery: bool,
+    ) -> Dict[str, Any]:
+        if self._reject_mutation_during_preflight_hold():
+            return {"applied": False, "review_reason": "", "evidence": {}}
         try:
             after, scan_times, evidence = self._member_exchange_apply_plan(attempt)
         except (TypeError, ValueError) as exc:
-            coordinator.store.mark_local_review(attempt.intent_id, str(exc))
-            return False
+            return {
+                "applied": False,
+                "review_reason": str(exc),
+                "evidence": {},
+            }
         before = list(self.current_tray.scanned_barcodes)
         before_times = list(self.current_tray.scan_times)
         before_error_state = bool(self.current_tray.has_error_or_reset)
@@ -14095,11 +14438,13 @@ class ContainerAudit:
             attempt.predecessor_operation_lease_id,
             successor_lease_id,
         }:
-            coordinator.store.mark_local_review(
-                attempt.intent_id,
-                "active tray operation lease differs from central rotation predecessor",
-            )
-            return False
+            return {
+                "applied": False,
+                "review_reason": (
+                    "active tray operation lease differs from central rotation predecessor"
+                ),
+                "evidence": {},
+            }
         if successor_lease_id:
             self.current_tray.operation_lease_id = successor_lease_id
         self.current_tray.scanned_barcodes = after
@@ -14122,7 +14467,7 @@ class ContainerAudit:
             self.current_tray.scanned_barcodes = before
             self.current_tray.scan_times = before_times
             self.current_tray.has_error_or_reset = before_error_state
-            return False
+            return {"applied": False, "review_reason": "", "evidence": {}}
         event_type = (
             "PRODUCT_EXCHANGE_LOCAL_RECONCILED"
             if recovery
@@ -14133,46 +14478,138 @@ class ContainerAudit:
             self.current_tray.scanned_barcodes = before
             self.current_tray.scan_times = before_times
             self.current_tray.has_error_or_reset = before_error_state
+            review_reason = ""
             if not self._save_current_tray_state():
-                coordinator.store.mark_local_review(
-                    attempt.intent_id,
-                    "central exchange committed but local state rollback failed after log error",
+                review_reason = (
+                    "central exchange committed but local state rollback failed after log error"
                 )
-            return False
-        try:
-            coordinator.store.mark_local_applied(attempt.intent_id, evidence)
-        except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
-            # The state and append-only event are already durable.  Leave the
-            # intent PENDING so restart reconciliation can idempotently close it.
-            print(f"중앙 제품 교체 local receipt 저장 실패: {exc.__class__.__name__}")
+            return {
+                "applied": False,
+                "review_reason": review_reason,
+                "evidence": {},
+            }
         self._redraw_active_tray_scans()
+        return {"applied": True, "review_reason": "", "evidence": evidence}
+
+    def _reconcile_pending_local_member_exchanges(self) -> bool:
+        if self._reject_mutation_during_preflight_hold():
+            return False
+        if not getattr(self.current_tray, "master_label_code", ""):
+            return False
+        self._member_exchange_reconcile_pending = True
+        if (
+            getattr(self, "_startup_transfer_recovery_pending", False)
+            or getattr(self, "_startup_transfer_recovery_inflight", False)
+        ):
+            return False
+        return self._schedule_member_exchange_reconcile()
+
+    def _schedule_member_exchange_reconcile(self) -> bool:
+        if (
+            not getattr(self, "_member_exchange_reconcile_pending", False)
+            or getattr(self, "_member_exchange_reconcile_inflight", False)
+            or getattr(self, "_ui_close_requested", False)
+        ):
+            return False
+        master_label = str(
+            getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            or ""
+        )
+        if not master_label:
+            self._member_exchange_reconcile_pending = False
+            return False
+        coordinator = self._transfer_member_exchange_runtime()
+        owner_provider = getattr(
+            coordinator,
+            "_owner_thread_id_provider",
+            None,
+        )
+        if (
+            callable(owner_provider)
+            and owner_provider() == threading.get_ident()
+            and getattr(self, "_ui_lane", None) is None
+        ):
+            self._member_exchange_reconcile_pending = False
+            self._finish_member_exchange_reconcile(
+                self._work_member_exchange_reconcile(master_label)
+            )
+            return True
+
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return False
+        self._member_exchange_reconcile_pending = False
+        self._member_exchange_reconcile_inflight = True
+
+        def finish(outcome: Mapping[str, Any]) -> None:
+            self._member_exchange_reconcile_inflight = False
+            self._finish_member_exchange_reconcile(outcome)
+
+        def fail(exc: BaseException) -> None:
+            self._member_exchange_reconcile_inflight = False
+            print(
+                "중앙 제품 교체 local reconcile lane 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            self._finish_member_exchange_reconcile({"status": "failed"})
+
+        admission = lane.submit(
+            LaneTask(
+                name="transfer-member-local-reconcile",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=lambda: self._work_member_exchange_reconcile(master_label),
+                finish=finish,
+                fail=fail,
+                on_idle=self._schedule_pending_transfer_coordinator_work,
+                shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+            )
+        )
+        if not admission.accepted:
+            self._member_exchange_reconcile_inflight = False
+            self._member_exchange_reconcile_pending = True
+            return False
         return True
 
-    def _reconcile_pending_local_member_exchanges(self) -> None:
-        if self._reject_mutation_during_preflight_hold():
-            return
-        if not getattr(self.current_tray, "master_label_code", ""):
-            return
+    def _member_exchange_ui_snapshot(self) -> Dict[str, Any]:
+        return {
+            "master_label": str(self.current_tray.master_label_code or ""),
+            "barcodes": tuple(self.current_tray.scanned_barcodes),
+            "operation_lease_id": str(
+                getattr(self.current_tray, "operation_lease_id", "") or ""
+            ),
+        }
+
+    def _work_member_exchange_reconcile(
+        self,
+        master_label: str,
+    ) -> Dict[str, str]:
         coordinator = self._transfer_member_exchange_runtime()
-        attempts = coordinator.pending_local_attempts(
-            master_label=self.current_tray.master_label_code
-        )
+        attempts = coordinator.pending_local_attempts(master_label=master_label)
         for attempt in attempts:
+            snapshot = self._call_transfer_ui_sync(
+                self._member_exchange_ui_snapshot
+            )
+            if str(snapshot.get("master_label") or "") != master_label:
+                return {"status": "stale"}
             current = {
-                normalize_barcode(value) for value in self.current_tray.scanned_barcodes
+                normalize_barcode(value)
+                for value in tuple(snapshot.get("barcodes") or ())
             }
-            old_values = {normalize_barcode(value) for value in attempt.old_barcodes}
-            new_values = {normalize_barcode(value) for value in attempt.new_barcodes}
+            old_values = {
+                normalize_barcode(value) for value in attempt.old_barcodes
+            }
+            new_values = {
+                normalize_barcode(value) for value in attempt.new_barcodes
+            }
             if old_values.issubset(current) and not (new_values & current):
-                self._active_transfer_exchange_master_label = (
-                    self.current_tray.master_label_code
+                self._call_transfer_ui_sync(
+                    setattr,
+                    self,
+                    "_active_transfer_exchange_master_label",
+                    master_label,
                 )
                 if not self._apply_acked_member_exchange(attempt, recovery=True):
-                    messagebox.showerror(
-                        "중앙 교체 복구 실패",
-                        "서버에서 완료된 제품 교체를 현재 트레이에 복구하지 못했습니다. 담당자 확인이 필요합니다.",
-                    )
-                    return
+                    return {"status": "failed"}
                 continue
             if not (old_values & current) and new_values.issubset(current):
                 try:
@@ -14184,37 +14621,30 @@ class ContainerAudit:
                         attempt.intent_id,
                         f"{exc.code}: saved tray cannot verify lease rotation",
                     )
-                    return
+                    return {"status": "failed"}
                 except (KeyError, TypeError, ValueError, sqlite3.Error):
-                    # Keep ACKED/PENDING. The next restart or action retries the
-                    # same stored receipt without issuing another command.
-                    return
-                current_lease_id = str(
-                    getattr(self.current_tray, "operation_lease_id", "") or ""
+                    return {"status": "failed"}
+                outcome = self._call_transfer_ui_sync(
+                    self._reconcile_existing_member_exchange_ui,
+                    attempt,
+                    successor_lease_id,
+                    tuple(sorted(current)),
                 )
-                if successor_lease_id and current_lease_id != successor_lease_id:
-                    if current_lease_id != attempt.predecessor_operation_lease_id:
-                        coordinator.store.mark_local_review(
-                            attempt.intent_id,
-                            "saved tray lease is neither the rotation predecessor nor successor",
-                        )
-                        return
-                    self.current_tray.operation_lease_id = successor_lease_id
-                    if not self._save_current_tray_state():
-                        self.current_tray.operation_lease_id = current_lease_id
-                        return
-                evidence = {
-                    "exchange_intent_id": attempt.intent_id,
-                    "central_receipt_id": attempt.receipt_id,
-                    "reconciled_existing_state": True,
-                    "after_selection_hash": stable_hash(sorted(current)),
-                    "predecessor_operation_lease_id": (
-                        attempt.predecessor_operation_lease_id or None
-                    ),
-                    "successor_operation_lease_id": successor_lease_id or None,
-                }
+                review_reason = str(outcome.get("review_reason") or "")
+                if review_reason:
+                    coordinator.store.mark_local_review(
+                        attempt.intent_id,
+                        review_reason,
+                    )
+                    return {"status": "failed"}
+                evidence = dict(outcome.get("evidence") or {})
+                if not evidence:
+                    return {"status": "failed"}
                 try:
-                    coordinator.store.mark_local_applied(attempt.intent_id, evidence)
+                    coordinator.store.mark_local_applied(
+                        attempt.intent_id,
+                        evidence,
+                    )
                 except ValueError:
                     pass
                 continue
@@ -14222,12 +14652,60 @@ class ContainerAudit:
                 attempt.intent_id,
                 "active tray membership is neither the before nor after exchange set",
             )
+            return {"status": "conflict"}
+        return {"status": "applied"}
+
+    def _reconcile_existing_member_exchange_ui(
+        self,
+        attempt: MemberExchangeAttempt,
+        successor_lease_id: str,
+        current: Sequence[str],
+    ) -> Dict[str, Any]:
+        current_lease_id = str(
+            getattr(self.current_tray, "operation_lease_id", "") or ""
+        )
+        if successor_lease_id and current_lease_id != successor_lease_id:
+            if current_lease_id != attempt.predecessor_operation_lease_id:
+                return {
+                    "review_reason": (
+                        "saved tray lease is neither the rotation predecessor nor successor"
+                    ),
+                    "evidence": {},
+                }
+            self.current_tray.operation_lease_id = successor_lease_id
+            if not self._save_current_tray_state():
+                self.current_tray.operation_lease_id = current_lease_id
+                return {"review_reason": "", "evidence": {}}
+        return {
+            "review_reason": "",
+            "evidence": {
+                "exchange_intent_id": attempt.intent_id,
+                "central_receipt_id": attempt.receipt_id,
+                "reconciled_existing_state": True,
+                "after_selection_hash": stable_hash(sorted(current)),
+                "predecessor_operation_lease_id": (
+                    attempt.predecessor_operation_lease_id or None
+                ),
+                "successor_operation_lease_id": successor_lease_id or None,
+            },
+        }
+
+    def _finish_member_exchange_reconcile(
+        self,
+        outcome: Mapping[str, Any],
+    ) -> None:
+        status = str(outcome.get("status") or "failed")
+        if status == "conflict":
             messagebox.showerror(
                 "중앙 교체 상태 충돌",
                 "중앙 교체 결과와 현재 트레이 제품 목록이 부분적으로만 일치합니다. "
                 "작업을 중단하고 관리자에게 확인하세요.",
             )
-            return
+        elif status == "failed":
+            messagebox.showerror(
+                "중앙 교체 복구 실패",
+                "서버에서 완료된 제품 교체를 현재 트레이에 복구하지 못했습니다. 담당자 확인이 필요합니다.",
+            )
 
     def _cancel_exchange(self, *, reason: str = "operator_cancel") -> bool:
         """진행 중인 제품 교환을 취소하고 필요한 감사 로그를 남깁니다."""
@@ -14237,41 +14715,115 @@ class ContainerAudit:
             getattr(self, "_active_transfer_exchange_intent_id", "") or ""
         )
         if intent_id:
-            coordinator = self._transfer_member_exchange_runtime()
+            return self._schedule_exchange_cancel(intent_id, reason)
+        if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
+            return False
+        return self._finish_exchange_cancel_ui(reason)
+
+    def _schedule_exchange_cancel(self, intent_id: str, reason: str) -> bool:
+        coordinator = self._transfer_member_exchange_runtime()
+
+        def work() -> Dict[str, str]:
+            if self._call_transfer_ui_sync(
+                self._preflight_context_blocks_mutation
+            ):
+                return {"status": "hold"}
             attempt = coordinator.attempt(intent_id)
             if attempt.status == "ACKED" and attempt.local_apply_status == "PENDING":
-                if not self._apply_acked_member_exchange(attempt, recovery=True):
-                    messagebox.showerror(
-                        "교체 취소 불가",
-                        "중앙에서 완료된 제품 교체를 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
+                return {
+                    "status": (
+                        "allowed"
+                        if self._apply_acked_member_exchange(
+                            attempt,
+                            recovery=True,
+                        )
+                        else "apply_failed"
                     )
-                    return False
-            elif attempt.status in {
+                }
+            if attempt.status in {
                 "PREPARED",
                 "COMMAND_READY",
                 "RETRY_WAIT",
                 "OPERATOR_REVIEW",
             }:
                 if not attempt.idempotency_key:
-                    try:
-                        coordinator.store.dismiss_without_durable_command(
-                            intent_id, reason
-                        )
-                    except (KeyError, TypeError, ValueError, sqlite3.Error):
-                        messagebox.showerror(
-                            "교체 취소 기록 실패",
-                            "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
-                        )
-                        return False
-                else:
-                    messagebox.showerror(
-                        "교체 취소 불가",
-                        "중앙 제품 교체 완료 여부가 아직 확정되지 않았습니다. "
-                        "네트워크를 확인한 뒤 다시 시도하세요.",
+                    coordinator.store.dismiss_without_durable_command(
+                        intent_id,
+                        reason,
                     )
-                    return False
-        if self._transfer_member_exchange_blocks_local_action("제품 교환 취소"):
+                    return {"status": "allowed"}
+                return {"status": "command_pending"}
+            return {"status": "allowed"}
+
+        def finish(outcome: Mapping[str, Any]) -> None:
+            status = str(outcome.get("status") or "failed")
+            if status == "allowed":
+                self._finish_exchange_cancel_ui(reason)
+            elif status == "apply_failed":
+                messagebox.showerror(
+                    "교체 취소 불가",
+                    "중앙에서 완료된 제품 교체를 현재 트레이에 먼저 복구해야 합니다. 담당자에게 알리세요.",
+                )
+            elif status == "command_pending":
+                messagebox.showerror(
+                    "교체 취소 불가",
+                    "중앙 제품 교체 완료 여부가 아직 확정되지 않았습니다. "
+                    "네트워크를 확인한 뒤 다시 시도하세요.",
+                )
+
+        def fail(exc: BaseException) -> None:
+            print(f"중앙 제품 교체 취소 lane 실패: {exc.__class__.__name__}")
+            messagebox.showerror(
+                "교체 취소 기록 실패",
+                "중앙 명령 전 사전검증 실패를 안전하게 해제하지 못했습니다. 상태를 유지합니다.",
+            )
+
+        owner_provider = getattr(
+            coordinator,
+            "_owner_thread_id_provider",
+            None,
+        )
+        if (
+            callable(owner_provider)
+            and owner_provider() == threading.get_ident()
+            and getattr(self, "_ui_lane", None) is None
+        ):
+            try:
+                outcome = work()
+            except (KeyError, TypeError, ValueError, sqlite3.Error) as exc:
+                fail(exc)
+                return False
+            finish(outcome)
+            return str(outcome.get("status") or "") == "allowed"
+
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
             return False
+        admission = lane.submit(
+            LaneTask(
+                name="transfer-member-cancel",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+            )
+        )
+        if not admission.accepted:
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+            )
+            return False
+        # App close must re-enter after the admitted cancellation has reached
+        # its durable terminal state; an operator cancellation is now owned.
+        return reason != "app_close"
+
+    def _finish_exchange_cancel_ui(self, reason: str) -> bool:
         session = self.current_exchange_session
         has_scans = bool(session.defective_barcodes or session.good_barcodes)
         if has_scans:
@@ -14306,6 +14858,71 @@ class ContainerAudit:
         self._active_transfer_exchange_intent_id = ""
         self._update_action_button_states()
         return True
+
+    def _finish_central_exchange_pending(
+        self,
+        attempt: MemberExchangeAttempt,
+    ) -> None:
+        if hasattr(self, "exchange_complete_button"):
+            self.exchange_complete_button.config(state=tk.NORMAL)
+        title = (
+            "중앙 교체 담당자 확인 필요"
+            if attempt.status == "OPERATOR_REVIEW"
+            else "중앙 교체 응답 대기"
+        )
+        messagebox.showerror(
+            title,
+            (
+                "중앙 교체 결과를 자동으로 확인할 수 없습니다. "
+                "현재 트레이를 유지하고 관리자에게 확인하세요."
+                if attempt.status == "OPERATOR_REVIEW"
+                else "중앙 교체 결과를 확인 중입니다. "
+                "현재 트레이를 유지하고 잠시 후 다시 시도하세요."
+            ),
+        )
+
+    def _finish_central_exchange_failure(
+        self,
+        attempt: Optional[MemberExchangeAttempt],
+    ) -> None:
+        if hasattr(self, "exchange_complete_button"):
+            self.exchange_complete_button.config(state=tk.NORMAL)
+        if attempt is None:
+            title = "중앙 교체 차단"
+            message = (
+                "중앙 교체 준비 정보를 확인하지 못했습니다. "
+                "현재 트레이를 유지하고 관리자에게 문의하세요."
+            )
+        else:
+            title = "교체 반영 실패"
+            message = (
+                "중앙 교체는 완료됐지만 현재 트레이 상태에 반영하지 못했습니다. "
+                "창을 닫지 말고 담당자에게 알리세요."
+            )
+        messagebox.showerror(title, message)
+
+    def _finish_central_exchange_success(self) -> None:
+        session = self.current_exchange_session
+        session.current_step = "completed"
+        messagebox.showinfo(
+            "중앙 교체 완료",
+            f"{len(session.exchange_pairs)}개의 제품을 원자적으로 교체했습니다.\n\n"
+            f"품목: {session.item_name}\n"
+            "교체 제품은 공정 불량 보류 위치로 이동했습니다.",
+        )
+        dialog = getattr(self, "exchange_dialog", None)
+        if dialog is not None:
+            try:
+                dialog.destroy()
+            except tk.TclError:
+                pass
+        self.exchange_dialog = None
+        self.exchange_quantity_spin = None
+        self.current_exchange_session = ProductExchangeSession()
+        self._active_transfer_exchange_mode = False
+        self._active_transfer_exchange_master_label = ""
+        self._active_transfer_exchange_intent_id = ""
+        self._update_action_button_states()
 
     def _complete_exchange(self):
         """제품 교환을 완료합니다."""
@@ -14355,75 +14972,105 @@ class ContainerAudit:
                     "현재 트레이를 유지하고 관리자에게 문의하세요.",
                 )
                 return
-            try:
-                prepared = coordinator.prepare(
-                    master_label=self.current_tray.master_label_code,
-                    master_label_fields=master_fields,
-                    item_id=self.current_tray.item_code,
-                    operator=persistent_operator_name(self.worker_name),
-                    old_barcodes=session.defective_barcodes,
-                    new_barcodes=session.good_barcodes,
-                    operation_lease_id=operation_lease_id,
-                )
-                self._active_transfer_exchange_intent_id = prepared.intent_id
+            prepare_arguments = {
+                "master_label": str(self.current_tray.master_label_code),
+                "master_label_fields": dict(master_fields),
+                "item_id": str(self.current_tray.item_code),
+                "operator": persistent_operator_name(self.worker_name),
+                "old_barcodes": tuple(session.defective_barcodes),
+                "new_barcodes": tuple(session.good_barcodes),
+                "operation_lease_id": operation_lease_id,
+            }
+
+            def work() -> Dict[str, Any]:
+                if self._call_transfer_ui_sync(
+                    self._preflight_context_blocks_mutation
+                ):
+                    return {"status": "hold"}
+                prepared = coordinator.prepare(**prepare_arguments)
                 attempt = coordinator.attempt(prepared.intent_id)
-            except (TransferSealError, TypeError, ValueError) as exc:
+                applied = False
+                if attempt.status == "ACKED":
+                    applied = self._apply_acked_member_exchange(attempt)
+                return {
+                    "status": "attempted",
+                    "intent_id": prepared.intent_id,
+                    "attempt": attempt,
+                    "applied": applied,
+                }
+
+            def finish(outcome: Mapping[str, Any]) -> None:
+                if str(outcome.get("status") or "") == "hold":
+                    if hasattr(self, "exchange_complete_button"):
+                        self.exchange_complete_button.config(state=tk.NORMAL)
+                    return
+                attempt = outcome.get("attempt")
+                self._active_transfer_exchange_intent_id = str(
+                    outcome.get("intent_id") or ""
+                )
+                if not isinstance(attempt, MemberExchangeAttempt):
+                    self._finish_central_exchange_failure(None)
+                    return
+                if attempt.status != "ACKED":
+                    self._finish_central_exchange_pending(attempt)
+                    return
+                if not bool(outcome.get("applied")):
+                    self._finish_central_exchange_failure(attempt)
+                    return
+                self._finish_central_exchange_success()
+
+            def fail(exc: BaseException) -> None:
                 print(
                     "중앙 제품 교체 준비 실패: "
                     f"{exc.__class__.__name__}: {exc}"
                 )
-                self.exchange_complete_button.config(state=tk.NORMAL)
-                messagebox.showerror(
-                    "중앙 교체 차단",
-                    "중앙 교체 준비 정보를 확인하지 못했습니다. "
-                    "현재 트레이를 유지하고 관리자에게 문의하세요.",
-                )
-                return
-            if attempt.status != "ACKED":
-                self.exchange_complete_button.config(state=tk.NORMAL)
-                title = (
-                    "중앙 교체 담당자 확인 필요"
-                    if attempt.status == "OPERATOR_REVIEW"
-                    else "중앙 교체 응답 대기"
-                )
-                messagebox.showerror(
-                    title,
-                    (
-                        "중앙 교체 결과를 자동으로 확인할 수 없습니다. "
-                        "현재 트레이를 유지하고 관리자에게 확인하세요."
-                        if attempt.status == "OPERATOR_REVIEW"
-                        else "중앙 교체 결과를 확인 중입니다. "
-                        "현재 트레이를 유지하고 잠시 후 다시 시도하세요."
-                    ),
-                )
-                return
-            if not self._apply_acked_member_exchange(attempt):
-                self.exchange_complete_button.config(state=tk.NORMAL)
-                messagebox.showerror(
-                    "교체 반영 실패",
-                    "중앙 교체는 완료됐지만 현재 트레이 상태에 반영하지 못했습니다. 창을 닫지 말고 담당자에게 알리세요.",
-                )
-                return
-            session.current_step = "completed"
-            messagebox.showinfo(
-                "중앙 교체 완료",
-                f"{len(session.exchange_pairs)}개의 제품을 원자적으로 교체했습니다.\n\n"
-                f"품목: {session.item_name}\n"
-                f"교체 제품은 공정 불량 보류 위치로 이동했습니다.",
+                self._finish_central_exchange_failure(None)
+
+            owner_provider = getattr(
+                coordinator,
+                "_owner_thread_id_provider",
+                None,
             )
-            dialog = getattr(self, "exchange_dialog", None)
-            if dialog is not None:
+            if (
+                callable(owner_provider)
+                and owner_provider() == threading.get_ident()
+                and getattr(self, "_ui_lane", None) is None
+            ):
                 try:
-                    dialog.destroy()
-                except tk.TclError:
-                    pass
-            self.exchange_dialog = None
-            self.exchange_quantity_spin = None
-            self.current_exchange_session = ProductExchangeSession()
-            self._active_transfer_exchange_mode = False
-            self._active_transfer_exchange_master_label = ""
-            self._active_transfer_exchange_intent_id = ""
-            self._update_action_button_states()
+                    finish(work())
+                except (TransferSealError, TypeError, ValueError) as exc:
+                    fail(exc)
+                return
+
+            lane = self._ui_task_lane()
+            if lane.is_busy():
+                if hasattr(self, "exchange_complete_button"):
+                    self.exchange_complete_button.config(state=tk.NORMAL)
+                self.show_status_message(
+                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    self.COLOR_DANGER,
+                )
+                return
+            admission = lane.submit(
+                LaneTask(
+                    name="transfer-member-central-exchange",
+                    generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                    work=work,
+                    finish=finish,
+                    fail=fail,
+                    shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+                )
+            )
+            if not admission.accepted and hasattr(
+                self,
+                "exchange_complete_button",
+            ):
+                self.exchange_complete_button.config(state=tk.NORMAL)
+            if not admission.accepted:
+                self.show_status_message(
+                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    self.COLOR_DANGER,
+                )
             return
 
         # 로그 기록

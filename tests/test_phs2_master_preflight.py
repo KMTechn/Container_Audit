@@ -27,6 +27,17 @@ from tests.operation_lease_fixtures import signed_transfer_artifact
 from warning_presenter import Notice, NoticeSeverity, WarningPresenter
 
 
+_TransferSealStore = TransferSealStore
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
+
+
 ITEM = "AAA2270730100"
 INPUT_TAG = "ITAG-COMPACT-001"
 LABEL_ID = "LBL-COMPACT-001"

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import threading
 import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -139,6 +140,32 @@ class TransferSealError(RuntimeError):
         self.retryable = bool(retryable)
         self.committed = committed
         self.details = dict(details or {})
+
+
+class TransferCoordinatorOwnerError(TransferSealError):
+    """Fail closed when a mutable transfer coordinator has no declared owner."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TRANSFER_COORDINATOR_OWNER_VIOLATION",
+            "transfer coordinator mutation requires its declared owner thread",
+            retryable=False,
+        )
+
+
+def _assert_transfer_coordinator_owner(
+    owner_thread_id_provider: Callable[[], int | None] | None,
+) -> None:
+    try:
+        owner_thread_id = (
+            owner_thread_id_provider()
+            if callable(owner_thread_id_provider)
+            else None
+        )
+    except Exception as exc:
+        raise TransferCoordinatorOwnerError() from exc
+    if owner_thread_id is None or threading.get_ident() != owner_thread_id:
+        raise TransferCoordinatorOwnerError()
 
 
 @dataclass(frozen=True)
@@ -2342,10 +2369,32 @@ class TransferSealStore:
     """Atomic local completion ledger and replayable SQLite transfer outbox."""
 
     @writer_sink("transfer_seal")
-    def __init__(self, db_path: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        db_path: str | os.PathLike[str],
+        *,
+        owner_thread_id_provider: Callable[[], int | None] | None = None,
+    ) -> None:
         self.db_path = str(db_path)
+        # Schema bootstrap is constructor-owned; every public write after
+        # construction requires an explicit owner, even without a coordinator.
+        self._coordinator_owner_bound = True
+        self._owner_thread_id_provider = owner_thread_id_provider
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+
+    def bind_owner_thread_id_provider(
+        self,
+        owner_thread_id_provider: Callable[[], int | None] | None,
+    ) -> None:
+        self._owner_thread_id_provider = owner_thread_id_provider
+        self._coordinator_owner_bound = True
+
+    def _assert_coordinator_owner(self) -> None:
+        if self._coordinator_owner_bound:
+            _assert_transfer_coordinator_owner(
+                self._owner_thread_id_provider
+            )
 
     @contextmanager
     def _connect(self):
@@ -2771,6 +2820,7 @@ class TransferSealStore:
         operation_lease_id: str = "",
         require_completion_checkpoint: bool = False,
     ) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         preview = self.preview_intent(
             master_label=master_label,
             source_identity=source_identity,
@@ -2893,6 +2943,7 @@ class TransferSealStore:
 
     @writer_sink("transfer_seal")
     def bind_command(self, intent_id: str, context: Mapping[str, Any]) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         command_id = _normalize_identifier(context.get("idempotency_key"), "idempotency_key")
         command_json = _canonical_json(dict(context))
         command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
@@ -2935,6 +2986,7 @@ class TransferSealStore:
     def confirm_completion_checkpoint(self, intent_id: str) -> sqlite3.Row:
         """Make one GUI completion intent eligible for command/HTTP dispatch."""
 
+        self._assert_coordinator_owner()
         normalized_intent = _normalize_identifier(intent_id, "intent_id")
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -3064,6 +3116,7 @@ class TransferSealStore:
 
     @writer_sink("transfer_seal")
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         operator_review_codes = {
             "AMBIGUOUS_BUNDLE",
             "SOURCE_IDENTITY_MISMATCH",
@@ -3124,6 +3177,7 @@ class TransferSealStore:
 
     @writer_sink("transfer_seal")
     def record_receipt(self, intent_id: str, receipt: Mapping[str, Any], seal_qr_payload: str) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -3203,6 +3257,7 @@ class TransferSealStore:
         *,
         projection_log_file_path: str,
     ) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         normalized_case_id = _normalize_identifier(
             review_case_id,
             "review_case_id",
@@ -3553,6 +3608,7 @@ class TransferSealStore:
 
     @writer_sink("transfer_seal")
     def record_exchange_block(self, *, reason_code: str, details: Mapping[str, Any]) -> str:
+        self._assert_coordinator_owner()
         created_at = _utc_now()
         material = {
             "reason_code": _normalize_identifier(reason_code, "reason_code"),
@@ -3578,10 +3634,19 @@ class TransferSealCoordinator:
         store: TransferSealStore,
         client: LogisticsTransferClient | None,
         operation_lease_manager: OperationLeaseManager | None = None,
+        *,
+        owner_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        self._owner_thread_id_provider = owner_thread_id_provider
+        self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
+
+    def _assert_owner(self) -> None:
+        _assert_transfer_coordinator_owner(
+            getattr(self, "_owner_thread_id_provider", None)
+        )
 
     def _verified_operation_lease(
         self,
@@ -3705,6 +3770,7 @@ class TransferSealCoordinator:
         operation_lease_id: str = "",
         require_completion_checkpoint: bool = False,
     ) -> SealAttempt:
+        self._assert_owner()
         scans = list(scanned_barcodes)
         identity = source_identity_from_label(master_label_fields)
         if not identity["item_id"]:
@@ -3760,6 +3826,7 @@ class TransferSealCoordinator:
         return self._attempt_from_row(row)
 
     def confirm_completion_checkpoint(self, intent_id: str) -> SealAttempt:
+        self._assert_owner()
         return self._attempt_from_row(
             self.store.confirm_completion_checkpoint(intent_id)
         )
@@ -4879,6 +4946,7 @@ class TransferSealCoordinator:
         return data
 
     def attempt(self, intent_id: str) -> SealAttempt:
+        self._assert_owner()
         row = self.store.load(intent_id)
         if not bool(row["completion_checkpoint_confirmed"]):
             raise TransferSealError(
@@ -4961,6 +5029,7 @@ class TransferSealCoordinator:
         *,
         can_attempt: Callable[[], bool] | None = None,
     ) -> list[SealAttempt]:
+        self._assert_owner()
         results: list[SealAttempt] = []
         for intent_id in self.store.pending_ids():
             if can_attempt is not None and not bool(can_attempt()):
@@ -4970,6 +5039,8 @@ class TransferSealCoordinator:
 
     def drain_pending_through(self, intent_id: str) -> list[SealAttempt]:
         """Retry pending intents in FIFO order through one newly linked intent."""
+
+        self._assert_owner()
 
         target = self.store.load(intent_id)
         if target["status"] not in PENDING_STATUSES:
@@ -5190,6 +5261,7 @@ def transfer_seal_coordinator_from_env(
     session: Any = None,
     probe_required: bool = True,
     profile_decryptor: Any = None,
+    owner_thread_id_provider: Callable[[], int | None] | None = None,
 ) -> TransferSealCoordinator:
     store = TransferSealStore(db_path)
     client = logistics_transfer_client_from_env(
@@ -5203,7 +5275,12 @@ def transfer_seal_coordinator_from_env(
             Path(db_path).parent / "operation_lease_keyring.json"
         ),
     )
-    return TransferSealCoordinator(store, client, operation_lease_manager)
+    return TransferSealCoordinator(
+        store,
+        client,
+        operation_lease_manager,
+        owner_thread_id_provider=owner_thread_id_provider,
+    )
 
 
 __all__ = [
@@ -5211,6 +5288,7 @@ __all__ = [
     "SealAttempt",
     "TransferSourcePreflight",
     "TransferSealCoordinator",
+    "TransferCoordinatorOwnerError",
     "TransferSealError",
     "TransferSealStore",
     "membership_hash",

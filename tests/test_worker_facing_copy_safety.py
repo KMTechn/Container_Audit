@@ -1,5 +1,6 @@
 import ast
 import re
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -84,8 +85,10 @@ def test_exact_exchange_policy_dialogs_use_worker_language_only(monkeypatch):
     app.worker_name = ""
     app.log_file_path = ""
     app._exact_transfer_exchange_blocked = lambda: True
+    owner_thread_id = threading.get_ident()
     app.transfer_seal_coordinator = SimpleNamespace(
-        store=SimpleNamespace(record_exchange_block=lambda **_kwargs: "support-id")
+        store=SimpleNamespace(record_exchange_block=lambda **_kwargs: "support-id"),
+        _owner_thread_id_provider=lambda: owner_thread_id,
     )
 
     assert app._block_unsafe_exact_exchange() is True

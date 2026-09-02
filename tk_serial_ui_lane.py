@@ -251,6 +251,12 @@ class TkSerialUiLane:
         if active is None:
             self._complete_close()
 
+    def mark_broken(self, exc: BaseException) -> None:
+        """Enter the fail-closed terminal state from the Tk owner."""
+
+        self._assert_owner()
+        self._break_lane(exc)
+
     def _worker_main(self) -> None:
         self._worker_thread_id = threading.get_ident()
         self._worker_started.set()

@@ -20,11 +20,35 @@ from storage_utils import atomic_write_json
 from transfer_seal import (
     LogisticsTransferClient,
     SealAttempt,
+    TransferCoordinatorOwnerError,
     TransferSealCoordinator,
     TransferSealError,
     TransferSealStore,
 )
-from transfer_member_exchange import TransferMemberExchangeCoordinator
+from transfer_member_exchange import (
+    TransferMemberExchangeCoordinator,
+    TransferMemberExchangeStore,
+)
+
+
+_TransferSealStore = TransferSealStore
+_TransferMemberExchangeStore = TransferMemberExchangeStore
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
+
+
+def TransferMemberExchangeStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeStore(*args, **kwargs)
 
 
 def _saved_tray_state():
@@ -370,6 +394,7 @@ def _startup_transfer_recovery_app(
     seal_store = _PendingRecoveryStore(seal_intent_ids)
     seal_coordinator = TransferSealCoordinator.__new__(TransferSealCoordinator)
     seal_coordinator.store = seal_store
+    seal_coordinator._owner_thread_id_provider = lambda: lane.worker_thread_id
 
     def seal_attempt(intent_id):
         if block_seal_attempt is not None:
@@ -387,6 +412,7 @@ def _startup_transfer_recovery_app(
         TransferMemberExchangeCoordinator
     )
     member_coordinator.store = member_store
+    member_coordinator._owner_thread_id_provider = lambda: lane.worker_thread_id
 
     def member_attempt(intent_id):
         calls["member"].append((intent_id, threading.get_ident()))
@@ -437,6 +463,242 @@ def _startup_transfer_recovery_app(
     return app, root, lane, hold_store, seal_store, member_store, calls
 
 
+def _exercise_actual_coordinator_lane_ownership(
+    tmp_path,
+    monkeypatch,
+    request,
+):
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    _module, PreflightScanHoldStore = _hold_symbols()
+    denied_seal_store = _TransferSealStore(tmp_path / "denied-seal.db")
+    with pytest.raises(TransferCoordinatorOwnerError):
+        denied_seal_store.prepare(
+            master_label="MASTER",
+            source_identity={"source_bundle_id": "PHS-DENIED"},
+            item_id="AAA2270730100",
+            operator="tester",
+            scanned_barcodes=("AAA2270730100-DENIED",),
+        )
+    denied_member_store = _TransferMemberExchangeStore(
+        tmp_path / "denied-member.db"
+    )
+    denied_member = TransferMemberExchangeCoordinator(
+        denied_member_store,
+        None,
+    )
+    with pytest.raises(TransferCoordinatorOwnerError):
+        denied_member.attempt("missing-intent")
+
+    root = _cross_thread_fake_root()
+    root.tk = object()
+    root.winfo_exists = lambda: True
+    lane = TkSerialUiLane(root, poll_ms=1)
+
+    def close_lane() -> None:
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED", timeout=12.0)
+
+    request.addfinalizer(close_lane)
+    seal_store = TransferSealStore(tmp_path / "actual-transfer.db")
+    seal_row = seal_store.prepare(
+        master_label="PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1",
+        source_identity={
+            "source_bundle_id": "PHS-ACTUAL",
+            "item_id": "AAA2270730100",
+        },
+        item_id="AAA2270730100",
+        operator="tester",
+        scanned_barcodes=("AAA2270730100-OLD",),
+    )
+    member_store = TransferMemberExchangeStore(seal_store.db_path)
+    member_rows = [
+        member_store.prepare(
+            master_label="PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1",
+            source_identity={
+                "source_bundle_id": "PHS-ACTUAL",
+                "item_id": "AAA2270730100",
+            },
+            item_id="AAA2270730100",
+            operator="tester",
+            old_barcodes=(f"AAA2270730100-OLD-{index}",),
+            new_barcodes=(f"AAA2270730100-NEW-{index}",),
+        )
+        for index in (1, 2)
+    ]
+    seal = TransferSealCoordinator(
+        seal_store,
+        None,
+        owner_thread_id_provider=lambda: lane.worker_thread_id,
+    )
+    member = TransferMemberExchangeCoordinator(
+        member_store,
+        None,
+        owner_thread_id_provider=lambda: lane.worker_thread_id,
+    )
+    hold_store = PreflightScanHoldStore(
+        tmp_path / "actual-hold.json",
+        capacity=4,
+    )
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = lane
+    app.transfer_seal_coordinator = seal
+    app.transfer_member_exchange_coordinator = member
+    app.save_folder = str(tmp_path)
+    app.PREFLIGHT_SCAN_HOLD_FILE = "actual-hold.json"
+    app.TRAY_SIZE = 4
+    app._preflight_hold_store_instance = hold_store
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._ui_close_requested = False
+    app._scan_callback_epoch = 1
+    app._startup_transfer_recovery_pending = True
+    app._startup_transfer_recovery_inflight = False
+    app._startup_transfer_recovery_waiting_for_hold = False
+    app._startup_transfer_recovery_task_handle = None
+    app._member_exchange_reconcile_pending = False
+    app._member_exchange_reconcile_inflight = False
+    app._transfer_post_review_refresh_pending = False
+    app._transfer_post_review_refresh_inflight = False
+    app._post_review_refresh_required = False
+    app._presented_post_review_case_ids = set()
+    app.worker_name = "tester"
+    app.log_file_path = ""
+    app.current_tray = TraySession(
+        master_label_code=(
+            "PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1"
+        ),
+        active_label_qr_payload=(
+            "PHS=1|BND=PHS-ACTUAL|CLC=AAA2270730100|QT=1"
+        ),
+        item_code="AAA2270730100",
+        item_name="fixture",
+        item_spec="fixture",
+        scanned_barcodes=["AAA2270730100-OLD-1"],
+        operation_lease_id="operation-lease-fixture",
+    )
+    app.current_exchange_session = container_module.ProductExchangeSession(
+        item_code="AAA2270730100",
+        item_name="fixture",
+        item_spec="fixture",
+        target_quantity=1,
+        current_step="scan_good",
+        defective_barcodes=["AAA2270730100-OLD-1"],
+        good_barcodes=["AAA2270730100-NEW-1"],
+    )
+    app._active_transfer_exchange_mode = True
+    app._active_transfer_exchange_master_label = app.current_tray.master_label_code
+    app._active_transfer_exchange_intent_id = str(member_rows[0]["intent_id"])
+    app.exchange_complete_button = SimpleNamespace(config=lambda **_kwargs: None)
+    app.COLOR_DANGER = "danger"
+    app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+    app.statuses = []
+    app._operator_review_blocks_mutation = lambda: False
+    app._show_exchange_dialog_after_coordinator_admission = (
+        lambda: app.idle_paths.append("dialog")
+    )
+    app._finish_exchange_cancel_ui = (
+        lambda _reason: app.idle_paths.append("cancel") or True
+    )
+    app._present_transfer_post_review_required_notice = lambda *_args: True
+    app.idle_paths = []
+    monkeypatch.setattr(container_module.messagebox, "showwarning", lambda *_a, **_k: None)
+    monkeypatch.setattr(container_module.messagebox, "showerror", lambda *_a, **_k: None)
+    monkeypatch.setattr(container_module.messagebox, "showinfo", lambda *_a, **_k: None)
+
+    entered_write = threading.Event()
+    original_record_error = seal_store.record_error
+
+    def observing_record_error(*args, **kwargs):
+        entered_write.set()
+        return original_record_error(*args, **kwargs)
+
+    seal_store.record_error = observing_record_error
+    lock = sqlite3.connect(seal_store.db_path, timeout=1.0)
+    lock_open = True
+
+    def release_lock() -> None:
+        nonlocal lock_open
+        if not lock_open:
+            return
+        lock_open = False
+        lock.rollback()
+        lock.close()
+
+    request.addfinalizer(release_lock)
+    lock.execute("BEGIN IMMEDIATE")
+    try:
+        assert app._schedule_startup_transfer_recovery() is True
+        assert entered_write.wait(timeout=2.0)
+        assert lane.is_busy() is True
+        with pytest.raises(TransferCoordinatorOwnerError):
+            seal.attempt(str(seal_row["intent_id"]))
+        with pytest.raises(TransferCoordinatorOwnerError):
+            member.attempt(str(member_rows[0]["intent_id"]))
+
+        app._refresh_transfer_post_review_state()
+        assert app._schedule_exchange_dialog_admission() is False
+        assert app._reconcile_pending_local_member_exchanges() is False
+        assert app._schedule_exchange_cancel(
+            str(member_rows[0]["intent_id"]),
+            "operator_cancel",
+        ) is False
+        app._complete_exchange()
+        assert app._block_unsafe_exact_exchange() is True
+        assert app._block_unsafe_exact_master_label_replacement() is True
+        with seal_store._connect() as conn:
+            assert conn.execute(
+                "SELECT COUNT(*) FROM transfer_exchange_block_receipts"
+            ).fetchone()[0] == 0
+        assert lane._next_op_id == 1
+        assert app._transfer_post_review_refresh_pending is True
+        assert app._member_exchange_reconcile_pending is True
+    finally:
+        release_lock()
+
+    app._startup_transfer_recovery_task_handle.join(timeout=12.0)
+    root.run_until(
+        lambda: lane._next_op_id == 3 and not lane.is_busy(),
+        timeout=12.0,
+    )
+    assert app._member_exchange_reconcile_pending is False
+    assert app._transfer_post_review_refresh_pending is False
+
+    # Idle regression: each production admission is accepted and its actual
+    # coordinator/store operation reaches a terminal result on the same lane.
+    assert app._refresh_transfer_post_review_state() is True
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    assert app._schedule_exchange_cancel(
+        str(member_rows[0]["intent_id"]),
+        "operator_cancel",
+    ) is True
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    assert app._schedule_exchange_dialog_admission() is True
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    assert app.idle_paths == ["cancel", "dialog"]
+    assert app._reconcile_pending_local_member_exchanges() is True
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    app._complete_exchange()
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    assert app._block_unsafe_exact_exchange() is True
+    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
+    with seal_store._connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM transfer_exchange_block_receipts"
+        ).fetchone()[0] == 1
+    assert lane._next_op_id == 9
+    assert threading.get_ident() != lane.worker_thread_id
+
+    if lane.state != "CLOSED":
+        lane.close_idle()
+        root.run_until(lambda: lane.state == "CLOSED")
+
+
 def test_startup_transfer_recovery_existing_hold_preserves_pending_on_real_lane(
     tmp_path,
 ):
@@ -469,7 +731,11 @@ def test_startup_transfer_recovery_existing_hold_preserves_pending_on_real_lane(
             root.run_until(lambda: lane.state == "CLOSED")
 
 
-def test_startup_transfer_recovery_runs_only_on_shared_lane_worker(tmp_path):
+def test_startup_transfer_recovery_runs_only_on_shared_lane_worker(
+    tmp_path,
+    monkeypatch,
+    request,
+):
     app, root, lane, _hold_store, seal_store, member_store, calls = (
         _startup_transfer_recovery_app(
             tmp_path,
@@ -497,6 +763,12 @@ def test_startup_transfer_recovery_runs_only_on_shared_lane_worker(tmp_path):
         if lane.state != "CLOSED":
             lane.close_idle()
             root.run_until(lambda: lane.state == "CLOSED")
+
+    _exercise_actual_coordinator_lane_ownership(
+        tmp_path / "actual-owner",
+        monkeypatch,
+        request,
+    )
 
 
 def test_startup_transfer_recovery_rechecks_hold_before_each_pending_attempt(
@@ -616,6 +888,7 @@ def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_p
 
 def test_live_event_writer_retries_close_without_destroy(monkeypatch):
     from tests.test_tk_serial_ui_lane import FakeTkRoot
+    from tk_serial_ui_lane import TkSerialUiLane
 
     class LiveWriter:
         def __init__(self):
@@ -628,30 +901,73 @@ def test_live_event_writer_retries_close_without_destroy(monkeypatch):
         def join(self, timeout=None):
             self.join_calls.append(timeout)
 
-    root = FakeTkRoot()
-    writer = LiveWriter()
-    queued = []
-    app = ContainerAudit.__new__(ContainerAudit)
-    app.root = root
-    app._ui_lane = None
-    app._event_log_close_requested = False
-    app.log_queue = SimpleNamespace(put=queued.append)
-    app.log_thread = writer
-    app.save_settings = lambda: None
-    app._cancel_all_jobs = lambda: None
     monkeypatch.setattr(container_module, "stop_all_sounds", lambda: None)
+    monkeypatch.setattr(
+        container_module.messagebox,
+        "askokcancel",
+        lambda *_args, **_kwargs: True,
+    )
 
+    def close_app(writer):
+        root = FakeTkRoot()
+        lane = TkSerialUiLane(root, poll_ms=1)
+        queued = []
+        statuses = []
+        app = ContainerAudit.__new__(ContainerAudit)
+        app.root = root
+        app._ui_lane = lane
+        app._event_log_close_requested = False
+        app.log_queue = SimpleNamespace(put=queued.append)
+        app.log_thread = writer
+        app._ui_close_requested = True
+        app._ui_close_lane_drained = True
+        app._preflight_hold_writer_instance = None
+        app.master_label_replace_state = None
+        app.current_exchange_session = SimpleNamespace(
+            defective_barcodes=[],
+            good_barcodes=[],
+        )
+        app.worker_name = ""
+        app.paned_window = SimpleNamespace(winfo_exists=lambda: False)
+        app._preserve_preflight_hold_for_close = lambda: (True, False)
+        app.save_settings = lambda: None
+        app._cancel_all_jobs = lambda: None
+        app.show_status_message = lambda message, *_a, **_k: statuses.append(
+            message
+        )
+        app.COLOR_DANGER = "danger"
+        return app, root, lane, queued, statuses
+
+    live_writer = LiveWriter()
+    app, root, lane, queued, statuses = close_app(live_writer)
     app._finalize_application_close()
+    assert root.run_one() is True
+    assert root.run_one() is True
 
     assert root.destroyed is False
-    assert writer.join_calls == [1.0]
+    assert live_writer.join_calls == [1.0, 1.0, 1.0]
     assert queued == [None]
-    assert len(root.jobs) == 1
+    assert not root.jobs
+    assert lane.state == "BROKEN"
+    assert statuses[-1].startswith("종료 정리 지연")
+    app.on_closing()
+    assert root.run_one() is True
+    assert root.run_one() is True
+    assert live_writer.join_calls == [1.0] * 6
+    assert lane.state == "BROKEN"
+    assert root.destroyed is False
+    lane.close_idle()
+    assert lane.state == "CLOSED"
 
-    writer.alive = False
+    retry_writer = LiveWriter()
+    app, root, lane, queued, _statuses = close_app(retry_writer)
+    app._finalize_application_close()
+    retry_writer.alive = False
     assert root.run_one() is True
     assert root.destroyed is True
+    assert retry_writer.join_calls == [1.0]
     assert queued == [None]
+    assert lane.state == "CLOSED"
 
 
 def _preflight_hold_ownership_app(tmp_path, monkeypatch):

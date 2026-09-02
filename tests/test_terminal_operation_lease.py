@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -31,6 +32,26 @@ from transfer_seal import (
     transfer_operation_lease_binding,
     validate_compact_phs2_preflight,
 )
+
+
+_TransferSealStore = TransferSealStore
+_TransferSealCoordinator = TransferSealCoordinator
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
+
+
+def TransferSealCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealCoordinator(*args, **kwargs)
 from tray_state import (
     tray_session_from_state,
     tray_session_to_state,

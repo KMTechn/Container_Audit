@@ -31,7 +31,11 @@ from Container_Audit import ContainerAudit, ProductExchangeSession, TraySession,
 
 
 def _headless_app():
-    return ContainerAudit.__new__(ContainerAudit)
+    app = ContainerAudit.__new__(ContainerAudit)
+    app._explicit_transfer_coordinator_owner_thread_id_provider = (
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id
+    )
+    return app
 
 
 def _append_event_log_worker(args):

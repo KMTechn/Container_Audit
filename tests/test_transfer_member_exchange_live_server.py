@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import threading
 from urllib.parse import urlsplit
 
 import pytest
@@ -25,6 +26,26 @@ from transfer_member_exchange import (  # noqa: E402
     TransferMemberExchangeStore,
 )
 from transfer_seal import LogisticsTransferClient  # noqa: E402
+
+
+_TransferMemberExchangeStore = TransferMemberExchangeStore
+_TransferMemberExchangeCoordinator = TransferMemberExchangeCoordinator
+
+
+def TransferMemberExchangeStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeStore(*args, **kwargs)
+
+
+def TransferMemberExchangeCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeCoordinator(*args, **kwargs)
 
 
 class _FlaskResponse:

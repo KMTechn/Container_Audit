@@ -2,6 +2,7 @@ import csv
 import hashlib
 import json
 import sqlite3
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -19,6 +20,26 @@ from transfer_seal import (
     validate_compact_phs2_fields,
     validate_compact_phs2_preflight,
 )
+
+
+_TransferSealStore = TransferSealStore
+_TransferSealCoordinator = TransferSealCoordinator
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
+
+
+def TransferSealCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealCoordinator(*args, **kwargs)
 
 
 SCOPE = "PLANT-01"

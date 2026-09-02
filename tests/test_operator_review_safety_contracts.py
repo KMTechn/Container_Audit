@@ -1,4 +1,5 @@
 import datetime
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,26 @@ from warning_presenter import (
     CompletionOutcomeSnapshot,
     WarningPresenter,
 )
+
+
+_TransferSealStore = TransferSealStore
+_TransferSealCoordinator = TransferSealCoordinator
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
+
+
+def TransferSealCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealCoordinator(*args, **kwargs)
 
 
 ITEM_CODE = "AAA2270730100"

@@ -1,6 +1,7 @@
 import datetime
 from pathlib import Path
 import sqlite3
+import threading
 
 import pytest
 
@@ -449,6 +450,10 @@ def test_restart_review_refresh_surfaces_only_worker_safe_blocking_guidance():
     app.warning_presenter = WarningPresenter()
     app._post_review_refresh_required = True
     app._presented_post_review_case_ids = set()
+    owner_thread_id = threading.get_ident()
+    app._explicit_transfer_coordinator_owner_thread_id_provider = (
+        lambda: owner_thread_id
+    )
     app._drain_transfer_post_review_projections = lambda: 1
     app._transfer_seal_runtime = lambda: type(
         "Coordinator",

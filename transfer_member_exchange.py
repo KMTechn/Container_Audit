@@ -36,6 +36,7 @@ from transfer_seal import (
     CONTRACT_VERSION,
     LogisticsTransferClient,
     TransferSealError,
+    _assert_transfer_coordinator_owner,
     membership_hash,
     normalize_barcode,
     source_identity_from_label,
@@ -274,10 +275,30 @@ class TransferMemberExchangeStore:
     """SQLite outbox for a central member exchange and its local application."""
 
     @writer_sink("transfer_member_exchange")
-    def __init__(self, db_path: str | os.PathLike[str]) -> None:
+    def __init__(
+        self,
+        db_path: str | os.PathLike[str],
+        *,
+        owner_thread_id_provider: Callable[[], int | None] | None = None,
+    ) -> None:
         self.db_path = str(db_path)
+        self._coordinator_owner_bound = True
+        self._owner_thread_id_provider = owner_thread_id_provider
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+
+    def bind_owner_thread_id_provider(
+        self,
+        owner_thread_id_provider: Callable[[], int | None] | None,
+    ) -> None:
+        self._owner_thread_id_provider = owner_thread_id_provider
+        self._coordinator_owner_bound = True
+
+    def _assert_coordinator_owner(self) -> None:
+        if self._coordinator_owner_bound:
+            _assert_transfer_coordinator_owner(
+                self._owner_thread_id_provider
+            )
 
     @contextmanager
     def _connect(self):
@@ -395,6 +416,7 @@ class TransferMemberExchangeStore:
         new_barcodes: Iterable[str],
         predecessor_lease_evidence: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         old_values = tuple(normalize_barcode(value) for value in old_barcodes)
         new_values = tuple(normalize_barcode(value) for value in new_barcodes)
         if (
@@ -572,6 +594,7 @@ class TransferMemberExchangeStore:
 
     @writer_sink("transfer_member_exchange")
     def bind_command(self, intent_id: str, command: Mapping[str, Any]) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         command_id = _identifier(command.get("idempotency_key"), "idempotency_key")
         command_json = _canonical_json(dict(command))
         command_hash = hashlib.sha256(command_json.encode("utf-8")).hexdigest()
@@ -622,6 +645,7 @@ class TransferMemberExchangeStore:
 
     @writer_sink("transfer_member_exchange")
     def record_error(self, intent_id: str, error: TransferSealError) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         operator_review_codes = {
             "CAPABILITY_UNAVAILABLE",
             "AUTHORITY_PROFILE_MISMATCH",
@@ -686,6 +710,7 @@ class TransferMemberExchangeStore:
 
     @writer_sink("transfer_member_exchange")
     def record_receipt(self, intent_id: str, receipt: Mapping[str, Any]) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -707,6 +732,7 @@ class TransferMemberExchangeStore:
     def mark_local_applied(
         self, intent_id: str, evidence: Mapping[str, Any]
     ) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         encoded = _canonical_json(dict(evidence or {}))
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -738,6 +764,7 @@ class TransferMemberExchangeStore:
 
     @writer_sink("transfer_member_exchange")
     def mark_local_review(self, intent_id: str, reason: str) -> sqlite3.Row:
+        self._assert_coordinator_owner()
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             conn.execute(
@@ -780,6 +807,7 @@ class TransferMemberExchangeStore:
     ) -> sqlite3.Row:
         """Dismiss a resolver/preflight failure that could not have reached POST."""
 
+        self._assert_coordinator_owner()
         dismissal_reason = str(reason or "").strip()
         if not dismissal_reason:
             raise ValueError("dismissal reason is required")
@@ -859,10 +887,19 @@ class TransferMemberExchangeCoordinator:
         store: TransferMemberExchangeStore,
         client: LogisticsTransferClient | None,
         operation_lease_manager: OperationLeaseManager | None = None,
+        *,
+        owner_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        self._owner_thread_id_provider = owner_thread_id_provider
+        self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
+
+    def _assert_owner(self) -> None:
+        _assert_transfer_coordinator_owner(
+            getattr(self, "_owner_thread_id_provider", None)
+        )
 
     def prepare(
         self,
@@ -875,6 +912,7 @@ class TransferMemberExchangeCoordinator:
         new_barcodes: Iterable[str],
         operation_lease_id: str = "",
     ) -> MemberExchangeAttempt:
+        self._assert_owner()
         predecessor_evidence = None
         normalized_lease_id = str(operation_lease_id or "").strip()
         if normalized_lease_id:
@@ -2144,6 +2182,7 @@ class TransferMemberExchangeCoordinator:
     def ensure_local_rotation(self, intent_id: str) -> str:
         """Persist verified L1 consumption and L2 before tray membership changes."""
 
+        self._assert_owner()
         row = self.store.load(intent_id)
         if row["status"] != "ACKED" or not row["receipt_json"]:
             raise TransferSealError(
@@ -2177,6 +2216,7 @@ class TransferMemberExchangeCoordinator:
         return str(normalized["lease_id"])
 
     def attempt(self, intent_id: str) -> MemberExchangeAttempt:
+        self._assert_owner()
         row = self.store.load(intent_id)
         if self.store.has_dismissed_command_fence(intent_id):
             return self._attempt(row)
@@ -2261,6 +2301,7 @@ class TransferMemberExchangeCoordinator:
         *,
         can_attempt: Callable[[], bool] | None = None,
     ) -> list[MemberExchangeAttempt]:
+        self._assert_owner()
         results: list[MemberExchangeAttempt] = []
         for intent_id in self.store.pending_ids():
             if can_attempt is not None and not bool(can_attempt()):

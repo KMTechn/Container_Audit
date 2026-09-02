@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -16,6 +17,26 @@ from transfer_member_exchange import (
     _empty_membership_hash,
 )
 from transfer_seal import LogisticsTransferClient, TransferSealError, membership_hash
+
+
+_TransferMemberExchangeStore = TransferMemberExchangeStore
+_TransferMemberExchangeCoordinator = TransferMemberExchangeCoordinator
+
+
+def TransferMemberExchangeStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeStore(*args, **kwargs)
+
+
+def TransferMemberExchangeCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeCoordinator(*args, **kwargs)
 
 
 SCOPE = "scope-exchange"

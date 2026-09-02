@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from copy import deepcopy
 
 import pytest
@@ -44,6 +45,26 @@ from transfer_seal import (
     transfer_operation_lease_binding,
     validate_compact_phs2_preflight,
 )
+
+
+_TransferMemberExchangeStore = TransferMemberExchangeStore
+_TransferMemberExchangeCoordinator = TransferMemberExchangeCoordinator
+
+
+def TransferMemberExchangeStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeStore(*args, **kwargs)
+
+
+def TransferMemberExchangeCoordinator(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferMemberExchangeCoordinator(*args, **kwargs)
 
 
 OLD_UNIT = "unit-001"

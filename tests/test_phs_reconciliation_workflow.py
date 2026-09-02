@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import queue
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +24,17 @@ from phs_label_workflow import (
 )
 from phs_reconciliation_workflow import PHSReconciliationExchangeCoordinator
 from transfer_seal import LogisticsTransferClient, TransferSealStore
+
+
+_TransferSealStore = TransferSealStore
+
+
+def TransferSealStore(*args, **kwargs):
+    kwargs.setdefault(
+        "owner_thread_id_provider",
+        lambda owner_thread_id=threading.get_ident(): owner_thread_id,
+    )
+    return _TransferSealStore(*args, **kwargs)
 
 
 SCOPE = "scope-transfer-reconciliation"
