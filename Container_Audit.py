@@ -1449,7 +1449,7 @@ class ContainerAudit:
         if lane is None or getattr(lane, "state", "") == "CLOSED":
             lane = TkSerialUiLane(
                 self.root,
-                poll_ms=15,
+                poll_ms=15, generation_provider=lambda: getattr(self, "_scan_callback_epoch", 0),
                 on_runner_fault=self._handle_ui_lane_fault,
             )
             self._ui_lane = lane
@@ -8420,7 +8420,7 @@ class ContainerAudit:
         admission = lane.submit(
             LaneTask(
                 name="phs2-master-preflight",
-                generation=token,
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
                 work=worker,
                 finish=finish,
                 fail=fail,

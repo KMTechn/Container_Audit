@@ -260,6 +260,55 @@ def test_fifo_ui_call_before_final_result():
     _close(root, lane)
 
 
+def test_stale_generation_rejects_sync_checkpoint_and_releases_waiter():
+    module, LaneTask, TkSerialUiLane = _symbols()
+    root = FakeTkRoot()
+    generation = {"value": 1}
+    lane = TkSerialUiLane(
+        root,
+        poll_ms=1,
+        generation_provider=lambda: generation["value"],
+    )
+    started = threading.Event()
+    release = threading.Event()
+    checkpoint_calls = []
+    worker_failures = []
+    finished = []
+    failed = []
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2.0)
+        try:
+            return lane.call_ui_sync(lambda: checkpoint_calls.append("called"))
+        except BaseException as exc:
+            worker_failures.append(exc)
+            raise
+
+    admission = lane.submit(
+        LaneTask("stale-checkpoint", 1, work, finished.append, failed.append)
+    )
+    assert admission.accepted is True
+    assert admission.handle is not None
+    assert started.wait(timeout=1.0)
+
+    generation["value"] = 2
+    release.set()
+    root.run_until(lambda: not lane.is_busy())
+
+    assert checkpoint_calls == []
+    assert admission.handle.is_alive() is False
+    assert len(worker_failures) == 1
+    assert isinstance(worker_failures[0], module.StaleUiCheckpointError)
+    assert worker_failures[0].code == "UI_LANE_STALE_CHECKPOINT"
+    assert worker_failures[0].task_generation == 1
+    assert worker_failures[0].current_generation == 2
+    assert admission.handle.stale_generation_error is worker_failures[0]
+    assert finished == []
+    assert failed == []
+    _close(root, lane)
+
+
 def test_on_idle_barrier_order():
     _module, LaneTask, TkSerialUiLane = _symbols()
     root = FakeTkRoot()
@@ -291,24 +340,58 @@ def test_on_idle_barrier_order():
     _close(root, lane)
 
 
-def test_stale_generation_skips_render_not_settle():
-    _module, LaneTask, TkSerialUiLane = _symbols()
+@pytest.mark.parametrize("terminal_path", ["success", "failure"])
+def test_stale_terminal_generation_skips_callbacks_and_domain_transition(
+    terminal_path,
+):
+    module, LaneTask, TkSerialUiLane = _symbols()
     root = FakeTkRoot()
-    lane = TkSerialUiLane(root, poll_ms=1)
-    generation = {"value": 2}
-    settled = []
-    rendered = []
+    generation = {"value": 1}
+    lane = TkSerialUiLane(
+        root,
+        poll_ms=1,
+        generation_provider=lambda: generation["value"],
+    )
+    started = threading.Event()
+    release = threading.Event()
+    finished = []
+    failed = []
+    domain = {"state": "generation-1"}
 
-    def finish(value):
-        settled.append(value)
-        if generation["value"] == 1:
-            rendered.append(value)
+    def work():
+        started.set()
+        assert release.wait(timeout=2.0)
+        if terminal_path == "failure":
+            raise ValueError("stale failure")
+        return "stale success"
 
-    lane.submit(LaneTask("stale", 1, lambda: "receipt", finish, pytest.fail))
+    admission = lane.submit(
+        LaneTask(
+            "stale-terminal",
+            1,
+            work,
+            lambda value: (finished.append(value), domain.update(state="stale")),
+            lambda exc: (failed.append(exc), domain.update(state="stale")),
+        )
+    )
+    assert admission.handle is not None
+    assert started.wait(timeout=1.0)
+    generation["value"] = 2
+    domain["state"] = "generation-2"
+    release.set()
     root.run_until(lambda: not lane.is_busy())
 
-    assert settled == ["receipt"]
-    assert rendered == []
+    assert finished == []
+    assert failed == []
+    assert domain == {"state": "generation-2"}
+    assert isinstance(
+        admission.handle.stale_generation_error,
+        module.StaleUiResultError,
+    )
+    assert admission.handle.stale_generation_error.code == "UI_LANE_STALE_RESULT"
+    assert admission.handle.stale_generation_error.task_generation == 1
+    assert admission.handle.stale_generation_error.current_generation == 2
+    assert lane.state == "IDLE"
     _close(root, lane)
 
 

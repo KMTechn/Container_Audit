@@ -25,6 +25,35 @@ DRAIN_TO_DURABLE_HANDOFF = "DRAIN_TO_DURABLE_HANDOFF"
 _SHUTDOWN_POLICIES = {DRAIN_TO_TERMINAL, DRAIN_TO_DURABLE_HANDOFF}
 
 
+class StaleUiGenerationError(RuntimeError):
+    """Typed record that a lane result belongs to an obsolete UI generation."""
+
+    code = "UI_LANE_STALE_GENERATION"
+
+    def __init__(
+        self,
+        task_generation: int,
+        current_generation: int | None = None,
+    ) -> None:
+        self.task_generation = int(task_generation)
+        self.current_generation = int(
+            task_generation if current_generation is None else current_generation
+        )
+        super().__init__(self.code)
+
+
+class StaleUiCheckpointError(StaleUiGenerationError):
+    """Raised back to a worker whose synchronous UI checkpoint is stale."""
+
+    code = "UI_LANE_STALE_CHECKPOINT"
+
+
+class StaleUiResultError(StaleUiGenerationError):
+    """Recorded when a terminal result is skipped for a stale generation."""
+
+    code = "UI_LANE_STALE_RESULT"
+
+
 @dataclass(frozen=True)
 class LaneTask:
     name: str
@@ -51,6 +80,7 @@ class TaskHandle:
 
     def __init__(self) -> None:
         self._work_done = threading.Event()
+        self.stale_generation_error: StaleUiGenerationError | None = None
 
     def _mark_work_done(self) -> None:
         self._work_done.set()
@@ -60,7 +90,6 @@ class TaskHandle:
 
     def is_alive(self) -> bool:
         return not self._work_done.is_set()
-
 
 @dataclass(frozen=True)
 class Admission:
@@ -109,12 +138,14 @@ class TkSerialUiLane:
         *,
         poll_ms: int = 15,
         max_results_per_tick: int = 16,
+        generation_provider: Callable[[], int] | None = None,
         on_runner_fault: Callable[[BaseException], None] | None = None,
     ) -> None:
         self._root = root
         self._owner_thread_id = threading.get_ident()
         self._poll_ms = max(1, int(poll_ms))
         self._max_results_per_tick = max(1, int(max_results_per_tick))
+        self._generation_provider = generation_provider
         self._on_runner_fault = on_runner_fault
         self._state_lock = threading.RLock()
         self._sequence_lock = threading.Lock()
@@ -158,6 +189,11 @@ class TkSerialUiLane:
         with self._sequence_lock:
             self._next_sequence += 1
             return self._next_sequence
+
+    def _generation_is_current(self, generation: int) -> bool:
+        if self._generation_provider is None:
+            return True
+        return int(self._generation_provider()) == int(generation)
 
     def _schedule_pump(self) -> None:
         self._assert_owner()
@@ -320,8 +356,21 @@ class TkSerialUiLane:
         try:
             with self._state_lock:
                 active = self._active
-            if active is None or active.op_id != envelope.op_id:
-                raise RuntimeError("stale UI checkpoint")
+            if (
+                active is None
+                or active.op_id != envelope.op_id
+                or active.task.generation != envelope.generation
+                or not self._generation_is_current(envelope.generation)
+            ):
+                current_generation = (
+                    envelope.generation
+                    if self._generation_provider is None
+                    else self._generation_provider()
+                )
+                raise StaleUiCheckpointError(
+                    envelope.generation,
+                    current_generation,
+                )
             ui_call.result = ui_call.callback(*ui_call.args, **ui_call.kwargs)
         except BaseException as exc:
             ui_call.error = exc
@@ -334,9 +383,24 @@ class TkSerialUiLane:
         if active is None or active.op_id != envelope.op_id or envelope.task is not active.task:
             self._break_lane(RuntimeError("stale or mismatched lane result"))
             return
-        callback = active.task.finish if envelope.kind == "success" else active.task.fail
         try:
-            callback(envelope.value)
+            if self._generation_is_current(envelope.generation):
+                callback = (
+                    active.task.finish
+                    if envelope.kind == "success"
+                    else active.task.fail
+                )
+                callback(envelope.value)
+            else:
+                stale_error = (
+                    envelope.value
+                    if isinstance(envelope.value, StaleUiGenerationError)
+                    else StaleUiResultError(
+                        envelope.generation,
+                        self._generation_provider(),
+                    )
+                )
+                active.handle.stale_generation_error = stale_error
         except BaseException as exc:
             self._break_lane(exc)
             return
@@ -446,6 +510,9 @@ __all__ = [
     "DRAIN_TO_DURABLE_HANDOFF",
     "DRAIN_TO_TERMINAL",
     "LaneTask",
+    "StaleUiCheckpointError",
+    "StaleUiGenerationError",
+    "StaleUiResultError",
     "TaskHandle",
     "TkSerialUiLane",
     "UI_LANE_SPEC",

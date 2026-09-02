@@ -2433,6 +2433,76 @@ def test_completion_local_prepare_precedes_checkpoint_and_any_http_attempt():
     assert calls == ["preview", "local-prepare", "durable-checkpoint-failed"]
 
 
+def test_completion_checkpoint_stale_generation_preserves_new_domain_state(tmp_path):
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+    from tk_serial_ui_lane import LaneTask, StaleUiCheckpointError
+
+    root = FakeTkRoot()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = None
+    app._scan_callback_epoch = 1
+    app.current_tray = TraySession(item_name="generation-2 item")
+    app.COLOR_DANGER = "danger"
+    save_calls = []
+    app._save_current_tray_state = lambda: save_calls.append("save") or True
+    lane = app._ui_task_lane()
+    started = threading.Event()
+    release = threading.Event()
+    worker_failures = []
+    terminal_calls = []
+    prepared = SealAttempt("intent-from-generation-1", "PREPARED")
+
+    def work():
+        started.set()
+        assert release.wait(timeout=2.0)
+        try:
+            return lane.call_ui_sync(
+                app._persist_prepared_completion_contract,
+                prepared,
+                existing_event_contract=None,
+                completion_observed_at=datetime.datetime(2026, 9, 3, 8, 0, 0),
+                projection_log_path=tmp_path / "events.csv",
+                completion_projection_worker="tester",
+                completion_was_restored=False,
+                master_label="MASTER-GENERATION-1",
+            )
+        except BaseException as exc:
+            worker_failures.append(exc)
+            raise
+
+    admission = lane.submit(
+        LaneTask(
+            "tray-completion-checkpoint",
+            1,
+            work,
+            lambda _value: terminal_calls.append("finish"),
+            lambda _error: terminal_calls.append("fail"),
+        )
+    )
+    assert admission.accepted is True
+    assert started.wait(timeout=1.0)
+
+    generation_2_contract = {
+        "owner_generation": 2,
+        "transfer_intent_id": "intent-from-generation-2",
+    }
+    app._scan_callback_epoch = 2
+    app._pending_completion_event_contract = generation_2_contract
+    release.set()
+    root.run_until(lambda: not lane.is_busy())
+
+    try:
+        assert app._pending_completion_event_contract is generation_2_contract
+        assert save_calls == []
+        assert terminal_calls == []
+        assert len(worker_failures) == 1
+        assert isinstance(worker_failures[0], StaleUiCheckpointError)
+    finally:
+        lane.close_idle()
+        root.run_until(lambda: lane.state == "CLOSED")
+
+
 def _insert_relay_row(db_path: Path, *, relay_id: str, status: str, created_at: str, updated_at: str):
     with sqlite3.connect(db_path) as connection:
         connection.execute(
