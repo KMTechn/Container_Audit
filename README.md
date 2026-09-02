@@ -310,11 +310,11 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 ### M7 화면 증거 계약
 
-현행 캡처 스키마는 `M7 external capture bundle v1`입니다. 묶음은 저장소 밖의 `<M7 handover evidence root>/capture-bundles/Container_Audit/`에서 승인하며, `<M7 handover evidence root>/handover-index.json`의 `app_id=Container_Audit` → `capture-bundles/Container_Audit/manifest.json` → `captures[].state_id` 순서로 조회합니다. 저장소 쪽 계약은 창을 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`로 확인합니다.
+정본은 `E:/KMTech/production-readiness-20260830/HANDOVER/CAPTURE-BUNDLE-V1-CONTRACT.md`이고 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 외부 묶음은 `E:/requal-evidence/capture-bundle-v1/<app>/<app>__<commit12>__<YYYYMMDDTHHMMSSZ>__<nonce8>/`에 두며, `HANDOVER-INDEX.md`가 가리키는 불변 `indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json`에서 `app=Container_Audit` 항목을 찾아 bundle `manifest.json`의 `captures[].state_id`로 조회합니다. 저장소 쪽 선언은 창을 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`의 `{schema, app, required_state_ids}` envelope로 확인합니다.
 
-필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`입니다. manifest는 앱 source commit/tree, portable artifact SHA-256, 도구 commit/blob SHA-256, 각 캡처의 state ID·viewport·DPI·생성 시각·이미지 SHA-256, 승인자·custody receipt를 담지만 이 README에는 미래 digest 값을 기록하지 않습니다.
+필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`입니다. 디렉터리·파일명, manifest field와 create-new 순서는 위 정본만 따르며 이 README에는 그 계약을 재정의하거나 미래 digest를 기록하지 않습니다.
 
-현재 상태는 C-1 `external bundle 캡처 대기(도구 준비됨)`, C-2·C-3 `조직 확정 필요 (Q1)`, C-4 도구 수정 닫힘, C-5 과거 보존 evidence `부재`입니다. 기존 추적 이미지는 역사 참고로 유지하고 최종 portable artifact의 외부 승인 묶음으로 교체할 예정입니다.
+현재 상태는 C-1 `external bundle 캡처 대기(재감사 통과 전 '도구 준비됨' 표기 금지)`, C-2·C-3 `미정 — 조직 확정 필요(Q1)`, C-4 `도구 정정 진행(재감사 대기)`입니다. C-5는 코디네이터 직접 확인(D-121, 2026-09-03) 결과, 두 `.tmp/ui-validation-secondary-20260625-165416` 대상과 원래 `.deploy_backups` 대상은 부재하지만 회사 프로그램 아카이브에 9 PNG와 1 JSON이 남아 있어 `부분 존재(아카이브)`입니다. 기존 추적 이미지는 역사 참고로만 유지하고 최종 portable artifact의 외부 승인 묶음으로 교체할 예정입니다.
 
 ---
 

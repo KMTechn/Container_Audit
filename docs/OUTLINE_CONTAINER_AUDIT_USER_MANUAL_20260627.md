@@ -236,9 +236,9 @@ parked 트레이와 `보류 스캔 N건`은 삭제 대기 항목이 아니라 �
 
 ## 11. M7 external capture bundle v1
 
-현행 화면 증거의 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 승인 묶음은 앱 저장소 밖의 `<M7 handover evidence root>/capture-bundles/Container_Audit/`에 두고, `<M7 handover evidence root>/handover-index.json`에서 `app_id=Container_Audit` 항목을 선택한 뒤 `capture-bundles/Container_Audit/manifest.json`의 `captures[].state_id`로 조회합니다. 저장소에서는 GUI를 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`로 같은 계약과 production seam 목록을 확인할 수 있습니다.
+정본은 `E:/KMTech/production-readiness-20260830/HANDOVER/CAPTURE-BUNDLE-V1-CONTRACT.md`이고 현행 화면 증거의 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 승인 묶음은 앱 저장소 밖의 `E:/requal-evidence/capture-bundle-v1/<app>/<app>__<commit12>__<YYYYMMDDTHHMMSSZ>__<nonce8>/`에 둡니다. `HANDOVER-INDEX.md`가 가리키는 불변 `indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json`에서 `app=Container_Audit` 항목을 찾고 bundle `manifest.json`의 `captures[].state_id`로 조회합니다. 저장소에서는 GUI를 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`의 `{schema, app, required_state_ids}` envelope로 같은 선언을 확인합니다.
 
-묶음 manifest에는 앱 source commit/tree, portable artifact SHA-256, 캡처 도구 commit/blob SHA-256, 장면별 state ID·viewport·DPI·생성 시각·이미지 SHA-256, 승인자와 custody receipt를 기록합니다. 이 문서에는 아직 만들어지지 않은 digest 값을 미리 적지 않습니다. 캡처 승인자 직책과 캡처·게시 evidence owner는 조직이 Q1에서 확정해야 하며, 확정 전에는 승인 완료로 판정하지 않습니다.
+디렉터리·파일명, manifest field와 create-new 순서는 위 정본만 따릅니다. 이 문서에는 그 계약을 재정의하거나 아직 만들어지지 않은 digest를 적지 않습니다. 캡처 승인자 직책과 캡처·게시 evidence owner 값은 `미정 — 조직 확정 필요(Q1)`이며, 확정 전에는 승인 완료로 판정하지 않습니다.
 
 필수 state ID는 다음 아홉 개입니다.
 
@@ -258,14 +258,16 @@ parked 트레이와 `보류 스캔 N건`은 삭제 대기 항목이 아니라 �
 
 | ID | 분류 | 처리 |
 |---|---|---|
-| C-1 | `external bundle 캡처 대기(도구 준비됨)` | 캡처 도구가 exact-six PHS2와 아홉 production presenter/state seam을 선언하고 headless 계약 조회를 제공합니다. PNG 생성과 최종 artifact 캡처·승인은 이 문서 변경의 범위 밖입니다. |
-| C-2 | `조직 확정 필요 (Q1)` | 캡처 승인자 직책은 정하지 않았으며 조직 결정 전 미정입니다. |
-| C-3 | `조직 확정 필요 (Q1)` | 캡처·게시 evidence owner는 정하지 않았으며 조직 결정 전 미정입니다. |
-| C-4 | `닫힘` | 캡처 도구는 증거 경로에서 과거 fixture를 제거하고 exact-six PHS2 및 필수 아홉 state만 사용하도록 수정했습니다. |
-| C-5 | `부재` | 2026-09-03에 아래 세 원본 경로의 직접 존재 여부와 저장소·`E:\KMTech`의 경로명/참조를 검색했습니다. 세 경로 모두 존재하지 않았고 검색 결과도 문서 참조뿐이어서 보존 evidence 실재는 부재로 분류하며, `M7 external capture bundle v1`이 이를 대체합니다. |
+| C-1 | `external bundle 캡처 대기(재감사 통과 전 '도구 준비됨' 표기 금지)` | 도구 정정은 진행 중이며, 장면별 production 호출과 fake-free 문구 assertion을 재감사하기 전에는 도구 준비 완료로 간주하지 않습니다. PNG 생성과 최종 artifact 캡처·승인은 이 문서 변경의 범위 밖입니다. |
+| C-2 | `미정 — 조직 확정 필요(Q1)` | 캡처 승인자 직책은 정하지 않았으며 조직 결정 전 미정입니다. |
+| C-3 | `미정 — 조직 확정 필요(Q1)` | 캡처·게시 evidence owner는 정하지 않았으며 조직 결정 전 미정입니다. |
+| C-4 | `도구 정정 진행(재감사 대기)` | 도구의 실제 production call trace, production validator 호출, variant별 assertion 및 정본 manifest 생성을 정정했으며 독립 재감사 전에는 닫지 않습니다. |
+| C-5 | `부분 존재(아카이브)` | 코디네이터 직접 확인(D-121, 2026-09-03) 결과, 아래 세 원본 경로는 부재하지만 회사 프로그램 아카이브에 원래 캡처 세트 10개(9 PNG + 1 JSON)가 남아 있습니다. 이 자료는 historical evidence일 뿐 현행 승인 묶음은 아닙니다. |
 
 C-5에서 확인한 원본 경로:
 
 - `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\ui_validation_report.json`
 - `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\screenshots`
 - `C:\company\program\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`
+
+아카이브에서 확인된 경로는 `E:\KMTech\company-program-archive-20260821-postreboot\moved-unique\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`입니다.

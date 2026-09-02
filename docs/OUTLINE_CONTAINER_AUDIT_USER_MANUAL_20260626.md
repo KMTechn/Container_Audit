@@ -466,14 +466,16 @@ startup 복구와 보류 목록에서 다른 작업을 여는 전환은 서로 �
 
 원본 검증 evidence와 현행 대체 계약:
 
-> 2026-09-03 직접 존재 확인과 저장소·`E:\KMTech` 경로명/참조 검색에서 아래 세 원본 경로는 모두 없었고, 검색된 것은 문서 참조뿐이었습니다. 따라서 과거 보존 evidence는 `부재`로 분류하며 현행 `M7 external capture bundle v1`이 이를 대체합니다.
+> 코디네이터 직접 확인(D-121, 2026-09-03) 결과 아래 세 원본 경로는 부재하지만, 회사 프로그램 아카이브에는 원래 캡처 세트 10개(9 PNG + 1 JSON)가 남아 있습니다. 따라서 과거 보존 evidence는 `부분 존재(아카이브)`로 분류하고 historical 참고로만 취급합니다.
 
 - `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\ui_validation_report.json`
 - `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\screenshots`
 - `C:\company\program\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`
 
-현행 승인 묶음은 앱 저장소 밖의 `<M7 handover evidence root>/capture-bundles/Container_Audit/`에 둡니다. `<M7 handover evidence root>/handover-index.json`에서 `app_id=Container_Audit`을 선택하고 `capture-bundles/Container_Audit/manifest.json`의 `captures[].state_id`로 찾으며, 저장소에서는 GUI 없이 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`로 계약과 production seam 목록을 조회합니다.
+- 확인된 아카이브: `E:\KMTech\company-program-archive-20260821-postreboot\moved-unique\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`
 
-필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`의 아홉 개입니다. manifest에는 앱 source commit/tree, portable artifact SHA-256, 캡처 도구 commit/blob SHA-256, 장면별 state ID·viewport·DPI·생성 시각·이미지 SHA-256, 승인자와 custody receipt를 기록하되 이 문서에는 아직 생성되지 않은 digest 값을 넣지 않습니다. 승인자와 evidence owner는 `조직 확정 필요 (Q1)`이고, C-1은 `external bundle 캡처 대기(도구 준비됨)`, C-4 도구 수정은 닫힘, C-5는 `부재`입니다.
+정본은 `E:/KMTech/production-readiness-20260830/HANDOVER/CAPTURE-BUNDLE-V1-CONTRACT.md`입니다. 현행 승인 묶음은 앱 저장소 밖의 `E:/requal-evidence/capture-bundle-v1/<app>/<app>__<commit12>__<YYYYMMDDTHHMMSSZ>__<nonce8>/`에 둡니다. `HANDOVER-INDEX.md`가 가리키는 불변 `indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json`에서 `app=Container_Audit`을 찾고 bundle `manifest.json`의 `captures[].state_id`로 조회하며, 저장소에서는 GUI 없이 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`의 `{schema, app, required_state_ids}` envelope로 선언을 확인합니다.
+
+필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`의 아홉 개입니다. 디렉터리·파일명, manifest field와 create-new 순서는 위 정본만 따르며 이 문서에는 그 계약을 재정의하거나 미래 digest를 기록하지 않습니다. 승인자와 evidence owner는 `미정 — 조직 확정 필요(Q1)`이고, C-1은 `external bundle 캡처 대기(재감사 통과 전 '도구 준비됨' 표기 금지)`, C-4는 `도구 정정 진행(재감사 대기)`, C-5는 `부분 존재(아카이브)`입니다.
 
 기존 추적 이미지는 삭제하지 않고 역사 참고 자료로 유지하며 최종 portable artifact의 외부 승인 묶음으로 교체할 예정입니다. 이 historical 문서를 OUTLINE에 새 현행 절차로 게시하지 말고, 현행 정본의 `M7 external capture bundle v1` 계약을 따릅니다.

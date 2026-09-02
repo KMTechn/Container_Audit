@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import base64
 import ctypes
 import datetime as dt
 import functools
@@ -9,11 +11,17 @@ import json
 import math
 import os
 import re
+import secrets
+import shutil
+import struct
+import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from types import SimpleNamespace
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 
 from PIL import Image, ImageGrab
 
@@ -45,10 +53,15 @@ M7_REQUIRED_STATE_IDS = (
 )
 DEFAULT_STATE_IDS = M7_REQUIRED_STATE_IDS
 M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA = "M7 external capture bundle v1"
-M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION = (
-    "<M7 handover evidence root>/capture-bundles/Container_Audit/"
+M7_EXTERNAL_CAPTURE_APP = "Container_Audit"
+M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION = "E:/requal-evidence/capture-bundle-v1/"
+M7_EXTERNAL_CAPTURE_INDEX = (
+    "HANDOVER-INDEX.md -> indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json"
 )
-M7_EXTERNAL_CAPTURE_INDEX = "<M7 handover evidence root>/handover-index.json"
+M7_CANONICAL_CONTRACT_PATH = (
+    "E:/KMTech/production-readiness-20260830/HANDOVER/"
+    "CAPTURE-BUNDLE-V1-CONTRACT.md"
+)
 M7_PHS2_FIELD_ORDER = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
 CAPTURE_EXACT_SIX_PHS2 = (
     "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITG-M7-CONTAINER-0001|"
@@ -61,16 +74,39 @@ CAPTURE_ACTIVE_EXACT_SIX_PHS2 = (
 M7_CAPTURE_MANIFEST_IDENTITY_FIELDS = (
     "app_source.commit",
     "app_source.tree",
+    "portable_artifact.file",
     "portable_artifact.sha256",
+    "capture_tool.path",
     "capture_tool.commit",
     "capture_tool.blob_sha256",
     "captures[].state_id",
-    "captures[].viewport",
+    "captures[].image_file",
+    "captures[].image_sha256",
+    "captures[].viewport.width_px",
+    "captures[].viewport.height_px",
     "captures[].dpi",
     "captures[].generated_at",
-    "captures[].image_sha256",
     "approval.approver",
-    "approval.custody_receipt",
+    "approval.approval_receipt_file",
+    "approval.approval_receipt_sha256",
+    "approval.custody_receipt_file",
+    "approval.custody_receipt_sha256",
+)
+M7_APPROVAL_PLACEHOLDER = "미정 — 조직 확정 필요(Q1)"
+M7_CAPTURE_TOOL_PATH = "tools/capture_container_operator_ui.py"
+M7_PRODUCT_TEXT_BLOBS = (
+    "Container_Audit.py",
+    "warning_presenter.py",
+    "direct_sync_health.py",
+    "transfer_seal.py",
+    "transfer_member_exchange.py",
+    "terminal_operation_lease.py",
+)
+M7_PRODUCTION_BINDING_PATHS = (
+    "Container_Audit.py",
+    "label_qr.py",
+    "preflight_scan_hold.py",
+    *M7_PRODUCT_TEXT_BLOBS[1:],
 )
 M7_ACTION_NAMES = (
     "reset",
@@ -84,11 +120,9 @@ M7_ACTION_NAMES = (
     "phs_label_exchange",
 )
 
-# Each scene is rooted in a production state or presenter seam.  The source
-# locations are deliberately part of the manifest so an external reviewer can
-# compare the captured state with the frozen application source.  Modal-only
-# steps are retained as flow assertions; this tool never redraws a modal as a
-# different surface.
+# Each scene names only the production methods that the capture path must
+# actually call.  Text provenance is measured against frozen Git blobs below;
+# hand-maintained source ranges are intentionally not evidence.
 M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
     "m7_phs2_preflight": {
         "label": "exact-six PHS2 · 중앙 preflight 진행/차단",
@@ -97,13 +131,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_set_preflight_scan_input_locked",
             "_update_current_item_label",
             "_update_action_button_states",
-        ),
-        "production_sources": (
-            "Container_Audit.py:8121-8566",
-            "Container_Audit.py:7917-7955",
-            "Container_Audit.py:1780-1793",
-            "Container_Audit.py:4315-4600",
-            "Container_Audit.py:13403-13425",
         ),
         "input_state": "disabled",
         "disabled_controls": M7_ACTION_NAMES,
@@ -114,14 +141,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "show_status_message",
             "_set_preflight_scan_input_locked",
             "_update_action_button_states",
-        ),
-        "production_sources": (
-            "Container_Audit.py:8569-8633",
-            "Container_Audit.py:8928-8977",
-            "Container_Audit.py:12363-12428",
-            "Container_Audit.py:1780-1793",
-            "Container_Audit.py:4315-4600",
-            "Container_Audit.py:13403-13425",
         ),
         "input_state": "disabled",
         "disabled_controls": M7_ACTION_NAMES,
@@ -134,12 +153,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_set_preflight_scan_input_locked",
             "_update_action_button_states",
         ),
-        "production_sources": (
-            "Container_Audit.py:9914-10021",
-            "Container_Audit.py:1780-1793",
-            "Container_Audit.py:4315-4600",
-            "Container_Audit.py:13403-13425",
-        ),
         "input_state": "disabled",
         "disabled_controls": M7_ACTION_NAMES,
     },
@@ -150,13 +163,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_update_parked_trays_list",
             "_update_parked_recovery_affordance",
             "show_status_message",
-        ),
-        "production_sources": (
-            "Container_Audit.py:3442-3544",
-            "Container_Audit.py:6606-6622",
-            "Container_Audit.py:10896-11067",
-            "Container_Audit.py:13591-13815",
-            "Container_Audit.py:13403-13425",
         ),
         "input_state": "normal",
         "disabled_controls": (),
@@ -169,13 +175,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_render_warning_state",
             "_update_action_button_states",
         ),
-        "production_sources": (
-            "Container_Audit.py:12129-12168",
-            "Container_Audit.py:11106-11157",
-            "Container_Audit.py:4315-4600",
-            "direct_sync_health.py:113-129",
-            "warning_presenter.py:120-158",
-        ),
         "input_state": "normal",
         "disabled_controls": (),
     },
@@ -185,12 +184,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_update_center_display",
             "_update_current_item_label",
             "_update_action_button_states",
-        ),
-        "production_sources": (
-            "Container_Audit.py:8511-8559",
-            "Container_Audit.py:7917-7955",
-            "Container_Audit.py:10896-11067",
-            "Container_Audit.py:4315-4600",
         ),
         "input_state": "normal",
         "disabled_controls": (),
@@ -202,14 +195,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
             "_set_preflight_scan_input_locked",
             "_update_action_button_states",
         ),
-        "production_sources": (
-            "Container_Audit.py:8221-8301",
-            "Container_Audit.py:8471-8510",
-            "Container_Audit.py:10083-10107",
-            "Container_Audit.py:11438-11469",
-            "Container_Audit.py:1780-1793",
-            "Container_Audit.py:4315-4600",
-        ),
         "input_state": "disabled",
         "disabled_controls": M7_ACTION_NAMES,
     },
@@ -218,13 +203,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
         "production_call_path": (
             "_render_warning_state",
             "_update_action_button_states",
-        ),
-        "production_sources": (
-            "warning_presenter.py:120-158",
-            "Container_Audit.py:11106-11157",
-            "Container_Audit.py:4315-4600",
-            "Container_Audit.py:11068-11278",
-            "Container_Audit.py:10570-10619",
         ),
         "input_state": "disabled",
         "disabled_controls": (
@@ -243,14 +221,6 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
         "production_call_path": (
             "show_status_message",
             "_update_action_button_states",
-        ),
-        "production_sources": (
-            "Container_Audit.py:10039-10052",
-            "Container_Audit.py:4315-4600",
-            "Container_Audit.py:13403-13425",
-            "Container_Audit.py:14457-14607",
-            "Container_Audit.py:14764-14964",
-            "Container_Audit.py:15439-15550",
         ),
         "input_state": "normal",
         "disabled_controls": (),
@@ -420,6 +390,15 @@ class StateFixture:
 
 
 @dataclass(frozen=True, slots=True)
+class ExternalCaptureImage:
+    """One already-rendered PNG supplied to the external envelope builder."""
+
+    state_id: str
+    png_bytes: bytes
+    dpi: int
+
+
+@dataclass(frozen=True, slots=True)
 class DisplayMonitor:
     """Stable subset of Win32 monitor metadata used by capture gates."""
 
@@ -508,8 +487,8 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
             lease=LeaseFixture(state="ISSUE_PENDING", start_allowed=False),
             preflight_phase="LOOKUP",
             status_variants=(
-                "중앙 확인 중 · 보류 스캔 0건",
-                "중앙 검사 완료 수량 확인 중 · 보류 0건",
+                "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
+                "현품표 정보를 읽지 못했습니다. 현품표를 확인한 뒤 다시 스캔하세요.",
             ),
         ),
         StateFixture(
@@ -624,7 +603,7 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
                 lease_id="LEASE-M7-CONTAINER-EXPIRED-0001",
                 expires_at="2026-09-03T07:55:00+09:00",
                 start_allowed=False,
-                error_code="OPERATION_LEASE_NOT_ACTIVE",
+                error_code="OPERATION_LEASE_EXPIRED",
             ),
             preflight_phase="LOOKUP_FAILED",
             status_variants=(
@@ -686,24 +665,12 @@ def build_state_fixtures() -> tuple[StateFixture, ...]:
 
 
 def build_m7_external_capture_bundle_contract() -> dict[str, Any]:
-    """Return the repository-side contract without creating a window or image."""
+    """Return the canonical headless describe envelope and nothing else."""
 
     return {
         "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
-        "app_id": "Container_Audit",
-        "external_approval_location": M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION,
+        "app": M7_EXTERNAL_CAPTURE_APP,
         "required_state_ids": list(M7_REQUIRED_STATE_IDS),
-        "manifest_identity_fields": list(M7_CAPTURE_MANIFEST_IDENTITY_FIELDS),
-        "lookup": {
-            "start_at": M7_EXTERNAL_CAPTURE_INDEX,
-            "select": "app_id=Container_Audit",
-            "manifest": "capture-bundles/Container_Audit/manifest.json",
-            "state_selector": "captures[].state_id",
-            "approval_required": True,
-        },
-        "tracked_images": "retained_historical_pending_external_replacement",
-        "repository_document_digest_values_allowed": False,
-        "capture_status": "PENDING_FINAL_ARTIFACT_AND_EXTERNAL_APPROVAL",
     }
 
 
@@ -714,30 +681,381 @@ def _bound_method_identity(method: Any) -> str:
     return ".".join(part for part in (module_name, qualname) if part)
 
 
-def inspect_m7_production_scene_seams(module: Any) -> dict[str, Any]:
-    """Fail closed unless every scene still resolves to production callables."""
+def _assert_runtime_module_binding(module: Any) -> str:
+    module_path = Path(str(getattr(module, "__file__", "") or "")).resolve()
+    if module_path != (ROOT / "Container_Audit.py").resolve():
+        raise RuntimeError("Container_Audit runtime module is not loaded from this repository")
+    commit = _resolve_git_commit(str(ROOT.resolve()), "HEAD")
+    _assert_frozen_production_worktree(ROOT, commit)
+    return commit
 
-    scene_receipts: dict[str, Any] = {}
+
+def _git_bytes(repo_root: Path, *arguments: str) -> bytes:
+    completed = subprocess.run(
+        ["git", "-C", str(repo_root), *arguments],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "git evidence query failed: "
+            + completed.stderr.decode("utf-8", errors="replace").strip()
+        )
+    return completed.stdout
+
+
+@functools.lru_cache(maxsize=16)
+def _resolve_git_commit(repo_root_text: str, revision: str) -> str:
+    return _git_bytes(
+        Path(repo_root_text), "rev-parse", f"{revision}^{{commit}}"
+    ).decode("ascii").strip()
+
+
+def _git_paths_match_commit(
+    repo_root: Path,
+    commit: str,
+    relative_paths: Sequence[str],
+) -> bool:
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo_root),
+            "diff",
+            "--quiet",
+            "--no-ext-diff",
+            commit,
+            "--",
+            *relative_paths,
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if completed.returncode not in (0, 1):
+        raise RuntimeError(
+            "git worktree evidence query failed: "
+            + completed.stderr.decode("utf-8", errors="replace").strip()
+        )
+    return completed.returncode == 0
+
+
+def _production_binding_signature(
+    repo_root: Path,
+) -> tuple[tuple[str, int, int, bool], ...]:
+    signature: list[tuple[str, int, int, bool]] = []
+    for relative_path in M7_PRODUCTION_BINDING_PATHS:
+        path = repo_root / Path(relative_path)
+        try:
+            stat = path.stat()
+            signature.append(
+                (relative_path, stat.st_size, stat.st_mtime_ns, path.is_symlink())
+            )
+        except OSError:
+            signature.append((relative_path, -1, -1, path.is_symlink()))
+    return tuple(signature)
+
+
+@functools.lru_cache(maxsize=32)
+def _assert_frozen_production_worktree_cached(
+    repo_root_text: str,
+    commit: str,
+    signature: tuple[tuple[str, int, int, bool], ...],
+) -> None:
+    repo_root = Path(repo_root_text)
+    for relative_path in M7_PRODUCTION_BINDING_PATHS:
+        frozen, _digest = _frozen_git_blob(
+            str(repo_root.resolve()), commit, relative_path
+        )
+        path = repo_root / Path(relative_path)
+        if not frozen or not path.is_file() or path.is_symlink():
+            raise RuntimeError(
+                f"production path is not a frozen regular file: {relative_path}"
+            )
+    if not _git_paths_match_commit(repo_root, commit, M7_PRODUCTION_BINDING_PATHS):
+        raise RuntimeError("production worktree does not match the frozen app commit")
+
+
+def _assert_frozen_production_worktree(repo_root: Path, commit: str) -> None:
+    resolved_root = repo_root.resolve()
+    _assert_frozen_production_worktree_cached(
+        str(resolved_root),
+        commit,
+        _production_binding_signature(resolved_root),
+    )
+
+
+@functools.lru_cache(maxsize=64)
+def _frozen_git_blob(
+    repo_root_text: str,
+    commit: str,
+    relative_path: str,
+) -> tuple[bytes, str]:
+    repo_root = Path(repo_root_text)
+    raw = _git_bytes(repo_root, "show", f"{commit}:{relative_path}")
+    return raw, hashlib.sha256(raw).hexdigest()
+
+
+@functools.lru_cache(maxsize=64)
+def _python_non_docstring_literals(raw: bytes) -> frozenset[str]:
+    tree = ast.parse(raw.decode("utf-8"))
+    docstring_nodes: set[int] = set()
+    for parent in ast.walk(tree):
+        body = getattr(parent, "body", None)
+        if (
+            isinstance(body, list)
+            and body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            docstring_nodes.add(id(body[0].value))
+    return frozenset(
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstring_nodes
+    )
+
+
+def inspect_production_text_provenance(
+    text: str,
+    *,
+    commit: str = "HEAD",
+    repo_root: Path = ROOT,
+) -> dict[str, Any]:
+    """Prove exact visible copy exists in a frozen production Git blob."""
+
+    value = str(text or "")
+    resolved_root = repo_root.resolve()
+    matches: list[dict[str, str]] = []
+    errors: list[str] = []
+    try:
+        frozen_commit = _resolve_git_commit(str(resolved_root), commit)
+        _assert_frozen_production_worktree(resolved_root, frozen_commit)
+    except (RuntimeError, UnicodeError) as exc:
+        frozen_commit = ""
+        errors.append(f"production_binding:{exc.__class__.__name__}")
+    if value:
+        for relative_path in M7_PRODUCT_TEXT_BLOBS:
+            try:
+                raw, digest = _frozen_git_blob(
+                    str(resolved_root), frozen_commit or commit, relative_path
+                )
+                literals = _python_non_docstring_literals(raw)
+            except (RuntimeError, UnicodeError, SyntaxError) as exc:
+                errors.append(f"{relative_path}:{exc.__class__.__name__}")
+                continue
+            if value in literals:
+                matches.append(
+                    {
+                        "path": relative_path,
+                        "blob_sha256": digest,
+                        "match_kind": "python_string_literal_exact",
+                    }
+                )
+    return {
+        "text": value,
+        "exact_product_blob_match": bool(matches),
+        "matches": matches,
+        "errors": errors,
+        "passed": bool(value) and bool(matches) and not errors,
+    }
+
+
+def validate_m7_production_call_trace(
+    trace: Mapping[str, Any],
+    expected_methods: Sequence[str],
+) -> dict[str, Any]:
+    """Recompute trace validity from immutable per-call facts."""
+
+    expected = [str(name) for name in expected_methods]
+    calls_value = trace.get("calls")
+    calls = list(calls_value) if isinstance(calls_value, list) else []
+    observed_methods = [
+        str(call.get("method") or "") if isinstance(call, Mapping) else ""
+        for call in calls
+    ]
+    unexpected = [name for name in observed_methods if name not in expected]
+    checks = {
+        "expected_methods_exact": trace.get("expected_methods") == expected,
+        "calls_present": bool(calls),
+        "ordinals_exact": all(
+            isinstance(call, Mapping) and call.get("ordinal") == index
+            for index, call in enumerate(calls, start=1)
+        ),
+        "methods_declared": not unexpected,
+        "production_identities_exact": all(
+            isinstance(call, Mapping)
+            and call.get("production_identity")
+            == f"Container_Audit.ContainerAudit.{call.get('method')}"
+            for call in calls
+        ),
+        "originals_invoked": all(
+            isinstance(call, Mapping) and call.get("original_invoked") is True
+            for call in calls
+        ),
+        "calls_returned": all(
+            isinstance(call, Mapping) and call.get("returned") is True
+            for call in calls
+        ),
+        "every_expected_called": all(name in observed_methods for name in expected),
+    }
+    return {
+        "expected_methods": expected,
+        "observed_methods": observed_methods,
+        "unexpected_methods": unexpected,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+@contextmanager
+def trace_m7_production_calls(
+    app: Any,
+    module: Any,
+    method_names: Sequence[str],
+) -> Iterator[dict[str, Any]]:
+    """Wrap bound production methods, invoke the originals, and record calls."""
+
+    expected = tuple(str(name) for name in method_names)
+    originals: dict[str, Any] = {}
+    prior_instance_values: dict[str, Any] = {}
+    had_instance_value: dict[str, bool] = {}
+    records: list[dict[str, Any]] = []
+    for method_name in expected:
+        original = getattr(app, method_name, None)
+        identity = _bound_method_identity(original)
+        if not callable(original) or identity != (
+            f"Container_Audit.ContainerAudit.{method_name}"
+        ):
+            raise RuntimeError(
+                f"M7 call trace cannot bind production method {method_name}: "
+                f"{identity or '<missing>'}"
+            )
+        originals[method_name] = original
+        instance_dict = getattr(app, "__dict__", {})
+        had_instance_value[method_name] = method_name in instance_dict
+        if had_instance_value[method_name]:
+            prior_instance_values[method_name] = instance_dict[method_name]
+
+        @functools.wraps(getattr(original, "__func__", original))
+        def traced(
+            *args: Any,
+            __name: str = method_name,
+            __identity: str = identity,
+            __original: Callable[..., Any] = original,
+            **kwargs: Any,
+        ) -> Any:
+            record: dict[str, Any] = {
+                "ordinal": len(records) + 1,
+                "method": __name,
+                "production_identity": __identity,
+                "original_invoked": True,
+                "returned": False,
+            }
+            records.append(record)
+            try:
+                result = __original(*args, **kwargs)
+            except BaseException as exc:
+                record["exception"] = exc.__class__.__name__
+                raise
+            record["returned"] = True
+            return result
+
+        setattr(app, method_name, traced)
+
+    trace = {
+        "expected_methods": list(expected),
+        "calls": records,
+        "all_expected_called": False,
+        "unexpected_methods": [],
+        "passed": False,
+    }
+    try:
+        yield trace
+    finally:
+        for method_name in reversed(expected):
+            if had_instance_value[method_name]:
+                setattr(app, method_name, prior_instance_values[method_name])
+            else:
+                try:
+                    delattr(app, method_name)
+                except AttributeError:
+                    pass
+        assessment = validate_m7_production_call_trace(trace, expected)
+        trace["all_expected_called"] = assessment["checks"][
+            "every_expected_called"
+        ]
+        trace["unexpected_methods"] = assessment["unexpected_methods"]
+        trace["trace_checks"] = assessment["checks"]
+        trace["passed"] = assessment["passed"]
+
+
+def inspect_m7_production_scene_seams(
+    module: Any,
+    scene_receipts: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Report only observed traces as seams; callable presence is declaration-only."""
+
+    _assert_runtime_module_binding(module)
+    observed_receipts = dict(scene_receipts or {})
+    inspected_scenes: dict[str, Any] = {}
     for state_id in M7_REQUIRED_STATE_IDS:
         spec = M7_SCENE_CONTRACT[state_id]
         identities: dict[str, str] = {}
         for method_name in spec["production_call_path"]:
             method = getattr(module.ContainerAudit, method_name, None)
             identity = _bound_method_identity(method)
-            if not callable(method) or not identity.startswith(
-                "Container_Audit.ContainerAudit."
+            if not callable(method) or identity != (
+                f"Container_Audit.ContainerAudit.{method_name}"
             ):
                 raise RuntimeError(
                     f"M7 scene {state_id} has no production method {method_name}: "
                     f"{identity or '<missing>'}"
                 )
             identities[str(method_name)] = identity
-        scene_receipts[state_id] = {
+        observed = observed_receipts.get(state_id)
+        call_trace = (
+            observed.get("production_call_trace")
+            if isinstance(observed, Mapping)
+            else None
+        )
+        semantic = (
+            observed.get("assertions", {}).get("production_validation", {})
+            if isinstance(observed, Mapping)
+            and isinstance(observed.get("assertions"), Mapping)
+            else {}
+        )
+        trace_assessment = (
+            validate_m7_production_call_trace(
+                call_trace,
+                spec["production_call_path"],
+            )
+            if isinstance(call_trace, Mapping)
+            else {"passed": False}
+        )
+        trace_matches = trace_assessment["passed"] is True
+        inspected_scenes[state_id] = {
             "state_id": state_id,
             "production_call_path": list(spec["production_call_path"]),
             "production_method_identities": identities,
-            "production_sources": list(spec["production_sources"]),
-            "seam_available": True,
+            "production_call_trace": call_trace,
+            "production_call_trace_assessment": trace_assessment,
+            "trace_observed": trace_matches,
+            "semantic_variants_validated": semantic.get("passed") is True,
+            "seam_available": bool(
+                trace_matches and semantic.get("passed") is True
+            ),
+            "reason": (
+                "validated"
+                if trace_matches and semantic.get("passed") is True
+                else "actual_scene_trace_required"
+                if call_trace is None
+                else "production_semantic_variant_unavailable"
+            ),
         }
 
     support_callables = {
@@ -751,13 +1069,35 @@ def inspect_m7_production_scene_seams(module: Any) -> dict[str, Any]:
         name: _bound_method_identity(callable_value)
         for name, callable_value in support_callables.items()
     }
-    if not all(callable(value) and support_identities[name] for name, value in support_callables.items()):
+    expected_support_identities = {
+        "phs2_parser": "label_qr.parse_new_format_qr",
+        "phs2_validator": "transfer_seal.validate_compact_phs2_fields",
+        "warning_presenter": "warning_presenter.WarningPresenter.present_completion",
+        "completion_notice": "warning_presenter.notice_for_completion",
+        "relay_health_presenter": "direct_sync_health.relay_health_card_model",
+    }
+    if not all(
+        callable(value)
+        and support_identities[name] == expected_support_identities[name]
+        for name, value in support_callables.items()
+    ):
         raise RuntimeError("M7 production support seam is incomplete")
     return {
-        "scenes": scene_receipts,
+        "scenes": inspected_scenes,
         "support_method_identities": support_identities,
-        "scene_count": len(scene_receipts),
-        "all_seams_available": len(scene_receipts) == len(M7_REQUIRED_STATE_IDS),
+        "declared_scene_count": len(inspected_scenes),
+        "traced_scene_count": sum(
+            item["trace_observed"] for item in inspected_scenes.values()
+        ),
+        "production_validated_scene_count": sum(
+            item["seam_available"] for item in inspected_scenes.values()
+        ),
+        "no_seam_scene_count": sum(
+            not item["seam_available"] for item in inspected_scenes.values()
+        ),
+        "all_seams_available": all(
+            item["seam_available"] for item in inspected_scenes.values()
+        ),
     }
 
 
@@ -789,6 +1129,344 @@ def _validate_exact_six_phs2(module: Any, payload: str) -> dict[str, Any]:
     }
 
 
+def _production_member_set_assertion(
+    module: Any,
+    fixture: StateFixture,
+) -> dict[str, Any]:
+    """Run the production PHS2 preflight validator over the exact member map."""
+
+    import transfer_seal
+
+    fields = module.parse_new_format_qr(fixture.scanned_master_label) or {}
+    members = [asdict(member) for member in fixture.authoritative_members]
+    member_ids = [member["product_id"] for member in members]
+    barcodes = [member["barcode"] for member in members]
+    validated_fields = module.validate_compact_phs2_fields(fields)
+    label_hash = validated_fields["HSH"] + ("0" * 48)
+    registry = {
+        "input_tag_id": validated_fields["ITG"],
+        "label_id": validated_fields["LBL"],
+        "item_id": validated_fields["CLC"],
+        "tag_core_hash": hashlib.sha256(b"container-m7-input-tag").hexdigest(),
+        "label_instance_hash": label_hash,
+        "hash_prefix": validated_fields["HSH"],
+        "lifecycle": "INSPECTION_COMPLETED",
+        "qr_payload": fixture.scanned_master_label,
+    }
+    resolved = {
+        "candidate_count": 1,
+        "bundle": {
+            "authority_scope_id": "M7-CAPTURE-AUTHORITY",
+            "authority_epoch": 1,
+            "ledger_plane": "AUTHORITATIVE",
+            "plane_epoch": 1,
+            "bundle_id": "M7-CAPTURE-SOURCE-BUNDLE",
+            "bundle_role": "TRANSFER_SOURCE",
+            "bundle_type": "PHS",
+            "bundle_state": "AVAILABLE",
+            "external_label": fixture.scanned_master_label,
+            "source_session_id": validated_fields["ITG"],
+            "item_id": validated_fields["CLC"],
+            "uom": "EA",
+            "source_iin": "M7-CAPTURE-IIN",
+            "current_location": "PHS_GOOD",
+            "current_locations": ["PHS_GOOD"],
+            "member_ids": member_ids,
+            "member_count": len(member_ids),
+            "membership_hash": transfer_seal.membership_hash(member_ids),
+            "barcode_member_count": len(barcodes),
+            "barcode_membership_hash": transfer_seal.membership_hash(barcodes),
+            "entity_version": 1,
+            "entity_versions": {"bundle:M7-CAPTURE-SOURCE-BUNDLE": 1},
+            "members": [
+                {
+                    "unit_id": member["product_id"],
+                    "normalized_barcode": member["barcode"],
+                    "inbound_iin": "M7-CAPTURE-IIN",
+                    "current_inbound_iin": "M7-CAPTURE-IIN",
+                    "item_id": validated_fields["CLC"],
+                    "uom": "EA",
+                    "unit_state": "AVAILABLE",
+                    "location_code": "PHS_GOOD",
+                }
+                for member in members
+            ],
+        },
+        "input_tag": registry,
+    }
+    try:
+        preflight = module.validate_compact_phs2_preflight(
+            validated_fields,
+            resolved,
+        )
+    except module.TransferSealError as exc:
+        return {
+            "production_validator_called": True,
+            "validator_identity": _bound_method_identity(
+                module.validate_compact_phs2_preflight
+            ),
+            "error_code": exc.code,
+            "passed": False,
+        }
+    expected_pairs = sorted(
+        (member["product_id"], member["barcode"]) for member in members
+    )
+    validated_input_pairs = sorted(
+        (member["unit_id"], member["normalized_barcode"])
+        for member in resolved["bundle"]["members"]
+    )
+    checks = {
+        "member_count_exact": preflight.member_count == len(members),
+        "member_ids_exact": list(preflight.member_ids) == sorted(member_ids),
+        "barcodes_exact": list(preflight.normalized_barcodes) == sorted(barcodes),
+        "validated_input_pairs_exact": validated_input_pairs == expected_pairs,
+        "quantity_basis_central_exact_membership": (
+            preflight.audit_detail().get("quantity_basis")
+            == "CENTRAL_EXACT_MEMBERSHIP"
+        ),
+    }
+    return {
+        "production_validator_called": True,
+        "validator_identity": _bound_method_identity(
+            module.validate_compact_phs2_preflight
+        ),
+        "member_count": preflight.member_count,
+        "member_ids": list(preflight.member_ids),
+        "normalized_barcodes": list(preflight.normalized_barcodes),
+        "validated_input_pairs": [list(pair) for pair in validated_input_pairs],
+        "membership_hash": preflight.membership_hash,
+        "barcode_membership_hash": preflight.barcode_membership_hash,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _status_variant_assertion(
+    module: Any,
+    *,
+    variant_id: str,
+    text: str,
+    color: str,
+) -> dict[str, Any]:
+    """Exercise generic copy presentation without claiming business semantics."""
+
+    app = module.ContainerAudit.__new__(module.ContainerAudit)
+    app.warning_presenter = module.WarningPresenter()
+    app.current_tray = SimpleNamespace(master_label_code="")
+    app.status_label = None
+    app.notice_frame = None
+    app.notice_title_label = None
+    app.notice_message_label = None
+    app.phs_active_label_info_label = None
+    app.notice_ack_button = None
+    app.scan_entry = None
+    app.last_scan_value_label = None
+    app.info_cards = {}
+    app.follow_up_label = None
+    app._center_widget_generation = 0
+    app._schedule_notice_message_wrap_refresh = lambda **_kwargs: None
+    trace: dict[str, Any]
+    with trace_m7_production_calls(
+        app,
+        module,
+        ("show_status_message",),
+    ) as trace:
+        app.show_status_message(text, color, duration=0)
+    notice = app.warning_presenter.state.active_notice
+    provenance = inspect_production_text_provenance(text)
+    presenter_checks = {
+        "production_presenter_called": trace["passed"] is True,
+        "presented_text_exact": notice is not None and notice.message == text,
+        "text_exact_in_product_blob": provenance["passed"] is True,
+    }
+    return {
+        "variant_id": variant_id,
+        "kind": "status_presenter",
+        "expected_text": text,
+        "presented_text": notice.message if notice is not None else "",
+        "production_call_trace": trace,
+        "text_provenance": provenance,
+        "presenter_checks": presenter_checks,
+        "presenter_checks_passed": all(presenter_checks.values()),
+        "business_state_producer_called": False,
+        "reason": (
+            "generic show_status_message accepts caller-provided copy; no safe "
+            "branch-specific producer was called"
+        ),
+        "seam_available": False,
+        "passed": False,
+    }
+
+
+def _b64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+
+def _expired_lease_validation_assertion(fixture: StateFixture) -> dict[str, Any]:
+    """Use the production signed-artifact validator to prove expiry."""
+
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    import terminal_operation_lease as lease
+    import transfer_seal
+
+    lease_fixture = fixture.lease
+    if lease_fixture is None or not lease_fixture.lease_id or not lease_fixture.expires_at:
+        raise RuntimeError("expired-lease scene requires a bound lease fixture")
+    expires = dt.datetime.fromisoformat(lease_fixture.expires_at).astimezone(
+        dt.timezone.utc
+    )
+    issued = expires - dt.timedelta(minutes=5)
+    snapshot = {
+        "fixture": fixture.state_id,
+        "lease_id": lease_fixture.lease_id,
+    }
+    members = [member.product_id for member in fixture.authoritative_members]
+    claims = {
+        "contract_version": lease.LEASE_CONTRACT_VERSION,
+        "lease_id": lease_fixture.lease_id,
+        "site_id": "M7-CAPTURE-SITE",
+        "program": "Container_Audit",
+        "device_id": "M7-CAPTURE-DEVICE",
+        "source_host_id": "M7-CAPTURE-HOST",
+        "authority_scope_id": "M7-CAPTURE-AUTHORITY",
+        "ledger_plane": "AUTHORITATIVE",
+        "plane_epoch": 1,
+        "operation": lease.TRANSFER_OPERATION,
+        "resource_id": "phs-work-group:M7-CAPTURE-GROUP",
+        "physical_label_id": "LBL-M7-CONTAINER-0001",
+        "physical_qr_sha256": lease.physical_qr_sha256(CAPTURE_EXACT_SIX_PHS2),
+        "item_id": "AAA2270730100",
+        "quantity": len(members),
+        "member_count": len(members),
+        "membership_hash": transfer_seal.membership_hash(members),
+        "expected_versions": {"bundle:M7-CAPTURE-SOURCE": 1},
+        "issued_at": lease.utc_text(issued),
+        "expires_at": lease.utc_text(expires),
+        "fence": 1,
+        "snapshot_hash": lease.canonical_hash(snapshot),
+    }
+    private_key = ec.derive_private_key(7, ec.SECP256R1())
+    numbers = private_key.public_key().public_numbers()
+    public_jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": _b64url(numbers.x.to_bytes(32, "big")),
+        "y": _b64url(numbers.y.to_bytes(32, "big")),
+    }
+    kid = "M7-CAPTURE-LEASE-KEY"
+    header = {"alg": "ES256", "kid": kid, "typ": lease.JWS_TYPE}
+    encoded_header = _b64url(lease.canonical_json_bytes(header))
+    encoded_payload = _b64url(lease.canonical_json_bytes(claims))
+    signing_input = f"{encoded_header}.{encoded_payload}".encode("ascii")
+    der = private_key.sign(signing_input, ec.ECDSA(hashes.SHA256()))
+    r_value, s_value = decode_dss_signature(der)
+    p256_order = int(
+        "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
+        16,
+    )
+    s_value = min(s_value, p256_order - s_value)
+    token = (
+        f"{encoded_header}.{encoded_payload}."
+        + _b64url(r_value.to_bytes(32, "big") + s_value.to_bytes(32, "big"))
+    )
+    keyring = {
+        "contract_version": lease.KEYRING_CONTRACT_VERSION,
+        "site_id": claims["site_id"],
+        "current_kid": kid,
+        "keys": [
+            {
+                "kid": kid,
+                "status": "current",
+                "public_jwk": public_jwk,
+                "thumbprint": lease.jwk_thumbprint(public_jwk),
+            }
+        ],
+    }
+    artifact = {
+        "contract_version": lease.ARTIFACT_CONTRACT_VERSION,
+        "lease_id": claims["lease_id"],
+        "status": "ACTIVE",
+        "replayed": False,
+        "token": token,
+        "kid": kid,
+        "expires_at": claims["expires_at"],
+        "fence": claims["fence"],
+        "snapshot_hash": claims["snapshot_hash"],
+        "operation_snapshot": snapshot,
+        "keyring": keyring,
+    }
+    expected = {key: claims[key] for key in lease.LEASE_BINDING_KEYS}
+    observed_code = ""
+    try:
+        lease.validate_artifact(
+            artifact,
+            expected=expected,
+            now=expires + dt.timedelta(seconds=1),
+        )
+    except lease.OperationLeaseError as exc:
+        observed_code = exc.code
+    expected_error_code = lease_fixture.error_code
+    fixture_binding = {
+        "lease_id": artifact["lease_id"] == lease_fixture.lease_id,
+        "expires_at": artifact["expires_at"]
+        == lease.utc_text(expires),
+        "error_code": observed_code == expected_error_code,
+    }
+    return {
+        "variant_id": "lease_expired",
+        "production_validator_called": True,
+        "validator_identity": _bound_method_identity(lease.validate_artifact),
+        "observed_error_code": observed_code,
+        "expected_error_code": expected_error_code,
+        "fixture_binding": fixture_binding,
+        "seam_available": all(fixture_binding.values()),
+        "passed": all(fixture_binding.values()),
+    }
+
+
+def _offline_lease_validation_assertion(
+    module: Any,
+    fixture: StateFixture,
+) -> dict[str, Any]:
+    coordinator = module.TransferSealCoordinator.__new__(
+        module.TransferSealCoordinator
+    )
+    coordinator.client = None
+    coordinator.operation_lease_manager = None
+    observed_code = ""
+    try:
+        coordinator._verified_operation_lease(
+            lease_id=(fixture.lease.lease_id if fixture.lease is not None else ""),
+            master_label=fixture.scanned_master_label,
+            master_label_fields=module.parse_new_format_qr(
+                fixture.scanned_master_label
+            )
+            or {},
+            item_id=(fixture.tray.item_code if fixture.tray is not None else "AAA2270730100"),
+            scanned_barcodes=(
+                list(fixture.tray.scanned_barcodes)
+                if fixture.tray is not None
+                else []
+            ),
+        )
+    except module.TransferSealError as exc:
+        observed_code = exc.code
+    passed = observed_code == "OPERATION_LEASE_RUNTIME_UNAVAILABLE"
+    return {
+        "variant_id": "lease_offline_start_blocked",
+        "production_validator_called": True,
+        "validator_identity": _bound_method_identity(
+            module.TransferSealCoordinator._verified_operation_lease
+        ),
+        "observed_error_code": observed_code,
+        "expected_error_code": "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+        "seam_available": passed,
+        "passed": passed,
+    }
+
+
 def _completion_variant_assertions(
     module: Any,
     fixture: StateFixture,
@@ -814,6 +1492,14 @@ def _completion_variant_assertions(
         presenter = module.WarningPresenter()
         changed = presenter.present_completion(snapshot)
         notice = presenter.state.active_notice
+        title_provenance = inspect_production_text_provenance(
+            notice.title if notice is not None else ""
+        )
+        checks = {
+            "production_presenter_called": changed is True,
+            "notice_present": notice is not None,
+            "title_exact_in_product_blob": title_provenance["passed"] is True,
+        }
         assertions.append(
             {
                 "outcome": outcome_name,
@@ -828,9 +1514,170 @@ def _completion_variant_assertions(
                 "presenter_identity": _bound_method_identity(
                     presenter.present_completion
                 ),
+                "title_provenance": title_provenance,
+                "checks": checks,
+                "seam_available": all(checks.values()),
+                "passed": all(checks.values()),
             }
         )
     return assertions
+
+
+def _m7_variant_assertions(
+    fixture: StateFixture,
+    module: Any,
+    *,
+    member_validation: Mapping[str, Any],
+    completion_variants: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    state_id = fixture.state_id
+    if state_id == "m7_phs2_preflight":
+        return [
+            _status_variant_assertion(
+                module,
+                variant_id=f"preflight_{index}",
+                text=text,
+                color=(module.ContainerAudit.COLOR_PRIMARY if index == 1 else module.ContainerAudit.COLOR_DANGER),
+            )
+            for index, text in enumerate(fixture.status_variants, start=1)
+        ]
+    if state_id == "m7_central_preflight_queue":
+        return [
+            {
+                "variant_id": f"central_queue_{index}",
+                "kind": "business_state_without_safe_capture_seam",
+                "expected_text": text,
+                "text_provenance": inspect_production_text_provenance(text),
+                "production_state_method_called": False,
+                "reason": (
+                    "production text is created inside asynchronous hold-store callbacks; "
+                    "the capture tool has no read-only state API"
+                ),
+                "seam_available": False,
+                "passed": False,
+            }
+            for index, text in enumerate(fixture.status_variants, start=1)
+        ]
+    if state_id == "m7_completion_busy":
+        return [
+            _status_variant_assertion(
+                module,
+                variant_id=f"completion_busy_{index}",
+                text=text,
+                color=(module.ContainerAudit.COLOR_PRIMARY if index == 1 else module.ContainerAudit.COLOR_DANGER),
+            )
+            for index, text in enumerate(fixture.status_variants, start=1)
+        ]
+    if state_id == "m7_recovery_transition":
+        variants: list[dict[str, Any]] = []
+        for index, text in enumerate(fixture.status_variants, start=1):
+            if index == len(fixture.status_variants):
+                variants.append(
+                    _status_variant_assertion(
+                        module,
+                        variant_id="recovery_restored_status",
+                        text=text,
+                        color=module.ContainerAudit.COLOR_PRIMARY,
+                    )
+                )
+                continue
+            variants.append(
+                {
+                    "variant_id": f"recovery_flow_{index}",
+                    "kind": "modal_or_dynamic_business_state_without_safe_capture_seam",
+                    "expected_text": text,
+                    "text_provenance": inspect_production_text_provenance(text),
+                    "production_state_method_called": False,
+                    "reason": (
+                        "production exposes this state only through a modal or a dynamic "
+                        "parked-row presenter; GUI execution is forbidden in this lane"
+                    ),
+                    "seam_available": False,
+                    "passed": False,
+                }
+            )
+        return variants
+    if state_id == "m7_direct_sync_backlog_ack":
+        assert fixture.direct_sync is not None
+        health = module.RelayHealth(**asdict(fixture.direct_sync))
+        card_model = module.relay_health_card_model(health)
+        rendered = f"{card_model['summary']}\n{card_model['detail']}"
+        ack = list(completion_variants)
+        return [
+            {
+                "variant_id": "direct_sync_backlog_and_last_ack",
+                "kind": "production_formatter_dynamic_copy",
+                "production_formatter_called": True,
+                "formatter_identity": _bound_method_identity(
+                    module.relay_health_card_model
+                ),
+                "presented_text": rendered,
+                "text_provenance": inspect_production_text_provenance(rendered),
+                "reason": (
+                    "the exact rendered backlog/ACK string is dynamic and is not an "
+                    "exact product-blob string"
+                ),
+                "seam_available": False,
+                "passed": False,
+            },
+            *ack,
+        ]
+    if state_id == "m7_exact_good_membership":
+        passed = member_validation.get("passed") is True
+        return [
+            {
+                "variant_id": "exact_good_member_count_and_pairs",
+                "kind": "production_exact_membership_validator",
+                "production_validation": dict(member_validation),
+                "seam_available": passed,
+                "passed": passed,
+            }
+        ]
+    if state_id == "m7_lease_fail_closed":
+        issue_text = fixture.status_variants[0]
+        return [
+            {
+                "variant_id": "lease_issue_failed",
+                "kind": "writer_only_api_without_read_only_validation_seam",
+                "expected_text": issue_text,
+                "text_provenance": inspect_production_text_provenance(issue_text),
+                "production_validator_called": False,
+                "reason": (
+                    "lease issuance is a writer/network API and no dry-run validator exists"
+                ),
+                "seam_available": False,
+                "passed": False,
+            },
+            _expired_lease_validation_assertion(fixture),
+            _offline_lease_validation_assertion(module, fixture),
+        ]
+    if state_id == "m7_transfer_receipt_status":
+        return [dict(item) for item in completion_variants]
+    if state_id == "m7_partial_atomic_exchange":
+        partial = _status_variant_assertion(
+            module,
+            variant_id="partial_completion_blocked",
+            text=fixture.status_variants[0],
+            color=module.ContainerAudit.COLOR_DANGER,
+        )
+        return [
+            partial,
+            {
+                "variant_id": "one_or_two_pair_atomic_exchange",
+                "kind": "mutation_free_exchange_validation_api_missing",
+                "coordinator_identity": (
+                    "transfer_member_exchange.TransferMemberExchangeCoordinator"
+                ),
+                "production_validator_called": False,
+                "reason": (
+                    "pair validation is coupled to TransferMemberExchangeStore.prepare "
+                    "and mutates SQLite; no dry-run/validate API exists"
+                ),
+                "seam_available": False,
+                "passed": False,
+            },
+        ]
+    raise RuntimeError(f"unsupported M7 variant contract: {state_id}")
 
 
 def build_m7_scene_assertions(
@@ -839,26 +1686,14 @@ def build_m7_scene_assertions(
 ) -> dict[str, Any]:
     """Build non-pixel assertions from production objects for one scene."""
 
+    _assert_runtime_module_binding(module)
     spec = M7_SCENE_CONTRACT[fixture.state_id]
     phs2 = _validate_exact_six_phs2(module, fixture.scanned_master_label)
     members = [asdict(member) for member in fixture.authoritative_members]
-    member_ids = [member["product_id"] for member in members]
-    member_barcodes = [member["barcode"] for member in members]
     active_scans = (
         list(fixture.tray.scanned_barcodes) if fixture.tray is not None else []
     )
-    member_checks = {
-        "member_count_exact": (
-            fixture.tray is None
-            or fixture.tray.target_count == len(members)
-        ),
-        "member_ids_unique": len(member_ids) == len(set(member_ids)),
-        "barcodes_unique": len(member_barcodes) == len(set(member_barcodes)),
-        "product_id_barcode_pairs_exact": all(
-            set(member) == {"product_id", "barcode"} for member in members
-        ),
-        "active_scans_are_members": set(active_scans).issubset(member_barcodes),
-    }
+    member_validation = _production_member_set_assertion(module, fixture)
     direct_sync: dict[str, Any] | None = None
     if fixture.direct_sync is not None:
         health = module.RelayHealth(**asdict(fixture.direct_sync))
@@ -874,27 +1709,41 @@ def build_m7_scene_assertions(
         {"old_barcode": old, "new_barcode": new}
         for old, new in fixture.exchange_pairs
     ]
-    exchange_checks = {
-        "pair_count_in_range": not exchange_pairs or 1 <= len(exchange_pairs) <= 2,
-        "pair_counts_equal": all(
-            pair["old_barcode"] and pair["new_barcode"] for pair in exchange_pairs
+    completion_variants = _completion_variant_assertions(module, fixture)
+    variant_assertions = _m7_variant_assertions(
+        fixture,
+        module,
+        member_validation=member_validation,
+        completion_variants=completion_variants,
+    )
+    exchange_applicable = bool(exchange_pairs)
+    exchange_validation = {
+        "applicable": exchange_applicable,
+        "pairs": exchange_pairs,
+        "production_validator_called": False,
+        "validator_identity": None,
+        "reason": (
+            "no mutation-free TransferMemberExchangeCoordinator validate API"
+            if exchange_applicable
+            else "not_applicable"
         ),
-        "old_members_belong_to_active_tray": all(
-            pair["old_barcode"] in active_scans for pair in exchange_pairs
+        "seam_available": not exchange_applicable,
+        "passed": not exchange_applicable,
+    }
+    production_checks = {
+        "exact_six_phs2_validated": phs2["passed"] is True,
+        "exact_membership_validated": member_validation.get("passed") is True,
+        "every_variant_asserted": bool(variant_assertions),
+        "every_variant_has_production_seam": all(
+            item.get("passed") is True for item in variant_assertions
         ),
-        "replacement_barcodes_are_new": all(
-            pair["new_barcode"] not in active_scans for pair in exchange_pairs
-        ),
-        "central_atomic": (
-            True
-            if not exchange_pairs
-            else all(pair["old_barcode"] != pair["new_barcode"] for pair in exchange_pairs)
+        "exchange_validated_when_applicable": (
+            exchange_validation["passed"] is True
         ),
     }
     return {
         "schema": "container-audit-m7-scene-assertions-v1",
         "state_id": fixture.state_id,
-        "production_sources": list(spec["production_sources"]),
         "production_call_path": list(spec["production_call_path"]),
         "expected_input_state": spec["input_state"],
         "expected_disabled_controls": list(spec.get("disabled_controls") or ()),
@@ -905,26 +1754,40 @@ def build_m7_scene_assertions(
             "phase": fixture.preflight_phase or None,
             "held_scan_count": len(fixture.held_scans),
             "held_scans": list(fixture.held_scans),
-            "status_variants": list(fixture.status_variants),
         },
         "member_set": {
             "member_count": len(members),
             "members": members,
             "active_scan_count": len(active_scans),
             "active_scans": active_scans,
-            "checks": member_checks,
-            "passed": all(member_checks.values()),
+            "production_validation": member_validation,
+            "passed": member_validation.get("passed") is True,
         },
-        "lease": lease,
+        "lease": {
+            "fixture": lease,
+            "production_variants": [
+                item
+                for item in variant_assertions
+                if str(item.get("variant_id") or "").startswith("lease_")
+            ],
+        },
         "direct_sync": direct_sync,
         "receipt": {
             "active_receipt_id": fixture.receipt_id,
-            "completion_variants": _completion_variant_assertions(module, fixture),
+            "completion_variants": completion_variants,
         },
-        "exchange": {
-            "pairs": exchange_pairs,
-            "checks": exchange_checks,
-            "passed": all(exchange_checks.values()),
+        "exchange": exchange_validation,
+        "variant_assertions": variant_assertions,
+        "production_validation": {
+            "variant_count": len(variant_assertions),
+            "validated_variant_count": sum(
+                item.get("passed") is True for item in variant_assertions
+            ),
+            "no_seam_variant_count": sum(
+                item.get("passed") is not True for item in variant_assertions
+            ),
+            "checks": production_checks,
+            "passed": all(production_checks.values()),
         },
     }
 
@@ -1683,6 +2546,16 @@ def enable_per_monitor_dpi_awareness() -> str:
             return "system-aware"
         except Exception:
             return "unchanged"
+
+
+def measure_tk_dpi(root: Any) -> int:
+    """Read the live Tk screen DPI used by the already-open capture window."""
+
+    measured = float(root.winfo_fpixels("1i"))
+    dpi = int(round(measured))
+    if not math.isfinite(measured) or dpi < 1:
+        raise RuntimeError("Tk returned an invalid capture-host DPI")
+    return dpi
 
 
 def pump_tk(root: Any, milliseconds: int = 220) -> None:
@@ -3397,71 +4270,93 @@ def _apply_m7_production_scene(
         app._preflight_hold_draining = fixture.preflight_phase == "DRAINING"
 
     state_id = fixture.state_id
-    if state_id == "m7_phs2_preflight":
-        app.show_status_message(
-            fixture.status_variants[0], app.COLOR_PRIMARY, duration=0
-        )
-        app._set_preflight_scan_input_locked(True)
-        app._update_current_item_label()
-        app._update_action_button_states()
-    elif state_id == "m7_central_preflight_queue":
-        app.show_status_message(
-            fixture.status_variants[2], app.COLOR_DANGER, duration=0
-        )
-        app._set_preflight_scan_input_locked(True)
-        app._update_action_button_states()
-    elif state_id == "m7_completion_busy":
-        app._set_completion_lane_busy(True)
-        app.show_status_message(
-            fixture.status_variants[1], app.COLOR_DANGER, duration=0
-        )
-        app._set_preflight_scan_input_locked(True)
-        app._update_action_button_states()
-    elif state_id == "m7_recovery_transition":
-        app._update_center_display()
-        app._update_parked_trays_list()
-        app._update_parked_recovery_affordance()
-        app.show_status_message(
-            fixture.status_variants[-1], app.COLOR_PRIMARY, duration=0
-        )
-    elif state_id == "m7_direct_sync_backlog_ack":
-        if fixture.direct_sync is None:
-            raise RuntimeError("direct-sync scene requires RelayHealth state")
-        app._apply_direct_sync_health(module.RelayHealth(**asdict(fixture.direct_sync)))
-        app._render_warning_state()
-        app._update_action_button_states()
-    elif state_id == "m7_exact_good_membership":
-        app._update_center_display()
-        app._update_current_item_label()
-        app._update_action_button_states()
-    elif state_id == "m7_lease_fail_closed":
-        app.show_fullscreen_warning(
-            "중앙 PHS=2 확인 실패",
-            fixture.status_variants[-1],
-            app.COLOR_DANGER,
-        )
-        app._set_preflight_scan_input_locked(True)
-        app._update_action_button_states()
-    elif state_id == "m7_transfer_receipt_status":
-        app._render_warning_state()
-        app._update_action_button_states()
-    elif state_id == "m7_partial_atomic_exchange":
-        app._exact_exchange_mode_active = True
-        app._exact_transfer_exchange_history_snapshot = True
-        app.show_status_message(
-            fixture.status_variants[0], app.COLOR_DANGER, duration=0
-        )
-        app._update_action_button_states()
-    else:  # pragma: no cover - the constant set is validated by tests
-        raise RuntimeError(f"unsupported M7 state: {state_id}")
+
+    def drive_scene() -> None:
+        if state_id == "m7_phs2_preflight":
+            app.show_status_message(
+                fixture.status_variants[0], app.COLOR_PRIMARY, duration=0
+            )
+            app._set_preflight_scan_input_locked(True)
+            app._update_current_item_label()
+            app._update_action_button_states()
+        elif state_id == "m7_central_preflight_queue":
+            app.show_status_message(
+                fixture.status_variants[2], app.COLOR_DANGER, duration=0
+            )
+            app._set_preflight_scan_input_locked(True)
+            app._update_action_button_states()
+        elif state_id == "m7_completion_busy":
+            app._set_completion_lane_busy(True)
+            app.show_status_message(
+                fixture.status_variants[1], app.COLOR_DANGER, duration=0
+            )
+            app._set_preflight_scan_input_locked(True)
+            app._update_action_button_states()
+        elif state_id == "m7_recovery_transition":
+            app._update_center_display()
+            app._update_parked_trays_list()
+            app._update_parked_recovery_affordance()
+            app.show_status_message(
+                fixture.status_variants[-1], app.COLOR_PRIMARY, duration=0
+            )
+        elif state_id == "m7_direct_sync_backlog_ack":
+            if fixture.direct_sync is None:
+                raise RuntimeError("direct-sync scene requires RelayHealth state")
+            app._apply_direct_sync_health(
+                module.RelayHealth(**asdict(fixture.direct_sync))
+            )
+            app._render_warning_state()
+            app._update_action_button_states()
+        elif state_id == "m7_exact_good_membership":
+            app._update_center_display()
+            app._update_current_item_label()
+            app._update_action_button_states()
+        elif state_id == "m7_lease_fail_closed":
+            app.show_fullscreen_warning(
+                "중앙 PHS=2 확인 실패",
+                fixture.status_variants[-1],
+                app.COLOR_DANGER,
+            )
+            app._set_preflight_scan_input_locked(True)
+            app._update_action_button_states()
+        elif state_id == "m7_transfer_receipt_status":
+            app._render_warning_state()
+            app._update_action_button_states()
+        elif state_id == "m7_partial_atomic_exchange":
+            app._exact_exchange_mode_active = True
+            app._exact_transfer_exchange_history_snapshot = True
+            app.show_status_message(
+                fixture.status_variants[0], app.COLOR_DANGER, duration=0
+            )
+            app._update_action_button_states()
+        else:  # pragma: no cover - the constant set is validated by tests
+            raise RuntimeError(f"unsupported M7 state: {state_id}")
+
+    call_trace: dict[str, Any]
+    with trace_m7_production_calls(
+        app,
+        module,
+        spec["production_call_path"],
+    ) as call_trace:
+        drive_scene()
 
     assertions = build_m7_scene_assertions(fixture, module)
+    semantic_validation = assertions["production_validation"]
     receipt = {
         "state_id": fixture.state_id,
         "production_call_path": list(spec["production_call_path"]),
         "production_method_identities": bound_identities,
-        "production_sources": list(spec["production_sources"]),
-        "seam_available": True,
+        "production_call_trace": call_trace,
+        "seam_available": bool(
+            call_trace["passed"] is True
+            and semantic_validation["passed"] is True
+        ),
+        "reason": (
+            "validated"
+            if call_trace["passed"] is True
+            and semantic_validation["passed"] is True
+            else "production_semantic_variant_unavailable"
+        ),
         "state_values": {
             "preflight_pending": bool(
                 getattr(app, "_master_preflight_pending", False)
@@ -3627,6 +4522,373 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _canonical_json_bytes(value: Mapping[str, Any]) -> bytes:
+    return (
+        json.dumps(
+            dict(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    ).encode("utf-8")
+
+
+def _write_new_bytes(path: Path, payload: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as handle:
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+
+
+def _write_new_json(path: Path, value: Mapping[str, Any]) -> str:
+    payload = _canonical_json_bytes(value)
+    _write_new_bytes(path, payload)
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _png_dimensions_from_bytes(payload: bytes) -> tuple[int, int]:
+    signature = bytes((137, 80, 78, 71, 13, 10, 26, 10))
+    if (
+        len(payload) < 24
+        or payload[:8] != signature
+        or payload[12:16] != b"IHDR"
+    ):
+        raise ValueError("capture input must be a PNG with an IHDR header")
+    width, height = struct.unpack(">II", payload[16:24])
+    if width < 1 or height < 1:
+        raise ValueError("capture PNG dimensions must be positive")
+    return width, height
+
+
+def _git_source_and_tool_identity(
+    *,
+    repo_root: Path,
+    capture_tool_path: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    commit = _git_bytes(repo_root, "rev-parse", "HEAD^{commit}").decode(
+        "ascii"
+    ).strip()
+    tree = _git_bytes(repo_root, "rev-parse", f"{commit}^{{tree}}").decode(
+        "ascii"
+    ).strip()
+    if re.fullmatch(r"[0-9a-f]{40}", commit) is None or re.fullmatch(
+        r"[0-9a-f]{40}", tree
+    ) is None:
+        raise RuntimeError("app source commit/tree is not a full Git object ID")
+    normalized_tool_path = str(capture_tool_path or "").replace("\\", "/")
+    if (
+        not normalized_tool_path
+        or normalized_tool_path.startswith("/")
+        or ".." in Path(normalized_tool_path).parts
+        or re.fullmatch(r"[A-Za-z0-9._/-]+", normalized_tool_path) is None
+    ):
+        raise ValueError("capture tool path must be a safe repository path")
+    frozen_tool = _git_bytes(
+        repo_root,
+        "show",
+        f"{commit}:{normalized_tool_path}",
+    )
+    working_tool_path = repo_root / Path(normalized_tool_path)
+    if (
+        not working_tool_path.is_file()
+        or working_tool_path.is_symlink()
+        or not _git_paths_match_commit(
+            repo_root,
+            commit,
+            (normalized_tool_path,),
+        )
+    ):
+        raise RuntimeError(
+            "capture tool content must exactly match the frozen app commit"
+        )
+    _assert_frozen_production_worktree(repo_root, commit)
+    return (
+        {"commit": commit, "tree": tree},
+        {
+            "path": normalized_tool_path,
+            "commit": commit,
+            "blob_sha256": hashlib.sha256(frozen_tool).hexdigest(),
+        },
+    )
+
+
+def _root_relative(path: Path, root: Path) -> str:
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError as exc:
+        raise ValueError("evidence path must remain below the external root") from exc
+    if not relative or re.fullmatch(r"[A-Za-z0-9._/-]+", relative) is None:
+        raise ValueError("evidence path is not a canonical root-relative path")
+    return relative
+
+
+def _assert_no_symlink_path_components(path: Path) -> None:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current = current / part
+        if current.exists() and current.is_symlink():
+            raise ValueError(f"symlink path component is forbidden: {current}")
+
+
+def _assert_clean_evidence_root(root: Path) -> None:
+    for current_text, directories, files in os.walk(root, followlinks=False):
+        current = Path(current_text)
+        for name in [*directories, *files]:
+            candidate = current / name
+            if candidate.is_symlink():
+                raise ValueError("symlinks are forbidden in the external evidence root")
+            if name.lower() == "latest" or Path(name).stem.lower() == "latest":
+                raise ValueError("mutable latest aliases are forbidden")
+
+
+def build_m7_external_capture_bundle(
+    *,
+    evidence_root: Path,
+    portable_artifact: Path,
+    captures: Sequence[ExternalCaptureImage],
+    repo_root: Path = ROOT,
+    capture_tool_path: str = M7_CAPTURE_TOOL_PATH,
+    generated_at: dt.datetime | None = None,
+    nonce: str | None = None,
+) -> dict[str, Any]:
+    """Create one canonical external bundle from already-rendered PNG bytes.
+
+    The function performs no rendering and never opens Tk.  Every document and
+    copied byte object is created with exclusive-create semantics.
+    """
+
+    root_input = Path(evidence_root).absolute()
+    _assert_no_symlink_path_components(root_input)
+    root = root_input.resolve()
+    if root.exists() and not root.is_dir():
+        raise ValueError("external evidence root must be a real directory")
+    root.mkdir(parents=True, exist_ok=True)
+    _assert_clean_evidence_root(root)
+    artifact_input = Path(portable_artifact).absolute()
+    _assert_no_symlink_path_components(artifact_input)
+    artifact_source = artifact_input.resolve()
+    if (
+        not artifact_source.is_file()
+        or artifact_source.stat().st_size < 1
+    ):
+        raise ValueError("portable artifact input must be a non-empty regular file")
+    app_source, capture_tool = _git_source_and_tool_identity(
+        repo_root=Path(repo_root).resolve(),
+        capture_tool_path=capture_tool_path,
+    )
+    by_state: dict[str, ExternalCaptureImage] = {}
+    for capture in captures:
+        if not isinstance(capture, ExternalCaptureImage):
+            raise TypeError("captures must contain ExternalCaptureImage values")
+        state_id = str(capture.state_id or "")
+        if state_id in by_state:
+            raise ValueError(f"duplicate capture state ID: {state_id}")
+        if state_id not in M7_REQUIRED_STATE_IDS:
+            raise ValueError(f"unexpected capture state ID: {state_id}")
+        if isinstance(capture.dpi, bool) or int(capture.dpi) < 1:
+            raise ValueError("capture DPI must be a positive integer")
+        _png_dimensions_from_bytes(capture.png_bytes)
+        by_state[state_id] = capture
+    if set(by_state) != set(M7_REQUIRED_STATE_IDS) or len(by_state) != len(
+        M7_REQUIRED_STATE_IDS
+    ):
+        missing = [state for state in M7_REQUIRED_STATE_IDS if state not in by_state]
+        extra = [state for state in by_state if state not in M7_REQUIRED_STATE_IDS]
+        raise ValueError(
+            "captures must contain the exact required state set; "
+            f"missing={missing!r} extra={extra!r}"
+        )
+
+    instant = generated_at or dt.datetime.now(dt.timezone.utc)
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise ValueError("generated_at must be timezone-aware")
+    instant = instant.astimezone(dt.timezone.utc).replace(microsecond=0)
+    compact_utc = instant.strftime("%Y%m%dT%H%M%SZ")
+    rfc3339_utc = instant.strftime("%Y-%m-%dT%H:%M:%SZ")
+    nonce8 = str(nonce or secrets.token_hex(4)).lower()
+    if re.fullmatch(r"[0-9a-f]{8}", nonce8) is None:
+        raise ValueError("bundle nonce must be lowercase 8-hex")
+    bundle_id = (
+        f"{M7_EXTERNAL_CAPTURE_APP}__{app_source['commit'][:12]}__"
+        f"{compact_utc}__{nonce8}"
+    )
+    bundle_root = root / M7_EXTERNAL_CAPTURE_APP / bundle_id
+    bundle_root.mkdir(parents=True, exist_ok=False)
+    for directory in ("captures", "states", "approval"):
+        (bundle_root / directory).mkdir()
+
+    artifact_digest = _sha256(artifact_source)
+    try:
+        artifact_relative = _root_relative(artifact_source, root)
+    except ValueError:
+        suffix = artifact_source.suffix.lower()
+        if re.fullmatch(r"\.[a-z0-9]+", suffix) is None:
+            suffix = ".bin"
+        artifact_destination = (
+            root
+            / "artifacts"
+            / (
+                f"{M7_EXTERNAL_CAPTURE_APP}__{app_source['commit'][:12]}__"
+                f"{artifact_digest[:12]}{suffix}"
+            )
+        )
+        artifact_destination.parent.mkdir(parents=True, exist_ok=True)
+        if artifact_destination.exists():
+            if (
+                artifact_destination.is_symlink()
+                or not artifact_destination.is_file()
+                or _sha256(artifact_destination) != artifact_digest
+            ):
+                raise RuntimeError("existing portable artifact identity mismatch")
+        else:
+            with artifact_source.open("rb") as source_handle, artifact_destination.open(
+                "xb"
+            ) as destination_handle:
+                shutil.copyfileobj(source_handle, destination_handle, 1024 * 1024)
+                destination_handle.flush()
+                os.fsync(destination_handle.fileno())
+        if _sha256(artifact_destination) != artifact_digest:
+            raise RuntimeError("portable artifact copy digest mismatch")
+        artifact_relative = _root_relative(artifact_destination, root)
+    portable_identity = {
+        "file": artifact_relative,
+        "sha256": artifact_digest,
+    }
+
+    capture_records: list[dict[str, Any]] = []
+    for state_id in M7_REQUIRED_STATE_IDS:
+        capture = by_state[state_id]
+        width, height = _png_dimensions_from_bytes(capture.png_bytes)
+        dpi = int(capture.dpi)
+        stem = f"{state_id}__{width}x{height}__{dpi}dpi"
+        image_path = bundle_root / "captures" / f"{stem}.png"
+        _write_new_bytes(image_path, capture.png_bytes)
+        image_digest = hashlib.sha256(capture.png_bytes).hexdigest()
+        image_relative = _root_relative(image_path, root)
+        state_path = bundle_root / "states" / f"{stem}.json"
+        state_document = {
+            "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+            "app": M7_EXTERNAL_CAPTURE_APP,
+            "bundle_id": bundle_id,
+            "state_id": state_id,
+            "viewport": {"width_px": width, "height_px": height},
+            "dpi": dpi,
+            "generated_at": rfc3339_utc,
+            "image_file": image_relative,
+            "image_sha256": image_digest,
+        }
+        state_digest = _write_new_json(state_path, state_document)
+        capture_records.append(
+            {
+                "state_id": state_id,
+                "viewport": {"width_px": width, "height_px": height},
+                "dpi": dpi,
+                "generated_at": rfc3339_utc,
+                "image_file": image_relative,
+                "image_sha256": image_digest,
+                "state_manifest_file": _root_relative(state_path, root),
+                "state_manifest_sha256": state_digest,
+            }
+        )
+
+    capture_set_relative = _root_relative(bundle_root / "capture-set.json", root)
+    capture_set = {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app": M7_EXTERNAL_CAPTURE_APP,
+        "bundle_id": bundle_id,
+        "app_source": app_source,
+        "portable_artifact": portable_identity,
+        "capture_tool": capture_tool,
+        "captures": capture_records,
+    }
+    capture_set_digest = _write_new_json(
+        bundle_root / "capture-set.json",
+        capture_set,
+    )
+    approval_relative = _root_relative(
+        bundle_root / "approval" / "approval-receipt.json",
+        root,
+    )
+    approval_receipt = {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app": M7_EXTERNAL_CAPTURE_APP,
+        "bundle_id": bundle_id,
+        "capture_set_file": capture_set_relative,
+        "capture_set_sha256": capture_set_digest,
+        "approver": M7_APPROVAL_PLACEHOLDER,
+    }
+    approval_digest = _write_new_json(
+        bundle_root / "approval" / "approval-receipt.json",
+        approval_receipt,
+    )
+    custody_relative = _root_relative(
+        bundle_root / "approval" / "custody-receipt.json",
+        root,
+    )
+    custody_receipt = {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app": M7_EXTERNAL_CAPTURE_APP,
+        "bundle_id": bundle_id,
+        "capture_set_file": capture_set_relative,
+        "capture_set_sha256": capture_set_digest,
+        "approval_receipt_file": approval_relative,
+        "approval_receipt_sha256": approval_digest,
+        "custodian": M7_APPROVAL_PLACEHOLDER,
+        "custody_location": M7_APPROVAL_PLACEHOLDER,
+        "retention_period": M7_APPROVAL_PLACEHOLDER,
+    }
+    custody_digest = _write_new_json(
+        bundle_root / "approval" / "custody-receipt.json",
+        custody_receipt,
+    )
+    manifest = {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app": M7_EXTERNAL_CAPTURE_APP,
+        "app_source": app_source,
+        "portable_artifact": portable_identity,
+        "capture_tool": capture_tool,
+        "captures": capture_records,
+        "approval": {
+            "approver": M7_APPROVAL_PLACEHOLDER,
+            "approval_receipt_file": approval_relative,
+            "approval_receipt_sha256": approval_digest,
+            "custody_receipt_file": custody_relative,
+            "custody_receipt_sha256": custody_digest,
+        },
+    }
+    manifest_path = bundle_root / "manifest.json"
+    manifest_digest = _write_new_json(manifest_path, manifest)
+    index_path = root / "indexes" / (
+        f"handover-index__{compact_utc}__{nonce8}.json"
+    )
+    index_document = {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "manifests": [
+            {
+                "app": M7_EXTERNAL_CAPTURE_APP,
+                "manifest_file": _root_relative(manifest_path, root),
+                "manifest_sha256": manifest_digest,
+            }
+        ],
+    }
+    index_digest = _write_new_json(index_path, index_document)
+    return {
+        "evidence_root": str(root),
+        "bundle_id": bundle_id,
+        "manifest_path": str(manifest_path),
+        "manifest_sha256": manifest_digest,
+        "index_path": str(index_path),
+        "index_sha256": index_digest,
+        "manifest": manifest,
+        "capture_set_sha256": capture_set_digest,
+        "approval_pending": True,
+    }
 
 
 def _fixture_manifest(
@@ -3854,6 +5116,17 @@ def build_m7_scene_gate(
     member_set = assertions.get("member_set") or {}
     exchange = assertions.get("exchange") or {}
     direct_sync = assertions.get("direct_sync")
+    production_validation = assertions.get("production_validation") or {}
+    call_trace = receipt.get("production_call_trace") or {}
+    call_trace_assessment = (
+        validate_m7_production_call_trace(
+            call_trace,
+            spec["production_call_path"],
+        )
+        if isinstance(call_trace, Mapping)
+        else {"passed": False}
+    )
+    variant_assertions = assertions.get("variant_assertions") or []
     expected_direct_sync_text = ""
     if isinstance(direct_sync, Mapping):
         model = direct_sync.get("card_model") or {}
@@ -3865,9 +5138,18 @@ def build_m7_scene_gate(
         "production_seam_available": receipt.get("seam_available") is True,
         "production_call_path_exact": receipt.get("production_call_path")
         == list(spec["production_call_path"]),
-        "production_sources_exact": receipt.get("production_sources")
-        == list(spec["production_sources"]),
+        "production_call_trace_complete": (
+            call_trace_assessment.get("passed") is True
+        ),
         "production_assertions_exact": receipt.get("assertions") == assertions,
+        "semantic_variants_production_validated": (
+            production_validation.get("passed") is True
+            and bool(variant_assertions)
+            and all(
+                isinstance(item, Mapping) and item.get("passed") is True
+                for item in variant_assertions
+            )
+        ),
         "exact_six_phs2_validated": phs2.get("passed") is True,
         "member_set_validated": member_set.get("passed") is True,
         "exchange_assertion_validated": exchange.get("passed") is True,
@@ -3923,7 +5205,7 @@ def build_m7_scene_gate(
         )
     elif state_id == "m7_lease_fail_closed":
         checks["lease_failure_visible"] = notice_title == "중앙 PHS=2 확인 실패"
-        lease = assertions.get("lease")
+        lease = (assertions.get("lease") or {}).get("fixture")
         checks["lease_start_blocked"] = (
             isinstance(lease, Mapping) and lease.get("start_allowed") is False
         )
@@ -3932,9 +5214,11 @@ def build_m7_scene_gate(
         completion_variants = (assertions.get("receipt") or {}).get(
             "completion_variants"
         ) or []
-        checks["all_receipt_variants_present"] = [
-            item.get("outcome") for item in completion_variants
-        ] == list(fixture.get("completion_variants") or [])
+        checks["all_receipt_variants_production_presented"] = (
+            [item.get("outcome") for item in completion_variants]
+            == list(fixture.get("completion_variants") or [])
+            and all(item.get("passed") is True for item in completion_variants)
+        )
     elif state_id == "m7_partial_atomic_exchange":
         checks["partial_count_visible"] = count_text == (
             f"{member_set.get('active_scan_count')} / {member_set.get('member_count')}"
@@ -5363,9 +6647,7 @@ def run_capture_matrix(
         "isolated_app_settings": isolated_settings,
         "monitor_preflight": monitor_preflight,
         "near_black_failure_ratio": NEAR_BLACK_FAILURE_RATIO,
-        "m7_external_capture_bundle_contract": (
-            build_m7_external_capture_bundle_contract()
-        ),
+        "external_bundle_contract_reference": M7_CANONICAL_CONTRACT_PATH,
         "m7_production_scene_seams": m7_scene_seams,
         "captures": [],
     }
@@ -5376,6 +6658,7 @@ def run_capture_matrix(
     isolated_data_after: dict[str, Any] | None = None
     try:
         app = _make_capture_app(module, requested_scale)
+        measured_capture_dpi = measure_tk_dpi(app.root)
         isolated_data_before = inventory_isolated_data(data_root)
         mutation_guard = CaptureMutationGuard(app, module)
         mutation_guard.arm()
@@ -5455,6 +6738,7 @@ def run_capture_matrix(
                     "requested_size": [size[0], size[1]],
                     "requested_scale": requested_scale,
                     "requested_left_view": requested_left_view,
+                    "measured_capture_dpi": measured_capture_dpi,
                     "applied_scale_factor": float(app.scale_factor),
                     "capture_gate_schema_version": 6,
                     "path": str(path.relative_to(resolved_output)).replace("\\", "/"),
@@ -5533,6 +6817,19 @@ def run_capture_matrix(
     )
 
     captures = manifest["captures"]
+    first_scene_receipts: dict[str, Mapping[str, Any]] = {}
+    for capture in captures:
+        state_id = str(capture.get("state") or "")
+        receipt = (capture.get("rendered_state") or {}).get(
+            "m7_scene_receipt"
+        )
+        if state_id not in first_scene_receipts and isinstance(receipt, Mapping):
+            first_scene_receipts[state_id] = receipt
+    m7_scene_seams = inspect_m7_production_scene_seams(
+        module,
+        first_scene_receipts,
+    )
+    manifest["m7_production_scene_seams"] = m7_scene_seams
     apply_cross_capture_contracts(
         [capture for capture in captures if capture["capture_sequence"] == "matrix"]
     )
@@ -5604,7 +6901,9 @@ def run_capture_matrix(
             and m7_scene_seams["all_seams_available"] is True
         ),
     }
-    manifest_path = resolved_output / "manifest.json"
+    app_specific_root = resolved_output / "_app_specific"
+    app_specific_root.mkdir(parents=True, exist_ok=True)
+    manifest_path = app_specific_root / "geometry-manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
@@ -5673,14 +6972,27 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="return an error after writing the manifest when any proxy check fails",
+        help="compatibility flag; M7 capture and approval gates always fail closed",
+    )
+    parser.add_argument(
+        "--external-evidence-root",
+        type=Path,
+        help=(
+            "canonical external root (normally "
+            f"{M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION})"
+        ),
+    )
+    parser.add_argument(
+        "--portable-artifact",
+        type=Path,
+        help="required sealed portable artifact input for the external manifest",
     )
     parser.add_argument(
         "--describe-m7-contract",
         action="store_true",
         help=(
-            "print the headless M7 external capture contract and production "
-            "scene seam inventory; do not create a window or output directory"
+            "print the canonical {schema, app, required_state_ids} envelope; "
+            "do not create a window or output directory"
         ),
     )
     return parser
@@ -5689,24 +7001,38 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.describe_m7_contract:
-        module = _load_app_module()
         print(
             json.dumps(
-                {
-                    "contract": build_m7_external_capture_bundle_contract(),
-                    "production_scene_seams": inspect_m7_production_scene_seams(
-                        module
-                    ),
-                    "scene_assertions": [
-                        build_m7_scene_assertions(fixture, module)
-                        for fixture in build_state_fixtures()
-                    ],
-                },
+                build_m7_external_capture_bundle_contract(),
                 ensure_ascii=False,
                 indent=2,
             )
         )
         return 0
+    if args.external_evidence_root is None or args.portable_artifact is None:
+        print(
+            json.dumps(
+                {
+                    "error": "external_evidence_root_and_portable_artifact_required",
+                    "passed": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
+    canonical_external_root = Path(M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION).resolve()
+    if args.external_evidence_root.resolve() != canonical_external_root:
+        print(
+            json.dumps(
+                {
+                    "error": "external_evidence_root_must_match_canonical",
+                    "expected": M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION,
+                    "passed": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
     manifest_path, manifest = run_capture_matrix(
         output_root=args.output_root,
         sizes=args.sizes,
@@ -5717,23 +7043,70 @@ def main(argv: Sequence[str] | None = None) -> int:
         left_view=args.left_view,
     )
     summary = manifest["summary"]
+    external_bundle = None
+    if summary["passed"]:
+        first_size = list(args.sizes[0])
+        external_inputs: list[ExternalCaptureImage] = []
+        for state_id in M7_REQUIRED_STATE_IDS:
+            matching = next(
+                capture
+                for capture in manifest["captures"]
+                if capture["capture_sequence"] == "matrix"
+                and capture["requested_size"] == first_size
+                and capture["state"] == state_id
+            )
+            image_path = manifest_path.parent.parent / matching["path"]
+            external_inputs.append(
+                ExternalCaptureImage(
+                    state_id=state_id,
+                    png_bytes=image_path.read_bytes(),
+                    dpi=int(matching["measured_capture_dpi"]),
+                )
+            )
+        external_bundle = build_m7_external_capture_bundle(
+            evidence_root=args.external_evidence_root,
+            portable_artifact=args.portable_artifact,
+            captures=external_inputs,
+        )
     print(
         json.dumps(
             {
-                "manifest": str(manifest_path),
+                "app_specific_geometry_manifest": str(manifest_path),
+                "external_manifest": (
+                    external_bundle["manifest_path"]
+                    if external_bundle is not None
+                    else None
+                ),
+                "external_index": (
+                    external_bundle["index_path"]
+                    if external_bundle is not None
+                    else None
+                ),
                 "capture_count": summary["capture_count"],
                 "requested_scale": summary["requested_scale"],
                 "monitor_device": args.monitor_device or None,
                 "monitor_gate_passed": summary["monitor_gate_passed"],
                 "roundtrip_sizes": [list(size) for size in args.roundtrip_sizes],
                 "left_view": args.left_view,
-                "passed": summary["passed"],
+                "capture_gate_passed": summary["passed"],
+                "approval_pending": (
+                    external_bundle["approval_pending"]
+                    if external_bundle is not None
+                    else None
+                ),
+                "passed": bool(
+                    summary["passed"]
+                    and external_bundle is not None
+                    and not external_bundle["approval_pending"]
+                ),
                 "issue_counts": summary["issue_counts"],
             },
             ensure_ascii=False,
         )
     )
-    return 0 if summary["passed"] or not args.strict else 2
+    if not summary["passed"] or external_bundle is None:
+        return 2
+    return 3 if external_bundle["approval_pending"] else 0
 
 
 if __name__ == "__main__":

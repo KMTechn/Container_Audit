@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import argparse
 import copy
+import io
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,6 +21,7 @@ from tools.capture_container_operator_ui import (
     DEFAULT_SIZES,
     DEFAULT_STATE_IDS,
     DisplayMonitor,
+    ExternalCaptureImage,
     MAX_SCALE,
     M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
     M7_PHS2_FIELD_ORDER,
@@ -36,6 +40,7 @@ from tools.capture_container_operator_ui import (
     build_isolated_data_gate,
     build_left_sidebar_gate,
     build_m7_external_capture_bundle_contract,
+    build_m7_external_capture_bundle,
     build_m7_scene_assertions,
     build_m7_scene_gate,
     build_monitor_capture_gate,
@@ -53,6 +58,7 @@ from tools.capture_container_operator_ui import (
     normalize_capture_scan_rows,
     inventory_isolated_data,
     inspect_m7_production_scene_seams,
+    inspect_production_text_provenance,
     parse_roundtrip_sizes,
     parse_scale,
     parse_sizes,
@@ -841,37 +847,33 @@ def test_m7_exact_six_phs2_uses_production_parser_and_validator_only():
 def test_m7_external_bundle_contract_has_identity_lookup_and_no_repo_digest_values():
     contract = build_m7_external_capture_bundle_contract()
 
-    assert contract["schema"] == M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA
-    assert contract["app_id"] == "Container_Audit"
-    assert contract["external_approval_location"] == (
-        "<M7 handover evidence root>/capture-bundles/Container_Audit/"
-    )
-    assert contract["required_state_ids"] == list(M7_REQUIRED_STATE_IDS)
-    assert contract["lookup"] == {
-        "start_at": "<M7 handover evidence root>/handover-index.json",
-        "select": "app_id=Container_Audit",
-        "manifest": "capture-bundles/Container_Audit/manifest.json",
-        "state_selector": "captures[].state_id",
-        "approval_required": True,
+    assert contract == {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app": "Container_Audit",
+        "required_state_ids": list(M7_REQUIRED_STATE_IDS),
     }
-    assert contract["repository_document_digest_values_allowed"] is False
-    assert contract["tracked_images"] == (
-        "retained_historical_pending_external_replacement"
-    )
-    assert {
+    assert "app_id" not in contract
+    assert set(capture_tool.M7_CAPTURE_MANIFEST_IDENTITY_FIELDS) == {
         "app_source.commit",
         "app_source.tree",
+        "portable_artifact.file",
         "portable_artifact.sha256",
+        "capture_tool.path",
         "capture_tool.commit",
         "capture_tool.blob_sha256",
         "captures[].state_id",
-        "captures[].viewport",
+        "captures[].image_file",
+        "captures[].image_sha256",
+        "captures[].viewport.width_px",
+        "captures[].viewport.height_px",
         "captures[].dpi",
         "captures[].generated_at",
-        "captures[].image_sha256",
         "approval.approver",
-        "approval.custody_receipt",
-    }.issubset(contract["manifest_identity_fields"])
+        "approval.approval_receipt_file",
+        "approval.approval_receipt_sha256",
+        "approval.custody_receipt_file",
+        "approval.custody_receipt_sha256",
+    }
 
 
 @pytest.mark.parametrize(
@@ -899,46 +901,76 @@ def test_m7_external_bundle_contract_is_aligned_in_guides(
         section = section.split("\n---", 1)[0]
 
     assert M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA in section
-    assert "<M7 handover evidence root>/capture-bundles/Container_Audit/" in section
-    assert "<M7 handover evidence root>/handover-index.json" in section
-    assert "external bundle 캡처 대기(도구 준비됨)" in section
-    assert "조직 확정 필요 (Q1)" in section
+    assert capture_tool.M7_CANONICAL_CONTRACT_PATH in section
+    assert "E:/requal-evidence/capture-bundle-v1/" in section
+    assert "HANDOVER-INDEX.md" in section
+    assert "indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json" in section
+    assert "app=Container_Audit" in section
+    assert "app_id" not in section
+    assert "external bundle 캡처 대기(재감사 통과 전 '도구 준비됨' 표기 금지)" in section
+    assert "도구 정정 진행(재감사 대기)" in section
+    assert capture_tool.M7_APPROVAL_PLACEHOLDER in section
     assert "기존 추적 이미지" in section
+    assert "코디네이터 직접 확인(D-121, 2026-09-03)" in section
+    assert "부분 존재(아카이브)" in section
     assert all(state_id in section for state_id in M7_REQUIRED_STATE_IDS)
     assert re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", section, re.I) is None
 
 
-def test_all_nine_m7_scenes_resolve_to_current_production_seams_and_sources():
+def test_method_presence_alone_never_claims_a_production_scene_seam():
     import Container_Audit as module
 
     receipt = inspect_m7_production_scene_seams(module)
 
-    assert receipt["scene_count"] == 9
-    assert receipt["all_seams_available"] is True
+    assert receipt["declared_scene_count"] == 9
+    assert receipt["traced_scene_count"] == 0
+    assert receipt["production_validated_scene_count"] == 0
+    assert receipt["no_seam_scene_count"] == 9
+    assert receipt["all_seams_available"] is False
     assert tuple(receipt["scenes"]) == M7_REQUIRED_STATE_IDS
     for state_id, scene in receipt["scenes"].items():
-        assert scene["seam_available"] is True
+        assert scene["seam_available"] is False
+        assert scene["trace_observed"] is False
+        assert scene["production_call_trace"] is None
         assert scene["production_call_path"] == list(
             M7_SCENE_CONTRACT[state_id]["production_call_path"]
-        )
-        assert scene["production_sources"] == list(
-            M7_SCENE_CONTRACT[state_id]["production_sources"]
         )
         assert all(
             identity.startswith("Container_Audit.ContainerAudit.")
             for identity in scene["production_method_identities"].values()
         )
-        for source in scene["production_sources"]:
-            match = re.fullmatch(r"([^:]+):(\d+)-(\d+)", source)
-            assert match is not None
-            source_path = Path(capture_tool.ROOT, match.group(1))
-            assert source_path.is_file()
-            with source_path.open(
-                "r", encoding="utf-8", errors="replace"
-            ) as handle:
-                line_count = sum(1 for _ in handle)
-            start, end = int(match.group(2)), int(match.group(3))
-            assert 1 <= start <= end <= line_count
+        assert "production_sources" not in scene
+
+    source = Path(capture_tool.__file__).read_text(encoding="utf-8")
+    assert re.search(r"Container_Audit\.py:\d+-\d+", source) is None
+
+
+def test_fake_free_text_gate_requires_exact_non_docstring_product_literal(tmp_path):
+    real = inspect_production_text_provenance("완료 처리 중")
+    partial = inspect_production_text_provenance("료 처")
+    invented = inspect_production_text_provenance(
+        "도구에만 존재하는 M7 가짜 완료 문구 9cb4d0315396"
+    )
+    repo, _tool = _synthetic_capture_repo(tmp_path)
+    literal = inspect_production_text_provenance(
+        "literal-visible-sentinel", repo_root=repo
+    )
+    comment = inspect_production_text_provenance(
+        "comment-only-sentinel", repo_root=repo
+    )
+    docstring = inspect_production_text_provenance(
+        "docstring-only-sentinel", repo_root=repo
+    )
+
+    assert real["passed"] is True
+    assert real["exact_product_blob_match"] is True
+    assert any(item["path"] == "Container_Audit.py" for item in real["matches"])
+    assert partial["passed"] is False
+    assert invented["passed"] is False
+    assert invented["matches"] == []
+    assert literal["passed"] is True
+    assert comment["passed"] is False
+    assert docstring["passed"] is False
 
 
 def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts():
@@ -957,9 +989,22 @@ def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts()
     assert membership["member_count"] == 3
     assert membership["active_scan_count"] == 3
     assert membership["passed"] is True
-    lease = assertions["m7_lease_fail_closed"]["lease"]
+    assert membership["production_validation"]["validator_identity"] == (
+        "transfer_seal.validate_compact_phs2_preflight"
+    )
+    assert membership["production_validation"]["production_validator_called"] is True
+    lease = assertions["m7_lease_fail_closed"]["lease"]["fixture"]
     assert lease["state"] == "EXPIRED"
     assert lease["start_allowed"] is False
+    lease_variants = assertions["m7_lease_fail_closed"]["lease"][
+        "production_variants"
+    ]
+    assert [item["variant_id"] for item in lease_variants] == [
+        "lease_issue_failed",
+        "lease_expired",
+        "lease_offline_start_blocked",
+    ]
+    assert [item["passed"] for item in lease_variants] == [False, True, True]
     relay = assertions["m7_direct_sync_backlog_ack"]["direct_sync"]
     assert relay["health"]["pending_count"] == 2
     assert relay["card_model"]["summary"].startswith("대기 2 · 최근 성공 ")
@@ -982,8 +1027,37 @@ def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts()
     ]
     exchange = assertions["m7_partial_atomic_exchange"]["exchange"]
     assert len(exchange["pairs"]) == 1
-    assert exchange["checks"]["central_atomic"] is True
-    assert exchange["passed"] is True
+    assert exchange["production_validator_called"] is False
+    assert exchange["seam_available"] is False
+    assert exchange["passed"] is False
+    assert "no mutation-free" in exchange["reason"]
+
+    scene_results = {
+        state_id: value["production_validation"]["passed"]
+        for state_id, value in assertions.items()
+    }
+    assert [state for state, passed in scene_results.items() if passed] == [
+        "m7_exact_good_membership",
+        "m7_transfer_receipt_status",
+    ]
+    assert sum(
+        value["production_validation"]["variant_count"]
+        for value in assertions.values()
+    ) == 27
+    assert sum(
+        value["production_validation"]["validated_variant_count"]
+        for value in assertions.values()
+    ) == 9
+    preflight_variants = assertions["m7_phs2_preflight"]["variant_assertions"]
+    assert all(item["production_call_trace"]["passed"] for item in preflight_variants)
+    assert all(item["presenter_checks_passed"] for item in preflight_variants)
+    assert all(item["business_state_producer_called"] is False for item in preflight_variants)
+    assert all(item["passed"] is False for item in preflight_variants)
+    assert all(
+        lease_variant["fixture_binding"].values()
+        for lease_variant in lease_variants
+        if lease_variant["variant_id"] == "lease_expired"
+    )
 
 
 def test_m7_scene_gate_passes_only_with_bound_production_receipt():
@@ -996,8 +1070,26 @@ def test_m7_scene_gate_passes_only_with_bound_production_receipt():
     )
     manifest = _fixture_manifest(fixture, module)
     scene = inspect_m7_production_scene_seams(module)["scenes"][fixture.state_id]
+    expected_methods = list(M7_SCENE_CONTRACT[fixture.state_id]["production_call_path"])
     receipt = {
         **scene,
+        "production_call_trace": {
+            "expected_methods": expected_methods,
+            "calls": [
+                {
+                    "ordinal": index,
+                    "method": name,
+                    "production_identity": f"Container_Audit.ContainerAudit.{name}",
+                    "original_invoked": True,
+                    "returned": True,
+                }
+                for index, name in enumerate(expected_methods, start=1)
+            ],
+            "all_expected_called": True,
+            "unexpected_methods": [],
+            "passed": True,
+        },
+        "seam_available": True,
         "assertions": manifest["m7_assertions"],
     }
     rendered = {
@@ -1012,6 +1104,22 @@ def test_m7_scene_gate_passes_only_with_bound_production_receipt():
     assert gate["gate_applicable"] is True
     assert gate["passed"] is True
 
+    forged = copy.deepcopy(rendered)
+    forged["m7_scene_receipt"]["production_call_trace"]["calls"] = []
+    forged["m7_scene_receipt"]["production_call_trace"]["passed"] = True
+    assert build_m7_scene_gate(manifest, forged)["passed"] is False
+    inspected = inspect_m7_production_scene_seams(
+        module,
+        {fixture.state_id: forged["m7_scene_receipt"]},
+    )
+    assert inspected["scenes"][fixture.state_id]["trace_observed"] is False
+
+    foreign = copy.deepcopy(rendered)
+    foreign["m7_scene_receipt"]["production_call_trace"]["calls"][0][
+        "production_identity"
+    ] = "capture_tool.fake_presenter"
+    assert build_m7_scene_gate(manifest, foreign)["passed"] is False
+
     rendered.pop("m7_scene_receipt")
     failed = build_m7_scene_gate(manifest, rendered)
     assert failed["checks"]["production_scene_receipt_present"] is False
@@ -1022,11 +1130,238 @@ def test_describe_m7_contract_is_headless_and_returns_the_nine_scene_plan(capsys
     assert capture_tool.main(["--describe-m7-contract"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload["contract"] == build_m7_external_capture_bundle_contract()
-    assert payload["production_scene_seams"]["scene_count"] == 9
-    assert [item["state_id"] for item in payload["scene_assertions"]] == list(
+    assert payload == build_m7_external_capture_bundle_contract()
+    assert set(payload) == {"schema", "app", "required_state_ids"}
+
+
+def _small_png_bytes(width=2, height=1):
+    output = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(output, format="PNG")
+    return output.getvalue()
+
+
+def _synthetic_capture_repo(tmp_path):
+    repo = tmp_path / "repo"
+    tool = repo / "tools" / "capture_container_operator_ui.py"
+    tool.parent.mkdir(parents=True)
+    tool.write_text("print('frozen capture tool')\n", encoding="utf-8")
+    for relative_path in capture_tool.M7_PRODUCTION_BINDING_PATHS:
+        (repo / relative_path).write_text(
+            "\"\"\"docstring-only-sentinel\"\"\"\n"
+            "VISIBLE_SENTINEL = 'literal-visible-sentinel'\n"
+            "# comment-only-sentinel\n",
+            encoding="utf-8",
+        )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "capture@example.test"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Capture Fixture"],
+        check=True,
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-qm", "fixture"],
+        check=True,
+    )
+    return repo, tool
+
+
+def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tmp_path):
+    repo, _tool = _synthetic_capture_repo(tmp_path)
+    artifact = tmp_path / "Container_Audit-portable.zip"
+    artifact.write_bytes(b"sealed portable artifact fixture")
+    evidence_root = tmp_path / "evidence"
+    png = _small_png_bytes()
+    receipt = build_m7_external_capture_bundle(
+        evidence_root=evidence_root,
+        portable_artifact=artifact,
+        captures=tuple(
+            ExternalCaptureImage(state_id=state_id, png_bytes=png, dpi=96)
+            for state_id in reversed(M7_REQUIRED_STATE_IDS)
+        ),
+        repo_root=repo,
+        generated_at=capture_tool.dt.datetime(
+            2026, 9, 3, 1, 2, 3, tzinfo=capture_tool.dt.timezone.utc
+        ),
+        nonce="a1b2c3d4",
+    )
+
+    manifest_path = Path(receipt["manifest_path"])
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert set(manifest) == {
+        "schema",
+        "app",
+        "app_source",
+        "portable_artifact",
+        "capture_tool",
+        "captures",
+        "approval",
+    }
+    assert manifest["schema"] == M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA
+    assert manifest["app"] == "Container_Audit"
+    assert "app_id" not in manifest
+    assert re.fullmatch(r"[0-9a-f]{40}", manifest["app_source"]["commit"])
+    assert re.fullmatch(r"[0-9a-f]{40}", manifest["app_source"]["tree"])
+    assert manifest["portable_artifact"]["sha256"] == capture_tool._sha256(
+        evidence_root / manifest["portable_artifact"]["file"]
+    )
+    assert manifest["capture_tool"]["path"] == (
+        "tools/capture_container_operator_ui.py"
+    )
+    assert [item["state_id"] for item in manifest["captures"]] == list(
         M7_REQUIRED_STATE_IDS
     )
+    assert all(item["viewport"] == {"width_px": 2, "height_px": 1} for item in manifest["captures"])
+    assert all(item["dpi"] == 96 for item in manifest["captures"])
+    assert all(item["generated_at"] == "2026-09-03T01:02:03Z" for item in manifest["captures"])
+    assert all(
+        capture_tool._sha256(evidence_root / item["image_file"])
+        == item["image_sha256"]
+        for item in manifest["captures"]
+    )
+    assert manifest["approval"]["approver"] == capture_tool.M7_APPROVAL_PLACEHOLDER
+    assert receipt["approval_pending"] is True
+    assert all(
+        capture_tool._sha256(evidence_root / item["state_manifest_file"])
+        == item["state_manifest_sha256"]
+        for item in manifest["captures"]
+    )
+    approval = manifest["approval"]
+    assert capture_tool._sha256(evidence_root / approval["approval_receipt_file"]) == (
+        approval["approval_receipt_sha256"]
+    )
+    assert capture_tool._sha256(evidence_root / approval["custody_receipt_file"]) == (
+        approval["custody_receipt_sha256"]
+    )
+    assert Path(receipt["index_path"]).name == (
+        "handover-index__20260903T010203Z__a1b2c3d4.json"
+    )
+    assert manifest_path.parent.name == receipt["bundle_id"]
+    index_document = json.loads(Path(receipt["index_path"]).read_text(encoding="utf-8"))
+    assert index_document["manifests"] == [
+        {
+            "app": "Container_Audit",
+            "manifest_file": manifest_path.relative_to(evidence_root).as_posix(),
+            "manifest_sha256": capture_tool._sha256(manifest_path),
+        }
+    ]
+
+    validator = Path(
+        "E:/KMTech/production-readiness-20260830/HANDOVER/tools/"
+        "validate_capture_bundle_v1.py"
+    )
+    if not validator.is_file():
+        pytest.skip("canonical external validator is not installed on this host")
+    describe_path = tmp_path / "describe.json"
+    describe_path.write_text(
+        json.dumps(build_m7_external_capture_bundle_contract(), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    validated = subprocess.run(
+        [
+            sys.executable,
+            "-B",
+            str(validator),
+            str(evidence_root),
+            "--app",
+            "Container_Audit",
+            "--describe-json",
+            str(describe_path),
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    validator_output = json.loads(validated.stdout)
+    assert validated.returncode == 3
+    assert validator_output["summary"]["FAIL"] == 0
+    assert validator_output["summary"]["APPROVAL_PENDING"] == 5
+
+
+def test_external_bundle_builder_rejects_bad_png_missing_state_and_dirty_tool(tmp_path):
+    repo, tool = _synthetic_capture_repo(tmp_path)
+    artifact = tmp_path / "portable.zip"
+    artifact.write_bytes(b"artifact")
+    good_png = _small_png_bytes()
+    exact = tuple(
+        ExternalCaptureImage(state_id=state_id, png_bytes=good_png, dpi=96)
+        for state_id in M7_REQUIRED_STATE_IDS
+    )
+
+    with pytest.raises(ValueError, match="exact required state set"):
+        build_m7_external_capture_bundle(
+            evidence_root=tmp_path / "missing",
+            portable_artifact=artifact,
+            captures=exact[:-1],
+            repo_root=repo,
+            nonce="00000001",
+        )
+    bad = list(exact)
+    bad[0] = ExternalCaptureImage(
+        state_id=M7_REQUIRED_STATE_IDS[0], png_bytes=b"not a png", dpi=96
+    )
+    with pytest.raises(ValueError, match="PNG"):
+        build_m7_external_capture_bundle(
+            evidence_root=tmp_path / "bad-png",
+            portable_artifact=artifact,
+            captures=bad,
+            repo_root=repo,
+            nonce="00000002",
+        )
+    tool.write_bytes(b"print('dirty')\n")
+    with pytest.raises(RuntimeError, match="frozen app commit"):
+        build_m7_external_capture_bundle(
+            evidence_root=tmp_path / "dirty",
+            portable_artifact=artifact,
+            captures=exact,
+            repo_root=repo,
+            nonce="00000003",
+        )
+    tool.write_text("print('frozen capture tool')\n", encoding="utf-8")
+    (repo / "Container_Audit.py").write_text(
+        "DIRTY_PRODUCTION = True\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="production worktree"):
+        build_m7_external_capture_bundle(
+            evidence_root=tmp_path / "dirty-product",
+            portable_artifact=artifact,
+            captures=exact,
+            repo_root=repo,
+            nonce="00000004",
+        )
+
+    latest_root = tmp_path / "latest-alias"
+    latest_root.mkdir()
+    (latest_root / "latest").write_text("mutable alias", encoding="utf-8")
+    with pytest.raises(ValueError, match="latest aliases"):
+        build_m7_external_capture_bundle(
+            evidence_root=latest_root,
+            portable_artifact=artifact,
+            captures=exact,
+            repo_root=repo,
+            nonce="00000005",
+        )
+
+
+def test_cli_refuses_noncanonical_external_root_without_opening_gui(tmp_path, capsys):
+    artifact = tmp_path / "portable.zip"
+    artifact.write_bytes(b"artifact")
+
+    assert capture_tool.main(
+        [
+            "--external-evidence-root",
+            str(tmp_path / "wrong-root"),
+            "--portable-artifact",
+            str(artifact),
+        ]
+    ) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"] == "external_evidence_root_must_match_canonical"
 
 
 def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():
