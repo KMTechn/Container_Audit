@@ -7,6 +7,7 @@ import pytest
 import Container_Audit as container_audit_module
 from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
+from preflight_scan_hold import PreflightScanHoldStore
 from scan_display import format_scan_list_row
 from transfer_seal import SealAttempt
 from warning_presenter import CompletionOutcome, WarningPresenter
@@ -386,12 +387,15 @@ def test_server_conflict_after_local_link_does_not_roll_back_completion():
 
 def test_restart_terminal_conflict_sets_safe_review_refresh_without_raw_console(
     capsys,
+    tmp_path,
 ):
     class Coordinator:
         def __init__(self, results):
             self.results = results
 
-        def drain_pending(self):
+        def drain_pending(self, *, can_attempt=None):
+            if can_attempt is not None and not can_attempt():
+                return []
             return list(self.results)
 
     app = ContainerAudit.__new__(ContainerAudit)
@@ -405,8 +409,23 @@ def test_restart_terminal_conflict_sets_safe_review_refresh_without_raw_console(
         ]
     )
     app._transfer_member_exchange_runtime = lambda: Coordinator([])
-
-    app._retry_pending_transfer_seals()
+    app.save_folder = str(tmp_path)
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 4
+    app._preflight_hold_store_instance = PreflightScanHoldStore(
+        tmp_path / "hold.json",
+        capacity=4,
+    )
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._finish_startup_transfer_recovery(
+        {
+            "seal_results": tuple(app._transfer_seal_runtime().drain_pending()),
+            "member_results": (),
+            "blocked_by_hold": False,
+        }
+    )
 
     captured = capsys.readouterr()
     assert "intent-raw-123" not in captured.out

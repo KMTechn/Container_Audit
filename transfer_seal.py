@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import quote, unquote, urlencode, urlsplit
 
 from writer_session_fence import writer_sink
@@ -4956,8 +4956,17 @@ class TransferSealCoordinator:
             )
         return self._attempt_from_row(row)
 
-    def drain_pending(self) -> list[SealAttempt]:
-        return [self.attempt(intent_id) for intent_id in self.store.pending_ids()]
+    def drain_pending(
+        self,
+        *,
+        can_attempt: Callable[[], bool] | None = None,
+    ) -> list[SealAttempt]:
+        results: list[SealAttempt] = []
+        for intent_id in self.store.pending_ids():
+            if can_attempt is not None and not bool(can_attempt()):
+                break
+            results.append(self.attempt(intent_id))
+        return results
 
     def drain_pending_through(self, intent_id: str) -> list[SealAttempt]:
         """Retry pending intents in FIFO order through one newly linked intent."""

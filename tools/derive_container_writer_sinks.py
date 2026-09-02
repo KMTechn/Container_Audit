@@ -12,7 +12,9 @@ from typing import Any
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SNAPSHOT_PATH = ROOT / "tools" / "container_writer_sink_inventory.json"
+SNAPSHOT_RELATIVE_PATH = Path("tools/container_writer_sink_inventory.json")
+BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH,)
+SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "vendor")
 SHIPPED_PORTABLE_ENTRYPOINTS = (Path("portable/main.py"),)

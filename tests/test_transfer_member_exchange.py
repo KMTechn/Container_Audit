@@ -648,6 +648,35 @@ def test_restart_recovers_saved_exchange_receipt_before_reposting(tmp_path):
     assert len(receipt_gets) == 1
 
 
+def test_drain_pending_gate_stops_before_next_durable_intent(tmp_path):
+    coordinator = TransferMemberExchangeCoordinator(
+        TransferMemberExchangeStore(tmp_path / "gated-drain.db"),
+        None,
+    )
+    first = _prepare(coordinator)
+    second = coordinator.prepare(
+        master_label=MASTER + "|LOCAL=SECOND",
+        master_label_fields={"BND": TARGET, "AUTH_SCOPE": SCOPE, "CLC": ITEM},
+        item_id=ITEM,
+        operator="tester",
+        old_barcodes=[OLD_2],
+        new_barcodes=[f"{ITEM}-NEW-2"],
+    )
+    gate_checks = 0
+
+    def can_attempt():
+        nonlocal gate_checks
+        gate_checks += 1
+        return gate_checks == 1
+
+    attempts = coordinator.drain_pending(can_attempt=can_attempt)
+
+    assert [attempt.intent_id for attempt in attempts] == [first.intent_id]
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id]
+    assert coordinator.store.load(first.intent_id)["status"] == "RETRY_WAIT"
+    assert coordinator.store.load(second.intent_id)["status"] == "PREPARED"
+
+
 def test_invalid_receipt_remains_blocked_on_restart_and_never_reposts(
     tmp_path, monkeypatch
 ):

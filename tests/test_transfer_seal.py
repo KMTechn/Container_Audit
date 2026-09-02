@@ -1434,6 +1434,28 @@ def test_offline_multi_event_keeps_linked_ledger_and_fifo_outbox(tmp_path):
     assert all(row["event_type"] == "LINKED" for row in linked)
 
 
+def test_drain_pending_gate_stops_before_next_durable_intent(tmp_path):
+    coordinator = TransferSealCoordinator(
+        TransferSealStore(tmp_path / "gated-drain.db"),
+        None,
+    )
+    first = _prepare(coordinator, barcodes=("BC-GATE-1",))
+    second = _prepare(coordinator, barcodes=("BC-GATE-2",))
+    gate_checks = 0
+
+    def can_attempt():
+        nonlocal gate_checks
+        gate_checks += 1
+        return gate_checks == 1
+
+    attempts = coordinator.drain_pending(can_attempt=can_attempt)
+
+    assert [attempt.intent_id for attempt in attempts] == [first.intent_id]
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id]
+    assert coordinator.store.load(first.intent_id)["status"] == "RETRY_WAIT"
+    assert coordinator.store.load(second.intent_id)["status"] == "PREPARED"
+
+
 def test_restart_replays_fifo_with_original_idempotency_keys(tmp_path):
     db_path = tmp_path / "restart-fifo.db"
     offline = TransferSealCoordinator(TransferSealStore(db_path), None)

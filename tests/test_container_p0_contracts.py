@@ -20,9 +20,11 @@ from storage_utils import atomic_write_json
 from transfer_seal import (
     LogisticsTransferClient,
     SealAttempt,
+    TransferSealCoordinator,
     TransferSealError,
     TransferSealStore,
 )
+from transfer_member_exchange import TransferMemberExchangeCoordinator
 
 
 def _saved_tray_state():
@@ -334,6 +336,322 @@ def test_recovery_decline_audit_failure_keeps_current_and_parked_copies(tmp_path
 def _hold_symbols():
     module = importlib.import_module("preflight_scan_hold")
     return module, module.PreflightScanHoldStore
+
+
+class _PendingRecoveryStore:
+    def __init__(self, intent_ids):
+        self.intent_ids = list(intent_ids)
+
+    def pending_ids(self):
+        return list(self.intent_ids)
+
+
+def _startup_transfer_recovery_app(
+    tmp_path,
+    *,
+    hold_active=False,
+    seal_intent_ids=(),
+    member_intent_ids=(),
+    after_seal_attempt=None,
+    block_seal_attempt=None,
+):
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    _module, PreflightScanHoldStore = _hold_symbols()
+    root = _cross_thread_fake_root()
+    root.tk = object()
+    root.winfo_exists = lambda: True
+    lane = TkSerialUiLane(root, poll_ms=1)
+    hold_store = PreflightScanHoldStore(tmp_path / "hold.json", capacity=4)
+    if hold_active:
+        hold_store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+
+    calls = {"seal": [], "member": []}
+    seal_store = _PendingRecoveryStore(seal_intent_ids)
+    seal_coordinator = TransferSealCoordinator.__new__(TransferSealCoordinator)
+    seal_coordinator.store = seal_store
+
+    def seal_attempt(intent_id):
+        if block_seal_attempt is not None:
+            block_seal_attempt(intent_id)
+        calls["seal"].append((intent_id, threading.get_ident()))
+        seal_store.intent_ids.remove(intent_id)
+        if after_seal_attempt is not None:
+            after_seal_attempt(intent_id, hold_store)
+        return SimpleNamespace(status="ACKED", intent_id=intent_id, error_code="")
+
+    seal_coordinator.attempt = seal_attempt
+
+    member_store = _PendingRecoveryStore(member_intent_ids)
+    member_coordinator = TransferMemberExchangeCoordinator.__new__(
+        TransferMemberExchangeCoordinator
+    )
+    member_coordinator.store = member_store
+
+    def member_attempt(intent_id):
+        calls["member"].append((intent_id, threading.get_ident()))
+        member_store.intent_ids.remove(intent_id)
+        return SimpleNamespace(status="ACKED", intent_id=intent_id, error_code="")
+
+    member_coordinator.attempt = member_attempt
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = lane
+    app.save_folder = str(tmp_path)
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 4
+    app._preflight_hold_store_instance = hold_store
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._ui_close_requested = False
+    app._scan_callback_epoch = 1
+    app._startup_transfer_recovery_pending = True
+    app._startup_transfer_recovery_inflight = False
+    app._startup_transfer_recovery_waiting_for_hold = False
+    app._startup_transfer_recovery_task_handle = None
+    app.transfer_seal_coordinator = seal_coordinator
+    app.transfer_member_exchange_coordinator = member_coordinator
+    app._post_review_refresh_required = False
+    app._presented_post_review_case_ids = set()
+    app.current_tray = TraySession()
+    app.worker_entry = SimpleNamespace(get=lambda: "tester")
+    app.worker_registry = None
+    app.worker_name = ""
+    app.worker_role = ""
+    app._authenticated_protected_admin = False
+    app._ensure_worker_login_name = lambda value: value
+    app._load_session_state = lambda: None
+    app._drain_phs_replacement_waiting_projections = lambda: None
+    app._load_current_tray_state = lambda: None
+    app._begin_or_resume_work_session = lambda: True
+    app.paned_window = SimpleNamespace(winfo_ismapped=lambda: True)
+    app._refresh_transfer_post_review_state = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.show_fullscreen_warning = lambda *_args, **_kwargs: None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    return app, root, lane, hold_store, seal_store, member_store, calls
+
+
+def test_startup_transfer_recovery_existing_hold_preserves_pending_on_real_lane(
+    tmp_path,
+):
+    app, root, lane, hold_store, seal_store, member_store, calls = (
+        _startup_transfer_recovery_app(
+            tmp_path,
+            hold_active=True,
+            seal_intent_ids=("seal-1",),
+            member_intent_ids=("member-1",),
+        )
+    )
+
+    try:
+        app.start_work()
+
+        assert lane._next_op_id == 1
+        assert lane._active is not None
+        assert lane._active.task.name == "startup-transfer-recovery"
+        root.run_until(lambda: not lane.is_busy())
+
+        assert hold_store.exists() is True
+        assert seal_store.intent_ids == ["seal-1"]
+        assert member_store.intent_ids == ["member-1"]
+        assert calls == {"seal": [], "member": []}
+        assert app._startup_transfer_recovery_pending is True
+        assert app._startup_transfer_recovery_waiting_for_hold is True
+    finally:
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_startup_transfer_recovery_runs_only_on_shared_lane_worker(tmp_path):
+    app, root, lane, _hold_store, seal_store, member_store, calls = (
+        _startup_transfer_recovery_app(
+            tmp_path,
+            seal_intent_ids=("seal-1",),
+            member_intent_ids=("member-1",),
+        )
+    )
+
+    try:
+        app.start_work()
+        root.run_until(lambda: not lane.is_busy())
+
+        assert seal_store.intent_ids == []
+        assert member_store.intent_ids == []
+        assert [thread_id for _intent_id, thread_id in calls["seal"]] == [
+            lane.worker_thread_id
+        ]
+        assert [thread_id for _intent_id, thread_id in calls["member"]] == [
+            lane.worker_thread_id
+        ]
+        assert app._startup_transfer_recovery_pending is False
+        with pytest.raises(RuntimeError, match="shared lane worker"):
+            app._retry_pending_transfer_seals()
+    finally:
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_startup_transfer_recovery_rechecks_hold_before_each_pending_attempt(
+    tmp_path,
+):
+    hold_created = False
+
+    def create_hold_after_first(_intent_id, hold_store):
+        nonlocal hold_created
+        if hold_created:
+            return
+        hold_created = True
+        hold_store.start(worker="tester", master_raw="MASTER", scan_epoch=2)
+
+    app, root, lane, hold_store, seal_store, member_store, calls = (
+        _startup_transfer_recovery_app(
+            tmp_path,
+            seal_intent_ids=("seal-1", "seal-2"),
+            member_intent_ids=("member-1",),
+            after_seal_attempt=create_hold_after_first,
+        )
+    )
+
+    try:
+        app.start_work()
+        root.run_until(lambda: not lane.is_busy())
+
+        assert hold_store.exists() is True
+        assert [intent_id for intent_id, _thread_id in calls["seal"]] == ["seal-1"]
+        assert calls["seal"][0][1] == lane.worker_thread_id
+        assert calls["member"] == []
+        assert seal_store.intent_ids == ["seal-2"]
+        assert member_store.intent_ids == ["member-1"]
+        assert app._startup_transfer_recovery_pending is True
+        assert app._startup_transfer_recovery_waiting_for_hold is True
+
+        assert hold_store.mark_draining() is None
+        app._preflight_hold_snapshot = None
+        app._preflight_hold_draining = False
+        app._preflight_completion_due = False
+        app._update_action_button_states = lambda: None
+        app._complete_after_preflight_hold_drain()
+        root.run_until(lambda: not lane.is_busy())
+
+        assert hold_store.exists() is False
+        assert seal_store.intent_ids == []
+        assert member_store.intent_ids == []
+        assert [intent_id for intent_id, _thread_id in calls["seal"]] == [
+            "seal-1",
+            "seal-2",
+        ]
+        assert all(
+            thread_id == lane.worker_thread_id
+            for _intent_id, thread_id in (*calls["seal"], *calls["member"])
+        )
+        assert app._startup_transfer_recovery_pending is False
+    finally:
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_path):
+    started = threading.Event()
+    release = threading.Event()
+
+    def block_attempt(_intent_id):
+        started.set()
+        assert release.wait(timeout=2.0)
+
+    app, root, lane, _hold_store, _seal_store, _member_store, _calls = (
+        _startup_transfer_recovery_app(
+            tmp_path,
+            seal_intent_ids=("seal-1",),
+            block_seal_attempt=block_attempt,
+        )
+    )
+    close_calls = []
+
+    try:
+        app.start_work()
+        assert started.wait(timeout=1.0)
+        app._scan_callback_pending = False
+        app._ui_close_requested = False
+        app._ui_close_lane_drained = False
+        app._preflight_hold_writer_instance = None
+        app.master_label_replace_state = None
+        app.current_exchange_session = SimpleNamespace(
+            defective_barcodes=[],
+            good_barcodes=[],
+        )
+        app.worker_name = ""
+        app.paned_window = SimpleNamespace(winfo_exists=lambda: False)
+        app._preserve_preflight_hold_for_close = lambda: close_calls.append(
+            "preserve"
+        ) or (True, False)
+        app._finalize_application_close = lambda: close_calls.append(
+            ("finalize", lane.state, lane.worker_thread.is_alive())
+        )
+
+        app.on_closing(_confirmed=True)
+
+        assert lane.state == "DRAINING"
+        assert not any(isinstance(call, tuple) for call in close_calls)
+        release.set()
+        root.run_until(
+            lambda: any(isinstance(call, tuple) for call in close_calls)
+        )
+
+        assert close_calls == ["preserve", ("finalize", "CLOSED", False)]
+    finally:
+        release.set()
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_live_event_writer_retries_close_without_destroy(monkeypatch):
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+
+    class LiveWriter:
+        def __init__(self):
+            self.alive = True
+            self.join_calls = []
+
+        def is_alive(self):
+            return self.alive
+
+        def join(self, timeout=None):
+            self.join_calls.append(timeout)
+
+    root = FakeTkRoot()
+    writer = LiveWriter()
+    queued = []
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = None
+    app._event_log_close_requested = False
+    app.log_queue = SimpleNamespace(put=queued.append)
+    app.log_thread = writer
+    app.save_settings = lambda: None
+    app._cancel_all_jobs = lambda: None
+    monkeypatch.setattr(container_module, "stop_all_sounds", lambda: None)
+
+    app._finalize_application_close()
+
+    assert root.destroyed is False
+    assert writer.join_calls == [1.0]
+    assert queued == [None]
+    assert len(root.jobs) == 1
+
+    writer.alive = False
+    assert root.run_one() is True
+    assert root.destroyed is True
+    assert queued == [None]
 
 
 def _preflight_hold_ownership_app(tmp_path, monkeypatch):

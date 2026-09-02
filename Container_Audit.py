@@ -1056,12 +1056,12 @@ class ContainerAudit:
             self.transfer_seal_coordinator.client,
             renderer=PHSLabelRenderer(Path(self.data_root) / "labels"),
         )
-        if self.transfer_seal_coordinator.client is not None:
-            threading.Thread(
-                target=self._retry_pending_transfer_seals,
-                name="container-audit-transfer-seal-recovery",
-                daemon=True,
-            ).start()
+        self._startup_transfer_recovery_pending = bool(
+            self.transfer_seal_coordinator.client is not None
+        )
+        self._startup_transfer_recovery_inflight = False
+        self._startup_transfer_recovery_waiting_for_hold = False
+        self._startup_transfer_recovery_task_handle = None
         self._direct_sync_bootstrap_thread = start_direct_sync_auto_bootstrap(
             app_root=self.application_path,
             direct_sync_root=self.direct_sync_program_data_root,
@@ -1164,6 +1164,7 @@ class ContainerAudit:
         
         self.log_queue: queue.Queue = queue.Queue()
         self.log_file_path: Optional[str] = None
+        self._event_log_close_requested = False
         self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
         self.log_thread.start()
         
@@ -1595,6 +1596,7 @@ class ContainerAudit:
             self.COLOR_PRIMARY,
             duration=0,
         )
+        self._schedule_startup_transfer_recovery()
         return True
 
     def restore_quarantined_preflight_hold(self, filepath: str) -> bool:
@@ -2485,6 +2487,9 @@ class ContainerAudit:
             self.worker_role = ""
             self.show_worker_input_screen()
             return
+        # Durable hold ownership is restored before the first shared-lane task
+        # can inspect or mutate either transfer coordinator.
+        self._schedule_startup_transfer_recovery()
         if not self._begin_or_resume_work_session():
             self.current_tray = TraySession()
             self.worker_name = ""
@@ -8428,6 +8433,7 @@ class ContainerAudit:
             self._preflight_hold_snapshot = None
             self._preflight_hold_draining = False
             self._set_preflight_scan_input_locked(False)
+            self._schedule_startup_transfer_recovery()
             return
 
         def finish(snapshot: Optional[PreflightHoldSnapshot]) -> None:
@@ -8439,6 +8445,7 @@ class ContainerAudit:
                     "중앙 확인 완료 · 보류 스캔 없음",
                     self.COLOR_SUCCESS,
                 )
+                self._schedule_startup_transfer_recovery()
                 return
             self.show_status_message(
                 f"중앙 확인 완료 · 보류 {len(snapshot.items)}건 순서대로 처리 중",
@@ -8697,16 +8704,25 @@ class ContainerAudit:
         if not completion_due:
             self._set_preflight_scan_input_locked(False)
             self._update_action_button_states()
+            self._schedule_startup_transfer_recovery()
             return
-        callback = (
-            self.request_complete_tray
-            if hasattr(getattr(self, "root", None), "tk")
-            else self.complete_tray
-        )
 
         def complete_after_release() -> None:
             self._set_preflight_scan_input_locked(False)
-            callback()
+            if hasattr(getattr(self, "root", None), "tk"):
+                admitted = self.request_complete_tray(
+                    completion_callback=(
+                        lambda _completed: self.root.after(
+                            0,
+                            self._schedule_startup_transfer_recovery,
+                        )
+                    )
+                )
+                if not admitted:
+                    self._schedule_startup_transfer_recovery()
+                return
+            self.complete_tray()
+            self._schedule_startup_transfer_recovery()
 
         self.root.after(0, complete_after_release)
 
@@ -11514,11 +11530,19 @@ class ContainerAudit:
         lane = getattr(self, "_ui_lane", None)
         if lane is not None:
             lane.close_idle()
-        self.save_settings()
-        self._cancel_all_jobs()
-        self.log_queue.put(None)
+        if not getattr(self, "_event_log_close_requested", False):
+            self.save_settings()
+            self._cancel_all_jobs()
+            self.log_queue.put(None)
+            self._event_log_close_requested = True
         if self.log_thread.is_alive():
             self.log_thread.join(timeout=1.0)
+        if self.log_thread.is_alive():
+            try:
+                self.root.after(0, self._finalize_application_close)
+            except (AttributeError, tk.TclError):
+                pass
+            return
         stop_all_sounds()
         self.root.destroy()
 
@@ -12484,25 +12508,100 @@ class ContainerAudit:
         self._post_review_refresh_required = False
         return False
 
-    def _retry_pending_transfer_seals(self) -> None:
+    def _schedule_startup_transfer_recovery(self) -> bool:
+        if (
+            not getattr(self, "_startup_transfer_recovery_pending", False)
+            or getattr(self, "_startup_transfer_recovery_inflight", False)
+            or getattr(self, "_ui_close_requested", False)
+        ):
+            return False
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return False
+
+        self._startup_transfer_recovery_inflight = True
+
+        def fail(exc: BaseException) -> None:
+            self._startup_transfer_recovery_inflight = False
+            self._startup_transfer_recovery_pending = True
+            self._startup_transfer_recovery_waiting_for_hold = False
+            self._startup_transfer_recovery_task_handle = None
+            print(f"이적 재시작 복구 lane 실패: {exc.__class__.__name__}")
+
+        admission = lane.submit(
+            LaneTask(
+                name="startup-transfer-recovery",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=self._retry_pending_transfer_seals,
+                finish=self._finish_startup_transfer_recovery,
+                fail=fail,
+            )
+        )
+        if not admission.accepted:
+            self._startup_transfer_recovery_inflight = False
+            return False
+        self._startup_transfer_recovery_task_handle = admission.handle
+        return True
+
+    def _finish_startup_transfer_recovery(
+        self,
+        outcome: Mapping[str, Any],
+    ) -> None:
+        self._startup_transfer_recovery_inflight = False
+        self._startup_transfer_recovery_task_handle = None
+        for result in outcome.get("seal_results", ()):
+            if result.status == "OPERATOR_REVIEW":
+                self._post_review_refresh_required = True
+        for result in outcome.get("member_results", ()):
+            if result.status == "OPERATOR_REVIEW":
+                print(
+                    "중앙 제품 교체 복구에 작업자 확인이 필요합니다: "
+                    f"{result.intent_id} {result.error_code}"
+                )
+        blocked_by_hold = bool(outcome.get("blocked_by_hold")) or bool(
+            self._preflight_context_blocks_mutation()
+        )
+        self._startup_transfer_recovery_waiting_for_hold = blocked_by_hold
+        self._startup_transfer_recovery_pending = blocked_by_hold
+
+    def _retry_pending_transfer_seals(self) -> Dict[str, Any]:
+        lane = getattr(self, "_ui_lane", None)
+        if (
+            lane is None
+            or threading.get_ident() != getattr(lane, "worker_thread_id", None)
+        ):
+            raise RuntimeError("startup transfer recovery requires the shared lane worker")
+        outcome: Dict[str, Any] = {
+            "seal_results": (),
+            "member_results": (),
+            "blocked_by_hold": False,
+        }
+
+        def can_attempt() -> bool:
+            blocked = bool(self._preflight_context_blocks_mutation())
+            if blocked:
+                outcome["blocked_by_hold"] = True
+            return not blocked
+
+        if not can_attempt():
+            return outcome
         try:
             coordinator = self._transfer_seal_runtime()
-            for result in coordinator.drain_pending():
-                if result.status == "OPERATOR_REVIEW":
-                    self._post_review_refresh_required = True
+            outcome["seal_results"] = tuple(
+                coordinator.drain_pending(can_attempt=can_attempt)
+            )
         except Exception as exc:
             print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")
+        if not can_attempt():
+            return outcome
         try:
             exchange_coordinator = self._transfer_member_exchange_runtime()
-            exchange_results = exchange_coordinator.drain_pending()
-            for result in exchange_results:
-                if result.status == "OPERATOR_REVIEW":
-                    print(
-                        "중앙 제품 교체 복구에 작업자 확인이 필요합니다: "
-                        f"{result.intent_id} {result.error_code}"
-                    )
+            outcome["member_results"] = tuple(
+                exchange_coordinator.drain_pending(can_attempt=can_attempt)
+            )
         except Exception as exc:
             print(f"중앙 제품 교체 재시작 복구 실패: {exc.__class__.__name__}")
+        return outcome
 
     def _exact_transfer_exchange_blocked(self) -> bool:
         if getattr(self, "_exact_exchange_mode_active", False):

@@ -33,6 +33,33 @@ def test_container_writer_sink_inventory_matches_snapshot() -> None:
     assert actual == expected
 
 
+def test_byte_exact_inventory_outputs_disable_checkout_eol_conversion() -> None:
+    module = _load_module()
+    relative_paths = tuple(
+        Path(path).as_posix() for path in module.BYTE_EXACT_CHECKOUT_PATHS
+    )
+
+    assert relative_paths
+    assert len(relative_paths) == len(set(relative_paths))
+    for relative_path in relative_paths:
+        completed = subprocess.run(
+            ["git", "check-attr", "text", "eol", "--", relative_path],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        attributes = {
+            name: value
+            for _path, name, value in (
+                line.split(": ", 2)
+                for line in completed.stdout.splitlines()
+                if line.strip()
+            )
+        }
+        assert attributes.get("text") == "unset" or attributes.get("eol") == "lf"
+
+
 def test_container_writer_sink_inventory_has_expected_current_findings() -> None:
     payload = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     module = _load_module()
