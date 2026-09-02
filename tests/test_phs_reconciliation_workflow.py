@@ -1123,6 +1123,9 @@ def test_current_and_completed_transfer_label_scan_resolves_without_mutating_wor
 
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = _ImmediateRoot()
+    lane = _ImmediateLane()
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
     app.current_tray = TraySession()
     if not completed:
         app.current_tray.master_label_code = "CURRENT-TRAY"
@@ -1522,6 +1525,9 @@ def test_active_refresh_does_not_mutate_tray_after_marker_gate_failure(
     )
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = _ImmediateRoot()
+    lane = _ImmediateLane()
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
     app.current_tray = tray
     app._phs_label_exchange_pending = False
     app._phs_label_refresh_pending = False
@@ -1564,6 +1570,9 @@ def test_reconciliation_context_is_not_published_after_marker_gate_failure(
     }
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = _ImmediateRoot()
+    lane = _ImmediateLane()
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
     app.current_tray = TraySession(master_label_code="CURRENT-TRAY")
     app.completed_master_labels = set()
     app._phs_reconciliation_scan_armed = True

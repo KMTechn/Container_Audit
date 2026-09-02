@@ -1112,6 +1112,7 @@ class ContainerAudit:
         self._phs_label_exchange_pending = False
         self._phs_label_recovery_deferred = False
         self._phs_label_candidate_pending = False
+        self._phs_reconciliation_resolve_pending = False
         self._phs_label_candidates: List[Dict[str, Any]] = []
         self._phs_reconciliation_scan_armed = False
         self._phs_reconciliation_context: Optional[Dict[str, Any]] = None
@@ -1782,6 +1783,130 @@ class ContainerAudit:
         )
         self._schedule_focus_return()
         return True
+
+    def _capture_mutation_finish_identity(self) -> Dict[str, Any]:
+        """Capture the stable Tk-owned identity used by mutating finishes."""
+
+        tray = getattr(self, "current_tray", None)
+        scans = getattr(tray, "scanned_barcodes", None)
+        return {
+            "tray": tray,
+            "master_label_code": str(
+                getattr(tray, "master_label_code", "") or ""
+            ),
+            "canonical_input_tag_qr": str(
+                getattr(tray, "canonical_input_tag_qr", "") or ""
+            ),
+            "active_label_qr_payload": str(
+                getattr(tray, "active_label_qr_payload", "") or ""
+            ),
+            "active_label_id": str(
+                getattr(tray, "active_label_id", "") or ""
+            ),
+            "item_code": str(getattr(tray, "item_code", "") or ""),
+            "tray_size": int(getattr(tray, "tray_size", 0) or 0),
+            "scans_object": scans,
+            "scans": tuple(scans) if isinstance(scans, list) else None,
+            "operation_lease_id": str(
+                getattr(tray, "operation_lease_id", "") or ""
+            ),
+            "worker_name": persistent_operator_name(
+                getattr(self, "worker_name", "")
+            ),
+            "scan_epoch": int(getattr(self, "_scan_callback_epoch", 0) or 0),
+            "resolve_pending": bool(
+                getattr(self, "_phs_reconciliation_resolve_pending", False)
+            ),
+            "refresh_pending": bool(
+                getattr(self, "_phs_label_refresh_pending", False)
+            ),
+            "preflight_pending": bool(
+                getattr(self, "_master_preflight_pending", False)
+            ),
+            "preflight_draining": bool(
+                getattr(self, "_preflight_hold_draining", False)
+            ),
+            "hold_pending": bool(self._preflight_context_blocks_mutation()),
+        }
+
+    def _mutation_finish_can_apply(
+        self,
+        captured: Optional[Mapping[str, Any]],
+        *,
+        operation: str,
+        expected_preflight_hold: Optional[PreflightHoldSnapshot] = None,
+    ) -> bool:
+        """Fence late Tk applies against a new hold or changed tray identity."""
+
+        current = getattr(self, "current_tray", None)
+        scans = getattr(current, "scanned_barcodes", None)
+        identity_matches = bool(
+            isinstance(captured, Mapping)
+            and current is captured.get("tray")
+            and str(getattr(current, "master_label_code", "") or "")
+            == str(captured.get("master_label_code") or "")
+            and str(getattr(current, "canonical_input_tag_qr", "") or "")
+            == str(captured.get("canonical_input_tag_qr") or "")
+            and str(getattr(current, "active_label_qr_payload", "") or "")
+            == str(captured.get("active_label_qr_payload") or "")
+            and str(getattr(current, "active_label_id", "") or "")
+            == str(captured.get("active_label_id") or "")
+            and str(getattr(current, "item_code", "") or "")
+            == str(captured.get("item_code") or "")
+            and int(getattr(current, "tray_size", 0) or 0)
+            == int(captured.get("tray_size") or 0)
+            and scans is captured.get("scans_object")
+            and (
+                captured.get("scans") is None
+                or tuple(scans or ()) == tuple(captured.get("scans") or ())
+            )
+            and str(getattr(current, "operation_lease_id", "") or "")
+            == str(captured.get("operation_lease_id") or "")
+            and persistent_operator_name(getattr(self, "worker_name", ""))
+            == str(captured.get("worker_name") or "")
+            and int(getattr(self, "_scan_callback_epoch", 0) or 0)
+            == int(captured.get("scan_epoch") or 0)
+            and bool(
+                getattr(self, "_phs_reconciliation_resolve_pending", False)
+            )
+            == bool(captured.get("resolve_pending"))
+            and bool(getattr(self, "_phs_label_refresh_pending", False))
+            == bool(captured.get("refresh_pending"))
+            and bool(getattr(self, "_master_preflight_pending", False))
+            == bool(captured.get("preflight_pending"))
+            and bool(getattr(self, "_preflight_hold_draining", False))
+            == bool(captured.get("preflight_draining"))
+        )
+        hold_pending = bool(self._preflight_context_blocks_mutation())
+        preflight_owner = False
+        if expected_preflight_hold is not None and hold_pending:
+            try:
+                durable_hold = self._preflight_hold_store().load()
+            except (OSError, PreflightHoldError, TypeError, ValueError):
+                durable_hold = None
+            preflight_owner = bool(
+                isinstance(durable_hold, PreflightHoldSnapshot)
+                and durable_hold.preflight_id
+                == expected_preflight_hold.preflight_id
+                and durable_hold.master_raw == expected_preflight_hold.master_raw
+                and durable_hold.worker == expected_preflight_hold.worker
+                and getattr(self, "_master_preflight_pending", False)
+            )
+        if identity_matches and (not hold_pending or preflight_owner):
+            return True
+
+        reasons = []
+        if hold_pending and not preflight_owner:
+            reasons.append("active_preflight_hold")
+        if not identity_matches:
+            reasons.append("captured_identity_changed")
+        print(
+            f"{operation} finish discarded as stale: "
+            + ",".join(reasons or ["unknown"])
+        )
+        if hold_pending and not preflight_owner:
+            self._reject_mutation_during_preflight_hold()
+        return False
 
     def _remember_completed_master_label(self, master_label: str) -> None:
         if not master_label:
@@ -4328,6 +4453,7 @@ class ContainerAudit:
         phs_busy = bool(
             getattr(self, "_phs_label_exchange_pending", False)
             or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_reconciliation_resolve_pending", False)
             or getattr(self, "_phs_label_refresh_pending", False)
         )
         self._configure_widget_options(
@@ -4763,6 +4889,16 @@ class ContainerAudit:
                 else None
             ),
             "tray_size": int(getattr(tray, "tray_size", 0) or 0),
+            "resolve_pending": bool(
+                getattr(self, "_phs_reconciliation_resolve_pending", False)
+            ),
+            "refresh_pending": bool(
+                getattr(self, "_phs_label_refresh_pending", False)
+            ),
+            "preflight_pending": bool(
+                getattr(self, "_master_preflight_pending", False)
+            ),
+            "hold_pending": bool(self._preflight_context_blocks_mutation()),
         }
 
     def _phs_reconciliation_progress_unchanged(
@@ -4781,6 +4917,16 @@ class ContainerAudit:
             is captured.get("scans_object")
             and int(getattr(current, "tray_size", 0) or 0)
             == int(captured.get("tray_size") or 0)
+            and bool(
+                getattr(self, "_phs_reconciliation_resolve_pending", False)
+            )
+            == bool(captured.get("resolve_pending"))
+            and bool(getattr(self, "_phs_label_refresh_pending", False))
+            == bool(captured.get("refresh_pending"))
+            and bool(getattr(self, "_master_preflight_pending", False))
+            == bool(captured.get("preflight_pending"))
+            and bool(self._preflight_context_blocks_mutation())
+            == bool(captured.get("hold_pending"))
             and (
                 scans_before is None
                 or tuple(getattr(current, "scanned_barcodes", []))
@@ -4860,7 +5006,12 @@ class ContainerAudit:
         )
 
     def _phs_label_exchange_transition_pending(self) -> bool:
-        if getattr(self, "_phs_label_exchange_pending", False):
+        if (
+            getattr(self, "_phs_label_exchange_pending", False)
+            or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_reconciliation_resolve_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        ):
             return True
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
         if coordinator is None:
@@ -5350,8 +5501,12 @@ class ContainerAudit:
             self._schedule_focus_return()
             return True
 
-        progress_before = self._capture_phs_reconciliation_progress()
         self._phs_label_candidate_pending = True
+        self._phs_reconciliation_resolve_pending = True
+        progress_before = self._capture_phs_reconciliation_progress()
+        finish_identity = self._capture_mutation_finish_identity()
+        payload_snapshot = str(payload)
+        lane = self._ui_task_lane()
         self._set_phs_reconciliation_context(None)
         self.show_status_message(
             "스캔 현품표의 이적 교체 작업을 중앙에서 조회합니다.",
@@ -5360,97 +5515,126 @@ class ContainerAudit:
         )
         self._schedule_focus_return()
 
-        def worker() -> None:
-            try:
-                context = reconciliation.resolve(payload)
-                error = None
-            except Exception as exc:
-                context = None
-                error = exc
+        def work() -> Dict[str, Any]:
+            return reconciliation.resolve(payload_snapshot)
 
-            def finish() -> None:
-                self._phs_label_candidate_pending = False
-                preserved = self._phs_reconciliation_progress_unchanged(
-                    progress_before
-                )
-                if not preserved:
+        def finish(context: Dict[str, Any]) -> None:
+            preserved = self._phs_reconciliation_progress_unchanged(
+                progress_before
+            )
+            apply_ready = self._mutation_finish_can_apply(
+                finish_identity,
+                operation="phs-reconciliation-resolve",
+            )
+            self._phs_reconciliation_resolve_pending = False
+            self._phs_label_candidate_pending = False
+            if not preserved or not apply_ready:
+                if not self._preflight_context_blocks_mutation():
                     self.show_status_message(
                         "현품표 조회 중 현재 이적 작업 상태가 변경되어 결과를 "
                         "적용하지 않았습니다.",
                         self.COLOR_DANGER,
                         duration=8000,
                     )
-                elif error is not None:
-                    self.show_status_message(
-                        "현품표 교체 작업을 확인하지 못했습니다. "
-                        "F8로 다시 시도하세요.",
-                        self.COLOR_DANGER,
-                        duration=8000,
-                    )
-                else:
-                    marker_ready, marker_new = (
-                        self._ensure_phs_replacement_waiting_marked(
-                            context,
-                            master_label=str(
-                                getattr(
-                                    self.current_tray,
-                                    "master_label_code",
-                                    "",
-                                )
-                                or ""
-                            ),
-                        )
-                    )
-                    if not marker_ready:
-                        self._set_phs_reconciliation_context(None)
-                        self._phs_reconciliation_execution_guard = None
-                        self._update_action_button_states()
-                        self._schedule_focus_return()
-                        return
-                    self._set_phs_reconciliation_context(context)
-                    self._phs_reconciliation_execution_guard = progress_before
-                    summaries = reconciliation.target_summaries(context)
-                    if marker_new:
-                        self._show_phs_replacement_required_notice()
-                    else:
-                        self.show_status_message(
-                            f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
-                            "F8로 출력·교체를 계속하세요.",
-                            self.COLOR_PRIMARY,
-                            duration=8000,
-                        )
-                    try:
-                        self._log_event(
-                            "PHS_RECONCILIATION_ACTION_RESOLVED",
-                            detail={
-                                "reconciliation_id": context[
-                                    "reconciliation"
-                                ]["reconciliation_id"],
-                                "action_ids": list(
-                                    context["selection"]["action_ids"]
-                                ),
-                                "exchange_kind": context[
-                                    "expected_exchange_kind"
-                                ],
-                                "target_count": len(summaries),
-                                "local_progress_preserved": True,
-                            },
-                        )
-                    except Exception:
-                        pass
                 self._update_action_button_states()
                 self._schedule_focus_return()
-
+                return
+            marker_ready, marker_new = (
+                self._ensure_phs_replacement_waiting_marked(
+                    context,
+                    master_label=str(
+                        getattr(
+                            self.current_tray,
+                            "master_label_code",
+                            "",
+                        )
+                        or ""
+                    ),
+                )
+            )
+            if not marker_ready:
+                self._set_phs_reconciliation_context(None)
+                self._phs_reconciliation_execution_guard = None
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                return
+            self._set_phs_reconciliation_context(context)
+            self._phs_reconciliation_execution_guard = (
+                self._capture_phs_reconciliation_progress()
+            )
+            summaries = reconciliation.target_summaries(context)
+            if marker_new:
+                self._show_phs_replacement_required_notice()
+            else:
+                self.show_status_message(
+                    f"서버 교체 지시 {len(summaries)}장을 확인했습니다. "
+                    "F8로 출력·교체를 계속하세요.",
+                    self.COLOR_PRIMARY,
+                    duration=8000,
+                )
             try:
-                self.root.after(0, finish)
-            except (tk.TclError, AttributeError):
-                self._phs_label_candidate_pending = False
+                self._log_event(
+                    "PHS_RECONCILIATION_ACTION_RESOLVED",
+                    detail={
+                        "reconciliation_id": context[
+                            "reconciliation"
+                        ]["reconciliation_id"],
+                        "action_ids": list(
+                            context["selection"]["action_ids"]
+                        ),
+                        "exchange_kind": context[
+                            "expected_exchange_kind"
+                        ],
+                        "target_count": len(summaries),
+                        "local_progress_preserved": True,
+                    },
+                )
+            except Exception:
+                pass
+            self._update_action_button_states()
+            self._schedule_focus_return()
 
-        threading.Thread(
-            target=worker,
-            name="container-audit-phs-reconciliation-resolve",
-            daemon=True,
-        ).start()
+        def fail(exc: BaseException) -> None:
+            print(
+                "현품표 reconciliation 조회 lane 실패: "
+                f"{exc.__class__.__name__}"
+            )
+            self._phs_reconciliation_resolve_pending = False
+            self._phs_label_candidate_pending = False
+            self.show_status_message(
+                "현품표 교체 작업을 확인하지 못했습니다. F8로 다시 시도하세요.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._update_action_button_states()
+            self._schedule_focus_return()
+
+        admission = lane.submit(
+            LaneTask(
+                name="phs-reconciliation-resolve",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                on_idle=(
+                    (lambda: lane.close_idle())
+                    if not hasattr(self.root, "tk")
+                    else None
+                ),
+            )
+        )
+        if not admission.accepted:
+            self._phs_reconciliation_resolve_pending = False
+            self._phs_label_candidate_pending = False
+            self._update_action_button_states()
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self._schedule_focus_return()
+            return True
+        self._phs_reconciliation_resolve_task_handle = admission.handle
         return True
 
     def _phs_exchange_status_from_worker(self, _message: str) -> None:
@@ -5542,6 +5726,7 @@ class ContainerAudit:
         captured_master_label = str(tray.master_label_code or "")
         tray_snapshot = copy.deepcopy(tray)
         candidate_snapshot = copy.deepcopy(candidate)
+        finish_identity = self._capture_mutation_finish_identity()
         confirm_reprint = bool(
             getattr(
                 getattr(self, "phs_label_reprint_confirm_var", None),
@@ -5573,7 +5758,15 @@ class ContainerAudit:
 
         def finish(outcome: tuple[Any, TraySession]) -> None:
             result, updated_tray = outcome
+            apply_ready = self._mutation_finish_can_apply(
+                finish_identity,
+                operation="phs-label-exchange",
+            )
             self._phs_label_exchange_pending = False
+            if not apply_ready:
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                return
             local_ready = self._apply_phs_label_exchange_snapshot(
                 captured_tray=tray,
                 captured_master_label=captured_master_label,
@@ -5831,6 +6024,7 @@ class ContainerAudit:
             self._schedule_focus_return()
             return
         snapshot = self._capture_phs_reconciliation_progress()
+        finish_identity = self._capture_mutation_finish_identity()
         context_snapshot = copy.deepcopy(context)
         lane = self._ui_task_lane()
         self._phs_label_exchange_pending = True
@@ -5851,7 +6045,15 @@ class ContainerAudit:
             )
 
         def finish(result: Any) -> None:
+            apply_ready = self._mutation_finish_can_apply(
+                finish_identity,
+                operation="phs-reconciliation-exchange",
+            )
             self._phs_label_exchange_pending = False
+            if not apply_ready:
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                return
             preserved = self._phs_reconciliation_progress_unchanged(
                 snapshot
             )
@@ -6008,6 +6210,7 @@ class ContainerAudit:
         tray = self.current_tray
         captured_master_label = str(tray.master_label_code or "")
         tray_snapshot = copy.deepcopy(tray)
+        finish_identity = self._capture_mutation_finish_identity()
         lane = self._ui_task_lane()
         self._phs_label_exchange_pending = True
         self._update_action_button_states()
@@ -6028,7 +6231,15 @@ class ContainerAudit:
 
         def finish(outcome: tuple[Any, TraySession]) -> None:
             result, updated_tray = outcome
+            apply_ready = self._mutation_finish_can_apply(
+                finish_identity,
+                operation="phs-label-recovery",
+            )
             self._phs_label_exchange_pending = False
+            if not apply_ready:
+                self._update_action_button_states()
+                self._schedule_focus_return()
+                return
             local_ready = False
             refresh_confirmed = False
             if result is not None:
@@ -7684,7 +7895,13 @@ class ContainerAudit:
         active_label_business_date: str = "",
         active_label_worker_code: str = "",
         operation_lease_id: str = "",
+        preflight_hold_owner: bool = False,
     ) -> bool:
+        if (
+            not preflight_hold_owner
+            and self._reject_mutation_during_preflight_hold()
+        ):
+            return False
         self.current_tray = TraySession(
             master_label_code=barcode,
             canonical_input_tag_qr=canonical_input_tag_qr or barcode,
@@ -7784,6 +8001,7 @@ class ContainerAudit:
 
         hold_store = self._preflight_hold_store()
         hold_worker = persistent_operator_name(self.worker_name)
+        finish_identity = self._capture_mutation_finish_identity()
 
         def prepare_hold() -> PreflightHoldSnapshot:
             if hold_store.exists():
@@ -7956,6 +8174,25 @@ class ContainerAudit:
             return result
 
         def finish(result: tuple[Any, ...]) -> None:
+            success = bool(result[0]) if result else False
+            expected_hold = (
+                result[4]
+                if len(result) > 4
+                and isinstance(result[4], PreflightHoldSnapshot)
+                else None
+            )
+            if success and expected_hold is not None and not (
+                self._mutation_finish_can_apply(
+                    finish_identity,
+                    operation="phs2-master-preflight",
+                    expected_preflight_hold=expected_hold,
+                )
+            ):
+                self._settle_stale_preflight_result(
+                    result,
+                    reason="finish_context_changed",
+                )
+                return
             result_queue: queue.Queue = queue.Queue(maxsize=1)
             result_queue.put_nowait(result)
             self._master_preflight_queue = result_queue
@@ -8132,6 +8369,7 @@ class ContainerAudit:
             active_label_business_date=preflight.active_label_business_date,
             active_label_worker_code=preflight.active_label_worker_code,
             operation_lease_id=operation_lease_id,
+            preflight_hold_owner=True,
         )
         if activated:
             self._begin_preflight_hold_drain()
@@ -8676,6 +8914,12 @@ class ContainerAudit:
             self._schedule_focus_return()
             return
         self._phs_label_refresh_pending = True
+        finish_identity = self._capture_mutation_finish_identity()
+        canonical_snapshot = copy.deepcopy(canonical_fields)
+        source_identity = copy.deepcopy(
+            source_identity_from_label(canonical_snapshot)
+        )
+        lane = self._ui_task_lane()
         self._update_action_button_states()
         self.show_status_message(
             "스캔한 현품표의 현재 사용 표를 확인하고 있습니다.",
@@ -8683,146 +8927,165 @@ class ContainerAudit:
             duration=0,
         )
 
-        def worker() -> None:
-            try:
-                resolved = client.resolve_source(
-                    source_identity_from_label(canonical_fields)
-                )
-                preflight = validate_compact_phs2_preflight(
-                    canonical_fields, resolved
-                )
-                outcome = (preflight, None)
-            except Exception as exc:
-                outcome = (None, exc)
+        def work() -> Any:
+            resolved = client.resolve_source(source_identity)
+            return validate_compact_phs2_preflight(
+                canonical_snapshot,
+                resolved,
+            )
 
-            def finish() -> None:
-                self._phs_label_refresh_pending = False
-                self._update_action_button_states()
-                preflight, error = outcome
-                if self.current_tray is not tray or tray.master_label_code != tray_master:
-                    self._schedule_focus_return()
-                    return
-                if preflight is None:
-                    self.show_status_message(
-                        "현재 사용 현품표를 확인하지 못했습니다. 잠시 후 다시 스캔하세요.",
-                        self.COLOR_DANGER,
-                        duration=8000,
+        def finish(preflight: Any) -> None:
+            apply_ready = self._mutation_finish_can_apply(
+                finish_identity,
+                operation="phs-label-active-refresh",
+            )
+            self._phs_label_refresh_pending = False
+            self._update_action_button_states()
+            if not apply_ready:
+                self._schedule_focus_return()
+                return
+            if self.current_tray is not tray or tray.master_label_code != tray_master:
+                self._schedule_focus_return()
+                return
+            if (
+                preflight.canonical_input_tag_qr != tray.master_label_code
+                or preflight.item_id != tray.item_code
+                or preflight.member_count != tray.tray_size
+            ):
+                self.show_status_message(
+                    "중앙에서 확인한 현품표의 품목 또는 수량이 현재 "
+                    "트레이와 다릅니다.",
+                    self.COLOR_DANGER,
+                    duration=8000,
+                )
+                self._schedule_focus_return()
+                return
+            replacement_context = {
+                "process_context": "transfer",
+                "scan": {
+                    "replacement_required": bool(
+                        preflight.replaced_scan
+                    ),
+                    "scanned_label_id": preflight.scanned_label_id,
+                    "active_label_id": preflight.active_label_id,
+                    "active_qr_payload": (
+                        preflight.active_label_qr_payload
+                    ),
+                },
+            }
+            marker_new = False
+            if preflight.replaced_scan:
+                marker_ready, marker_new = (
+                    self._ensure_phs_replacement_waiting_marked(
+                        replacement_context,
+                        master_label=tray.master_label_code,
                     )
+                )
+                if not marker_ready:
                     self._schedule_focus_return()
                     return
-                if (
-                    preflight.canonical_input_tag_qr != tray.master_label_code
-                    or preflight.item_id != tray.item_code
-                    or preflight.member_count != tray.tray_size
-                ):
-                    self.show_status_message(
-                        "중앙에서 확인한 현품표의 품목 또는 수량이 현재 "
-                        "트레이와 다릅니다.",
-                        self.COLOR_DANGER,
-                        duration=8000,
-                    )
-                    self._schedule_focus_return()
-                    return
-                replacement_context = {
-                    "process_context": "transfer",
-                    "scan": {
-                        "replacement_required": bool(
-                            preflight.replaced_scan
-                        ),
+            before = {
+                "canonical_input_tag_qr": tray.canonical_input_tag_qr,
+                "active_label_qr_payload": tray.active_label_qr_payload,
+                "active_label_id": tray.active_label_id,
+                "active_label_business_date": tray.active_label_business_date,
+                "active_label_worker_code": tray.active_label_worker_code,
+            }
+            tray.canonical_input_tag_qr = preflight.canonical_input_tag_qr
+            tray.active_label_qr_payload = preflight.active_label_qr_payload
+            tray.active_label_id = preflight.active_label_id
+            tray.active_label_business_date = (
+                preflight.active_label_business_date
+            )
+            tray.active_label_worker_code = preflight.active_label_worker_code
+            if not self._save_current_tray_state():
+                for field_name, value in before.items():
+                    setattr(tray, field_name, value)
+                self.show_status_message(
+                    "현재 사용 현품표 상태를 저장하지 못해 기존 표시를 유지합니다.",
+                    self.COLOR_DANGER,
+                    duration=8000,
+                )
+                self._schedule_focus_return()
+                return
+            try:
+                self._log_event(
+                    "PHS_LABEL_ACTIVE_REFRESHED",
+                    detail={
+                        "canonical_input_tag_qr": tray.master_label_code,
                         "scanned_label_id": preflight.scanned_label_id,
                         "active_label_id": preflight.active_label_id,
-                        "active_qr_payload": (
-                            preflight.active_label_qr_payload
+                        "active_label_business_date": (
+                            preflight.active_label_business_date
                         ),
+                        "active_label_worker_code": (
+                            preflight.active_label_worker_code
+                        ),
+                        "resolution": preflight.active_label_resolution,
+                        "replaced_scan": preflight.replaced_scan,
                     },
-                }
-                marker_new = False
-                if preflight.replaced_scan:
-                    marker_ready, marker_new = (
-                        self._ensure_phs_replacement_waiting_marked(
-                            replacement_context,
-                            master_label=tray.master_label_code,
-                        )
-                    )
-                    if not marker_ready:
-                        self._schedule_focus_return()
-                        return
-                before = {
-                    "canonical_input_tag_qr": tray.canonical_input_tag_qr,
-                    "active_label_qr_payload": tray.active_label_qr_payload,
-                    "active_label_id": tray.active_label_id,
-                    "active_label_business_date": tray.active_label_business_date,
-                    "active_label_worker_code": tray.active_label_worker_code,
-                }
-                tray.canonical_input_tag_qr = preflight.canonical_input_tag_qr
-                tray.active_label_qr_payload = preflight.active_label_qr_payload
-                tray.active_label_id = preflight.active_label_id
-                tray.active_label_business_date = (
-                    preflight.active_label_business_date
                 )
-                tray.active_label_worker_code = preflight.active_label_worker_code
-                if not self._save_current_tray_state():
-                    for field_name, value in before.items():
-                        setattr(tray, field_name, value)
-                    self.show_status_message(
-                        "현재 사용 현품표 상태를 저장하지 못해 기존 표시를 유지합니다.",
-                        self.COLOR_DANGER,
-                        duration=8000,
-                    )
-                    self._schedule_focus_return()
-                    return
-                try:
-                    self._log_event(
-                        "PHS_LABEL_ACTIVE_REFRESHED",
-                        detail={
-                            "canonical_input_tag_qr": tray.master_label_code,
-                            "scanned_label_id": preflight.scanned_label_id,
-                            "active_label_id": preflight.active_label_id,
-                            "active_label_business_date": (
-                                preflight.active_label_business_date
-                            ),
-                            "active_label_worker_code": (
-                                preflight.active_label_worker_code
-                            ),
-                            "resolution": preflight.active_label_resolution,
-                            "replaced_scan": preflight.replaced_scan,
-                        },
-                    )
-                except Exception:
-                    pass
-                if preflight.replaced_scan:
-                    if marker_new:
-                        self._show_phs_replacement_required_notice()
-                    message = None if marker_new else (
-                        "현재 사용 중인 현품표를 다시 확인했습니다."
-                    )
-                else:
-                    message = (
-                        "현재 사용 현품표 "
-                        f"{preflight.active_label_business_date or '날짜 미표기'} · "
-                        f"{preflight.active_label_worker_code or '작업코드 미배정'}를 "
-                        "확인했습니다."
-                    )
-                if message is not None:
-                    self.show_status_message(
-                        message,
-                        self.COLOR_PRIMARY,
-                        duration=8000,
-                    )
-                self._update_current_item_label()
-                self._update_action_button_states()
-                self._schedule_focus_return()
+            except Exception:
+                pass
+            if preflight.replaced_scan:
+                if marker_new:
+                    self._show_phs_replacement_required_notice()
+                message = None if marker_new else (
+                    "현재 사용 중인 현품표를 다시 확인했습니다."
+                )
+            else:
+                message = (
+                    "현재 사용 현품표 "
+                    f"{preflight.active_label_business_date or '날짜 미표기'} · "
+                    f"{preflight.active_label_worker_code or '작업코드 미배정'}를 "
+                    "확인했습니다."
+                )
+            if message is not None:
+                self.show_status_message(
+                    message,
+                    self.COLOR_PRIMARY,
+                    duration=8000,
+                )
+            self._update_current_item_label()
+            self._update_action_button_states()
+            self._schedule_focus_return()
 
-            try:
-                self.root.after(0, finish)
-            except (tk.TclError, AttributeError):
-                self._phs_label_refresh_pending = False
+        def fail(exc: BaseException) -> None:
+            print(f"현품표 active refresh lane 실패: {exc.__class__.__name__}")
+            self._phs_label_refresh_pending = False
+            self._update_action_button_states()
+            self.show_status_message(
+                "현재 사용 현품표를 확인하지 못했습니다. 잠시 후 다시 스캔하세요.",
+                self.COLOR_DANGER,
+                duration=8000,
+            )
+            self._schedule_focus_return()
 
-        threading.Thread(
-            target=worker,
-            name="container-audit-phs-label-active-refresh",
-            daemon=True,
-        ).start()
+        admission = lane.submit(
+            LaneTask(
+                name="phs-label-active-refresh",
+                generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+                work=work,
+                finish=finish,
+                fail=fail,
+                on_idle=(
+                    (lambda: lane.close_idle())
+                    if not hasattr(self.root, "tk")
+                    else None
+                ),
+            )
+        )
+        if not admission.accepted:
+            self._phs_label_refresh_pending = False
+            self._update_action_button_states()
+            self.show_status_message(
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            self._schedule_focus_return()
+            return
+        self._phs_label_refresh_task_handle = admission.handle
 
     def _intercept_active_tray_phs2_scan(self, raw_barcode: str) -> bool:
         """Prevent a PHS=2 label from being counted as a product barcode."""
@@ -8876,6 +9139,14 @@ class ContainerAudit:
             return "이전 스캔 입력을 접수하는 중입니다. 입력값을 유지합니다."
         if getattr(self, "_preflight_scan_input_locked", False):
             return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 입력값을 유지합니다."
+        if (
+            getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_reconciliation_resolve_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
+        ):
+            return "이전 중앙 작업 처리 중입니다. 입력값을 유지합니다."
+        if self._preflight_context_blocks_mutation():
+            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 입력값을 유지합니다."
         lane = getattr(self, "_ui_lane", None)
         if lane is not None:
             state = str(getattr(lane, "state", "") or "")
@@ -8902,6 +9173,9 @@ class ContainerAudit:
             pending
             or getattr(self, "_preflight_scan_input_locked", False)
             or getattr(self, "_completion_lane_busy", False)
+            or getattr(self, "_phs_label_candidate_pending", False)
+            or getattr(self, "_phs_reconciliation_resolve_pending", False)
+            or getattr(self, "_phs_label_refresh_pending", False)
             or getattr(self, "_ui_close_requested", False)
         )
         try:
@@ -9446,7 +9720,16 @@ class ContainerAudit:
         completion_projection_worker: str,
         completion_was_restored: bool,
         master_label: str,
+        mutation_identity: Optional[Mapping[str, Any]] = None,
     ) -> None:
+        if mutation_identity is not None and not self._mutation_finish_can_apply(
+            mutation_identity,
+            operation="tray-completion-checkpoint",
+        ):
+            raise TransferSealError(
+                "TRAY_COMPLETE_CONTEXT_STALE",
+                "tray completion context changed before durable checkpoint",
+            )
         prepared_intent_id = str(prepared_attempt.intent_id or "").strip()
         if existing_event_contract is not None:
             if prepared_intent_id != str(
@@ -9495,6 +9778,8 @@ class ContainerAudit:
     ) -> bool:
         """Submit the GUI completion transport to the shared foreground lane."""
 
+        if self._reject_mutation_during_preflight_hold():
+            return False
         if getattr(self.current_tray, "is_test_tray", False):
             completed = bool(self.complete_tray())
             if completion_callback is not None:
@@ -9591,6 +9876,7 @@ class ContainerAudit:
             return False
 
         identity = self._completion_lane_identity()
+        finish_identity = self._capture_mutation_finish_identity()
         coordinator = self._transfer_seal_runtime()
         item_code = str(self.current_tray.item_code or "")
         scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
@@ -9621,12 +9907,18 @@ class ContainerAudit:
                     completion_projection_worker=completion_projection_worker,
                     completion_was_restored=completion_was_restored,
                     master_label=master_label,
+                    mutation_identity=finish_identity,
                 ),
             )
 
         def finish(attempt: SealAttempt) -> None:
             completed = False
             try:
+                if not self._mutation_finish_can_apply(
+                    finish_identity,
+                    operation="tray-completion",
+                ):
+                    return
                 if self._completion_lane_identity() != identity:
                     self.show_status_message(
                         "완료 결과는 저장됐지만 화면 작업이 바뀌어 자동 초기화하지 않았습니다.",
@@ -9675,6 +9967,8 @@ class ContainerAudit:
         *,
         _prepared_transfer_attempt: Optional[SealAttempt] = None,
     ):
+        if self._reject_mutation_during_preflight_hold():
+            return False
         blocking_completion = self._active_blocking_completion_snapshot()
         if (
             blocking_completion is not None
@@ -10135,6 +10429,8 @@ class ContainerAudit:
         self._update_tray_image_display()
 
     def undo_last_scan(self):
+        if self._reject_mutation_during_preflight_hold():
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
@@ -10185,6 +10481,8 @@ class ContainerAudit:
         self._schedule_focus_return()
 
     def reset_current_work(self):
+        if self._reject_mutation_during_preflight_hold():
+            return
         if self._phs_label_exchange_blocks_tray_transition("현재 작업 초기화"):
             return
         if self._operator_review_blocks_mutation():
@@ -10223,6 +10521,8 @@ class ContainerAudit:
             self._schedule_focus_return()
 
     def submit_current_tray(self):
+        if self._reject_mutation_during_preflight_hold():
+            return
         blocking_completion = self._active_blocking_completion_snapshot()
         if (
             blocking_completion is not None
@@ -10260,6 +10560,8 @@ class ContainerAudit:
         self._schedule_focus_return()
 
     def _complete_current_tray_as_partial(self) -> bool:
+        if self._reject_mutation_during_preflight_hold():
+            return False
         was_partial = self.current_tray.is_partial_submission
         self.current_tray.is_partial_submission = True
         if hasattr(getattr(self, "root", None), "tk"):
@@ -10386,6 +10688,9 @@ class ContainerAudit:
 
     def _update_stopwatch(self):
         if not self.root.winfo_exists() or self.is_idle: return
+        if self._preflight_context_blocks_mutation():
+            self.stopwatch_job = self.root.after(1000, self._update_stopwatch)
+            return
         mins, secs = divmod(int(self.current_tray.stopwatch_seconds), 60)
         if self.info_cards.get('stopwatch') and self.info_cards['stopwatch']['value'].winfo_exists():
             self.info_cards['stopwatch']['value']['text'] = f"{mins:02d}:{secs:02d}"
@@ -10412,6 +10717,13 @@ class ContainerAudit:
         if idle_epoch is not None and idle_epoch != getattr(self, "_idle_check_epoch", 0):
             return
         if not self.root.winfo_exists() or self.is_idle: return
+        if self._preflight_context_blocks_mutation():
+            self.idle_check_job = self.root.after(
+                1000,
+                self._check_for_idle,
+                getattr(self, "_idle_check_epoch", 0),
+            )
+            return
         if not self.current_tray.master_label_code:
             self.idle_check_job = self.root.after(1000, self._check_for_idle, getattr(self, "_idle_check_epoch", 0)); return
         if not self.last_activity_time:
@@ -10428,6 +10740,8 @@ class ContainerAudit:
 
     def _wakeup_from_idle(self, *, activity_time: Optional[datetime.datetime] = None):
         if not self.is_idle: return
+        if self._preflight_context_blocks_mutation():
+            return
         if not self.current_tray.master_label_code:
             self.is_idle = False
             self._set_idle_style(is_idle=False)
@@ -11786,6 +12100,8 @@ class ContainerAudit:
     def _retry_precommand_operator_review_completion(self) -> bool:
         """Retry only a commandless review against a saved active successor."""
 
+        if self._reject_mutation_during_preflight_hold():
+            return False
         retry_context = self._precommand_operator_review_retry_context()
         snapshot = self._active_operator_review_snapshot()
         if retry_context is None or snapshot is None:
@@ -12937,6 +13253,8 @@ class ContainerAudit:
 
     def initiate_master_label_replacement(self):
         """현품표 교체 프로세스를 시작합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
@@ -12962,6 +13280,8 @@ class ContainerAudit:
 
     def cancel_master_label_replacement(self) -> bool:
         """현품표 교체 프로세스를 취소하고 상태와 컨텍스트를 초기화합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return False
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return False
@@ -13179,6 +13499,8 @@ class ContainerAudit:
 
     def _finalize_replacement(self):
         """모든 정보가 준비되면 최종적으로 찾았던 로그 파일을 수정하고 저장합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return
         try:
             ctx = self.replacement_context
             log_file_path = ctx['found_log_file']
@@ -13224,6 +13546,8 @@ class ContainerAudit:
 
     def show_exchange_dialog(self):
         """개별 제품 교환 다이얼로그를 표시합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
@@ -13441,6 +13765,8 @@ class ContainerAudit:
 
     def _process_exchange_scan(self, barcode: str):
         """교환 스캔을 처리합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return
         session = self.current_exchange_session
 
         # 세션이 시작되지 않았으면 자동으로 시작
@@ -13630,6 +13956,8 @@ class ContainerAudit:
     def _apply_acked_member_exchange(
         self, attempt: MemberExchangeAttempt, *, recovery: bool = False
     ) -> bool:
+        if self._reject_mutation_during_preflight_hold():
+            return False
         coordinator = self._transfer_member_exchange_runtime()
         try:
             successor_lease_id = coordinator.ensure_local_rotation(attempt.intent_id)
@@ -13722,6 +14050,8 @@ class ContainerAudit:
         return True
 
     def _reconcile_pending_local_member_exchanges(self) -> None:
+        if self._reject_mutation_during_preflight_hold():
+            return
         if not getattr(self.current_tray, "master_label_code", ""):
             return
         coordinator = self._transfer_member_exchange_runtime()
@@ -13802,6 +14132,8 @@ class ContainerAudit:
 
     def _cancel_exchange(self, *, reason: str = "operator_cancel") -> bool:
         """진행 중인 제품 교환을 취소하고 필요한 감사 로그를 남깁니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return False
         intent_id = str(
             getattr(self, "_active_transfer_exchange_intent_id", "") or ""
         )
@@ -13878,6 +14210,8 @@ class ContainerAudit:
 
     def _complete_exchange(self):
         """제품 교환을 완료합니다."""
+        if self._reject_mutation_during_preflight_hold():
+            return
         active_transfer_exchange = bool(
             getattr(self, "_active_transfer_exchange_mode", False)
         )

@@ -107,6 +107,22 @@ class _ImmediateRoot:
         return callback(*args)
 
 
+def _cross_thread_fake_root():
+    """Return a deterministic Tk pump that also exposes legacy worker after()."""
+
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+
+    class CrossThreadFakeTkRoot(FakeTkRoot):
+        def after(self, delay_ms, callback, *args):
+            self.after_threads.append(threading.get_ident())
+            self._next_job += 1
+            job_id = f"job-{self._next_job}"
+            self.jobs.append((job_id, int(delay_ms), callback, args))
+            return job_id
+
+    return CrossThreadFakeTkRoot()
+
+
 class _OptionWidget:
     def __init__(self):
         self.options = {}
@@ -1299,6 +1315,212 @@ def test_active_hold_blocks_phs_active_refresh_before_current_tray_mutation(
         "보류" in message and "접수되지 않았습니다" in message
         for message in app.statuses
     )
+
+
+def test_reconciliation_resolve_finish_discards_when_hold_appears_on_real_lane(
+    monkeypatch,
+):
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    root = _cross_thread_fake_root()
+    lane = TkSerialUiLane(root, poll_ms=1)
+    started = threading.Event()
+    release = threading.Event()
+    hold = {"active": False}
+    resolve_threads = []
+    marker_calls = []
+    context = {
+        "reconciliation": {"reconciliation_id": "RECON-1"},
+        "selection": {"action_ids": ["ACTION-1"]},
+        "expected_exchange_kind": "SPLIT",
+    }
+
+    class Reconciliation:
+        available = True
+
+        @staticmethod
+        def resolve(_payload):
+            resolve_threads.append(threading.get_ident())
+            started.set()
+            assert release.wait(timeout=2.0)
+            return context
+
+        @staticmethod
+        def target_summaries(_context):
+            return ["target"]
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
+    app.current_tray = TraySession()
+    app.phs_label_exchange_coordinator = SimpleNamespace(
+        reconciliation=Reconciliation(),
+    )
+    app._scan_callback_epoch = 11
+    app._phs_reconciliation_scan_armed = True
+    app._phs_label_candidate_pending = False
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_store = lambda: SimpleNamespace(
+        exists=lambda: hold["active"],
+    )
+    app._parse_new_format_qr = lambda _payload: {"PHS": "2"}
+    app._set_phs_reconciliation_context = lambda value: setattr(
+        app,
+        "_phs_reconciliation_context",
+        value,
+    )
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: marker_calls.append(
+            (hold["active"], app._master_preflight_pending)
+        )
+        or (True, True)
+    )
+    app._update_action_button_states = lambda: None
+    app._schedule_focus_return = lambda: None
+    app._log_event = lambda *_args, **_kwargs: True
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_fields",
+        lambda fields: dict(fields),
+    )
+
+    try:
+        assert app._intercept_phs_reconciliation_scan("PHS2") is True
+        assert started.wait(timeout=1.0)
+
+        hold["active"] = True
+        app._master_preflight_pending = True
+        release.set()
+        root.run_until(lambda: app._phs_label_candidate_pending is False)
+
+        assert marker_calls == []
+        assert resolve_threads == [lane.worker_thread_id]
+        assert app._phs_reconciliation_context is None
+    finally:
+        release.set()
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_active_refresh_finish_discards_when_hold_appears_on_real_lane(
+    monkeypatch,
+):
+    from tk_serial_ui_lane import TkSerialUiLane
+
+    root = _cross_thread_fake_root()
+    lane = TkSerialUiLane(root, poll_ms=1)
+    started = threading.Event()
+    release = threading.Event()
+    hold = {"active": False}
+    refresh_threads = []
+    marker_calls = []
+    save_calls = []
+    tray = TraySession(
+        master_label_code="MASTER",
+        canonical_input_tag_qr="MASTER",
+        active_label_qr_payload="ACTIVE-OLD",
+        active_label_id="LBL-OLD",
+        item_code="ITEM",
+        tray_size=2,
+        scanned_barcodes=["UNIT-1"],
+    )
+    preflight = SimpleNamespace(
+        canonical_input_tag_qr="MASTER",
+        active_label_qr_payload="ACTIVE-NEW",
+        active_label_id="LBL-NEW",
+        active_label_business_date="2026-09-02",
+        active_label_worker_code="WORKER-NEW",
+        scanned_label_id="LBL-SCANNED",
+        active_label_resolution="OVERLAY_REPLACED",
+        item_id="ITEM",
+        member_count=2,
+        replaced_scan=True,
+    )
+
+    class Client:
+        @staticmethod
+        def resolve_source(_identity):
+            refresh_threads.append(threading.get_ident())
+            started.set()
+            assert release.wait(timeout=2.0)
+            return {}
+
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app._ui_lane = lane
+    app._ui_task_lane = lambda: lane
+    app.current_tray = tray
+    app.phs_label_exchange_coordinator = SimpleNamespace(client=Client())
+    app._scan_callback_epoch = 12
+    app._phs_label_exchange_pending = False
+    app._phs_label_refresh_pending = False
+    app._phs_label_candidate_pending = False
+    app._master_preflight_pending = False
+    app._preflight_hold_draining = False
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_store = lambda: SimpleNamespace(
+        exists=lambda: hold["active"],
+    )
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._parse_new_format_qr = lambda _payload: {
+        "PHS": "2",
+        "ITG": "ITAG-1",
+        "CLC": "ITEM",
+        "LBL": "LBL-OLD",
+        "HSH": "0123456789abcdef",
+    }
+    app._ensure_phs_replacement_waiting_marked = (
+        lambda *_args, **_kwargs: marker_calls.append(
+            (hold["active"], app._master_preflight_pending)
+        )
+        or (True, True)
+    )
+    app._save_current_tray_state = lambda: save_calls.append("save") or True
+    app._update_action_button_states = lambda: None
+    app._update_current_item_label = lambda: None
+    app._schedule_focus_return = lambda: None
+    app._log_event = lambda *_args, **_kwargs: True
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_fields",
+        lambda fields: dict(fields),
+    )
+    monkeypatch.setattr(
+        container_module,
+        "validate_compact_phs2_preflight",
+        lambda *_args, **_kwargs: preflight,
+    )
+
+    try:
+        app._begin_active_phs_label_refresh("PHS2")
+        assert started.wait(timeout=1.0)
+
+        hold["active"] = True
+        app._master_preflight_pending = True
+        release.set()
+        root.run_until(lambda: app._phs_label_refresh_pending is False)
+
+        assert marker_calls == []
+        assert save_calls == []
+        assert refresh_threads == [lane.worker_thread_id]
+        assert tray.active_label_id == "LBL-OLD"
+    finally:
+        release.set()
+        if lane.state != "CLOSED":
+            lane.close_idle()
+            root.run_until(lambda: lane.state == "CLOSED")
 
 
 def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
