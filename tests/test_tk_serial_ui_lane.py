@@ -356,6 +356,7 @@ def test_stale_terminal_generation_skips_callbacks_and_domain_transition(
     release = threading.Event()
     finished = []
     failed = []
+    stale_settles = []
     domain = {"state": "generation-1"}
 
     def work():
@@ -372,6 +373,7 @@ def test_stale_terminal_generation_skips_callbacks_and_domain_transition(
             work,
             lambda value: (finished.append(value), domain.update(state="stale")),
             lambda exc: (failed.append(exc), domain.update(state="stale")),
+            on_stale=lambda: stale_settles.append((lane.is_busy(), lane.state)),
         )
     )
     assert admission.handle is not None
@@ -383,6 +385,7 @@ def test_stale_terminal_generation_skips_callbacks_and_domain_transition(
 
     assert finished == []
     assert failed == []
+    assert stale_settles == [(True, "BUSY")]
     assert domain == {"state": "generation-2"}
     assert isinstance(
         admission.handle.stale_generation_error,

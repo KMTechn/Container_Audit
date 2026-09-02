@@ -64,6 +64,7 @@ class LaneTask:
     on_idle: Optional[Callable[[], None]] = None
     cancel_safe: bool = False
     shutdown_policy: str = DRAIN_TO_TERMINAL
+    on_stale: Optional[Callable[[], None]] = None
 
     def __post_init__(self) -> None:
         if not str(self.name or "").strip():
@@ -401,6 +402,8 @@ class TkSerialUiLane:
                     )
                 )
                 active.handle.stale_generation_error = stale_error
+                if active.task.on_stale is not None:
+                    active.task.on_stale()
         except BaseException as exc:
             self._break_lane(exc)
             return

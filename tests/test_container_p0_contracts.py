@@ -2978,6 +2978,138 @@ def test_gui_completion_recomputes_actions_after_lane_becomes_idle(
             app._ui_lane.close_idle()
 
 
+@pytest.mark.parametrize("terminal_path", ["success", "failure"])
+def test_stale_completion_terminal_settles_busy_before_actual_idle_action_refresh(
+    tmp_path,
+    terminal_path,
+):
+    from tk_serial_ui_lane import StaleUiResultError
+
+    root = HealthPumpRoot()
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    master = (
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-STALE-SETTLE|"
+        "CLC=AAA2270730100|LBL=LBL-STALE-SETTLE|HSH=0123456789abcdef"
+    )
+    now = datetime.datetime(2026, 9, 3, 8, 0, 0)
+    app.current_tray = TraySession(
+        master_label_code=master,
+        canonical_input_tag_qr=master,
+        active_label_qr_payload=master,
+        active_label_id="LBL-STALE-SETTLE",
+        active_label_business_date="2026-09-03",
+        active_label_worker_code="fixture-worker",
+        operation_lease_id="operation-lease-stale-settle",
+        item_code="AAA2270730100",
+        item_name="fixture item",
+        scanned_barcodes=["AAA2270730100-PRODUCT-1"],
+        scan_times=[now],
+        tray_size=1,
+        start_time=now - datetime.timedelta(seconds=30),
+    )
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app._scan_callback_epoch = 10
+    app._ui_lane = None
+    app.COLOR_PRIMARY = "primary"
+    app.COLOR_DANGER = "danger"
+    app._active_blocking_completion_snapshot = lambda: None
+    app._active_completion_event_contract = lambda: None
+    app._operator_review_blocks_mutation = lambda: False
+    app._phs_label_exchange_blocks_tray_transition = lambda _action: False
+    app._transfer_member_exchange_blocks_local_action = lambda _action: False
+    app._precommand_operator_review_retry_context = lambda: None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._phs_label_exchange_transition_pending = lambda: False
+    app._preflight_context_blocks_mutation = lambda: False
+    app._phs_label_exchange_available_for_tray = lambda: False
+    app._phs_reconciliation_exchange_available = lambda: False
+    app._refresh_phs_active_label_info = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app._schedule_focus_return = lambda *_args, **_kwargs: None
+    app.transfer_seal_coordinator = SimpleNamespace()
+    updates = []
+    app.operations_button = CompletionActionStateWidget(app, updates)
+    started = threading.Event()
+    release = threading.Event()
+    completion_callbacks = []
+    complete_tray_calls = []
+    attempt = SealAttempt(
+        "intent-stale-settle",
+        "ACKED",
+        operation_lease_id="operation-lease-stale-settle",
+    )
+
+    def prepare_snapshot(**_kwargs):
+        started.set()
+        assert release.wait(timeout=2.0)
+        if terminal_path == "failure":
+            raise RuntimeError("injected stale completion failure")
+        return attempt
+
+    def complete_tray(*, _prepared_transfer_attempt=None):
+        complete_tray_calls.append(_prepared_transfer_attempt)
+        return True
+
+    app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
+    app.complete_tray = complete_tray
+
+    try:
+        assert app.request_complete_tray(
+            completion_callback=completion_callbacks.append,
+        ) is True
+        assert started.wait(timeout=1.0)
+        app._invalidate_pending_scan_callbacks()
+        assert app._scan_callback_epoch == 11
+        release.set()
+        app._completion_task_handle.join(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while app._ui_lane.is_busy() and time.monotonic() < deadline:
+            if root.jobs:
+                root.run_next()
+            else:
+                time.sleep(0.005)
+
+        stale_error = app._completion_task_handle.stale_generation_error
+        settled = bool(
+            not app._completion_lane_busy
+            and updates
+            and updates[-1]["action_state"] == container_module.tk.NORMAL
+        )
+        print(f"terminal_path={terminal_path}")
+        print(
+            "terminal_record_type="
+            f"{type(stale_error).__name__} code={getattr(stale_error, 'code', None)}"
+        )
+        print(
+            f"lane_busy={app._ui_lane.is_busy()} lane_state={app._ui_lane.state} "
+            f"completion_busy={app._completion_lane_busy}"
+        )
+        print(f"last_action_state={updates[-1]['action_state']}")
+        print(
+            "stale_terminal_post_idle_cleanup="
+            + ("SETTLED" if settled else "REPRODUCED")
+        )
+
+        assert isinstance(stale_error, StaleUiResultError)
+        assert stale_error.code == "UI_LANE_STALE_RESULT"
+        assert stale_error.task_generation == 10
+        assert stale_error.current_generation == 11
+        assert completion_callbacks == []
+        assert complete_tray_calls == []
+        assert app._completion_lane_busy is False
+        assert updates[-1] == {
+            "completion_busy": False,
+            "lane_busy": False,
+            "lane_state": "IDLE",
+            "action_state": container_module.tk.NORMAL,
+        }
+    finally:
+        if app._ui_lane is not None:
+            app._ui_lane.close_idle()
+
+
 class RedirectResponse:
     status_code = 302
     headers = {"Location": "https://evil.example.invalid/steal?token=raw-secret"}

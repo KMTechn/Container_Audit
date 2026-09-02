@@ -10227,10 +10227,10 @@ class ContainerAudit:
                 name="tray-completion",
                 generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
                 work=work,
-                finish=finish,
-                fail=fail,
+                finish=finish, fail=fail,
                 on_idle=self._update_action_button_states,
                 shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+                on_stale=lambda: self._set_completion_lane_busy(False),
             )
         )
         if not admission.accepted:
