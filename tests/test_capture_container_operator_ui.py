@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -10,11 +13,16 @@ from scan_display import compact_scan_value, format_scan_list_row
 import tools.capture_container_operator_ui as capture_tool
 
 from tools.capture_container_operator_ui import (
+    CAPTURE_EXACT_SIX_PHS2,
     DEFAULT_SCALE,
     DEFAULT_SIZES,
     DEFAULT_STATE_IDS,
     DisplayMonitor,
     MAX_SCALE,
+    M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+    M7_PHS2_FIELD_ORDER,
+    M7_REQUIRED_STATE_IDS,
+    M7_SCENE_CONTRACT,
     MIN_SCALE,
     CaptureMutationBlocked,
     CaptureMutationGuard,
@@ -27,6 +35,9 @@ from tools.capture_container_operator_ui import (
     build_compact_display_gate,
     build_isolated_data_gate,
     build_left_sidebar_gate,
+    build_m7_external_capture_bundle_contract,
+    build_m7_scene_assertions,
+    build_m7_scene_gate,
     build_monitor_capture_gate,
     build_matrix_roundtrip_parity_signatures,
     build_isolated_app_settings,
@@ -41,6 +52,7 @@ from tools.capture_container_operator_ui import (
     monitor_preflight_manifest,
     normalize_capture_scan_rows,
     inventory_isolated_data,
+    inspect_m7_production_scene_seams,
     parse_roundtrip_sizes,
     parse_scale,
     parse_sizes,
@@ -52,21 +64,16 @@ from tools.capture_container_operator_ui import (
 )
 
 
-def test_default_matrix_has_four_required_sizes_and_six_required_states():
+def test_default_matrix_has_four_sizes_and_exactly_nine_m7_scenes():
     assert DEFAULT_SIZES == (
         (1366, 768),
         (1440, 900),
         (1920, 1080),
         (2560, 1080),
     )
-    assert DEFAULT_STATE_IDS == (
-        "waiting",
-        "normal",
-        "duplicate",
-        "operator_review",
-        "completed",
-        "recovered",
-    )
+    assert DEFAULT_STATE_IDS == M7_REQUIRED_STATE_IDS
+    assert DEFAULT_STATE_IDS == tuple(M7_SCENE_CONTRACT)
+    assert len(DEFAULT_STATE_IDS) == 9
     assert DEFAULT_SCALE == 1.0
 
 
@@ -739,7 +746,8 @@ def test_size_and_state_parsers_accept_korean_multiplication_mark_and_deduplicat
         (1366, 768),
         (1440, 900),
     )
-    assert parse_states("waiting,normal,waiting") == ("waiting", "normal")
+    first, second = M7_REQUIRED_STATE_IDS[:2]
+    assert parse_states(f"{first},{second},{first}") == (first, second)
 
     with pytest.raises(argparse.ArgumentTypeError):
         parse_sizes("800x600")
@@ -767,45 +775,265 @@ def test_roundtrip_parser_preserves_duplicate_ordinals_and_requires_compact_retu
             parse_roundtrip_sizes(invalid)
 
 
-def test_fixture_contract_preserves_last_normal_scan_across_duplicate_and_review():
+def test_fixture_contract_covers_each_c1_scene_with_exact_members_and_state():
     fixtures = {fixture.state_id: fixture for fixture in build_state_fixtures()}
 
-    waiting = fixtures["waiting"]
-    normal = fixtures["normal"]
-    duplicate = fixtures["duplicate"]
-    review = fixtures["operator_review"]
-    completed = fixtures["completed"]
-    recovered = fixtures["recovered"]
+    assert tuple(fixtures) == M7_REQUIRED_STATE_IDS
+    assert all(
+        fixture.scanned_master_label == CAPTURE_EXACT_SIX_PHS2
+        for fixture in fixtures.values()
+    )
+    assert all(len(fixture.authoritative_members) == 3 for fixture in fixtures.values())
 
-    assert waiting.tray is None
-    assert waiting.tray_image_visible is False
-    assert normal.tray is not None and len(normal.tray.scanned_barcodes) == 3
-    assert normal.tray_image_visible is True
-    assert "|" in normal.last_normal_scan and "=" in normal.last_normal_scan
-    assert duplicate.tray is not None
-    assert duplicate.tray_image_visible is True
-    assert duplicate.tray.scanned_barcodes == normal.tray.scanned_barcodes
-    assert duplicate.last_normal_scan == normal.last_normal_scan
-    assert duplicate.notice is not None and duplicate.notice.blocking is True
-    assert duplicate.last_normal_scan not in duplicate.notice.message
-    assert "|" not in duplicate.notice.message and "=" not in duplicate.notice.message
-    assert review.tray is not None
-    assert review.tray_image_visible is True
-    assert len(review.tray.scanned_barcodes) == review.tray.target_count
-    assert review.completion is not None
-    assert review.completion.outcome == "OPERATOR_REVIEW"
-    assert review.last_normal_scan == review.tray.scanned_barcodes[-1]
-    assert completed.tray is None
-    assert completed.tray_image_visible is False
-    assert completed.completion is not None and completed.completion.outcome == "ACKED"
-    assert recovered.tray is not None and recovered.tray.restored is True
-    assert recovered.tray_image_visible is True
-    assert recovered.notice is not None and recovered.notice.blocking is False
+    preflight = fixtures["m7_phs2_preflight"]
+    queue = fixtures["m7_central_preflight_queue"]
+    completion_busy = fixtures["m7_completion_busy"]
+    recovery = fixtures["m7_recovery_transition"]
+    relay = fixtures["m7_direct_sync_backlog_ack"]
+    membership = fixtures["m7_exact_good_membership"]
+    lease = fixtures["m7_lease_fail_closed"]
+    receipt = fixtures["m7_transfer_receipt_status"]
+    exchange = fixtures["m7_partial_atomic_exchange"]
+
+    assert preflight.tray is None and preflight.preflight_phase == "LOOKUP"
+    assert queue.preflight_phase == "LOOKUP_FAILED" and len(queue.held_scans) == 2
+    assert completion_busy.tray is not None
+    assert len(completion_busy.tray.scanned_barcodes) == completion_busy.tray.target_count
+    assert recovery.tray is not None and recovery.tray.restored is True
+    assert relay.direct_sync is not None and relay.direct_sync.pending_count == 2
+    assert relay.completion is not None and relay.completion.outcome == "ACKED"
+    assert membership.tray is not None
+    assert len(membership.tray.scanned_barcodes) == membership.tray.target_count
+    assert lease.lease is not None and lease.lease.start_allowed is False
+    assert receipt.completion_variants == (
+        "LINKED",
+        "ACKED",
+        "RETRY_WAIT",
+        "LOCAL_EVENT_RETRY",
+        "OPERATOR_REVIEW",
+    )
+    assert exchange.tray is not None
+    assert len(exchange.tray.scanned_barcodes) < exchange.tray.target_count
+    assert len(exchange.exchange_pairs) == 1
+
+
+def test_m7_exact_six_phs2_uses_production_parser_and_validator_only():
+    import Container_Audit as module
+
+    fixtures = build_state_fixtures()
+    for fixture in fixtures:
+        assertions = build_m7_scene_assertions(fixture, module)
+        exact = assertions["exact_six_phs2"]
+        assert exact["passed"] is True
+        assert tuple(exact["field_order"]) == M7_PHS2_FIELD_ORDER
+        assert set(exact["validated_fields"]) == set(M7_PHS2_FIELD_ORDER)
+        assert exact["parser_identity"] == "label_qr.parse_new_format_qr"
+        assert exact["validator_identity"] == (
+            "transfer_seal.validate_compact_phs2_fields"
+        )
+
+    source = Path(capture_tool.__file__).read_text(encoding="utf-8")
+    assert "PHS=1|" not in source
+    assert "|QT=" not in source
+    assert "PHS=2|CLC=" not in source
+
+
+def test_m7_external_bundle_contract_has_identity_lookup_and_no_repo_digest_values():
+    contract = build_m7_external_capture_bundle_contract()
+
+    assert contract["schema"] == M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA
+    assert contract["app_id"] == "Container_Audit"
+    assert contract["external_approval_location"] == (
+        "<M7 handover evidence root>/capture-bundles/Container_Audit/"
+    )
+    assert contract["required_state_ids"] == list(M7_REQUIRED_STATE_IDS)
+    assert contract["lookup"] == {
+        "start_at": "<M7 handover evidence root>/handover-index.json",
+        "select": "app_id=Container_Audit",
+        "manifest": "capture-bundles/Container_Audit/manifest.json",
+        "state_selector": "captures[].state_id",
+        "approval_required": True,
+    }
+    assert contract["repository_document_digest_values_allowed"] is False
+    assert contract["tracked_images"] == (
+        "retained_historical_pending_external_replacement"
+    )
+    assert {
+        "app_source.commit",
+        "app_source.tree",
+        "portable_artifact.sha256",
+        "capture_tool.commit",
+        "capture_tool.blob_sha256",
+        "captures[].state_id",
+        "captures[].viewport",
+        "captures[].dpi",
+        "captures[].generated_at",
+        "captures[].image_sha256",
+        "approval.approver",
+        "approval.custody_receipt",
+    }.issubset(contract["manifest_identity_fields"])
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "section_marker"),
+    (
+        ("README.md", "### M7 화면 증거 계약"),
+        (
+            "docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md",
+            "## 11. M7 external capture bundle v1",
+        ),
+        (
+            "docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260626.md",
+            "원본 검증 evidence와 현행 대체 계약:",
+        ),
+    ),
+)
+def test_m7_external_bundle_contract_is_aligned_in_guides(
+    relative_path,
+    section_marker,
+):
+    text = Path(capture_tool.ROOT, relative_path).read_text(encoding="utf-8")
+    assert section_marker in text
+    section = text.split(section_marker, 1)[1]
+    if relative_path == "README.md":
+        section = section.split("\n---", 1)[0]
+
+    assert M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA in section
+    assert "<M7 handover evidence root>/capture-bundles/Container_Audit/" in section
+    assert "<M7 handover evidence root>/handover-index.json" in section
+    assert "external bundle 캡처 대기(도구 준비됨)" in section
+    assert "조직 확정 필요 (Q1)" in section
+    assert "기존 추적 이미지" in section
+    assert all(state_id in section for state_id in M7_REQUIRED_STATE_IDS)
+    assert re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", section, re.I) is None
+
+
+def test_all_nine_m7_scenes_resolve_to_current_production_seams_and_sources():
+    import Container_Audit as module
+
+    receipt = inspect_m7_production_scene_seams(module)
+
+    assert receipt["scene_count"] == 9
+    assert receipt["all_seams_available"] is True
+    assert tuple(receipt["scenes"]) == M7_REQUIRED_STATE_IDS
+    for state_id, scene in receipt["scenes"].items():
+        assert scene["seam_available"] is True
+        assert scene["production_call_path"] == list(
+            M7_SCENE_CONTRACT[state_id]["production_call_path"]
+        )
+        assert scene["production_sources"] == list(
+            M7_SCENE_CONTRACT[state_id]["production_sources"]
+        )
+        assert all(
+            identity.startswith("Container_Audit.ContainerAudit.")
+            for identity in scene["production_method_identities"].values()
+        )
+        for source in scene["production_sources"]:
+            match = re.fullmatch(r"([^:]+):(\d+)-(\d+)", source)
+            assert match is not None
+            source_path = Path(capture_tool.ROOT, match.group(1))
+            assert source_path.is_file()
+            with source_path.open(
+                "r", encoding="utf-8", errors="replace"
+            ) as handle:
+                line_count = sum(1 for _ in handle)
+            start, end = int(match.group(2)), int(match.group(3))
+            assert 1 <= start <= end <= line_count
+
+
+def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts():
+    import Container_Audit as module
+
+    assertions = {
+        fixture.state_id: build_m7_scene_assertions(fixture, module)
+        for fixture in build_state_fixtures()
+    }
+
+    assert assertions["m7_phs2_preflight"]["expected_input_state"] == "disabled"
+    assert set(assertions["m7_completion_busy"]["expected_disabled_controls"]) == set(
+        capture_tool.M7_ACTION_NAMES
+    )
+    membership = assertions["m7_exact_good_membership"]["member_set"]
+    assert membership["member_count"] == 3
+    assert membership["active_scan_count"] == 3
+    assert membership["passed"] is True
+    lease = assertions["m7_lease_fail_closed"]["lease"]
+    assert lease["state"] == "EXPIRED"
+    assert lease["start_allowed"] is False
+    relay = assertions["m7_direct_sync_backlog_ack"]["direct_sync"]
+    assert relay["health"]["pending_count"] == 2
+    assert relay["card_model"]["summary"].startswith("대기 2 · 최근 성공 ")
+    variants = assertions["m7_transfer_receipt_status"]["receipt"][
+        "completion_variants"
+    ]
+    assert [item["outcome"] for item in variants] == [
+        "LINKED",
+        "ACKED",
+        "RETRY_WAIT",
+        "LOCAL_EVENT_RETRY",
+        "OPERATOR_REVIEW",
+    ]
+    assert [item["notice"]["title"] for item in variants] == [
+        "이적 연계 완료",
+        "서버 이적 확인 완료",
+        "서버 이적 확인 대기",
+        "완료 기록 저장 재시도",
+        "완료 확인 필요",
+    ]
+    exchange = assertions["m7_partial_atomic_exchange"]["exchange"]
+    assert len(exchange["pairs"]) == 1
+    assert exchange["checks"]["central_atomic"] is True
+    assert exchange["passed"] is True
+
+
+def test_m7_scene_gate_passes_only_with_bound_production_receipt():
+    import Container_Audit as module
+
+    fixture = next(
+        item
+        for item in build_state_fixtures()
+        if item.state_id == "m7_exact_good_membership"
+    )
+    manifest = _fixture_manifest(fixture, module)
+    scene = inspect_m7_production_scene_seams(module)["scenes"][fixture.state_id]
+    receipt = {
+        **scene,
+        "assertions": manifest["m7_assertions"],
+    }
+    rendered = {
+        "m7_scene_receipt": receipt,
+        "scan_entry_state": "normal",
+        "action_buttons": {},
+        "right_texts": {},
+        "count": "3 / 3",
+    }
+
+    gate = build_m7_scene_gate(manifest, rendered)
+    assert gate["gate_applicable"] is True
+    assert gate["passed"] is True
+
+    rendered.pop("m7_scene_receipt")
+    failed = build_m7_scene_gate(manifest, rendered)
+    assert failed["checks"]["production_scene_receipt_present"] is False
+    assert failed["passed"] is False
+
+
+def test_describe_m7_contract_is_headless_and_returns_the_nine_scene_plan(capsys):
+    assert capture_tool.main(["--describe-m7-contract"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["contract"] == build_m7_external_capture_bundle_contract()
+    assert payload["production_scene_seams"]["scene_count"] == 9
+    assert [item["state_id"] for item in payload["scene_assertions"]] == list(
+        M7_REQUIRED_STATE_IDS
+    )
 
 
 def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():
     normal = next(
-        fixture for fixture in build_state_fixtures() if fixture.state_id == "normal"
+        fixture
+        for fixture in build_state_fixtures()
+        if fixture.state_id == "m7_exact_good_membership"
     )
     manifest = _fixture_manifest(normal)
     rows = _expected_scan_list_rows(manifest)
@@ -831,7 +1059,11 @@ def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():
 )
 def test_compact_display_gate_rejects_visible_raw_and_preserves_runtime_raw(mutation):
     fixture = _fixture_manifest(
-        next(item for item in build_state_fixtures() if item.state_id == "normal")
+        next(
+            item
+            for item in build_state_fixtures()
+            if item.state_id == "m7_exact_good_membership"
+        )
     )
     rendered = {
         "scan_list_rows": _expected_scan_list_rows(fixture),

@@ -10,7 +10,7 @@
 
 이 문서는 표준 PHS2 작업의 현행 절차입니다. 핵심은 **원본 물리 PHS2 한 번 → 중앙 preflight와 서명 lease → 중앙 exact GOOD 멤버 전량 스캔 → 로컬 완료 정보 저장 → 현재 트레이의 중앙 이적 결과 확인**입니다.
 
-> 화면 안내: 아래 사진은 2026-06-30 보존 캡처이며 적용 commit의 화면을 증명하지 않습니다. 로그인과 입력 위치를 찾는 참고로만 사용하고, 사진 속 수량·버전·예전 예외 버튼을 현행 절차의 근거로 삼지 마세요. 적용 commit 기준 캡처는 아래 TODO로 남깁니다.
+> 화면 안내: 아래 사진은 2026-06-30 보존 캡처이며 적용 commit의 화면을 증명하지 않습니다. 로그인과 입력 위치를 찾는 참고로만 사용하고, 사진 속 수량·버전·예전 예외 버튼을 현행 절차의 근거로 삼지 마세요. 현행 증거는 아래 `M7 external capture bundle v1` 계약에 따라 외부 승인 묶음으로 교체할 예정입니다.
 
 ![보존 화면 모음](assets/container_audit_user_manual_20260630_annotated/20-contact-sheet.png)
 
@@ -234,23 +234,38 @@ parked 트레이와 `보류 스캔 N건`은 삭제 대기 항목이 아니라 �
 
 이 화면은 **레거시 증거**입니다. 일반 작업이나 담당자 지시로 표준 PHS2를 부분 제출해서는 안 됩니다.
 
-## 11. TODO — 적용 commit 화면 캡처
+## 11. M7 external capture bundle v1
 
-게시 전 적용 commit을 포함한 실제 배포 artifact에서 다음 화면을 새로 촬영해 보존 이미지를 교체해야 합니다. 이 문서 수정에서는 GUI를 실행하거나 캡처를 만들지 않았으므로 모두 **UNPROVEN**입니다.
+현행 화면 증거의 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 승인 묶음은 앱 저장소 밖의 `<M7 handover evidence root>/capture-bundles/Container_Audit/`에 두고, `<M7 handover evidence root>/handover-index.json`에서 `app_id=Container_Audit` 항목을 선택한 뒤 `capture-bundles/Container_Audit/manifest.json`의 `captures[].state_id`로 조회합니다. 저장소에서는 GUI를 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`로 같은 계약과 production seam 목록을 확인할 수 있습니다.
 
-- 캡처 승인자 직책: **미정**
-- 캡처·게시 증거 책임 소재: **미정**
+묶음 manifest에는 앱 source commit/tree, portable artifact SHA-256, 캡처 도구 commit/blob SHA-256, 장면별 state ID·viewport·DPI·생성 시각·이미지 SHA-256, 승인자와 custody receipt를 기록합니다. 이 문서에는 아직 만들어지지 않은 digest 값을 미리 적지 않습니다. 캡처 승인자 직책과 캡처·게시 evidence owner는 조직이 Q1에서 확정해야 하며, 확정 전에는 승인 완료로 판정하지 않습니다.
 
-- exact six-field PHS2 스캔과 preflight 진행·차단
-- `중앙 확인 중 · 보류 스캔 N건`, `중앙 확인 완료 · 보류 N건 순서대로 처리 중`, `중앙 조회 실패 · 보류 N건 (삭제되지 않음)`, `이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.`, `이번 스캔은 접수되지 않았습니다.` 상태
-- `완료 처리 중`, `이전 중앙 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.`와 preflight 보류 중 비활성 control
-- `이전 작업 복구`, `작업 전환 확인`, `보류 작업 N건 (더블클릭으로 복원)` 흐름
-- `저장 전송` 카드의 backlog·최근 ACK와 현재 트레이 이적 확인 결과
-- 중앙 exact GOOD `member_count`와 제품 ID↔바코드 대조
-- lease 발급 실패·만료와 시작 전 오프라인 차단
-- `이적 연계 완료`, `서버 이적 확인 완료`, `서버 이적 확인 대기`, `완료 기록 저장 재시도`, `완료 확인 필요` 표시
-- 표준 부분 완료 차단과 같은 품목 1~2쌍 원자 교환
+필수 state ID는 다음 아홉 개입니다.
 
-`tools/capture_container_operator_ui.py`의 fixture는 아직 레거시 `QT` PHS2와 과거 상태만 사용하므로 위 적용 commit 캡처의 증거 도구로 사용할 수 없습니다. 별도 코드 레인에서 exact six-field PHS2와 위 상태를 지원하기 전까지 자동 캡처도 **UNPROVEN**입니다.
+1. `m7_phs2_preflight` — exact six-field PHS2, preflight 진행·차단
+2. `m7_central_preflight_queue` — 중앙 확인 중/완료/실패, 이전 중앙 작업 처리 중, 이번 스캔 미접수
+3. `m7_completion_busy` — 완료 처리 중, 이번 완료 요청 미접수, preflight 보류 중 control 비활성
+4. `m7_recovery_transition` — 이전 작업 복구, 작업 전환 확인, 보류 작업 N건 복원
+5. `m7_direct_sync_backlog_ack` — 저장 전송 backlog/최근 ACK, 현재 트레이 이적 확인
+6. `m7_exact_good_membership` — 중앙 exact GOOD `member_count`, 제품 ID↔바코드 대조
+7. `m7_lease_fail_closed` — lease 발급 실패/만료, 시작 전 오프라인 차단
+8. `m7_transfer_receipt_status` — 이적 연계 완료/서버 확인 완료·대기/로컬 기록 재시도/확인 필요
+9. `m7_partial_atomic_exchange` — 표준 부분 완료 차단, 같은 품목 1~2쌍 원자 교환
 
-현재 캡처가 준비되기 전까지 기존 사진은 화면 위치 안내로만 사용하고, 절차와 상태 판단은 이 문서 본문을 따릅니다.
+기존 추적 이미지는 삭제하지 않고 역사 참고 자료로 유지합니다. 최종 portable artifact에서 위 아홉 state를 외부 묶음으로 캡처하고 승인한 뒤에만 현행 화면 증거를 교체하며, 그전까지 절차와 상태 판단은 이 문서 본문을 따릅니다.
+
+### C-1~C-5 처리표
+
+| ID | 분류 | 처리 |
+|---|---|---|
+| C-1 | `external bundle 캡처 대기(도구 준비됨)` | 캡처 도구가 exact-six PHS2와 아홉 production presenter/state seam을 선언하고 headless 계약 조회를 제공합니다. PNG 생성과 최종 artifact 캡처·승인은 이 문서 변경의 범위 밖입니다. |
+| C-2 | `조직 확정 필요 (Q1)` | 캡처 승인자 직책은 정하지 않았으며 조직 결정 전 미정입니다. |
+| C-3 | `조직 확정 필요 (Q1)` | 캡처·게시 evidence owner는 정하지 않았으며 조직 결정 전 미정입니다. |
+| C-4 | `닫힘` | 캡처 도구는 증거 경로에서 과거 fixture를 제거하고 exact-six PHS2 및 필수 아홉 state만 사용하도록 수정했습니다. |
+| C-5 | `부재` | 2026-09-03에 아래 세 원본 경로의 직접 존재 여부와 저장소·`E:\KMTech`의 경로명/참조를 검색했습니다. 세 경로 모두 존재하지 않았고 검색 결과도 문서 참조뿐이어서 보존 evidence 실재는 부재로 분류하며, `M7 external capture bundle v1`이 이를 대체합니다. |
+
+C-5에서 확인한 원본 경로:
+
+- `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\ui_validation_report.json`
+- `C:\company\program\Container_Audit\.tmp\ui-validation-secondary-20260625-165416\screenshots`
+- `C:\company\program\.deploy_backups\Container_Audit_local_state_20260625-124732\.codex\uiux-captures\20260623-213546-full-uiux-background`

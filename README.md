@@ -308,6 +308,14 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 보류, startup 복구, busy 상태별 재스캔 판단, DirectSync 상세는 정본의 창 제목·화면 문구 표를 확인합니다. 보류된 트레이와 preflight 보류 입력은 삭제된 것이 아닙니다.
 
+### M7 화면 증거 계약
+
+현행 캡처 스키마는 `M7 external capture bundle v1`입니다. 묶음은 저장소 밖의 `<M7 handover evidence root>/capture-bundles/Container_Audit/`에서 승인하며, `<M7 handover evidence root>/handover-index.json`의 `app_id=Container_Audit` → `capture-bundles/Container_Audit/manifest.json` → `captures[].state_id` 순서로 조회합니다. 저장소 쪽 계약은 창을 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`로 확인합니다.
+
+필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`입니다. manifest는 앱 source commit/tree, portable artifact SHA-256, 도구 commit/blob SHA-256, 각 캡처의 state ID·viewport·DPI·생성 시각·이미지 SHA-256, 승인자·custody receipt를 담지만 이 README에는 미래 digest 값을 기록하지 않습니다.
+
+현재 상태는 C-1 `external bundle 캡처 대기(도구 준비됨)`, C-2·C-3 `조직 확정 필요 (Q1)`, C-4 도구 수정 닫힘, C-5 과거 보존 evidence `부재`입니다. 기존 추적 이미지는 역사 참고로 유지하고 최종 portable artifact의 외부 승인 묶음으로 교체할 예정입니다.
+
 ---
 
 ## 💡 유용한 팁 및 주의사항

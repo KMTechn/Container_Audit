@@ -13,7 +13,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from PIL import Image, ImageGrab
 
@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scan_display import compact_scan_value, format_scan_list_row
+from preflight_scan_hold import HeldScan
 from tools.capture_quality import (
     NEAR_BLACK_FAILURE_RATIO,
     analyze_capture_quality,
@@ -31,14 +32,231 @@ from tools.capture_quality import (
 
 
 DEFAULT_SIZES = ((1366, 768), (1440, 900), (1920, 1080), (2560, 1080))
-DEFAULT_STATE_IDS = (
-    "waiting",
-    "normal",
-    "duplicate",
-    "operator_review",
-    "completed",
-    "recovered",
+M7_REQUIRED_STATE_IDS = (
+    "m7_phs2_preflight",
+    "m7_central_preflight_queue",
+    "m7_completion_busy",
+    "m7_recovery_transition",
+    "m7_direct_sync_backlog_ack",
+    "m7_exact_good_membership",
+    "m7_lease_fail_closed",
+    "m7_transfer_receipt_status",
+    "m7_partial_atomic_exchange",
 )
+DEFAULT_STATE_IDS = M7_REQUIRED_STATE_IDS
+M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA = "M7 external capture bundle v1"
+M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION = (
+    "<M7 handover evidence root>/capture-bundles/Container_Audit/"
+)
+M7_EXTERNAL_CAPTURE_INDEX = "<M7 handover evidence root>/handover-index.json"
+M7_PHS2_FIELD_ORDER = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
+CAPTURE_EXACT_SIX_PHS2 = (
+    "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITG-M7-CONTAINER-0001|"
+    "CLC=AAA2270730100|LBL=LBL-M7-CONTAINER-0001|HSH=0123456789abcdef"
+)
+CAPTURE_ACTIVE_EXACT_SIX_PHS2 = (
+    "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITG-M7-CONTAINER-0001|"
+    "CLC=AAA2270730100|LBL=LBL-M7-CONTAINER-0002|HSH=fedcba9876543210"
+)
+M7_CAPTURE_MANIFEST_IDENTITY_FIELDS = (
+    "app_source.commit",
+    "app_source.tree",
+    "portable_artifact.sha256",
+    "capture_tool.commit",
+    "capture_tool.blob_sha256",
+    "captures[].state_id",
+    "captures[].viewport",
+    "captures[].dpi",
+    "captures[].generated_at",
+    "captures[].image_sha256",
+    "approval.approver",
+    "approval.custody_receipt",
+)
+M7_ACTION_NAMES = (
+    "reset",
+    "undo",
+    "park",
+    "submit",
+    "operations",
+    "change_worker",
+    "replace",
+    "exchange",
+    "phs_label_exchange",
+)
+
+# Each scene is rooted in a production state or presenter seam.  The source
+# locations are deliberately part of the manifest so an external reviewer can
+# compare the captured state with the frozen application source.  Modal-only
+# steps are retained as flow assertions; this tool never redraws a modal as a
+# different surface.
+M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
+    "m7_phs2_preflight": {
+        "label": "exact-six PHS2 · 중앙 preflight 진행/차단",
+        "production_call_path": (
+            "show_status_message",
+            "_set_preflight_scan_input_locked",
+            "_update_current_item_label",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:8121-8566",
+            "Container_Audit.py:7917-7955",
+            "Container_Audit.py:1780-1793",
+            "Container_Audit.py:4315-4600",
+            "Container_Audit.py:13403-13425",
+        ),
+        "input_state": "disabled",
+        "disabled_controls": M7_ACTION_NAMES,
+    },
+    "m7_central_preflight_queue": {
+        "label": "중앙 확인 보류 FIFO · 실패/미접수",
+        "production_call_path": (
+            "show_status_message",
+            "_set_preflight_scan_input_locked",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:8569-8633",
+            "Container_Audit.py:8928-8977",
+            "Container_Audit.py:12363-12428",
+            "Container_Audit.py:1780-1793",
+            "Container_Audit.py:4315-4600",
+            "Container_Audit.py:13403-13425",
+        ),
+        "input_state": "disabled",
+        "disabled_controls": M7_ACTION_NAMES,
+    },
+    "m7_completion_busy": {
+        "label": "완료 처리 중 · 추가 완료 미접수",
+        "production_call_path": (
+            "_set_completion_lane_busy",
+            "show_status_message",
+            "_set_preflight_scan_input_locked",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:9914-10021",
+            "Container_Audit.py:1780-1793",
+            "Container_Audit.py:4315-4600",
+            "Container_Audit.py:13403-13425",
+        ),
+        "input_state": "disabled",
+        "disabled_controls": M7_ACTION_NAMES,
+    },
+    "m7_recovery_transition": {
+        "label": "이전 작업 복구 · 전환 확인 · 보류 복원",
+        "production_call_path": (
+            "_update_center_display",
+            "_update_parked_trays_list",
+            "_update_parked_recovery_affordance",
+            "show_status_message",
+        ),
+        "production_sources": (
+            "Container_Audit.py:3442-3544",
+            "Container_Audit.py:6606-6622",
+            "Container_Audit.py:10896-11067",
+            "Container_Audit.py:13591-13815",
+            "Container_Audit.py:13403-13425",
+        ),
+        "input_state": "normal",
+        "disabled_controls": (),
+        "modal_flow_titles": ("이전 작업 복구", "작업 전환 확인"),
+    },
+    "m7_direct_sync_backlog_ack": {
+        "label": "저장 전송 backlog/ACK · 현재 이적 확인",
+        "production_call_path": (
+            "_apply_direct_sync_health",
+            "_render_warning_state",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:12129-12168",
+            "Container_Audit.py:11106-11157",
+            "Container_Audit.py:4315-4600",
+            "direct_sync_health.py:113-129",
+            "warning_presenter.py:120-158",
+        ),
+        "input_state": "normal",
+        "disabled_controls": (),
+    },
+    "m7_exact_good_membership": {
+        "label": "중앙 exact GOOD member_count · ID↔barcode",
+        "production_call_path": (
+            "_update_center_display",
+            "_update_current_item_label",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:8511-8559",
+            "Container_Audit.py:7917-7955",
+            "Container_Audit.py:10896-11067",
+            "Container_Audit.py:4315-4600",
+        ),
+        "input_state": "normal",
+        "disabled_controls": (),
+    },
+    "m7_lease_fail_closed": {
+        "label": "lease 발급 실패/만료 · 시작 전 오프라인 차단",
+        "production_call_path": (
+            "show_fullscreen_warning",
+            "_set_preflight_scan_input_locked",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:8221-8301",
+            "Container_Audit.py:8471-8510",
+            "Container_Audit.py:10083-10107",
+            "Container_Audit.py:11438-11469",
+            "Container_Audit.py:1780-1793",
+            "Container_Audit.py:4315-4600",
+        ),
+        "input_state": "disabled",
+        "disabled_controls": M7_ACTION_NAMES,
+    },
+    "m7_transfer_receipt_status": {
+        "label": "이적 receipt 완료/대기/재시도/확인 필요",
+        "production_call_path": (
+            "_render_warning_state",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "warning_presenter.py:120-158",
+            "Container_Audit.py:11106-11157",
+            "Container_Audit.py:4315-4600",
+            "Container_Audit.py:11068-11278",
+            "Container_Audit.py:10570-10619",
+        ),
+        "input_state": "disabled",
+        "disabled_controls": (
+            "reset",
+            "undo",
+            "park",
+            "operations",
+            "change_worker",
+            "replace",
+            "exchange",
+            "phs_label_exchange",
+        ),
+    },
+    "m7_partial_atomic_exchange": {
+        "label": "표준 부분 완료 차단 · 1~2쌍 원자 교환",
+        "production_call_path": (
+            "show_status_message",
+            "_update_action_button_states",
+        ),
+        "production_sources": (
+            "Container_Audit.py:10039-10052",
+            "Container_Audit.py:4315-4600",
+            "Container_Audit.py:13403-13425",
+            "Container_Audit.py:14457-14607",
+            "Container_Audit.py:14764-14964",
+            "Container_Audit.py:15439-15550",
+        ),
+        "input_state": "normal",
+        "disabled_controls": (),
+        "enabled_controls": ("exchange",),
+    },
+}
 MIN_SCALE = 0.7
 MAX_SCALE = 2.5
 DEFAULT_SCALE = 1.0
@@ -138,6 +356,33 @@ class CompletionFixture:
 
 
 @dataclass(frozen=True, slots=True)
+class MemberFixture:
+    product_id: str
+    barcode: str
+
+
+@dataclass(frozen=True, slots=True)
+class LeaseFixture:
+    state: str
+    lease_id: str = ""
+    expires_at: str = ""
+    start_allowed: bool = False
+    error_code: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class DirectSyncFixture:
+    state: str
+    pending_count: int
+    failed_permanent_count: int
+    operator_review_count: int
+    last_acked_at: str
+    oldest_pending_at: str
+    observed_at: str
+    error_code: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class TrayFixture:
     master_label: str
     item_code: str
@@ -147,12 +392,15 @@ class TrayFixture:
     scanned_barcodes: tuple[str, ...]
     stopwatch_seconds: float
     restored: bool = False
+    operation_lease_id: str = ""
+    partial_submission: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class StateFixture:
     state_id: str
     state_label: str
+    scanned_master_label: str = CAPTURE_EXACT_SIX_PHS2
     tray: TrayFixture | None = None
     last_normal_scan: str = ""
     last_normal_item_code: str = ""
@@ -160,6 +408,15 @@ class StateFixture:
     completion: CompletionFixture | None = None
     completed_tray_count: int = 0
     tray_image_visible: bool = False
+    authoritative_members: tuple[MemberFixture, ...] = ()
+    lease: LeaseFixture | None = None
+    direct_sync: DirectSyncFixture | None = None
+    preflight_phase: str = ""
+    held_scans: tuple[str, ...] = ()
+    status_variants: tuple[str, ...] = ()
+    completion_variants: tuple[str, ...] = ()
+    receipt_id: str = ""
+    exchange_pairs: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,120 +468,465 @@ def _products(count: int) -> tuple[str, ...]:
     return tuple(
         (
             "AAA2270730100|"
-            f"SERIAL=CAPTURE-LINE-{index:04d}|"
-            f"TRACE=TRACE-{index:04d}"
+            f"SERIAL=M7-CONTAINER-{index:04d}|"
+            f"TRACE=M7-TRACE-{index:04d}"
         )
         for index in range(1, count + 1)
     )
 
 
 def build_state_fixtures() -> tuple[StateFixture, ...]:
-    """Return deterministic, display-only fixtures for the operator screen."""
+    """Return the nine deterministic C-1 scenes for external capture."""
 
-    normal_products = _products(3)
-    review_products = _products(5)
-    recovered_products = _products(6)
+    products = _products(3)
+    replacement_products = tuple(
+        value.replace("M7-CONTAINER", "M7-REPLACEMENT")
+        for value in products[:2]
+    )
+    members = tuple(
+        MemberFixture(product_id=f"UNIT-M7-{index:04d}", barcode=barcode)
+        for index, barcode in enumerate(products, start=1)
+    )
+    active_lease = LeaseFixture(
+        state="ACTIVE",
+        lease_id="LEASE-M7-CONTAINER-0001",
+        expires_at="2026-09-03T09:30:00+09:00",
+        start_allowed=True,
+    )
     common = {
-        "master_label": "PHS=2|CLC=AAA2270730100|QT=8",
+        "master_label": CAPTURE_EXACT_SIX_PHS2,
         "item_code": "AAA2270730100",
-        "item_name": "캡처 기준 품목",
-        "item_spec": "표준 트레이",
+        "item_name": "M7 캡처 기준 품목",
+        "item_spec": "중앙 exact GOOD 3개",
+        "target_count": len(members),
     }
     return (
-        StateFixture(state_id="waiting", state_label="대기"),
         StateFixture(
-            state_id="normal",
-            state_label="정상",
-            tray=TrayFixture(
-                **common,
-                target_count=8,
-                scanned_barcodes=normal_products,
-                stopwatch_seconds=74,
+            state_id="m7_phs2_preflight",
+            state_label=M7_SCENE_CONTRACT["m7_phs2_preflight"]["label"],
+            authoritative_members=members,
+            lease=LeaseFixture(state="ISSUE_PENDING", start_allowed=False),
+            preflight_phase="LOOKUP",
+            status_variants=(
+                "중앙 확인 중 · 보류 스캔 0건",
+                "중앙 검사 완료 수량 확인 중 · 보류 0건",
             ),
-            last_normal_scan=normal_products[-1],
-            last_normal_item_code=common["item_code"],
-            tray_image_visible=True,
         ),
         StateFixture(
-            state_id="duplicate",
-            state_label="중복",
-            tray=TrayFixture(
-                **common,
-                target_count=8,
-                scanned_barcodes=normal_products,
-                stopwatch_seconds=82,
+            state_id="m7_central_preflight_queue",
+            state_label=M7_SCENE_CONTRACT["m7_central_preflight_queue"]["label"],
+            authoritative_members=members,
+            lease=LeaseFixture(
+                state="ISSUE_FAILED",
+                start_allowed=False,
+                error_code="PHS2_PREFLIGHT_UNAVAILABLE",
             ),
-            last_normal_scan=normal_products[-1],
-            last_normal_item_code=common["item_code"],
-            notice=NoticeFixture(
-                code="capture.duplicate",
-                title="중복 스캔",
-                message=(
-                    "이미 스캔된 제품입니다.\n"
-                    + compact_scan_value(
-                        normal_products[-1],
-                        item_code=common["item_code"],
-                    )
-                ),
-                severity="error",
-                blocking=True,
+            preflight_phase="LOOKUP_FAILED",
+            held_scans=products[:2],
+            status_variants=(
+                "중앙 확인 중 · 보류 스캔 2건",
+                "중앙 확인 완료 · 보류 2건 순서대로 처리 중",
+                "중앙 조회 실패 · 보류 2건 (삭제되지 않음)",
+                "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                "보류 저장 대기열이 가득 차 이번 스캔은 접수되지 않았습니다.",
             ),
-            tray_image_visible=True,
         ),
         StateFixture(
-            state_id="operator_review",
-            state_label="OPERATOR_REVIEW",
+            state_id="m7_completion_busy",
+            state_label=M7_SCENE_CONTRACT["m7_completion_busy"]["label"],
             tray=TrayFixture(
-                **{**common, "master_label": "PHS=2|CLC=AAA2270730100|QT=5"},
-                target_count=5,
-                scanned_barcodes=review_products,
+                **common,
+                scanned_barcodes=products,
                 stopwatch_seconds=128,
+                operation_lease_id=active_lease.lease_id,
             ),
-            last_normal_scan=review_products[-1],
+            last_normal_scan=products[-1],
             last_normal_item_code=common["item_code"],
-            completion=CompletionFixture(
-                outcome="OPERATOR_REVIEW",
-                message=(
-                    "서버 판정 미완료 · 현재 트레이와 스캔 목록을 유지합니다."
-                ),
-                error_code="CAPTURE_REVIEW",
+            authoritative_members=members,
+            lease=active_lease,
+            preflight_phase="DRAINING",
+            held_scans=products[-1:],
+            status_variants=(
+                "완료 처리 중",
+                "이전 중앙 작업 처리 중 · 이번 완료 요청은 접수되지 않았습니다.",
+                "중앙 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
             ),
             tray_image_visible=True,
         ),
         StateFixture(
-            state_id="completed",
-            state_label="완료",
-            last_normal_scan=review_products[-1],
+            state_id="m7_recovery_transition",
+            state_label=M7_SCENE_CONTRACT["m7_recovery_transition"]["label"],
+            tray=TrayFixture(
+                **common,
+                scanned_barcodes=products[:2],
+                stopwatch_seconds=196,
+                restored=True,
+                operation_lease_id=active_lease.lease_id,
+            ),
+            last_normal_scan=products[1],
+            last_normal_item_code=common["item_code"],
+            authoritative_members=members,
+            lease=active_lease,
+            status_variants=(
+                "이전 작업 복구",
+                "작업 전환 확인",
+                "보류 작업 1건 (더블클릭으로 복원)",
+                "이전 트레이 작업을 복구했습니다.",
+            ),
+            tray_image_visible=True,
+        ),
+        StateFixture(
+            state_id="m7_direct_sync_backlog_ack",
+            state_label=M7_SCENE_CONTRACT["m7_direct_sync_backlog_ack"]["label"],
+            last_normal_scan=products[-1],
             last_normal_item_code=common["item_code"],
             completion=CompletionFixture(
                 outcome="ACKED",
-                message="'캡처 기준 품목' 완료 · 서버 이적 확인이 완료되었습니다.",
-                receipt_id="capture-receipt-0001",
+                message="'M7 캡처 기준 품목' 완료 · 서버 이적 확인이 완료되었습니다.",
+                receipt_id="RECEIPT-M7-CONTAINER-ACK-0001",
             ),
             completed_tray_count=1,
+            authoritative_members=members,
+            lease=active_lease,
+            direct_sync=DirectSyncFixture(
+                state="pending",
+                pending_count=2,
+                failed_permanent_count=0,
+                operator_review_count=0,
+                last_acked_at="2026-09-03T08:15:00+09:00",
+                oldest_pending_at="2026-09-03T08:20:00+09:00",
+                observed_at="2026-09-03T08:25:00+09:00",
+            ),
+            completion_variants=("ACKED",),
+            receipt_id="RECEIPT-M7-CONTAINER-ACK-0001",
         ),
         StateFixture(
-            state_id="recovered",
-            state_label="복구",
+            state_id="m7_exact_good_membership",
+            state_label=M7_SCENE_CONTRACT["m7_exact_good_membership"]["label"],
             tray=TrayFixture(
-                **{**common, "master_label": "PHS=2|CLC=AAA2270730100|QT=12"},
-                target_count=12,
-                scanned_barcodes=recovered_products,
-                stopwatch_seconds=196,
-                restored=True,
+                **common,
+                scanned_barcodes=products,
+                stopwatch_seconds=164,
+                operation_lease_id=active_lease.lease_id,
             ),
-            last_normal_scan=recovered_products[-1],
+            last_normal_scan=products[-1],
             last_normal_item_code=common["item_code"],
-            notice=NoticeFixture(
-                code="capture.recovered",
-                title="작업 복구 완료",
-                message="보류된 트레이를 복구했습니다. 중앙 목록을 확인하고 다음 제품을 스캔하세요.",
-                severity="success",
-                blocking=False,
+            authoritative_members=members,
+            lease=active_lease,
+            tray_image_visible=True,
+        ),
+        StateFixture(
+            state_id="m7_lease_fail_closed",
+            state_label=M7_SCENE_CONTRACT["m7_lease_fail_closed"]["label"],
+            authoritative_members=members,
+            lease=LeaseFixture(
+                state="EXPIRED",
+                lease_id="LEASE-M7-CONTAINER-EXPIRED-0001",
+                expires_at="2026-09-03T07:55:00+09:00",
+                start_allowed=False,
+                error_code="OPERATION_LEASE_NOT_ACTIVE",
             ),
+            preflight_phase="LOOKUP_FAILED",
+            status_variants=(
+                "이 PC에서 오프라인 이적 확인 정보를 준비할 수 없습니다.",
+                "server lease remains unresolved and cannot be replaced",
+                "검사 완료 상태와 네트워크를 확인한 뒤 다시 스캔하세요.",
+            ),
+        ),
+        StateFixture(
+            state_id="m7_transfer_receipt_status",
+            state_label=M7_SCENE_CONTRACT["m7_transfer_receipt_status"]["label"],
+            tray=TrayFixture(
+                **common,
+                scanned_barcodes=products,
+                stopwatch_seconds=180,
+                operation_lease_id=active_lease.lease_id,
+            ),
+            last_normal_scan=products[-1],
+            last_normal_item_code=common["item_code"],
+            completion=CompletionFixture(
+                outcome="RETRY_WAIT",
+                message="동일 이적 요청의 서버 receipt를 다시 확인해야 합니다.",
+                receipt_id="RECEIPT-M7-CONTAINER-PENDING-0001",
+                error_code="TRANSFER_RECEIPT_PENDING",
+            ),
+            authoritative_members=members,
+            lease=active_lease,
+            completion_variants=(
+                "LINKED",
+                "ACKED",
+                "RETRY_WAIT",
+                "LOCAL_EVENT_RETRY",
+                "OPERATOR_REVIEW",
+            ),
+            receipt_id="RECEIPT-M7-CONTAINER-PENDING-0001",
+            tray_image_visible=True,
+        ),
+        StateFixture(
+            state_id="m7_partial_atomic_exchange",
+            state_label=M7_SCENE_CONTRACT["m7_partial_atomic_exchange"]["label"],
+            tray=TrayFixture(
+                **common,
+                scanned_barcodes=products[:2],
+                stopwatch_seconds=94,
+                operation_lease_id=active_lease.lease_id,
+            ),
+            last_normal_scan=products[1],
+            last_normal_item_code=common["item_code"],
+            authoritative_members=members,
+            lease=active_lease,
+            status_variants=(
+                "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다.",
+                "현재 이적 제품 교체",
+            ),
+            exchange_pairs=((products[0], replacement_products[0]),),
             tray_image_visible=True,
         ),
     )
+
+
+def build_m7_external_capture_bundle_contract() -> dict[str, Any]:
+    """Return the repository-side contract without creating a window or image."""
+
+    return {
+        "schema": M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA,
+        "app_id": "Container_Audit",
+        "external_approval_location": M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION,
+        "required_state_ids": list(M7_REQUIRED_STATE_IDS),
+        "manifest_identity_fields": list(M7_CAPTURE_MANIFEST_IDENTITY_FIELDS),
+        "lookup": {
+            "start_at": M7_EXTERNAL_CAPTURE_INDEX,
+            "select": "app_id=Container_Audit",
+            "manifest": "capture-bundles/Container_Audit/manifest.json",
+            "state_selector": "captures[].state_id",
+            "approval_required": True,
+        },
+        "tracked_images": "retained_historical_pending_external_replacement",
+        "repository_document_digest_values_allowed": False,
+        "capture_status": "PENDING_FINAL_ARTIFACT_AND_EXTERNAL_APPROVAL",
+    }
+
+
+def _bound_method_identity(method: Any) -> str:
+    function = getattr(method, "__func__", method)
+    module_name = str(getattr(function, "__module__", "") or "")
+    qualname = str(getattr(function, "__qualname__", "") or "")
+    return ".".join(part for part in (module_name, qualname) if part)
+
+
+def inspect_m7_production_scene_seams(module: Any) -> dict[str, Any]:
+    """Fail closed unless every scene still resolves to production callables."""
+
+    scene_receipts: dict[str, Any] = {}
+    for state_id in M7_REQUIRED_STATE_IDS:
+        spec = M7_SCENE_CONTRACT[state_id]
+        identities: dict[str, str] = {}
+        for method_name in spec["production_call_path"]:
+            method = getattr(module.ContainerAudit, method_name, None)
+            identity = _bound_method_identity(method)
+            if not callable(method) or not identity.startswith(
+                "Container_Audit.ContainerAudit."
+            ):
+                raise RuntimeError(
+                    f"M7 scene {state_id} has no production method {method_name}: "
+                    f"{identity or '<missing>'}"
+                )
+            identities[str(method_name)] = identity
+        scene_receipts[state_id] = {
+            "state_id": state_id,
+            "production_call_path": list(spec["production_call_path"]),
+            "production_method_identities": identities,
+            "production_sources": list(spec["production_sources"]),
+            "seam_available": True,
+        }
+
+    support_callables = {
+        "phs2_parser": module.parse_new_format_qr,
+        "phs2_validator": module.validate_compact_phs2_fields,
+        "warning_presenter": module.WarningPresenter.present_completion,
+        "completion_notice": module.notice_for_completion,
+        "relay_health_presenter": module.relay_health_card_model,
+    }
+    support_identities = {
+        name: _bound_method_identity(callable_value)
+        for name, callable_value in support_callables.items()
+    }
+    if not all(callable(value) and support_identities[name] for name, value in support_callables.items()):
+        raise RuntimeError("M7 production support seam is incomplete")
+    return {
+        "scenes": scene_receipts,
+        "support_method_identities": support_identities,
+        "scene_count": len(scene_receipts),
+        "all_seams_available": len(scene_receipts) == len(M7_REQUIRED_STATE_IDS),
+    }
+
+
+def _validate_exact_six_phs2(module: Any, payload: str) -> dict[str, Any]:
+    segments = str(payload or "").split("|")
+    field_order = [segment.split("=", 1)[0] for segment in segments if "=" in segment]
+    parsed = module.parse_new_format_qr(payload)
+    validated = module.validate_compact_phs2_fields(parsed or {})
+    checks = {
+        "six_segments": len(segments) == 6,
+        "field_order_exact": tuple(field_order) == M7_PHS2_FIELD_ORDER,
+        "field_set_exact": set(validated) == set(M7_PHS2_FIELD_ORDER),
+        "version_two": validated.get("PHS") == "2",
+        "central_input_tag_source": validated.get("SRC") == "KMTECH_INPUT_TAG",
+        "hash_prefix_16_hex": bool(
+            re.fullmatch(r"[0-9a-f]{16}", str(validated.get("HSH") or ""))
+        ),
+    }
+    return {
+        "payload": payload,
+        "field_order": field_order,
+        "validated_fields": validated,
+        "parser_identity": _bound_method_identity(module.parse_new_format_qr),
+        "validator_identity": _bound_method_identity(
+            module.validate_compact_phs2_fields
+        ),
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
+def _completion_variant_assertions(
+    module: Any,
+    fixture: StateFixture,
+) -> list[dict[str, Any]]:
+    assertions: list[dict[str, Any]] = []
+    target_count = len(fixture.authoritative_members)
+    scan_count = (
+        len(fixture.tray.scanned_barcodes)
+        if fixture.tray is not None
+        else target_count
+    )
+    for outcome_name in fixture.completion_variants:
+        snapshot = module.CompletionOutcomeSnapshot(
+            outcome=module.CompletionOutcome(outcome_name),
+            item_name=(
+                fixture.tray.item_name if fixture.tray is not None else "M7 캡처 기준 품목"
+            ),
+            master_label=fixture.scanned_master_label,
+            scan_count=scan_count,
+            target_count=max(scan_count, target_count),
+            receipt_id=fixture.receipt_id,
+        )
+        presenter = module.WarningPresenter()
+        changed = presenter.present_completion(snapshot)
+        notice = presenter.state.active_notice
+        assertions.append(
+            {
+                "outcome": outcome_name,
+                "presented": changed,
+                "notice": {
+                    "code": notice.code if notice is not None else "",
+                    "title": notice.title if notice is not None else "",
+                    "message": notice.message if notice is not None else "",
+                    "blocking": bool(notice.blocking) if notice is not None else None,
+                },
+                "receipt_id": snapshot.receipt_id,
+                "presenter_identity": _bound_method_identity(
+                    presenter.present_completion
+                ),
+            }
+        )
+    return assertions
+
+
+def build_m7_scene_assertions(
+    fixture: StateFixture,
+    module: Any,
+) -> dict[str, Any]:
+    """Build non-pixel assertions from production objects for one scene."""
+
+    spec = M7_SCENE_CONTRACT[fixture.state_id]
+    phs2 = _validate_exact_six_phs2(module, fixture.scanned_master_label)
+    members = [asdict(member) for member in fixture.authoritative_members]
+    member_ids = [member["product_id"] for member in members]
+    member_barcodes = [member["barcode"] for member in members]
+    active_scans = (
+        list(fixture.tray.scanned_barcodes) if fixture.tray is not None else []
+    )
+    member_checks = {
+        "member_count_exact": (
+            fixture.tray is None
+            or fixture.tray.target_count == len(members)
+        ),
+        "member_ids_unique": len(member_ids) == len(set(member_ids)),
+        "barcodes_unique": len(member_barcodes) == len(set(member_barcodes)),
+        "product_id_barcode_pairs_exact": all(
+            set(member) == {"product_id", "barcode"} for member in members
+        ),
+        "active_scans_are_members": set(active_scans).issubset(member_barcodes),
+    }
+    direct_sync: dict[str, Any] | None = None
+    if fixture.direct_sync is not None:
+        health = module.RelayHealth(**asdict(fixture.direct_sync))
+        direct_sync = {
+            "health": asdict(fixture.direct_sync),
+            "card_model": module.relay_health_card_model(health),
+            "presenter_identity": _bound_method_identity(
+                module.ContainerAudit._apply_direct_sync_health
+            ),
+        }
+    lease = asdict(fixture.lease) if fixture.lease is not None else None
+    exchange_pairs = [
+        {"old_barcode": old, "new_barcode": new}
+        for old, new in fixture.exchange_pairs
+    ]
+    exchange_checks = {
+        "pair_count_in_range": not exchange_pairs or 1 <= len(exchange_pairs) <= 2,
+        "pair_counts_equal": all(
+            pair["old_barcode"] and pair["new_barcode"] for pair in exchange_pairs
+        ),
+        "old_members_belong_to_active_tray": all(
+            pair["old_barcode"] in active_scans for pair in exchange_pairs
+        ),
+        "replacement_barcodes_are_new": all(
+            pair["new_barcode"] not in active_scans for pair in exchange_pairs
+        ),
+        "central_atomic": (
+            True
+            if not exchange_pairs
+            else all(pair["old_barcode"] != pair["new_barcode"] for pair in exchange_pairs)
+        ),
+    }
+    return {
+        "schema": "container-audit-m7-scene-assertions-v1",
+        "state_id": fixture.state_id,
+        "production_sources": list(spec["production_sources"]),
+        "production_call_path": list(spec["production_call_path"]),
+        "expected_input_state": spec["input_state"],
+        "expected_disabled_controls": list(spec.get("disabled_controls") or ()),
+        "expected_enabled_controls": list(spec.get("enabled_controls") or ()),
+        "modal_flow_titles": list(spec.get("modal_flow_titles") or ()),
+        "exact_six_phs2": phs2,
+        "preflight": {
+            "phase": fixture.preflight_phase or None,
+            "held_scan_count": len(fixture.held_scans),
+            "held_scans": list(fixture.held_scans),
+            "status_variants": list(fixture.status_variants),
+        },
+        "member_set": {
+            "member_count": len(members),
+            "members": members,
+            "active_scan_count": len(active_scans),
+            "active_scans": active_scans,
+            "checks": member_checks,
+            "passed": all(member_checks.values()),
+        },
+        "lease": lease,
+        "direct_sync": direct_sync,
+        "receipt": {
+            "active_receipt_id": fixture.receipt_id,
+            "completion_variants": _completion_variant_assertions(module, fixture),
+        },
+        "exchange": {
+            "pairs": exchange_pairs,
+            "checks": exchange_checks,
+            "passed": all(exchange_checks.values()),
+        },
+    }
 
 
 def _parse_size_sequence(
@@ -809,6 +1411,15 @@ def acquire_win32_foreground(
     }
 
 
+def state_requires_scan_lock(state_id: str) -> bool:
+    spec = M7_SCENE_CONTRACT.get(str(state_id))
+    if spec is not None:
+        return str(spec.get("input_state") or "") == "disabled"
+    # Compatibility for older manifest evaluators; these IDs are no longer
+    # part of the capture matrix.
+    return str(state_id) in {"duplicate", "operator_review"}
+
+
 def build_capture_focus_gate(
     *,
     state_id: str,
@@ -823,7 +1434,7 @@ def build_capture_focus_gate(
     scan_entry_enabled: bool,
     acquisition: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    blocking = state_id in {"duplicate", "operator_review"}
+    blocking = state_requires_scan_lock(state_id)
     checks = {
         "root_hwnd_present": int(root_hwnd) > 0,
         "root_hwnd_pid_matches_process": int(root_hwnd_pid) == int(process_pid),
@@ -880,7 +1491,7 @@ def _widget_is_owned_by_root(widget: Any, root: Any) -> bool:
 def settle_capture_focus(app: Any, state_id: str) -> dict[str, Any]:
     """Put keyboard focus in the state-authoritative widget before evidence."""
 
-    blocking = state_id in {"duplicate", "operator_review"}
+    blocking = state_requires_scan_lock(state_id)
     target = app.root if blocking else app.scan_entry
     app.root.deiconify()
     app.root.lift()
@@ -2473,6 +3084,7 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         active_tray_last_scan_raw = ""
     right_texts = {
         "status": _widget_text(app.info_cards["status"]["value"]),
+        "direct_sync": _widget_text(app.info_cards["direct_sync"]["value"]),
         "stopwatch": _widget_text(app.info_cards["stopwatch"]["value"]),
         "last_normal_scan": _widget_text(app.last_scan_value_label),
         "next_action": _widget_text(app.follow_up_label),
@@ -2486,11 +3098,19 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
     }
     action_buttons: dict[str, dict[str, str]] = {}
     for name, button in (
-        ("undo", app.undo_button),
-        ("park", app.park_button),
-        ("submit", app.submit_tray_button),
-        ("operations", app.operations_button),
+        ("reset", getattr(app, "reset_button", None)),
+        ("undo", getattr(app, "undo_button", None)),
+        ("park", getattr(app, "park_button", None)),
+        ("submit", getattr(app, "submit_tray_button", None)),
+        ("operations", getattr(app, "operations_button", None)),
+        ("change_worker", getattr(app, "change_worker_button", None)),
+        ("replace", getattr(app, "replace_master_label_button", None)),
+        ("exchange", getattr(app, "exchange_button", None)),
+        ("phs_label_exchange", getattr(app, "phs_label_exchange_button", None)),
     ):
+        if button is None:
+            action_buttons[name] = {"text": "", "state": "missing"}
+            continue
         try:
             state = str(button.cget("state"))
         except Exception:
@@ -2549,6 +3169,9 @@ def collect_rendered_state(app: Any) -> dict[str, Any]:
         "right_progress_count_texts": right_progress_count_texts,
         "action_buttons": action_buttons,
         "left_sidebar": left_sidebar,
+        "m7_scene_receipt": dict(
+            getattr(app, "_capture_m7_scene_receipt", None) or {}
+        ),
     }
 
 
@@ -2704,8 +3327,167 @@ def collect_scan_list_viewport_gate(
     )
 
 
+def _capture_preflight_snapshot(
+    fixture: StateFixture,
+    module: Any,
+) -> Any:
+    state_by_phase = {
+        "LOOKUP": module.HOLD_LOOKUP,
+        "LOOKUP_FAILED": module.HOLD_LOOKUP_FAILED,
+        "DRAINING": module.HOLD_DRAINING,
+    }
+    state = state_by_phase.get(fixture.preflight_phase)
+    if state is None:
+        return None
+    timestamp = "2026-09-03T00:00:00+00:00"
+    items = tuple(
+        HeldScan(
+            scan_id=f"M7-HELD-{index:04d}",
+            sequence=index,
+            raw_barcode=barcode,
+            admitted_at=timestamp,
+        )
+        for index, barcode in enumerate(fixture.held_scans, start=1)
+    )
+    return module.PreflightHoldSnapshot(
+        preflight_id=f"PREFLIGHT-{fixture.state_id.upper()}",
+        scan_epoch=1,
+        worker="캡처 작업자",
+        master_raw=fixture.scanned_master_label,
+        created_at=timestamp,
+        updated_at=timestamp,
+        state=state,
+        items=items,
+        error_code=(
+            fixture.lease.error_code
+            if fixture.lease is not None and state == module.HOLD_LOOKUP_FAILED
+            else ""
+        ),
+    )
+
+
+def _apply_m7_production_scene(
+    app: Any,
+    fixture: StateFixture,
+    module: Any,
+) -> dict[str, Any]:
+    """Drive one scene through current ContainerAudit presenter/state methods."""
+
+    static_receipts = inspect_m7_production_scene_seams(module)
+    spec = M7_SCENE_CONTRACT[fixture.state_id]
+    bound_identities: dict[str, str] = {}
+    for method_name in spec["production_call_path"]:
+        method = getattr(app, method_name, None)
+        identity = _bound_method_identity(method)
+        if not callable(method) or identity != (
+            static_receipts["scenes"][fixture.state_id][
+                "production_method_identities"
+            ][method_name]
+        ):
+            raise RuntimeError(
+                f"M7 scene {fixture.state_id} is not bound to production "
+                f"{method_name}: {identity or '<missing>'}"
+            )
+        bound_identities[method_name] = identity
+
+    snapshot = _capture_preflight_snapshot(fixture, module)
+    if snapshot is not None:
+        app._preflight_hold_snapshot = snapshot
+        app._master_preflight_pending = fixture.preflight_phase == "LOOKUP"
+        app._preflight_hold_draining = fixture.preflight_phase == "DRAINING"
+
+    state_id = fixture.state_id
+    if state_id == "m7_phs2_preflight":
+        app.show_status_message(
+            fixture.status_variants[0], app.COLOR_PRIMARY, duration=0
+        )
+        app._set_preflight_scan_input_locked(True)
+        app._update_current_item_label()
+        app._update_action_button_states()
+    elif state_id == "m7_central_preflight_queue":
+        app.show_status_message(
+            fixture.status_variants[2], app.COLOR_DANGER, duration=0
+        )
+        app._set_preflight_scan_input_locked(True)
+        app._update_action_button_states()
+    elif state_id == "m7_completion_busy":
+        app._set_completion_lane_busy(True)
+        app.show_status_message(
+            fixture.status_variants[1], app.COLOR_DANGER, duration=0
+        )
+        app._set_preflight_scan_input_locked(True)
+        app._update_action_button_states()
+    elif state_id == "m7_recovery_transition":
+        app._update_center_display()
+        app._update_parked_trays_list()
+        app._update_parked_recovery_affordance()
+        app.show_status_message(
+            fixture.status_variants[-1], app.COLOR_PRIMARY, duration=0
+        )
+    elif state_id == "m7_direct_sync_backlog_ack":
+        if fixture.direct_sync is None:
+            raise RuntimeError("direct-sync scene requires RelayHealth state")
+        app._apply_direct_sync_health(module.RelayHealth(**asdict(fixture.direct_sync)))
+        app._render_warning_state()
+        app._update_action_button_states()
+    elif state_id == "m7_exact_good_membership":
+        app._update_center_display()
+        app._update_current_item_label()
+        app._update_action_button_states()
+    elif state_id == "m7_lease_fail_closed":
+        app.show_fullscreen_warning(
+            "중앙 PHS=2 확인 실패",
+            fixture.status_variants[-1],
+            app.COLOR_DANGER,
+        )
+        app._set_preflight_scan_input_locked(True)
+        app._update_action_button_states()
+    elif state_id == "m7_transfer_receipt_status":
+        app._render_warning_state()
+        app._update_action_button_states()
+    elif state_id == "m7_partial_atomic_exchange":
+        app._exact_exchange_mode_active = True
+        app._exact_transfer_exchange_history_snapshot = True
+        app.show_status_message(
+            fixture.status_variants[0], app.COLOR_DANGER, duration=0
+        )
+        app._update_action_button_states()
+    else:  # pragma: no cover - the constant set is validated by tests
+        raise RuntimeError(f"unsupported M7 state: {state_id}")
+
+    assertions = build_m7_scene_assertions(fixture, module)
+    receipt = {
+        "state_id": fixture.state_id,
+        "production_call_path": list(spec["production_call_path"]),
+        "production_method_identities": bound_identities,
+        "production_sources": list(spec["production_sources"]),
+        "seam_available": True,
+        "state_values": {
+            "preflight_pending": bool(
+                getattr(app, "_master_preflight_pending", False)
+            ),
+            "preflight_draining": bool(
+                getattr(app, "_preflight_hold_draining", False)
+            ),
+            "preflight_input_locked": bool(
+                getattr(app, "_preflight_scan_input_locked", False)
+            ),
+            "completion_lane_busy": bool(
+                getattr(app, "_completion_lane_busy", False)
+            ),
+            "exact_exchange_mode": bool(
+                getattr(app, "_exact_exchange_mode_active", False)
+            ),
+            "parked_count": int(getattr(app, "_parked_tray_count", 0) or 0),
+        },
+        "assertions": assertions,
+    }
+    app._capture_m7_scene_receipt = receipt
+    return receipt
+
+
 def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
-    """Render fixture state without invoking scan, ledger, network, or completion logic."""
+    """Render an M7 fixture through production presenters without business I/O."""
 
     app._stop_stopwatch()
     app._stop_idle_checker()
@@ -2713,6 +3495,16 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
     app.warning_presenter = presenter
     app.master_label_replace_state = None
     app.replacement_context = {}
+    app._capture_m7_scene_receipt = None
+    app._master_preflight_pending = False
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_draining = False
+    app._preflight_scan_input_locked = False
+    app._completion_lane_busy = False
+    app._exact_exchange_mode_active = False
+    app._exact_transfer_exchange_history_snapshot = False
+    app._pending_operator_review_snapshot = None
+    app._pending_completion_event_contract = None
     summary_count = max(CAPTURE_SUMMARY_ROW_COUNT, fixture.completed_tray_count)
     app.work_summary = {
         CAPTURE_SUMMARY_ITEM_CODE: {
@@ -2745,8 +3537,15 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
             tray_size=tray_fixture.target_count,
             stopwatch_seconds=tray_fixture.stopwatch_seconds,
             start_time=start_time,
-            has_error_or_reset=fixture.state_id in {"duplicate", "operator_review"},
+            has_error_or_reset=bool(fixture.exchange_pairs),
             is_restored_session=tray_fixture.restored,
+            is_partial_submission=tray_fixture.partial_submission,
+            canonical_input_tag_qr=tray_fixture.master_label,
+            active_label_qr_payload=CAPTURE_ACTIVE_EXACT_SIX_PHS2,
+            active_label_id="LBL-M7-CONTAINER-0002",
+            active_label_business_date="2026-09-03",
+            active_label_worker_code="capture-worker",
+            operation_lease_id=tray_fixture.operation_lease_id,
         )
 
     app.scanned_listbox.delete(0, "end")
@@ -2780,13 +3579,21 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
         )
     if fixture.completion is not None:
         tray = fixture.tray
-        scan_count = len(tray.scanned_barcodes) if tray is not None else 5
+        scan_count = (
+            len(tray.scanned_barcodes)
+            if tray is not None
+            else len(fixture.authoritative_members)
+        )
         target_count = tray.target_count if tray is not None else scan_count
         presenter.present_completion(
             module.CompletionOutcomeSnapshot(
                 outcome=module.CompletionOutcome(fixture.completion.outcome),
-                item_name=tray.item_name if tray is not None else "캡처 기준 품목",
-                master_label=tray.master_label if tray is not None else "PHS=2|CLC=AAA2270730100|QT=5",
+                item_name=tray.item_name if tray is not None else "M7 캡처 기준 품목",
+                master_label=(
+                    tray.master_label
+                    if tray is not None
+                    else fixture.scanned_master_label
+                ),
                 scan_count=scan_count,
                 target_count=target_count,
                 message=fixture.completion.message,
@@ -2795,7 +3602,7 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
             )
         )
 
-    app.is_idle = fixture.state_id in {"waiting", "completed"}
+    app.is_idle = fixture.tray is None
     app.show_tray_image_var.set(bool(fixture.tray_image_visible))
     app._update_current_item_label()
     app._update_tray_image_display()
@@ -2804,24 +3611,14 @@ def apply_state_fixture(app: Any, fixture: StateFixture, module: Any) -> None:
     app._apply_scanned_listbox_layout()
     app._apply_right_sidebar_layout()
 
-    status_card = app.info_cards.get("status")
     stopwatch_card = app.info_cards.get("stopwatch")
-    if status_card:
-        status_text = {
-            "waiting": "대기 중",
-            "normal": "작업 중",
-            "duplicate": "확인 필요",
-            "operator_review": "담당자 확인",
-            "completed": "완료",
-            "recovered": "복구 작업 중",
-        }[fixture.state_id]
-        status_card["value"].configure(text=status_text)
     if stopwatch_card:
         seconds = int(tray_fixture.stopwatch_seconds) if tray_fixture else 0
         stopwatch_card["value"].configure(text=f"{seconds // 60:02d}:{seconds % 60:02d}")
     app.status_label.configure(text="스캐너 준비")
     app._render_warning_state()
     app._update_action_button_states()
+    _apply_m7_production_scene(app, fixture, module)
 
 
 def _sha256(path: Path) -> str:
@@ -2832,7 +3629,10 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _fixture_manifest(fixture: StateFixture) -> dict[str, Any]:
+def _fixture_manifest(
+    fixture: StateFixture,
+    module: Any | None = None,
+) -> dict[str, Any]:
     record = asdict(fixture)
     tray = fixture.tray
     record["active_tray"] = tray is not None
@@ -2847,6 +3647,8 @@ def _fixture_manifest(fixture: StateFixture) -> dict[str, Any]:
         if fixture.last_normal_scan
         else "-"
     )
+    if module is not None:
+        record["m7_assertions"] = build_m7_scene_assertions(fixture, module)
     return record
 
 
@@ -3013,6 +3815,149 @@ def _append_gate_issues(
         issues.append(f"{gate_name}_failed")
 
 
+def build_m7_scene_gate(
+    fixture: Mapping[str, Any],
+    rendered: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify that one captured scene reflects its production-backed assertions."""
+
+    state_id = str(fixture.get("state_id") or "")
+    spec = M7_SCENE_CONTRACT.get(state_id)
+    if spec is None:
+        return {"gate_applicable": False, "checks": {}, "passed": True}
+    assertions = fixture.get("m7_assertions")
+    receipt = rendered.get("m7_scene_receipt")
+    if not isinstance(assertions, Mapping) or not isinstance(receipt, Mapping):
+        checks = {
+            "fixture_assertions_present": isinstance(assertions, Mapping),
+            "production_scene_receipt_present": isinstance(receipt, Mapping),
+        }
+        return {
+            "gate_applicable": True,
+            "state_id": state_id,
+            "checks": checks,
+            "passed": False,
+        }
+    actions_value = rendered.get("action_buttons")
+    actions = actions_value if isinstance(actions_value, Mapping) else {}
+    expected_disabled = list(assertions.get("expected_disabled_controls") or [])
+    expected_enabled = list(assertions.get("expected_enabled_controls") or [])
+    disabled_actual = {
+        name: str((actions.get(name) or {}).get("state") or "")
+        for name in expected_disabled
+    }
+    enabled_actual = {
+        name: str((actions.get(name) or {}).get("state") or "")
+        for name in expected_enabled
+    }
+    phs2 = assertions.get("exact_six_phs2") or {}
+    member_set = assertions.get("member_set") or {}
+    exchange = assertions.get("exchange") or {}
+    direct_sync = assertions.get("direct_sync")
+    expected_direct_sync_text = ""
+    if isinstance(direct_sync, Mapping):
+        model = direct_sync.get("card_model") or {}
+        expected_direct_sync_text = (
+            f"{model.get('summary', '')}\n{model.get('detail', '')}"
+        )
+    checks: dict[str, bool] = {
+        "state_id_exact": receipt.get("state_id") == state_id,
+        "production_seam_available": receipt.get("seam_available") is True,
+        "production_call_path_exact": receipt.get("production_call_path")
+        == list(spec["production_call_path"]),
+        "production_sources_exact": receipt.get("production_sources")
+        == list(spec["production_sources"]),
+        "production_assertions_exact": receipt.get("assertions") == assertions,
+        "exact_six_phs2_validated": phs2.get("passed") is True,
+        "member_set_validated": member_set.get("passed") is True,
+        "exchange_assertion_validated": exchange.get("passed") is True,
+        "input_state_exact": str(rendered.get("scan_entry_state") or "")
+        == str(assertions.get("expected_input_state") or ""),
+        "disabled_controls_exact": all(
+            state == "disabled" for state in disabled_actual.values()
+        ),
+        "enabled_controls_exact": all(
+            state == "normal" for state in enabled_actual.values()
+        ),
+        "direct_sync_card_exact": (
+            not expected_direct_sync_text
+            or str((rendered.get("right_texts") or {}).get("direct_sync") or "")
+            == expected_direct_sync_text
+        ),
+    }
+    notice_title = str(rendered.get("notice_title") or "")
+    notice_message = str(rendered.get("notice_message") or "")
+    count_text = str(rendered.get("count") or "")
+    right_status = str((rendered.get("right_texts") or {}).get("status") or "")
+    status_variants = list(fixture.get("status_variants") or [])
+    if state_id == "m7_phs2_preflight":
+        checks["preflight_progress_visible"] = "중앙 검사 완료 수량 확인 중" in str(
+            rendered.get("current_item") or ""
+        )
+        checks["preflight_status_visible"] = bool(status_variants) and (
+            notice_message == status_variants[0]
+        )
+    elif state_id == "m7_central_preflight_queue":
+        checks["central_failure_visible"] = len(status_variants) > 2 and (
+            notice_message == status_variants[2]
+        )
+    elif state_id == "m7_completion_busy":
+        checks["completion_busy_control_visible"] = (
+            str((actions.get("submit") or {}).get("text") or "") == "완료 처리 중"
+        )
+        checks["completion_rejection_visible"] = len(status_variants) > 1 and (
+            notice_message == status_variants[1]
+        )
+    elif state_id == "m7_recovery_transition":
+        checks["restored_status_visible"] = right_status == "복구 작업 중"
+        checks["parked_recovery_row_present"] = int(
+            (rendered.get("left_sidebar") or {}).get("parked_count", 0)
+        ) >= 1
+    elif state_id == "m7_direct_sync_backlog_ack":
+        checks["current_transfer_confirmation_visible"] = (
+            notice_title == "서버 이적 확인 완료"
+        )
+    elif state_id == "m7_exact_good_membership":
+        checks["exact_member_count_visible"] = count_text == (
+            f"{member_set.get('active_scan_count')} / {member_set.get('member_count')}"
+        )
+    elif state_id == "m7_lease_fail_closed":
+        checks["lease_failure_visible"] = notice_title == "중앙 PHS=2 확인 실패"
+        lease = assertions.get("lease")
+        checks["lease_start_blocked"] = (
+            isinstance(lease, Mapping) and lease.get("start_allowed") is False
+        )
+    elif state_id == "m7_transfer_receipt_status":
+        checks["receipt_wait_visible"] = notice_title == "서버 이적 확인 대기"
+        completion_variants = (assertions.get("receipt") or {}).get(
+            "completion_variants"
+        ) or []
+        checks["all_receipt_variants_present"] = [
+            item.get("outcome") for item in completion_variants
+        ] == list(fixture.get("completion_variants") or [])
+    elif state_id == "m7_partial_atomic_exchange":
+        checks["partial_count_visible"] = count_text == (
+            f"{member_set.get('active_scan_count')} / {member_set.get('member_count')}"
+        )
+        checks["partial_completion_block_visible"] = bool(status_variants) and (
+            notice_message == status_variants[0]
+        )
+        checks["atomic_exchange_control_visible"] = (
+            "현재 이적 제품 교체"
+            in str((actions.get("exchange") or {}).get("text") or "")
+        )
+    return {
+        "gate_applicable": True,
+        "state_id": state_id,
+        "expected_disabled_controls": expected_disabled,
+        "observed_disabled_control_states": disabled_actual,
+        "expected_enabled_controls": expected_enabled,
+        "observed_enabled_control_states": enabled_actual,
+        "checks": checks,
+        "passed": all(checks.values()),
+    }
+
+
 def evaluate_capture(record: dict[str, Any]) -> list[str]:
     issues: list[str] = []
     monitor_gate = record.get("monitor_gate")
@@ -3092,6 +4037,8 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
         _append_gate_issues(issues, record, "left_sidebar_gate")
     if capture_gate_schema_version >= 5 or "capture_geometry_gate" in record:
         _append_gate_issues(issues, record, "capture_geometry_gate")
+    if capture_gate_schema_version >= 6 or "m7_scene_gate" in record:
+        _append_gate_issues(issues, record, "m7_scene_gate")
     if rendered:
         if "requested_left_view" in record or "left_sidebar" in rendered:
             requested_left_view = str(record.get("requested_left_view") or "summary")
@@ -3139,7 +4086,7 @@ def evaluate_capture(record: dict[str, Any]) -> list[str]:
             )
             if rendered.get("active_tray_scans_raw") != expected_active_scans_raw:
                 issues.append("active_tray_scans_not_preserved")
-        if record.get("state") in {"duplicate", "operator_review"}:
+        if state_requires_scan_lock(str(record.get("state") or "")):
             if str(rendered.get("scan_entry_state")) != "disabled":
                 issues.append("blocking_state_scan_entry_enabled")
             if "status_bar_text" in rendered and not str(
@@ -4207,15 +5154,19 @@ def _make_capture_app(module: Any, scale: object = DEFAULT_SCALE) -> Any:
             )
             self.capture_settings_path = settings_path
             fixture_session = module.TraySession(
-                master_label_code="PHS=1|CLC=AAA2270730100|QT=8",
+                master_label_code=CAPTURE_EXACT_SIX_PHS2,
                 item_code="AAA2270730100",
                 item_name="캡처 보류 트레이",
-                item_spec="DISPLAY2 recovery fixture",
-                scanned_barcodes=[
-                    "PHS=2|CLC=AAA2270730100|ID=CAPTURE-PARKED-0001"
-                ],
+                item_spec="M7 recovery state",
+                scanned_barcodes=[_products(1)[0]],
                 scan_times=[dt.datetime(2026, 7, 19, 9, 0, 0)],
-                tray_size=8,
+                tray_size=3,
+                canonical_input_tag_qr=CAPTURE_EXACT_SIX_PHS2,
+                active_label_qr_payload=CAPTURE_ACTIVE_EXACT_SIX_PHS2,
+                active_label_id="LBL-M7-CONTAINER-0002",
+                active_label_business_date="2026-09-03",
+                active_label_worker_code="capture-worker",
+                operation_lease_id="LEASE-M7-CONTAINER-PARKED-0001",
             )
             fixture_state = module.tray_session_to_state(
                 fixture_session,
@@ -4390,10 +5341,11 @@ def run_capture_matrix(
     guards = prepare_isolated_environment(data_root, geometry)
     dpi_mode = enable_per_monitor_dpi_awareness()
     module = _load_app_module()
+    m7_scene_seams = inspect_m7_production_scene_seams(module)
     fixtures_by_id = {fixture.state_id: fixture for fixture in build_state_fixtures()}
 
     manifest: dict[str, Any] = {
-        "schema_version": 5,
+        "schema_version": 6,
         "tool": "tools/capture_container_operator_ui.py",
         "generated_at": dt.datetime.now(dt.timezone.utc).astimezone().isoformat(),
         "repository_root": str(ROOT),
@@ -4411,6 +5363,10 @@ def run_capture_matrix(
         "isolated_app_settings": isolated_settings,
         "monitor_preflight": monitor_preflight,
         "near_black_failure_ratio": NEAR_BLACK_FAILURE_RATIO,
+        "m7_external_capture_bundle_contract": (
+            build_m7_external_capture_bundle_contract()
+        ),
+        "m7_production_scene_seams": m7_scene_seams,
         "captures": [],
     }
 
@@ -4486,7 +5442,7 @@ def run_capture_matrix(
                 rendered_state = frame["rendered_state"]
                 tree_heading_fit_gate = frame["tree_heading_fit_gate"]
                 capture_geometry_gate = frame["capture_geometry_gate"]
-                fixture_manifest = _fixture_manifest(fixture)
+                fixture_manifest = _fixture_manifest(fixture, module)
                 record_id = f"{size[0]}x{size[1]}-{state_id}"
                 if capture_sequence == "roundtrip":
                     record_id = f"roundtrip-{sequence_ordinal:03d}-{record_id}"
@@ -4500,7 +5456,7 @@ def run_capture_matrix(
                     "requested_scale": requested_scale,
                     "requested_left_view": requested_left_view,
                     "applied_scale_factor": float(app.scale_factor),
-                    "capture_gate_schema_version": 5,
+                    "capture_gate_schema_version": 6,
                     "path": str(path.relative_to(resolved_output)).replace("\\", "/"),
                     "capture_source": source,
                     "sha256": _sha256(path),
@@ -4522,6 +5478,10 @@ def run_capture_matrix(
                         tray_image_expected=bool(fixture.tray_image_visible),
                     ),
                     "compact_display_gate": build_compact_display_gate(
+                        fixture_manifest,
+                        rendered_state,
+                    ),
+                    "m7_scene_gate": build_m7_scene_gate(
                         fixture_manifest,
                         rendered_state,
                     ),
@@ -4631,7 +5591,18 @@ def run_capture_matrix(
         "roundtrip_capture_count": sum(
             1 for capture in captures if capture["capture_sequence"] == "roundtrip"
         ),
-        "passed": len(captures) == expected_capture_count and not issue_counts,
+        "m7_required_scene_count": len(M7_REQUIRED_STATE_IDS),
+        "m7_requested_scene_ids_exact": tuple(state_ids)
+        == tuple(M7_REQUIRED_STATE_IDS),
+        "m7_production_seams_available": m7_scene_seams[
+            "all_seams_available"
+        ],
+        "passed": (
+            len(captures) == expected_capture_count
+            and not issue_counts
+            and tuple(state_ids) == tuple(M7_REQUIRED_STATE_IDS)
+            and m7_scene_seams["all_seams_available"] is True
+        ),
     }
     manifest_path = resolved_output / "manifest.json"
     manifest_path.write_text(
@@ -4704,11 +5675,38 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="return an error after writing the manifest when any proxy check fails",
     )
+    parser.add_argument(
+        "--describe-m7-contract",
+        action="store_true",
+        help=(
+            "print the headless M7 external capture contract and production "
+            "scene seam inventory; do not create a window or output directory"
+        ),
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.describe_m7_contract:
+        module = _load_app_module()
+        print(
+            json.dumps(
+                {
+                    "contract": build_m7_external_capture_bundle_contract(),
+                    "production_scene_seams": inspect_m7_production_scene_seams(
+                        module
+                    ),
+                    "scene_assertions": [
+                        build_m7_scene_assertions(fixture, module)
+                        for fixture in build_state_fixtures()
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return 0
     manifest_path, manifest = run_capture_matrix(
         output_root=args.output_root,
         sizes=args.sizes,
