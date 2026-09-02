@@ -997,6 +997,7 @@ class ContainerAudit:
         # during a server outage.
         startup_logistics_client = container_startup_logistics_client()
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
+        self._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
         self.root = tk.Tk()
         if startup_geometry:
             self.root.withdraw()
@@ -1042,13 +1043,19 @@ class ContainerAudit:
             ),
         )
         self.transfer_seal_coordinator = TransferSealCoordinator(
-            TransferSealStore(transfer_seal_db_path),
+            TransferSealStore(
+                transfer_seal_db_path,
+                ui_thread_id_provider=self._transfer_coordinator_ui_thread_id,
+            ),
             startup_logistics_client,
             operation_lease_manager,
             owner_thread_id_provider=self._transfer_coordinator_owner_thread_id,
         )
         self.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
-            TransferMemberExchangeStore(self.transfer_seal_coordinator.store.db_path),
+            TransferMemberExchangeStore(
+                self.transfer_seal_coordinator.store.db_path,
+                ui_thread_id_provider=self._transfer_coordinator_ui_thread_id,
+            ),
             self.transfer_seal_coordinator.client,
             getattr(self.transfer_seal_coordinator, "operation_lease_manager", None),
             owner_thread_id_provider=self._transfer_coordinator_owner_thread_id,
@@ -1421,6 +1428,9 @@ class ContainerAudit:
     def _transfer_coordinator_owner_thread_id(self) -> Optional[int]:
         lane = getattr(self, "_ui_lane", None)
         return getattr(lane, "worker_thread_id", None)
+
+    def _transfer_coordinator_ui_thread_id(self) -> Optional[int]:
+        return getattr(self, "_transfer_coordinator_ui_owner_thread_id", None)
 
     def _transfer_coordinator_owner_provider(
         self,
@@ -12234,6 +12244,7 @@ class ContainerAudit:
         coordinator = transfer_seal_coordinator_from_env(
             Path(data_root) / "transfer_seal" / "transfer_seal.db",
             owner_thread_id_provider=self._transfer_coordinator_owner_provider(),
+            ui_thread_id_provider=self._transfer_coordinator_ui_thread_id,
         )
         self.transfer_seal_coordinator = coordinator
         return coordinator
@@ -12244,7 +12255,14 @@ class ContainerAudit:
             return coordinator
         seal_coordinator = self._transfer_seal_runtime()
         coordinator = TransferMemberExchangeCoordinator(
-            TransferMemberExchangeStore(seal_coordinator.store.db_path),
+            TransferMemberExchangeStore(
+                seal_coordinator.store.db_path,
+                ui_thread_id_provider=getattr(
+                    seal_coordinator,
+                    "_ui_thread_id_provider",
+                    self._transfer_coordinator_ui_thread_id,
+                ),
+            ),
             seal_coordinator.client,
             getattr(seal_coordinator, "operation_lease_manager", None),
             owner_thread_id_provider=getattr(

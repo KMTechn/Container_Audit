@@ -36,7 +36,9 @@ from transfer_seal import (
     CONTRACT_VERSION,
     LogisticsTransferClient,
     TransferCoordinatorOwnerBindingError,
+    TransferCoordinatorUiThreadBindingError,
     TransferSealError,
+    _assert_not_transfer_coordinator_ui_thread,
     _assert_transfer_coordinator_owner,
     membership_hash,
     normalize_barcode,
@@ -281,6 +283,7 @@ class TransferMemberExchangeStore:
         db_path: str | os.PathLike[str],
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
+        ui_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.db_path = str(db_path)
         self._coordinator_owner_bound = True
@@ -288,8 +291,12 @@ class TransferMemberExchangeStore:
         self._owner_thread_id_provider_bound = (
             owner_thread_id_provider is not None
         )
+        # Construction owns the only pre-guard schema bootstrap window.
+        self._ui_thread_id_provider = None
+        self._ui_thread_id_provider_bound = False
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.bind_ui_thread_id_provider(ui_thread_id_provider)
 
     def bind_owner_thread_id_provider(
         self,
@@ -305,6 +312,22 @@ class TransferMemberExchangeStore:
         )
         self._coordinator_owner_bound = True
 
+    def bind_ui_thread_id_provider(
+        self,
+        ui_thread_id_provider: Callable[[], int | None] | None,
+    ) -> None:
+        if getattr(self, "_ui_thread_id_provider_bound", False):
+            if ui_thread_id_provider is not self._ui_thread_id_provider:
+                raise TransferCoordinatorUiThreadBindingError()
+            return
+        self._ui_thread_id_provider = ui_thread_id_provider
+        self._ui_thread_id_provider_bound = ui_thread_id_provider is not None
+
+    def _assert_not_ui_thread_read(self) -> None:
+        _assert_not_transfer_coordinator_ui_thread(
+            getattr(self, "_ui_thread_id_provider", None)
+        )
+
     def _assert_coordinator_owner(self) -> None:
         if self._coordinator_owner_bound:
             _assert_transfer_coordinator_owner(
@@ -313,6 +336,7 @@ class TransferMemberExchangeStore:
 
     @contextmanager
     def _connect(self):
+        self._assert_not_ui_thread_read()
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -580,6 +604,7 @@ class TransferMemberExchangeStore:
         return row
 
     def load(self, intent_id: str) -> sqlite3.Row:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT * FROM transfer_member_exchange_intents WHERE intent_id=?",
@@ -590,6 +615,7 @@ class TransferMemberExchangeStore:
         return row
 
     def has_dismissed_command_fence(self, intent_id: str) -> bool:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             row = conn.execute(
                 """SELECT 1 FROM transfer_member_exchange_intents i
@@ -794,6 +820,7 @@ class TransferMemberExchangeStore:
         return row
 
     def pending_ids(self) -> list[str]:
+        self._assert_not_ui_thread_read()
         placeholders = ",".join("?" for _ in PENDING_EXCHANGE_STATUSES)
         with self._connect() as conn:
             rows = conn.execute(
@@ -858,6 +885,7 @@ class TransferMemberExchangeStore:
         return dismissed
 
     def pending_local_rows(self, *, master_label: str = "") -> list[sqlite3.Row]:
+        self._assert_not_ui_thread_read()
         query = (
             "SELECT * FROM transfer_member_exchange_intents "
             "WHERE status='ACKED' AND local_apply_status='PENDING'"
@@ -871,6 +899,7 @@ class TransferMemberExchangeStore:
             return list(conn.execute(query, params).fetchall())
 
     def blocking_rows(self, *, master_label: str = "") -> list[sqlite3.Row]:
+        self._assert_not_ui_thread_read()
         query = (
             "SELECT * FROM transfer_member_exchange_intents i WHERE "
             "(status IN ('PREPARED','COMMAND_READY','RETRY_WAIT','OPERATOR_REVIEW') OR "
@@ -900,6 +929,7 @@ class TransferMemberExchangeCoordinator:
         operation_lease_manager: OperationLeaseManager | None = None,
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
+        ui_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.store = store
         self.client = client
@@ -912,10 +942,23 @@ class TransferMemberExchangeCoordinator:
             )
         self._owner_thread_id_provider = owner_thread_id_provider
         self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
+        if ui_thread_id_provider is None:
+            ui_thread_id_provider = getattr(
+                store,
+                "_ui_thread_id_provider",
+                None,
+            )
+        self._ui_thread_id_provider = ui_thread_id_provider
+        self.store.bind_ui_thread_id_provider(ui_thread_id_provider)
 
     def _assert_owner(self) -> None:
         _assert_transfer_coordinator_owner(
             getattr(self, "_owner_thread_id_provider", None)
+        )
+
+    def _assert_not_ui_thread_read(self) -> None:
+        _assert_not_transfer_coordinator_ui_thread(
+            getattr(self, "_ui_thread_id_provider", None)
         )
 
     def prepare(
@@ -2327,6 +2370,7 @@ class TransferMemberExchangeCoordinator:
         return results
 
     def pending_local_attempts(self, *, master_label: str = "") -> list[MemberExchangeAttempt]:
+        self._assert_not_ui_thread_read()
         return [
             self._attempt(row)
             for row in self.store.pending_local_rows(master_label=master_label)

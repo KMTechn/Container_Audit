@@ -532,13 +532,16 @@ def _exercise_actual_coordinator_lane_ownership(
         for index in (1, 2)
     ]
     lane_owner_provider = lambda: lane.worker_thread_id
+    ui_thread_provider = lambda: root.owner_thread_id
     seal_store = _TransferSealStore(
         seed_seal_store.db_path,
         owner_thread_id_provider=lane_owner_provider,
+        ui_thread_id_provider=ui_thread_provider,
     )
     member_store = _TransferMemberExchangeStore(
         seed_seal_store.db_path,
         owner_thread_id_provider=lane_owner_provider,
+        ui_thread_id_provider=ui_thread_provider,
     )
     seal = TransferSealCoordinator(
         seal_store,
@@ -664,7 +667,9 @@ def _exercise_actual_coordinator_lane_ownership(
         app._complete_exchange()
         assert app._block_unsafe_exact_exchange() is True
         assert app._block_unsafe_exact_master_label_replacement() is True
-        with seal_store._connect() as conn:
+        # This is a test-only inspection from the fake Tk owner; production
+        # code must not bypass the store's runtime UI-read boundary.
+        with sqlite3.connect(seal_store.db_path) as conn:
             assert conn.execute(
                 "SELECT COUNT(*) FROM transfer_exchange_block_receipts"
             ).fetchone()[0] == 0
@@ -700,7 +705,8 @@ def _exercise_actual_coordinator_lane_ownership(
     root.run_until(lambda: not lane.is_busy(), timeout=12.0)
     assert app._block_unsafe_exact_exchange() is True
     root.run_until(lambda: not lane.is_busy(), timeout=12.0)
-    with seal_store._connect() as conn:
+    # Test-only postcondition inspection remains outside the product store API.
+    with sqlite3.connect(seal_store.db_path) as conn:
         assert conn.execute(
             "SELECT COUNT(*) FROM transfer_exchange_block_receipts"
         ).fetchone()[0] == 1

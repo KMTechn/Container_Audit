@@ -164,6 +164,28 @@ class TransferCoordinatorOwnerBindingError(TransferSealError):
         )
 
 
+class TransferCoordinatorUiThreadReadError(TransferSealError):
+    """Reject transfer-store reads from the registered Tk owner thread."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TRANSFER_COORDINATOR_UI_THREAD_READ",
+            "transfer coordinator reads require a non-UI owner context",
+            retryable=False,
+        )
+
+
+class TransferCoordinatorUiThreadBindingError(TransferSealError):
+    """Reject attempts to replace an already-declared Tk owner provider."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "TRANSFER_COORDINATOR_UI_THREAD_REBIND",
+            "transfer coordinator UI thread provider is already bound",
+            retryable=False,
+        )
+
+
 def _assert_transfer_coordinator_owner(
     owner_thread_id_provider: Callable[[], int | None] | None,
 ) -> None:
@@ -177,6 +199,21 @@ def _assert_transfer_coordinator_owner(
         raise TransferCoordinatorOwnerError() from exc
     if owner_thread_id is None or threading.get_ident() != owner_thread_id:
         raise TransferCoordinatorOwnerError()
+
+
+def _assert_not_transfer_coordinator_ui_thread(
+    ui_thread_id_provider: Callable[[], int | None] | None,
+) -> None:
+    """Fail closed when a registered UI-context probe identifies this thread."""
+
+    if not callable(ui_thread_id_provider):
+        return
+    try:
+        ui_thread_id = ui_thread_id_provider()
+    except Exception as exc:
+        raise TransferCoordinatorUiThreadReadError() from exc
+    if ui_thread_id is not None and threading.get_ident() == ui_thread_id:
+        raise TransferCoordinatorUiThreadReadError()
 
 
 @dataclass(frozen=True)
@@ -2385,6 +2422,7 @@ class TransferSealStore:
         db_path: str | os.PathLike[str],
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
+        ui_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.db_path = str(db_path)
         # Schema bootstrap is constructor-owned; every public write after
@@ -2394,8 +2432,13 @@ class TransferSealStore:
         self._owner_thread_id_provider_bound = (
             owner_thread_id_provider is not None
         )
+        # Schema bootstrap is the only UI-thread SQLite window.  It is closed
+        # exactly once below and has no API that can reopen it.
+        self._ui_thread_id_provider = None
+        self._ui_thread_id_provider_bound = False
         Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
         self._initialize()
+        self.bind_ui_thread_id_provider(ui_thread_id_provider)
 
     def bind_owner_thread_id_provider(
         self,
@@ -2411,6 +2454,22 @@ class TransferSealStore:
         )
         self._coordinator_owner_bound = True
 
+    def bind_ui_thread_id_provider(
+        self,
+        ui_thread_id_provider: Callable[[], int | None] | None,
+    ) -> None:
+        if getattr(self, "_ui_thread_id_provider_bound", False):
+            if ui_thread_id_provider is not self._ui_thread_id_provider:
+                raise TransferCoordinatorUiThreadBindingError()
+            return
+        self._ui_thread_id_provider = ui_thread_id_provider
+        self._ui_thread_id_provider_bound = ui_thread_id_provider is not None
+
+    def _assert_not_ui_thread_read(self) -> None:
+        _assert_not_transfer_coordinator_ui_thread(
+            getattr(self, "_ui_thread_id_provider", None)
+        )
+
     def _assert_coordinator_owner(self) -> None:
         if self._coordinator_owner_bound:
             _assert_transfer_coordinator_owner(
@@ -2419,6 +2478,7 @@ class TransferSealStore:
 
     @contextmanager
     def _connect(self):
+        self._assert_not_ui_thread_read()
         conn = sqlite3.connect(self.db_path, timeout=10.0)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys=ON")
@@ -2791,8 +2851,8 @@ class TransferSealStore:
                 self._ensure_linked_event(conn, row)
             conn.commit()
 
-    @staticmethod
     def preview_intent(
+        self,
         *,
         master_label: str,
         source_identity: Mapping[str, Any],
@@ -2800,6 +2860,7 @@ class TransferSealStore:
         scanned_barcodes: Iterable[str],
         operation_lease_id: str = "",
     ) -> dict[str, Any]:
+        self._assert_not_ui_thread_read()
         raw_barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
         normalized = [normalize_barcode(value) for value in raw_barcodes]
         if not raw_barcodes or len(set(normalized)) != len(normalized):
@@ -2920,6 +2981,7 @@ class TransferSealStore:
         return row
 
     def load(self, intent_id: str) -> sqlite3.Row:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             row = self._load_in_connection(conn, intent_id)
         if row is None:
@@ -2935,6 +2997,7 @@ class TransferSealStore:
     ) -> sqlite3.Row | None:
         """Return one exact review row only when no central command was durable."""
 
+        self._assert_not_ui_thread_read()
         raw_barcodes = [
             _normalize_identifier(value, "scanned_barcode")
             for value in scanned_barcodes
@@ -3214,6 +3277,7 @@ class TransferSealStore:
         return row
 
     def pending_ids(self) -> list[str]:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT intent_id FROM transfer_seal_intents
@@ -3225,6 +3289,7 @@ class TransferSealStore:
         return [str(row["intent_id"]) for row in rows]
 
     def post_review_case_for_intent(self, intent_id: str) -> sqlite3.Row:
+        self._assert_not_ui_thread_read()
         normalized_intent = _normalize_identifier(intent_id, "intent_id")
         with self._connect() as conn:
             row = conn.execute(
@@ -3242,6 +3307,7 @@ class TransferSealStore:
         return row
 
     def post_review_cases(self) -> list[sqlite3.Row]:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT review.*, outbox.outbox_sequence,
@@ -3255,6 +3321,7 @@ class TransferSealStore:
         return list(rows)
 
     def pending_post_review_projections(self) -> list[sqlite3.Row]:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT review.*, outbox.outbox_sequence,
@@ -3351,6 +3418,7 @@ class TransferSealStore:
         return receipt
 
     def has_exact_history(self) -> bool:
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             row = conn.execute("SELECT 1 FROM transfer_seal_intents LIMIT 1").fetchone()
         return row is not None
@@ -3514,6 +3582,7 @@ class TransferSealStore:
     def replacement_waiting_outbox(self) -> list[sqlite3.Row]:
         """Return immutable replacement-waiting replay evidence in FIFO order."""
 
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT ledger.*, outbox.outbox_sequence,
@@ -3530,6 +3599,7 @@ class TransferSealStore:
     def pending_replacement_waiting_projections(self) -> list[sqlite3.Row]:
         """Return FIFO marker rows that still need their append-only CSV receipt."""
 
+        self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT ledger.*, outbox.outbox_sequence,
@@ -3659,6 +3729,7 @@ class TransferSealCoordinator:
         operation_lease_manager: OperationLeaseManager | None = None,
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
+        ui_thread_id_provider: Callable[[], int | None] | None = None,
     ) -> None:
         self.store = store
         self.client = client
@@ -3671,10 +3742,23 @@ class TransferSealCoordinator:
             )
         self._owner_thread_id_provider = owner_thread_id_provider
         self.store.bind_owner_thread_id_provider(owner_thread_id_provider)
+        if ui_thread_id_provider is None:
+            ui_thread_id_provider = getattr(
+                store,
+                "_ui_thread_id_provider",
+                None,
+            )
+        self._ui_thread_id_provider = ui_thread_id_provider
+        self.store.bind_ui_thread_id_provider(ui_thread_id_provider)
 
     def _assert_owner(self) -> None:
         _assert_transfer_coordinator_owner(
             getattr(self, "_owner_thread_id_provider", None)
+        )
+
+    def _assert_not_ui_thread_read(self) -> None:
+        _assert_not_transfer_coordinator_ui_thread(
+            getattr(self, "_ui_thread_id_provider", None)
         )
 
     def _verified_operation_lease(
@@ -3757,6 +3841,7 @@ class TransferSealCoordinator:
     ) -> SealAttempt:
         """Compute the exact transfer identity without creating local ledger rows."""
 
+        self._assert_not_ui_thread_read()
         scans = list(scanned_barcodes)
         identity = source_identity_from_label(master_label_fields)
         if not identity["item_id"]:
@@ -5291,8 +5376,12 @@ def transfer_seal_coordinator_from_env(
     probe_required: bool = True,
     profile_decryptor: Any = None,
     owner_thread_id_provider: Callable[[], int | None] | None = None,
+    ui_thread_id_provider: Callable[[], int | None] | None = None,
 ) -> TransferSealCoordinator:
-    store = TransferSealStore(db_path)
+    store = TransferSealStore(
+        db_path,
+        ui_thread_id_provider=ui_thread_id_provider,
+    )
     client = logistics_transfer_client_from_env(
         session=session,
         probe_required=probe_required,
@@ -5309,6 +5398,7 @@ def transfer_seal_coordinator_from_env(
         client,
         operation_lease_manager,
         owner_thread_id_provider=owner_thread_id_provider,
+        ui_thread_id_provider=ui_thread_id_provider,
     )
 
 
@@ -5319,6 +5409,8 @@ __all__ = [
     "TransferSealCoordinator",
     "TransferCoordinatorOwnerBindingError",
     "TransferCoordinatorOwnerError",
+    "TransferCoordinatorUiThreadBindingError",
+    "TransferCoordinatorUiThreadReadError",
     "TransferSealError",
     "TransferSealStore",
     "membership_hash",

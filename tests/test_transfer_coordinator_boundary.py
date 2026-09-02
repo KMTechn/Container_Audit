@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import ast
+import functools
+import operator
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 import Container_Audit as container_module
 import transfer_seal as transfer_seal_module
+from tests import transfer_read_runtime_helper
 from Container_Audit import ContainerAudit, TraySession
 from tests.test_container_p0_contracts import _cross_thread_fake_root
 from tk_serial_ui_lane import TkSerialUiLane
@@ -15,6 +19,8 @@ from transfer_member_exchange import TransferMemberExchangeStore
 from transfer_seal import (
     TransferSealCoordinator,
     TransferSealStore,
+    TransferCoordinatorUiThreadBindingError,
+    TransferCoordinatorUiThreadReadError,
 )
 
 
@@ -47,11 +53,102 @@ READ_ONLY_ALLOWLIST = {
 }
 
 OWNER_BIND_METHOD = "bind_owner_thread_id_provider"
+UI_THREAD_BIND_METHOD = "bind_ui_thread_id_provider"
 STORE_CLASS_NAMES = {"TransferSealStore", "TransferMemberExchangeStore"}
 COORDINATOR_CLASS_NAMES = {
     "TransferSealCoordinator",
     "TransferMemberExchangeCoordinator",
 }
+
+
+def _runtime_read_local_alias(self):
+    audit9_store_alias = self.transfer_seal_coordinator.store
+    return audit9_store_alias.has_exact_history()
+
+
+def _runtime_read_bound_method(self):
+    audit10_bound_read = self.transfer_seal_coordinator.store.has_exact_history
+    return audit10_bound_read()
+
+
+def _runtime_read_attribute_chain(self):
+    return self._svc.store.has_exact_history()
+
+
+def _runtime_read_getattr(self):
+    return getattr(
+        self.transfer_seal_coordinator.store,
+        "has_exact_history",
+    )()
+
+
+def _runtime_read_immediate_lambda(self):
+    return (lambda: self.transfer_seal_coordinator.store.has_exact_history())()
+
+
+def _runtime_read_immediate_nested(self):
+    def audit10_nested_read():
+        return self.transfer_seal_coordinator.store.has_exact_history()
+
+    return audit10_nested_read()
+
+
+def _runtime_read_comprehension(self):
+    return [
+        self.transfer_seal_coordinator.store.has_exact_history()
+        for _index in range(1)
+    ][0]
+
+
+def _runtime_read_partial(self):
+    return functools.partial(
+        self.transfer_seal_coordinator.store.has_exact_history
+    )()
+
+
+def _runtime_read_methodcaller(self):
+    return operator.methodcaller("has_exact_history")(
+        self.transfer_seal_coordinator.store
+    )
+
+
+def _runtime_read_tuple_list_alias(self):
+    (audit10_store,) = (self.transfer_seal_coordinator.store,)
+    audit10_list = [audit10_store]
+    return audit10_list[0].has_exact_history()
+
+
+def _runtime_read_imported_helper(self):
+    return transfer_read_runtime_helper.has_exact_history(
+        self.transfer_seal_coordinator.store
+    )
+
+
+def _runtime_read_unbound_descriptor(self):
+    store = self.transfer_seal_coordinator.store
+    return type(store).has_exact_history(store)
+
+
+def _runtime_read_private_connect(self):
+    with self.transfer_seal_coordinator.store._connect():
+        return False
+
+
+RUNTIME_UI_READ_VARIANTS = (
+    ("audit9-local-alias", _runtime_read_local_alias),
+    ("bound-method", _runtime_read_bound_method),
+    ("attribute-chain", _runtime_read_attribute_chain),
+    ("getattr", _runtime_read_getattr),
+    ("immediate-lambda", _runtime_read_immediate_lambda),
+    ("immediate-nested-function", _runtime_read_immediate_nested),
+    ("list-comprehension", _runtime_read_comprehension),
+    ("functools-partial", _runtime_read_partial),
+    ("operator-methodcaller", _runtime_read_methodcaller),
+    ("tuple-unpack-list-index", _runtime_read_tuple_list_alias),
+    ("imported-module-helper", _runtime_read_imported_helper),
+    ("unbound-descriptor", _runtime_read_unbound_descriptor),
+    ("private-connect-backstop", _runtime_read_private_connect),
+)
 
 
 def _classes(filename: str):
@@ -592,13 +689,31 @@ def _writer_surfaces():
         methods = _public_methods(_classes(filename)[class_name])
         excluded = set(read_only)
         if class_name in STORE_CLASS_NAMES:
-            excluded.add(OWNER_BIND_METHOD)
+            excluded.update({OWNER_BIND_METHOD, UI_THREAD_BIND_METHOD})
         for method_name in sorted(set(methods) - excluded):
             surfaces.append((filename, class_name, method_name))
     return surfaces
 
 
 WRITER_SURFACES = _writer_surfaces()
+
+
+def test_transfer_writer_owner_census_remains_exactly_25():
+    counts = {
+        class_name: sum(
+            1
+            for _filename, observed_class, _method_name in WRITER_SURFACES
+            if observed_class == class_name
+        )
+        for class_name in sorted(STORE_CLASS_NAMES | COORDINATOR_CLASS_NAMES)
+    }
+    assert counts == {
+        "TransferMemberExchangeCoordinator": 4,
+        "TransferMemberExchangeStore": 7,
+        "TransferSealCoordinator": 5,
+        "TransferSealStore": 9,
+    }
+    assert len(WRITER_SURFACES) == 25
 
 
 @pytest.mark.parametrize(
@@ -632,7 +747,8 @@ def test_every_public_transfer_writer_asserts_owner_first(
         store_key = (filename, store_class_name)
         store_methods = _public_methods(_classes(filename)[store_class_name])
         store_writers = set(store_methods) - READ_ONLY_ALLOWLIST[store_key] - {
-            OWNER_BIND_METHOD
+            OWNER_BIND_METHOD,
+            UI_THREAD_BIND_METHOD,
         }
         mutation_calls = {
             f"self.store.{name}" for name in store_writers
@@ -680,6 +796,10 @@ def test_transfer_read_only_allowlist_has_no_write_or_central_call(
     method = methods[method_name]
     assert _constant_sql_writes(method) == []
     assert _central_calls(method) == []
+    first = _first_executable_statement(method)
+    assert isinstance(first, ast.Expr)
+    assert isinstance(first.value, ast.Call)
+    assert _call_name(first.value) == "self._assert_not_ui_thread_read"
 
 
 @pytest.mark.parametrize(
@@ -706,6 +826,92 @@ def test_transfer_owner_provider_binding_is_one_shot(tmp_path, store_type):
         store.bind_owner_thread_id_provider(different_provider)
 
     assert raised.value.code == "TRANSFER_COORDINATOR_OWNER_REBIND"
+
+
+@pytest.mark.parametrize(
+    "store_type",
+    [TransferSealStore, TransferMemberExchangeStore],
+)
+def test_transfer_ui_thread_provider_is_one_shot_and_bootstrap_only(
+    tmp_path,
+    store_type,
+):
+    ui_thread_id = threading.get_ident()
+    first_provider = lambda: ui_thread_id
+    different_provider = lambda: ui_thread_id
+
+    # Constructor schema initialization is the sole bootstrap window.  The
+    # provider is bound only after it completes, so the window cannot reopen.
+    store = store_type(
+        tmp_path / f"ui-{store_type.__name__}.db",
+        ui_thread_id_provider=first_provider,
+    )
+    store.bind_ui_thread_id_provider(first_provider)
+
+    with pytest.raises(TransferCoordinatorUiThreadReadError) as raised:
+        with store._connect():
+            pass
+    assert raised.value.code == "TRANSFER_COORDINATOR_UI_THREAD_READ"
+
+    worker_results = []
+    worker_errors = []
+
+    def read_on_worker():
+        try:
+            if isinstance(store, TransferSealStore):
+                worker_results.append(store.has_exact_history())
+            else:
+                worker_results.append(store.blocking_rows())
+        except BaseException as exc:  # pragma: no cover - assertion reports it
+            worker_errors.append(exc)
+
+    worker = threading.Thread(target=read_on_worker)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert worker.is_alive() is False
+    assert worker_errors == []
+    assert worker_results in ([False], [[]])
+
+    with pytest.raises(TransferCoordinatorUiThreadBindingError) as rebound:
+        store.bind_ui_thread_id_provider(different_provider)
+    assert rebound.value.code == "TRANSFER_COORDINATOR_UI_THREAD_REBIND"
+
+
+@pytest.mark.parametrize(
+    ("variant_name", "variant"),
+    RUNTIME_UI_READ_VARIANTS,
+    ids=[name for name, _variant in RUNTIME_UI_READ_VARIANTS],
+)
+def test_runtime_ui_read_boundary_is_authoritative_for_tk_root_call_shapes(
+    tmp_path,
+    monkeypatch,
+    variant_name,
+    variant,
+):
+    """Runtime context, not static syntax, rejects all 11 audited + 2 variants."""
+
+    root = _cross_thread_fake_root()
+    assert threading.get_ident() == root.owner_thread_id
+    ui_provider = lambda: root.owner_thread_id
+    store = TransferSealStore(
+        tmp_path / f"runtime-{variant_name}.db",
+        ui_thread_id_provider=ui_provider,
+    )
+    coordinator = TransferSealCoordinator(store, None)
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.root = root
+    app.transfer_seal_coordinator = coordinator
+    app._svc = SimpleNamespace(store=store)
+    monkeypatch.setattr(
+        ContainerAudit,
+        "_exact_transfer_exchange_blocked",
+        variant,
+    )
+
+    with pytest.raises(TransferCoordinatorUiThreadReadError) as raised:
+        app._exact_transfer_exchange_blocked()
+
+    assert raised.value.code == "TRANSFER_COORDINATOR_UI_THREAD_READ"
 
 
 def test_suite_wide_headless_guard_covers_container_aliases(
@@ -739,6 +945,7 @@ def test_tk_exact_history_uses_lane_snapshot_during_post_review_work(
     store = TransferSealStore(
         tmp_path / "transfer.db",
         owner_thread_id_provider=owner_provider,
+        ui_thread_id_provider=lambda: root.owner_thread_id,
     )
     coordinator = TransferSealCoordinator(
         store,
@@ -800,6 +1007,8 @@ def test_tk_exact_history_uses_lane_snapshot_during_post_review_work(
 
 
 def test_tk_state_consumers_have_no_direct_store_call():
+    """Fast static linter only; the runtime UI-read guard is authoritative."""
+
     root_names = (
         "_update_action_button_states",
         "_show_operations_menu",
