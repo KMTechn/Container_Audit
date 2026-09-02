@@ -4,6 +4,7 @@ import argparse
 import copy
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -1169,6 +1170,114 @@ def _synthetic_capture_repo(tmp_path):
     return repo, tool
 
 
+def _make_windows_junction(link: Path, target: Path) -> Path:
+    if os.name != "nt":
+        pytest.skip("Windows junction coverage requires Windows")
+    target.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()[-300:]
+        pytest.skip(f"mklink /J is unavailable on this host: {detail}")
+    assert getattr(link, "is_junction", lambda: False)()
+    return link
+
+
+def test_external_bundle_builder_rejects_junction_ancestor_before_creation(tmp_path):
+    target = tmp_path / "junction-target"
+    junction = _make_windows_junction(tmp_path / "junction", target)
+    redirected_root = junction / "must-not-be-created"
+    try:
+        with pytest.raises(capture_tool.ExternalEvidencePathError) as caught:
+            build_m7_external_capture_bundle(
+                evidence_root=redirected_root,
+                portable_artifact=tmp_path / "unused.zip",
+                captures=(),
+                repo_root=tmp_path,
+            )
+        assert caught.value.code == "SYMLINK_FORBIDDEN"
+        assert not (target / "must-not-be-created").exists()
+    finally:
+        junction.rmdir()
+
+
+def test_external_bundle_builder_rejects_junction_in_root_before_bundle_creation(
+    tmp_path,
+):
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    junction = _make_windows_junction(
+        evidence_root / "redirect",
+        tmp_path / "junction-target",
+    )
+    artifact = tmp_path / "portable.zip"
+    artifact.write_bytes(b"artifact")
+    try:
+        with pytest.raises(capture_tool.ExternalEvidencePathError) as caught:
+            build_m7_external_capture_bundle(
+                evidence_root=evidence_root,
+                portable_artifact=artifact,
+                captures=(),
+                repo_root=tmp_path,
+            )
+        assert caught.value.code == "SYMLINK_FORBIDDEN"
+        assert not (evidence_root / "Container_Audit").exists()
+    finally:
+        junction.rmdir()
+
+
+def test_external_bundle_builder_rejects_broken_symlink_ancestor_before_creation(
+    tmp_path,
+):
+    missing_target = tmp_path / "missing-target"
+    link = tmp_path / "broken-link"
+    try:
+        os.symlink(missing_target, link, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(
+            "symlink creation is unavailable (Windows may require Developer Mode): "
+            f"{exc}"
+        )
+
+    with pytest.raises(capture_tool.ExternalEvidencePathError) as caught:
+        build_m7_external_capture_bundle(
+            evidence_root=link / "must-not-be-created",
+            portable_artifact=tmp_path / "unused.zip",
+            captures=(),
+            repo_root=tmp_path,
+        )
+    assert caught.value.code == "SYMLINK_FORBIDDEN"
+    assert link.is_symlink()
+    assert not missing_target.exists()
+
+
+def test_default_documents_and_settings_junction_is_rejected_read_only(monkeypatch):
+    if os.name != "nt":
+        pytest.skip("the built-in Documents and Settings junction is Windows-only")
+    junction = Path("C:/Documents and Settings")
+    if not getattr(junction, "is_junction", lambda: False)():
+        pytest.skip("C:/Documents and Settings is not a junction on this host")
+
+    assert not junction.is_symlink()
+    attributes = getattr(os.lstat(junction), "st_file_attributes", 0)
+    assert attributes & getattr(
+        capture_tool.stat,
+        "FILE_ATTRIBUTE_REPARSE_POINT",
+        0x00000400,
+    )
+    assert capture_tool._is_forbidden_link(junction)
+    monkeypatch.setattr(Path, "is_junction", lambda _path: False)
+    assert capture_tool._is_forbidden_link(junction)
+    with pytest.raises(capture_tool.ExternalEvidencePathError) as caught:
+        capture_tool._assert_no_symlink_path_components(junction)
+    assert caught.value.code == "SYMLINK_FORBIDDEN"
+
+
 def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tmp_path):
     repo, _tool = _synthetic_capture_repo(tmp_path)
     artifact = tmp_path / "Container_Audit-portable.zip"
@@ -1362,6 +1471,46 @@ def test_cli_refuses_noncanonical_external_root_without_opening_gui(tmp_path, ca
     ) == 2
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"] == "external_evidence_root_must_match_canonical"
+
+
+def test_cli_requires_lexical_and_physical_canonical_root_identity(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    canonical = tmp_path / "canonical"
+    canonical.mkdir()
+    alias = _make_windows_junction(tmp_path / "canonical-alias", canonical)
+    artifact = tmp_path / "portable.zip"
+    artifact.write_bytes(b"artifact")
+    monkeypatch.setattr(
+        capture_tool,
+        "M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION",
+        str(canonical),
+    )
+    monkeypatch.setattr(
+        capture_tool,
+        "run_capture_matrix",
+        lambda **_kwargs: pytest.fail("canonical path rejection must precede GUI work"),
+    )
+    try:
+        assert alias.resolve() == canonical.resolve()
+        assert not capture_tool._paths_have_same_lexical_and_physical_identity(
+            alias,
+            canonical,
+        )
+        assert capture_tool.main(
+            [
+                "--external-evidence-root",
+                str(alias),
+                "--portable-artifact",
+                str(artifact),
+            ]
+        ) == 2
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["error"] == "external_evidence_root_must_match_canonical"
+    finally:
+        alias.rmdir()
 
 
 def test_capture_fixture_keeps_raw_source_but_requires_compact_visible_values():

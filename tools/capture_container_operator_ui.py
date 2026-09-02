@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -4617,34 +4618,185 @@ def _git_source_and_tool_identity(
     )
 
 
-def _root_relative(path: Path, root: Path) -> str:
+class ExternalEvidencePathError(ValueError):
+    """Typed rejection for an external evidence-root path contract violation."""
+
+    def __init__(self, code: str, path: Path, detail: str) -> None:
+        self.code = str(code)
+        self.reason_code = self.code
+        self.path = str(path)
+        super().__init__(f"{self.code}: {detail}: {self.path}")
+
+
+def _is_forbidden_link(path: Path) -> bool:
+    """Mirror the canonical validator's symlink/junction/reparse decision."""
+
+    # CAPTURE-BUNDLE-V1-CONTRACT.md section 2.3, lines 87-95. Keep this
+    # predicate aligned with HANDOVER/tools/validate_capture_bundle_v1.py.
     try:
-        relative = path.resolve().relative_to(root.resolve()).as_posix()
+        if path.is_symlink():
+            return True
+        is_junction = getattr(path, "is_junction", None)
+        if is_junction is not None and is_junction():
+            return True
+        if os.name == "nt":
+            attributes = getattr(os.lstat(path), "st_file_attributes", 0)
+            return bool(
+                attributes
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
+            )
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return False
+
+
+def _lexical_absolute(path: Path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _path_key(path: Path) -> str:
+    return os.path.normcase(os.fspath(path))
+
+
+def _resolved_path(path: Path) -> Path:
+    try:
+        return path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ExternalEvidencePathError(
+            "PATH_ESCAPES_ROOT",
+            path,
+            "evidence path could not be resolved",
+        ) from exc
+
+
+def _paths_have_same_lexical_and_physical_identity(
+    first: Path,
+    second: Path,
+) -> bool:
+    first_lexical = _lexical_absolute(first)
+    second_lexical = _lexical_absolute(second)
+    try:
+        first_physical = first_lexical.resolve()
+        second_physical = second_lexical.resolve()
+    except (OSError, RuntimeError):
+        return False
+    return (
+        _path_key(first_lexical) == _path_key(second_lexical)
+        and _path_key(first_physical) == _path_key(second_physical)
+    )
+
+
+def _key_is_within(candidate: str, root: str) -> bool:
+    try:
+        return os.path.commonpath((root, candidate)) == root
+    except (OSError, ValueError):
+        return False
+
+
+def _assert_lexical_and_physical_path_within_root(path: Path, root: Path) -> None:
+    path_lexical = _lexical_absolute(path)
+    root_lexical = _lexical_absolute(root)
+    path_physical = _resolved_path(path_lexical)
+    root_physical = _resolved_path(root_lexical)
+    path_lexical_key = _path_key(path_lexical)
+    root_lexical_key = _path_key(root_lexical)
+    path_physical_key = _path_key(path_physical)
+    root_physical_key = _path_key(root_physical)
+    if not (
+        _key_is_within(path_lexical_key, root_lexical_key)
+        and _key_is_within(path_physical_key, root_physical_key)
+    ):
+        raise ExternalEvidencePathError(
+            "PATH_ESCAPES_ROOT",
+            path_lexical,
+            "lexical and resolved physical paths must remain inside the evidence root",
+        )
+    if (
+        path_lexical_key != path_physical_key
+        or root_lexical_key != root_physical_key
+    ):
+        raise ExternalEvidencePathError(
+            "SYMLINK_FORBIDDEN",
+            path_lexical,
+            "lexical and resolved physical paths differ; redirect is forbidden",
+        )
+
+
+def _root_relative(path: Path, root: Path) -> str:
+    absolute = _lexical_absolute(path)
+    absolute_root = _lexical_absolute(root)
+    _assert_no_symlink_path_components(absolute_root)
+    _assert_no_symlink_path_components(absolute)
+    _assert_lexical_and_physical_path_within_root(absolute, absolute_root)
+    try:
+        relative = absolute.relative_to(absolute_root).as_posix()
     except ValueError as exc:
-        raise ValueError("evidence path must remain below the external root") from exc
+        raise ExternalEvidencePathError(
+            "PATH_ESCAPES_ROOT",
+            absolute,
+            "evidence path must remain below the external root",
+        ) from exc
     if not relative or re.fullmatch(r"[A-Za-z0-9._/-]+", relative) is None:
         raise ValueError("evidence path is not a canonical root-relative path")
     return relative
 
 
 def _assert_no_symlink_path_components(path: Path) -> None:
-    absolute = path.absolute()
+    absolute = _lexical_absolute(path)
     current = Path(absolute.anchor)
+    components = [current]
     for part in absolute.parts[1:]:
-        current = current / part
-        if current.exists() and current.is_symlink():
-            raise ValueError(f"symlink path component is forbidden: {current}")
+        components.append(components[-1] / part)
+    for current in components:
+        if _is_forbidden_link(current):
+            raise ExternalEvidencePathError(
+                "SYMLINK_FORBIDDEN",
+                current,
+                "symlink path component is forbidden, including a junction or "
+                "reparse-point redirect",
+            )
 
 
 def _assert_clean_evidence_root(root: Path) -> None:
-    for current_text, directories, files in os.walk(root, followlinks=False):
-        current = Path(current_text)
-        for name in [*directories, *files]:
-            candidate = current / name
-            if candidate.is_symlink():
-                raise ValueError("symlinks are forbidden in the external evidence root")
-            if name.lower() == "latest" or Path(name).stem.lower() == "latest":
-                raise ValueError("mutable latest aliases are forbidden")
+    _assert_no_symlink_path_components(root)
+    _assert_lexical_and_physical_path_within_root(root, root)
+
+    def reject_walk_error(exc: OSError) -> None:
+        error_path = Path(exc.filename) if exc.filename else root
+        raise ExternalEvidencePathError(
+            "ROOT_SCAN_ERROR",
+            error_path,
+            "external evidence root could not be scanned",
+        ) from exc
+
+    try:
+        for current_text, directories, files in os.walk(
+            root,
+            followlinks=False,
+            onerror=reject_walk_error,
+        ):
+            current = Path(current_text)
+            for name in [*directories, *files]:
+                candidate = current / name
+                if _is_forbidden_link(candidate):
+                    raise ExternalEvidencePathError(
+                        "SYMLINK_FORBIDDEN",
+                        candidate,
+                        "symlinks are forbidden in the external evidence root; "
+                        "junctions and reparse-point redirects are also forbidden",
+                    )
+                if name.lower() == "latest" or Path(name).stem.lower() == "latest":
+                    raise ValueError("mutable latest aliases are forbidden")
+    except ExternalEvidencePathError:
+        raise
+    except OSError as exc:
+        raise ExternalEvidencePathError(
+            "ROOT_SCAN_ERROR",
+            root,
+            "external evidence root could not be scanned",
+        ) from exc
 
 
 def build_m7_external_capture_bundle(
@@ -4663,21 +4815,23 @@ def build_m7_external_capture_bundle(
     copied byte object is created with exclusive-create semantics.
     """
 
-    root_input = Path(evidence_root).absolute()
+    root_input = _lexical_absolute(Path(evidence_root))
     _assert_no_symlink_path_components(root_input)
-    root = root_input.resolve()
-    if root.exists() and not root.is_dir():
+    _assert_lexical_and_physical_path_within_root(root_input, root_input)
+    if root_input.exists() and not root_input.is_dir():
         raise ValueError("external evidence root must be a real directory")
-    root.mkdir(parents=True, exist_ok=True)
-    _assert_clean_evidence_root(root)
-    artifact_input = Path(portable_artifact).absolute()
+    artifact_input = _lexical_absolute(Path(portable_artifact))
     _assert_no_symlink_path_components(artifact_input)
-    artifact_source = artifact_input.resolve()
+    _assert_lexical_and_physical_path_within_root(artifact_input, artifact_input)
+    artifact_source = _resolved_path(artifact_input)
     if (
         not artifact_source.is_file()
         or artifact_source.stat().st_size < 1
     ):
         raise ValueError("portable artifact input must be a non-empty regular file")
+    root = root_input
+    root.mkdir(parents=True, exist_ok=True)
+    _assert_clean_evidence_root(root)
     app_source, capture_tool = _git_source_and_tool_identity(
         repo_root=Path(repo_root).resolve(),
         capture_tool_path=capture_tool_path,
@@ -4726,7 +4880,9 @@ def build_m7_external_capture_bundle(
     artifact_digest = _sha256(artifact_source)
     try:
         artifact_relative = _root_relative(artifact_source, root)
-    except ValueError:
+    except ExternalEvidencePathError as exc:
+        if exc.code != "PATH_ESCAPES_ROOT":
+            raise
         suffix = artifact_source.suffix.lower()
         if re.fullmatch(r"\.[a-z0-9]+", suffix) is None:
             suffix = ".bin"
@@ -4741,7 +4897,7 @@ def build_m7_external_capture_bundle(
         artifact_destination.parent.mkdir(parents=True, exist_ok=True)
         if artifact_destination.exists():
             if (
-                artifact_destination.is_symlink()
+                _is_forbidden_link(artifact_destination)
                 or not artifact_destination.is_file()
                 or _sha256(artifact_destination) != artifact_digest
             ):
@@ -7020,13 +7176,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 2
-    canonical_external_root = Path(M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION).resolve()
-    if args.external_evidence_root.resolve() != canonical_external_root:
+    canonical_external_root = Path(M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION)
+    if not _paths_have_same_lexical_and_physical_identity(
+        args.external_evidence_root,
+        canonical_external_root,
+    ):
         print(
             json.dumps(
                 {
                     "error": "external_evidence_root_must_match_canonical",
                     "expected": M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION,
+                    "passed": False,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 2
+    try:
+        external_root = _lexical_absolute(args.external_evidence_root)
+        _assert_no_symlink_path_components(external_root)
+        _assert_lexical_and_physical_path_within_root(external_root, external_root)
+    except ExternalEvidencePathError as exc:
+        print(
+            json.dumps(
+                {
+                    "error": "external_evidence_root_path_forbidden",
+                    "reason_code": exc.code,
+                    "path": exc.path,
                     "passed": False,
                 },
                 ensure_ascii=False,
