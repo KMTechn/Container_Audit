@@ -707,6 +707,7 @@ if (
 $placementWriterFenceLease = $null
 if (-not $DryRun.IsPresent -and -not $testOverride) {
     $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
+    . $WriterFenceHelperPath
 }
 try {
 if ($RestoreVerifiedReplacement.IsPresent) {

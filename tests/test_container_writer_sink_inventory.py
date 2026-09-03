@@ -279,7 +279,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
         "call_operator": 18,
         "com_wmi_process_create": 1,
-        "dot_source": 6,
+        "dot_source": 7,
         "start_process": 3,
     }
     raster_write = next(

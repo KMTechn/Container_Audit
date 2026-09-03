@@ -267,6 +267,20 @@ def test_bootstrap_is_minimal_code_placement_contract():
     assert "--remove-current-user-setup" in text
 
 
+def test_placement_writer_fence_release_imports_helper_in_script_scope():
+    text = INSTALLER.read_text(encoding="utf-8")
+
+    enter = text.index(
+        "$placementWriterFenceLease = Enter-ContainerPlacementWriterFence"
+    )
+    script_scope_import = text.index(". $WriterFenceHelperPath", enter)
+    guarded_body = text.index("\ntry {", script_scope_import)
+    release = text.index(
+        "Exit-ContainerWriterAdmission $placementWriterFenceLease", guarded_body
+    )
+    assert enter < script_scope_import < guarded_body < release
+
+
 def test_bootstrap_powershell_parses():
     for script in (INSTALLER, PORTABLE_INSTALLER, INTEGRITY_HELPER):
         escaped = str(script).replace("'", "''")
