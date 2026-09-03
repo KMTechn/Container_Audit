@@ -514,14 +514,49 @@ function New-CanonicalWriterFenceReleaseAuthorization(
     return [ordered]@{ path=[IO.Path]::GetFullPath($Path); sha256=Sha $Path }
 }
 function Set-CanonicalWriterFenceReleaseAuthorization($Authorization) {
-    [void](Set-ContainerWriterFencePrepared `
-        -SessionId $Script:CanonicalWriterFenceSessionId `
-        -AttemptId $Script:CanonicalWriterFenceAttemptId `
-        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-        -PreparedReceiptPath ([string]$Authorization.path) `
-        -PreparedReceiptSha256 ([string]$Authorization.sha256) `
-        -Status 'PREPARED' `
-        -AuthorityLease $canonicalWriterFenceAuthority)
+    Invoke-CanonicalWriterFenceReleaseStep {
+        [void](Set-ContainerWriterFencePrepared `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -PreparedReceiptPath ([string]$Authorization.path) `
+            -PreparedReceiptSha256 ([string]$Authorization.sha256) `
+            -Status 'PREPARED' `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+    }
+}
+function Invoke-CanonicalWriterFenceReleaseStep([scriptblock]$Action) {
+    for ($attempt = 1; $attempt -le 6; $attempt++) {
+        try { return & $Action }
+        catch {
+            if (
+                $_.Exception.Message -cne 'CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT' -or
+                $attempt -ge 6
+            ) { throw }
+            Start-Sleep -Milliseconds 500
+        }
+    }
+}
+function Clear-CanonicalWriterFenceReleaseDelegation {
+    Invoke-CanonicalWriterFenceReleaseStep {
+        [void](Clear-ContainerWriterFenceDelegation `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+    }
+}
+function Stop-CanonicalWriterFenceRelease($Authorization) {
+    Invoke-CanonicalWriterFenceReleaseStep {
+        [void](Stop-ContainerWriterFence `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -ReleaseAuthorizationPath ([string]$Authorization.path) `
+            -ReleaseAuthorizationSha256 ([string]$Authorization.sha256) `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+    }
 }
 function Relays {
     return @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
@@ -1426,19 +1461,8 @@ $enteredPlacementTry = $true
         $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
         $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
         Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
-        [void](Clear-ContainerWriterFenceDelegation `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
-            -AuthorityLease $canonicalWriterFenceAuthority)
-        [void](Stop-ContainerWriterFence `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
-            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
-            -AuthorityLease $canonicalWriterFenceAuthority)
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
         $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
         $audit.scheduled_writer.natural_trigger_proof = $writerRunning
@@ -1458,19 +1482,8 @@ $enteredPlacementTry = $true
         $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
         $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
         Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
-        [void](Clear-ContainerWriterFenceDelegation `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
-            -AuthorityLease $canonicalWriterFenceAuthority)
-        [void](Stop-ContainerWriterFence `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
-            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
-            -AuthorityLease $canonicalWriterFenceAuthority)
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
     }
     "install_status=$terminalStatus"
@@ -1654,19 +1667,8 @@ catch {
             $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
             $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
             Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
-            [void](Clear-ContainerWriterFenceDelegation `
-                -SessionId $Script:CanonicalWriterFenceSessionId `
-                -AttemptId $Script:CanonicalWriterFenceAttemptId `
-                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-                -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
-                -AuthorityLease $canonicalWriterFenceAuthority)
-            [void](Stop-ContainerWriterFence `
-                -SessionId $Script:CanonicalWriterFenceSessionId `
-                -AttemptId $Script:CanonicalWriterFenceAttemptId `
-                -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-                -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
-                -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
-                -AuthorityLease $canonicalWriterFenceAuthority)
+            Clear-CanonicalWriterFenceReleaseDelegation
+            Stop-CanonicalWriterFenceRelease $releaseAuthorization
             $canonicalWriterFenceActive = $false
             $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
             $audit.scheduled_writer.natural_trigger_proof = $writerRunning
@@ -1725,19 +1727,8 @@ catch {
         $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
         $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
         Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
-        [void](Clear-ContainerWriterFenceDelegation `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
-            -AuthorityLease $canonicalWriterFenceAuthority)
-        [void](Stop-ContainerWriterFence `
-            -SessionId $Script:CanonicalWriterFenceSessionId `
-            -AttemptId $Script:CanonicalWriterFenceAttemptId `
-            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-            -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
-            -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) `
-            -AuthorityLease $canonicalWriterFenceAuthority)
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
     }
     throw $original

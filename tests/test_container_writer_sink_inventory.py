@@ -277,7 +277,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 18,
+        "call_operator": 19,
         "com_wmi_process_create": 1,
         "dot_source": 7,
         "start_process": 3,

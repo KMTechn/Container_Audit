@@ -413,6 +413,15 @@ def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback
     assert "cold_boot_status=UNPROVEN" in text
 
 
+def test_canonical_writer_release_retries_transient_admission_contention():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+
+    assert "function Invoke-CanonicalWriterFenceReleaseStep" in text
+    assert text.count("Invoke-CanonicalWriterFenceReleaseStep {") == 3
+    assert "CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT" in text
+    assert "$attempt -ge 6" in text
+
+
 def test_bootstrap_task_query_failure_stops_without_task_mutation():
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(INSTALLER)
