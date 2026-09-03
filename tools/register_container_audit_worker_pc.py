@@ -967,7 +967,7 @@ def _build_container_audit_manifest(
         "identity_registry": {
             "required_for_pass": True,
             "status": identity_registry_status,
-            "source_host_id_unique": identity_registry_status == "checked",
+            "source_host_id_unique": identity_registry_status == "self_enrolled",
         },
         "hmac_gate": {
             "required": False,
@@ -2729,7 +2729,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         secret_ref=secret_ref,
         storage_paths=storage_paths,
         identity_registry_status=(
-            "checked"
+            "self_enrolled"
             if bool(getattr(args, "self_enroll", False))
             or bool(getattr(args, "admin_recovery_secret_file", ""))
             else "missing"

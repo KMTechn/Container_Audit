@@ -314,6 +314,11 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     )
     assert captured["json"]["key_id"] == "install-request-key-pc-02"
     assert captured["json"]["manifest"]["schema_version"] == "producer-onboarding-manifest-v1"
+    assert captured["json"]["manifest"]["identity_registry"] == {
+        "required_for_pass": True,
+        "source_host_id_unique": True,
+        "status": "self_enrolled",
+    }
     assert captured["wincred_target"] == "KMTech.DirectSync.ContainerAudit.PC-02"
     assert captured["wincred_secret"] == "server-issued-secret-pc-02"
     assert report["identity_action"] == "CREATED"
