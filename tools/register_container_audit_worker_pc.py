@@ -928,6 +928,7 @@ def _build_container_audit_manifest(
         "schema_version": "producer-onboarding-manifest-v1",
         "pc_identity": {
             "pc_id": pc_id,
+            "display_hostname": hostname,
             "source_host_id": source_host_id,
             "producer_install_id": producer_install_id,
         },

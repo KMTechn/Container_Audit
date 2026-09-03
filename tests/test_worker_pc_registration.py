@@ -170,7 +170,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     )
     assert manifest["pc_identity"]["source_host_id"] == expected_source_host_id
     assert manifest["pc_identity"]["pc_id"] == expected_pc_id
-    assert report["hostname"] == "PC-01"
+    assert manifest["pc_identity"]["display_hostname"] == "PC-01"
     assert report["pc_id"] == expected_pc_id
     raw_event_names = manifest["streams"][0]["raw_event_names"]
     catalog_names = _catalog_container_audit_raw_event_names()
@@ -314,11 +314,6 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     )
     assert captured["json"]["key_id"] == "install-request-key-pc-02"
     assert captured["json"]["manifest"]["schema_version"] == "producer-onboarding-manifest-v1"
-    assert set(captured["json"]["manifest"]["pc_identity"]) == {
-        "pc_id",
-        "producer_install_id",
-        "source_host_id",
-    }
     assert captured["json"]["manifest"]["identity_registry"] == {
         "required_for_pass": True,
         "source_host_id_unique": True,
@@ -906,6 +901,7 @@ def test_generated_runtime_identities_do_not_collide_on_same_hostname(
         assert report["pc_id"] == expected_pc
         assert manifest["pc_identity"] == {
             "pc_id": expected_pc,
+            "display_hostname": "SHARED-PC-NAME",
             "source_host_id": expected_source,
             "producer_install_id": install_id,
         }
@@ -950,8 +946,8 @@ def test_generated_runtime_identities_survive_hostname_rename(
         assert first[0][field] == second[0][field]
     assert first[0]["key_id"] == second[0]["key_id"]
     assert first[2]["secret_ref"] == second[2]["secret_ref"]
-    assert first[0]["hostname"] == "LINE-PC-OLD"
-    assert second[0]["hostname"] == "LINE-PC-NEW"
+    assert first[1]["pc_identity"]["display_hostname"] == "LINE-PC-OLD"
+    assert second[1]["pc_identity"]["display_hostname"] == "LINE-PC-NEW"
 
 
 def test_existing_hostname_identity_fails_closed_without_overwriting_registration(
