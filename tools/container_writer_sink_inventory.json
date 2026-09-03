@@ -4035,11 +4035,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 2853,
+      "line": 2856,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3117,
+          "line": 3120,
           "operation": "recovery_secret_path.unlink",
           "writer_admission_sources": []
         }
@@ -5767,7 +5767,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "6b0b7ce3d904ce181d1e11c459cc1ae4b1c69af88d91b85b0854c1fcd377bd7d",
+  "inventory_sha256": "54a9171bec27acd9a161f6987bad6aefa39f80ca2c0be9a9a46c3eeca565ea9f",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17054,7 +17054,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc.main",
-      "line": 2853,
+      "line": 2856,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },

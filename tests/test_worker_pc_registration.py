@@ -603,6 +603,48 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
     assert writes == []
 
 
+def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path, monkeypatch):
+    report_path = tmp_path / "registration-server-rejection.json"
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
+    monkeypatch.delenv(DATA_ROOT_ENV, raising=False)
+
+    class FakeResponse:
+        status_code = 400
+
+        def json(self):
+            return {
+                "error": {
+                    "code": "manifest_invalid",
+                    "message": "Enrollment manifest failed validation: SYNC_TARGET_INVALID",
+                }
+            }
+
+    monkeypatch.setattr(
+        registration,
+        "_post_enrollment_request",
+        lambda *args, **kwargs: FakeResponse(),
+    )
+
+    exit_code = registration.main(
+        [
+            "--hostname",
+            "PC-REJECTED",
+            "--self-enroll",
+            "--endpoint-url",
+            "https://worker.example.invalid/api/producer-ingest/v1/source-file",
+            "--report-path",
+            str(report_path),
+        ]
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert exit_code == 2
+    assert report["blocked_reason"].endswith(
+        "manifest_invalid: Enrollment manifest failed validation: SYNC_TARGET_INVALID"
+    )
+
+
 def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-preserve-profile.json"
     captured = {}

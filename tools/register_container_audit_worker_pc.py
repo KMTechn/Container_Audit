@@ -1813,8 +1813,9 @@ def _self_enroll(
                 f"self-enroll response is not an object: HTTP {response.status_code}"
             )
         if response.status_code >= 400:
+            error = response_payload.get("error") or {}
             code = str(
-                (response_payload.get("error") or {}).get("code")
+                error.get("code")
                 or response.status_code
             )
             if code in {
@@ -1832,7 +1833,9 @@ def _self_enroll(
                         "fingerprint": possession_descriptor.fingerprint,
                     },
                 )
-            raise DirectSyncPushError(f"self-enroll failed: {code}")
+            message = str(error.get("message") or "").strip()
+            detail = f": {message}" if message else ""
+            raise DirectSyncPushError(f"self-enroll failed: {code}{detail}")
         response_possession = response_payload.get("possession_key")
         if (
             response_payload.get("contract_version")
