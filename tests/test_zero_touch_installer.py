@@ -281,6 +281,15 @@ def test_placement_writer_fence_release_imports_helper_in_script_scope():
     assert enter < script_scope_import < guarded_body < release
 
 
+def test_installed_manifest_metrics_exclude_generated_integrity_record():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    installed_start = text.index("function InstalledManifest")
+    installed_end = text.index("\nfunction Snapshot", installed_start)
+    installed_manifest = text[installed_start:installed_end]
+
+    assert "bootstrap-integrity.json" in installed_manifest
+
+
 def test_bootstrap_powershell_parses():
     for script in (INSTALLER, PORTABLE_INSTALLER, INTEGRITY_HELPER):
         escaped = str(script).replace("'", "''")

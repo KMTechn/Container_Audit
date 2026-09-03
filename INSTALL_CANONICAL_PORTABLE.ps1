@@ -325,7 +325,10 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
     }
     $filesBeforeManifest = @(
         Get-ChildItem -LiteralPath $Root -File -Force -Recurse |
-            Where-Object { -not (Same $_.FullName $path) }
+            Where-Object {
+                -not (Same $_.FullName $path) -and
+                -not (Same $_.FullName (Join-Path $Root 'bootstrap-integrity.json'))
+            }
     )
     $bytesBeforeManifest = [int64](
         ($filesBeforeManifest | Measure-Object -Property Length -Sum).Sum
