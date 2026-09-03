@@ -3905,17 +3905,17 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1116,
+      "line": 1115,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1128,
+          "line": 1127,
           "operation": "secret_path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 1136,
+          "line": 1135,
           "operation": "secret_path.write_bytes",
           "writer_admission_sources": []
         }
@@ -3953,11 +3953,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1247,
+      "line": 1246,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 1260,
+          "line": 1259,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -3994,11 +3994,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 1577,
+      "line": 1576,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1688,
+          "line": 1687,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -4035,11 +4035,11 @@
       ],
       "file": "tools/register_container_audit_worker_pc.py",
       "kind": "function",
-      "line": 2853,
+      "line": 2852,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3117,
+          "line": 3116,
           "operation": "recovery_secret_path.unlink",
           "writer_admission_sources": []
         }
@@ -5767,7 +5767,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "6b0b7ce3d904ce181d1e11c459cc1ae4b1c69af88d91b85b0854c1fcd377bd7d",
+  "inventory_sha256": "97f145f95bb7a5e0ef96aeddeadfb10506d9f487dccf183c7ab3ac0950f1381d",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17030,7 +17030,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._post_enrollment_request",
-      "line": 1247,
+      "line": 1246,
       "marker_kind": "decorator",
       "source": "worker_enrollment_network"
     },
@@ -17038,7 +17038,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._finalize_server_registration",
-      "line": 1577,
+      "line": 1576,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
@@ -17046,7 +17046,7 @@
       "direct_mutation_site_count": 2,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc._write_dpapi_secret",
-      "line": 1116,
+      "line": 1115,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
@@ -17054,7 +17054,7 @@
       "direct_mutation_site_count": 1,
       "file": "tools/register_container_audit_worker_pc.py",
       "function": "tools.register_container_audit_worker_pc.main",
-      "line": 2853,
+      "line": 2852,
       "marker_kind": "decorator",
       "source": "worker_pc_registration"
     },
