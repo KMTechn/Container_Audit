@@ -110,7 +110,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $apiVersion = "2026-03-10"
-          $factoryContractSha256 = "afa1f0e1f4e16421116438fcf998899694186db4c668bfa7fdd7192ede3b3a9a"
+          $factoryContractSha256 = "c4f5d00b0fcfa22be2b8f284d9fd57c4b4979085f6030548111c835dd3ad7b7c"
           $releaseCommit = $env:RELEASE_TAG_COMMIT_SHA
           $releaseTree = (git rev-parse --verify "$releaseCommit^{tree}").Trim().ToLowerInvariant()
           $zipName = "Container_Audit-$env:RELEASE_TAG.zip"
@@ -367,7 +367,7 @@ jobs:
       - name: Verify immutable release self-consistency and embedded identities
         shell: pwsh
         env:
-          FACTORY_CONTRACT_SHA256: afa1f0e1f4e16421116438fcf998899694186db4c668bfa7fdd7192ede3b3a9a
+          FACTORY_CONTRACT_SHA256: c4f5d00b0fcfa22be2b8f284d9fd57c4b4979085f6030548111c835dd3ad7b7c
         run: |
           $ErrorActionPreference = "Stop"
           $releaseCommit = $env:RELEASE_TAG_COMMIT_SHA

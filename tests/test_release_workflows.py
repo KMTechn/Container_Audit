@@ -184,7 +184,7 @@ def test_release_verifier_is_bound_to_tag_source_and_factory_contract():
     contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
     builder = FROZEN_BUILDER.read_text(encoding="utf-8")
     expected_contract_sha256 = (
-        "afa1f0e1f4e16421116438fcf998899694186db4c668bfa7fdd7192ede3b3a9a"
+        "c4f5d00b0fcfa22be2b8f284d9fd57c4b4979085f6030548111c835dd3ad7b7c"
     )
     contract_lock = json.loads((ROOT / "contract.lock.json").read_text(encoding="utf-8"))
     bundle_sha256 = (
