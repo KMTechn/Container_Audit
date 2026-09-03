@@ -422,6 +422,15 @@ def test_canonical_writer_release_retries_transient_admission_contention():
     assert "$attempt -ge 6" in text
 
 
+def test_canonical_writer_release_quiesces_delegated_relay_before_mutex_drain():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+
+    assert "function Stop-CanonicalDelegatedRelay" in text
+    assert "function Start-CanonicalRelayAfterFenceRelease" in text
+    assert text.count("Stop-CanonicalDelegatedRelay $pidValue") == 2
+    assert text.count("$pidValue = Start-CanonicalRelayAfterFenceRelease") == 2
+
+
 def test_bootstrap_task_query_failure_stops_without_task_mutation():
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(INSTALLER)

@@ -530,8 +530,10 @@ function Invoke-CanonicalWriterFenceReleaseStep([scriptblock]$Action) {
         try { return & $Action }
         catch {
             if (
-                $_.Exception.Message -cne 'CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT' -or
-                $attempt -ge 6
+                $_.Exception.Message -cnotin @(
+                    'CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT',
+                    'CONTAINER_WRITER_ADMISSION_MUTEX_ABANDONED'
+                ) -or $attempt -ge 6
             ) { throw }
             Start-Sleep -Milliseconds 500
         }
@@ -563,6 +565,32 @@ function Relays {
         [string]$_.CommandLine -like '*--container-audit-user-relay*' -and
         [string]$_.ExecutablePath -match '(?i)(pythonw?\.exe|Container_Audit\.exe)$'
     })
+}
+function Stop-CanonicalDelegatedRelay([int]$ProcessId) {
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    if (
+        $null -eq $process -or
+        -not (Same ([string]$process.ExecutablePath) (Join-Path $install 'runtime\pythonw.exe')) -or
+        [string]$process.CommandLine -notlike '*--container-audit-user-relay*'
+    ) { throw 'Canonical delegated relay identity changed before writer fence release.' }
+    Stop-Process -Id $ProcessId -Force -ErrorAction Stop
+    $deadline = (Get-Date).AddSeconds(15)
+    do {
+        Start-Sleep -Milliseconds 200
+        $remaining = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+    } while ($null -ne $remaining -and (Get-Date) -lt $deadline)
+    if ($null -ne $remaining) { throw 'Canonical delegated relay quiescence timed out.' }
+}
+function Start-CanonicalRelayAfterFenceRelease {
+    $newPid = StartRaw $wanted
+    Start-Sleep -Seconds 3
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
+    if (
+        $null -eq $process -or
+        -not (Same ([string]$process.ExecutablePath) (Join-Path $install 'runtime\pythonw.exe')) -or
+        [string]$process.CommandLine -notlike '*--container-audit-user-relay*'
+    ) { throw 'Canonical relay restart after writer fence release failed.' }
+    return [int]$newPid
 }
 function Assert-RollbackRelayPreimage([object[]]$ExpectedRelays) {
     $actualRelays = @(Relays)
@@ -1448,6 +1476,7 @@ $enteredPlacementTry = $true
     if ($evidenceFull) { Save $evidenceFull $audit }
 
     if ($writerRestoreNeeded) {
+        Stop-CanonicalDelegatedRelay $pidValue
         $writerEnabled = Enable-CanonicalWriter $install $writerBefore
         $audit.scheduled_writer.restore_readback = $writerEnabled
         $audit.status='WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
@@ -1464,6 +1493,7 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
+        $pidValue = Start-CanonicalRelayAfterFenceRelease
         $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
         $audit.scheduled_writer.natural_trigger_proof = $writerRunning
         $audit.rollback.scheduled_writer_restored=$true
@@ -1475,6 +1505,7 @@ $enteredPlacementTry = $true
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
     if ($canonicalWriterFenceActive) {
+        Stop-CanonicalDelegatedRelay $pidValue
         $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
             -Path $productCompleteAuthorizationPath `
             -Phase 'PRODUCT_COMPLETE' `
@@ -1485,6 +1516,7 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
+        $pidValue = Start-CanonicalRelayAfterFenceRelease
     }
     "install_status=$terminalStatus"
     "install_root=$install"
