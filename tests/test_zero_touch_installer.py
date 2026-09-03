@@ -1441,6 +1441,123 @@ exit 0
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
+def test_portable_writer_snapshot_ignores_non_exec_scheduled_task_actions(tmp_path):
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    environment["LOCALAPPDATA"] = str(tmp_path / "local")
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+$functions = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -in @('Full','Get-CanonicalWriterSnapshot')
+}, $true))
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+if ($functions.Count -ne 2) { exit 11 }
+foreach ($function in $functions) { Invoke-Expression $function.Extent.Text }
+$script:CanonicalWriterTaskName = 'ContainerAuditDirectSync'
+$script:NoncanonicalQualificationTaskName = 'ContainerAuditQualification'
+$comAction = [pscustomobject]@{
+    CimClass = [pscustomobject]@{ CimClassName = 'MSFT_TaskComHandlerAction' }
+    ClassId = '{00000000-0000-0000-0000-000000000000}'
+}
+function Get-ScheduledTask {
+    return [pscustomobject]@{
+        TaskName = 'BuiltInComHandler'
+        TaskPath = '\Microsoft\Windows\Test\'
+        Actions = @($comAction)
+    }
+}
+$snapshot = Get-CanonicalWriterSnapshot 'C:\not-installed'
+if ([string]$snapshot.classification -cne 'CANONICAL_ABSENT_NONCANONICAL_DISABLED') {
+    exit 12
+}
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
+    source = _portable_release_fixture(tmp_path)
+    installer_path = source / "INSTALL_CANONICAL_PORTABLE.ps1"
+    installer = installer_path.read_text(encoding="utf-8")
+    marker = "$canonicalWriterFenceActive = $true\n"
+    assert installer.count(marker) >= 1
+    installer = installer.replace(
+        marker,
+        marker + "throw 'TEST_INJECTED_PREFLIGHT_FAILURE'\n",
+        1,
+    )
+    installer_path.write_text(installer, encoding="utf-8")
+    manifest_path = source / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["installer_sha256"] = hashlib.sha256(installer_path.read_bytes()).hexdigest()
+    files = [
+        path
+        for path in source.rglob("*")
+        if path.is_file()
+        and path != manifest_path
+        and path.name != "bootstrap-integrity.json"
+    ]
+    manifest["file_count_before_manifest"] = len(files)
+    manifest["byte_count_before_manifest"] = sum(path.stat().st_size for path in files)
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=True), encoding="utf-8")
+
+    local_app_data = tmp_path / "local"
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    environment["LOCALAPPDATA"] = str(local_app_data)
+    completed = subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(installer_path),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(tmp_path / "apps" / "current"),
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "TEST_INJECTED_PREFLIGHT_FAILURE" in (completed.stderr + completed.stdout)
+    control_root = (
+        local_app_data / "KMTech" / "DirectSync" / "container_audit" / "control" / "writer-session"
+    )
+    assert not (control_root / "active.json").exists()
+    audit_root = local_app_data / "KMTech" / "ContainerAudit" / "install-audit"
+    assert not list(audit_root.glob("canonical-portable-*-writer-prepared.json"))
+
+
 def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
     tmp_path,
 ):

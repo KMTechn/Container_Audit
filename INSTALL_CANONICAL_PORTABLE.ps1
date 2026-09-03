@@ -814,8 +814,14 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
     $allTasks = @(Get-ScheduledTask -ErrorAction Stop)
     foreach ($candidate in $allTasks) {
         $actions = @($candidate.Actions)
-        $arguments = if ($actions.Count -eq 1) { [string]$actions[0].Arguments } else { '' }
-        $execute = if ($actions.Count -eq 1) { [string]$actions[0].Execute } else { '' }
+        $arguments = if (
+            $actions.Count -eq 1 -and
+            $null -ne $actions[0].PSObject.Properties['Arguments']
+        ) { [string]$actions[0].Arguments } else { '' }
+        $execute = if (
+            $actions.Count -eq 1 -and
+            $null -ne $actions[0].PSObject.Properties['Execute']
+        ) { [string]$actions[0].Execute } else { '' }
         $owned = (
             [string]$candidate.TaskName -ceq $CanonicalWriterTaskName -or
             [string]$candidate.TaskName -ceq $NoncanonicalQualificationTaskName -or
@@ -1504,6 +1510,12 @@ catch {
                 $canonicalWriterFenceActive = $false
             }
             catch { throw "CANONICAL_WRITER_FENCE_EARLY_ABORT_FAILED: $($_.Exception.GetType().Name)" }
+        }
+        if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
+            Remove-Item -LiteralPath $canonicalWriterFencePreparedPath -Force
+            if (Test-Path -LiteralPath $canonicalWriterFencePreparedPath) {
+                throw 'CANONICAL_WRITER_FENCE_EARLY_RECEIPT_CLEANUP_FAILED'
+            }
         }
         throw $original
     }
