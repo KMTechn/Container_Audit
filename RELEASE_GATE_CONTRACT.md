@@ -42,6 +42,23 @@ An existing complete and matching state is reused. Partial, conflicting, or
 unreadable state is `RECOVERY_REQUIRED`; a missing result or exit code is
 `UNKNOWN` and must never be converted to success.
 
+Removal and in-run installation rollback restore local code/autostart/relay
+state while preserving user business data and reusable local credentials and
+the possession key. Server enrollment, audit and credential-generation history
+remain. A same-PC retry reuses a complete verified bundle without HTTP; a lost
+enrollment acknowledgement or failed secret finalization with the same key
+continues through the existing v2 possession reattach protocol. Reimaging or key
+loss requires the existing audited administrator recovery route. Server
+`retire-credential` is permanent decommissioning, never installation retry or
+rollback compensation.
+
+Portable replacement may quiesce a verified installed runtime using that tree's
+inventory identity, then activate the candidate under its own identity. This
+compatibility is limited to unchanged writer identities, guards and delegated
+sources under the existing fence/authority contract; caller counts and source
+positions may differ. Both complete trees must pass their existing integrity checks. Other
+inventory transitions fail before runtime or scheduled-writer mutation.
+
 The current-user state roots are:
 
 - `%LOCALAPPDATA%\KMTech\ContainerAudit` for business state and the ledger;

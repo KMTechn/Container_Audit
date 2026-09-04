@@ -279,9 +279,26 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
         "call_operator": 19,
         "com_wmi_process_create": 1,
-        "dot_source": 7,
+        "dot_source": 8,
         "start_process": 3,
     }
+    bootstrap_loads = [
+        row for row in payload["powershell_execution_inventory"]["execution_sites"]
+        if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
+        and row["kind"] == "dot_source"
+        and row["target"] == "$BootstrapIntegrityFunctions"
+    ]
+    assert len(bootstrap_loads) == 1
+    assert bootstrap_loads[0]["guarded"] is True
+    assert bootstrap_loads[0]["guard_name"] == "byte_pinned_function_library"
+    installer = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8")
+    assert (
+        installer.index("$sourceManifest = Manifest")
+        < installer.index("$BootstrapIntegrityFunctions = Join-Path $source 'tools\\bootstrap_integrity.ps1'")
+        < installer.index(". $BootstrapIntegrityFunctions")
+        < installer.index("[void](Assert-BootstrapIntegrityRecord $install)")
+        < installer.index("[void](Start-ContainerWriterFence")
+    )
     raster_write = next(
         row
         for row in payload["closure_direct_mutation_functions"]

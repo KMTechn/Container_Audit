@@ -524,6 +524,8 @@ $script:productCalls = 0
 $script:restoreCalls = 0
 $script:startCalls = 0
 $script:saveCalls = 0
+$script:syncCalls = 0
+function Sync-CanonicalWriterFenceInventory { $script:syncCalls += 1 }
 function Product {
     param($Root, $Mode)
     $script:productCalls += 1
@@ -550,6 +552,7 @@ try { throw [ApplicationException]::new('original failure') }
 catch { $original = $_ }
 Invoke-Expression $candidates[0].Extent.Text
 if ($script:productCalls -ne 1) { exit 22 }
+if ($script:syncCalls -ne 1) { exit 28 }
 if ($script:restoreCalls -ne 0 -or $script:startCalls -ne 0) { exit 23 }
 if ([bool]$audit.rollback.runtime_restored) { exit 24 }
 if ([string]$audit.status -cne 'AUTOSTART_ROLLBACK_FAILED') { exit 25 }
@@ -1539,6 +1542,21 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     source = _portable_release_fixture(tmp_path)
     installer_path = source / "INSTALL_CANONICAL_PORTABLE.ps1"
     installer = installer_path.read_text(encoding="utf-8")
+    # The preimage is now captured before activating the fence. Model a fresh
+    # target explicitly instead of reading this test runner's real HKCU state.
+    installer = installer.replace(
+        "$before = Snapshot\n",
+        "function Snapshot { return [ordered]@{exists=$false;kind='';data=''} }\n"
+        "function Relays { return @() }\n$before = Snapshot\n",
+        1,
+    )
+    installer = installer.replace(
+        "$canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority",
+        "$Script:ContainerWriterFenceAdmissionMutexName = 'Local\\KMTech.CA.Test."
+        + hashlib.sha256(str(tmp_path).encode()).hexdigest()[:16]
+        + "'\n$canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority",
+        1,
+    )
     marker = "$canonicalWriterFenceActive = $true\n"
     assert installer.count(marker) >= 1
     installer = installer.replace(

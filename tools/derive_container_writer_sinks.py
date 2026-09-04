@@ -62,7 +62,9 @@ POWERSHELL_NON_PRODUCTION_FUNCTION_MODES: dict[Path, dict[str, str]] = {
     },
 }
 POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
-    Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset({"$writerFenceHelperPath"}),
+    Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset(
+        {"$writerFenceHelperPath", "$BootstrapIntegrityFunctions"}
+    ),
     Path("INSTALL_THIS_PC.ps1"): frozenset(
         {"$BootstrapIntegrityFunctions", "$writerFenceHelperFull", "$writerFenceHelperPath"}
     ),

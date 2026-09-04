@@ -374,6 +374,42 @@ function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
     }
     return $value
 }
+function Get-WriterInventorySemantics($Inventory) {
+    # Compare the actual writers and guards. Caller counts and positions are
+    # generator evidence, not a new delegated writer or wire contract.
+    $membership = [ordered]@{
+        schema_version=$Inventory.schema_version
+        writer_sink_sources=$Inventory.writer_sink_sources
+        writer_sinks=$Inventory.writer_sinks
+        powershell_writer_sinks=$Inventory.powershell_writer_sinks
+        known_route_coverage=$Inventory.known_route_coverage
+    }
+    $copy = $membership | ConvertTo-Json -Depth 40 | ConvertFrom-Json
+    function Remove-WriterInventoryPositions($Value) {
+        if ($Value -is [System.Management.Automation.PSCustomObject]) {
+            foreach ($property in @($Value.PSObject.Properties)) {
+                if ($property.Name -ceq 'inventory_sha256' -or $property.Name -cmatch '(^|_)line$') {
+                    $Value.PSObject.Properties.Remove($property.Name)
+                } else { Remove-WriterInventoryPositions $property.Value }
+            }
+        } elseif ($Value -is [array]) {
+            foreach ($item in $Value) { Remove-WriterInventoryPositions $item }
+        }
+    }
+    Remove-WriterInventoryPositions $copy
+    return ($copy | ConvertTo-Json -Depth 40 -Compress)
+}
+function Sync-CanonicalWriterFenceInventory([string]$InventorySha256) {
+    $active = Read-ContainerWriterFence
+    if ([string]$active.writer_inventory_sha256 -ceq $InventorySha256) { return }
+    [void](Set-ContainerWriterFenceInventory `
+        -SessionId $Script:CanonicalWriterFenceSessionId `
+        -AttemptId $Script:CanonicalWriterFenceAttemptId `
+        -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+        -WriterInventorySha256 $InventorySha256 `
+        -AuthorityLease $canonicalWriterFenceAuthority)
+    $audit.code_replacement.writer_inventory_transitions += $InventorySha256
+}
 function Snapshot {
     $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($RunKey, $false)
     if ($null -eq $key) { return [ordered]@{exists=$false;kind='';data=''} }
@@ -1198,6 +1234,21 @@ if ($PlanOnly) {
 }
 
 $winps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+$BootstrapIntegrityFunctions = Join-Path $source 'tools\bootstrap_integrity.ps1'
+. $BootstrapIntegrityFunctions
+# Reject incompatible/damaged installed trees before creating a fence that can
+# stop a resident relay. Repeat the existing integrity readback under the fence.
+if (Test-Path -LiteralPath $install -PathType Container) {
+    $preflightCandidate = InstalledManifest $install $SkipSignatureValidationForTest
+    [void](Assert-BootstrapIntegrityRecord $install)
+    $preflightInventory = Assert-WriterSinkInventory `
+        (Join-Path $install 'tools\container_writer_sink_inventory.json') `
+        ([string]$preflightCandidate.writer_sink_inventory_sha256) `
+        ([string]$preflightCandidate.writer_sink_inventory_contract_sha256)
+    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+        throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
+    }
+}
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $statusRoot = Join-Path $lad 'KMTech\DirectSync\container_audit\status'
 $stop = Join-Path $lad 'KMTech\DirectSync\container_audit\control\container_audit_user_relay.stop.json'
@@ -1241,6 +1292,18 @@ $canonicalWriterFenceLastReleaseAuthorizationSha256 = ''
 $canonicalWriterFencePreparedReceipt = $null
 $enteredPlacementTry = $false
 $canonicalWriterFenceDelegatedSources = [Object[]]@($sourceWriterInventory.writer_sink_sources)
+$before = Snapshot
+$old = @(Relays)
+$runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
+    -Before $before `
+    -Processes $old `
+    -ExpectedCommand $wanted `
+    -ExpectedRoot $install `
+    -StopMarkerExists (Test-Path -LiteralPath $stop)
+$writerBefore = if ($testMode) {
+    [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
+}
+else { Get-CanonicalWriterPreimageForQuiesce $install }
 try {
 $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -1277,18 +1340,6 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $Script:CanonicalWriterFenceSessionId, 'Process')
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID', $Script:CanonicalWriterFenceAttemptId, 'Process')
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
-$before = Snapshot
-$old = @(Relays)
-$runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
-    -Before $before `
-    -Processes $old `
-    -ExpectedCommand $wanted `
-    -ExpectedRoot $install `
-    -StopMarkerExists (Test-Path -LiteralPath $stop)
-$writerBefore = if ($testMode) {
-    [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
-}
-else { Get-CanonicalWriterPreimageForQuiesce $install }
 $audit = [ordered]@{
     schema='container-audit-canonical-portable-install-v2'
     status='PREIMAGE_SAVED'
@@ -1336,23 +1387,17 @@ $audit = [ordered]@{
 Save $auditPath $audit
 if ($evidenceFull) { Save $evidenceFull $audit }
 
-$mutated = $false
+$mutated = ($old.Count -gt 0)
 $writerRestoreNeeded = [bool]$writerBefore.restore_required
 $runtimeQuiescedForReplacement = $false
 $codeRestoreNeeded = $false
 $replacementReceipt = $null
 $replacementReceiptSha256 = ''
+$installedInventorySha256 = $Script:ContainerWriterFenceInventorySha256
+$currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
+$audit.code_replacement.writer_inventory_transitions = @()
+$audit.code_replacement.candidate_writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
 $enteredPlacementTry = $true
-    if ($writerRestoreNeeded) {
-        $writerDisabled = Disable-CanonicalWriter $install $writerBefore
-        $audit.scheduled_writer.disable_readback = $writerDisabled
-        Save $auditPath $audit
-        if ($evidenceFull) { Save $evidenceFull $audit }
-        $writerStopped = Confirm-CanonicalWriterStopped $install $writerBefore $writerDisabled
-        $audit.scheduled_writer.stop_proof = $writerStopped
-        Save $auditPath $audit
-        if ($evidenceFull) { Save $evidenceFull $audit }
-    }
 
     $placement = 'INSTALL_REQUIRED'
     $existingVerified = $false
@@ -1363,6 +1408,18 @@ $enteredPlacementTry = $true
             $escapedRoot = $install.Replace("'","''")
             & $winps -NoLogo -NoProfile -NonInteractive -Command ". '$helper'; [void](Assert-BootstrapIntegrityRecord '$escapedRoot')"
             if ($LASTEXITCODE -ne 0) { throw 'integrity differs' }
+            $installedInventory = Assert-WriterSinkInventory `
+                (Join-Path $install 'tools\container_writer_sink_inventory.json') `
+                ([string]$candidate.writer_sink_inventory_sha256) `
+                ([string]$candidate.writer_sink_inventory_contract_sha256)
+            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+                throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
+            }
+            $installedInventorySha256 = [string]$candidate.writer_sink_inventory_contract_sha256
+            $currentTreeInventorySha256 = $installedInventorySha256
+            $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $installedInventorySha256
+            $audit.code_replacement.installed_writer_inventory_sha256 = $installedInventorySha256
+            $audit.code_replacement.writer_semantics_identical = $true
             $existingVerified = $true
             $audit.code_replacement.prestate='VERIFIED_REPLACE'
             if (
@@ -1374,6 +1431,9 @@ $enteredPlacementTry = $true
         catch {
             $audit.code_replacement.prestate='UNKNOWN_OR_DAMAGED'
             $audit.code_replacement.prestate_failure_type=$_.Exception.GetType().Name
+            if ($_.Exception.Message -ceq 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER') {
+                $audit.code_replacement.prestate_failure_code='CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
+            }
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
         }
@@ -1381,9 +1441,20 @@ $enteredPlacementTry = $true
             throw 'CODE_PRESTATE_NOT_VERIFIED_REPLACE'
         }
     }
+    if ($writerRestoreNeeded) {
+        $writerDisabled = Disable-CanonicalWriter $install $writerBefore
+        $audit.scheduled_writer.disable_readback = $writerDisabled
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        $writerStopped = Confirm-CanonicalWriterStopped $install $writerBefore $writerDisabled
+        $audit.scheduled_writer.stop_proof = $writerStopped
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+    }
     if ($placement -eq 'INSTALL_REQUIRED') {
         $replaceExisting = Test-Path -LiteralPath $install -PathType Container
         if ($replaceExisting) {
+            Sync-CanonicalWriterFenceInventory $installedInventorySha256
             $mutated = $true
             Product $install '--remove-current-user-setup'
             $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1398,6 +1469,7 @@ $enteredPlacementTry = $true
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
         }
+        Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
         $bootstrap = @(
             '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
@@ -1422,6 +1494,7 @@ $enteredPlacementTry = $true
         $bootstrapOutput = @(& $winps @bootstrap)
         $bootstrapExitCode = $LASTEXITCODE
         if ($bootstrapExitCode -ne 0) { throw "Code placement failed: $bootstrapExitCode" }
+        $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
         if ($replaceExisting) {
             $replacementReceiptSha256 = Sha $replacementReceiptPath
             $replacementReceipt = ReadReplacementReceipt `
@@ -1598,6 +1671,13 @@ catch {
                 throw 'CANONICAL_WRITER_FENCE_EARLY_RECEIPT_CLEANUP_FAILED'
             }
         }
+        if ($earlyFenceMatches -and $old.Count -gt 0) {
+            if (@(Relays).Count -eq 0) {
+                foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
+                Start-Sleep -Seconds 3
+            }
+            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+        }
         throw $original
     }
     if (-not $canonicalWriterFenceActive) {
@@ -1635,6 +1715,7 @@ catch {
     $codeRollbackFailure=''
     if ($codeRestoreNeeded) {
         try {
+            Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
             Product $install '--remove-current-user-setup'
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
                 throw 'Replacement rollback runtime quiescence failed.'
@@ -1660,6 +1741,7 @@ catch {
             $restoreOutput = @(& $winps @restoreBootstrap)
             $restoreExitCode = $LASTEXITCODE
             if ($restoreExitCode -ne 0) { throw "Code restore failed: $restoreExitCode" }
+            $currentTreeInventorySha256 = $installedInventorySha256
             $restoreEvidence = ReadReplacementRestoreEvidence `
                 -Path $replacementRestoreEvidencePath `
                 -ExpectedTransactionId $replacementTransactionId `
@@ -1687,26 +1769,18 @@ catch {
     $audit.rollback.runtime_restored = (-not $mutated)
     try {
         if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
+            Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
             Product $install '--remove-current-user-setup'
             [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
             Restore $before
             if (Test-Path $stop) { Remove-Item $stop -Force }
-            foreach ($item in $old) {
-                $newPid = StartRaw ([string]$item.CommandLine)
-                Start-Sleep -Seconds 3
-                $p = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
-                if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
-                    throw 'runtime restore failed'
-                }
-            }
-            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
             $check = Snapshot
             if (
                 [bool]$check.exists -ne [bool]$before.exists -or
                 [string]$check.kind -cne [string]$before.kind -or
                 [string]$check.data -cne [string]$before.data
             ) { throw 'registry restore failed' }
-            $audit.rollback.runtime_restored = $true
+            $audit.rollback.runtime_restored = ($old.Count -eq 0)
         }
     }
     catch {
@@ -1780,7 +1854,7 @@ catch {
     if (-not [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
         throw "CODE_ROLLBACK_FAILED: $codeRollbackFailure"
     }
-    $audit.status='FAILED_ROLLED_BACK'
+    $audit.status='ROLLBACK_AWAITING_FENCE_RELEASE'
     $audit.failure_type=$original.Exception.GetType().Name
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
@@ -1796,9 +1870,36 @@ catch {
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
     }
+    # Win32_Process.Create does not inherit this process's delegation. Restore
+    # the old relay only after releasing the fence, as on the success path.
+    try {
+        if ($mutated) {
+            foreach ($item in $old) {
+                $newPid = StartRaw ([string]$item.CommandLine)
+                Start-Sleep -Seconds 3
+                $p = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
+                if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
+                    throw 'runtime restore failed'
+                }
+            }
+            [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+            $audit.rollback.runtime_restored = $true
+        }
+    }
+    catch {
+        $audit.status='AUTOSTART_ROLLBACK_FAILED'
+        $audit.rollback.runtime_restored=$false
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        throw "AUTOSTART_ROLLBACK_FAILED: $($_.Exception.GetType().Name)"
+    }
+    $audit.status='FAILED_ROLLED_BACK'
+    Save $auditPath $audit
+    if ($evidenceFull) { Save $evidenceFull $audit }
     throw $original
 }
 finally {
+    $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
     foreach ($name in $canonicalWriterFenceEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')
     }

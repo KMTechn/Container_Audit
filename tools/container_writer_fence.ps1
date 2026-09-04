@@ -6,7 +6,8 @@ $Script:ContainerWriterFenceAppId = 'container_audit'
 $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-authority-v1'
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
-$Script:ContainerWriterFenceInventorySha256 = '8c6cb022606e687be4cdf035d86dd29126bd19ca6b88caf5765471e8c3477de1'
+$Script:ContainerWriterFenceInventorySha256 = '54f732f1683f3934f850a6b4182d90752833661faf8c8018ddbc8a4fe11d0bea'
+$Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
     'schema','status','app_id','session_id','attempt_id','replacement_transaction_id',
@@ -21,6 +22,17 @@ $Script:ContainerWriterFenceReleaseFields = @(
     'writer_inventory_sha256','release_authorization_path',
     'release_authorization_sha256','released_at_utc','secret_values_recorded'
 )
+
+function Test-ContainerWriterFenceInventoryAccepted([string]$Value) {
+    return (
+        (Test-ContainerWriterFenceHex $Value 64) -and (
+            $Value -ceq $Script:ContainerWriterFenceInventorySha256 -or (
+                -not [string]::IsNullOrEmpty($Script:ContainerWriterFenceAcceptedInstalledInventorySha256) -and
+                $Value -ceq $Script:ContainerWriterFenceAcceptedInstalledInventorySha256
+            )
+        )
+    )
+}
 
 function Get-ContainerWriterFenceStringSha256([string]$Value) {
     $algorithm = [Security.Cryptography.SHA256]::Create()
@@ -270,7 +282,7 @@ function Assert-ContainerWriterFencePayload($Payload) {
         -not (Test-ContainerWriterFenceHex ([string]$Payload.replacement_transaction_id) 32) -or
         -not (Test-ContainerWriterFenceHex ([string]$Payload.orchestrator_sha256) 64) -or
         -not (Test-ContainerWriterFenceHex ([string]$Payload.writer_contract_sha256) 64) -or
-        [string]$Payload.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        -not (Test-ContainerWriterFenceInventoryAccepted ([string]$Payload.writer_inventory_sha256)) -or
         $Payload.secret_values_recorded -isnot [bool] -or [bool]$Payload.secret_values_recorded -or
         $Payload.delegated_sources -isnot [Object[]] -or
         @($Payload.delegated_sources | Where-Object { $_ -isnot [string] }).Count -ne 0
@@ -380,7 +392,7 @@ function Read-ContainerWriterFenceReleaseReceipt([string]$PathValue) {
         -not (Test-ContainerWriterFenceHex ([string]$payload.session_id) 32) -or
         -not (Test-ContainerWriterFenceHex ([string]$payload.attempt_id) 32) -or
         -not (Test-ContainerWriterFenceHex ([string]$payload.replacement_transaction_id) 32) -or
-        [string]$payload.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+        -not (Test-ContainerWriterFenceInventoryAccepted ([string]$payload.writer_inventory_sha256)) -or
         [string]::IsNullOrWhiteSpace([string]$payload.release_authorization_path) -or
         -not (Test-ContainerWriterFenceHex ([string]$payload.release_authorization_sha256) 64) -or
         $payload.secret_values_recorded -isnot [bool] -or
@@ -530,6 +542,32 @@ function Start-ContainerWriterFence {
             -DelegationExpiresAtUtc $DelegationExpiresAtUtc
         Assert-ContainerWriterSessionAuthority $payload $AuthorityLease
         return Write-ContainerWriterFenceAtomic $ControlRoot $payload
+    }
+    finally { Exit-ContainerWriterAdmission $lease }
+}
+
+function Set-ContainerWriterFenceInventory {
+    param(
+        [string]$ControlRoot = '',
+        [string]$SessionId,
+        [string]$AttemptId,
+        [string]$ReplacementTransactionId,
+        [string]$WriterInventorySha256,
+        $AuthorityLease = $null
+    )
+    $lease = Enter-ContainerWriterAdmission $ControlRoot
+    try {
+        $active = Read-ContainerWriterFence $ControlRoot
+        Assert-ContainerWriterSessionAuthority $active $AuthorityLease
+        if (
+            [string]$active.owner_kind -cne 'canonical_installer' -or
+            [string]$active.session_id -cne $SessionId -or
+            [string]$active.attempt_id -cne $AttemptId -or
+            [string]$active.replacement_transaction_id -cne $ReplacementTransactionId -or
+            -not (Test-ContainerWriterFenceInventoryAccepted $WriterInventorySha256)
+        ) { throw 'CONTAINER_WRITER_FENCE_INVENTORY_TRANSITION_INVALID' }
+        $active.writer_inventory_sha256 = $WriterInventorySha256
+        return Write-ContainerWriterFenceAtomic $ControlRoot $active
     }
     finally { Exit-ContainerWriterAdmission $lease }
 }
@@ -984,7 +1022,7 @@ function Stop-ContainerWriterFence {
                 session_id = $SessionId
                 attempt_id = $AttemptId
                 replacement_transaction_id = $ReplacementTransactionId
-                writer_inventory_sha256 = $Script:ContainerWriterFenceInventorySha256
+                writer_inventory_sha256 = [string]$active.writer_inventory_sha256
                 release_authorization_path = $authorizationFull
                 release_authorization_sha256 = $ReleaseAuthorizationSha256
                 released_at_utc = [DateTime]::UtcNow.ToString('o')
