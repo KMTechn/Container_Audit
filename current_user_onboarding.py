@@ -1145,6 +1145,7 @@ def inspect_current_user_state(
         "producer_install_id": required_identity["producer_install_id"],
         "manifest_hash": expected_manifest_hash,
         "possession_key": possession_key,
+        "base_url": str(getattr(resolved_profile, "base_url", "") or ""),
         "tls_private_ca_configured": bool(
             getattr(resolved_profile, "tls_ca_bundle_path", "")
         ),

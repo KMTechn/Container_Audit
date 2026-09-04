@@ -3,6 +3,7 @@ param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$EvidencePath = "",
+    [string]$ServerBaseUrl = "",
     [switch]$PlanOnly,
     [switch]$AllowNoncanonicalLayoutForTest,
     [switch]$SkipSignatureValidationForTest
@@ -23,6 +24,24 @@ $testMode = $AllowNoncanonicalLayoutForTest -and
 if ($SkipSignatureValidationForTest -and -not $testMode) {
     throw 'Signature bypass is test-only.'
 }
+$onboardingServerBaseUrl = ''
+$onboardingServerBaseUri = $null
+if (-not [string]::IsNullOrEmpty($ServerBaseUrl)) {
+    if (
+        $ServerBaseUrl -match '[\s"\\]' -or
+        -not [Uri]::TryCreate($ServerBaseUrl, [UriKind]::Absolute, [ref]$onboardingServerBaseUri) -or
+        $onboardingServerBaseUri.Scheme -cne 'https' -or
+        [string]::IsNullOrEmpty($onboardingServerBaseUri.Host) -or
+        $onboardingServerBaseUri.IsLoopback -or
+        $onboardingServerBaseUri.Port -lt 1 -or
+        $onboardingServerBaseUri.UserInfo -cne '' -or
+        $onboardingServerBaseUri.Query -cne '' -or
+        $onboardingServerBaseUri.Fragment -cne '' -or
+        $onboardingServerBaseUri.AbsolutePath -cnotin @('', '/')
+    ) { throw 'ServerBaseUrl must be a credential-free HTTPS origin without path, query, or fragment.' }
+    $onboardingServerBaseUrl = $ServerBaseUrl.TrimEnd('/')
+}
+$onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServerBaseUrl } else { 'PRODUCT_DEFAULT' }
 
 function Full([string]$Value, [string]$Purpose) {
     if (-not [IO.Path]::IsPathRooted($Value) -or $Value.StartsWith('\\?\')) {
@@ -647,6 +666,9 @@ function Assert-CanonicalRuntimePreimage(
 function Product([string]$Root,[string]$Mode) {
     $args = '-I -B {0} {1} --app-root {2}' -f
         (Arg (Join-Path $Root 'app\main.py')),$Mode,(Arg (Join-Path $Root 'app'))
+    if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
+        $args += ' --server-base-url ' + (Arg $onboardingServerBaseUrl)
+    }
     $process = Start-Process (Join-Path $Root 'runtime\pythonw.exe') -ArgumentList $args -WindowStyle Hidden -PassThru
     # Start-Process -Wait includes the persistent relay child; this waits only for the host.
     $process.WaitForExit()
@@ -1168,6 +1190,7 @@ if ($PlanOnly) {
     "install_status=PLAN_ONLY"
     "install_root=$install"
     "autostart_command=$wanted"
+    "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
     'replacement_prestate_required=VERIFIED_REPLACE'
     'replacement_restore_status=AVAILABLE_RECEIPT_BOUND'
     'registry_changed=false'
@@ -1451,6 +1474,15 @@ $enteredPlacementTry = $true
     $after = Snapshot
     if ([string]$onboarding.status -cne 'READY' -or [string]$onboarding.relay_autostart.command -cne $wanted -or
         -not $after.exists -or [string]$after.data -cne $wanted) { throw 'Onboarding Run readback failed.' }
+    if ($onboardingServerBaseUrl) {
+        $boundServerBaseUri = $null
+        if (
+            -not [Uri]::TryCreate([string]$onboarding.state_readback.base_url, [UriKind]::Absolute, [ref]$boundServerBaseUri) -or
+            $boundServerBaseUri.Scheme -cne 'https' -or
+            $boundServerBaseUri.Host -ine $onboardingServerBaseUri.Host -or
+            $boundServerBaseUri.Port -ne $onboardingServerBaseUri.Port
+        ) { throw 'Onboarding server endpoint readback failed.' }
+    }
     if (-not (Test-JsonPositiveInt32 $onboarding.relay_start.process_id)) {
         throw 'Onboarding relay process id type/readback failed.'
     }
@@ -1470,7 +1502,7 @@ $enteredPlacementTry = $true
     if($null-eq$relay -or -not (Test-JsonTrue $relay.persistent_retry)){throw 'Fresh relay status proof failed.'}
     $audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } else { 'PRODUCT_PHASE_PASS' }
     $audit.stop_marker_absent=-not(Test-Path $stop)
-    $audit.onboarding=[ordered]@{status=[string]$onboarding.status;action=[string]$onboarding.action;autostart_writer='product_onboarding'}
+    $audit.onboarding=[ordered]@{status=[string]$onboarding.status;action=[string]$onboarding.action;autostart_writer='product_onboarding';server_base_url=$onboardingServerBaseUrlLabel;bound_server_base_url=[string]$onboarding.state_readback.base_url}
     $audit.exact_launch=[ordered]@{status='PROVEN';process_id=$pidValue;executable=[string]$process.ExecutablePath;relay_status=[string]$relay.status;persistent_retry=$relay.persistent_retry}
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
@@ -1523,6 +1555,7 @@ $enteredPlacementTry = $true
     "code_placement_status=$placement"
     'autostart_status=PROVEN_NON_REBOOT_APPROXIMATION'
     "autostart_command=$wanted"
+    "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
     "autostart_process_id=$pidValue"
     "stop_marker_absent=$($audit.stop_marker_absent.ToString().ToLowerInvariant())"
     if ($codeRestoreNeeded) {

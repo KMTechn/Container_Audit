@@ -2165,3 +2165,230 @@ def test_bootstrap_refuses_implicit_replacement_and_inverse_preserves_user_state
     assert "uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED" in removed.stdout
     assert not install.exists()
     assert user_state.read_bytes() == b"preserve-me"
+
+
+def test_portable_product_forwards_explicit_server_base_url_only_to_onboarding():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    parameter_index = text.index('[string]$ServerBaseUrl = "",')
+    validation_index = text.index(
+        "ServerBaseUrl must be a credential-free HTTPS origin without path, query, or fragment."
+    )
+    # The parameter is validated before the first helper is even defined, so an
+    # invalid endpoint never reaches the manifest, fence or PlanOnly stages.
+    assert parameter_index < validation_index < text.index("function Full(")
+    assert validation_index < text.index("if ($PlanOnly) {")
+    assert text.count("--server-base-url") == 1
+    assert "Product $install '--onboard-current-user'" in text
+    assert "Onboarding server endpoint readback failed" in text
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+foreach ($name in @('Arg','Product')) {
+    $functions = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+            $node.Name -ceq $name
+    }, $true))
+    if ($functions.Count -ne 1) { exit 11 }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$script:launches = @()
+function Start-Process {
+    param($FilePath, $ArgumentList, $WindowStyle, [switch]$PassThru)
+    $script:launches += [pscustomobject]@{
+        FilePath = [string]$FilePath
+        ArgumentList = [string]$ArgumentList
+    }
+    $process = [pscustomobject]@{ ExitCode = 0 }
+    $process | Add-Member -MemberType ScriptMethod -Name WaitForExit -Value { }
+    return $process
+}
+$root = 'C:\KMTech\Apps\Container_Audit\current'
+$onboardingServerBaseUrl = 'https://qualification.example.invalid:8443'
+Product $root '--onboard-current-user'
+Product $root '--remove-current-user-setup'
+$onboardingServerBaseUrl = ''
+Product $root '--onboard-current-user'
+Product $root '--remove-current-user-setup'
+if ($script:launches.Count -ne 4) { exit 12 }
+foreach ($launch in $script:launches) {
+    if ($launch.FilePath -cne 'C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe') { exit 13 }
+}
+$prefix = '-I -B C:\KMTech\Apps\Container_Audit\current\app\main.py '
+$appRoot = ' --app-root C:\KMTech\Apps\Container_Audit\current\app'
+$explicit = $prefix + '--onboard-current-user' + $appRoot + ' --server-base-url https://qualification.example.invalid:8443'
+if ($script:launches[0].ArgumentList -cne $explicit) { Write-Output $script:launches[0].ArgumentList; exit 14 }
+if ($script:launches[1].ArgumentList -cne ($prefix + '--remove-current-user-setup' + $appRoot)) { exit 15 }
+if ($script:launches[2].ArgumentList -cne ($prefix + '--onboard-current-user' + $appRoot)) { exit 16 }
+if ($script:launches[3].ArgumentList -cne ($prefix + '--remove-current-user-setup' + $appRoot)) { exit 17 }
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_portable_onboarding_endpoint_readback_fails_closed_on_foreign_or_missing_origin():
+    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
+    onboarding_index = text.index("Product $install '--onboard-current-user'")
+    run_readback_index = text.index(
+        "throw 'Onboarding Run readback failed.'", onboarding_index
+    )
+    endpoint_readback_index = text.index(
+        "throw 'Onboarding server endpoint readback failed.'", run_readback_index
+    )
+    relay_pid_index = text.index(
+        "throw 'Onboarding relay process id type/readback failed.'",
+        endpoint_readback_index,
+    )
+    assert onboarding_index < run_readback_index < endpoint_readback_index < relay_pid_index
+
+    environment = dict(os.environ)
+    environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
+    command = r"""
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH,
+    [ref]$tokens,
+    [ref]$errors
+)
+if ($errors.Count -ne 0) { exit 10 }
+$candidates = @($ast.FindAll({
+    param($node)
+    $node -is [Management.Automation.Language.IfStatementAst] -and
+        $node.Extent.Text.StartsWith('if ($onboardingServerBaseUrl) {') -and
+        $node.Extent.Text.Contains("throw 'Onboarding server endpoint readback failed.'")
+}, $true))
+if ($candidates.Count -ne 1) { exit 11 }
+$readback = $candidates[0].Extent.Text
+function Invoke-Readback([string]$Requested, $StateReadback) {
+    $onboardingServerBaseUrl = $Requested
+    $onboardingServerBaseUri = $null
+    if ($Requested) { $onboardingServerBaseUri = [Uri]$Requested }
+    $onboarding = [pscustomobject]@{ status = 'READY'; state_readback = $StateReadback }
+    try { Invoke-Expression $readback; return 'ADMITTED' }
+    catch { return [string]$_.Exception.Message }
+}
+$explicit = 'https://qualification.example.invalid:8443'
+$expected = 'Onboarding server endpoint readback failed.'
+if ((Invoke-Readback $explicit ([pscustomobject]@{ base_url = 'https://QUALIFICATION.example.invalid:8443' })) -cne 'ADMITTED') { exit 12 }
+if ((Invoke-Readback 'https://qualification.example.invalid' ([pscustomobject]@{ base_url = 'https://qualification.example.invalid:443' })) -cne 'ADMITTED') { exit 13 }
+if ((Invoke-Readback $explicit ([pscustomobject]@{ base_url = 'https://worker.kmtecherp.com' })) -cne $expected) { exit 14 }
+if ((Invoke-Readback $explicit ([pscustomobject]@{ base_url = 'https://qualification.example.invalid' })) -cne $expected) { exit 15 }
+if ((Invoke-Readback $explicit ([pscustomobject]@{ base_url = 'http://qualification.example.invalid:8443' })) -cne $expected) { exit 16 }
+if ((Invoke-Readback $explicit ([pscustomobject]@{ status = 'READY' })) -cne $expected) { exit 17 }
+if ((Invoke-Readback $explicit $null) -cne $expected) { exit 18 }
+if ((Invoke-Readback '' ([pscustomobject]@{ base_url = 'https://worker.kmtecherp.com' })) -cne 'ADMITTED') { exit 19 }
+if ((Invoke-Readback '' ([pscustomobject]@{ status = 'READY' })) -cne 'ADMITTED') { exit 20 }
+exit 0
+"""
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def _run_portable_plan(source: Path, install: Path, *extra: str):
+    environment = dict(os.environ)
+    environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
+    return subprocess.run(
+        [
+            _powershell(),
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(source / "INSTALL_CANONICAL_PORTABLE.ps1"),
+            "-SourceRoot",
+            str(source),
+            "-InstallRoot",
+            str(install),
+            "-PlanOnly",
+            "-AllowNoncanonicalLayoutForTest",
+            "-SkipSignatureValidationForTest",
+            *extra,
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=environment,
+    )
+
+
+def test_portable_plan_reports_explicit_server_base_url_without_mutation(tmp_path):
+    source = _portable_release_fixture(tmp_path)
+    install = tmp_path / "apps" / "current"
+
+    explicit = _run_portable_plan(
+        source, install, "-ServerBaseUrl", "https://qualification.example.invalid:8443/"
+    )
+    omitted = _run_portable_plan(source, install)
+
+    assert explicit.returncode == 0, explicit.stderr or explicit.stdout
+    assert "install_status=PLAN_ONLY" in explicit.stdout
+    assert "registry_changed=false" in explicit.stdout
+    assert (
+        _output_value(explicit.stdout, "onboarding_server_base_url")
+        == "https://qualification.example.invalid:8443"
+    )
+    assert omitted.returncode == 0, omitted.stderr or omitted.stdout
+    assert _output_value(omitted.stdout, "onboarding_server_base_url") == "PRODUCT_DEFAULT"
+    assert not install.exists()
+
+
+@pytest.mark.parametrize(
+    "server_base_url",
+    [
+        "http://qualification.example.invalid",
+        "https://operator:secret@qualification.example.invalid",
+        "https://qualification.example.invalid/api/producer-ingest/v1/source-file",
+        "https://qualification.example.invalid?plane=shadow",
+        "https://qualification.example.invalid#fragment",
+        "https://localhost:8443",
+        "https://127.0.0.1:8443",
+        "https://[::1]:8443",
+        "https://qualification.example.invalid:70000",
+        "qualification.example.invalid:8443",
+        "https://qualification example.invalid",
+        r"https://qualification.example.invalid\api",
+    ],
+)
+def test_portable_installer_rejects_invalid_server_base_url_before_plan_output(
+    tmp_path, server_base_url
+):
+    source = _portable_release_fixture(tmp_path)
+    install = tmp_path / "apps" / "current"
+
+    completed = _run_portable_plan(source, install, "-ServerBaseUrl", server_base_url)
+
+    assert completed.returncode != 0
+    diagnostic = "".join((completed.stderr + completed.stdout).split()).lower()
+    assert "serverbaseurlmustbeacredential-freehttpsorigin" in diagnostic
+    assert "install_status=" not in completed.stdout
+    assert not install.exists()

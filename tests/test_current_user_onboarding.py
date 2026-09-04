@@ -1470,3 +1470,147 @@ def test_public_remove_does_not_downgrade_lost_relay_result(tmp_path):
     assert caught.value.status == "UNKNOWN"
     report = json.loads(caught.value.report_path.read_text(encoding="utf-8"))
     assert report["status"] == "UNKNOWN"
+
+
+def _profile_loader_with_base_url(path: Path):
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return SimpleNamespace(
+        source_host_id=payload["source_host_id"],
+        tls_ca_bundle_path=payload.get("tls_ca_bundle_path", ""),
+        base_url=payload.get("base_url", ""),
+    )
+
+
+def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_product_default(
+    tmp_path, monkeypatch
+):
+    from container_audit_product_host import dispatch_product_mode
+
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
+    captured = []
+
+    def fake_onboard(selected_app_root, **kwargs):
+        captured.append((str(selected_app_root), dict(kwargs)))
+        return {"status": "READY", "action": "CREATED", "bootstrap_integrity": "absent"}
+
+    monkeypatch.setattr(onboarding_module, "onboard_current_user", fake_onboard)
+
+    # Exactly the argv the canonical installer's Product helper launches after
+    # ``runtime\pythonw.exe -I -B app\main.py``.
+    explicit = dispatch_product_mode(
+        [
+            "--onboard-current-user",
+            "--app-root",
+            str(app_root),
+            "--server-base-url",
+            "https://qualification.example.invalid:8443",
+        ]
+    )
+    omitted = dispatch_product_mode(["--onboard-current-user", "--app-root", str(app_root)])
+
+    assert explicit == 0
+    assert omitted == 0
+    assert [entry[0] for entry in captured] == [str(app_root), str(app_root)]
+    assert captured[0][1]["server_base_url"] == "https://qualification.example.invalid:8443"
+    assert captured[1][1]["server_base_url"] == onboarding_module.DEFAULT_SERVER_BASE_URL
+    assert onboarding_module.DEFAULT_SERVER_BASE_URL == "https://worker.kmtecherp.com"
+
+
+def test_explicit_server_base_url_reaches_registration_endpoint_and_bound_readback(
+    tmp_path, monkeypatch
+):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "user-state")}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    server_base_url = "https://qualification.example.invalid:8443"
+    captured = {}
+
+    def fake_registration(arguments):
+        captured["arguments"] = list(arguments)
+        _ready_state(paths)
+        payload = json.loads(paths.logistics_profile_path.read_text(encoding="utf-8"))
+        payload["base_url"] = server_base_url
+        _write_json(paths.logistics_profile_path, payload)
+        return 0
+
+    monkeypatch.setattr(
+        "tools.register_container_audit_worker_pc.main",
+        fake_registration,
+    )
+
+    report = onboard_current_user(
+        app_root,
+        environ=environment,
+        server_base_url=server_base_url,
+        require_bootstrap_integrity=False,
+        profile_loader=_profile_loader_with_base_url,
+        credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory,
+        autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+
+    arguments = captured["arguments"]
+    assert (
+        arguments[arguments.index("--endpoint-url") + 1]
+        == "https://qualification.example.invalid:8443/api/producer-ingest/v1/source-file"
+    )
+    assert "--self-enroll" in arguments
+    assert arguments[arguments.index("--credential-scope") + 1] == "current_user"
+    assert arguments[arguments.index("--logistics-profile-path") + 1] == str(
+        paths.logistics_profile_path
+    )
+    assert "--tls-ca-bundle-path" not in arguments
+    assert "--isolated-qualification-context" not in arguments
+    assert report["status"] == "READY"
+    assert report["action"] == "CREATED"
+    assert report["state_readback"]["base_url"] == server_base_url
+    persisted = json.loads(paths.onboarding_report_path.read_text(encoding="utf-8"))
+    assert persisted["state_readback"]["base_url"] == server_base_url
+
+
+@pytest.mark.parametrize(
+    "server_base_url",
+    [onboarding_module.DEFAULT_SERVER_BASE_URL, "https://qualification.example.invalid:8443"],
+)
+def test_ready_profile_is_reused_without_registration_or_migration_for_any_requested_url(
+    tmp_path, server_base_url
+):
+    app_root = tmp_path / "app"
+    app_root.mkdir()
+    environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "user-state")}
+    paths = resolve_current_user_onboarding_paths(app_root, environ=environment)
+    _ready_state(paths)
+    payload = json.loads(paths.logistics_profile_path.read_text(encoding="utf-8"))
+    payload["base_url"] = "https://worker.kmtecherp.com"
+    _write_json(paths.logistics_profile_path, payload)
+    profile_before = paths.logistics_profile_path.read_bytes()
+    identity_before = paths.identity_path.read_bytes()
+    credential_before = paths.credential_path.read_bytes()
+
+    report = onboard_current_user(
+        app_root,
+        environ=environment,
+        server_base_url=server_base_url,
+        require_bootstrap_integrity=False,
+        registration_runner=lambda _paths: (_ for _ in ()).throw(
+            AssertionError("a READY profile must never be re-registered")
+        ),
+        profile_loader=_profile_loader_with_base_url,
+        credential_loader=_credential_loader,
+        ledger_factory=_ledger_factory,
+        autostart_installer=_autostart,
+        relay_launcher=_relay_start,
+    )
+
+    # The product layer never migrates an existing profile; the canonical
+    # installer's endpoint readback is what fails closed on a foreign origin.
+    assert report["status"] == "READY"
+    assert report["action"] == "REUSED"
+    assert report["state_readback"]["base_url"] == "https://worker.kmtecherp.com"
+    assert paths.logistics_profile_path.read_bytes() == profile_before
+    assert paths.identity_path.read_bytes() == identity_before
+    assert paths.credential_path.read_bytes() == credential_before
