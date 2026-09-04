@@ -554,8 +554,33 @@ def writer_admission(
 P = ParamSpec("P")
 R = TypeVar("R")
 
+# The only sinks allowed to probe admission and release it before the body
+# runs: the session direct-sync wrapper, its process launcher, and the resident
+# relay entry point that drives them. The relay child takes the same single
+# admission for its own spanning writes, so a parent that held it across
+# subprocess.run would starve the child out. Every one of these releases only
+# after the probe has already denied an active fence, and each keeps its own
+# writes under an explicit admission of its own.
+PROBE_ONLY_WRITER_SINKS = frozenset(
+    {
+        (
+            "session_direct_sync_process",
+            "direct_sync_auto_bootstrap.run_session_direct_sync_once",
+        ),
+        (
+            "session_direct_sync_process",
+            "direct_sync_auto_bootstrap._run_command",
+        ),
+        ("persistent_relay_status", "user_relay.main"),
+    }
+)
 
-def writer_sink(source: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+
+def writer_sink(
+    source: str,
+    *,
+    probe_only: bool = False,
+) -> Callable[[Callable[P, R]], Callable[P, R]]:
     """Mark and guard a concrete writer sink for code-derived inventory."""
 
     selected_source = str(source or "").strip()
@@ -570,8 +595,21 @@ def writer_sink(source: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
         ):
             raise TypeError("writer sinks must execute synchronously inside admission")
 
+        sink_id = f"{function.__module__}.{function.__qualname__}"
+        if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
+            raise WriterFencedError(
+                "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED",
+                "probe-only admission is not approved for this writer sink",
+            )
+
         @wraps(function)
         def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
+            if probe_only:
+                # Deny under an active fence before the child exists, then
+                # release so the child can take the same admission itself.
+                with writer_admission(selected_source):
+                    pass
+                return function(*args, **kwargs)
             with writer_admission(selected_source):
                 return function(*args, **kwargs)
 
@@ -589,6 +627,7 @@ __all__ = [
     "DELEGATION_SESSION_ENV",
     "DELEGATION_TOKEN_ENV",
     "DELEGATION_TRANSACTION_ENV",
+    "PROBE_ONLY_WRITER_SINKS",
     "SESSION_MUTEX_PREFIX",
     "SESSION_TUPLE_VERSION",
     "WRITER_INVENTORY_SHA256",

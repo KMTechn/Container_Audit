@@ -167,7 +167,7 @@ def build_session_direct_sync_command(
     return command
 
 
-@writer_sink("session_direct_sync_process")
+@writer_sink("session_direct_sync_process", probe_only=True)
 def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     try:
         completed = subprocess.run(
@@ -192,7 +192,7 @@ def _run_command(command: list[str], timeout_seconds: int) -> dict[str, Any]:
     }
 
 
-@writer_sink("session_direct_sync_process")
+@writer_sink("session_direct_sync_process", probe_only=True)
 def run_session_direct_sync_once(
     *,
     app_root: str | os.PathLike[str],

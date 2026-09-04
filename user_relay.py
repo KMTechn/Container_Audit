@@ -21,7 +21,7 @@ from storage_policy import (
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
 )
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -381,7 +381,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-@writer_sink("persistent_relay_status")
+@writer_sink("persistent_relay_status", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     app_root = Path(
@@ -393,24 +393,25 @@ def main(argv: list[str] | None = None) -> int:
         )
     ).expanduser().resolve()
     storage = build_container_audit_storage_paths(application_path=str(app_root))
-    ensure_container_audit_storage_dirs(storage)
-    direct_sync_root = (
-        Path(args.direct_sync_root).expanduser().resolve()
-        if args.direct_sync_root
-        else storage.direct_sync_root
-    )
-    scan_source_dir = (
-        Path(args.scan_source_dir).expanduser().resolve()
-        if args.scan_source_dir
-        else storage.events_dir
-    )
-    assert_runtime_state_outside_code_root(
-        app_root=app_root,
-        direct_sync_root=direct_sync_root,
-        scan_source_dir=scan_source_dir,
-    )
-    direct_sync_root.mkdir(parents=True, exist_ok=True)
-    scan_source_dir.mkdir(parents=True, exist_ok=True)
+    with writer_admission("persistent_relay_status"):
+        ensure_container_audit_storage_dirs(storage)
+        direct_sync_root = (
+            Path(args.direct_sync_root).expanduser().resolve()
+            if args.direct_sync_root
+            else storage.direct_sync_root
+        )
+        scan_source_dir = (
+            Path(args.scan_source_dir).expanduser().resolve()
+            if args.scan_source_dir
+            else storage.events_dir
+        )
+        assert_runtime_state_outside_code_root(
+            app_root=app_root,
+            direct_sync_root=direct_sync_root,
+            scan_source_dir=scan_source_dir,
+        )
+        direct_sync_root.mkdir(parents=True, exist_ok=True)
+        scan_source_dir.mkdir(parents=True, exist_ok=True)
     stop_path = user_relay_stop_path(direct_sync_root)
     if stop_path.exists():
         return 0

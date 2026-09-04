@@ -368,6 +368,75 @@ def test_writer_sink_rejects_async_and_generator_bodies() -> None:
             yield "mutation"
 
 
+def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
+    assert fence.PROBE_ONLY_WRITER_SINKS == frozenset(
+        {
+            (
+                "session_direct_sync_process",
+                "direct_sync_auto_bootstrap.run_session_direct_sync_once",
+            ),
+            (
+                "session_direct_sync_process",
+                "direct_sync_auto_bootstrap._run_command",
+            ),
+            ("persistent_relay_status", "user_relay.main"),
+        }
+    )
+
+    with pytest.raises(fence.WriterFencedError) as exc_info:
+
+        @fence.writer_sink("session_direct_sync_process", probe_only=True)
+        def foreign_sink() -> None:
+            return None
+
+    assert exc_info.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
+
+    with pytest.raises(fence.WriterFencedError) as exc_info:
+
+        @fence.writer_sink("direct_sync_install_pack", probe_only=True)
+        def _run_command() -> None:
+            return None
+
+    assert exc_info.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
+
+
+def test_probe_only_session_sink_denies_under_fence_before_any_spawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import direct_sync_auto_bootstrap as bootstrap
+
+    root = tmp_path / "control"
+    _write_active(root, _active_payload())
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    canonical = fence.canonical_control_root()
+    canonical.mkdir(parents=True, exist_ok=True)
+    active = canonical / fence.ACTIVE_FILENAME
+    active.write_bytes((root / fence.ACTIVE_FILENAME).read_bytes())
+    before = (active.read_bytes(), active.stat().st_mtime_ns)
+    spawns: list[object] = []
+
+    def forbidden_run(*args: object, **kwargs: object) -> None:
+        spawns.append(args)
+        raise AssertionError("the relay child must not be spawned under an active fence")
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", forbidden_run)
+
+    with pytest.raises(fence.WriterFencedError) as exc_info:
+        bootstrap.run_session_direct_sync_once(
+            app_root=ROOT,
+            direct_sync_root=tmp_path / "direct-sync",
+            scan_source_dir=tmp_path / "events",
+        )
+    assert exc_info.value.code == "ACTIVE_WRITER_FENCE"
+
+    with pytest.raises(fence.WriterFencedError) as exc_info:
+        bootstrap._run_command(["relay"], 10)
+    assert exc_info.value.code == "ACTIVE_WRITER_FENCE"
+
+    assert spawns == []
+    assert (active.read_bytes(), active.stat().st_mtime_ns) == before
+
+
 def test_nested_sink_revalidates_its_own_source_and_preserves_zero_mutation(tmp_path: Path) -> None:
     root = tmp_path / "control"
     effect = tmp_path / "nested-effect.txt"
