@@ -486,6 +486,15 @@ def writer_admission(
     if not selected_source:
         raise WriterFencedError("WRITER_SOURCE_MISSING", "writer source is required")
     depth = int(getattr(_WRITER_LOCAL, "depth", 0))
+    if depth < 0:
+        # A negative depth is truthy, so it would route this writer down the
+        # nested branch with no admission mutex and no active-fence check.
+        # Deny instead, and leave the corrupted count exactly as it is: a
+        # silent reset here would hide the accounting defect that produced it.
+        raise WriterFenceError(
+            "WRITER_ADMISSION_DEPTH_UNDERFLOW",
+            "writer admission depth accounting underflowed",
+        )
     if depth:
         nested_active = getattr(_WRITER_LOCAL, "active", None)
         nested_environ = getattr(_WRITER_LOCAL, "environ", None)

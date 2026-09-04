@@ -474,6 +474,71 @@ def test_nested_sink_revalidates_its_own_source_and_preserves_zero_mutation(tmp_
         thread.join(5)
 
 
+def _writer_depth() -> int:
+    return int(getattr(fence._WRITER_LOCAL, "depth", 0))
+
+
+def _spy_on_admission_mutex(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    acquired: list[str] = []
+    original = fence._acquire_named_mutex
+
+    def spy(name: str, timeout_seconds: float):
+        acquired.append(name)
+        return original(name, timeout_seconds)
+
+    monkeypatch.setattr(fence, "_acquire_named_mutex", spy)
+    return acquired
+
+
+def test_negative_admission_depth_denies_without_the_gate_and_is_not_clamped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "control"
+    effect = tmp_path / "underflow-effect.txt"
+    acquired = _spy_on_admission_mutex(monkeypatch)
+    assert _writer_depth() == 0
+    fence._WRITER_LOCAL.depth = -1
+    try:
+        with pytest.raises(fence.WriterFenceError) as exc_info:
+            with fence.writer_admission("underflow_sink", control_root=root):
+                effect.write_text("bad", encoding="utf-8")
+        assert exc_info.value.code == "WRITER_ADMISSION_DEPTH_UNDERFLOW"
+        assert acquired == []
+        assert not effect.exists()
+        assert not root.exists()
+        # Fail closed, not repaired: the corrupted count survives, so every
+        # later writer on this thread is denied instead of one silently
+        # passing through the nested branch with no mutex.
+        assert _writer_depth() == -1
+        with pytest.raises(fence.WriterFenceError) as again:
+            with fence.writer_admission("underflow_sink", control_root=root):
+                effect.write_text("bad", encoding="utf-8")
+        assert again.value.code == "WRITER_ADMISSION_DEPTH_UNDERFLOW"
+        assert acquired == []
+        assert not effect.exists()
+    finally:
+        fence._WRITER_LOCAL.depth = 0
+
+
+def test_nested_admission_reuses_one_gate_and_returns_depth_to_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "control"
+    acquired = _spy_on_admission_mutex(monkeypatch)
+    assert _writer_depth() == 0
+    with fence.writer_admission("outer_sink", control_root=root):
+        assert _writer_depth() == 1
+        with fence.writer_admission("inner_sink", control_root=root):
+            assert _writer_depth() == 2
+        assert _writer_depth() == 1
+    assert _writer_depth() == 0
+    assert len(acquired) == 1, "the nested writer must not take a second admission"
+    with fence.writer_admission("outer_sink", control_root=root):
+        assert _writer_depth() == 1
+    assert _writer_depth() == 0
+    assert len(acquired) == 2, "a writer after a balanced nest must take the gate again"
+
+
 def test_every_derived_sink_has_negative_and_positive_admission_controls(
     tmp_path: Path,
 ) -> None:
