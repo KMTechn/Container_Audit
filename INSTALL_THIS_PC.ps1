@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
@@ -14,6 +14,12 @@ param(
     [switch]$RestoreVerifiedReplacement,
     [string]$ReplacementReceiptSha256 = "",
     [string]$RestoreEvidencePath = "",
+    [string]$ExpectedInstalledManifestSha256 = "",
+    [string]$ExpectedInstalledAggregateSha256 = "",
+    [string]$QuiesceReceiptPath = "",
+    [string]$ExpectedQuiesceReceiptSha256 = "",
+    [string]$RestoreUninstallRecordPath = "",
+    [string]$ExpectedUninstallRecordSha256 = "",
     [string]$WriterFenceHelperPath = "",
     [string]$ExpectedWriterFenceHelperSha256 = "",
     [string]$WriterFenceSessionId = "",
@@ -84,144 +90,6 @@ function ConvertTo-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('\', '\').Replace('"', '\"') + '"'
 }
 
-function Test-WriterSessionContractExactPropertySet($Value, [string[]]$Expected) {
-    if ($null -eq $Value) { return $false }
-    $actual = @($Value.PSObject.Properties.Name)
-    if ($actual.Count -ne $Expected.Count) { return $false }
-    foreach ($name in $Expected) {
-        if ($name -cnotin $actual) { return $false }
-    }
-    return $true
-}
-
-function Test-WriterSessionContractExactStringProperties($Value, [string[]]$Names) {
-    if ($null -eq $Value) { return $false }
-    foreach ($name in $Names) {
-        $property = $Value.PSObject.Properties[$name]
-        if ($null -eq $property -or -not ($property.Value -is [string])) { return $false }
-    }
-    return $true
-}
-
-function Get-WriterSessionContractMutexName($Fence, $Vector) {
-    $values = @(
-        [string]$Fence.session_tuple_version,
-        [string]$Vector.session_id,
-        [string]$Vector.attempt_id,
-        [string]$Vector.orchestrator_sha256,
-        [string]$Vector.replacement_transaction_id,
-        [string]$Vector.writer_contract_sha256
-    )
-    $normalized = @($values | ForEach-Object {
-        $_.Normalize([Text.NormalizationForm]::FormC)
-    })
-    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($normalized -join "`n"))
-    $algorithm = [Security.Cryptography.SHA256]::Create()
-    try {
-        $digest = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
-    }
-    finally { $algorithm.Dispose() }
-    return [string]$Fence.session_mutex_prefix + $digest
-}
-
-function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha256) {
-    if ((Get-Item -LiteralPath $Path -Force).Length -gt 65536) {
-        throw "Writer session public contract is oversized."
-    }
-    if ((Get-FileSha256 $Path) -cne $ExpectedSha256) {
-        throw "Writer session public contract hash differs."
-    }
-    try { $contract = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch { throw "Writer session public contract JSON is invalid." }
-    $bindings = @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','session_authority_mutex_name','adapter_sha256','contract_sha256','evidence_path','historical_capability.receipt_sha256','historical_capability.capability_binding_sha256')
-    $fenceFields = @('active_schema','release_schema','control_root','active_filename','release_filename_pattern','admission_mutex_name','noncanonical_mutex_derivation','session_mutex_prefix','session_tuple_version','session_tuple_fields','tuple_separator','tuple_encoding','tuple_normalization','writer_inventory_path','writer_inventory_sha256','canonical_installer_delegation_source','scheduled_task_mutation_rule','natural_trigger_phase_rule','verification_vectors','active_statuses','writer_admission_fail_closed','unknown_or_unobservable_is_denied','denial_mutates_state')
-    $fenceStringFields = @('active_schema','release_schema','control_root','active_filename','release_filename_pattern','admission_mutex_name','noncanonical_mutex_derivation','session_mutex_prefix','session_tuple_version','tuple_separator','tuple_encoding','tuple_normalization','writer_inventory_path','writer_inventory_sha256','canonical_installer_delegation_source','scheduled_task_mutation_rule','natural_trigger_phase_rule')
-    $vectorFields = @('session_id','attempt_id','orchestrator_sha256','replacement_transaction_id','writer_contract_sha256','expected_mutex_name')
-    $vectors = @($contract.all_writer_fence.verification_vectors)
-    $vectorsValid = $vectors.Count -eq 2
-    foreach ($vector in $vectors) {
-        if (
-            -not (Test-WriterSessionContractExactPropertySet $vector $vectorFields) -or
-            -not (Test-WriterSessionContractExactStringProperties $vector $vectorFields) -or
-            [string]$vector.session_id -cnotmatch '^[0-9a-f]{32}$' -or
-            [string]$vector.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
-            [string]$vector.orchestrator_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-            [string]$vector.replacement_transaction_id -cnotmatch '^[0-9a-f]{32}$' -or
-            [string]$vector.writer_contract_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-            [string]$vector.expected_mutex_name -cne (Get-WriterSessionContractMutexName $contract.all_writer_fence $vector)
-        ) { $vectorsValid = $false }
-    }
-    if ($vectors.Count -eq 2) {
-        $vectorsValid = $vectorsValid -and
-            [string]$vectors[0].expected_mutex_name -ceq 'Local\KMTech.ContainerAudit.DeploymentSession.1121406d92315036b04c14edfea1a09a03938923fa052324623e225d006a7b0c' -and
-            [string]$vectors[1].expected_mutex_name -ceq 'Local\KMTech.ContainerAudit.DeploymentSession.7487aff53f2ea39a278e3648037625e8c1484636d80a5177dee05ba06556f071'
-    }
-    $requiredTrue = @(
-        $contract.lifecycle_restore.require_same_session_receipt,
-        $contract.lifecycle_restore.require_code_restore_before_writer_restore,
-        $contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore,
-        $contract.lifecycle_restore.require_live_current_user_lifecycle_before_writer_restore,
-        $contract.lifecycle_restore.require_non_elevated_medium_integrity_lifecycle_producer,
-        $contract.lifecycle_restore.producer_code_tree_read_locked_through_execution,
-        $contract.lifecycle_restore.failure_is_explicit,
-        $contract.security.active_session_authority_mutex_required,
-        $contract.security.all_writer_fence_required,
-        $contract.security.all_writer_sinks_require_admission,
-        $contract.security.evidence_paths_outside_install_parent_required,
-        $contract.security.evidence_paths_local_fixed_drive_required,
-        $contract.security.evidence_path_reparse_ancestors_forbidden,
-        $contract.security.evidence_path_aliases_canonicalized
-    )
-    $requiredFalse = @($contract.security.secret_values_recorded, $contract.security.manual_writer_start_allowed, $contract.security.contract_mode_system_mutation, $contract.all_writer_fence.denial_mutates_state)
-    if (
-        [string]$contract.schema -cne 'container-audit-writer-session-cli-contract-v1' -or
-        [string]$contract.app_id -cne 'container_audit' -or
-        [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
-        (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
-        -not (Test-BootstrapJsonInteger $contract.cli.success_exit_code) -or [int64]$contract.cli.success_exit_code -ne 0 -or
-        @($contract.cli.failure_exit_codes | Where-Object { -not (Test-BootstrapJsonInteger $_) }).Count -ne 0 -or
-        (@($contract.cli.failure_exit_codes) -join ',') -cne '1,20' -or
-        -not (Test-BootstrapJsonInteger $contract.identifiers.session_max_age_hours) -or [int64]$contract.identifiers.session_max_age_hours -ne 24 -or
-        [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
-        -not (Test-WriterSessionContractExactPropertySet $contract.all_writer_fence $fenceFields) -or
-        -not (Test-WriterSessionContractExactStringProperties $contract.all_writer_fence $fenceStringFields) -or
-        [string]$contract.all_writer_fence.active_schema -cne 'container-audit-all-writer-fence-active-v1' -or
-        [string]$contract.all_writer_fence.release_schema -cne 'container-audit-all-writer-fence-release-v1' -or
-        [string]$contract.all_writer_fence.control_root -cne '%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\writer-session' -or
-        [string]$contract.all_writer_fence.active_filename -cne 'active.json' -or
-        [string]$contract.all_writer_fence.release_filename_pattern -cne 'release-{replacement_transaction_id}-{release_authorization_sha256}.json' -or
-        [string]$contract.all_writer_fence.admission_mutex_name -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1' -or
-        [string]$contract.all_writer_fence.noncanonical_mutex_derivation -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1.<first 16 lowercase hex characters of SHA-256 over the absolute control root after slash-to-backslash conversion, trailing-backslash removal, Unicode NFC, and ASCII A-Z to a-z mapping with every other code point unchanged, encoded as UTF-8 without BOM>' -or
-        [string]$contract.all_writer_fence.session_mutex_prefix -cne 'Local\KMTech.ContainerAudit.DeploymentSession.' -or
-        [string]$contract.all_writer_fence.session_tuple_version -cne 'container-audit-deployment-session-authority-v1' -or
-        $contract.all_writer_fence.session_tuple_fields -isnot [Object[]] -or
-        @($contract.all_writer_fence.session_tuple_fields | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
-        (@($contract.all_writer_fence.session_tuple_fields) -join ',') -cne 'session_tuple_version,session_id,attempt_id,orchestrator_sha256,replacement_transaction_id,writer_contract_sha256' -or
-        [string]$contract.all_writer_fence.tuple_separator -cne 'LF (U+000A) between ordered fields; no trailing LF' -or
-        [string]$contract.all_writer_fence.tuple_encoding -cne 'UTF-8 without BOM' -or
-        [string]$contract.all_writer_fence.tuple_normalization -cne 'Unicode NFC applied to each field before joining' -or
-        [string]$contract.all_writer_fence.writer_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
-        [string]$contract.all_writer_fence.canonical_installer_delegation_source -cne 'writer_sink_sources from the exact pinned code-derived inventory' -or
-        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.scheduled_task_mutation_rule) -or
-        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.natural_trigger_phase_rule) -or
-        [string]$contract.all_writer_fence.writer_inventory_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
-        $contract.all_writer_fence.verification_vectors -isnot [Object[]] -or
-        $contract.all_writer_fence.active_statuses -isnot [Object[]] -or
-        @($contract.all_writer_fence.active_statuses | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
-        (@($contract.all_writer_fence.active_statuses) -join ',') -cne 'PREPARING,PREPARED,RESTORING,RESTORE_FAILED,INSTALLING' -or
-        $contract.all_writer_fence.writer_admission_fail_closed -isnot [bool] -or -not $contract.all_writer_fence.writer_admission_fail_closed -or
-        $contract.all_writer_fence.unknown_or_unobservable_is_denied -isnot [bool] -or -not $contract.all_writer_fence.unknown_or_unobservable_is_denied -or
-        -not $vectorsValid -or
-        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v3' -or
-        [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
-        [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
-        (@($contract.receipts.prepared_required_bindings) -join ',') -cne ($bindings -join ',') -or
-        [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
-        @($requiredTrue | Where-Object { $_ -isnot [bool] -or -not $_ }).Count -ne 0 -or
-        @($requiredFalse | Where-Object { $_ -isnot [bool] -or $_ }).Count -ne 0
-    ) { throw "Writer session public contract semantics differ." }
-}
-
 function Invoke-SelfElevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -277,7 +145,7 @@ function Enter-ContainerPlacementWriterFence {
         -Source $PlacementWriterSource `
         -TimeoutMilliseconds 15000
     Exit-ContainerWriterAdmission $preflightLease
-    Invoke-SelfElevated
+    if (-not $testOverride) { Invoke-SelfElevated }
     return Enter-ContainerWriterDelegatedOperation `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
@@ -673,6 +541,9 @@ if ($ApplyHardenedAclForTest.IsPresent -and -not $testOverride) {
 if ($InjectRestoreFailureAfterDisplaceForTest.IsPresent -and -not $testOverride) {
     throw 'InjectRestoreFailureAfterDisplaceForTest requires the guarded noncanonical test layout.'
 }
+if ($RestoreUninstallRecordPath -and ($Uninstall -or $ReplaceExistingVerifiedPortable -or $RestoreVerifiedReplacement -or $TlsCaBundlePath)) {
+    throw 'Uninstall recovery accepts only exact fenced code placement.'
+}
 if ($ReplaceExistingVerifiedPortable.IsPresent -and $Uninstall.IsPresent) {
     throw "ReplaceExistingVerifiedPortable cannot be combined with Uninstall."
 }
@@ -700,12 +571,12 @@ if (
     (Test-CurrentUserRelayPersistencePresent)
 ) {
     throw (
-        "Run Container_Audit.exe --remove-current-user-setup as the current user " +
+        "Run the exact packet's INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall as the current user " +
         "before removing hardened code."
     )
 }
 $placementWriterFenceLease = $null
-if (-not $DryRun.IsPresent -and -not $testOverride) {
+if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
     $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
     . $WriterFenceHelperPath
 }
@@ -798,23 +669,103 @@ if ($Uninstall.IsPresent) {
         Write-Output "user_state_preserved=true"
         exit 0
     }
-    [void](Get-StrictFullPath $installRootFull "uninstall target")
-    Assert-NoReparsePoint $installRootFull "Container_Audit code root"
+    $uninstallSource = Get-StrictFullPath $SourceRoot 'uninstall source'
+    if ($ExpectedInstalledManifestSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $ExpectedInstalledAggregateSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Test-SamePath $uninstallSource $installRootFull) -or
+        (Test-PathWithin $uninstallSource $installRootFull) -or
+        (Test-PathWithin $installRootFull $uninstallSource)) {
+        throw 'UNINSTALL_EXACT_IDENTITY_REQUIRED: use the canonical uninstall entrypoint.'
+    }
+    Assert-NoReparsePoint $uninstallSource 'uninstall source'
+    Assert-NoReparsePoint $installRootFull 'uninstall target'
+    [void](Assert-RequiredRelease $uninstallSource $testOverride)
+    if (-not (Test-SamePath $BootstrapScriptPath (Join-Path $uninstallSource 'INSTALL_THIS_PC.ps1'))) {
+        throw 'Uninstall helper must execute from the admitted SourceRoot.'
+    }
+    $uninstallRecord = Assert-BootstrapIntegrityRecord $installRootFull
+    $uninstallRecordSha = Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)
+    if ((Get-FileSha256 (Join-Path $installRootFull 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256 -or
+        (Get-FileSha256 (Join-Path $uninstallSource 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256 -or
+        (Get-InventoryAggregate @(Get-CodeInventory $uninstallSource)) -cne $ExpectedInstalledAggregateSha256 -or
+        [string]$uninstallRecord.aggregate_sha256 -cne $ExpectedInstalledAggregateSha256) {
+        throw 'UNINSTALL_IDENTITY_MISMATCH: source or installed bytes differ.'
+    }
+    $quiesceFull = Get-StrictFullPath $QuiesceReceiptPath 'current-user removal receipt'
+    $expectedQuiescePath = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\status\current_user_removal.json'
+    Assert-NoReparsePoint $quiesceFull 'current-user removal receipt'
+    if (-not (Test-SamePath $quiesceFull $expectedQuiescePath) -or
+        $ExpectedQuiesceReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        (Get-FileSha256 $quiesceFull) -cne $ExpectedQuiesceReceiptSha256 -or
+        (Get-Item -LiteralPath $quiesceFull).Length -gt 65536) {
+        throw 'Uninstall current-user removal receipt binding differs.'
+    }
+    $quiesce = Get-Content -LiteralPath $quiesceFull -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$quiesce.status -cne 'PASS_DATA_PRESERVED' -or
+        [string]$quiesce.state_scope -cne 'current_user' -or
+        $quiesce.data_preserved -isnot [bool] -or -not $quiesce.data_preserved -or
+        [string]$quiesce.relay_autostart.status -cne 'ABSENT' -or
+        [string]$quiesce.relay_process.status -cne 'ABSENT' -or
+        -not (Test-SamePath ([string]$quiesce.machine_code_root) (Join-Path $installRootFull 'app'))) {
+        throw 'Uninstall current-user quiescence was not proven.'
+    }
+    Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
     if (-not $testOverride) {
-        Remove-OwnedLegacyTask $LegacyQualificationTaskName $installRootFull
-        Remove-OwnedLegacyTask $LegacyRelayTaskName $installRootFull
+        foreach ($name in @($LegacyQualificationTaskName, $LegacyRelayTaskName)) {
+            if ($null -ne (Get-LegacyTaskByNameFailClosed $name)) {
+                throw 'Uninstall requires the current-user layout without legacy scheduled writers.'
+            }
+        }
     }
-    if (Test-Path -LiteralPath $installRootFull) {
+    $uninstallParent = Get-StrictFullPath (Split-Path -Parent $installRootFull) 'uninstall parent'
+    $uninstallBackup = Get-StrictFullPath (Join-Path $uninstallParent ('.current.uninstall.' + $WriterFenceAttemptId)) 'uninstall recovery tree'
+    if (-not (Test-PathWithin $uninstallBackup $uninstallParent)) { throw 'Uninstall backup escaped its parent.' }
+    if (Test-Path -LiteralPath $uninstallBackup) { throw 'Uninstall recovery tree already exists.' }
+    $uninstallMutationStarted = $false
+    try {
+        Copy-Item -LiteralPath $installRootFull -Destination $uninstallBackup -Recurse
+        if ($applyHardenedAcl) { Set-HardenedCodeAcl $uninstallBackup -Recursive }
+        if ((Get-InventoryAggregate @(Get-CodeInventory $uninstallBackup)) -cne $ExpectedInstalledAggregateSha256 -or
+            (Get-FileSha256 (Join-Path $uninstallBackup $IntegrityFileName)) -cne $uninstallRecordSha) {
+            throw 'Uninstall code preimage copy readback failed.'
+        }
+        Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
+        $uninstallMutationStarted = $true
         Remove-Item -LiteralPath $installRootFull -Recurse -Force -ErrorAction Stop
+        if (Test-Path -LiteralPath $installRootFull) { throw 'Hardened code root removal postcondition failed.' }
+        $uninstallMutationStarted = $false
+        try { Remove-Item -LiteralPath $uninstallBackup -Recurse -Force -ErrorAction Stop }
+        catch { Write-Output "code_recovery_cleanup_status=RETAINED:$uninstallBackup" }
+        if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container code removal completed.' }
+        Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'
+        Write-Output 'application_root_status=ABSENT'
+        Write-Output 'user_state_preserved=true'
     }
-    if (Test-Path -LiteralPath $installRootFull) {
-        throw "Hardened code root removal postcondition failed."
+    catch {
+        $uninstallFailure = $_
+        if ($uninstallMutationStarted) {
+            Assert-NoReparsePoint $uninstallBackup 'uninstall recovery tree'
+            Assert-NoReparsePoint $installRootFull 'partial uninstall target'
+            foreach ($item in @(Get-ChildItem -LiteralPath $uninstallBackup -Force -Recurse)) {
+                $destination = Join-Path $installRootFull (Get-RelativeCodePath $uninstallBackup $item.FullName)
+                if ($item.PSIsContainer) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+                else {
+                    New-Item -ItemType Directory -Path (Split-Path -Parent $destination) -Force | Out-Null
+                    if (-not (Test-Path -LiteralPath $destination) -or (Get-FileSha256 $destination) -cne (Get-FileSha256 $item.FullName)) {
+                        Copy-Item -LiteralPath $item.FullName -Destination $destination -Force
+                    }
+                }
+            }
+            if ($applyHardenedAcl) { Set-HardenedCodeAcl $installRootFull -Recursive }
+            [void](Assert-BootstrapIntegrityRecord $installRootFull)
+            if ((Get-InventoryAggregate @(Get-CodeInventory $installRootFull)) -cne $ExpectedInstalledAggregateSha256 -or
+                (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $uninstallRecordSha) {
+                throw "UNINSTALL_CODE_RESTORE_FAILED: recovery_tree=$uninstallBackup"
+            }
+            Write-Output 'code_restore_status=PASS_VERIFIED'
+        }
+        throw $uninstallFailure
     }
-    Write-Output "uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED"
-    Write-Output "application_root_status=ABSENT"
-    Write-Output "system_task_status=ABSENT"
-    Write-Output "user_state_preserved=true"
-    Write-Output "current_user_setup_removal_command=Container_Audit.exe --remove-current-user-setup"
     exit 0
 }
 
@@ -843,6 +794,20 @@ if ($sourceInventory.Count -eq 0) {
     throw "Frozen release code inventory is empty."
 }
 $sourceAggregate = Get-InventoryAggregate $sourceInventory
+if ($RestoreUninstallRecordPath) {
+    if ($DryRun -or (Test-Path -LiteralPath $installRootFull) -or
+        $ExpectedUninstallRecordSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $sourceAggregate -cne $ExpectedInstalledAggregateSha256 -or
+        (Get-FileSha256 (Join-Path $sourceRootFull 'portable-manifest.json')) -cne $ExpectedInstalledManifestSha256) {
+        throw 'UNINSTALL_RECOVERY_IDENTITY_INVALID: exact source and absent target required.'
+    }
+    $RestoreUninstallRecordPath = Get-StrictFullPath $RestoreUninstallRecordPath 'uninstall integrity preimage'
+    Assert-NoReparsePoint $RestoreUninstallRecordPath 'uninstall integrity preimage'
+    if ((Get-FileSha256 $RestoreUninstallRecordPath) -cne $ExpectedUninstallRecordSha256) {
+        throw 'UNINSTALL_RECOVERY_RECORD_CHANGED'
+    }
+    Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
+}
 if ($DryRun.IsPresent) {
     Write-Output "bootstrap_status=DRY_RUN"
     Write-Output "code_root=$installRootFull"
@@ -887,6 +852,12 @@ try {
     [void](Write-BootstrapIntegrityRecord `
         -Root $stagingRoot `
         -CodeRootIdentity $installRootFull)
+    if ($RestoreUninstallRecordPath) {
+        Copy-Item -LiteralPath $RestoreUninstallRecordPath -Destination (Join-Path $stagingRoot $IntegrityFileName) -Force
+        if ((Get-FileSha256 (Join-Path $stagingRoot $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {
+            throw 'Uninstall recovery staging record readback failed.'
+        }
+    }
     if ($applyHardenedAcl) {
         Set-HardenedCodeAcl $stagingRoot -Recursive
     }
@@ -1012,6 +983,10 @@ try {
             -Path $replacementReceiptFull `
             -Payload $receiptPayload
         $replacementReceiptWritten = $true
+    }
+    if ($RestoreUninstallRecordPath -and
+        (Get-FileSha256 (Join-Path $installRootFull $IntegrityFileName)) -cne $ExpectedUninstallRecordSha256) {
+        throw 'Uninstall recovery installed record readback failed.'
     }
     Write-Output "bootstrap_status=$bootstrapStatus"
     Write-Output "acl_readback_status=$aclReadbackStatus"

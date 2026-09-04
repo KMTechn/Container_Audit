@@ -515,3 +515,141 @@ function Invoke-BootstrapVerifiedReplacementRestore(
         throw "Replacement restore failed; the pre-restore state was contained: $original"
     }
 }
+
+function Test-WriterSessionContractExactPropertySet($Value, [string[]]$Expected) {
+    if ($null -eq $Value) { return $false }
+    $actual = @($Value.PSObject.Properties.Name)
+    if ($actual.Count -ne $Expected.Count) { return $false }
+    foreach ($name in $Expected) {
+        if ($name -cnotin $actual) { return $false }
+    }
+    return $true
+}
+
+function Test-WriterSessionContractExactStringProperties($Value, [string[]]$Names) {
+    if ($null -eq $Value) { return $false }
+    foreach ($name in $Names) {
+        $property = $Value.PSObject.Properties[$name]
+        if ($null -eq $property -or -not ($property.Value -is [string])) { return $false }
+    }
+    return $true
+}
+
+function Get-WriterSessionContractMutexName($Fence, $Vector) {
+    $values = @(
+        [string]$Fence.session_tuple_version,
+        [string]$Vector.session_id,
+        [string]$Vector.attempt_id,
+        [string]$Vector.orchestrator_sha256,
+        [string]$Vector.replacement_transaction_id,
+        [string]$Vector.writer_contract_sha256
+    )
+    $normalized = @($values | ForEach-Object {
+        $_.Normalize([Text.NormalizationForm]::FormC)
+    })
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($normalized -join "`n"))
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try {
+        $digest = ([BitConverter]::ToString($algorithm.ComputeHash($bytes))).Replace('-', '').ToLowerInvariant()
+    }
+    finally { $algorithm.Dispose() }
+    return [string]$Fence.session_mutex_prefix + $digest
+}
+
+function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha256) {
+    if ((Get-Item -LiteralPath $Path -Force).Length -gt 65536) {
+        throw "Writer session public contract is oversized."
+    }
+    if ((Get-FileSha256 $Path) -cne $ExpectedSha256) {
+        throw "Writer session public contract hash differs."
+    }
+    try { $contract = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "Writer session public contract JSON is invalid." }
+    $bindings = @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','session_authority_mutex_name','adapter_sha256','contract_sha256','evidence_path','historical_capability.receipt_sha256','historical_capability.capability_binding_sha256')
+    $fenceFields = @('active_schema','release_schema','control_root','active_filename','release_filename_pattern','admission_mutex_name','noncanonical_mutex_derivation','session_mutex_prefix','session_tuple_version','session_tuple_fields','tuple_separator','tuple_encoding','tuple_normalization','writer_inventory_path','writer_inventory_sha256','canonical_installer_delegation_source','scheduled_task_mutation_rule','natural_trigger_phase_rule','verification_vectors','active_statuses','writer_admission_fail_closed','unknown_or_unobservable_is_denied','denial_mutates_state')
+    $fenceStringFields = @('active_schema','release_schema','control_root','active_filename','release_filename_pattern','admission_mutex_name','noncanonical_mutex_derivation','session_mutex_prefix','session_tuple_version','tuple_separator','tuple_encoding','tuple_normalization','writer_inventory_path','writer_inventory_sha256','canonical_installer_delegation_source','scheduled_task_mutation_rule','natural_trigger_phase_rule')
+    $vectorFields = @('session_id','attempt_id','orchestrator_sha256','replacement_transaction_id','writer_contract_sha256','expected_mutex_name')
+    $vectors = @($contract.all_writer_fence.verification_vectors)
+    $vectorsValid = $vectors.Count -eq 2
+    foreach ($vector in $vectors) {
+        if (
+            -not (Test-WriterSessionContractExactPropertySet $vector $vectorFields) -or
+            -not (Test-WriterSessionContractExactStringProperties $vector $vectorFields) -or
+            [string]$vector.session_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [string]$vector.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [string]$vector.orchestrator_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            [string]$vector.replacement_transaction_id -cnotmatch '^[0-9a-f]{32}$' -or
+            [string]$vector.writer_contract_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+            [string]$vector.expected_mutex_name -cne (Get-WriterSessionContractMutexName $contract.all_writer_fence $vector)
+        ) { $vectorsValid = $false }
+    }
+    if ($vectors.Count -eq 2) {
+        $vectorsValid = $vectorsValid -and
+            [string]$vectors[0].expected_mutex_name -ceq 'Local\KMTech.ContainerAudit.DeploymentSession.1121406d92315036b04c14edfea1a09a03938923fa052324623e225d006a7b0c' -and
+            [string]$vectors[1].expected_mutex_name -ceq 'Local\KMTech.ContainerAudit.DeploymentSession.7487aff53f2ea39a278e3648037625e8c1484636d80a5177dee05ba06556f071'
+    }
+    $requiredTrue = @(
+        $contract.lifecycle_restore.require_same_session_receipt,
+        $contract.lifecycle_restore.require_code_restore_before_writer_restore,
+        $contract.lifecycle_restore.require_lifecycle_restore_before_writer_restore,
+        $contract.lifecycle_restore.require_live_current_user_lifecycle_before_writer_restore,
+        $contract.lifecycle_restore.require_non_elevated_medium_integrity_lifecycle_producer,
+        $contract.lifecycle_restore.producer_code_tree_read_locked_through_execution,
+        $contract.lifecycle_restore.failure_is_explicit,
+        $contract.security.active_session_authority_mutex_required,
+        $contract.security.all_writer_fence_required,
+        $contract.security.all_writer_sinks_require_admission,
+        $contract.security.evidence_paths_outside_install_parent_required,
+        $contract.security.evidence_paths_local_fixed_drive_required,
+        $contract.security.evidence_path_reparse_ancestors_forbidden,
+        $contract.security.evidence_path_aliases_canonicalized
+    )
+    $requiredFalse = @($contract.security.secret_values_recorded, $contract.security.manual_writer_start_allowed, $contract.security.contract_mode_system_mutation, $contract.all_writer_fence.denial_mutates_state)
+    if (
+        [string]$contract.schema -cne 'container-audit-writer-session-cli-contract-v1' -or
+        [string]$contract.app_id -cne 'container_audit' -or
+        [string]$contract.cli.relative_path -cne 'tools/container_writer_session.ps1' -or
+        (@($contract.cli.public_writer_modes) -join ',') -cne 'Contract,Prepare,ValidatePrepared,RestoreWriter' -or
+        -not (Test-BootstrapJsonInteger $contract.cli.success_exit_code) -or [int64]$contract.cli.success_exit_code -ne 0 -or
+        @($contract.cli.failure_exit_codes | Where-Object { -not (Test-BootstrapJsonInteger $_) }).Count -ne 0 -or
+        (@($contract.cli.failure_exit_codes) -join ',') -cne '1,20' -or
+        -not (Test-BootstrapJsonInteger $contract.identifiers.session_max_age_hours) -or [int64]$contract.identifiers.session_max_age_hours -ne 24 -or
+        [string]$contract.identifiers.session_authority_mutex_derivation -cne 'Local\KMTech.ContainerAudit.DeploymentSession.<sha256(v1 canonical session tuple)>' -or
+        -not (Test-WriterSessionContractExactPropertySet $contract.all_writer_fence $fenceFields) -or
+        -not (Test-WriterSessionContractExactStringProperties $contract.all_writer_fence $fenceStringFields) -or
+        [string]$contract.all_writer_fence.active_schema -cne 'container-audit-all-writer-fence-active-v1' -or
+        [string]$contract.all_writer_fence.release_schema -cne 'container-audit-all-writer-fence-release-v1' -or
+        [string]$contract.all_writer_fence.control_root -cne '%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\writer-session' -or
+        [string]$contract.all_writer_fence.active_filename -cne 'active.json' -or
+        [string]$contract.all_writer_fence.release_filename_pattern -cne 'release-{replacement_transaction_id}-{release_authorization_sha256}.json' -or
+        [string]$contract.all_writer_fence.admission_mutex_name -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1' -or
+        [string]$contract.all_writer_fence.noncanonical_mutex_derivation -cne 'Local\KMTech.ContainerAudit.WriterAdmission.v1.<first 16 lowercase hex characters of SHA-256 over the absolute control root after slash-to-backslash conversion, trailing-backslash removal, Unicode NFC, and ASCII A-Z to a-z mapping with every other code point unchanged, encoded as UTF-8 without BOM>' -or
+        [string]$contract.all_writer_fence.session_mutex_prefix -cne 'Local\KMTech.ContainerAudit.DeploymentSession.' -or
+        [string]$contract.all_writer_fence.session_tuple_version -cne 'container-audit-deployment-session-authority-v1' -or
+        $contract.all_writer_fence.session_tuple_fields -isnot [Object[]] -or
+        @($contract.all_writer_fence.session_tuple_fields | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+        (@($contract.all_writer_fence.session_tuple_fields) -join ',') -cne 'session_tuple_version,session_id,attempt_id,orchestrator_sha256,replacement_transaction_id,writer_contract_sha256' -or
+        [string]$contract.all_writer_fence.tuple_separator -cne 'LF (U+000A) between ordered fields; no trailing LF' -or
+        [string]$contract.all_writer_fence.tuple_encoding -cne 'UTF-8 without BOM' -or
+        [string]$contract.all_writer_fence.tuple_normalization -cne 'Unicode NFC applied to each field before joining' -or
+        [string]$contract.all_writer_fence.writer_inventory_path -cne 'tools/container_writer_sink_inventory.json' -or
+        [string]$contract.all_writer_fence.canonical_installer_delegation_source -cne 'writer_sink_sources from the exact pinned code-derived inventory' -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.scheduled_task_mutation_rule) -or
+        [string]::IsNullOrWhiteSpace([string]$contract.all_writer_fence.natural_trigger_phase_rule) -or
+        [string]$contract.all_writer_fence.writer_inventory_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $contract.all_writer_fence.verification_vectors -isnot [Object[]] -or
+        $contract.all_writer_fence.active_statuses -isnot [Object[]] -or
+        @($contract.all_writer_fence.active_statuses | Where-Object { $_ -isnot [string] }).Count -ne 0 -or
+        (@($contract.all_writer_fence.active_statuses) -join ',') -cne 'PREPARING,PREPARED,RESTORING,RESTORE_FAILED,INSTALLING' -or
+        $contract.all_writer_fence.writer_admission_fail_closed -isnot [bool] -or -not $contract.all_writer_fence.writer_admission_fail_closed -or
+        $contract.all_writer_fence.unknown_or_unobservable_is_denied -isnot [bool] -or -not $contract.all_writer_fence.unknown_or_unobservable_is_denied -or
+        -not $vectorsValid -or
+        [string]$contract.receipts.prepared_schema -cne 'container-audit-writer-session-prepared-v3' -or
+        [string]$contract.receipts.restored_schema -cne 'container-audit-writer-session-restored-v2' -or
+        [string]$contract.receipts.lifecycle_restore_schema -cne 'container-audit-replacement-lifecycle-restore-v1' -or
+        (@($contract.receipts.prepared_required_bindings) -join ',') -cne ($bindings -join ',') -or
+        [string]$contract.lifecycle_restore.product_mode -cne '--restore-current-user-lifecycle-after-replacement' -or
+        @($requiredTrue | Where-Object { $_ -isnot [bool] -or -not $_ }).Count -ne 0 -or
+        @($requiredFalse | Where-Object { $_ -isnot [bool] -or $_ }).Count -ne 0
+    ) { throw "Writer session public contract semantics differ." }
+}

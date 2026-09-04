@@ -89,15 +89,15 @@ Full CI가 exact SHA에서 한 번 실행한다.
 
 ### 설치와 최초 실행
 
-`INSTALL_THIS_PC.ps1`은 관리자 쓰기 전용 경로에 동결 코드와 무결성 기록을
-배치하는 최소 부트스트랩이다. 이 단계는 identity, profile, ledger, queue 또는
-relay persistence를 만들지 않는다.
+보존한 정확한 portable packet에서 일반 작업자 계정으로 canonical 설치를
+실행한다. 내부 helper는 관리자 쓰기 전용 경로에 코드와 무결성 기록을 배치한다.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_CANONICAL_PORTABLE.ps1
 ```
 
-배치 후 일반 작업자 계정으로 `Container_Audit.exe`를 실행한다. 앱은 첫 실행에서
+배치 후 일반 작업자 계정으로
+`C:\KMTech\Apps\Container_Audit\current\launch-container-audit.cmd`를 실행한다. 앱은 첫 실행에서
 서버 승인된 producer identity/manifest/credential, CurrentUser DPAPI logistics
 profile, business ledger와 durable queue를 사용자 범위에 만들고 즉시 readback한
 뒤 같은 프로세스에서 사용한다. 기존의 완전하고 일치하는 상태는 다시 만들지
@@ -110,18 +110,26 @@ profile, business ledger와 durable queue를 사용자 범위에 만들고 즉�
 - persistent relay: 현재 사용자 권한의
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\KMTech.ContainerAudit.Relay`
 
-relay는 hardened `Container_Audit.exe --container-audit-user-relay`를 현재 사용자로
+relay는 hardened `runtime\pythonw.exe -I -B app\main.py --container-audit-user-relay`를 현재 사용자로
 실행하고 최대 60초 간격으로 durable queue를 다시 확인한다. SYSTEM AtStartup
 task는 설치/실행 계약에 포함되지 않는다.
 
-g5 공개 제거는 먼저 현재 사용자 persistence와 relay를 제거하면서 데이터를
-보존하고, 별도의 승격된 inverse가 hardened code와 소유가 확인된 구형 task만
-제거한다. 데이터 파기는 이 명령들의 일부가 아니다.
+일반 제거는 앱 창을 닫은 뒤 설치에 사용한 정확한 packet의 바깥 소스 경로에서
+같은 작업자 계정으로 실행한다. canonical 명령은 설치/소스 무결성과 소유권을
+확인하고 현재 사용자 persistence/relay를 정지한 뒤 필요한 코드 제거만 승격한다.
 
 ```powershell
-C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe --remove-current-user-setup
-powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall
 ```
+
+성공은 `uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED`로 표시한다. business data,
+credential, reusable key, profile, queue와 서버 등록은 보존한다. 다른 packet이나
+알 수 없는 설치 상태, 실행 중인 writer, legacy scheduled writer는 제거를 막는다.
+부분 삭제나 후속 실패는 동일 실행의 fence 아래 정확한 코드/무결성 기록과
+HKCU/relay 사전 상태를 복구한 뒤 `PASS_EXACT_PREIMAGE_SAFE_TO_RETRY`를 표시한다.
+이 표시가 없으면 audit에 기록된 recovery tree와 원본 packet을 보존하고 실패를
+해결해야 하며, 수동 fence 삭제나 임의 프로세스 종료로 우회하지 않는다.
+재설치는 위 canonical 설치 명령과 현재 사용자 첫 실행을 반복한다.
 
 ## 🎯 핵심 기능 상세
 

@@ -111,7 +111,7 @@ def test_install_helper_rejects_string_false_writer_contract(tmp_path):
     environment = dict(os.environ)
     environment.update(
         {
-            "KMTECH_TEST_INSTALLER": str(INSTALLER),
+            "KMTECH_TEST_INTEGRITY_HELPER": str(INTEGRITY_HELPER),
             "KMTECH_TEST_VALID_CONTRACT": str(valid_path),
             "KMTECH_TEST_VALID_SHA256": hashlib.sha256(valid_path.read_bytes()).hexdigest(),
             "KMTECH_TEST_INVALID_CONTRACT": str(invalid_path),
@@ -124,7 +124,7 @@ def test_install_helper_rejects_string_false_writer_contract(tmp_path):
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
-    $env:KMTECH_TEST_INSTALLER,
+    $env:KMTECH_TEST_INTEGRITY_HELPER,
     [ref]$tokens,
     [ref]$errors
 )

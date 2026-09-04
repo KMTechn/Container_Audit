@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
@@ -252,7 +253,7 @@ def test_bootstrap_is_minimal_code_placement_contract():
     assert "'/reset', '/L'" in text
     assert "acl_readback_status=UNKNOWN" in text
     reuse_index = text.index("$bootstrapStatus = 'REUSED'")
-    final_acl_index = text.index("Set-HardenedCodeAcl $installRootFull -Recursive")
+    final_acl_index = text.index("Set-HardenedCodeAcl $installRootFull -Recursive", reuse_index)
     success_index = text.index('Write-Output "bootstrap_status=$bootstrapStatus"')
     assert reuse_index < final_acl_index < success_index
     assert "Register-ScheduledTask" not in text
@@ -264,7 +265,8 @@ def test_bootstrap_is_minimal_code_placement_contract():
     assert "EnableWindowsSandboxQualification" not in text
     assert "Remove-OwnedLegacyTask" in text
     assert "Test-CurrentUserRelayPersistencePresent" in text
-    assert "--remove-current-user-setup" in text
+    assert "INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall as the current user" in text
+    assert "Product $install '--remove-current-user-setup'" in PORTABLE_INSTALLER.read_text(encoding="utf-8")
 
 
 def test_placement_writer_fence_release_imports_helper_in_script_scope():
@@ -390,13 +392,45 @@ def test_direct_production_helper_rejects_well_formed_but_inactive_delegation(
 
 def test_canonical_installer_passes_exact_placement_delegation_to_every_helper_call():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-
-    assert text.count("'-WriterFenceHelperPath'") == 2
-    assert text.count("'-ExpectedWriterFenceHelperSha256'") == 2
-    assert text.count("'-WriterFenceSessionId'") == 2
-    assert text.count("'-WriterFenceAttemptId'") == 2
-    assert text.count("'-WriterFenceReplacementTransactionId'") == 2
-    assert text.count("'-WriterFenceDelegationToken'") == 2
+    # Enumerate the actual execution sites, including uninstall's derived
+    # recovery arguments, so adding an unfenced helper cannot pass by count.
+    calls = re.findall(r"& \$winps @(\w+)", text)
+    assert sorted(calls) == sorted([
+        "uninstallArguments", "bootstrap", "recoverCodeArguments", "restoreBootstrap",
+    ])
+    fields = (
+        "WriterFenceHelperPath", "ExpectedWriterFenceHelperSha256",
+        "WriterFenceSessionId", "WriterFenceAttemptId",
+        "WriterFenceReplacementTransactionId", "WriterFenceDelegationToken",
+    )
+    for arguments, helper_root in (
+        ("uninstallArguments", "source"), ("bootstrap", "source"),
+        ("restoreBootstrap", "install"),
+    ):
+        closing = "\n            )" if arguments == "restoreBootstrap" else "\n        )"
+        block = text.split(f"${arguments} = @(", 1)[1].split(closing, 1)[0]
+        assert f"'-File',(Join-Path ${helper_root} 'INSTALL_THIS_PC.ps1')" in block
+        for field in fields:
+            assert block.count(f"'-{field}'") == 1, (arguments, field)
+        for field, value in (
+            ("WriterFenceSessionId", "SessionId"),
+            ("WriterFenceAttemptId", "AttemptId"),
+            ("WriterFenceReplacementTransactionId", "TransactionId"),
+            ("WriterFenceDelegationToken", "DelegationToken"),
+        ):
+            assert f"'-{field}',$Script:CanonicalWriterFence{value}" in block
+        assert "'-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256)" in block
+        helper_path = (
+            "$writerFenceHelperPath" if arguments == "uninstallArguments"
+            else f"(Join-Path ${helper_root} 'tools\\container_writer_fence.ps1')"
+        )
+        assert f"'-WriterFenceHelperPath',{helper_path}" in block
+    assert "$recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })" in text
+    assert "$recoverCodeArguments += @('-RestoreUninstallRecordPath',$uninstallRecordPreimagePath," in text
+    assert "'-ExpectedUninstallRecordSha256',$uninstallRecordSha256)" in text
+    recovery = text.index("$recoverCodeArguments =")
+    delegation = text.rindex("[void](Set-ContainerWriterFenceDelegation", 0, recovery)
+    assert delegation < recovery < text.index("& $winps @recoverCodeArguments")
 
 
 def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback():
@@ -2161,7 +2195,7 @@ def test_bootstrap_copies_opt_in_tls_ca_for_current_user_onboarding(tmp_path):
     assert expected.read_bytes() == ca_payload
 
 
-def test_bootstrap_refuses_implicit_replacement_and_inverse_preserves_user_state(tmp_path):
+def test_bootstrap_refuses_implicit_replacement_and_unfenced_inverse(tmp_path):
     source = _release_fixture(tmp_path)
     install = tmp_path / "apps" / "current"
     user_state = tmp_path / "LocalAppData" / "KMTech" / "ContainerAudit" / "ledger.db"
@@ -2179,9 +2213,9 @@ def test_bootstrap_refuses_implicit_replacement_and_inverse_preserves_user_state
     conflict_text = "".join((conflict.stderr + conflict.stdout).split()).lower()
     assert "differentordamagedhardenedcodeplacementexists" in conflict_text
     removed = _run_installer(source, install, "-Uninstall")
-    assert removed.returncode == 0, removed.stderr
-    assert "uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED" in removed.stdout
-    assert not install.exists()
+    assert removed.returncode != 0
+    assert "requires exact attempt-bound writer fence parameters" in removed.stderr
+    assert (install / "Container_Audit.exe").read_bytes() == b"container-audit-frozen-exe"
     assert user_state.read_bytes() == b"preserve-me"
 
 

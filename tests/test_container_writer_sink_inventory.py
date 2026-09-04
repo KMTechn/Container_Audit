@@ -277,11 +277,20 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 19,
+        "call_operator": 21,
         "com_wmi_process_create": 1,
         "dot_source": 8,
         "start_process": 3,
     }
+    helper_calls = [
+        row for row in payload["powershell_execution_inventory"]["execution_sites"]
+        if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
+        and row["kind"] == "call_operator" and row["target"] == "$winps"
+    ]
+    # Four delegated bootstrap invocations and two read-only integrity probes.
+    assert len(helper_calls) == 6
+    assert all(row["guarded"] for row in helper_calls)
+    assert {row["guard_name"] for row in helper_calls} == {"Enter-ContainerWriterSessionAuthority"}
     bootstrap_loads = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"

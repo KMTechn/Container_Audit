@@ -1,10 +1,11 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$EvidencePath = "",
     [string]$ServerBaseUrl = "",
     [switch]$PlanOnly,
+    [switch]$Uninstall,
     [switch]$AllowNoncanonicalLayoutForTest,
     [switch]$SkipSignatureValidationForTest
 )
@@ -388,7 +389,7 @@ function Get-WriterInventorySemantics($Inventory) {
     function Remove-WriterInventoryPositions($Value) {
         if ($Value -is [System.Management.Automation.PSCustomObject]) {
             foreach ($property in @($Value.PSObject.Properties)) {
-                if ($property.Name -ceq 'inventory_sha256' -or $property.Name -cmatch '(^|_)line$') {
+                if ($property.Name -cin @('inventory_sha256','writer_site_count') -or $property.Name -cmatch '(^|_)line$') {
                     $Value.PSObject.Properties.Remove($property.Name)
                 } else { Remove-WriterInventoryPositions $property.Value }
             }
@@ -1224,6 +1225,7 @@ $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity
 $wanted = Command $install
 if ($PlanOnly) {
     "install_status=PLAN_ONLY"
+    if ($Uninstall) { 'operation=UNINSTALL'; 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' }
     "install_root=$install"
     "autostart_command=$wanted"
     "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
@@ -1250,6 +1252,25 @@ if (Test-Path -LiteralPath $install -PathType Container) {
     }
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
+if ($Uninstall) {
+    foreach ($pair in @(@($source, $install), @($lad, $install), @($source, $lad))) {
+        if ((Same $pair[0] $pair[1]) -or
+            $pair[0].StartsWith($pair[1] + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            $pair[1].StartsWith($pair[0] + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Uninstall requires separate source, code and current-user data roots.'
+        }
+    }
+    if (-not (Test-Path -LiteralPath $install -PathType Container)) {
+        throw 'Uninstall requires the exact installed tree and its integrity record.'
+    }
+    $uninstallIntegrity = Assert-BootstrapIntegrityRecord $install
+    $uninstallAggregate = Get-InventoryAggregate @(Get-CodeInventory $source)
+    $uninstallRecordSha256 = Sha (Join-Path $install 'bootstrap-integrity.json')
+    if ((Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256 -or
+        [string]$uninstallIntegrity.aggregate_sha256 -cne $uninstallAggregate) {
+        throw 'Uninstall installed/source identity differs; use the exact installed packet.'
+    }
+}
 $statusRoot = Join-Path $lad 'KMTech\DirectSync\container_audit\status'
 $stop = Join-Path $lad 'KMTech\DirectSync\container_audit\control\container_audit_user_relay.stop.json'
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
@@ -1304,6 +1325,11 @@ $writerBefore = if ($testMode) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
 else { Get-CanonicalWriterPreimageForQuiesce $install }
+if ($Uninstall -and [bool]$writerBefore.present) {
+    throw 'Uninstall requires the current-user layout without legacy scheduled writers.'
+}
+$uninstallCodeStarted = $false
+$uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
 try {
 $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -1342,6 +1368,7 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
 $audit = [ordered]@{
     schema='container-audit-canonical-portable-install-v2'
+    operation=if ($Uninstall) { 'UNINSTALL' } else { 'INSTALL' }
     status='PREIMAGE_SAVED'
     run_id=$runId
     captured_at=(Get-Date).ToUniversalTime().ToString('o')
@@ -1440,6 +1467,80 @@ $enteredPlacementTry = $true
         if (-not $existingVerified) {
             throw 'CODE_PRESTATE_NOT_VERIFIED_REPLACE'
         }
+    }
+    if ($Uninstall) {
+        if (-not $existingVerified -or $placement -cne 'REUSED_VERIFIED' -or
+            (Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256 -or
+            (Sha (Join-Path $install 'bootstrap-integrity.json')) -cne $uninstallRecordSha256 -or
+            (Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate) {
+            throw 'Uninstall installed/source identity changed before mutation.'
+        }
+        Copy-Item -LiteralPath (Join-Path $install 'bootstrap-integrity.json') -Destination $uninstallRecordPreimagePath
+        if ((Sha $uninstallRecordPreimagePath) -cne $uninstallRecordSha256) {
+            throw 'Uninstall integrity preimage copy readback failed.'
+        }
+        $audit.code_integrity_preimage_path = $uninstallRecordPreimagePath
+        $audit.code_integrity_preimage_sha256 = $uninstallRecordSha256
+        $audit.code_recovery_path = Join-Path (Split-Path -Parent $install) ('.current.uninstall.' + $Script:CanonicalWriterFenceAttemptId)
+        $mutated = $true
+        Product $install '--remove-current-user-setup'
+        $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
+            [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) {
+            throw 'Uninstall current-user removal readback failed.'
+        }
+        $uninstallStopSha256 = Sha $stop
+        $audit.status = 'UNINSTALL_RUNTIME_QUIESCED'
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        $uninstallArguments = @(
+            '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'), '-Uninstall',
+            '-SourceRoot',$source, '-InstallRoot',$install,
+            '-OperatorLocalAppDataRoot',$lad, '-ElevationLogPath',$elevationLogPath,
+            '-ExpectedInstalledManifestSha256',$sourceManifestSha256,
+            '-ExpectedInstalledAggregateSha256',$uninstallAggregate,
+            '-QuiesceReceiptPath',$removalPath, '-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
+            '-WriterFenceHelperPath',$writerFenceHelperPath,
+            '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
+            '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+            '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
+            '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
+        )
+        if ($testMode) { $uninstallArguments += '-AllowNoncanonicalLayoutForTest' }
+        $uninstallCodeStarted = $true
+        & $winps @uninstallArguments
+        if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }
+        if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {
+            throw 'Uninstall independent code/runtime absence readback failed.'
+        }
+        if ((Sha $stop) -cne $uninstallStopSha256) { throw 'Uninstall stop marker changed.' }
+        Remove-Item -LiteralPath $stop -Force
+        if (Test-Path -LiteralPath $stop) { throw 'Uninstall stop-marker cleanup failed.' }
+        $audit.status = 'UNINSTALL_AWAITING_FENCE_RELEASE'
+        $audit.code_placement = 'REMOVED'
+        $audit.after = Snapshot
+        Save $auditPath $audit
+        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            -Path $productCompleteAuthorizationPath -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
+        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
+        $canonicalWriterFenceActive = $false
+        $audit.status = 'PASS_UNINSTALLED_DATA_PRESERVED'
+        $audit.completed_at = [DateTime]::UtcNow.ToString('o')
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED'
+        'application_root_status=ABSENT'
+        'current_user_relay_status=ABSENT'
+        'user_state_preserved=true'
+        'server_identity_retired=false'
+        "audit_path=$auditPath"
+        return
     }
     if ($writerRestoreNeeded) {
         $writerDisabled = Disable-CanonicalWriter $install $writerBefore
@@ -1710,6 +1811,76 @@ catch {
         catch {
             throw "CANONICAL_WRITER_REFENCE_FAILED: $($_.Exception.GetType().Name)"
         }
+    }
+    if ($Uninstall) {
+        # The source survives code removal. Renew this same live delegation even
+        # if a failed release already cleared it; no foreign session is adopted.
+        $uninstallActiveFence = Read-ContainerWriterFence
+        [void](Set-ContainerWriterFencePrepared `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -PreparedReceiptPath ([string]$uninstallActiveFence.prepared_receipt_path) `
+            -PreparedReceiptSha256 ([string]$uninstallActiveFence.prepared_receipt_sha256) `
+            -Status 'RESTORING' -AuthorityLease $canonicalWriterFenceAuthority)
+        [void](Set-ContainerWriterFenceDelegation `
+            -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -DelegatedSources $canonicalWriterFenceDelegatedSources `
+            -LifetimeSeconds 300 `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        if ($uninstallCodeStarted -and -not (Test-Path -LiteralPath $install)) {
+            $recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })
+            $recoverCodeArguments += @('-RestoreUninstallRecordPath',$uninstallRecordPreimagePath,
+                '-ExpectedUninstallRecordSha256',$uninstallRecordSha256)
+            & $winps @recoverCodeArguments
+            if ($LASTEXITCODE -ne 0) { throw "Uninstall exact code recovery failed: $LASTEXITCODE" }
+        }
+        [void](Assert-BootstrapIntegrityRecord $install)
+        if ((Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate -or
+            (Sha (Join-Path $install 'bootstrap-integrity.json')) -cne $uninstallRecordSha256) {
+            throw 'Uninstall exact code recovery not proven; runtime remains fenced.'
+        }
+        if ($uninstallCodeStarted) { $audit.code_placement = 'RESTORED_EXACT_PREIMAGE' }
+        # A refusing original relay is never killed or duplicated. Restore its
+        # persistence/stop preimage and release only this attempt's live fence.
+        $remaining = @(Relays)
+        foreach ($item in $remaining) {
+            if (@($old | Where-Object { [int]$_.ProcessId -eq [int]$item.ProcessId -and
+                [string]$_.CommandLine -ceq [string]$item.CommandLine -and
+                (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) }).Count -ne 1) {
+                throw 'Uninstall recovery relay identity changed.'
+            }
+        }
+        Restore $before
+        if (Test-Path -LiteralPath $stop) { Remove-Item -LiteralPath $stop -Force }
+        $check = Snapshot
+        if ([bool]$check.exists -ne [bool]$before.exists -or [string]$check.kind -cne [string]$before.kind -or
+            [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop)) {
+            throw 'Uninstall runtime preimage restore failed.'
+        }
+        # Existing abort is authority/tuple checked and does not depend on audit
+        # availability. Code and persistence are exact before writers reopen.
+        [void](Abort-ContainerWriterFence -SessionId $Script:CanonicalWriterFenceSessionId `
+            -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -AuthorityLease $canonicalWriterFenceAuthority)
+        $canonicalWriterFenceActive = $false
+        if (@(Relays).Count -eq 0) {
+            foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
+            if ($old.Count -gt 0) { Start-Sleep -Seconds 3 }
+        }
+        [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+        $audit.status = 'FAILED_ROLLED_BACK'
+        $audit.rollback.applied = $mutated
+        $audit.rollback.runtime_restored = $true
+        $audit.rollback.code_exact = $true
+        try { Save $auditPath $audit; if ($evidenceFull) { Save $evidenceFull $audit } }
+        catch { Write-Output 'rollback_audit_status=UNAVAILABLE' }
+        'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
+        throw $original
     }
     $autostartRollbackFailure=''
     $codeRollbackFailure=''

@@ -165,6 +165,7 @@ $new=Get-Content $path -Raw | ConvertFrom-Json
 $expected=Get-WriterInventorySemantics $old
 $new.inventory_sha256='a'*64
 $new.writer_sinks[0].line=99999
+$new.powershell_writer_sinks[0].writer_site_count+=6
 $new.closure_direct_mutation_functions[0].direct_callers=@('added-existing-sink-caller')
 if ((Get-WriterInventorySemantics $new) -cne $expected) { throw 'metadata-only membership mismatch' }
 $new.writer_sinks[0].function='forged-writer'
@@ -175,6 +176,12 @@ if ((Get-WriterInventorySemantics $new) -ceq $expected) { throw 'forged delegati
 $new=Get-Content $path -Raw | ConvertFrom-Json
 $new.powershell_writer_sinks[0].guard_name='forged-guard'
 if ((Get-WriterInventorySemantics $new) -ceq $expected) { throw 'forged guard accepted' }
+$new=Get-Content $path -Raw | ConvertFrom-Json
+$new.powershell_writer_sinks[0].guarded=$false
+if ((Get-WriterInventorySemantics $new) -ceq $expected) { throw 'unguarded writer accepted' }
+$new=Get-Content $path -Raw | ConvertFrom-Json
+$new.powershell_writer_sinks[0].writer_site_kinds+=@('foreign-kind')
+if ((Get-WriterInventorySemantics $new) -ceq $expected) { throw 'changed writer kinds accepted' }
 'MEMBERSHIP_REJECTIONS_PASS'
 '''
     completed = subprocess.run([str(WINPS),'-NoProfile','-NonInteractive','-Command',command],

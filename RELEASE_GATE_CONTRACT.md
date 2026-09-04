@@ -27,14 +27,15 @@ canonical adoption.
 
 ## Installation, discoverability, and rollback contract
 
-The public bootstrap is `INSTALL_THIS_PC.ps1`. It has one privileged boundary:
+The public portable entrypoint is `INSTALL_CANONICAL_PORTABLE.ps1`; its
+`INSTALL_THIS_PC.ps1` helper has one privileged boundary:
 copy the frozen release code into
 `C:\KMTech\Apps\Container_Audit\current`, make that tree administrator-writable
 and user-readable/executable, and write `bootstrap-integrity.json` for the exact
 placement. It must not enroll a producer, create identity/profile/ledger/queue,
 write HKCU persistence, create shortcuts, or register any scheduled task.
 
-The non-elevated operator then launches the hardened `Container_Audit.exe`.
+The non-elevated operator then launches the hardened `launch-container-audit.cmd`.
 Before constructing the application client, first-run onboarding creates and
 readbacks the server-authorized producer bundle, CurrentUser-DPAPI logistics
 profile, business ledger, durable queue, and current-user relay persistence.
@@ -69,7 +70,7 @@ The current-user state roots are:
 
 Persistence is the exact HKCU Run value
 `Software\Microsoft\Windows\CurrentVersion\Run\KMTech.ContainerAudit.Relay`.
-It starts the hardened main executable with
+It starts the hardened `runtime\pythonw.exe -I -B app\main.py` with
 `--container-audit-user-relay` as the logged-in user. A single-instance relay
 per user drains the durable queue at login, app start, and a bounded interval
 of at most 60 seconds, so an offline item is retried after connectivity returns.
@@ -83,36 +84,48 @@ first-run onboarding, launches the GUI, proves the authenticated catalog and a
 representative transaction, and demonstrates restart/persistence plus one
 offline-to-online queue flush.
 
-g5 removal is intentionally split across trust boundaries. First, the current
-user runs:
+Normal portable removal is orchestrated across the existing trust boundaries.
+Close app windows, retain the exact installed packet outside the code and user
+data roots, and run from that packet as the original non-elevated operator:
 
 ```powershell
-C:\KMTech\Apps\Container_Audit\current\Container_Audit.exe --remove-current-user-setup
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall
 ```
 
-This removes the exact HKCU Run value, requests graceful termination of the
+The canonical entrypoint verifies source/installed manifest, inventory and
+bootstrap identity before acquiring its existing session authority/fence. It
+calls the actual current-user removal function, removes the exact HKCU Run value,
+requests graceful termination of the
 single owned user relay, and proves its instance lock is absent. It writes a
 redacted current-user removal report and preserves identity, profile, ledger,
 events, queue, spool, status, and logs. A missing relay-absence result is
 `UNKNOWN` and fails removal; it is never treated as zero.
 
-Second, an administrator runs the code-placement inverse:
+The entrypoint supplies the helper's exact attempt-bound delegation, source/code
+identity and quiescence receipt; elevation is limited to code removal. The helper
+rechecks ownership and zero product processes before removing only
+`C:\KMTech\Apps\Container_Audit\current`. Legacy scheduled-writer layouts,
+foreign paths, junctions, missing identities or ambiguous processes fail closed.
+Direct helper uninstall is not an operator entrypoint.
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_THIS_PC.ps1 -Uninstall
-```
+A verified code copy protects partial deletion. The retained exact source and
+original bootstrap record support code recovery after deletion, including late
+audit/fence-release failure. Code integrity and HKCU are restored before this
+same session releases the fence and restarts its original relay. Successful
+recovery prints `uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY`;
+success prints `uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED`. Recovery failure
+is not PASS: preserve the audit, code recovery tree and original packet. Power
+loss, a killed authority process or failure of restoration itself is outside
+this bounded in-run recovery proof; do not repair a fence by deleting it.
 
-The inverse removes only `C:\KMTech\Apps\Container_Audit\current` after strict
-path and reparse-point checks. It also removes the two known legacy scheduled
-tasks only when their single action proves Container ownership, then reads back
-their absence. User data remains preserved. Foreign tasks, foreign paths,
-filesystem roots, junctions, or ambiguous actions block removal.
-
-Neither public command performs destructive data purge. Any future purge needs
+Ordinary removal preserves reusable key material and never retires server
+enrollment. Reinstall uses the same packet's `INSTALL_CANONICAL_PORTABLE.ps1`,
+followed by current-user first run; pre-existing complete credentials are reused.
+The removal command performs no destructive data purge. Any future purge needs
 a separately reviewed command and explicit approval after proving no active
 work and a fully ACKed queue. Rollback during development is the inverse of the
-source changes plus removal of test-only E-drive evidence; deployment rollback
-uses the two commands above in that order.
+source changes while preserving test evidence; product rollback restores the
+declared exact code/runtime preimage and preserves business/credential state.
 
 ## Exact commands
 

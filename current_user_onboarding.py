@@ -1984,5 +1984,5 @@ def removal_main(argv: list[str] | None = None) -> int:
     print(f"current_user_removal_status={report['status']}")
     print("data_preserved=true")
     print(f"current_user_removal_report={paths.removal_report_path}")
-    print("machine_code_removal_command=INSTALL_THIS_PC.ps1 -Uninstall")
+    print("machine_code_removal_command=INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall")
     return 0
