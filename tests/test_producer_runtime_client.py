@@ -5,7 +5,6 @@ import hmac
 import json
 import re
 import sqlite3
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,8 +17,7 @@ import producer_runtime_client as runtime_client
 from direct_sync_push import ProducerCredentials, canonical_json, init_relay_queue_schema
 
 
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-SERVER_RUNTIME_LEASE_MODULE = WORKSPACE_ROOT / "WorkerAnalysisGUI-web" / "producer_runtime_lease.py"
+from tests.contracts.http_replay import load_contract
 
 
 @dataclass
@@ -1716,39 +1714,14 @@ def test_two_workers_can_reserve_only_one_rotating_token(tmp_path):
     assert winners[0].metadata["runtime_request_token"] == "C" * 43
 
 
-@pytest.mark.skipif(
-    not SERVER_RUNTIME_LEASE_MODULE.is_file(),
-    reason="cross-repository WorkerAnalysisGUI-web producer_runtime_lease.py is unavailable",
-)
-def test_cloned_relay_databases_get_one_server_commit_and_one_stale_token(tmp_path):
-    server_root = SERVER_RUNTIME_LEASE_MODULE.parent
-    sys.path.insert(0, str(server_root))
-    try:
-        from producer_runtime_lease import (
-            STALE_RUNTIME_REQUEST_TOKEN,
-            ProducerRuntimeLeaseError,
-            ProducerRuntimeLeaseService,
-            initialize_schema,
-        )
-    finally:
-        sys.path.remove(str(server_root))
-
-    now = datetime.now(UTC)
-    runtime_id, public_jwk = runtime_client.new_runtime_identity()
-    server_db = tmp_path / "server.sqlite3"
-    initialize_schema(server_db, now=now)
-    service = ProducerRuntimeLeaseService(server_db)
-    grant = service.acquire(
-        producer_install_id="install-test",
-        runtime_instance_id=runtime_id,
-        public_jwk=public_jwk,
-        issue_idempotency_key="clone-seed",
-        ttl_seconds=600,
-        now=now,
-    )
-
+def test_cloned_relay_databases_apply_server_rotation_and_quarantine_stale_authority(tmp_path):
+    # The vector comes from two actual server consume transactions. This test
+    # qualifies desktop reservation/receipt handling, not server CAS isolation.
+    vector = load_contract("runtime-token.json")
+    now = vector["now"]
+    grant = vector["grant"]
     first_db = tmp_path / "first.sqlite3"
-    _insert_claimed_row(first_db, "relay-a", owner="worker-a")
+    _make_pending_relay(first_db, tmp_path, "relay-a")
     scope = runtime_client._scope_values(_credentials(), "install-test")
     with sqlite3.connect(first_db) as connection:
         connection.execute(
@@ -1762,66 +1735,68 @@ def test_cloned_relay_databases_get_one_server_commit_and_one_stale_token(tmp_pa
             ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)
             """,
             (
-                runtime_client._scope_key(scope),
-                scope["endpoint_url"], scope["producer_id"], scope["key_id"],
-                scope["producer_install_id"], runtime_id, canonical_json(public_jwk),
+                runtime_client._scope_key(scope), scope["endpoint_url"],
+                scope["producer_id"], scope["key_id"], scope["producer_install_id"],
+                vector["runtime_instance_id"], canonical_json(vector["public_jwk"]),
                 grant["lease_id"], grant["fence"], grant["next_request_token"],
-                grant["next_request_sequence"], grant["expires_at"],
-                now.isoformat(), now.isoformat(),
+                grant["next_request_sequence"], grant["expires_at"], now, now,
             ),
         )
     second_db = tmp_path / "second.sqlite3"
     with sqlite3.connect(first_db) as source, sqlite3.connect(second_db) as target:
         source.backup(target)
     with sqlite3.connect(second_db) as connection:
-        metadata = _metadata("relay-b")
+        metadata = json.loads(connection.execute(
+            "SELECT metadata_json FROM direct_sync_relay_batches"
+        ).fetchone()[0])
+        metadata.update(client_batch_id="relay-b", idempotency_key="relay-b")
         connection.execute(
-            """
-            UPDATE direct_sync_relay_batches
-            SET relay_id='relay-b', lease_owner='worker-b',
-                relative_path=?, metadata_json=?
-            WHERE relay_id='relay-a'
-            """,
-            (metadata["relative_path"], canonical_json(metadata)),
+            "UPDATE direct_sync_relay_batches SET relay_id='relay-b', metadata_json=?",
+            (canonical_json(metadata),),
         )
-    first = runtime_client.prepare_runtime_metadata(
-        db_path=first_db, relay_id="relay-a", metadata=_metadata("relay-a"),
-        credentials=_credentials(), expected_lease_owner="worker-a",
-        expected_attempt_count=1, session=_LeaseSession(), timeout=5,
-    )
-    second = runtime_client.prepare_runtime_metadata(
-        db_path=second_db, relay_id="relay-b", metadata=_metadata("relay-b"),
-        credentials=_credentials(), expected_lease_owner="worker-b",
-        expected_attempt_count=1, session=_LeaseSession(), timeout=5,
-    )
-    assert first.metadata["runtime_request_token"] == second.metadata["runtime_request_token"]
-    assert first.metadata["idempotency_key"] != second.metadata["idempotency_key"]
 
-    outcomes = []
-    for index, metadata in enumerate((first.metadata, second.metadata), start=1):
-        with sqlite3.connect(server_db, isolation_level=None) as connection:
-            connection.row_factory = sqlite3.Row
-            connection.execute("BEGIN IMMEDIATE")
-            try:
-                service.consume_request_in_transaction(
-                    connection,
-                    producer_install_id="install-test",
-                    runtime_instance_id=runtime_id,
-                    public_jwk=public_jwk,
-                    fence=metadata["runtime_fence"],
-                    runtime_request_token=metadata["runtime_request_token"],
-                    runtime_request_sequence=metadata["runtime_request_sequence"],
-                    request_fingerprint=hashlib.sha256(metadata["idempotency_key"].encode()).hexdigest(),
-                    receipt_request_id=f"receipt-{index}",
-                    now=now + timedelta(seconds=index),
-                )
-            except ProducerRuntimeLeaseError as exc:
-                if exc.audit_recorded:
-                    connection.commit()
-                else:
-                    connection.rollback()
-                outcomes.append(exc.code)
-            else:
-                connection.commit()
-                outcomes.append("accepted")
-    assert outcomes == ["accepted", STALE_RUNTIME_REQUEST_TOKEN]
+    class VectorSession(_RelaySession):
+        def __init__(self, outcome):
+            super().__init__()
+            self.outcome = outcome
+
+        def post(self, url, **kwargs):
+            assert not str(url).endswith(runtime_client.ENDPOINT_PATH), "unexpired grant must be reused"
+            response = super().post(url, **kwargs)
+            uploaded = self.source_calls[-1][0]
+            assert uploaded["runtime_instance_id"] == vector["runtime_instance_id"]
+            assert uploaded["runtime_public_jwk"] == vector["public_jwk"]
+            assert uploaded["runtime_fence"] == grant["fence"]
+            assert uploaded["runtime_request_sequence"] == grant["next_request_sequence"]
+            assert uploaded["runtime_request_token"] == grant["next_request_token"]
+            if self.outcome["status"] == "accepted":
+                response.payload["runtime_lease"] = self.outcome["runtime_lease"]
+                return response
+            return _Response(409, self.outcome["error"])
+
+    sessions = [VectorSession(outcome) for outcome in vector["outcomes"]]
+    results = [
+        direct_sync_push.drain_one_relay_batch(
+            db_path=db, credentials=_credentials(), worker_id=f"worker-{i}",
+            session=session, status_dir=tmp_path/f"status-{i}", now=now,
+        )
+        for i, (db, session) in enumerate(zip((first_db, second_db), sessions))
+    ]
+    assert results[0] is not None and results[0].success is True
+    assert results[1] is not None and results[1].success is False
+    assert results[1].error_code == "STALE_RUNTIME_REQUEST_TOKEN"
+    assert len(sessions[0].source_calls) == len(sessions[1].source_calls) == 1
+    assert sessions[0].source_calls[0][0]["idempotency_key"] != sessions[1].source_calls[0][0]["idempotency_key"]
+    states = []
+    batches = []
+    for db in (first_db, second_db):
+        with sqlite3.connect(db) as connection:
+            states.append(connection.execute(
+                "SELECT status, next_request_token, next_request_sequence, assigned_relay_id "
+                "FROM direct_sync_runtime_authority"
+            ).fetchone())
+            batches.append(connection.execute("SELECT status FROM direct_sync_relay_batches").fetchone()[0])
+    rotation = vector["outcomes"][0]["runtime_lease"]
+    assert states[0] == ("ACTIVE", rotation["next_request_token"], rotation["next_request_sequence"], None)
+    assert states[1] == ("OPERATOR_REVIEW", None, None, None)
+    assert batches == ["acked", "operator_review"]

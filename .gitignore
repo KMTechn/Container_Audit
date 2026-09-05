@@ -4,6 +4,7 @@ dist/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.test-runs/
 Container_Audit-*.zip
 config/worker_registry.json
 config/parked_trays/

@@ -1256,12 +1256,13 @@ def test_external_bundle_builder_rejects_broken_symlink_ancestor_before_creation
     assert not missing_target.exists()
 
 
-def test_default_documents_and_settings_junction_is_rejected_read_only(monkeypatch):
+def test_owned_junction_is_rejected_even_without_pathlib_detection(tmp_path, monkeypatch):
     if os.name != "nt":
-        pytest.skip("the built-in Documents and Settings junction is Windows-only")
-    junction = Path("C:/Documents and Settings")
-    if not getattr(junction, "is_junction", lambda: False)():
-        pytest.skip("C:/Documents and Settings is not a junction on this host")
+        pytest.skip("junction coverage requires Windows")
+    target = tmp_path / "junction-target"
+    target.mkdir()
+    junction = tmp_path / "junction"
+    _make_windows_junction(junction, target)
 
     assert not junction.is_symlink()
     attributes = getattr(os.lstat(junction), "st_file_attributes", 0)
@@ -1278,7 +1279,7 @@ def test_default_documents_and_settings_junction_is_rejected_read_only(monkeypat
     assert caught.value.code == "SYMLINK_FORBIDDEN"
 
 
-def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tmp_path):
+def _external_bundle_with_verified_builder_values(tmp_path):
     repo, _tool = _synthetic_capture_repo(tmp_path)
     artifact = tmp_path / "Container_Audit-portable.zip"
     artifact.write_bytes(b"sealed portable artifact fixture")
@@ -1358,12 +1359,18 @@ def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tm
         }
     ]
 
-    validator = Path(
-        "E:/KMTech/production-readiness-20260830/HANDOVER/tools/"
-        "validate_capture_bundle_v1.py"
-    )
+    return evidence_root
+
+
+def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tmp_path):
+    _external_bundle_with_verified_builder_values(tmp_path)
+
+
+def test_external_bundle_matches_authoritative_validator_when_vendored(tmp_path):
+    validator = Path(__file__).parent / "contracts" / "capture_validator" / "validate_capture_bundle_v1.py"
     if not validator.is_file():
-        pytest.skip("canonical external validator is not installed on this host")
+        pytest.skip("authoritative capture validator unavailable; see tests/contracts/README.md")
+    evidence_root = _external_bundle_with_verified_builder_values(tmp_path)
     describe_path = tmp_path / "describe.json"
     describe_path.write_text(
         json.dumps(build_m7_external_capture_bundle_contract(), ensure_ascii=False),

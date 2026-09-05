@@ -1,0 +1,686 @@
+{
+  "expected": {
+    "error_code": "STALE_VERSION",
+    "status": "OPERATOR_REVIEW",
+    "target_label_action": "",
+    "target_label_identity_remains_valid": false,
+    "target_label_membership_bound": true
+  },
+  "inputs": {
+    "item_id": "ITEM-API",
+    "master_label": "BND=PHS-CONTRACT-TARGET",
+    "master_label_fields": {
+      "AUTH_SCOPE": "scope-api",
+      "BND": "PHS-CONTRACT-TARGET",
+      "CLC": "ITEM-API"
+    },
+    "new_barcodes": [
+      "P3-010"
+    ],
+    "old_barcodes": [
+      "P3-000"
+    ],
+    "operator": "contract-fixture"
+  },
+  "requests": [
+    {
+      "body": null,
+      "headers": {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Logistics-API-Token": "contract-only",
+        "X-Logistics-Device-Id": "container-contract-device",
+        "X-Logistics-Program": "Container_Audit",
+        "X-Logistics-Source-Host-Id": "container-contract-host"
+      },
+      "method": "GET",
+      "path": "/logistics/api/v1/capabilities",
+      "response": {
+        "data": {
+          "capabilities": {
+            "bundle_member_replacement_v1": {
+              "allowed_source_locations": [
+                "PHS_GOOD",
+                "REWORK_GOOD_READY"
+              ],
+              "atomic": true,
+              "command_type": "REPLACE_BUNDLE_MEMBERS",
+              "enabled": true,
+              "max_pairs": 2,
+              "multi_member_source_error_code": "REPLACEMENT_SOURCE_NOT_SINGLETON",
+              "multi_member_source_policy": "REJECT_STALE_PHYSICAL_LABEL",
+              "replacement_source_bundle_cardinality": "EXACTLY_ONE_ACTIVE_MEMBER",
+              "requires_exact_source_evidence": [
+                "unit_id",
+                "source_bundle_id",
+                "source_bundle_entity_version",
+                "member_ids",
+                "membership_hash"
+              ],
+              "resolver_aliases": [
+                "/logistics/api/v1/good-units/resolve"
+              ],
+              "resolver_contract_version": "logistics-good-replacement-source-v1",
+              "resolver_path": "/logistics/api/v1/replacements/good-source/resolve",
+              "sealed_transfer_package": false,
+              "target_label_action": "RETAIN_IDENTITY_LABEL",
+              "target_label_identity_remains_valid": true,
+              "target_label_membership_bound": false,
+              "two_bundle_cas": true
+            },
+            "compact_phs2_input_tag_v1": {
+              "cancel_path_template": "/logistics/api/v1/input-tags/{input_tag_id}/cancel",
+              "claim_id_reuse_policy": "FORBIDDEN_PER_INPUT_TAG",
+              "claim_owner_binding_fields": [
+                "claim_id",
+                "device_id",
+                "source_host_id",
+                "principal_id"
+              ],
+              "claim_path_template": "/logistics/api/v1/input-tags/{input_tag_id}/claim",
+              "claim_receipt_replay_policy": "EXACT_STORED_RESPONSE",
+              "completed_membership_basis": "GOOD_PHS_BUNDLE",
+              "completion_label_action": "RETAIN_SAME_PHS2",
+              "enabled": true,
+              "explicit_release": true,
+              "force_cancel_path_template": "/logistics/api/v1/input-tags/{input_tag_id}/force-cancel",
+              "force_release_path_template": "/logistics/api/v1/input-tags/{input_tag_id}/claim/force-release",
+              "inspection_offline_artifact_policy": "DURABLE_IN_ORIGINAL_CLAIM_RECEIPT",
+              "linked_mutation_expected_version_key": "input_tag:{session_id}",
+              "linked_mutation_result_version_policy": "UNCHANGED_UNTIL_TERMINAL_THEN_PLUS_ONE",
+              "qr_contract": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG|CLC|LBL|HSH16",
+              "recovery_configured": false,
+              "register_path": "/logistics/api/v1/input-tags/register",
+              "release_path_template": "/logistics/api/v1/input-tags/{input_tag_id}/claim/release",
+              "resolve_path": "/logistics/api/v1/input-tags/resolve",
+              "single_writer": true,
+              "writer_claim_contract_version": "input-tag-writer-claim-v2"
+            },
+            "defect_document_map_v1": {
+              "command_type": "MAP_DEFECT_DOCUMENT",
+              "enabled": true,
+              "qr_contract_version": "return-a4-scan-v2"
+            },
+            "defect_intake_batch_v1": {
+              "accepted_source_locations": [
+                "INSPECTION_NG_HOLD",
+                "DEFECT_INTAKE_WAIT",
+                "REWORK_WIP",
+                "PROCESS_DAMAGE_HOLD"
+              ],
+              "atomic": true,
+              "command_type": "RECEIVE_DEFECT_BATCH",
+              "enabled": true,
+              "max_sources": 100,
+              "process_damage_candidate_state_after_receive": "DEFECT_WAREHOUSE_RECEIVED",
+              "process_damage_candidate_status": "PROCESS_DAMAGE_READY",
+              "process_damage_policy": "EXACT_OWNER_LOCATION_AND_LINEAGE_REQUIRED",
+              "requires_source_member_ids": true,
+              "requires_target_evidence": [
+                "item_id",
+                "selected_member_ids",
+                "selected_membership_hash",
+                "selected_normalized_barcodes"
+              ],
+              "strict_terminal_projection_requires_batch_confirmation": true
+            },
+            "defect_return_batch_v1": {
+              "atomic": true,
+              "command_type": "DISPATCH_RETURN_BATCH",
+              "enabled": true,
+              "max_bundles": 100
+            },
+            "direct_member_unstage_v1": {
+              "atomic": true,
+              "command_type": "UNSTAGE_DIRECT_MEMBER",
+              "enabled": true,
+              "endpoint_template": "/logistics/api/v1/sessions/{session_id}/members/unstage",
+              "releases_quantity_hold": true,
+              "requires_active_input_tag_claim": true,
+              "restage_supported": true,
+              "target_location": "DISASSEMBLY",
+              "target_member_state": "STAGED",
+              "target_origin": "DIRECT"
+            },
+            "pooled_phs2_input_tag_v1": {
+              "allocate_path": "/logistics/api/v1/input-tags/pooled/allocate",
+              "allocate_status": "RESERVED",
+              "allocation_command_type": "ALLOCATE_POOLED_INPUT_TAGS",
+              "atomic": true,
+              "cancel_command_type": "CANCEL_POOLED_INPUT_TAGS",
+              "cancel_path_template": "/logistics/api/v1/input-tags/pooled/{allocation_id}/cancel",
+              "client_source_fields_allowed": false,
+              "confirm_command_type": "CONFIRM_POOLED_INPUT_TAGS",
+              "confirm_path_template": "/logistics/api/v1/input-tags/pooled/{allocation_id}/confirm",
+              "confirm_response_exact_input_tags": true,
+              "confirm_status": "CONFIRMED",
+              "continuation_registration": "ATOMIC_REGISTERED_OPEN_SESSIONS",
+              "continue_command_type": "CONTINUE_POOLED_INPUT_TAGS",
+              "continue_path_template": "/logistics/api/v1/input-tags/pooled/{allocation_id}/continue",
+              "disabled_reason": "POOLED_INPUT_TAG_SCHEMA_NOT_INITIALIZED",
+              "enabled": false,
+              "independent_schema_initializer_required": true,
+              "resolve_identifier_policy": "EXACTLY_ONE",
+              "resolve_input_tag_returns_segment": true,
+              "resolve_path": "/logistics/api/v1/input-tags/pooled/resolve",
+              "resolve_query_identifiers": [
+                "allocation_id",
+                "input_tag_id"
+              ],
+              "server_owned_display_fields": [
+                "issue_day",
+                "outbound_date",
+                "daily_ordinal"
+              ],
+              "single_iin_per_segment": true,
+              "source_selection": "SERVER_FIFO_DISASSEMBLY",
+              "two_phase_registration": true,
+              "work_order_identity": "INPUT_TAG_ID"
+            },
+            "rework_open_session_ng_resolver_bridge_v1": {
+              "atomic_owner_revalidation": true,
+              "enabled": true,
+              "materialize_method": "POST",
+              "materialize_path": "/logistics/api/v1/units/resolve/materialize",
+              "mutation_command_type": "MATERIALIZE_SESSION_NG_HOLD",
+              "required_machine_capability": "REWORK_NG_RESOLVER_BRIDGE",
+              "required_program": "Rework_worker",
+              "requires_exact_writer_claim_delegation": true,
+              "requires_scoped_machine_credential": true,
+              "resolve_is_read_only": true,
+              "resolve_method": "GET",
+              "resolve_path": "/logistics/api/v1/units/resolve",
+              "writer_claim_owner_fields": [
+                "claim_id",
+                "device_id",
+                "source_host_id",
+                "principal_id"
+              ]
+            },
+            "sealed_transfer_member_replacement_v1": {
+              "atomic": true,
+              "client_rollout_gate": "REQUIRE_ENABLED_CAPABILITY_AND_EXACT_RECEIPT",
+              "command_type": "REPLACE_SEALED_TRANSFER_MEMBERS",
+              "disabled_server_behavior": "REJECT_COMMAND_DO_NOT_MUTATE_LOCAL_STATE",
+              "enabled": true,
+              "endpoint_template": "/logistics/api/v1/transfers/{target_bundle_id}/members/replace-and-reseal",
+              "fail_closed_when_unavailable": true,
+              "max_pairs": 2,
+              "multi_member_source_error_code": "REPLACEMENT_SOURCE_NOT_SINGLETON",
+              "multi_member_source_policy": "REJECT_STALE_PHYSICAL_LABEL",
+              "old_server_behavior": "CAPABILITY_ABSENT_DO_NOT_SEND",
+              "package_or_wrapped_replacement": false,
+              "receipt_contract_version": "sealed-transfer-member-replacement-v1",
+              "replacement_source_bundle_cardinality": "EXACTLY_ONE_ACTIVE_MEMBER",
+              "requires_current_seal_evidence": true,
+              "requires_exact_source_membership": true,
+              "requires_exact_target_membership": true,
+              "rotates_seal": true,
+              "seal_qr_contract_version": "transfer-seal-qr-v1",
+              "seal_qr_value_encoding": "RFC3986_PERCENT",
+              "target_bundle_type": "TRANSFER",
+              "target_required_location": "TRANSFER",
+              "target_required_state": "AVAILABLE"
+            },
+            "terminal_operation_lease_rotation_v1": {
+              "atomic": true,
+              "command_type": "REPLACE_BUNDLE_MEMBERS",
+              "enabled": false,
+              "lost_ack_replay": "STORED_COMMAND_RECEIPT",
+              "predecessor_operation": "SEAL_TRANSFER_BUNDLE",
+              "request_contract_version": "terminal-operation-lease-rotation-request-v1",
+              "result_contract_version": "terminal-operation-lease-rotation-result-v1",
+              "successor_operation": "SEAL_TRANSFER_BUNDLE"
+            },
+            "terminal_operation_lease_v1": {
+              "authoritative_preflight_atomic": true,
+              "disabled_reason": "OPERATION_LEASE_SIGNER_NOT_CONFIGURED",
+              "enabled": false,
+              "expired_requires_reconciliation": true,
+              "issue_path": "/logistics/api/v1/operation-leases/issue",
+              "jws_alg": "ES256",
+              "jws_typ": "terminal-operation-lease+jws",
+              "normal_consume": "ATOMIC_WITH_BUSINESS_COMMAND",
+              "physical_member_overlap_fenced": true,
+              "program_operations": {
+                "Container_Audit": "SEAL_TRANSFER_BUNDLE",
+                "Label_Match": "CREATE_PACKAGE"
+              },
+              "reconcile_path": "/logistics/api/v1/operation-leases/reconcile",
+              "signer_fail_closed": true,
+              "terminal_exclusive": true
+            }
+          },
+          "capability_ids": [
+            "bundle_member_replacement_v1",
+            "compact_phs2_input_tag_v1",
+            "defect_document_map_v1",
+            "defect_intake_batch_v1",
+            "defect_return_batch_v1",
+            "direct_member_unstage_v1",
+            "pooled_phs2_input_tag_v1",
+            "rework_open_session_ng_resolver_bridge_v1",
+            "sealed_transfer_member_replacement_v1",
+            "terminal_operation_lease_rotation_v1",
+            "terminal_operation_lease_v1"
+          ],
+          "contract_version": "logistics-v1"
+        },
+        "ok": true,
+        "status": "ok"
+      },
+      "status_code": 200
+    },
+    {
+      "body": null,
+      "headers": {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Logistics-API-Token": "contract-only",
+        "X-Logistics-Device-Id": "container-contract-device",
+        "X-Logistics-Program": "Container_Audit",
+        "X-Logistics-Source-Host-Id": "container-contract-host"
+      },
+      "method": "GET",
+      "path": "/logistics/api/v1/bundles/resolve?bundle_id=PHS-CONTRACT-TARGET&item_id=ITEM-API&authority_scope_id=scope-api&bundle_role=TRANSFER_SOURCE",
+      "response": {
+        "data": {
+          "authority_epoch": 2,
+          "authority_scope_id": "scope-api",
+          "barcode_member_count": 2,
+          "barcode_membership_hash": "29f0506338a4406be38319c5cee44d9f4f86b9d5efbcca221882529710a75bd1",
+          "bundle": {
+            "authority_epoch": 2,
+            "authority_scope_id": "scope-api",
+            "barcode_member_count": 2,
+            "barcode_membership_hash": "29f0506338a4406be38319c5cee44d9f4f86b9d5efbcca221882529710a75bd1",
+            "bundle_id": "PHS-CONTRACT-TARGET",
+            "bundle_role": "TRANSFER_SOURCE",
+            "bundle_state": "AVAILABLE",
+            "bundle_type": "PHS",
+            "candidate_count": 1,
+            "canonical_bundle_url": "/logistics/api/v1/bundles/scope-api/PHS-CONTRACT-TARGET",
+            "current_location": "PHS_GOOD",
+            "current_locations": [
+              "PHS_GOOD"
+            ],
+            "entity_version": 1,
+            "entity_versions": {
+              "bundle:PHS-CONTRACT-TARGET": 1
+            },
+            "external_label": "CONTRACT-TARGET",
+            "item_id": "ITEM-API",
+            "ledger_plane": "SHADOW_CANDIDATE",
+            "member_count": 2,
+            "member_ids": [
+              "unit_00000000000000000000000000000082",
+              "unit_0000000000000000000000000000008a"
+            ],
+            "members": [
+              {
+                "current_inbound_iin": "IIN-API-001",
+                "inbound_iin": "IIN-API-001",
+                "item_id": "ITEM-API",
+                "location_code": "PHS_GOOD",
+                "normalized_barcode": "P3-000",
+                "unit_id": "unit_00000000000000000000000000000082",
+                "unit_state": "CONSUMED",
+                "uom": "EA"
+              },
+              {
+                "current_inbound_iin": "IIN-API-001",
+                "inbound_iin": "IIN-API-001",
+                "item_id": "ITEM-API",
+                "location_code": "PHS_GOOD",
+                "normalized_barcode": "P3-001",
+                "unit_id": "unit_0000000000000000000000000000008a",
+                "unit_state": "CONSUMED",
+                "uom": "EA"
+              }
+            ],
+            "membership_hash": "7c6417a865e5a2c54bcd3bff8a297867ecf9b33f2e53cebdf208138b7e44539a",
+            "mode": "SHADOW",
+            "origin_inbound_iins": [
+              "IIN-API-001"
+            ],
+            "plane_epoch": 1,
+            "source_iin": "IIN-API-001",
+            "source_iins": [
+              "IIN-API-001"
+            ],
+            "source_session_id": "CONTRACT-TARGET",
+            "uom": "EA"
+          },
+          "bundle_id": "PHS-CONTRACT-TARGET",
+          "bundle_role": "TRANSFER_SOURCE",
+          "bundle_state": "AVAILABLE",
+          "bundle_type": "PHS",
+          "candidate_count": 1,
+          "canonical_bundle_url": "/logistics/api/v1/bundles/scope-api/PHS-CONTRACT-TARGET",
+          "current_location": "PHS_GOOD",
+          "current_locations": [
+            "PHS_GOOD"
+          ],
+          "entity_version": 1,
+          "entity_versions": {
+            "bundle:PHS-CONTRACT-TARGET": 1
+          },
+          "external_label": "CONTRACT-TARGET",
+          "item_id": "ITEM-API",
+          "ledger_plane": "SHADOW_CANDIDATE",
+          "member_count": 2,
+          "member_ids": [
+            "unit_00000000000000000000000000000082",
+            "unit_0000000000000000000000000000008a"
+          ],
+          "members": [
+            {
+              "current_inbound_iin": "IIN-API-001",
+              "inbound_iin": "IIN-API-001",
+              "item_id": "ITEM-API",
+              "location_code": "PHS_GOOD",
+              "normalized_barcode": "P3-000",
+              "unit_id": "unit_00000000000000000000000000000082",
+              "unit_state": "CONSUMED",
+              "uom": "EA"
+            },
+            {
+              "current_inbound_iin": "IIN-API-001",
+              "inbound_iin": "IIN-API-001",
+              "item_id": "ITEM-API",
+              "location_code": "PHS_GOOD",
+              "normalized_barcode": "P3-001",
+              "unit_id": "unit_0000000000000000000000000000008a",
+              "unit_state": "CONSUMED",
+              "uom": "EA"
+            }
+          ],
+          "membership_hash": "7c6417a865e5a2c54bcd3bff8a297867ecf9b33f2e53cebdf208138b7e44539a",
+          "mode": "SHADOW",
+          "origin_inbound_iins": [
+            "IIN-API-001"
+          ],
+          "plane_epoch": 1,
+          "source_iin": "IIN-API-001",
+          "source_iins": [
+            "IIN-API-001"
+          ],
+          "source_session_id": "CONTRACT-TARGET",
+          "uom": "EA"
+        },
+        "ok": true,
+        "status": "ok"
+      },
+      "status_code": 200
+    },
+    {
+      "body": null,
+      "headers": {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Logistics-API-Token": "contract-only",
+        "X-Logistics-Device-Id": "container-contract-device",
+        "X-Logistics-Program": "Container_Audit",
+        "X-Logistics-Source-Host-Id": "container-contract-host"
+      },
+      "method": "GET",
+      "path": "/logistics/api/v1/replacements/good-source/resolve?authority_scope_id=scope-api&barcode=P3-010",
+      "response": {
+        "data": {
+          "accounting_inbound_iin": "IIN-API-001",
+          "authority_epoch": 2,
+          "authority_scope_id": "scope-api",
+          "bundle_id": "PHS-CONTRACT-SOURCE",
+          "bundle_state": "AVAILABLE",
+          "bundle_type": "PHS",
+          "candidate_count": 1,
+          "contract_version": "logistics-good-replacement-source-v1",
+          "current_location": "PHS_GOOD",
+          "entity_version": 1,
+          "entity_versions": {
+            "bundle:PHS-CONTRACT-SOURCE": 1,
+            "unit:unit_0000000000000000000000000000009c": 2
+          },
+          "inbound_iin": "IIN-API-001",
+          "item_id": "ITEM-API",
+          "ledger_plane": "SHADOW_CANDIDATE",
+          "member_count": 1,
+          "member_ids": [
+            "unit_0000000000000000000000000000009c"
+          ],
+          "members": [
+            {
+              "current_inbound_iin": "IIN-API-001",
+              "inbound_iin": "IIN-API-001",
+              "item_id": "ITEM-API",
+              "location_code": "PHS_GOOD",
+              "normalized_barcode": "P3-010",
+              "unit_entity_version": 2,
+              "unit_id": "unit_0000000000000000000000000000009c",
+              "unit_state": "CONSUMED",
+              "uom": "EA"
+            }
+          ],
+          "membership_hash": "24142ff901d74c9fa6b0ff1b482f44dcadd5f2fc0ec5a9fddff40ec4a5117819",
+          "mode": "SHADOW",
+          "multi_member_source_policy": "REJECT_STALE_PHYSICAL_LABEL",
+          "normalized_barcode": "P3-010",
+          "origin_inbound_iins": [
+            "IIN-API-001"
+          ],
+          "plane_epoch": 1,
+          "query": {
+            "barcode": "P3-010",
+            "match": "EXACT",
+            "normalized_barcode": "P3-010"
+          },
+          "replacement_evidence": {
+            "expected_source_bundle_version": 1,
+            "inbound_iin": "IIN-API-001",
+            "item_id": "ITEM-API",
+            "new_source_bundle_id": "PHS-CONTRACT-SOURCE",
+            "new_unit_id": "unit_0000000000000000000000000000009c",
+            "source_member_ids": [
+              "unit_0000000000000000000000000000009c"
+            ],
+            "source_membership_hash": "24142ff901d74c9fa6b0ff1b482f44dcadd5f2fc0ec5a9fddff40ec4a5117819",
+            "uom": "EA"
+          },
+          "replacement_source_bundle_cardinality": "EXACTLY_ONE_ACTIVE_MEMBER",
+          "source_bundle": {
+            "accounting_inbound_iin": "IIN-API-001",
+            "bundle_id": "PHS-CONTRACT-SOURCE",
+            "bundle_state": "AVAILABLE",
+            "bundle_type": "PHS",
+            "current_location": "PHS_GOOD",
+            "entity_version": 1,
+            "external_label": "CONTRACT-SOURCE",
+            "inbound_iin": "IIN-API-001",
+            "item_id": "ITEM-API",
+            "member_count": 1,
+            "member_ids": [
+              "unit_0000000000000000000000000000009c"
+            ],
+            "members": [
+              {
+                "current_inbound_iin": "IIN-API-001",
+                "inbound_iin": "IIN-API-001",
+                "item_id": "ITEM-API",
+                "location_code": "PHS_GOOD",
+                "normalized_barcode": "P3-010",
+                "unit_entity_version": 2,
+                "unit_id": "unit_0000000000000000000000000000009c",
+                "unit_state": "CONSUMED",
+                "uom": "EA"
+              }
+            ],
+            "membership_hash": "24142ff901d74c9fa6b0ff1b482f44dcadd5f2fc0ec5a9fddff40ec4a5117819",
+            "origin_inbound_iins": [
+              "IIN-API-001"
+            ],
+            "source_session_id": "CONTRACT-SOURCE",
+            "uom": "EA"
+          },
+          "source_bundle_entity_version": 1,
+          "source_bundle_id": "PHS-CONTRACT-SOURCE",
+          "source_bundle_version": 1,
+          "source_lineage": {
+            "active_assignment_receipt_id": "receipt_000000000000000000000000000000a3",
+            "edges": [],
+            "route_evidence": null,
+            "route_provenance": null,
+            "source_provenance": "INSPECTION_GOOD",
+            "source_session_id": "CONTRACT-SOURCE"
+          },
+          "source_provenance": "INSPECTION_GOOD",
+          "unit": {
+            "active_owner": {
+              "last_history_id": "membership_000000000000000000000000000000a5",
+              "membership_version": 2,
+              "owner_id": "PHS-CONTRACT-SOURCE",
+              "owner_type": "PACKAGE"
+            },
+            "current_inbound_iin": "IIN-API-001",
+            "current_location": "PHS_GOOD",
+            "entity_version": 2,
+            "inbound_iin": "IIN-API-001",
+            "item_id": "ITEM-API",
+            "normalized_barcode": "P3-010",
+            "origin_inbound_iin": "IIN-API-001",
+            "state": "CONSUMED",
+            "unit_id": "unit_0000000000000000000000000000009c",
+            "uom": "EA"
+          },
+          "unit_id": "unit_0000000000000000000000000000009c",
+          "unit_state": "CONSUMED",
+          "uom": "EA"
+        },
+        "ok": true,
+        "status": "ok"
+      },
+      "status_code": 200
+    },
+    {
+      "body": {
+        "authority_epoch": 2,
+        "authority_scope_id": "scope-api",
+        "client_exact_evidence": {
+          "new_barcodes": [
+            "P3-010"
+          ],
+          "old_barcodes": [
+            "P3-000"
+          ],
+          "sources": {
+            "PHS-CONTRACT-SOURCE": {
+              "barcode_membership_hash": "92f26ae999093c54dca98cf22c6c50837139ba30ca61956342be1754d6047639",
+              "entity_version": 1,
+              "member_count": 1,
+              "member_ids": [
+                "unit_0000000000000000000000000000009c"
+              ],
+              "member_provenance": [
+                {
+                  "current_inbound_iin": "IIN-API-001",
+                  "inbound_iin": "IIN-API-001",
+                  "item_id": "ITEM-API",
+                  "normalized_barcode": "P3-010",
+                  "unit_id": "unit_0000000000000000000000000000009c",
+                  "uom": "EA"
+                }
+              ],
+              "members": [
+                {
+                  "normalized_barcode": "P3-010",
+                  "unit_id": "unit_0000000000000000000000000000009c"
+                }
+              ],
+              "membership_hash": "24142ff901d74c9fa6b0ff1b482f44dcadd5f2fc0ec5a9fddff40ec4a5117819",
+              "normalized_barcodes": [
+                "P3-010"
+              ]
+            }
+          },
+          "target": {
+            "barcode_membership_hash": "29f0506338a4406be38319c5cee44d9f4f86b9d5efbcca221882529710a75bd1",
+            "entity_version": 1,
+            "member_count": 2,
+            "member_ids": [
+              "unit_00000000000000000000000000000082",
+              "unit_0000000000000000000000000000008a"
+            ],
+            "members": [
+              {
+                "normalized_barcode": "P3-000",
+                "unit_id": "unit_00000000000000000000000000000082"
+              },
+              {
+                "normalized_barcode": "P3-001",
+                "unit_id": "unit_0000000000000000000000000000008a"
+              }
+            ],
+            "membership_hash": "7c6417a865e5a2c54bcd3bff8a297867ecf9b33f2e53cebdf208138b7e44539a",
+            "normalized_barcodes": [
+              "P3-000",
+              "P3-001"
+            ]
+          }
+        },
+        "command_type": "REPLACE_BUNDLE_MEMBERS",
+        "contract_version": "logistics-v1",
+        "evidence_refs": [
+          "transfer-exchange-intent-b9b2e9019a153a09c113cd6ec3642de3",
+          "b9b2e9019a153a09c113cd6ec3642de384678d1b4baa7436f95f516b31f557f3"
+        ],
+        "expected_versions": {
+          "bundle:PHS-CONTRACT-SOURCE": 1,
+          "bundle:PHS-CONTRACT-TARGET": 1
+        },
+        "idempotency_key": "container-member-exchange:b9b2e9019a153a09c113cd6ec3642de384678d1b4baa7436f95f516b31f557f3",
+        "ledger_plane": "SHADOW_CANDIDATE",
+        "payload": {
+          "damage_bundle_id": "PROCESS-DAMAGE-0CCE550FFBADB03DA6DC62C2",
+          "damage_external_label": "PROCESS-DAMAGE-0CCE550FFBADB03DA6DC62C2",
+          "pairs": [
+            {
+              "new_source_bundle_id": "PHS-CONTRACT-SOURCE",
+              "new_unit_id": "unit_0000000000000000000000000000009c",
+              "old_unit_id": "unit_00000000000000000000000000000082"
+            }
+          ],
+          "target_bundle_id": "PHS-CONTRACT-TARGET"
+        },
+        "plane_epoch": 1,
+        "reason": "container_audit_preseal_process_damage_exchange"
+      },
+      "headers": {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "Idempotency-Key": "container-member-exchange:b9b2e9019a153a09c113cd6ec3642de384678d1b4baa7436f95f516b31f557f3",
+        "X-Logistics-API-Token": "contract-only",
+        "X-Logistics-Device-Id": "container-contract-device",
+        "X-Logistics-Program": "Container_Audit",
+        "X-Logistics-Source-Host-Id": "container-contract-host"
+      },
+      "method": "POST",
+      "path": "/logistics/api/v1/bundles/PHS-CONTRACT-TARGET/members/replace",
+      "response": {
+        "committed": false,
+        "contract_version": "logistics-v1",
+        "correlation_id": "000000000000000000000000000000bd",
+        "error": {
+          "code": "STALE_VERSION",
+          "details": {},
+          "message": "target bundle expected version does not match"
+        },
+        "expected_version": null,
+        "ok": false,
+        "received_version": null,
+        "retryable": true,
+        "status": "conflict"
+      },
+      "status_code": 409
+    }
+  ],
+  "schema": "container-exchange-wire-contract-v1"
+}

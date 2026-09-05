@@ -23,16 +23,12 @@ def _known_folder(csidl):
 
 
 def _module_contract(tmp_path):
-    identity = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:24]
-    analysis_cache_path = (
-        Path(r"E:\KMTech")
-        / f"pytest-release-module-fence-{identity}"
-        / "ModuleAnalysisCache"
-    )
+    analysis_cache_path = tmp_path / "module-cache" / "ModuleAnalysisCache"
     pwsh_path = Path(PWSH)
     current_user_modules = _known_folder(5) / "PowerShell" / "Modules"
     all_users_modules = _known_folder(38) / "PowerShell" / "Modules"
     windows_modules = (
+        # Exact literal in Get-ReleasePowerShellPrelaunchModulePath, not host discovery.
         Path(r"C:\Windows")
         / "System32"
         / "WindowsPowerShell"
@@ -199,7 +195,9 @@ def test_release_module_fence_contract_has_no_module_resolution_before_fencing()
 
 
 @pytest.mark.skipif(os.name != "nt" or PWSH is None, reason="requires PowerShell 7 on Windows")
-def test_new_pwsh_child_accepts_only_expected_startup_expansion_then_seals(tmp_path):
+@pytest.mark.native_e_drive
+def test_new_pwsh_child_accepts_only_expected_startup_expansion_then_seals(native_e_path):
+    tmp_path = native_e_path
     contract, completed, result = _run_child_fence(tmp_path)
 
     assert completed.returncode == 0, completed.stderr
@@ -215,8 +213,10 @@ def test_new_pwsh_child_accepts_only_expected_startup_expansion_then_seals(tmp_p
 
 @pytest.mark.skipif(os.name != "nt" or PWSH is None, reason="requires PowerShell 7 on Windows")
 @pytest.mark.parametrize("position", ("before", "after"))
-def test_new_pwsh_child_rejects_an_extra_hostile_c_module_path(tmp_path, position):
-    hostile_path = Path(r"C:\hostile-v2075-module-path")
+@pytest.mark.native_e_drive
+def test_new_pwsh_child_rejects_an_extra_hostile_c_module_path(native_e_path, position):
+    tmp_path = native_e_path
+    hostile_path = tmp_path / "hostile-modules"
     assert not hostile_path.exists()
     contract = _module_contract(tmp_path)
     hostile_prelaunch = os.pathsep.join(
@@ -249,7 +249,9 @@ def test_new_pwsh_child_rejects_an_extra_hostile_c_module_path(tmp_path, positio
         ("KMTECH_RELEASE_PRELAUNCH_MODULE_PATH_SHA256", "0" * 64),
     ),
 )
-def test_new_pwsh_child_rejects_a_changed_prelaunch_token(tmp_path, name, value):
+@pytest.mark.native_e_drive
+def test_new_pwsh_child_rejects_a_changed_prelaunch_token(native_e_path, name, value):
+    tmp_path = native_e_path
     contract, completed, result = _run_child_fence(
         tmp_path,
         environment_updates={name: value},
@@ -263,7 +265,9 @@ def test_new_pwsh_child_rejects_a_changed_prelaunch_token(tmp_path, name, value)
 
 
 @pytest.mark.skipif(os.name != "nt" or PWSH is None, reason="requires PowerShell 7 on Windows")
-def test_release_module_fence_rejects_a_c_drive_analysis_cache_contract(tmp_path):
+@pytest.mark.native_e_drive
+def test_release_module_fence_rejects_a_c_drive_analysis_cache_contract(native_e_path):
+    tmp_path = native_e_path
     hostile_cache = Path(r"C:\hostile-v2075-cache\ModuleAnalysisCache")
     assert not hostile_cache.parent.exists()
 

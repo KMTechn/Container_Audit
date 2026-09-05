@@ -1,0 +1,57 @@
+{
+  "grant": {
+    "contract_version": "producer-runtime-lease.v1",
+    "expires_at": "2026-09-06T00:10:00.000000Z",
+    "fence": 1,
+    "issue_idempotency_key": "clone-seed",
+    "issued_at": "2026-09-06T00:00:00.000000Z",
+    "lease_id": "00000000-0000-0000-0000-0000000000be",
+    "next_request_sequence": 1,
+    "next_request_token": "cCYHQsKVIVTITi6p9osac5f0m200PaHtKECTwL1yx0I",
+    "ok": true,
+    "operation": "issued",
+    "producer_install_id": "install-test",
+    "public_jwk_thumbprint": "ccgscWSOWNe7zfELCIRHTdb7JkVy_Eo2vg371C5rplY",
+    "runtime_instance_id": "runtime-contract-fixture-01",
+    "status": "ACTIVE"
+  },
+  "now": "2026-09-06T00:00:00+00:00",
+  "outcomes": [
+    {
+      "runtime_lease": {
+        "contract_version": "producer-runtime-lease.v1",
+        "expires_at": "2026-09-06T00:10:00.000000Z",
+        "fence": 1,
+        "lease_id": "00000000-0000-0000-0000-0000000000be",
+        "next_request_sequence": 2,
+        "next_request_token": "6zviMLvShEsfXY8uT6uf-6irIs_utpxME2GZO6Tzd7k",
+        "validation_status": "consumed"
+      },
+      "status": "accepted"
+    },
+    {
+      "error": {
+        "error": {
+          "code": "STALE_RUNTIME_REQUEST_TOKEN",
+          "details": {
+            "presented_fence": 1,
+            "producer_install_id": "install-test"
+          },
+          "message": "runtime request authority is stale, expired, or already consumed"
+        },
+        "ok": false,
+        "retryable": false,
+        "status": "conflict"
+      },
+      "status": "rejected"
+    }
+  ],
+  "public_jwk": {
+    "crv": "P-256",
+    "kty": "EC",
+    "x": "jlM7b6C_e0YluzBmfAH7YH75-LioD-9bMAYocDGHsqM",
+    "y": "c-sdveAzGDZtBp-DpvWQAFPHNjPLBBshxV4ahsH0ALQ"
+  },
+  "runtime_instance_id": "runtime-contract-fixture-01",
+  "schema": "producer-runtime-token-contract-v1"
+}

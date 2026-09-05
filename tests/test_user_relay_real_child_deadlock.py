@@ -20,16 +20,14 @@ import user_relay
 import writer_session_fence as fence
 from direct_sync_push import DEFAULT_ENDPOINT_PATH
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from test_real_child_http_regression import (  # noqa: E402
+from tests.test_real_child_http_regression import (
     CSV_NAME,
     ROOT,
     _loopback_https,
     _write_child_runtime,
     _write_csv,
 )
-from test_writer_session_fence import _active_payload, _write_active  # noqa: E402
+from tests.test_writer_session_fence import _active_payload, _write_active
 
 
 def test_resident_relay_main_runs_a_real_child_to_completion(

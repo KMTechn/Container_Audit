@@ -39,7 +39,8 @@ WINDOWS_POWERSHELL_IDENTITY = {
     "file_product_version": "10.0.26100.9168",
 }
 RELEASE_PYTHON_IDENTITY = {
-    "executable": r"E:\KMTech\release-python\Scripts\python.exe",
+    # Manifest data only: the verifier never opens this illustrative executable.
+    "executable": r"C:\contract-fixture\release-python\Scripts\python.exe",
     "sha256": "1" * 64,
     "size": 274424,
     "python_version": "3.12.10",

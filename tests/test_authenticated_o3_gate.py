@@ -3,11 +3,34 @@ from __future__ import annotations
 import io
 import json
 import secrets
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
 from tools import authenticated_o3_gate as gate
+
+
+class _UnwrittenWindowsPath(PureWindowsPath):
+    """Path-format contract without touching any host drive."""
+    def exists(self):
+        return False
+
+
+@pytest.mark.parametrize(
+    ("value", "error"),
+    [("C:/evidence/result.json", "EVIDENCE_PATH_NOT_ON_E_DRIVE"),
+     ("relative.json", "EVIDENCE_PATH_INVALID"),
+     ("E:/evidence/result.txt", "EVIDENCE_PATH_INVALID")],
+)
+def test_evidence_path_policy_rejects_invalid_windows_paths_without_io(monkeypatch, value, error):
+    monkeypatch.setattr(gate, "Path", _UnwrittenWindowsPath)
+    with pytest.raises(gate.GateError, match=error):
+        gate._evidence_path(value)
+
+
+def test_evidence_path_policy_accepts_fresh_json_without_host_drive(monkeypatch):
+    monkeypatch.setattr(gate, "Path", _UnwrittenWindowsPath)
+    assert gate._evidence_path("E:/evidence/result.json") == PureWindowsPath("E:/evidence/result.json")
 
 
 def _credential_payload() -> tuple[bytes, dict[str, dict[str, str]]]:
@@ -145,9 +168,9 @@ def _passing_database_probe(_path: Path) -> dict[str, object]:
     }
 
 
-def test_credential_free_dry_run_is_unknown_exit_2_and_writes_only_e(tmp_path, capsys):
-    evidence = tmp_path / "dry-run.json"
-    assert evidence.drive.casefold() == "e:"
+@pytest.mark.native_e_drive
+def test_credential_free_dry_run_is_unknown_exit_2_and_writes_only_e(native_e_path, capsys):
+    evidence = native_e_path / "dry-run.json"
 
     exit_code = gate.main(["dry-run", "--evidence", str(evidence)])
 
@@ -230,9 +253,10 @@ def test_wrong_credential_acceptance_forces_nested_and_overall_fail(tmp_path):
     assert document["overall_status"] == "FAIL"
 
 
-def test_unknown_is_not_folded_to_pass_for_profile_validation(tmp_path):
+@pytest.mark.native_e_drive
+def test_unknown_is_not_folded_to_pass_for_profile_validation(native_e_path):
     document = gate.dry_run_document()
-    path = tmp_path / "unknown.json"
+    path = native_e_path / "unknown.json"
     gate.atomic_write_json(path, document)
 
     assert gate.selected_status(document, "inspection") == "UNKNOWN"
