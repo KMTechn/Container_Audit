@@ -141,6 +141,17 @@ function Relays {
     return @()
 }
 function Product([string]$Root, [string]$Mode) {
+    $expectedPreimagePath = Join-Path $env:CA_UNINSTALL_ROOT 'expected-registry-preimage.json'
+    if (Test-Path -LiteralPath $expectedPreimagePath) {
+        $persistedAudit = Get-Content -LiteralPath $auditPath -Raw | ConvertFrom-Json
+        $expectedPreimage = Get-Content -LiteralPath $expectedPreimagePath -Raw | ConvertFrom-Json
+        if ($persistedAudit.preimage.exists -cne $expectedPreimage.exists -or
+            $persistedAudit.preimage.kind -cne $expectedPreimage.kind -or
+            $persistedAudit.preimage.data -cne $expectedPreimage.data) {
+            throw 'Registry preimage was not durable before product mutation'
+        }
+        Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'preimage-readback.log') -Value $Mode
+    }
     Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'product-calls.log') -Value $Mode
     $operation = switch -CaseSensitive ($Mode) {
         '--remove-current-user-setup' { 'remove' }
@@ -314,6 +325,9 @@ def _run(tmp_path, env, source, install, *extra):
 
 
 def _install(tmp_path, env, source, install):
+    if (tmp_path/'expected-registry-preimage.json').exists():
+        # A reinstall following uninstall starts from the now-absent registry.
+        (tmp_path/'expected-registry-preimage.json').write_bytes((tmp_path/'registry.json').read_bytes())
     result = _ps(source / 'INSTALL_CANONICAL_PORTABLE.ps1', env,
                  '-SourceRoot', str(source), '-InstallRoot', str(install),
                  '-EvidencePath', str(tmp_path / 'reinstall-audit.json'),
@@ -337,6 +351,7 @@ def _live_preimage(tmp_path, env, source, install, child):
     assert observation['ProcessId'] == child.pid
     assert observation['CommandLine'] == env['CA_UNINSTALL_LAUNCH_COMMAND']
     assert observation['ExecutablePath'] == env['CA_UNINSTALL_LAUNCH_EXECUTABLE']
+    (tmp_path / 'expected-registry-preimage.json').write_bytes((tmp_path / 'registry.json').read_bytes())
     control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
     return {
         'code': _tree(install), 'source': _tree(source),
@@ -429,6 +444,7 @@ def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
         calls = (tmp_path / 'product-calls.log').read_text(encoding='utf-8-sig').splitlines()
         assert calls.count('--onboard-current-user') == 1
         assert calls.count('--remove-current-user-setup') == (2 if operation == 'uninstall_then_reinstall' else 1)
+        assert (tmp_path/'preimage-readback.log').read_text(encoding='utf-8-sig').splitlines() == calls
     finally:
         _finish(tmp_path, child)
 
@@ -458,6 +474,40 @@ def test_live_relay_command_difference_rejected_before_mutation(tmp_path, differ
         _assert_preserved_and_released(env, protected)
         launches, _ = _assert_one_live_relay(tmp_path, env)
         assert len(launches) == 1
+    finally:
+        _finish(tmp_path, child)
+
+
+def test_incompatible_installed_writer_identity_is_rejected_before_fence_or_relay_mutation(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    inventory_path = install/'tools/container_writer_sink_inventory.json'
+    inventory = json.loads(inventory_path.read_text())
+    inventory['writer_sinks'][0]['function'] += '_incompatible'
+    inventory_path.write_text(json.dumps(inventory), encoding='utf-8')
+    manifest_path = install/'portable-manifest.json'
+    manifest = json.loads(manifest_path.read_text())
+    manifest['writer_sink_inventory_sha256'] = _sha(inventory_path)
+    files = [p for p in install.rglob('*') if p.is_file() and p not in
+             (manifest_path, install/'bootstrap-integrity.json')]
+    manifest['file_count_before_manifest'] = len(files)
+    manifest['byte_count_before_manifest'] = sum(p.stat().st_size for p in files)
+    manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+    refreshed = _ps(tmp_path/'record.ps1', env)
+    assert refreshed.returncode == 0, refreshed.stderr
+    _quote_fixture_executable(env)
+    child = _launch_relay(tmp_path, env)
+    before = _live_preimage(tmp_path, env, source, install, child)
+    try:
+        result = _install(tmp_path, env, source, install)
+        assert result.returncode != 0
+        assert child.poll() is None
+        assert _tree(install) == before['code']
+        assert _tree(source) == before['source']
+        assert (tmp_path/'registry.json').read_bytes() == before['registry']
+        assert not (tmp_path/'product-calls.log').exists()
+        assert not (tmp_path/'reinstall-audit.json').exists()
+        assert 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER' in result.stderr
+        _assert_preserved_and_released(env, protected)
     finally:
         _finish(tmp_path, child)
 

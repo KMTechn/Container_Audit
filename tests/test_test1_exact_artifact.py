@@ -1,119 +1,99 @@
-import hashlib
 import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
 import sys
 import zipfile
-from pathlib import Path
 
 import pytest
 
+from tools.run_test1_exact_artifact import (
+    ArtifactIdentityError, launch_exact_artifact, query_process_executable_path, sha256_file,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
-from tools.run_test1_exact_artifact import (
-    ArtifactIdentityError,
-    launch_exact_artifact,
-    sha256_file,
-)
 
-
+@pytest.mark.skipif(os.name != "nt", reason="OS executable-path attestation requires Windows")
 def test_exact_artifact_launch_records_identity_and_blocks_hash_drift(tmp_path):
-    executable = tmp_path / "installed" / "App.exe"
+    executable = tmp_path / "installed" / "python.exe"
     executable.parent.mkdir()
-    executable.write_bytes(b"exact packaged executable")
+    shutil.copy2(sys.executable, executable)
+    for library in (*Path(sys.base_prefix).glob("python*.dll"), *Path(sys.base_prefix).glob("vcruntime*.dll")):
+        shutil.copy2(library, executable.parent / library.name)
     archive = tmp_path / "release.zip"
     with zipfile.ZipFile(archive, "w") as package:
-        package.writestr("Package/App.exe", executable.read_bytes())
+        package.write(executable, "Package/python.exe")
+    children = []
+    queried = []
+    image = [executable]
 
-    launches = []
+    def launch(argv, cwd):
+        actual = [str(image[0]), *argv[1:]]
+        with (tmp_path/f"child-{len(children)}.stdout").open("xb") as stdout, (tmp_path/f"child-{len(children)}.stderr").open("xb") as stderr:
+            process = subprocess.Popen(actual, cwd=cwd, stdin=subprocess.PIPE,
+                stdout=stdout, stderr=stderr, env=dict(os.environ, PYTHONHOME=sys.base_prefix),
+                creationflags=subprocess.CREATE_NO_WINDOW)
+        children.append(process)
+        return process
 
-    class FakeProcess:
-        pid = 4242
+    def query_and_release(pid):
+        actual = query_process_executable_path(pid)
+        queried.append((pid, actual))
+        children[-1].stdin.write(b"x")
+        children[-1].stdin.flush()
+        return actual
 
-        @staticmethod
-        def poll():
-            return None
+    options = dict(archive_path=archive, expected_archive_sha256=sha256_file(archive),
+        executable_path=executable, expected_executable_sha256=sha256_file(executable),
+        archive_member="Package/python.exe", popen_factory=launch,
+        query_process_path=query_and_release,
+        application_args=["-B", "-c", "import os,sys,threading; t=threading.Timer(10,lambda:os._exit(9));t.start();sys.stdin.buffer.read(1);t.cancel()"])
+    try:
+        evidence = tmp_path/"identity.json"
+        identity = launch_exact_artifact(**options, evidence_json=evidence)
+        recorded = json.loads(evidence.read_text())
+        assert identity == recorded
+        assert recorded["status"] == "PASS"
+        assert recorded["archive"]["sha256"] == sha256_file(archive)
+        assert recorded["archive_member"]["matches_installed_executable"] is True
+        assert recorded["installed_executable"]["sha256"] == sha256_file(executable)
+        assert recorded["process"] == {
+            "pid": children[0].pid, "executable_path": str(executable.resolve()),
+            "matches_installed_executable": True, "exit_code": 0,
+        }
+        assert queried[0][0] == children[0].pid
+        assert children[0].poll() == 0
 
-        @staticmethod
-        def wait(timeout=None):
-            return 0
+        image[0] = Path(sys.executable)
+        with pytest.raises(ArtifactIdentityError, match="OS-reported process executable path"):
+            launch_exact_artifact(**options, evidence_json=tmp_path/"wrong-process.json")
+        assert queried[-1][1].resolve() == Path(sys.executable).resolve()
+        assert children[-1].poll() is not None
+        assert json.loads((tmp_path/"wrong-process.json").read_text())["status"] == "BLOCKED"
+        with pytest.raises(ArtifactIdentityError, match="archive SHA-256 mismatch"):
+            launch_exact_artifact(**dict(options, expected_archive_sha256="0"*64),
+                                  evidence_json=tmp_path/"wrong-hash.json")
+        assert len(children) == 2, "bad archive was launched"
+    finally:
+        for process in children:
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
+            process.stdin.close()
 
-        @staticmethod
-        def terminate():
-            return None
 
-        @staticmethod
-        def kill():
-            return None
-
-    def fake_popen(argv, cwd):
-        launches.append((argv, cwd))
-        return FakeProcess()
-
-    evidence = tmp_path / "evidence" / "identity.json"
-    identity = launch_exact_artifact(
-        archive_path=archive,
-        expected_archive_sha256=sha256_file(archive),
-        executable_path=executable,
-        expected_executable_sha256=hashlib.sha256(
-            executable.read_bytes()
-        ).hexdigest(),
-        archive_member="Package/App.exe",
-        evidence_json=evidence,
-        popen_factory=fake_popen,
-        query_process_path=lambda _pid: executable,
-    )
-
-    recorded = json.loads(evidence.read_text(encoding="utf-8"))
-    assert identity["status"] == recorded["status"] == "PASS"
-    assert recorded["archive"]["sha256"] == sha256_file(archive)
-    assert recorded["installed_executable"]["sha256"] == sha256_file(executable)
-    assert recorded["archive_member"]["matches_installed_executable"] is True
-    assert recorded["process"] == {
-        "pid": 4242,
-        "executable_path": str(executable.resolve()),
-        "matches_installed_executable": True,
-        "exit_code": 0,
-    }
-
-    wrong_process = tmp_path / "installed" / "Other.exe"
-    wrong_process.write_bytes(b"other process")
-    with pytest.raises(
-        ArtifactIdentityError, match="OS-reported process executable path"
-    ):
-        launch_exact_artifact(
-            archive_path=archive,
-            expected_archive_sha256=sha256_file(archive),
-            executable_path=executable,
-            expected_executable_sha256=sha256_file(executable),
-            archive_member="Package/App.exe",
-            evidence_json=tmp_path / "evidence" / "wrong-process.json",
-            popen_factory=fake_popen,
-            query_process_path=lambda _pid: wrong_process,
-        )
-
-    with pytest.raises(ArtifactIdentityError, match="archive SHA-256 mismatch"):
-        launch_exact_artifact(
-            archive_path=archive,
-            expected_archive_sha256="0" * 64,
-            executable_path=executable,
-            expected_executable_sha256=sha256_file(executable),
-            archive_member="Package/App.exe",
-            evidence_json=tmp_path / "evidence" / "blocked.json",
-            popen_factory=fake_popen,
-            query_process_path=lambda _pid: executable,
-        )
-    assert len(launches) == 2
-
-    packaged_driver = (ROOT / "tools" / "packaged_real_ui_driver.py").read_text(
-        encoding="utf-8"
-    )
-    assert "preflight_artifact_identity(" in packaged_driver
-    assert "attest_process_identity(" in packaged_driver
-    assert (
-        'parser.add_argument("--expected-archive-sha256", required=True)'
-        in packaged_driver
-    )
-    assert (
-        'parser.add_argument("--expected-exe-sha256", required=True)'
-        in packaged_driver
-    )
+@pytest.mark.parametrize("missing", ["--expected-archive-sha256", "--expected-exe-sha256"])
+def test_packaged_driver_rejects_missing_identity_before_opening_ui(tmp_path, missing):
+    values = {"--archive": "release.zip", "--expected-archive-sha256": "a"*64,
+        "--exe": "app.exe", "--expected-exe-sha256": "b"*64,
+        "--output-root": str(tmp_path/"evidence"), "--data-root": str(tmp_path/"data"),
+        "--worker": "fixture", "--master-label": "fixture"}
+    argv = [part for key, value in values.items() if key != missing for part in (key, value)]
+    result = subprocess.run([sys.executable,"-B",str(ROOT/"tools/packaged_real_ui_driver.py"),*argv],
+                            capture_output=True,text=True,timeout=15)
+    assert result.returncode == 2
+    assert "the following arguments are required: " + missing in result.stderr
+    assert not (tmp_path/"evidence").exists()
+    assert not (tmp_path/"data").exists()

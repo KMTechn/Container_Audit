@@ -19,6 +19,7 @@ from current_user_onboarding import (
 )
 from direct_sync_push import manifest_hash
 from tools import register_container_audit_worker_pc as registration
+from tests.lifecycle_children import owned_relay
 
 TEST_POSSESSION_FINGERPRINT = "EIEjk1nsv9vwrOp-3GrBvZz2WZPvy48vdViRVd6Llvg"
 TEST_INSTALL_ID = "container-audit-install-1"
@@ -392,6 +393,7 @@ def _owner_bytes(paths) -> dict[str, bytes]:
 def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_state(
     tmp_path,
     monkeypatch,
+    owned_relay,
 ):
     fixture = _replacement_lifecycle_fixture(tmp_path)
     owner_before = _owner_bytes(fixture.paths)
@@ -426,7 +428,7 @@ def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_s
             AssertionError("success must not run containment")
         ),
         relay_launcher=lambda root: calls.append(("relay", Path(root)))
-        or {"status": "START_REQUESTED", "process_id": 123},
+        or owned_relay.start(fixture.paths.direct_sync_root, wait_for_running=False),
         relay_stopper=lambda _root: (_ for _ in ()).throw(
             AssertionError("success must not run containment")
         ),
@@ -473,11 +475,15 @@ def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_s
         == report["owner_artifact_fingerprints_after"]
     )
     assert _owner_bytes(fixture.paths) == owner_before
+    assert len(owned_relay.children) == 1, 'restore did not launch a real relay'
     assert calls == [
         ("autostart", fixture.app_root.resolve()),
         ("relay", fixture.app_root.resolve()),
     ]
     assert not fixture.stop_path.exists()
+    owned_relay.wait_running(*owned_relay.children[0])
+    assert owned_relay.children[0][1].poll() is None
+    assert report['relay_start']['process_id'] == owned_relay.children[0][1].pid
 
 
 @pytest.mark.parametrize("collision", ["identity", "replacement_receipt"])
@@ -749,16 +755,19 @@ def test_replacement_lifecycle_rejects_inexact_transaction_or_code_before_mutati
     assert fixture.stop_path.is_file()
 
 
-def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path):
+def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path, owned_relay):
     fixture = _replacement_lifecycle_fixture(tmp_path)
     owner_before = _owner_bytes(fixture.paths)
     calls = []
 
     def stop_relay(root):
         calls.append(("stop", Path(root)))
-        fixture.stop_path.parent.mkdir(parents=True, exist_ok=True)
-        fixture.stop_path.write_text("contained\n", encoding="utf-8")
-        return {"status": "ABSENT"}
+        return owned_relay.stop(root)
+
+    def launch_then_fail(_root):
+        owned_relay.start(fixture.paths.direct_sync_root, wait_for_running=False)
+        assert owned_relay.children[0][1].poll() is None
+        raise RuntimeError('launch result lost after the real child started')
 
     with pytest.raises(CurrentUserOnboardingError) as caught:
         restore_current_user_lifecycle_after_replacement(
@@ -782,9 +791,7 @@ def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path
             or _replacement_autostart(root),
             autostart_remover=lambda: calls.append(("remove", None))
             or {"status": "ABSENT"},
-            relay_launcher=lambda root: (_ for _ in ()).throw(
-                RuntimeError(f"relay launch failed for {root}")
-            ),
+            relay_launcher=launch_then_fail,
             relay_stopper=stop_relay,
         )
 
@@ -799,6 +806,8 @@ def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path
     assert report["identity_or_credential_copied"] is False
     assert _owner_bytes(fixture.paths) == owner_before
     assert fixture.stop_path.is_file()
+    owned_relay.wait_stopped(fixture.paths.direct_sync_root)
+    assert owned_relay.children[0][1].poll() is not None
     assert calls == [
         ("autostart", fixture.app_root.resolve()),
         ("remove", None),
@@ -1429,7 +1438,7 @@ def test_bootstrap_integrity_verifies_exact_inventory(tmp_path):
         verify_bootstrap_integrity(paths, required=True)
 
 
-def test_public_remove_clears_user_persistence_but_preserves_data(tmp_path):
+def test_public_remove_clears_user_persistence_but_preserves_data(tmp_path, owned_relay):
     app_root = tmp_path / "app"
     app_root.mkdir()
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
@@ -1438,20 +1447,27 @@ def test_public_remove_clears_user_persistence_but_preserves_data(tmp_path):
     paths.ledger_path.parent.mkdir(parents=True)
     paths.ledger_path.write_bytes(b"preserve")
     observed = []
+    owned_relay.start(paths.direct_sync_root)
+    assert owned_relay.children[0][1].poll() is None
 
     report = remove_current_user_setup(
         app_root,
         environ=environment,
         autostart_remover=lambda: observed.append("hkcu") or {"status": "ABSENT"},
-        relay_stopper=lambda root: observed.append(Path(root)) or {"status": "ABSENT"},
+        relay_stopper=lambda root: observed.append(Path(root)) or owned_relay.stop(root),
     )
 
     assert report["status"] == "PASS_DATA_PRESERVED"
     assert report["data_preserved"] is True
+    assert onboarding_module.user_relay_stop_path(paths.direct_sync_root).is_file()
     assert observed == ["hkcu", paths.direct_sync_root]
     assert paths.identity_path.is_file()
     assert paths.logistics_profile_path.is_file()
     assert paths.ledger_path.read_bytes() == b"preserve"
+    owned_relay.wait_stopped(paths.direct_sync_root)
+    assert owned_relay.children[0][1].poll() is not None
+    # This proves absence, not a clean exit; the admission/STOPPED-write gap is
+    # disclosed in tests/KNOWN-GAPS.md and has a separate failing diagnostic.
 
 
 def test_public_remove_does_not_downgrade_lost_relay_result(tmp_path):

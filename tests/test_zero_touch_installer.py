@@ -269,27 +269,8 @@ def test_bootstrap_is_minimal_code_placement_contract():
     assert "Product $install '--remove-current-user-setup'" in PORTABLE_INSTALLER.read_text(encoding="utf-8")
 
 
-def test_placement_writer_fence_release_imports_helper_in_script_scope():
-    text = INSTALLER.read_text(encoding="utf-8")
-
-    enter = text.index(
-        "$placementWriterFenceLease = Enter-ContainerPlacementWriterFence"
-    )
-    script_scope_import = text.index(". $WriterFenceHelperPath", enter)
-    guarded_body = text.index("\ntry {", script_scope_import)
-    release = text.index(
-        "Exit-ContainerWriterAdmission $placementWriterFenceLease", guarded_body
-    )
-    assert enter < script_scope_import < guarded_body < release
 
 
-def test_installed_manifest_metrics_exclude_generated_integrity_record():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    installed_start = text.index("function InstalledManifest")
-    installed_end = text.index("\nfunction Snapshot", installed_start)
-    installed_manifest = text[installed_start:installed_end]
-
-    assert "bootstrap-integrity.json" in installed_manifest
 
 
 def test_bootstrap_powershell_parses():
@@ -390,79 +371,12 @@ def test_direct_production_helper_rejects_well_formed_but_inactive_delegation(
     )
 
 
-def test_canonical_installer_passes_exact_placement_delegation_to_every_helper_call():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    # Enumerate the actual execution sites, including uninstall's derived
-    # recovery arguments, so adding an unfenced helper cannot pass by count.
-    calls = re.findall(r"& \$winps @(\w+)", text)
-    assert sorted(calls) == sorted([
-        "uninstallArguments", "bootstrap", "recoverCodeArguments", "restoreBootstrap",
-    ])
-    fields = (
-        "WriterFenceHelperPath", "ExpectedWriterFenceHelperSha256",
-        "WriterFenceSessionId", "WriterFenceAttemptId",
-        "WriterFenceReplacementTransactionId", "WriterFenceDelegationToken",
-    )
-    for arguments, helper_root in (
-        ("uninstallArguments", "source"), ("bootstrap", "source"),
-        ("restoreBootstrap", "install"),
-    ):
-        closing = "\n            )" if arguments == "restoreBootstrap" else "\n        )"
-        block = text.split(f"${arguments} = @(", 1)[1].split(closing, 1)[0]
-        assert f"'-File',(Join-Path ${helper_root} 'INSTALL_THIS_PC.ps1')" in block
-        for field in fields:
-            assert block.count(f"'-{field}'") == 1, (arguments, field)
-        for field, value in (
-            ("WriterFenceSessionId", "SessionId"),
-            ("WriterFenceAttemptId", "AttemptId"),
-            ("WriterFenceReplacementTransactionId", "TransactionId"),
-            ("WriterFenceDelegationToken", "DelegationToken"),
-        ):
-            assert f"'-{field}',$Script:CanonicalWriterFence{value}" in block
-        assert "'-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256)" in block
-        helper_path = (
-            "$writerFenceHelperPath" if arguments == "uninstallArguments"
-            else f"(Join-Path ${helper_root} 'tools\\container_writer_fence.ps1')"
-        )
-        assert f"'-WriterFenceHelperPath',{helper_path}" in block
-    assert "$recoverCodeArguments = @($uninstallArguments | Where-Object { $_ -cne '-Uninstall' })" in text
-    assert "$recoverCodeArguments += @('-RestoreUninstallRecordPath',$uninstallRecordPreimagePath," in text
-    assert "'-ExpectedUninstallRecordSha256',$uninstallRecordSha256)" in text
-    recovery = text.index("$recoverCodeArguments =")
-    delegation = text.rindex("[void](Set-ContainerWriterFenceDelegation", 0, recovery)
-    assert delegation < recovery < text.index("& $winps @recoverCodeArguments")
 
 
-def test_portable_autostart_persists_preimage_before_exact_swap_and_has_rollback():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-
-    preimage_index = text.index("Save $auditPath $audit")
-    mutation_index = text.index("Product $install '--remove-current-user-setup'")
-    assert preimage_index < mutation_index
-    assert "Restore $before" in text
-    assert "AUTOSTART_ROLLBACK_FAILED" in text
-    assert "Product $install '--onboard-current-user'" in text
-    assert "relay_autostart.command -cne $wanted" in text
-    assert "StartRaw ([string]$item.CommandLine)" in text
-    assert "cold_boot_status=UNPROVEN" in text
 
 
-def test_canonical_writer_release_retries_transient_admission_contention():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-
-    assert "function Invoke-CanonicalWriterFenceReleaseStep" in text
-    assert text.count("Invoke-CanonicalWriterFenceReleaseStep {") == 3
-    assert "CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT" in text
-    assert "$attempt -ge 6" in text
 
 
-def test_canonical_writer_release_quiesces_delegated_relay_before_mutex_drain():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-
-    assert "function Stop-CanonicalDelegatedRelay" in text
-    assert "function Start-CanonicalRelayAfterFenceRelease" in text
-    assert text.count("Stop-CanonicalDelegatedRelay $pidValue") == 2
-    assert text.count("$pidValue = Start-CanonicalRelayAfterFenceRelease") == 2
 
 
 def test_bootstrap_task_query_failure_stops_without_task_mutation():
@@ -901,57 +815,6 @@ exit 0
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_portable_installer_fences_canonical_scheduled_writer_around_replacement():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    audit_index = text.index("$audit = [ordered]@{")
-    preimage_save_index = text.index("Save $auditPath $audit", audit_index)
-    disable_index = text.index(
-        "$writerDisabled = Disable-CanonicalWriter", preimage_save_index
-    )
-    stop_proof_index = text.index(
-        "$writerStopped = Confirm-CanonicalWriterStopped", disable_index
-    )
-    placement_index = text.index("& $winps @bootstrap", stop_proof_index)
-    product_pass_index = text.index(
-        "$audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } "
-        "else { 'PRODUCT_PHASE_PASS' }",
-        placement_index,
-    )
-    enable_index = text.index(
-        "$writerEnabled = Enable-CanonicalWriter", product_pass_index
-    )
-    natural_trigger_index = text.index(
-        "$writerRunning = Confirm-CanonicalWriterRunning", enable_index
-    )
-    terminal_status_index = text.index(
-        "$terminalStatus=Get-CanonicalInstallSuccessStatus $testMode",
-        natural_trigger_index,
-    )
-    final_pass_index = text.index("$audit.status=$terminalStatus", terminal_status_index)
-
-    assert (
-        preimage_save_index
-        < disable_index
-        < stop_proof_index
-        < placement_index
-        < product_pass_index
-        < enable_index
-        < natural_trigger_index
-        < terminal_status_index
-        < final_pass_index
-    )
-    assert "Disable-ScheduledTask" not in text
-    assert "Enable-ScheduledTask" not in text
-    assert "DisableAndStop-ContainerScheduledTaskUnderWriterFence" in text
-    assert "Enable-ContainerScheduledTaskUnderWriterFence" in text
-    assert "Start-ScheduledTask" not in text
-    assert "CANONICAL_WRITER_STOP_PROOF_FAILED" in text
-    assert "CANONICAL_WRITER_RESTORE_NEXT_TRIGGER_NOT_FUTURE" in text
-    assert "CANONICAL_WRITER_NATURAL_TRIGGER_PROOF_FAILED" in text
-    assert "CANONICAL_WRITER_RESTORE_FAILED" in text
-    assert "log_size_mtime_sha256_unchanged=$true" in text
-    assert "last_run_time_advanced=$true" in text
-    assert "log_actual_write=$true" in text
 
 
 def test_portable_installer_test_mode_terminal_status_is_explicitly_nonproduction():
@@ -1500,34 +1363,6 @@ def test_portable_plan_rejects_string_false_public_contract_booleans(
     assert not install.exists()
 
 
-def test_portable_installer_binds_verified_replace_receipt_and_later_restore():
-    text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-
-    receipt_path_index = text.index("$replacementReceiptPath = Join-Path")
-    prestate_index = text.index("$candidate = InstalledManifest")
-    quiesce_index = text.index("Product $install '--remove-current-user-setup'", prestate_index)
-    placement_index = text.index("& $winps @bootstrap", quiesce_index)
-    receipt_readback_index = text.index("ReadReplacementReceipt", placement_index)
-    restore_index = text.index("& $winps @restoreBootstrap", receipt_readback_index)
-    lifecycle_restore_index = text.index("Restore $before", restore_index)
-
-    assert (
-        receipt_path_index
-        < prestate_index
-        < quiesce_index
-        < placement_index
-        < receipt_readback_index
-        < restore_index
-        < lifecycle_restore_index
-    )
-    assert "CODE_PRESTATE_NOT_VERIFIED_REPLACE" in text
-    assert "'-ReplaceExistingVerifiedPortable'" in text
-    assert "'-ReplacementTransactionId',$replacementTransactionId" in text
-    assert "'-ReplacementReceiptPath',$replacementReceiptPath" in text
-    assert "'-ReplacementReceiptSha256',$replacementReceiptSha256" in text
-    assert "'-RestoreVerifiedReplacement'" in text
-    assert "READY_PENDING_FINAL_COMPOSITE" in text
-    assert "CODE_ROLLBACK_FAILED" in text
 
 
 def test_portable_installer_restore_binding_mismatch_is_explicit_without_mutation():

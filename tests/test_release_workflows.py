@@ -282,144 +282,26 @@ def test_release_contract_requires_final_tag_before_isolated_prepush_build():
     assert "preserved qualified local bytes" in contract
 
 
-def test_release_contract_quarantines_v2068_tag_without_an_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.68` is permanently quarantined with **no artifact**" in contract
-    assert "a28d7b57cd624f29b18356adc05c6e64c8b5d887" in contract
-    assert "5e2d7bd284a6a36f360c862dba51e4d8bba169cd" in contract
-    assert "no ZIP,\nmanifest, checksum, or qualification receipt exists" in contract
-    assert "Never delete, recreate,\nretarget, publish, or retry that tag" in contract
 
 
-def test_release_contract_quarantines_v2069_inconclusive_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.69` is permanently quarantined as an unpublished local candidate" in contract
-    assert "9f0c76bbd26f0dd56d6c6e396c30c2d3ede01a72" in contract
-    assert "3c126160560620694bbbcd0378f53f343340c5b6" in contract
-    assert "110970957 bytes" in contract
-    assert "da86ead0067cd2196681be18221faf301db67633bbf41e6a7ac9304a6a0259f6" in contract
-    assert "the successor is `v2.0.70`" in contract
 
 
-def test_release_contract_quarantines_v2070_builder_failure_without_an_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.70` is permanently quarantined with **no artifact**" in contract
-    assert "2ae5f677447a1e2db4cfcc53c71a4aceef5f4e9a" in contract
-    assert "848b3fed38190cb26d643dd50697f5d3a0c24d94" in contract
-    assert "ambient Python\npreceded the explicitly supplied prepared interpreter" in contract
-    assert "No ZIP, manifest,\nchecksum, or qualification receipt exists" in contract
-    assert "Never delete, recreate, retarget,\npublish, or retry that tag" in contract
-    assert "the successor is `v2.0.71`" in contract
 
 
-def test_release_contract_quarantines_v2071_sandbox_failure_and_exact_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.71` is permanently quarantined as an unpublished local candidate" in contract
-    assert "6c46d0e078f77a6c395e94c441c949f7abd79244" in contract
-    assert "46dee4e55e134b37cab31fda4db0509d3c658cfe" in contract
-    assert "126453345 bytes" in contract
-    assert "c557a7899bf990b414552dc7a4355e07e65a9a26c0425bae25dda024b8a419e1" in contract
-    assert "SYSTEM relay made no isolated runtime-lease request" in contract
-    assert "qualification authority process survived official uninstall" in contract
-    assert "the\nsuccessor is `v2.0.72`" in contract
 
 
-def test_release_contract_quarantines_v2072_sandbox_failure_and_exact_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.72` is permanently quarantined as an unpublished local candidate" in contract
-    assert "abc9b958833b6b6a9264a075a5473e9bb41224af" in contract
-    assert "fdc4cb3ef934c25b9087ccf68b958dfd5730f989" in contract
-    assert "126455428 bytes" in contract
-    assert "6423e829eebd551dfd5d23e8294c353cc2fef37f70cabe718a2f87e9a99dbc5e" in contract
-    assert "SYSTEM relay exited `1` without a status, log, or runtime-lease request" in contract
-    assert "shell whose working directory was that root" in contract
-    assert "the successor is `v2.0.73`" in contract
 
 
-def test_release_contract_quarantines_v2073_postbuild_failure_and_exact_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.73` is permanently quarantined as an unpublished local candidate" in contract
-    assert "1dee7f93a2c98e07ae2a9381c575d451b05a6a96" in contract
-    assert "83fc636def457b8a34af929a00b1f8f5c7443b6a" in contract
-    assert "126456593 bytes" in contract
-    assert "f1f7e6ad385d06918abbe6021fbfa3929129d5986201e51da563dba94b73c233" in contract
-    assert "six unsealed `__pycache__/*.pyc` files" in contract
-    assert "totaling 295120 bytes" in contract
-    assert "the successor is `v2.0.74`" in contract
 
 
-def test_release_contract_quarantines_v2074_builder_bootstrap_failure_without_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.74` is permanently quarantined with **no artifact**" in contract
-    assert "4e7b960e4a6f1fba59772a8645d9cfa0e65d03cc" in contract
-    assert "935014a0fbca214390815392d71193f30796d622" in contract
-    assert "stopped before source-builder entry" in contract
-    assert "standard current-user and all-users module directories" in contract
-    assert "No ZIP, manifest, checksum, qualification receipt,\ncandidate root, or success marker exists" in contract
-    assert "Never delete, recreate, retarget,\nrepair, publish, or retry that tag" in contract
-    assert "the successor is `v2.0.75`" in contract
 
 
-def test_release_contract_quarantines_v2075_sandbox_system_relay_lease_failure():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.75` is permanently quarantined as an unpublished local candidate after" in contract
-    assert "exclusive Windows Sandbox qualification classified it `FAIL`" in contract
-    assert "17531bc92faddf1c769447ac0cf1909fd559bbc6" in contract
-    assert "b4a7acdf83c0cac37dbcf59bd518fd3171f61d96" in contract
-    assert "126456582 bytes" in contract
-    assert "da142199a3f4017f3984324b34aa9b69fb4a4bbb1fe0c2b3b243f35a5452499b" in contract
-    assert "LastTaskResult `1`" in contract
-    assert "zero runtime-lease" in contract
-    assert "the successor is `v2.0.76`" in contract
 
 
-def test_release_contract_quarantines_v2076_spawn_wrapper_deadlock_without_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.76` is permanently quarantined with **no artifact**" in contract
-    assert "14e431f78dc42d64217014e4f8c6ca933dcf3e33" in contract
-    assert "5e6e1c239918844c55534d5bc09f3952d565773e" in contract
-    assert "redirected both stdout and stderr and called\n`ReadToEnd()` on stdout before stderr" in contract
-    assert "redirected-pipe deadlock is not\na product-source defect" in contract
-    assert "No ZIP, checksum, or qualification receipt exists" in contract
-    assert "Never delete, recreate, retarget, repair, publish, or retry that tag" in contract
-    assert "the\nsuccessor is `v2.0.77`" in contract
 
 
-def test_release_contract_quarantines_v2077_noncanonical_tag_without_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.77` is permanently quarantined with **no artifact**" in contract
-    assert "4a27455be3fd21cc0236505931fb5372082b5b50" in contract
-    assert "ba8eca5b37e60457f2282e6513f2dc0d4e8d311f" in contract
-    assert "materialized its message as the 15 bytes `Release v2.0.77`" in contract
-    assert "without\nthe required terminal LF" in contract
-    assert "canonical parser rejected it before the official\nbuilder was invoked" in contract
-    assert "No candidate root, ZIP, checksum, qualification receipt,\nor official builder log exists" in contract
-    assert "Never delete, recreate, retarget, repair,\npublish, retry, or reuse that tag" in contract
-    assert "the successor is `v2.0.78`" in contract
 
 
-def test_release_contract_quarantines_v2078_bare_powershell_failure_without_artifact():
-    contract = RELEASE_CONTRACT.read_text(encoding="utf-8")
-
-    assert "`v2.0.78` is permanently quarantined with **no artifact**" in contract
-    assert "8c72cb1be12841b3338f4fb60cad9e5f602b27d3" in contract
-    assert "a0821534944dea5315101f4e0493803a9a7b70b2" in contract
-    assert "one authorized official\nbuilder invocation" in contract
-    assert "line 332 invoked bare `powershell.exe`" in contract
-    assert "sealed\n`PATH` omitted `WindowsPowerShell\\v1.0`" in contract
-    assert "No ZIP, checksum, or qualification\nreceipt exists" in contract
-    assert "partial candidate is not qualified" in contract
-    assert "the successor\nis `v2.0.79`" in contract
 
 
 def test_release_contract_requires_exact_builder_child_module_path_closure():

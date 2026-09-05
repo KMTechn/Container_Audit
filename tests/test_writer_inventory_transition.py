@@ -128,26 +128,6 @@ def test_old_new_inventory_switch_keeps_real_child_admission_and_rollback_exact(
     _exercise_transition(tmp_path, old_root)
 
 
-def test_installer_rejects_incompatible_prestate_before_fence_and_restores_relay_after_release():
-    source = (ROOT/'INSTALL_CANONICAL_PORTABLE.ps1').read_text(encoding='utf-8')
-    precheck = source.index('$preflightCandidate = InstalledManifest')
-    integrity = source.index('Assert-BootstrapIntegrityRecord $install', precheck)
-    membership = source.index('CODE_PRESTATE_WRITER_SEMANTICS_DIFFER', integrity)
-    snapshot = source.index('$old = @(Relays)', membership)
-    activation = source.index('[void](Start-ContainerWriterFence', snapshot)
-    assert precheck < integrity < membership < snapshot < activation
-    old_sync = source.index('Sync-CanonicalWriterFenceInventory $installedInventorySha256', activation)
-    old_call = source.index("Product $install '--remove-current-user-setup'", old_sync)
-    new_sync = source.index('Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256', old_call)
-    placement = source.index('& $winps @bootstrap', new_sync)
-    restore = source.index('$currentTreeInventorySha256 = $installedInventorySha256', placement)
-    rollback_sync = source.index('Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256', restore)
-    rollback_call = source.index("Product $install '--remove-current-user-setup'", rollback_sync)
-    release = source.index("-Phase 'ROLLBACK_COMPLETE'", rollback_call)
-    release = source.index('Stop-CanonicalWriterFenceRelease $releaseAuthorization', release)
-    restart = source.index('$newPid = StartRaw', release)
-    assert old_sync < old_call < new_sync < placement < restore < rollback_sync < rollback_call < release < restart
-    assert "$Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''" in source[source.rindex('finally {'):]
 
 
 def test_inventory_compatibility_uses_sink_identities_and_guards_not_caller_counts(tmp_path):

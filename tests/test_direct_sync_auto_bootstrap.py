@@ -1,9 +1,14 @@
 import json
 from pathlib import Path
+import threading
 
 import pytest
 
 import direct_sync_auto_bootstrap as bootstrap
+from direct_sync_push import DEFAULT_ENDPOINT_PATH
+from tests.test_real_child_http_regression import (
+    ROOT, CSV_NAME, _loopback_https, _write_child_runtime, _write_csv,
+)
 
 
 def _source_app(tmp_path: Path) -> Path:
@@ -145,18 +150,16 @@ def test_lost_process_exit_code_is_unknown(monkeypatch):
 
 
 def test_app_start_wake_records_current_user_topology(tmp_path, monkeypatch):
-    monkeypatch.setattr(
-        bootstrap,
-        "run_session_direct_sync_once",
-        lambda **_kwargs: {"status": "PASS", "returncode": 0},
-    )
-    state = tmp_path / "state"
-
-    report = bootstrap.run_direct_sync_auto_bootstrap(
-        app_root=tmp_path / "app",
-        direct_sync_root=state,
-        scan_source_dir=tmp_path / "events",
-    )
+    with _loopback_https(tmp_path, monkeypatch) as bundle:
+        state = tmp_path / "state"
+        _write_child_runtime(state, bundle)
+        csv_bytes = _write_csv(tmp_path / "events" / CSV_NAME)
+        report = bootstrap.run_direct_sync_auto_bootstrap(
+            app_root=ROOT, direct_sync_root=state, scan_source_dir=tmp_path / "events",
+        )
+        assert bundle['marker_path'].is_file(), 'real child isolation hook was not loaded'
+        bodies = bundle['recorded'].bodies_for(DEFAULT_ENDPOINT_PATH)
+        assert len(bodies) == 1 and csv_bytes in bodies[0], 'real relay did not upload the source'
 
     persisted = json.loads(
         (
@@ -174,25 +177,44 @@ def test_app_start_wake_records_current_user_topology(tmp_path, monkeypatch):
 
 def test_background_wake_is_single_per_root_and_releases_key(tmp_path, monkeypatch):
     monkeypatch.setenv("CONTAINER_AUDIT_SESSION_SYNC_TRIGGER", "1")
-    observed = []
+    with _loopback_https(tmp_path, monkeypatch) as bundle:
+        state = tmp_path / 'state'
+        events = tmp_path / 'events'
+        _write_child_runtime(state, bundle)
+        _write_csv(events / CSV_NAME)
+        entered, release = threading.Event(), threading.Event()
+        record = bundle['recorded'].record
 
-    def fake_run(**kwargs):
-        observed.append(kwargs)
-        return {"status": "PASS"}
+        def gated_record(**kwargs):
+            if kwargs.get('path') == DEFAULT_ENDPOINT_PATH:
+                entered.set()
+                assert release.wait(15), 'test did not release the HTTP response'
+            return record(**kwargs)
 
-    monkeypatch.setattr(bootstrap, "run_direct_sync_auto_bootstrap", fake_run)
-    state = tmp_path / "state"
-
-    thread = bootstrap.start_direct_sync_auto_bootstrap(
-        app_root=tmp_path / "app",
-        direct_sync_root=state,
-        scan_source_dir=tmp_path / "events",
-    )
-    assert thread is not None
-    thread.join(timeout=5)
-    assert not thread.is_alive()
-    assert observed
-    assert bootstrap._STARTED_ROOTS == set()
+        monkeypatch.setattr(bundle['recorded'], 'record', gated_record)
+        options = dict(app_root=ROOT, direct_sync_root=state, scan_source_dir=events)
+        thread = bootstrap.start_direct_sync_auto_bootstrap(**options)
+        assert thread is not None
+        duplicate = None
+        try:
+            assert entered.wait(15), 'first real relay did not reach HTTP'
+            duplicate = bootstrap.start_direct_sync_auto_bootstrap(**options)
+            assert duplicate is None
+        finally:
+            release.set()
+            thread.join(timeout=20)
+            if duplicate is not None:
+                duplicate.join(timeout=20)
+        assert not thread.is_alive()
+        assert len(bundle['recorded'].bodies_for(DEFAULT_ENDPOINT_PATH)) == 1
+        bundle['marker_path'].unlink()
+        second = bootstrap.start_direct_sync_auto_bootstrap(**options)
+        assert second is not None, 'completed wake still prevents a later child'
+        second.join(timeout=20)
+        assert not second.is_alive()
+        assert bundle['marker_path'].is_file(), 'later wake did not spawn a real child'
+        persisted = json.loads((state/'status/container_audit_direct_sync_auto_bootstrap.json').read_text())
+        assert persisted['status'] == 'PASS'
 
 
 def test_module_contains_no_task_install_or_elevation_path():
