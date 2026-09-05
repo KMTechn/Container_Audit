@@ -32,7 +32,7 @@ def _tree(root):
 
 
 PY_HOST = r'''
-import json, os, sys
+import json, os, subprocess, sys, time
 from pathlib import Path
 sys.path.insert(0, os.environ['CA_UNINSTALL_REPO'])
 import writer_session_fence as fence
@@ -46,6 +46,15 @@ direct = Path(os.environ['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit'
 if sys.argv[1] == 'relay':
     lease = user_relay.acquire_runtime_instance(direct / 'user-relay-instance')
     assert lease is not None
+    observation = {
+        'ProcessId': os.getpid(),
+        'ExecutablePath': os.environ['CA_UNINSTALL_LAUNCH_EXECUTABLE'],
+        'CommandLine': os.environ['CA_UNINSTALL_LAUNCH_COMMAND'],
+        'fence_active': (direct / 'control/writer-session/active.json').exists(),
+    }
+    (root / 'relay-observation.json').write_text(json.dumps(observation))
+    with (root / 'relay-launches.jsonl').open('a') as stream:
+        stream.write(json.dumps(observation) + '\n')
     (root / 'relay.pid').write_text(str(os.getpid()))
     (root / 'relay.ready').touch()
     stop = user_relay.user_relay_stop_path(direct)
@@ -55,13 +64,13 @@ if sys.argv[1] == 'relay':
             while not (root / 'finish').exists(): time.sleep(.05)
         else:
             user_relay.run_persistent_relay_loop(
-                lambda: {'status': 'PASS'}, status_path=direct / 'status/test-relay.json',
+                lambda: {'status': 'PASS'}, status_path=user_relay.user_relay_status_path(direct),
                 interval_seconds=1, stop_requested=lambda: stop.exists() or (root / 'finish').exists(),
             )
     finally:
         lease.release()
         (root / 'relay.ready').unlink(missing_ok=True)
-else:
+elif sys.argv[1] == 'remove':
     def delete():
         registry.write_text(json.dumps({'exists': False, 'kind': '', 'data': ''}))
     def get():
@@ -70,6 +79,52 @@ else:
     defaults['autostart_remover'] = lambda: user_relay.remove_user_relay_autostart(deleter=delete, getter=get)
     from container_audit_product_host import dispatch_product_mode
     raise SystemExit(dispatch_product_mode(['--remove-current-user-setup', '--app-root', sys.argv[2]]))
+else:
+    assert sys.argv[1] == 'onboard'
+    from tests.test_current_user_onboarding import (
+        _FakeExistingPossessionKey, _ready_state, _profile_loader, _credential_loader,
+    )
+    # Registration, DPAPI/key access and OS launch are isolated boundaries;
+    # state inspection, onboarding, autostart readback and ledger creation are real.
+    onboarding.PersistentPossessionKey.open_existing = classmethod(
+        lambda cls, *args, **kwargs: _FakeExistingPossessionKey()
+    )
+    app = Path(sys.argv[2])
+    sys.executable = str(app.parent / 'runtime/pythonw.exe')
+    def register(paths):
+        _ready_state(paths)
+        return 0
+    def setter(command):
+        registry.write_text(json.dumps({'exists': True, 'kind': 'String', 'data': command}))
+    def launch(arguments):
+        environment = dict(os.environ)
+        environment['CA_UNINSTALL_LAUNCH_EXECUTABLE'] = arguments[0]
+        environment['CA_UNINSTALL_LAUNCH_COMMAND'] = subprocess.list2cmdline(arguments)
+        child = subprocess.Popen(
+            [os.environ['CA_UNINSTALL_PYTHON'], '-I', '-B', __file__, 'relay'],
+            env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and child.poll() is None:
+            if (root / 'relay.ready').exists() and int((root / 'relay.pid').read_text()) == child.pid:
+                return child.pid
+            time.sleep(.05)
+        raise AssertionError('delegated onboarding relay did not start')
+    def relay_launcher(selected_app):
+        result = user_relay.start_user_relay_process(selected_app, launcher=launch)
+        result['process_id'] = result.pop('launcher_result')
+        return result
+    defaults = onboarding.onboard_current_user.__wrapped__.__kwdefaults__
+    defaults.update(
+        registration_runner=register, profile_loader=_profile_loader,
+        credential_loader=_credential_loader,
+        autostart_installer=lambda selected_app: user_relay.install_user_relay_autostart(
+            selected_app, setter=setter, getter=lambda: json.loads(registry.read_text())['data'],
+        ),
+        relay_launcher=relay_launcher,
+    )
+    from container_audit_product_host import dispatch_product_mode
+    raise SystemExit(dispatch_product_mode(['--onboard-current-user', '--app-root', str(app)]))
 '''
 
 OS_BOUNDARIES = r'''
@@ -80,20 +135,42 @@ function Relays {
     if (Test-Path -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'relay.ready')) {
         $relayPid = [int](Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay.pid'))
         if (Get-Process -Id $relayPid -ErrorAction SilentlyContinue) {
-            return [pscustomobject]@{ ProcessId=$relayPid; ExecutablePath=(Join-Path $InstallRoot 'runtime\pythonw.exe'); CommandLine=(Command $InstallRoot) }
+            return Get-Content (Join-Path $env:CA_UNINSTALL_ROOT 'relay-observation.json') -Raw | ConvertFrom-Json
         }
     }
     return @()
 }
 function Product([string]$Root, [string]$Mode) {
-    if ($Mode -cne '--remove-current-user-setup') { throw 'Unexpected product mode' }
-    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST remove (Join-Path $Root 'app')
-    if ($LASTEXITCODE -ne 0) { throw "Real current-user removal failed: $LASTEXITCODE" }
+    Add-Content -LiteralPath (Join-Path $env:CA_UNINSTALL_ROOT 'product-calls.log') -Value $Mode
+    $operation = switch -CaseSensitive ($Mode) {
+        '--remove-current-user-setup' { 'remove' }
+        '--onboard-current-user' { 'onboard' }
+        default { throw 'Unexpected product mode' }
+    }
+    & $env:CA_UNINSTALL_PYTHON -I -B $env:CA_UNINSTALL_HOST $operation (Join-Path $Root 'app')
+    if ($LASTEXITCODE -ne 0) {
+        if ($operation -ceq 'remove') { throw "Real current-user removal failed: $LASTEXITCODE" }
+        throw "Real current-user onboarding failed: $LASTEXITCODE"
+    }
+}
+function Get-CimInstance {
+    [CmdletBinding()]
+    param([string]$ClassName, [string]$Filter)
+    if ($ClassName -ceq 'Win32_Process' -and $Filter -match '^ProcessId = (\d+)$') {
+        $selectedPid = [int]$Matches[1]
+        foreach ($relay in @(Relays)) {
+            if ([int]$relay.ProcessId -eq $selectedPid) { return $relay }
+        }
+    }
+    return CimCmdlets\Get-CimInstance @PSBoundParameters
 }
 function StartRaw([string]$Line) {
     if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'KMTech\DirectSync\container_audit\control\writer-session\active.json')) {
         throw 'Ordinary relay restarted while writer fence was active'
     }
+    # The child records the actual requested raw spelling, including rollback quotes.
+    $env:CA_UNINSTALL_LAUNCH_COMMAND = $Line
+    $env:CA_UNINSTALL_LAUNCH_EXECUTABLE = Join-Path $InstallRoot 'runtime\pythonw.exe'
     $arguments = '-I -B ' + (Arg $env:CA_UNINSTALL_HOST) + ' relay'
     $child = Start-Process -FilePath $env:CA_UNINSTALL_PYTHON -ArgumentList $arguments -WindowStyle Hidden -PassThru
     return $child.Id
@@ -189,6 +266,8 @@ def _setup(tmp_path, fault=''):
     command = subprocess.list2cmdline([str(install / 'runtime/pythonw.exe'), '-I', '-B',
                                       str(install / 'app/main.py'), '--container-audit-user-relay'])
     (tmp_path / 'registry.json').write_text(json.dumps({'exists': True, 'kind': 'String', 'data': command}))
+    env['CA_UNINSTALL_LAUNCH_EXECUTABLE'] = str(install / 'runtime/pythonw.exe')
+    env['CA_UNINSTALL_LAUNCH_COMMAND'] = command
     protected = []
     for relative in ('KMTech/ContainerAudit/events/event.csv', 'KMTech/ContainerAudit/parked_trays/tray.json',
                      'KMTech/ContainerAudit/config/settings.json', 'KMTech/ContainerAudit/identity/key.bin',
@@ -232,6 +311,183 @@ def _run(tmp_path, env, source, install, *extra):
     (tmp_path / 'stdout.log').write_text(result.stdout, encoding='utf-8')
     (tmp_path / 'stderr.log').write_text(result.stderr, encoding='utf-8')
     return result
+
+
+def _install(tmp_path, env, source, install):
+    result = _ps(source / 'INSTALL_CANONICAL_PORTABLE.ps1', env,
+                 '-SourceRoot', str(source), '-InstallRoot', str(install),
+                 '-EvidencePath', str(tmp_path / 'reinstall-audit.json'),
+                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest')
+    (tmp_path / 'reinstall-stdout.log').write_text(result.stdout, encoding='utf-8')
+    (tmp_path / 'reinstall-stderr.log').write_text(result.stderr, encoding='utf-8')
+    return result
+
+
+def _quote_fixture_executable(env):
+    executable = env['CA_UNINSTALL_LAUNCH_EXECUTABLE']
+    command = env['CA_UNINSTALL_LAUNCH_COMMAND']
+    assert command.startswith(executable + ' ')
+    env['CA_UNINSTALL_LAUNCH_COMMAND'] = '"' + executable + '"' + command[len(executable):]
+    return env['CA_UNINSTALL_LAUNCH_COMMAND']
+
+
+def _live_preimage(tmp_path, env, source, install, child):
+    assert child.poll() is None
+    observation = json.loads((tmp_path / 'relay-observation.json').read_text())
+    assert observation['ProcessId'] == child.pid
+    assert observation['CommandLine'] == env['CA_UNINSTALL_LAUNCH_COMMAND']
+    assert observation['ExecutablePath'] == env['CA_UNINSTALL_LAUNCH_EXECUTABLE']
+    control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
+    return {
+        'code': _tree(install), 'source': _tree(source),
+        'registry': (tmp_path / 'registry.json').read_bytes(),
+        'control': _tree(control), 'observation': observation,
+    }
+
+
+def _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result):
+    assert result.returncode != 0
+    assert 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr, result.stderr
+    assert child.poll() is None
+    assert _tree(install) == before['code']
+    assert _tree(source) == before['source']
+    assert (tmp_path / 'registry.json').read_bytes() == before['registry']
+    control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
+    assert _tree(control) == before['control']
+    assert not (control / 'writer-session/active.json').exists()
+    assert not (control / 'container_audit_user_relay.stop.json').exists()
+    assert not (tmp_path / 'product-calls.log').exists()
+    assert not (tmp_path / 'audit.json').exists()
+    assert not (tmp_path / 'reinstall-audit.json').exists()
+    assert not (Path(env['LOCALAPPDATA']) / 'KMTech/ContainerAudit/install-audit').exists()
+    assert json.loads((tmp_path / 'relay-observation.json').read_text()) == before['observation']
+
+
+def _assert_preserved_and_released(env, protected):
+    assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
+    control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
+    assert not (control / 'writer-session/active.json').exists()
+    assert not (control / 'container_audit_user_relay.stop.json').exists()
+
+
+def _assert_one_live_relay(tmp_path, env):
+    launches = [json.loads(line) for line in (tmp_path / 'relay-launches.jsonl').read_text().splitlines()]
+    current = json.loads((tmp_path / 'relay-observation.json').read_text())
+    assert (tmp_path / 'relay.ready').exists()
+    pids = ','.join(str(row['ProcessId']) for row in launches)
+    probe = tmp_path / 'live-relays.ps1'
+    probe.write_text(
+        f"$live = @(Get-Process -Id @({pids}) -ErrorAction SilentlyContinue)\n"
+        f"if ($live.Count -ne 1 -or $live[0].Id -ne {current['ProcessId']}) {{ exit 1 }}\n",
+        encoding='utf-8-sig',
+    )
+    result = _ps(probe, env)
+    assert result.returncode == 0, result.stderr
+    status = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/status/container_audit_user_relay.json'
+    assert json.loads(status.read_text())['persistent_retry'] is True
+    return launches, current
+
+
+@pytest.mark.parametrize('operation', ['uninstall_then_reinstall', 'reinstall_live'])
+def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
+    env, source, install, protected = _setup(tmp_path)
+    quoted = _quote_fixture_executable(env)
+    canonical_registry = (tmp_path / 'registry.json').read_bytes()
+    assert json.loads(canonical_registry)['data'] != quoted
+    child = _launch_relay(tmp_path, env)
+    before = _live_preimage(tmp_path, env, source, install, child)
+    try:
+        if operation == 'uninstall_then_reinstall':
+            result = _run(tmp_path, env, source, install)
+            if 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr:
+                _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
+            assert result.returncode == 0, result.stderr
+            assert 'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED' in result.stdout
+            assert not install.exists()
+            assert child.poll() is not None
+            assert not (tmp_path / 'relay.ready').exists()
+            assert json.loads((tmp_path / 'registry.json').read_text()) == {
+                'exists': False, 'kind': '', 'data': '',
+            }
+            _assert_preserved_and_released(env, protected)
+        result = _install(tmp_path, env, source, install)
+        if 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr:
+            _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
+        assert result.returncode == 0, result.stderr
+        assert 'install_status=TEST_ONLY_PARTIAL' in result.stdout
+        placement = 'PASS_NEW_VERIFIED' if operation == 'uninstall_then_reinstall' else 'REUSED_VERIFIED'
+        assert 'code_placement_status=' + placement in result.stdout
+        assert json.loads((tmp_path / 'registry.json').read_text()) == json.loads(canonical_registry)
+        assert _tree(source) == before['source']
+        assert {k: v for k, v in _tree(install).items() if k != 'bootstrap-integrity.json'} == before['source']
+        _assert_preserved_and_released(env, protected)
+        launches, current = _assert_one_live_relay(tmp_path, env)
+        assert launches[0]['CommandLine'] == quoted
+        assert current['CommandLine'] == json.loads(canonical_registry)['data']
+        assert len(launches) == 3  # original, delegated onboarding, ordinary post-fence restart
+        assert [row['fence_active'] for row in launches] == [False, True, False]
+        calls = (tmp_path / 'product-calls.log').read_text(encoding='utf-8-sig').splitlines()
+        assert calls.count('--onboard-current-user') == 1
+        assert calls.count('--remove-current-user-setup') == (2 if operation == 'uninstall_then_reinstall' else 1)
+    finally:
+        _finish(tmp_path, child)
+
+
+@pytest.mark.parametrize('difference', [
+    'executable', 'entrypoint', 'executable_case', 'argument_case', 'added_argument', 'missing_argument',
+])
+def test_live_relay_command_difference_rejected_before_mutation(tmp_path, difference):
+    env, source, install, protected = _setup(tmp_path)
+    quoted = _quote_fixture_executable(env)
+    commands = {
+        'executable': quoted.replace('pythonw.exe', 'python.exe'),
+        'entrypoint': quoted.replace('main.py', 'foreign.py'),
+        'executable_case': quoted.replace('pythonw.exe', 'PYTHONW.EXE'),
+        'argument_case': quoted.replace(' -I ', ' -i '),
+        'added_argument': quoted + ' --foreign',
+        'missing_argument': quoted.replace(' -B ', ' '),
+    }
+    env['CA_UNINSTALL_LAUNCH_COMMAND'] = commands[difference]
+    if difference == 'executable':
+        env['CA_UNINSTALL_LAUNCH_EXECUTABLE'] = env['CA_UNINSTALL_LAUNCH_EXECUTABLE'].replace('pythonw.exe', 'python.exe')
+    child = _launch_relay(tmp_path, env)
+    before = _live_preimage(tmp_path, env, source, install, child)
+    try:
+        result = _run(tmp_path, env, source, install)
+        _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
+        _assert_preserved_and_released(env, protected)
+        launches, _ = _assert_one_live_relay(tmp_path, env)
+        assert len(launches) == 1
+    finally:
+        _finish(tmp_path, child)
+
+
+def test_quoted_live_relay_post_removal_rollback_preserves_raw_command(tmp_path):
+    env, source, install, protected = _setup(tmp_path, 'after_removal')
+    quoted = _quote_fixture_executable(env)
+    child = _launch_relay(tmp_path, env)
+    before = _live_preimage(tmp_path, env, source, install, child)
+    try:
+        result = _run(tmp_path, env, source, install)
+        if 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr:
+            _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
+        assert result.returncode != 0
+        assert 'AFTER_REMOVAL_INJECTED_FAILURE' in result.stderr, result.stderr
+        assert 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED' in result.stdout
+        assert 'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY' in result.stdout
+        assert _tree(install) == before['code']
+        assert _tree(source) == before['source']
+        assert json.loads((tmp_path / 'registry.json').read_text()) == json.loads(before['registry'])
+        _assert_preserved_and_released(env, protected)
+        launches, current = _assert_one_live_relay(tmp_path, env)
+        assert len(launches) == 2
+        assert child.poll() is not None
+        assert current['ProcessId'] != child.pid
+        assert all(row['CommandLine'] == quoted for row in launches)
+        assert all(row['ExecutablePath'] == before['observation']['ExecutablePath'] for row in launches)
+        assert all(row['fence_active'] is False for row in launches)
+    finally:
+        _finish(tmp_path, child)
 
 
 @pytest.mark.parametrize('scenario', ['success', 'partial', 'refusal', 'forged', 'interactive',

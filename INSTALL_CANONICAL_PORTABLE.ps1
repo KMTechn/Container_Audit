@@ -664,6 +664,14 @@ function Assert-RollbackRelayPreimage([object[]]$ExpectedRelays) {
     }
     return $actualRelays
 }
+function Get-CanonicalRelayCommandIdentity([string]$CommandLine, [string]$ExecutablePath) {
+    # Windows Run autostart can quote argv[0]; preserve every argument byte and case.
+    $quotedExecutable = '"' + $ExecutablePath + '"'
+    if ($CommandLine.StartsWith($quotedExecutable + ' ', [StringComparison]::Ordinal)) {
+        return $ExecutablePath + $CommandLine.Substring($quotedExecutable.Length)
+    }
+    return $CommandLine
+}
 function Assert-CanonicalRuntimePreimage(
     $Before,
     [object[]]$Processes,
@@ -684,11 +692,13 @@ function Assert-CanonicalRuntimePreimage(
     ) { throw 'CANONICAL_HKCU_RUN_ABSENCE_CONTRACT_INVALID' }
     if ($items.Count -gt 1) { throw 'CANONICAL_RELAY_CARDINALITY_INVALID' }
     $expectedExecutable = Join-Path $ExpectedRoot 'runtime\pythonw.exe'
+    $expectedIdentity = Get-CanonicalRelayCommandIdentity $ExpectedCommand $expectedExecutable
     foreach ($item in $items) {
+        $commandIdentity = Get-CanonicalRelayCommandIdentity ([string]$item.CommandLine) $expectedExecutable
         if (
             -not [bool]$Before.exists -or
             -not (Same ([string]$item.ExecutablePath) $expectedExecutable) -or
-            [string]$item.CommandLine -cne $ExpectedCommand
+            $commandIdentity -cne $expectedIdentity
         ) { throw 'CANONICAL_RELAY_BINDING_MISMATCH' }
     }
     if ($StopMarkerExists) { throw 'CANONICAL_STOP_MARKER_PREEXISTS' }

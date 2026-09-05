@@ -635,7 +635,7 @@ $ast = [Management.Automation.Language.Parser]::ParseFile(
     [ref]$errors
 )
 if ($errors.Count -ne 0) { exit 10 }
-foreach ($name in @('Full','Same','Assert-CanonicalRuntimePreimage')) {
+foreach ($name in @('Full','Same','Get-CanonicalRelayCommandIdentity','Assert-CanonicalRuntimePreimage')) {
     $functions = @($ast.FindAll({
         param($node)
         $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
@@ -711,6 +711,94 @@ exit 0
         env=environment,
     )
 
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+@pytest.mark.parametrize(
+    "spelling,accepted",
+    [
+        ("canonical", True),
+        ("autostart_quoted_executable", True),
+        ("different_executable", False),
+        ("executable_case", False),
+        ("different_entrypoint", False),
+        ("entrypoint_case", False),
+        ("argument_case", False),
+        ("extra_argument", False),
+        ("missing_argument", False),
+        ("quoted_arguments", False),
+        ("quote_spans_arguments", False),
+        ("missing_executable_quote", False),
+        ("missing_token_boundary", False),
+    ],
+)
+def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
+    spelling, accepted,
+):
+    executable = r"C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe"
+    arguments = (
+        r" -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py"
+        " --container-audit-user-relay"
+    )
+    canonical = executable + arguments
+    quoted = '"' + executable + '"' + arguments
+    commands = {
+        "canonical": canonical,
+        "autostart_quoted_executable": quoted,
+        "different_executable": quoted.replace("pythonw.exe", "python.exe"),
+        "executable_case": quoted.replace("pythonw.exe", "PYTHONW.EXE"),
+        "different_entrypoint": quoted.replace("main.py", "foreign.py"),
+        "entrypoint_case": quoted.replace("main.py", "MAIN.PY"),
+        "argument_case": quoted.replace(" -I ", " -i "),
+        "extra_argument": quoted + " --foreign",
+        "missing_argument": quoted.replace(" -B ", " "),
+        "quoted_arguments": '"' + executable + '" "' + arguments[1:] + '"',
+        "quote_spans_arguments": '"' + executable + ' -I"' + arguments[3:],
+        "missing_executable_quote": '"' + canonical,
+        "missing_token_boundary": '"' + executable + '"' + arguments[1:],
+    }
+    environment = dict(os.environ)
+    environment.update(
+        KMTECH_TEST_INSTALLER_PATH=str(PORTABLE_INSTALLER),
+        KMTECH_TEST_RELAY_COMMAND=commands[spelling],
+        KMTECH_TEST_RELAY_ACCEPTED=str(int(accepted)),
+    )
+    command = r'''
+$ErrorActionPreference = 'Stop'
+$tokens = $null
+$errors = $null
+$ast = [Management.Automation.Language.Parser]::ParseFile(
+    $env:KMTECH_TEST_INSTALLER_PATH, [ref]$tokens, [ref]$errors
+)
+if ($errors.Count -ne 0) { throw 'Installer parse failed' }
+# Load definitions only, so the real guard runs without the installer entrypoint.
+foreach ($definition in $ast.EndBlock.Statements) {
+    if ($definition -is [Management.Automation.Language.FunctionDefinitionAst]) {
+        Invoke-Expression $definition.Extent.Text
+    }
+}
+$root = 'C:\KMTech\Apps\Container_Audit\current'
+$expected = Command $root
+$before = [ordered]@{ exists=$true; kind='String'; data=$expected }
+$process = New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
+    ExecutablePath=(Join-Path $root 'runtime\pythonw.exe')
+    CommandLine=$env:KMTECH_TEST_RELAY_COMMAND
+}
+$failure = ''
+try { $result = Assert-CanonicalRuntimePreimage $before @($process) $expected $root $false }
+catch { $failure = $_.Exception.Message }
+if ($env:KMTECH_TEST_RELAY_ACCEPTED -ceq '1') {
+    if ($failure) { throw $failure }
+    if ($result.status -cne 'PASS' -or $result.relay_count -ne 1) { throw 'Binding did not pass' }
+}
+elseif ($failure -cne 'CANONICAL_RELAY_BINDING_MISMATCH') {
+    throw "Expected relay binding rejection, got: $failure"
+}
+'''
+    completed = subprocess.run(
+        [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+        check=False, capture_output=True, text=True, timeout=60, env=environment,
+    )
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
