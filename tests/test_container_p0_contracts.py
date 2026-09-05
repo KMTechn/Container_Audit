@@ -2956,9 +2956,12 @@ def test_gui_completion_recomputes_actions_after_lane_becomes_idle(
         }
         assert updates[1] == {
             "completion_busy": False,
-            "lane_busy": True,
-            "lane_state": "BUSY",
-            "action_state": container_module.tk.DISABLED,
+            "lane_busy": terminal_path == "fail",
+            "lane_state": "BUSY" if terminal_path == "fail" else "IDLE",
+            "action_state": (
+                container_module.tk.DISABLED
+                if terminal_path == "fail" else container_module.tk.NORMAL
+            ),
         }
         post_idle_refresh_seen = any(
             not update["completion_busy"]
