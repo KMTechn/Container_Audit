@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
 
 import pytest
@@ -435,6 +436,98 @@ def test_probe_only_session_sink_denies_under_fence_before_any_spawn(
 
     assert spawns == []
     assert (active.read_bytes(), active.stat().st_mtime_ns) == before
+
+
+def _admission_available_in_other_process(mutex_name: str) -> bool:
+    result = subprocess.run(
+        [
+            sys.executable, "-B", "-c",
+            "import sys; import writer_session_fence as f; "
+            "lease=f._acquire_named_mutex(sys.argv[1], 0.25); "
+            "available=lease is not None; "
+            "lease.release() if available else None; "
+            "sys.exit(0 if available else 7)",
+            mutex_name,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode in {0, 7}, result.stderr
+    return result.returncode == 0
+
+
+@pytest.mark.parametrize("mode", ["gui", "relay"])
+@pytest.mark.skipif(os.name != "nt", reason="cross-process Windows mutex semantics required")
+def test_product_entrypoint_releases_admission_before_resident_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str,
+) -> None:
+    import Container_Audit as app
+    import user_relay
+    from types import SimpleNamespace
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
+    mutex = fence.WRITER_MUTEX_NAME + ".resident-test." + hashlib.sha256(
+        str(tmp_path).encode()
+    ).hexdigest()[:16]
+    monkeypatch.setattr(fence, "writer_admission_mutex_name", lambda *a, **k: mutex)
+    events: list[str] = []
+
+    def resident_loop(*args, **kwargs):
+        assert _admission_available_in_other_process(mutex), (
+            "the real product entrypoint must not hold admission for a resident loop"
+        )
+        events.append("resident")
+        return {"last_cycle": {"status": "PASS"}}
+
+    if mode == "relay":
+        monkeypatch.setattr(user_relay, "run_persistent_relay_loop", resident_loop)
+        assert app.main(["--container-audit-user-relay", "--app-root", str(ROOT)]) == 0
+        assert events == ["resident"]
+    else:
+        def create_app():
+            assert not _admission_available_in_other_process(mutex), (
+                "GUI initialization must still retain writer admission"
+            )
+            events.append("initialize")
+            return SimpleNamespace(
+                root=SimpleNamespace(after=lambda *_: None), run=resident_loop,
+            )
+
+        monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: None)
+        monkeypatch.setattr(app, "_first_run_onboarding_enabled", lambda: False)
+        monkeypatch.setattr(app, "prepare_startup_item_catalog", lambda: None)
+        monkeypatch.setattr(app, "ContainerAudit", create_app)
+        monkeypatch.setattr(app, "acquire_runtime_instance", lambda _: SimpleNamespace(
+            release=lambda: events.append("instance-release"),
+        ))
+        assert app.main([]) == 0
+        assert events == ["initialize", "resident", "instance-release"]
+
+
+@pytest.mark.parametrize("arguments", [[], ["--container-audit-user-relay"]])
+def test_product_entrypoint_denies_active_fence_before_gui_or_relay_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, arguments: list[str],
+) -> None:
+    import Container_Audit as app
+    import user_relay
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
+    active = _write_active(fence.canonical_control_root(), _active_payload())
+    before = active.read_bytes()
+    entered: list[str] = []
+    monkeypatch.setattr(app, "verify_factory_contract_startup", lambda: entered.append("gui"))
+    monkeypatch.setattr(user_relay, "run_persistent_relay_loop", lambda **_: entered.append("relay"))
+    # A fenced relay's diagnostic writer must also be denied; neither mode
+    # may turn an admission failure into a successful startup.
+    with pytest.raises(fence.WriterFencedError, match="active deployment fence"):
+        app.main(arguments)
+    assert entered == []
+    assert not (tmp_path / "state").exists()
+    assert active.read_bytes() == before
 
 
 def test_nested_sink_revalidates_its_own_source_and_preserves_zero_mutation(tmp_path: Path) -> None:

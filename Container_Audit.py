@@ -15771,12 +15771,28 @@ def _show_item_catalog_cache_warning(context: Mapping[str, object]) -> None:
         pass
 
 
-@writer_sink("gui_startup")
 def main(argv: list[str] | None = None):
     arguments = list(sys.argv[1:] if argv is None else argv)
     hosted_result = dispatch_product_mode(arguments)
     if hosted_result is not None:
         return hosted_result
+
+    startup = _prepare_gui_startup()
+    if not isinstance(startup, tuple):
+        return startup
+    app, instance_lease = startup
+    try:
+        # The resident UI must let the relay and background writers acquire
+        # admission between their own guarded mutations.
+        app.run()
+        return 0
+    finally:
+        instance_lease.release()
+
+
+@writer_sink("gui_startup")
+def _prepare_gui_startup():
+    """Guard initialization without holding admission for a resident mode."""
 
     verify_factory_contract_startup()
     if getattr(sys, 'frozen', False):
@@ -15802,6 +15818,7 @@ def main(argv: list[str] | None = None):
             "열려 있는 창을 사용해 주세요.",
         )
         return
+    startup_complete = False
     try:
         if _first_run_onboarding_enabled():
             try:
@@ -15845,10 +15862,11 @@ def main(argv: list[str] | None = None):
             _show_item_catalog_startup_error(exc.cause_code)
             return ITEM_CATALOG_STARTUP_EXIT_CODE
         app.root.after(500, lambda: schedule_update_check(app.root))
-        app.run()
-        return 0
+        startup_complete = True
+        return app, instance_lease
     finally:
-        instance_lease.release()
+        if not startup_complete:
+            instance_lease.release()
 
 
 if __name__ == "__main__":
