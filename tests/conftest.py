@@ -6,6 +6,7 @@ import tkinter
 from tkinter import messagebox, simpledialog
 
 import pytest
+from tests.native_widgets import native_tk_interpreter
 
 
 def pytest_addoption(parser):
@@ -141,9 +142,6 @@ _SIMPLEDIALOG_ENTRY_POINTS = (
 def fail_fast_on_real_gui(monkeypatch, request):
     """Keep every ordinary test headless, including imported module aliases."""
 
-    if request.node.get_closest_marker("real_gui") is not None:
-        pytest.skip("real GUI tests are disabled on this headless host")
-
     for name in _MESSAGEBOX_ENTRY_POINTS:
         if hasattr(messagebox, name):
             monkeypatch.setattr(
@@ -158,6 +156,9 @@ def fail_fast_on_real_gui(monkeypatch, request):
                 name,
                 _blocked_gui_call(f"tkinter.simpledialog.{name}"),
             )
+    # Explicit native widget tests own their roots and never invoke modal input.
+    if request.node.get_closest_marker("real_gui") is not None:
+        return
     monkeypatch.setattr(
         tkinter,
         "Toplevel",

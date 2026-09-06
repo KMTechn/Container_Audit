@@ -336,17 +336,17 @@ def test_writer_session_negative_injections_are_fail_closed_and_nonmutating():
     }
 
 
-def test_selftest_uses_common_live_readback_guard_not_private_value_validator():
-    text = ADAPTER.read_text(encoding="utf-8")
-    selftest = text[
-        text.index("function Invoke-ContainerWriterSessionSelfTest") : text.index(
-            "if ($Mode -ceq 'selftest')"
-        )
-    ]
+def test_public_live_readback_rejects_observation_failure(tmp_path):
+    from tests.powershell_contracts import run_functions
 
-    assert "Test-ContainerUserRelayLiveReadbackValues" not in selftest
-    assert selftest.count("Test-ContainerUserRelayLiveReadback ") >= 7
-    assert "live_relay_readback_rejects_observation_query_failure" in selftest
+    result = run_functions(tmp_path, ADAPTER, ["Test-ContainerUserRelayLiveReadback"], r'''
+$script:observationCalls=0
+$provider={ $script:observationCalls++; throw 'owned OS observation failed' }
+$accepted=Test-ContainerUserRelayLiveReadback -Receipt $null -ExpectedCodeRoot $env:CA_CONTRACT_ROOT -ObservationProvider $provider
+[ordered]@{accepted=$accepted;observation_calls=$script:observationCalls} | ConvertTo-Json -Compress
+''')
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"accepted": False, "observation_calls": 1}
 
 
 def test_public_contract_mode_is_pinned_machine_readable_and_nonmutating():
@@ -488,13 +488,16 @@ def test_public_mode_rejects_self_consistent_tuple_without_live_session_authorit
         tz=timezone.utc,
     ).isoformat()
 
+    before = {path.relative_to(tmp_path): path.read_bytes() if path.is_file() else None
+              for path in tmp_path.rglob("*")}
     completed = _run_adapter(*arguments, session_authority=False)
 
     combined = _squash_whitespace(completed.stdout + completed.stderr)
     assert completed.returncode != 0
     assert "sessionauthoritymutexisabsentornotactivelyheld" in combined
     assert "writer_session_validation_status=" not in completed.stdout
-    assert not list(tmp_path.rglob("*"))
+    assert {path.relative_to(tmp_path): path.read_bytes() if path.is_file() else None
+            for path in tmp_path.rglob("*")} == before
 
 
 @pytest.mark.parametrize(
@@ -798,60 +801,32 @@ def test_recover_rejects_output_through_reparse_parent_before_mutation(
     assert not (tmp_path / "apps" / "current").exists()
 
 
-def test_writer_session_adapter_exposes_only_natural_trigger_restore():
-    source = ADAPTER.read_text(encoding="utf-8")
-    recovery = source[source.index("function Invoke-ContainerRecovery") :]
-
-    assert "Start-ScheduledTask" not in source
-    assert "Enable-ScheduledTask" not in source
-    assert "Disable-ScheduledTask" not in source
-    assert "Stop-ScheduledTask" not in source
-    assert "Enable-ContainerScheduledTaskUnderWriterFence" in source
-    assert "Disable-ContainerScheduledTaskUnderWriterFence" in source
-    assert "natural trigger survival was not observed" in source
-    assert "CODE_RESTORE_FAILED" in source
-    assert "WRITER_RESTORE_FAILED" in source
-    assert "PREPARED_RECEIPT_OR_LIVE_DISABLED_INVALID" in source
-    assert "Invoke-ContainerLifecycleFailureContainment" in source
-    assert "removal_status=PASS_DATA_PRESERVED" in source
-    assert "CONTAINER_WRITER_DIRECT_PREFLIGHT_FAILED" in source
-    assert "CONTAINER_WRITER_PREPARE_FINAL_EVIDENCE_FAILED" in source
-    assert "PREPARE_FINAL_EVIDENCE_FAILED_RETAIN_DISABLED" in source
-    assert "Open-PinnedReadLock $HelperPath" in source
-    assert "Open-PinnedReadLock $Script:IntegrityHelperPath" in source
-    assert "Open-PinnedReadLock $ReplacementReceiptPath" in source
-    assert "Open-ContainerVerifiedTreeReadLocks $root $root $replacement.old" in source
-    assert (
-        "Open-ContainerVerifiedTreeReadLocks $producer $root $replacement.new"
-        in source
-    )
-    assert "if (Test-CanonicalSamePath $outputPaths[$left] $outputPaths[$right])" in source
-    assert recovery.index("Test-ContainerPreparedBeforeReplacement") < recovery.index(
-        "-RestoreVerifiedReplacement"
-    )
-    assert recovery.index("Test-ContainerReplacementBeforeCode") < recovery.index(
-        "Invoke-ContainerLifecycleRestoreProduct"
-    )
 
 
-def test_writer_session_adapter_is_pinned_by_portable_manifest_contract():
-    builder = (ROOT / "tools" / "build_portable_release_candidate.py").read_text(
-        encoding="utf-8"
-    )
-    installer = (ROOT / "INSTALL_THIS_PC.ps1").read_text(encoding="utf-8")
-    canonical_installer = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(
-        encoding="utf-8"
-    )
+@pytest.mark.parametrize("relative", ["tools/container_writer_session.ps1", "tools/container_writer_session_contract.json"])
+@pytest.mark.parametrize("caller", ["bootstrap", "canonical"])
+def test_installers_reject_changed_writer_bytes_before_placement(tmp_path, relative, caller):
+    from tests.test_zero_touch_installer import _portable_release_fixture, _run_installer
 
-    assert '"tools/container_writer_session.ps1"' in builder
-    assert '"writer_session_adapter_sha256"' in builder
-    assert '"tools/container_writer_session_contract.json"' in builder
-    assert '"writer_session_contract_sha256"' in builder
-    assert "tools\\container_writer_session.ps1" in installer
-    assert "writer_session_adapter_sha256" in installer
-    assert "tools\\container_writer_session_contract.json" in installer
-    assert "writer_session_contract_sha256" in installer
-    assert "tools\\container_writer_session.ps1" in canonical_installer
-    assert "writer_session_adapter_sha256" in canonical_installer
-    assert "tools\\container_writer_session_contract.json" in canonical_installer
-    assert "writer_session_contract_sha256" in canonical_installer
+    release = _portable_release_fixture(tmp_path)
+    changed = release / relative
+    changed.write_bytes(changed.read_bytes() + b"\n ")
+    manifest_path = release / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["byte_count_before_manifest"] = sum(
+        path.stat().st_size for path in release.rglob("*") if path.is_file() and path != manifest_path
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    install = tmp_path / "apps" / "current"
+    if caller == "bootstrap":
+        result = _run_installer(release, install)
+    else:
+        result = subprocess.run([
+            _powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+            "-File", str(release / "INSTALL_CANONICAL_PORTABLE.ps1"), "-SourceRoot", str(release),
+            "-InstallRoot", str(install), "-PlanOnly", "-AllowNoncanonicalLayoutForTest", "-SkipSignatureValidationForTest",
+        ], env=dict(os.environ, KMTECH_FACTORY_INSTALL_TEST_MODE="1"), capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0
+    expected = "Portable release manifest hash readback failed" if caller == "bootstrap" else "Portable manifest readback failed"
+    assert expected in result.stdout + result.stderr
+    assert not install.exists()

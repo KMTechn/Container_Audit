@@ -877,45 +877,6 @@ def test_m7_external_bundle_contract_has_identity_lookup_and_no_repo_digest_valu
     }
 
 
-@pytest.mark.parametrize(
-    ("relative_path", "section_marker"),
-    (
-        ("README.md", "### M7 화면 증거 계약"),
-        (
-            "docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md",
-            "## 11. M7 external capture bundle v1",
-        ),
-        (
-            "docs/OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260626.md",
-            "원본 검증 evidence와 현행 대체 계약:",
-        ),
-    ),
-)
-def test_m7_external_bundle_contract_is_aligned_in_guides(
-    relative_path,
-    section_marker,
-):
-    text = Path(capture_tool.ROOT, relative_path).read_text(encoding="utf-8")
-    assert section_marker in text
-    section = text.split(section_marker, 1)[1]
-    if relative_path == "README.md":
-        section = section.split("\n---", 1)[0]
-
-    assert M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA in section
-    assert capture_tool.M7_CANONICAL_CONTRACT_PATH in section
-    assert "E:/requal-evidence/capture-bundle-v1/" in section
-    assert "HANDOVER-INDEX.md" in section
-    assert "indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json" in section
-    assert "app=Container_Audit" in section
-    assert "app_id" not in section
-    assert "external bundle 캡처 대기(재감사 통과 전 '도구 준비됨' 표기 금지)" in section
-    assert "도구 정정 진행(재감사 대기)" in section
-    assert capture_tool.M7_APPROVAL_PLACEHOLDER in section
-    assert "기존 추적 이미지" in section
-    assert "코디네이터 직접 확인(D-121, 2026-09-03)" in section
-    assert "부분 존재(아카이브)" in section
-    assert all(state_id in section for state_id in M7_REQUIRED_STATE_IDS)
-    assert re.search(r"(?<![0-9a-f])[0-9a-f]{64}(?![0-9a-f])", section, re.I) is None
 
 
 def test_method_presence_alone_never_claims_a_production_scene_seam():

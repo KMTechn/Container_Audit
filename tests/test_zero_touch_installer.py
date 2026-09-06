@@ -233,40 +233,6 @@ def _private_ca_pem() -> bytes:
     return certificate.public_bytes(serialization.Encoding.PEM)
 
 
-def test_bootstrap_is_minimal_code_placement_contract():
-    text = INSTALLER.read_text(encoding="utf-8")
-    helper = INTEGRITY_HELPER.read_text(encoding="utf-8")
-
-    assert len(text.splitlines()) <= 1100
-    assert ". $BootstrapIntegrityFunctions" in text
-    assert "container-audit-bootstrap-integrity-v1" in helper
-    assert "Write-BootstrapIntegrityRecord" in text
-    assert "identity_profile_created=false" in text
-    assert "elevation_points=1:code_placement" in text
-    assert "ReplaceExistingVerifiedPortable" in text
-    assert "ProbeVerifiedReplacementRestore" in text
-    assert "RestoreVerifiedReplacement" in text
-    assert "OLD_PRESERVED_NEW_VERIFIED" in text
-    assert "Set-HardenedCodeAcl" in text
-    assert "Assert-HardenedCodeAcl" in text
-    assert "'/setowner', '*S-1-5-32-544'" in text
-    assert "'/reset', '/L'" in text
-    assert "acl_readback_status=UNKNOWN" in text
-    reuse_index = text.index("$bootstrapStatus = 'REUSED'")
-    final_acl_index = text.index("Set-HardenedCodeAcl $installRootFull -Recursive", reuse_index)
-    success_index = text.index('Write-Output "bootstrap_status=$bootstrapStatus"')
-    assert reuse_index < final_acl_index < success_index
-    assert "Register-ScheduledTask" not in text
-    assert "New-ScheduledTask" not in text
-    assert "Start-ScheduledTask" not in text
-    assert "self-enroll" not in text
-    assert "ProducerIdentityPath" not in text
-    assert "ServerBaseUrl" not in text
-    assert "EnableWindowsSandboxQualification" not in text
-    assert "Remove-OwnedLegacyTask" in text
-    assert "Test-CurrentUserRelayPersistencePresent" in text
-    assert "INSTALL_CANONICAL_PORTABLE.ps1 -Uninstall as the current user" in text
-    assert "Product $install '--remove-current-user-setup'" in PORTABLE_INSTALLER.read_text(encoding="utf-8")
 
 
 

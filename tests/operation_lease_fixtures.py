@@ -1,5 +1,9 @@
 import base64
 from datetime import datetime, timedelta, timezone
+import importlib
+from types import SimpleNamespace
+
+import pytest
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -25,6 +29,33 @@ P256_ORDER = int(
     "FFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551",
     16,
 )
+
+FIXED_LEASE_NOW = datetime(2026, 9, 6, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.fixture
+def fixed_operation_lease_clock(monkeypatch, request):
+    """Freeze both signed fixture time and every consumer used by this lease lane."""
+    class LeaseDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls.fromtimestamp(FIXED_LEASE_NOW.timestamp(), tz=tz)
+
+        @classmethod
+        def utcnow(cls):
+            return cls.fromtimestamp(FIXED_LEASE_NOW.timestamp(), timezone.utc).replace(tzinfo=None)
+
+    modules=[importlib.import_module(name) for name in
+             ('terminal_operation_lease','transfer_seal','transfer_member_exchange','phs_label_workflow','tray_state','Container_Audit')]
+    for module in [*modules,request.module]:
+        clock=getattr(module,'datetime',None)
+        if clock is datetime:
+            monkeypatch.setattr(module,'datetime',LeaseDatetime)
+        elif getattr(clock,'datetime',None) is datetime:
+            proxy=SimpleNamespace(**{name:value for name,value in vars(clock).items() if not name.startswith('__')})
+            proxy.datetime=LeaseDatetime
+            monkeypatch.setattr(module,'datetime',proxy)
+    return FIXED_LEASE_NOW
 
 
 def _b64(value: bytes) -> str:
@@ -70,7 +101,7 @@ def signed_transfer_artifact(
     private_scalar=7,
     kid="lease-key-01",
 ):
-    now = issued_at or datetime.now(timezone.utc)
+    now = issued_at or FIXED_LEASE_NOW
     expiry = expires_at or now + timedelta(hours=1)
     source = snapshot["work_group_source"]
     group = snapshot["phs_work_group"]

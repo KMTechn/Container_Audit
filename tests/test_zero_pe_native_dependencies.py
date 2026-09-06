@@ -3,13 +3,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import runpy
+import shutil
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import native_audio
 import pytest
 from tools import build_portable_release_candidate as portable_builder
 from tools.stage_pure_python_charset_normalizer import stage
+from tools import stage_pure_python_charset_normalizer as staging
+from tests.native_process_fixtures import native_argument_recorder
+from tests.powershell_contracts import run_functions
+from tests.spec_contracts import evaluate_spec
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,7 +92,18 @@ def test_portable_production_imports_have_no_native_crypto_or_removed_ui_package
         assert forbidden not in requirements
 
 
-def test_source_only_charset_normalizer_stage_has_no_pe(tmp_path):
+def test_source_only_charset_normalizer_stage_has_no_pe(tmp_path, monkeypatch):
+    source = tmp_path / 'owned installed package'
+    source.mkdir()
+    expected = ['__init__.py', 'api.py', 'md.py', 'nested/helper.py', 'py.typed']
+    for name in expected + ['native.pyd', 'nested/accelerator.dll', 'tool.exe', '__pycache__/api.pyc']:
+        file = source / name
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(('fixture:' + name).encode())
+    monkeypatch.setattr(staging, 'importlib', SimpleNamespace(
+        util=SimpleNamespace(find_spec=lambda name: SimpleNamespace(submodule_search_locations=[str(source)])),
+        metadata=SimpleNamespace(version=lambda name: 'owned-fixture-version'),
+    ))
     output_root = tmp_path / "pure-python-overrides"
     report = stage(output_root)
 
@@ -94,6 +112,9 @@ def test_source_only_charset_normalizer_stage_has_no_pe(tmp_path):
     assert (package / "api.py").is_file()
     assert (package / "md.py").is_file()
     assert report["native_files"] == []
+    assert report['version'] == 'owned-fixture-version'
+    assert report['files'] == sorted(expected)
+    assert all((package / name).read_bytes() == (source / name).read_bytes() for name in expected)
     assert not [
         path
         for path in output_root.rglob("*")
@@ -170,29 +191,37 @@ def test_wav_sound_uses_async_winsound_flags(monkeypatch, tmp_path):
     ]
 
 
-def test_frozen_builder_enforces_native_free_analysis_and_package_guard():
-    builder = (ROOT / "tools" / "build_frozen_release_candidate.ps1").read_text(
-        encoding="utf-8"
-    )
-    spec = (ROOT / "Container_Audit.spec").read_text(encoding="utf-8")
-    hook = (
-        ROOT / "tools" / "pyinstaller_hooks" / "hook-charset_normalizer.py"
-    ).read_text(encoding="utf-8")
+def test_frozen_analysis_configuration_excludes_native_packages(tmp_path, monkeypatch):
+    override = tmp_path / 'pure-python-source-override'
+    monkeypatch.setenv('KMTECH_PURE_PYTHON_OVERRIDE', str(override))
+    configured = evaluate_spec(ROOT / 'Container_Audit.spec')['analysis']
+    assert configured['pathex'] == [str(override)]
+    assert {'PIL', 'pygame', '_brotli', 'bcrypt', 'numpy', 'psutil', 'rpds', 'win32',
+            'yaml', '_cffi_backend', 'cffi', 'cryptography', 'charset_normalizer.md__mypyc'} <= set(configured['excludes'])
+    hook = runpy.run_path(str(ROOT / 'tools/pyinstaller_hooks/hook-charset_normalizer.py'))
+    assert hook['hiddenimports'] == []
 
-    assert "stage_pure_python_charset_normalizer.py" in builder
-    assert "Assert-LowRiskNativeFreePackage" in builder
-    assert "pure-python-source-override" in builder
-    assert '"--exclude-module", "PIL"' in builder
-    assert '"--exclude-module", "pygame"' in builder
-    for module_name in ("_brotli", "bcrypt", "numpy", "psutil", "rpds", "win32", "yaml"):
-        assert f"'{module_name}'" in builder
-        assert f"'{module_name}'" in spec
-    assert "unused_optional_native_paths" in builder
-    assert "KMTECH_PURE_PYTHON_OVERRIDE" in spec
-    assert "charset_normalizer.md__mypyc" in spec
-    for module_name in ("_cffi_backend", "cffi", "cryptography"):
-        assert f"'{module_name}'" in spec
-    assert "hiddenimports: list[str] = []" in hook
+
+@pytest.mark.parametrize('forbidden', ['pygame/base.py', 'PIL/core.py', 'charset_normalizer/md.pyd',
+                                       'numpy/core.pyd', 'nested/_brotli.pyd'])
+def test_frozen_package_guard_rejects_actual_forbidden_files(tmp_path, forbidden):
+    package = tmp_path / 'package'
+    package.mkdir()
+    (package / 'stdlib.py').write_text('# ordinary pure Python')
+    result = run_functions(tmp_path, ROOT / 'tools/build_frozen_release_candidate.ps1', ['Assert-LowRiskNativeFreePackage'],
+                           'Assert-LowRiskNativeFreePackage -Root $env:CA_PACKAGE_ROOT | ConvertTo-Json -Compress',
+                           values={'CA_PACKAGE_ROOT': str(package)}, engine='pwsh')
+    assert result.returncode == 0, result.stderr[-1600:]
+    assert json.loads(result.stdout)['unused_optional_native_paths'] == []
+    path = package / forbidden
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'owned forbidden artifact')
+    result = run_functions(tmp_path, ROOT / 'tools/build_frozen_release_candidate.ps1', ['Assert-LowRiskNativeFreePackage'],
+                           'Assert-LowRiskNativeFreePackage -Root $env:CA_PACKAGE_ROOT',
+                           values={'CA_PACKAGE_ROOT': str(package)}, engine='pwsh')
+    assert result.returncode != 0
+    assert 'native dependency removal failed' in result.stderr
+    assert forbidden in result.stderr
 
 
 def test_portable_builder_requires_empty_native_closure_and_curated_tools():
@@ -314,15 +343,25 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     assert list(output.rglob("__pycache__")) == []
 
 
-def test_portable_launcher_uses_pythonw_source_entrypoint_without_focus():
-    launcher = (ROOT / "portable" / "launch-container-audit.cmd").read_text(
-        encoding="utf-8"
-    )
-    assert "runtime\\pythonw.exe" in launcher
-    assert " -I -B " in launcher
-    assert "app\\main.py" in launcher
-    assert "Container_Audit.exe" not in launcher
-    assert "--focus" not in launcher
+@pytest.mark.parametrize('exit_code', [0, 23])
+def test_portable_launcher_uses_pythonw_source_entrypoint_without_focus(tmp_path, native_argument_recorder, exit_code):
+    packet = tmp_path / 'portable with spaces 한글'
+    (packet / 'runtime').mkdir(parents=True)
+    (packet / 'app').mkdir()
+    shutil.copy2(native_argument_recorder, packet / 'runtime/pythonw.exe')
+    launcher = packet / 'launch-container-audit.cmd'
+    shutil.copy2(ROOT / 'portable/launch-container-audit.cmd', launcher)
+    receipt = tmp_path / 'launch-arguments.json'
+    environment = dict(os.environ, CA_ARGUMENT_RECEIPT=str(receipt), CA_ARGUMENT_EXIT_CODE=str(exit_code))
+    # Pass cmd its actual command text; list2cmdline would add backslash-escaped
+    # quotes intended for a CRT executable, which cmd interprets differently.
+    command = '"' + os.environ['COMSPEC'] + '" /d /s /c ""' + str(launcher) + '" --help "argument with spaces""'
+    result = subprocess.run(command,
+                            cwd=tmp_path, env=environment, capture_output=True, text=True, timeout=20,
+                            creationflags=subprocess.CREATE_NO_WINDOW)
+    assert receipt.exists(), result.stderr[-1600:]
+    assert json.loads(receipt.read_text()) == ['-I', '-B', str(packet / 'app/main.py'), '--help', 'argument with spaces']
+    assert result.returncode == exit_code
 
 
 def test_release_signature_vendor_is_byte_pinned():

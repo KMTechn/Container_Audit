@@ -746,12 +746,8 @@ def test_windows_empty_temp_file_acl_readback_is_exact(tmp_path: Path) -> None:
         text=True,
         timeout=10,
     )
-    if identity.returncode != 0 or not identity.stdout.strip():
-        pytest.skip("current Windows identity is unavailable")
-    try:
-        reader_sid = installer._resolve_reader_sid(identity.stdout.strip())
-    except (OSError, RuntimeError, ValueError) as exc:
-        pytest.skip(f"Windows ACL integration unavailable: {exc.__class__.__name__}")
+    assert identity.returncode == 0 and identity.stdout.strip(), 'elevated Windows identity lookup failed'
+    reader_sid = installer._resolve_reader_sid(identity.stdout.strip())
     directory = tmp_path / "empty-profile-directory"
     installer._harden_profile_directory(directory, reader_sid)
     installer._verify_exact_acl(directory, reader_sid, directory=True)
@@ -778,14 +774,10 @@ def test_windows_temp_profile_acl_integration(tmp_path: Path) -> None:
         text=True,
         timeout=10,
     )
-    if identity.returncode != 0 or not identity.stdout.strip():
-        pytest.skip("current Windows identity is unavailable")
+    assert identity.returncode == 0 and identity.stdout.strip(), 'elevated Windows identity lookup failed'
     target = tmp_path / "acl-integration" / "protected_admin.json"
     principal = identity.stdout.strip()
-    try:
-        reader_sid = installer._resolve_reader_sid(principal)
-    except (OSError, RuntimeError, ValueError) as exc:
-        pytest.skip(f"Windows ACL integration unavailable: {exc.__class__.__name__}")
+    reader_sid = installer._resolve_reader_sid(principal)
     installer.install_protected_admin_profile(
         candidate=TEST_ADMIN_CODE,
         profile_path=target,

@@ -7,10 +7,10 @@ import subprocess
 import pytest
 
 
-def run_functions(tmp_path, source, names, script, *, values=None):
-    powershell = shutil.which('powershell.exe')
+def run_functions(tmp_path, source, names, script, *, values=None, engine='powershell.exe'):
+    powershell = shutil.which(engine)
     if not powershell:
-        pytest.skip('Windows PowerShell is required for executable function contracts')
+        pytest.skip(f'{engine} is required for executable function contracts')
     driver = tmp_path/'contract.ps1'
     driver.write_text(r'''
 $ErrorActionPreference='Stop'

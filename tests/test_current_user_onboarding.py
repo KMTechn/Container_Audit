@@ -49,8 +49,8 @@ class _FakeExistingPossessionKey:
         return SimpleNamespace(private_export_status_hex="0x80090029")
 
 
-@pytest.fixture(autouse=True)
-def _fake_existing_possession_key(monkeypatch):
+@pytest.fixture
+def existing_possession_key_contract(monkeypatch):
     monkeypatch.setattr(
         onboarding_module.PersistentPossessionKey,
         "open_existing",
@@ -390,6 +390,7 @@ def _owner_bytes(paths) -> dict[str, bytes]:
     }
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_state(
     tmp_path,
     monkeypatch,
@@ -487,6 +488,7 @@ def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_s
 
 
 @pytest.mark.parametrize("collision", ["identity", "replacement_receipt"])
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_rejects_protected_report_path_before_mutation(
     tmp_path,
     collision,
@@ -525,6 +527,7 @@ def test_replacement_lifecycle_rejects_protected_report_path_before_mutation(
     assert fixture.stop_path.is_file()
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_rejects_existing_report_before_mutation(tmp_path):
     fixture = _replacement_lifecycle_fixture(tmp_path)
     report_path = tmp_path / "audit" / "preexisting-report.json"
@@ -556,6 +559,7 @@ def test_replacement_lifecycle_rejects_existing_report_before_mutation(tmp_path)
     assert fixture.stop_path.is_file()
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_rejects_elevated_execution_context_before_mutation(
     tmp_path,
 ):
@@ -595,6 +599,7 @@ def test_replacement_lifecycle_rejects_elevated_execution_context_before_mutatio
     assert fixture.stop_path.is_file()
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_late_report_collision_is_not_overwritten_and_contains(
     tmp_path,
 ):
@@ -654,6 +659,7 @@ def test_replacement_lifecycle_late_report_collision_is_not_overwritten_and_cont
 @pytest.mark.parametrize(
     "state_status", ["ABSENT", "ABSENT_RETRYABLE", "RECOVERY_REQUIRED", "UNKNOWN"]
 )
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_requires_exact_ready_before_mutation(
     tmp_path,
     state_status,
@@ -700,6 +706,7 @@ def test_replacement_lifecycle_requires_exact_ready_before_mutation(
 @pytest.mark.parametrize(
     "binding", ["receipt_sha256", "transaction_id", "session_id", "restored_identity"]
 )
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_rejects_inexact_transaction_or_code_before_mutation(
     tmp_path,
     binding,
@@ -755,6 +762,7 @@ def test_replacement_lifecycle_rejects_inexact_transaction_or_code_before_mutati
     assert fixture.stop_path.is_file()
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path, owned_relay):
     fixture = _replacement_lifecycle_fixture(tmp_path)
     owner_before = _owner_bytes(fixture.paths)
@@ -958,6 +966,7 @@ def test_replacement_lifecycle_cli_forwards_all_public_bindings(tmp_path, monkey
     }
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_state_absent_partial_and_existing_are_distinguished(tmp_path):
     paths = resolve_current_user_onboarding_paths(
         tmp_path / "app",
@@ -991,6 +1000,7 @@ def test_state_absent_partial_and_existing_are_distinguished(tmp_path):
     assert ready["possession_key"]["fingerprint"] == (TEST_POSSESSION_FINGERPRINT)
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_hostname_era_complete_state_is_blocked_for_audited_identity_migration(
     tmp_path,
 ):
@@ -1027,6 +1037,7 @@ def test_hostname_era_complete_state_is_blocked_for_audited_identity_migration(
     assert "install-identity migration" in state["reason"]
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_admin_recovery_report_is_terminal_not_retryable(tmp_path):
     paths = resolve_current_user_onboarding_paths(
         tmp_path / "app",
@@ -1049,6 +1060,7 @@ def test_admin_recovery_report_is_terminal_not_retryable(tmp_path):
     assert state["enrollment_error_code"] == "admin_recovery_required"
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_legacy_complete_state_requires_admin_recovery_without_opening_key(
     tmp_path, monkeypatch
 ):
@@ -1086,6 +1098,7 @@ def test_legacy_complete_state_requires_admin_recovery_without_opening_key(
     assert "legacy producer identity" in state["reason"]
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
     app_root = tmp_path / "hardened-app"
     app_root.mkdir()
@@ -1123,6 +1136,7 @@ def test_first_run_creates_state_and_second_run_reuses_identity(tmp_path):
     assert first["system_scheduled_task_required"] is False
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_integrity_required_first_run_and_rerun_leave_code_root_exactly_unchanged(
     tmp_path,
 ):
@@ -1289,6 +1303,7 @@ def test_registration_runner_forwards_bootstrap_tls_ca_bundle(tmp_path, monkeypa
     assert arguments[ca_index + 1] == str(paths.bootstrap_tls_ca_bundle_path)
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_ready_profile_adds_configured_ca_without_registration(tmp_path, monkeypatch):
     app_root = tmp_path / "app"
     app_root.mkdir()
@@ -1337,6 +1352,7 @@ def test_ready_profile_adds_configured_ca_without_registration(tmp_path, monkeyp
     assert upgrades[0]["tls_ca_bundle_path"] == str(ca_source)
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_missing_registration_result_is_unknown_not_success(tmp_path):
     app_root = tmp_path / "app"
     app_root.mkdir()
@@ -1361,6 +1377,7 @@ def test_missing_registration_result_is_unknown_not_success(tmp_path):
     assert report["action"] == "UNKNOWN"
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_missing_bootstrap_integrity_is_diagnostic_warning_not_startup_failure(
     tmp_path,
 ):
@@ -1497,6 +1514,7 @@ def _profile_loader_with_base_url(path: Path):
     )
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_product_default(
     tmp_path, monkeypatch
 ):
@@ -1534,6 +1552,7 @@ def test_onboarding_product_mode_forwards_explicit_server_base_url_and_keeps_pro
     assert onboarding_module.DEFAULT_SERVER_BASE_URL == "https://worker.kmtecherp.com"
 
 
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_explicit_server_base_url_reaches_registration_endpoint_and_bound_readback(
     tmp_path, monkeypatch
 ):
@@ -1592,6 +1611,7 @@ def test_explicit_server_base_url_reaches_registration_endpoint_and_bound_readba
     "server_base_url",
     [onboarding_module.DEFAULT_SERVER_BASE_URL, "https://qualification.example.invalid:8443"],
 )
+@pytest.mark.usefixtures("existing_possession_key_contract")
 def test_ready_profile_is_reused_without_registration_or_migration_for_any_requested_url(
     tmp_path, server_base_url
 ):
@@ -1630,3 +1650,18 @@ def test_ready_profile_is_reused_without_registration_or_migration_for_any_reque
     assert paths.logistics_profile_path.read_bytes() == profile_before
     assert paths.identity_path.read_bytes() == identity_before
     assert paths.credential_path.read_bytes() == credential_before
+
+
+@pytest.fixture(autouse=True)
+def _reject_implicit_contract_boundary(monkeypatch, request):
+    """An undeclared stub must not turn this unit lane into a native credential operation."""
+    if 'existing_possession_key_contract' in request.fixturenames:
+        yield
+        return
+    calls=[]
+    def deny(*args, **kwargs):
+        calls.append('undeclared boundary')
+        raise AssertionError('explicit fixture required: existing_possession_key_contract')
+    monkeypatch.setattr(onboarding_module.PersistentPossessionKey, "open_existing", classmethod(deny))
+    yield
+    assert not calls, 'explicit fixture required: existing_possession_key_contract'

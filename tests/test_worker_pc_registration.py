@@ -71,8 +71,8 @@ class _FakePossessionKey:
         return b"\x01" * 64
 
 
-@pytest.fixture(autouse=True)
-def _fake_persistent_possession_key(monkeypatch):
+@pytest.fixture
+def registration_possession_key_contract(monkeypatch):
     monkeypatch.setattr(
         registration.PersistentPossessionKey,
         "provision_initial",
@@ -124,6 +124,7 @@ def test_worker_pc_registration_frozen_default_app_root_uses_executable_director
     assert registration._default_app_root() == str(frozen_exe.parent.resolve())
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
@@ -187,6 +188,7 @@ def test_worker_pc_registration_writes_manifest_and_secret_ref_only(tmp_path, mo
     assert "secret" not in credential
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_emits_catalog_order_raw_event_names_not_gui_order(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
@@ -223,6 +225,7 @@ def test_worker_pc_registration_emits_catalog_order_raw_event_names_not_gui_orde
     assert raw_event_names[-1] == "WORK_START"
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
@@ -334,6 +337,7 @@ def test_worker_pc_registration_self_enrolls_and_bootstraps_wincred(tmp_path, mo
     assert report["possession_private_export_status"] == "0x80090029"
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowlist(tmp_path, monkeypatch):
     local_app_data = tmp_path / "LocalAppData"
     program_data = tmp_path / "ProgramData"
@@ -415,6 +419,7 @@ def test_worker_pc_registration_self_enrolls_without_token_for_server_ip_allowli
     assert captured["dpapi_secret"] == "server-issued-secret-pc-ip"
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_current_user_scope_flows_to_both_profiles(
     tmp_path, monkeypatch
 ):
@@ -558,6 +563,7 @@ def test_worker_pc_registration_current_user_dpapi_roundtrip():
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_write(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-manifest-hash-mismatch.json"
     writes = []
@@ -608,6 +614,7 @@ def test_worker_pc_registration_blocks_manifest_hash_mismatch_before_secret_writ
     assert writes == []
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-server-rejection.json"
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
@@ -650,6 +657,7 @@ def test_worker_pc_registration_preserves_safe_server_rejection_detail(tmp_path,
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-preserve-profile.json"
     captured = {}
@@ -713,6 +721,7 @@ def test_worker_pc_registration_preserves_existing_machine_profile(tmp_path, mon
     assert report["machine_profiles"] == {}
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_manifest_hash_verification_uses_canonical_json_and_fails_closed(tmp_path, capsys):
     manifest_path = tmp_path / "producer_manifest.json"
     manifest = {
@@ -742,6 +751,7 @@ def test_manifest_hash_verification_uses_canonical_json_and_fails_closed(tmp_pat
     assert "sensitive-fixture-id" not in success_output + failure_output
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_post(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-self-enroll-blocked-report.json"
     calls = []
@@ -785,6 +795,7 @@ def test_worker_pc_registration_blocks_cross_origin_self_enroll_before_token_pos
     assert "enrollment_url must be HTTPS, same-origin" in report["blocked_reason"]
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_writes(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-output-path-blocked.json"
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
@@ -811,6 +822,7 @@ def test_worker_pc_registration_blocks_explicit_syncthing_output_paths_before_wr
     assert "credential_path must not point at the legacy Syncthing folder" in report["blocked_reason"]
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_syncthing_report_path_without_writing_there(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
     monkeypatch.setenv("PROGRAMDATA", str(tmp_path / "ProgramData"))
@@ -845,6 +857,7 @@ def test_path_independent_install_identity_fixed_vector_and_collision_boundaries
     assert _generated_install_id(app_id="defect_inspection") != install_id
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_generated_install_id_ignores_app_and_state_paths(
     tmp_path, monkeypatch
 ):
@@ -910,6 +923,7 @@ def _run_generated_identity_probe(
     return report, manifest, credential
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_generated_runtime_identities_do_not_collide_on_same_hostname(
     tmp_path,
     monkeypatch,
@@ -965,6 +979,7 @@ def test_generated_runtime_identities_do_not_collide_on_same_hostname(
     assert first[2]["secret_ref"] != second[2]["secret_ref"]
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_generated_runtime_identities_survive_hostname_rename(
     tmp_path,
     monkeypatch,
@@ -996,6 +1011,7 @@ def test_generated_runtime_identities_survive_hostname_rename(
     assert second[0]["hostname"] == "LINE-PC-NEW"
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_existing_hostname_identity_fails_closed_without_overwriting_registration(
     tmp_path,
     monkeypatch,
@@ -1047,6 +1063,7 @@ def test_existing_hostname_identity_fails_closed_without_overwriting_registratio
     assert storage_paths.credential_path.read_bytes() == credential_before
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_hostname_identity_file_alone_cannot_seed_mixed_install_artifacts(
     tmp_path,
     monkeypatch,
@@ -1249,6 +1266,7 @@ def _write_admin_recovery_authorization(
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_admin_recovery_is_explicit_signed_and_cleans_secret(
     tmp_path, monkeypatch
 ):
@@ -1386,6 +1404,7 @@ def test_worker_pc_registration_admin_recovery_is_explicit_signed_and_cleans_sec
     assert captured["dpapi_secret"] == "server-recovery-secret-02"
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_rejected_admin_recovery_retains_protected_secret(
     tmp_path, monkeypatch
 ):
@@ -1679,6 +1698,7 @@ def _two_phase_recovery_args(tmp_path, recovery_secret_path, report_path):
         ("AFTER_COMPLETE_JOURNAL", "COMMITTED"),
     ],
 )
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_two_phase_recovery_resumes_every_crash_cut_without_new_authorization(
     tmp_path,
     monkeypatch,
@@ -1774,6 +1794,7 @@ def test_two_phase_recovery_resumes_every_crash_cut_without_new_authorization(
         ("AFTER_EXPIRED_TERMINAL_JOURNAL", "EXPIRED", False),
     ],
 )
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_two_phase_expiry_crash_cuts_restart_to_audited_terminal_state(
     tmp_path,
     monkeypatch,
@@ -1867,6 +1888,7 @@ def test_two_phase_expiry_crash_cuts_restart_to_audited_terminal_state(
     ).exists()
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_two_phase_expiry_after_package_stage_removes_stale_package(
     tmp_path,
     monkeypatch,
@@ -1927,6 +1949,7 @@ def test_two_phase_expiry_after_package_stage_removes_stale_package(
     ).exists()
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_two_phase_terminal_journals_roll_to_new_authorizations(
     tmp_path,
     monkeypatch,
@@ -2041,6 +2064,7 @@ def test_two_phase_terminal_journals_roll_to_new_authorizations(
     assert not stale_complete_package.exists()
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_two_phase_unavailable_status_remains_reconcilable_not_expired(
     tmp_path,
     monkeypatch,
@@ -2092,6 +2116,7 @@ def test_two_phase_unavailable_status_remains_reconcilable_not_expired(
     ).is_file()
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_legacy_v2_recovery_remains_default_when_two_phase_flag_is_absent(
     tmp_path,
     monkeypatch,
@@ -2178,6 +2203,7 @@ def test_legacy_v2_recovery_remains_default_when_two_phase_flag_is_absent(
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_path, monkeypatch):
     local_app_data, _program_data = _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-persist-report.json"
@@ -2236,6 +2262,7 @@ def test_worker_pc_registration_persists_identity_after_self_enroll_success(tmp_
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
     tmp_path, monkeypatch
 ):
@@ -2311,6 +2338,7 @@ def test_worker_pc_registration_blocks_legacy_identity_without_key_or_http(
     assert persisted == pinned
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated(tmp_path, monkeypatch):
     _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-pin-report.json"
@@ -2366,6 +2394,7 @@ def test_worker_pc_registration_pins_explicit_producer_install_id_over_generated
     assert "9231ea1cf5b8" not in identity_path.read_text(encoding="utf-8")
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_seeded_legacy_identity_requires_admin_recovery(
     tmp_path, monkeypatch
 ):
@@ -2417,6 +2446,7 @@ def test_worker_pc_registration_seeded_legacy_identity_requires_admin_recovery(
     assert json.loads(seed_path.read_text(encoding="utf-8")) == seed
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evidence(
     tmp_path, monkeypatch
 ):
@@ -2470,6 +2500,7 @@ def test_worker_pc_registration_identity_conflict_fail_closed_without_reuse_evid
     )
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp_path, monkeypatch):
     _self_enroll_env(tmp_path, monkeypatch)
     seed_path = tmp_path / "bad-identity.json"
@@ -2505,6 +2536,7 @@ def test_worker_pc_registration_blocks_malformed_identity_file_before_enroll(tmp
     assert "schema_version is invalid" in report["blocked_reason"]
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeypatch):
     _self_enroll_env(tmp_path, monkeypatch)
     report_path = tmp_path / "registration-identity-syncthing-report.json"
@@ -2526,6 +2558,7 @@ def test_worker_pc_registration_blocks_syncthing_identity_path(tmp_path, monkeyp
     ]
 
 
+@pytest.mark.usefixtures("registration_possession_key_contract")
 def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch):
     report_path = tmp_path / "registration-blocked.json"
     monkeypatch.setenv(DATA_ROOT_ENV, r"C:\Sync")
@@ -2537,3 +2570,19 @@ def test_worker_pc_registration_blocks_syncthing_data_root(tmp_path, monkeypatch
     assert report["status"] == "BLOCKED"
     assert report["raw_secret_written"] is False
     assert "legacy Syncthing folder" in report["blocked_reason"]
+
+
+@pytest.fixture(autouse=True)
+def _reject_implicit_contract_boundary(monkeypatch, request):
+    """An undeclared stub must not turn this unit lane into a native credential operation."""
+    if 'registration_possession_key_contract' in request.fixturenames:
+        yield
+        return
+    calls=[]
+    def deny(*args, **kwargs):
+        calls.append('undeclared boundary')
+        raise AssertionError('explicit fixture required: registration_possession_key_contract')
+    monkeypatch.setattr(registration.PersistentPossessionKey, "provision_initial", classmethod(deny))
+    monkeypatch.setattr(registration.PersistentPossessionKey, "open_existing", classmethod(deny))
+    yield
+    assert not calls, 'explicit fixture required: registration_possession_key_contract'

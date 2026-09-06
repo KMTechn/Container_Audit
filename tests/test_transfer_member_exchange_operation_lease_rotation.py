@@ -8,7 +8,9 @@ from copy import deepcopy
 import pytest
 
 from Container_Audit import ContainerAudit, TraySession
-from tests.operation_lease_fixtures import signed_transfer_artifact
+from tests.operation_lease_fixtures import signed_transfer_artifact, fixed_operation_lease_clock
+
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
 from terminal_operation_lease import (
     OperationLeaseError,
     OperationLeaseManager,

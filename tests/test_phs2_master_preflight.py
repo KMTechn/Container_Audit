@@ -23,7 +23,9 @@ from transfer_seal import (
     _sha256,
     membership_hash,
 )
-from tests.operation_lease_fixtures import signed_transfer_artifact
+from tests.operation_lease_fixtures import signed_transfer_artifact, fixed_operation_lease_clock
+
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
 from warning_presenter import Notice, NoticeSeverity, WarningPresenter
 
 

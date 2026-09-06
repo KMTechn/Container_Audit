@@ -1055,15 +1055,31 @@ def test_check_and_apply_updates_skips_source_mode_before_network(monkeypatch):
 
 
 def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
+    import threading
+
     # This unit uses a fully mocked mixer and cannot reach the operator audio
     # device; explicitly bypass the suite-wide silent guard to exercise the
     # initialization failure branch.
     monkeypatch.setenv("KMTECH_TEST_SILENT_AUDIO", "0")
     monkeypatch.setenv("SDL_AUDIODRIVER", "unit-test-mocked")
     app = _headless_app()
+    finished = threading.Event()
+    real_thread = threading.Thread
+    owned_threads = []
+
+    def make_owned_thread(*args, **kwargs):
+        thread = real_thread(*args, **kwargs)
+        owned_threads.append(thread)
+        return thread
+
+    from types import SimpleNamespace
+    threads = SimpleNamespace(**{name:value for name,value in vars(threading).items() if not name.startswith('__')})
+    threads.Thread = make_owned_thread
+    monkeypatch.setattr(container_audit_module, 'threading', threads)
     class FakeRoot:
         def after(self, _delay_ms, callback):
             callback()
+            finished.set()
 
     app.root = FakeRoot()
     app.audio_feedback_init_started = False
@@ -1075,14 +1091,13 @@ def test_audio_feedback_init_failure_is_nonfatal(monkeypatch):
         lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("no audio device")),
     )
 
-    app._load_audio_feedback()
-
-    for _ in range(100):
-        if getattr(app, "audio_feedback_error", ""):
-            break
-        import time
-
-        time.sleep(0.01)
+    try:
+        app._load_audio_feedback()
+        assert finished.wait(5), 'audio completion callback was not delivered'
+    finally:
+        for thread in owned_threads:
+            thread.join(5)
+            assert not thread.is_alive(), 'owned audio initialization did not stop'
 
     assert app.success_sound is None
     assert app.error_sound is None

@@ -156,22 +156,17 @@ def test_main_dispatches_product_mode_before_factory_and_gui_startup(monkeypatch
     assert app.main(["--container-audit-direct-sync-relay", "--help"]) == 23
 
 
-def test_authoritative_pyinstaller_paths_include_factory_contract_data():
-    spec = (ROOT / "Container_Audit.spec").read_text(encoding="utf-8")
-    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(
-        encoding="utf-8"
-    )
-    verifier = (ROOT / "tools" / "verify_frozen_release_artifact.py").read_text(
-        encoding="utf-8"
-    )
+def test_authoritative_pyinstaller_paths_include_factory_contract_data(tmp_path, monkeypatch):
+    from tests.spec_contracts import evaluate_spec
 
-    assert (
-        "('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle')"
-        in spec
-    )
-    assert "('contract.lock.json', '.')" in spec
-    assert "PyInstaller" not in workflow
-    assert "build_cli prepare" not in workflow
-    assert "build_cli manifest" not in workflow
-    assert "verify_staged_package" in verifier
-    assert "expected_contract_sha256=expected_contract_sha256" in verifier
+    identity = tmp_path / 'owned identity with spaces'
+    monkeypatch.setenv('KMTECH_FACTORY_CONTRACT_IDENTITY_ROOT', str(identity))
+    configured = evaluate_spec(ROOT / 'Container_Audit.spec')
+    data = configured['analysis']['datas']
+    assert ('kmtech_factory_contracts/bundle', 'kmtech_factory_contracts/bundle') in data
+    assert ('contract.lock.json', '.') in data
+    assert (str(identity / 'build-identity.json'), '.') in data
+    assert (str(identity / 'build-compatibility.json'), '.') in data
+    assert configured['analysis']['scripts'] == ['Container_Audit.py']
+    assert configured['exe']['name'] == configured['collect']['name'] == 'Container_Audit'
+    assert configured['exe']['console'] is False

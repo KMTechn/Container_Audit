@@ -6,6 +6,9 @@ import threading
 from types import SimpleNamespace
 
 import pytest
+from tests.operation_lease_fixtures import fixed_operation_lease_clock
+
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
 
 from Container_Audit import ContainerAudit, TraySession
 from tests.test_container_audit_contracts import _completion_app

@@ -41,8 +41,8 @@ from direct_sync_push import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _isolate_legacy_relay_tests_from_runtime_lease(monkeypatch):
+@pytest.fixture
+def legacy_relay_without_runtime_lease(monkeypatch):
     monkeypatch.setattr(
         direct_sync_push,
         "prepare_runtime_metadata",
@@ -1333,6 +1333,7 @@ def test_relay_enqueue_blocks_changed_content_for_same_upload_identity_from_copi
 
 
 @pytest.mark.parametrize("damage", ["delete", "tamper"])
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_relay_enqueue_repairs_invalid_existing_spool_for_deduped_pending_batch(tmp_path, damage):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1697,6 +1698,7 @@ def test_relay_claim_and_stale_lease_reset(tmp_path):
     assert status["counts"][RELAY_STATUS_PENDING] == 1
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_relay_retry_then_success_uses_fresh_signed_request_and_marks_acked(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1794,6 +1796,7 @@ def test_relay_retry_then_success_uses_fresh_signed_request_and_marks_acked(tmp_
     assert Path(current["upload_status_path"]).is_file()
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_retry_wait_uses_retry_after_header(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1842,6 +1845,7 @@ def test_drain_retry_wait_uses_retry_after_header(tmp_path):
     assert current["next_attempt_at"] == "2099-01-01T00:02:00Z"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_retry_wait_preserves_zero_retry_after_header(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1898,6 +1902,7 @@ def test_retry_after_header_caps_far_future_http_date():
     assert retry_after == direct_sync_push.MAX_RETRY_AFTER_SECONDS
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_retry_wait_caps_huge_retry_after_header(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1945,6 +1950,7 @@ def test_drain_retry_wait_caps_huge_retry_after_header(tmp_path):
     assert current["next_attempt_at"] == "2099-01-02T00:00:00Z"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_pre_upload_pause_releases_claim_without_posting(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -1993,6 +1999,7 @@ def test_drain_pre_upload_pause_releases_claim_without_posting(tmp_path):
     assert current["last_error_code"] == "operator_paused"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_pre_upload_pause_restores_due_retry_wait_state(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2059,6 +2066,7 @@ def test_drain_pre_upload_pause_restores_due_retry_wait_state(tmp_path):
     assert current["last_error_code"] == "operator_paused"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_uses_enqueued_metadata_snapshot_after_manifest_changes(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2183,6 +2191,7 @@ def test_relay_schema_migrates_legacy_queue_without_metadata_snapshot(tmp_path):
     assert count == 1
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_legacy_row_without_metadata_snapshot_goes_to_operator_review_without_upload(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     credentials = make_credentials()
@@ -2262,6 +2271,7 @@ def test_drain_legacy_row_without_metadata_snapshot_goes_to_operator_review_with
     assert json.loads(current["receipt_json"]) == {"client_batch_id": "relay-legacy"}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_committed_receipt_identity_mismatch_to_operator_review(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2315,6 +2325,7 @@ def test_drain_moves_committed_receipt_identity_mismatch_to_operator_review(tmp_
     assert json.loads(current["receipt_json"])["client_batch_id"] == "relay-some-other-row"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_committed_receipt_missing_client_batch_id_to_operator_review(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2374,6 +2385,7 @@ def test_drain_moves_committed_receipt_missing_client_batch_id_to_operator_revie
         ({"upload_id": "request-from-different-upload"}, "receipt_trace_mismatch"),
     ],
 )
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_committed_receipt_missing_trace_identity_to_operator_review(
     tmp_path, receipt_patch, expected_error_code
 ):
@@ -2456,6 +2468,7 @@ def test_drain_moves_committed_receipt_missing_trace_identity_to_operator_review
         ({"totals": {"inserted": 0, "replayed": 0, "quarantined": 0, "errors": 0}}, "producer_receipt_invalid"),
     ],
 )
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_incomplete_committed_receipt_to_operator_review(tmp_path, receipt_patch, expected_error_code):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2512,6 +2525,7 @@ def test_drain_moves_incomplete_committed_receipt_to_operator_review(tmp_path, r
     assert csv_path.is_file()
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_2xx_invalid_receipt_to_operator_review(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2552,6 +2566,7 @@ def test_drain_moves_2xx_invalid_receipt_to_operator_review(tmp_path):
     assert Path(current["upload_status_path"]).is_file()
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_moves_2xx_string_committed_receipt_to_operator_review(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2601,6 +2616,7 @@ def test_drain_moves_2xx_string_committed_receipt_to_operator_review(tmp_path):
     assert Path(current["upload_status_path"]).is_file()
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_preserves_non_2xx_committed_receipt_for_operator_review(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2664,6 +2680,7 @@ def test_drain_preserves_non_2xx_committed_receipt_for_operator_review(tmp_path)
     assert status_artifact["retry_after_seconds"] is None
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_treats_string_retryable_false_as_failed_permanent(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2709,6 +2726,7 @@ def test_drain_treats_string_retryable_false_as_failed_permanent(tmp_path):
     assert current["last_error_code"] == "bad_request"
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_missing_spooled_file_marks_failed_permanent_without_posting(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2747,6 +2765,7 @@ def test_drain_missing_spooled_file_marks_failed_permanent_without_posting(tmp_p
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_spooled_file_digest_mismatch_records_relay_identity(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2785,6 +2804,7 @@ def test_drain_spooled_file_digest_mismatch_records_relay_identity(tmp_path):
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_invalid_relay_metadata_records_relay_identity(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2830,6 +2850,7 @@ def test_drain_invalid_relay_metadata_records_relay_identity(tmp_path):
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_corrupt_relay_metadata_goes_to_operator_review_without_rebuild(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2874,6 +2895,7 @@ def test_drain_corrupt_relay_metadata_goes_to_operator_review_without_rebuild(tm
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_rejects_non_integer_relay_metadata_byte_length_without_upload(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2918,6 +2940,7 @@ def test_drain_rejects_non_integer_relay_metadata_byte_length_without_upload(tmp
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_rejects_changed_producer_credentials_without_upload(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -2959,6 +2982,7 @@ def test_drain_rejects_changed_producer_credentials_without_upload(tmp_path):
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_upload_exception_after_claim_releases_lease_to_operator_review(tmp_path, monkeypatch):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -3012,6 +3036,7 @@ def test_drain_upload_exception_after_claim_releases_lease_to_operator_review(tm
     assert json.loads(current["receipt_json"]) == {"client_batch_id": row.relay_id}
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_acks_committed_upload_when_status_artifact_write_fails(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -3074,6 +3099,7 @@ def test_drain_acks_committed_upload_when_status_artifact_write_fails(tmp_path):
     assert relay_queue_status(db_path)["counts"][RELAY_STATUS_ACKED] == 1
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_status_write_failure_preserves_retryable_producer_error(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -3132,6 +3158,7 @@ def test_drain_status_write_failure_preserves_retryable_producer_error(tmp_path)
     assert "FileExistsError" in receipt["_local_upload_status_write_error_message"]
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_does_not_ack_when_lease_changes_before_status_update(tmp_path, monkeypatch):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -3212,6 +3239,7 @@ def test_drain_does_not_ack_when_lease_changes_before_status_update(tmp_path, mo
     assert current["receipt_json"] is None
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_drain_extends_lease_beyond_long_upload_timeout(tmp_path, monkeypatch):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)
@@ -3275,6 +3303,7 @@ def test_drain_extends_lease_beyond_long_upload_timeout(tmp_path, monkeypatch):
     assert (lease_expires_at - started_at).total_seconds() >= 600
 
 
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_acked_relay_retention_report_is_read_only_and_candidates_require_full_evidence(tmp_path):
     manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)

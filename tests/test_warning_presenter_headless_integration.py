@@ -124,7 +124,7 @@ def _scan_app(*, save_succeeds, events):
     return app
 
 
-def _completion_app(*, seal_status, ledger_succeeds, events):
+def _completion_app(*, save_root, seal_status, ledger_succeeds, events):
     app = ContainerAudit.__new__(ContainerAudit)
     scan_times = [
         datetime.datetime(2026, 7, 15, 9, 0, index)
@@ -147,7 +147,7 @@ def _completion_app(*, seal_status, ledger_succeeds, events):
         app.warning_presenter.record_normal_scan(barcode)
     events.clear()
     app.worker_name = "홍길동"
-    app.save_folder = str(Path(__file__).resolve().parent)
+    app.save_folder = str(save_root)
     app.log_file_path = str(Path(app.save_folder) / "headless-completion-events.csv")
     app.completed_master_labels = set()
     app.work_summary = {}
@@ -249,9 +249,9 @@ def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal():
     assert not any(event[0] == "record_normal_scan" for event in events)
 
 
-def test_operator_review_preserves_active_tray_and_center_rows_without_completion_or_reset():
+def test_operator_review_preserves_active_tray_and_center_rows_without_completion_or_reset(tmp_path):
     events = []
-    app = _completion_app(seal_status="OPERATOR_REVIEW", ledger_succeeds=True, events=events)
+    app = _completion_app(save_root=tmp_path, seal_status="OPERATOR_REVIEW", ledger_succeeds=True, events=events)
     original_tray = app.current_tray
     original_rows = list(app.scanned_listbox.rows)
 
@@ -271,9 +271,9 @@ def test_operator_review_preserves_active_tray_and_center_rows_without_completio
     assert not any(event[0] == "delete_state" for event in events)
 
 
-def test_acknowledging_operator_notice_does_not_release_completion_block():
+def test_acknowledging_operator_notice_does_not_release_completion_block(tmp_path):
     events = []
-    app = _completion_app(seal_status="OPERATOR_REVIEW", ledger_succeeds=True, events=events)
+    app = _completion_app(save_root=tmp_path, seal_status="OPERATOR_REVIEW", ledger_succeeds=True, events=events)
     app.complete_tray()
     app._schedule_focus_return = lambda: _raise("blocked review must not return scan focus")
 
@@ -284,9 +284,9 @@ def test_acknowledging_operator_notice_does_not_release_completion_block():
     assert app.warning_presenter.state.is_blocking is True
 
 
-def test_acked_snapshot_is_published_after_synchronous_tray_complete():
+def test_acked_snapshot_is_published_after_synchronous_tray_complete(tmp_path):
     events = []
-    app = _completion_app(seal_status="ACKED", ledger_succeeds=True, events=events)
+    app = _completion_app(save_root=tmp_path, seal_status="ACKED", ledger_succeeds=True, events=events)
 
     assert app.complete_tray() is True
 
@@ -298,9 +298,9 @@ def test_acked_snapshot_is_published_after_synchronous_tray_complete():
     assert app.warning_presenter.state.completion.outcome is CompletionOutcome.ACKED
 
 
-def test_retry_wait_locks_and_preserves_tray_before_local_completion():
+def test_retry_wait_locks_and_preserves_tray_before_local_completion(tmp_path):
     events = []
-    app = _completion_app(seal_status="RETRY_WAIT", ledger_succeeds=True, events=events)
+    app = _completion_app(save_root=tmp_path, seal_status="RETRY_WAIT", ledger_succeeds=True, events=events)
     app.current_tray.master_label_code = (
         f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-RETRY|CLC={ITEM_CODE}|"
         "LBL=LBL-RETRY|HSH=0123456789abcdef"
@@ -321,9 +321,9 @@ def test_retry_wait_locks_and_preserves_tray_before_local_completion():
     assert app.warning_presenter.state.is_blocking is True
 
 
-def test_durable_local_link_allows_completion_while_server_retry_waits():
+def test_durable_local_link_allows_completion_while_server_retry_waits(tmp_path):
     events = []
-    app = _completion_app(
+    app = _completion_app(save_root=tmp_path,
         seal_status="RETRY_WAIT",
         ledger_succeeds=True,
         events=events,
@@ -351,9 +351,9 @@ def test_durable_local_link_allows_completion_while_server_retry_waits():
     assert app.warning_presenter.state.completion.server_confirmed is False
 
 
-def test_server_conflict_after_local_link_does_not_roll_back_completion():
+def test_server_conflict_after_local_link_does_not_roll_back_completion(tmp_path):
     events = []
-    app = _completion_app(
+    app = _completion_app(save_root=tmp_path,
         seal_status="OPERATOR_REVIEW",
         ledger_succeeds=True,
         events=events,
@@ -475,9 +475,9 @@ def test_restart_review_refresh_surfaces_only_worker_safe_blocking_guidance():
     assert "review-raw-123" not in notice.message
 
 
-def test_permanent_local_outbox_failure_never_shows_completion_success():
+def test_permanent_local_outbox_failure_never_shows_completion_success(tmp_path):
     events = []
-    app = _completion_app(
+    app = _completion_app(save_root=tmp_path,
         seal_status="ACKED",
         ledger_succeeds=True,
         events=events,
@@ -495,9 +495,9 @@ def test_permanent_local_outbox_failure_never_shows_completion_success():
     assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)
 
 
-def test_completion_log_failure_after_acked_transfer_publishes_retry_lock_without_reset():
+def test_completion_log_failure_after_acked_transfer_publishes_retry_lock_without_reset(tmp_path):
     events = []
-    app = _completion_app(seal_status="ACKED", ledger_succeeds=False, events=events)
+    app = _completion_app(save_root=tmp_path, seal_status="ACKED", ledger_succeeds=False, events=events)
     original_tray = app.current_tray
     original_rows = list(app.scanned_listbox.rows)
 

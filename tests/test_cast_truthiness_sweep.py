@@ -172,12 +172,68 @@ exit 0
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_install_helper_keeps_restore_booleans_exact_before_evidence_write():
-    source = INSTALLER.read_text(encoding="utf-8")
+@pytest.mark.parametrize("field", ["prior_code_exact", "failed_new_preserved"])
+@pytest.mark.parametrize("value", ["'false'", "$false"])
+def test_install_helper_rejects_inexact_restore_result_before_pass_evidence(
+    tmp_path, field, value
+):
+    from tests.test_zero_touch_installer import (
+        _portable_release_fixture, _run_installer, _run_restore,
+    )
 
-    assert "-not (Test-BootstrapJsonInteger $manifest.file_count_before_manifest)" in source
-    assert "-not (Test-BootstrapJsonInteger $manifest.byte_count_before_manifest)" in source
-    assert "$result.prior_code_exact -isnot [bool]" in source
-    assert "$result.failed_new_preserved -isnot [bool]" in source
-    assert "prior_code_exact = $result.prior_code_exact" in source
-    assert "failed_new_preserved = $result.failed_new_preserved" in source
+    old = _portable_release_fixture(tmp_path, directory="old", main_payload="# old\n")
+    new = _portable_release_fixture(
+        tmp_path, directory="new", source_commit="b" * 40, main_payload="# new\n"
+    )
+    # Adversarial dependency return, after real disk restoration. The caller's
+    # Boolean gate, evidence writer, replacement and restore entrypoints run intact.
+    helper = new / "tools" / "bootstrap_integrity.ps1"
+    source = helper.read_text(encoding="utf-8")
+    original = f"{field} = $true"
+    assert source.count(original) == 2
+    helper.write_text(source.replace(original, f"{field} = {value}"), encoding="utf-8")
+    manifest_path = new / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["integrity_helper_sha256"] = hashlib.sha256(helper.read_bytes()).hexdigest()
+    manifest["byte_count_before_manifest"] = sum(
+        path.stat().st_size for path in new.rglob("*")
+        if path.is_file() and path != manifest_path
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    install = tmp_path / "apps" / "current"
+    initial = _run_installer(old, install)
+    assert initial.returncode == 0, initial.stderr or initial.stdout
+    receipt = tmp_path / "receipt.json"
+    transaction = "5" * 32
+    replaced = _run_installer(
+        new, install, "-ReplaceExistingVerifiedPortable",
+        "-ReplacementTransactionId", transaction, "-ReplacementReceiptPath", str(receipt),
+    )
+    assert replaced.returncode == 0, replaced.stderr or replaced.stdout
+    evidence = tmp_path / "restore.json"
+    result = _run_restore(
+        install, receipt, hashlib.sha256(receipt.read_bytes()).hexdigest(),
+        transaction, evidence,
+    )
+    assert result.returncode != 0
+    assert "Replacement restore result Boolean evidence is invalid" in result.stderr
+    assert json.loads(evidence.read_text(encoding="utf-8"))["status"] == "ROLLBACK_FAILED"
+    assert (install / "app" / "main.py").read_text(encoding="utf-8") == "# old\n"
+    failed = install.parent / f".current.failed.{transaction}"
+    assert (failed / "app" / "main.py").read_text(encoding="utf-8") == "# new\n"
+
+
+@pytest.mark.parametrize("field", ["file_count_before_manifest", "byte_count_before_manifest"])
+def test_installer_rejects_numeric_string_manifest_before_placement(tmp_path, field):
+    from tests.test_zero_touch_installer import _portable_release_fixture, _run_installer
+
+    release = _portable_release_fixture(tmp_path)
+    manifest_path = release / "portable-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest[field] = str(manifest[field])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    install = tmp_path / "apps" / "current"
+    result = _run_installer(release, install)
+    assert result.returncode != 0
+    assert "manifest" in result.stderr.lower()
+    assert not install.exists()

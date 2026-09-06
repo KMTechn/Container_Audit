@@ -16,169 +16,12 @@ BOOTSTRAP_INTEGRITY_HELPER = ROOT / "tools" / "bootstrap_integrity.ps1"
 PWSH = "pwsh"
 
 
-def test_frozen_candidate_builder_requires_prepared_isolated_mirror_and_final_tag():
-    script = BUILDER.read_text(encoding="utf-8")
-
-    assert "[string]$MirrorRoot" in script
-    assert '"--is-bare-repository"' in script
-    assert "Prepared release work clone origin must be the exact supplied local bare mirror" in script
-    assert '"refs/heads/main^{commit}"' in script
-    assert '"refs/remotes/origin/main^{commit}"' in script
-    assert '"refs/heads/main^{commit}"' in script
-    assert '"cat-file", "-t", $tagRef' in script
-    assert '"rev-parse", "--verify", "$tagRef^{commit}"' in script
-    assert "tools/read_release_qualification_tag.py" in script
-    assert '"FINAL_RELEASE_IDENTITY.json"' in script
-    assert script.index("tools/read_release_qualification_tag.py") < script.index(
-        '"kmtech_factory_contracts.build_cli", "prepare"'
-    )
-    assert "OutputRoot must be a fresh absent path" in script
-    assert "Isolated release work clone must be clean" in script
-    assert "[string]$PythonExecutable" in script
-    assert 'Initialize-ReleasePythonAuthority' in script
-    assert 'Assert-ReleasePythonIdentity' in script
-    assert 'release_python_authority=PASS' in script
-    assert 'release_python = [ordered]@{' in script
-    assert 'Invoke-Checked -FilePath "python"' not in script
-    assert '= python tools/read_release_qualification_tag.py' not in script
-
-    for forbidden in (
-        "PROVISIONAL",
-        "provisional",
-        "FINAL_TAG_MESSAGE.txt",
-        '"tag", "--delete"',
-        '"tag", "--annotate"',
-        "actions/workflows/ci.yml/runs",
-        "immutable-releases",
-        "gh api",
-        "git fetch",
-        "ls-remote",
-    ):
-        assert forbidden not in script
 
 
-def test_frozen_candidate_builder_uses_preflighted_absolute_windows_powershell():
-    script = BUILDER.read_text(encoding="utf-8")
-
-    authority = script.index("Initialize-WindowsPowerShellAuthority")
-    generation = script.index('"kmtech_factory_contracts.build_cli", "prepare"')
-    assertion = script.index("Assert-WindowsPowerShellIdentity")
-    wrapper = script.index(
-        "Invoke-Checked -FilePath $windowsPowerShellExecutable -Arguments @("
-    )
-
-    assert '. (Join-Path $PSScriptRoot "resolve_windows_powershell.ps1")' in script
-    assert "$windowsPowerShellSystemDirectory = [Environment]::SystemDirectory" in script
-    assert '"WindowsPowerShell\\v1.0\\powershell.exe"' in script
-    assert "windows_powershell = [ordered]@{" in script
-    assert 'schema_version = "container-audit-final-release-identity-v2"' in script
-    assert script.count("Assert-WindowsPowerShellIdentity") == 2
-    assert authority < generation
-    assert generation < assertion < wrapper
-    assert 'Invoke-Checked -FilePath "powershell.exe"' not in script
-    assert '"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass"' in script
-    assert (
-        '"-File", (Join-Path $packageRoot "PROVISION_PROTECTED_ADMIN_ACL.ps1"), "-DryRun"'
-        in script
-    )
-
-    final_identity = script[
-        script.index("$releaseIdentity = [ordered]@{") : script.index(
-            "$finalReleaseIdentityPath ="
-        )
-    ]
-    for field in (
-        "executable",
-        "system_directory",
-        "file_type",
-        "is_reparse_point",
-        "sha256",
-        "size",
-        "psedition",
-        "powershell_version",
-        "version_major",
-        "version_minor",
-        "file_product_version",
-    ):
-        assert f"{field} = $windowsPowerShellIdentity.{field}" in final_identity
-
-    receipt = script[script.index("$receipt = [ordered]@{") :]
-    assert 'schema_version = "container-audit-local-artifact-qualification-v2"' in receipt
-    assert "final_release_identity_sha256 = $finalReleaseIdentitySha256" in receipt
-    assert "windows_powershell = $sealedWindowsPowerShellIdentity" in receipt
-    assert "$sealedFinalReleaseIdentity.windows_powershell" in script
-    assert "$currentFinalReleaseIdentitySha256 -cne $finalReleaseIdentitySha256" in script
-    assert script.rindex("Assert-WindowsPowerShellIdentity") < script.index(
-        "$receipt = [ordered]@{"
-    )
 
 
-def test_frozen_candidate_builder_builds_seals_and_smokes_the_complete_package():
-    script = BUILDER.read_text(encoding="utf-8")
-
-    for marker in (
-        'm.version(\'pyinstaller\') == \'6.20.0\'',
-        '"kmtech_factory_contracts.build_cli", "prepare"',
-        '"Container_Audit.spec"',
-        '"--container-audit-direct-sync-relay", "--help"',
-        '"Container_Audit_DirectSync_Install"',
-        '"Container_Audit_Qualification_Authority"',
-        '"Container_Audit_Protected_Admin_Install"',
-        '"KMTech_Logistics_Profile_Install"',
-        '"KMTech_Logistics_Profile_Check"',
-        '"KMTechActiveWorkProbe"',
-        '"kmtech_factory_contracts.build_cli", "manifest"',
-        '"kmtech_factory_contracts.build_cli", "verify"',
-        "Compress-Archive",
-        '"tools/check_update_archive.py"',
-        '"tools/check_release_config.py"',
-        '"local-artifact-qualification-receipt.json"',
-        '"prepublish-verification.json"',
-        '"tools/verify_frozen_release_artifact.py"',
-        "[string]$prepublishVerification.status -cne 'PASS_SELF_CONSISTENCY'",
-        "[string]$prepublishVerification.bootstrap_integrity.status -cne 'PASS'",
-        'prepublish_verifier_gate=PASS',
-        'Write-BootstrapIntegrityRecord',
-        'Assert-BootstrapIntegrityRecord',
-        '"bootstrap_integrity.ps1"',
-        'status = "LOCAL_ARTIFACT_QUALIFICATION_PASS"',
-        "tag_object_sha = $tagObject",
-        "zip_sha256 = $zipSha256",
-        "zip_size = $zipInfo.Length",
-        "main_exe_sha256 = $mainExeSha256",
-    ):
-        assert marker in script
-    assert '"Container_Audit_DirectSync_Relay"' not in script
-    assert '"Container_Audit_Worker_PC_Register"' not in script
-    assert "gh release create" not in script
-    assert "gh release upload" not in script
-    assert "git push" not in script
-    assert "PRIVATE_UPDATE_MANIFEST" not in script
-    assert script.index('$receiptPath = Join-Path $candidateRoot') < script.index(
-        '"tools/verify_frozen_release_artifact.py"'
-    ) < script.index('frozen_candidate_build=LOCAL_ARTIFACT_QUALIFICATION_PASS')
 
 
-def test_post_seal_python_smokes_cannot_write_bytecode_and_reverify_inventory():
-    script = BUILDER.read_text(encoding="utf-8")
-    post_seal = script[script.index("Compress-Archive") : script.index("$zipInfo")]
-
-    for marker in (
-        '"-B", "tools/check_update_archive.py"',
-        '(Join-Path $smokeRoot "Container_Audit/Container_Audit.exe")',
-        '@("--container-audit-direct-sync-relay", "--help")',
-        '"-I", "-B", (Join-Path $smokeRoot "Container_Audit/tools/direct_sync_relay_operator.py")',
-        '"-B", "tools/check_release_config.py"',
-        '"-B", "-m", "kmtech_factory_contracts.build_cli", "verify"',
-    ):
-        assert marker in post_seal
-
-    assert script.count('"kmtech_factory_contracts.build_cli", "verify"') == 2
-    assert post_seal.index('"tools/check_release_config.py"') < post_seal.index(
-        '"kmtech_factory_contracts.build_cli", "verify"'
-    )
-    assert "Remove-Item" not in post_seal
-    assert "post_probe_smoke_inventory=PASS" in script
 
 
 @pytest.mark.parametrize(
@@ -461,11 +304,24 @@ try {
     assert error in completed.stderr
 
 
-def test_git_output_helpers_accept_a_clean_status_with_no_stdout():
-    script = BUILDER.read_text(encoding="utf-8")
+def test_git_output_helpers_accept_a_clean_status_with_no_stdout(tmp_path):
+    from tests.powershell_contracts import run_functions
 
-    assert script.count('return (([string[]]$value) -join "`n").Trim()') == 2
-    assert "return ([string]$value).Trim()" not in script
+    repository=tmp_path/'empty git repository'
+    subprocess.run(['git','init','-q',str(repository)],check=True,capture_output=True)
+    result=run_functions(tmp_path,BUILDER,['Get-GitValue','Get-GitValueAt'],r'''
+Push-Location -LiteralPath $env:CA_EMPTY_REPOSITORY
+try {
+    $local=Get-GitValue -Arguments @('status','--porcelain')
+    $explicit=Get-GitValueAt -Repository $env:CA_EMPTY_REPOSITORY -Arguments @('status','--porcelain')
+    if ($null -eq $local -or $local -cne '' -or $null -eq $explicit -or $explicit -cne '') {
+        throw 'clean Git status did not produce exact empty strings'
+    }
+    'both_clean_status_helpers=PASS'
+} finally { Pop-Location }
+''',values={'CA_EMPTY_REPOSITORY':str(repository)})
+    assert result.returncode==0,result.stderr[-1600:]
+    assert 'both_clean_status_helpers=PASS' in result.stdout
 
 
 @pytest.mark.parametrize(

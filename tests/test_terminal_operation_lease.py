@@ -6,7 +6,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from Container_Audit import TraySession
-from tests.operation_lease_fixtures import signed_transfer_artifact
+from tests.operation_lease_fixtures import signed_transfer_artifact, fixed_operation_lease_clock
+
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
 from terminal_operation_lease import (
     CONSUME_CONTRACT_VERSION,
     OperationLeaseError,
@@ -329,9 +331,10 @@ def test_lease_fails_closed_for_token_tamper(tmp_path):
     assert exc_info.value.code == "OPERATION_LEASE_SIGNATURE_INVALID"
 
 
-def test_lease_fails_closed_after_expiry(tmp_path):
+@pytest.mark.parametrize('expiry_seconds,expired',[(-1,True),(0,True),(1,False)])
+def test_lease_fails_closed_after_expiry(tmp_path, fixed_operation_lease_clock, expiry_seconds, expired):
     context = _lease_setup(tmp_path)
-    now = datetime.now(timezone.utc)
+    now = fixed_operation_lease_clock
     context["artifact"], context["claims"] = signed_transfer_artifact(
         context["resolved"],
         scan_payload=context["scan_payload"],
@@ -339,13 +342,17 @@ def test_lease_fails_closed_after_expiry(tmp_path):
         source_host_id=context["client"].source_host_id,
         authority_scope_id=SCOPE,
         issued_at=now - timedelta(hours=2),
-        expires_at=now - timedelta(hours=1),
+        expires_at=now + timedelta(seconds=expiry_seconds),
     )
 
-    with pytest.raises(OperationLeaseError) as exc_info:
-        _accept(context)
-
-    assert exc_info.value.code == "OPERATION_LEASE_EXPIRED"
+    if expired:
+        with pytest.raises(OperationLeaseError) as exc_info:
+            _accept(context)
+        assert exc_info.value.code == "OPERATION_LEASE_EXPIRED"
+    else:
+        normalized, claims = _accept(context)
+        assert normalized['lease_id'] == context['artifact']['lease_id']
+        assert claims['expires_at'] == context['claims']['expires_at']
 
 
 def test_admin_released_attempt_preserves_history_and_allows_fresh_same_qr(

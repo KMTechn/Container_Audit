@@ -23,6 +23,15 @@ import tools.direct_sync_relay_runner as runner_module
 from tools.direct_sync_relay_runner import main
 
 
+@pytest.fixture
+def fixed_runner_clock(monkeypatch):
+    from types import SimpleNamespace
+    clock = SimpleNamespace(**{name:value for name,value in vars(runner_module.time).items() if not name.startswith('__')})
+    clock.time = lambda: 2_000_000_000.0
+    monkeypatch.setattr(runner_module, 'time', clock)
+    return clock.time()
+
+
 def write_manifest(tmp_path):
     manifest = {
         "schema_version": "producer-onboarding-manifest-v1",
@@ -226,21 +235,27 @@ def test_runner_scan_source_defers_file_with_active_writer_lock(tmp_path, capsys
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
 
 
-def test_runner_scan_source_defers_lock_younger_than_writer_stale_threshold(tmp_path, capsys):
+@pytest.mark.parametrize('age_offset,should_defer',[(-0.001,True),(0,True),(0.001,False)])
+def test_runner_scan_source_defers_lock_younger_than_writer_stale_threshold(tmp_path, capsys, fixed_runner_clock, age_offset, should_defer):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
     lock_path = Path(f"{csv_path.resolve()}.lock")
     lock_path.write_text("writer-pid", encoding="ascii")
-    active_lock_time = time.time() - runner_module.SOURCE_WRITER_LOCK_STALE_SECONDS + 1
+    fixed_now = fixed_runner_clock
+    active_lock_time = fixed_now - runner_module.SOURCE_WRITER_LOCK_STALE_SECONDS - age_offset
     os.utime(lock_path, (active_lock_time, active_lock_time))
     args = runner_args(tmp_path, scan_dir=sync_dir)
 
     assert main(args) == 0
     output = capsys.readouterr().out
 
-    assert "direct_sync_relay_status=scan_no_new_rows" in output
-    assert "direct_sync_scan_enqueued_count=0" in output
-    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
+    if should_defer:
+        assert "direct_sync_relay_status=scan_no_new_rows" in output
+        assert "direct_sync_scan_enqueued_count=0" in output
+        assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
+    else:
+        assert "direct_sync_scan_enqueued_count=1" in output
+        assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
 
 
 def test_runner_enqueue_commit_acknowledgement_loss_preserves_exact_row_and_spool(
@@ -485,11 +500,11 @@ def test_runner_scan_source_dir_treats_acked_dedupe_as_idempotent_success(tmp_pa
     assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_ACKED] == 1
 
 
-def test_runner_scan_source_dir_does_not_starve_new_files_behind_acked_rows(tmp_path, capsys):
+def test_runner_scan_source_dir_does_not_starve_new_files_behind_acked_rows(tmp_path, capsys, fixed_runner_clock):
     sync_dir = tmp_path / "sync"
     older = write_container_csv(sync_dir, name="이적작업이벤트로그_001_20260622.csv")
     newer = write_container_csv(sync_dir, name="이적작업이벤트로그_002_20260622.csv")
-    now = time.time()
+    now = fixed_runner_clock
     os.utime(older, (now - 20, now - 20))
     os.utime(newer, (now - 10, now - 10))
     args = runner_args(tmp_path, scan_dir=sync_dir) + ["--max-enqueue-files", "1"]
@@ -545,7 +560,7 @@ def test_runner_scan_source_dir_reports_terminal_dedupe_as_blocked(tmp_path, cap
     assert status["scan_failed_source_file"] == str(csv_path)
 
 
-def test_runner_scan_source_dir_continues_after_old_terminal_delta(tmp_path, capsys):
+def test_runner_scan_source_dir_continues_after_old_terminal_delta(tmp_path, capsys, fixed_runner_clock):
     sync_dir = tmp_path / "sync"
     old_csv = write_container_csv(sync_dir, name="이적작업이벤트로그_관리자A_20260706.csv")
     args = runner_args(tmp_path, scan_dir=sync_dir)
@@ -562,7 +577,7 @@ def test_runner_scan_source_dir_continues_after_old_terminal_delta(tmp_path, cap
         "2026-07-09T02:00:00,worker,SCAN_OK,\"{ \"\"product_barcode\"\": \"\"R13-G001\"\" }\"\n",
         encoding="utf-8",
     )
-    now = time.time()
+    now = fixed_runner_clock
     os.utime(old_csv, (now - 120, now - 120))
     os.utime(new_csv, (now - 60, now - 60))
 
@@ -1266,45 +1281,43 @@ def test_runner_scan_source_dir_handles_no_matching_files(tmp_path, capsys):
     assert status["last_result"]["scan_attempted_count"] == 0
 
 
-def test_runner_scan_source_dir_skips_recent_files_when_min_age_is_set(tmp_path, capsys):
+@pytest.mark.parametrize('age_offset,accepted',[(-0.001,False),(0,True),(0.001,True)])
+def test_runner_scan_source_dir_skips_recent_files_when_min_age_is_set(tmp_path, capsys, fixed_runner_clock, age_offset, accepted):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
-    now = time.time()
-    os.utime(csv_path, (now, now))
+    now = fixed_runner_clock
+    boundary = now - 3600 - age_offset
+    os.utime(csv_path, (boundary, boundary))
     args = runner_args(tmp_path, scan_dir=sync_dir) + ["--min-source-file-age-seconds", "3600"]
 
     assert main(args) == 0
     output = capsys.readouterr().out
-    assert "direct_sync_relay_status=scan_no_files" in output
-    assert "direct_sync_scan_enqueued_count=0" in output
-
-    old_time = now - 7200
-    os.utime(csv_path, (old_time, old_time))
-
-    assert main(args) == 0
-    output = capsys.readouterr().out
-    assert "direct_sync_relay_status=enqueued" in output
-    assert "direct_sync_scan_enqueued_count=1" in output
-    assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
+    if accepted:
+        assert "direct_sync_relay_status=enqueued" in output
+        assert "direct_sync_scan_enqueued_count=1" in output
+        assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"][RELAY_STATUS_PENDING] == 1
+    else:
+        assert "direct_sync_relay_status=scan_no_files" in output
+        assert "direct_sync_scan_enqueued_count=0" in output
+        assert relay_queue_status(tmp_path / "relay.sqlite3")["counts"] == {}
 
 
-def test_runner_revalidates_source_file_age_immediately_before_enqueue(tmp_path, capsys, monkeypatch):
+def test_runner_revalidates_source_file_age_immediately_before_enqueue(tmp_path, capsys, monkeypatch, fixed_runner_clock):
     sync_dir = tmp_path / "sync"
     csv_path = write_container_csv(sync_dir)
-    old_time = time.time() - 7200
+    old_time = fixed_runner_clock - 7200
     os.utime(csv_path, (old_time, old_time))
     args = runner_args(tmp_path, scan_dir=sync_dir) + ["--min-source-file-age-seconds", "3600"]
 
-    def fake_scan_source_files(*args, **kwargs):
-        os.utime(csv_path, None)
-        return [csv_path]
+    scan_source_files = runner_module._scan_source_files
 
-    monkeypatch.setattr(runner_module, "_scan_source_files", fake_scan_source_files)
-    monkeypatch.setattr(
-        runner_module,
-        "enqueue_completed_source_file",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("revalidated recent file should not enqueue")),
-    )
+    def scan_then_touch(*args, **kwargs):
+        files = scan_source_files(*args, **kwargs)
+        assert csv_path in files
+        os.utime(csv_path, (fixed_runner_clock, fixed_runner_clock))
+        return files
+
+    monkeypatch.setattr(runner_module, "_scan_source_files", scan_then_touch)
 
     assert main(args) == 0
     output = capsys.readouterr().out
