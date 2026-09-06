@@ -334,6 +334,133 @@ def test_native_right_cards_and_legend_restore_after_compact_round_trip(native_o
     assert snapshots[0] == snapshots[1]
 
 
+@pytest.mark.parametrize('native_operator', [
+    {'scale': scale, 'viewport': (1366, 768), 'right_size': (302, 707)}
+    for scale in [1.0, 1.1, 1.2, 1.3, 1.4]
+], indirect=True)
+def test_native_compact_right_values_are_readable_at_supported_scales(
+    native_operator, record_testsuite_property,
+):
+    from tkinter.font import Font
+    from direct_sync_health import RelayHealth, relay_health_card_model
+
+    app, _center, right = native_operator
+    for key, text in [('avg_time', '01:23.4'), ('best_time', '00:58.2')]:
+        app.info_cards[key]['value'].configure(text=text)
+    for state, pending, failed, review, ack in [
+        ('blocked', 0, 0, 0, ''),
+        ('ready', 0, 0, 0, '2026-09-06T03:00:00Z'),
+        ('pending', 12, 0, 0, '2026-09-06T03:00:00Z'),
+        ('review', 12, 1, 2, '2026-09-06T03:00:00Z'),
+    ]:
+        health = RelayHealth(state, pending, failed, review, ack, '', '')
+        app._apply_direct_sync_health(health)
+        app.root.update()
+        model = relay_health_card_model(health)
+        value = app.info_cards['direct_sync']['value']
+        assert value.cget('text') == f"{model['summary']}\n{model['detail']}"
+        # A contained label can still clip its actual multiline text.
+        assert value.winfo_height() >= value.winfo_reqheight()
+        for card in app.info_cards.values():
+            assert_contained(card['value'], right)
+            for widget in [card['label'], card['value']]:
+                assert_contained(widget, card['frame'])
+                assert widget.winfo_height() >= widget.winfo_reqheight()
+        for widget in [app.last_scan_value_label, app.follow_up_label]:
+            assert_contained(widget, app._right_context_frame)
+            assert widget.winfo_height() >= widget.winfo_reqheight()
+        record_testsuite_property(f'{state}_scale_{app.scale_factor}',
+                                  (value.winfo_height(), value.winfo_reqheight()))
+    for key in ['status', 'stopwatch']:
+        assert Font(root=app.root, font=app.info_cards[key]['value'].cget('font')).cget('size') == (
+            16 if app.scale_factor < 1.2 else 14
+        )
+    for key in ['direct_sync', 'avg_time', 'best_time']:
+        assert Font(root=app.root, font=app.info_cards[key]['value'].cget('font')).cget('size') == (
+            14 if app.scale_factor < 1.2 else 12
+        )
+    record_testsuite_property('pane_dimensions', (right.winfo_width(), right.winfo_height()))
+
+
+@pytest.mark.parametrize('native_operator', [
+    {'scale': 1.4, 'viewport': (2560, 1369), 'right_size': (510, 1301)},
+], indirect=True)
+def test_native_constrained_relay_states_fit_actual_maximized_pane(
+    native_operator, record_testsuite_property,
+):
+    from tkinter.font import Font
+    from direct_sync_health import RelayHealth, relay_health_card_model
+
+    app, _center, right = native_operator
+    assert app.scale_factor == 1.4
+    assert (app.root.winfo_width(), app.root.winfo_height()) == (2560, 1369)
+    assert (right.winfo_width(), right.winfo_height()) == (510, 1301)
+    # Match the decorated client's observed pane, including its date/time text.
+    app.date_label.configure(text='2026-09-06')
+    app.clock_label.configure(text='12:15:00')
+    for key, text in [('avg_time', '01:23.4'), ('best_time', '00:58.2')]:
+        app.info_cards[key]['value'].configure(text=text)
+    captions = {
+        'status': '현재 작업 상태', 'direct_sync': '저장 전송',
+        'stopwatch': '트레이 소요', 'avg_time': '평균', 'best_time': '30일 최고',
+    }
+    for state, pending, failed, review, ack in [
+        ('blocked', 0, 0, 0, ''),
+        ('ready', 0, 0, 0, '2026-09-06T03:00:00Z'),
+        ('pending', 12, 0, 0, '2026-09-06T03:00:00Z'),
+        ('review', 12, 1, 2, '2026-09-06T03:00:00Z'),
+    ]:
+        health = RelayHealth(state, pending, failed, review, ack, '', '')
+        app._apply_direct_sync_health(health)
+        app.root.update()
+        model = relay_health_card_model(health)
+        expected = {
+            'status': '대기 중', 'direct_sync': f"{model['summary']}\n{model['detail']}",
+            'stopwatch': '-', 'avg_time': '01:23.4', 'best_time': '00:58.2',
+            'last_scan': '-', 'follow_up': '현품표 라벨 스캔',
+        }
+        values = {key: card['value'] for key, card in app.info_cards.items()}
+        values.update(last_scan=app.last_scan_value_label, follow_up=app.follow_up_label)
+        assert set(values) == set(expected)
+        assert_contained(right, app.root)
+        measurements = {}
+        for key, widget in values.items():
+            assert str(widget.cget('text')) == expected[key]
+            parent = app.info_cards[key]['frame'] if key in app.info_cards else app._right_context_frame
+            assert_contained(parent, right)
+            assert_contained(widget, parent)
+            assert_contained(widget, right)
+            # Real text requests must fit; containment alone misses clipped lines.
+            assert widget.winfo_width() >= widget.winfo_reqwidth(), (state, key)
+            assert widget.winfo_height() >= widget.winfo_reqheight(), (state, key)
+            font = Font(root=app.root, font=widget.cget('font')).actual()
+            assert font['family'].casefold() in {'malgun gothic', '맑은 고딕'}
+            assert font['size'] == (19 if key in {'status', 'stopwatch'} else 16)
+            assert font['weight'] == 'bold'
+            measurements[key] = (
+                widget.winfo_width(), widget.winfo_height(),
+                widget.winfo_reqwidth(), widget.winfo_reqheight(),
+            )
+        assert set(app.info_cards) == set(captions)
+        labels = [
+            (card['label'], card['frame'], captions[key])
+            for key, card in app.info_cards.items()
+        ]
+        assert len(app._right_context_captions) == 2
+        labels.extend(
+            (label, app._right_context_frame, text)
+            for label, text in zip(app._right_context_captions, ('마지막 정상 스캔', '다음 행동'))
+        )
+        for label, parent, text in labels:
+            assert str(label.cget('text')) == text
+            assert_contained(label, parent)
+            assert_contained(label, right)
+            assert label.winfo_width() >= label.winfo_reqwidth(), (state, text)
+            assert label.winfo_height() >= label.winfo_reqheight(), (state, text)
+        record_testsuite_property(f'constrained_relay_{state}', measurements)
+    record_testsuite_property('constrained_relay_pane', (right.winfo_width(), right.winfo_height()))
+
+
 @pytest.mark.parametrize('height', [694, 826])
 def test_native_left_view_survives_rebuild_and_rows_survive_resize(native_tk_root, height):
     root = native_tk_root

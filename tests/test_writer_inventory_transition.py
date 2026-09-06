@@ -30,7 +30,8 @@ fence.writer_admission_mutex_name = lambda root, environ=None: mutex
 import current_user_onboarding as onboarding
 # Keep the actual product dispatcher, admission, removal body and report. Only
 # the OS boundaries are isolated so no controller HKCU or process is changed.
-defaults = onboarding.remove_current_user_setup.__wrapped__.__kwdefaults__
+removal = onboarding.remove_current_user_setup
+defaults = getattr(removal, '__wrapped__', removal).__kwdefaults__
 defaults['autostart_remover'] = lambda: {'status': 'ABSENT'}
 defaults['relay_stopper'] = lambda root: {'status': 'ABSENT'}
 from container_audit_product_host import dispatch_product_mode

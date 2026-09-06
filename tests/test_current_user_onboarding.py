@@ -1455,7 +1455,12 @@ def test_bootstrap_integrity_verifies_exact_inventory(tmp_path):
         verify_bootstrap_integrity(paths, required=True)
 
 
-def test_public_remove_clears_user_persistence_but_preserves_data(tmp_path, owned_relay):
+def test_public_remove_clears_user_persistence_but_preserves_data(
+    tmp_path, owned_relay, record_testsuite_property,
+):
+    from direct_sync_operator import pause_relay, read_operator_pause
+    from user_relay import acquire_runtime_instance, user_relay_status_path
+
     app_root = tmp_path / "app"
     app_root.mkdir()
     environment = {"CONTAINER_AUDIT_DATA_ROOT": str(tmp_path / "state")}
@@ -1463,28 +1468,68 @@ def test_public_remove_clears_user_persistence_but_preserves_data(tmp_path, owne
     _ready_state(paths)
     paths.ledger_path.parent.mkdir(parents=True)
     paths.ledger_path.write_bytes(b"preserve")
+    event_path = paths.data_root / "events" / "removal-fixture.csv"
+    event_path.parent.mkdir(parents=True, exist_ok=True)
+    event_path.write_bytes(b"event,quantity\nowned-fixture,1\n")
+    # An ordinary supported pause keeps this shutdown test independent of
+    # credential provisioning and uploads while running the real relay cycle.
+    pause_path = paths.direct_sync_root / "control" / "pause.json"
+    pause = pause_relay(pause_path=pause_path, operator_id="lifecycle-test", reason="local maintenance")
+    assert pause["status"] == "PASS"
+    assert pause["pause"]["paused"] is True
+    assert pause["pause"]["marker_valid"] is True
     observed = []
     owned_relay.start(paths.direct_sync_root)
-    assert owned_relay.children[0][1].poll() is None
+    child = owned_relay.children[0][1]
+    assert child.poll() is None
+    status_path = user_relay_status_path(paths.direct_sync_root)
+    running = json.loads(status_path.read_text(encoding="utf-8"))
+    expected_cycle = {
+        "status": "paused_by_operator", "relay_status": "paused_by_operator",
+        "process_status": "PASS", "process_returncode": 0,
+    }
+    assert running["status"] == "RUNNING" and running["cycle_count"] >= 1
+    assert running["last_cycle"] == expected_cycle
+    lease_key = paths.direct_sync_root / "user-relay-instance"
+    assert acquire_runtime_instance(lease_key) is None
+    protected = [paths.identity_path, paths.credential_path, paths.producer_manifest_path,
+                 paths.logistics_profile_path, paths.logistics_secret_path,
+                 paths.ledger_path, event_path, pause_path]
+    before = {path: path.read_bytes() for path in protected}
 
     report = remove_current_user_setup(
         app_root,
         environ=environment,
         autostart_remover=lambda: observed.append("hkcu") or {"status": "ABSENT"},
-        relay_stopper=lambda root: observed.append(Path(root)) or owned_relay.stop(root),
     )
 
+    # Observe the public result unchanged; these assertions cannot affect the
+    # stopper's result or turn teardown cleanup into the tested natural exit.
+    exit_code = child.wait(timeout=5)
+    final = json.loads(status_path.read_text(encoding="utf-8"))
+    stderr_path = tmp_path / "lifecycle-child-0.stderr"
+    record_testsuite_property("public_removal_status", report["status"])
+    record_testsuite_property("public_relay_status", report["relay_process"]["status"])
+    record_testsuite_property("natural_relay_exit", exit_code)
+    record_testsuite_property("persisted_relay_status", final["status"])
+    record_testsuite_property("relay_stderr_bytes", stderr_path.stat().st_size)
     assert report["status"] == "PASS_DATA_PRESERVED"
     assert report["data_preserved"] is True
+    assert report["relay_autostart"]["status"] == "ABSENT"
+    assert report["relay_process"]["status"] == "ABSENT"
     assert onboarding_module.user_relay_stop_path(paths.direct_sync_root).is_file()
-    assert observed == ["hkcu", paths.direct_sync_root]
-    assert paths.identity_path.is_file()
-    assert paths.logistics_profile_path.is_file()
-    assert paths.ledger_path.read_bytes() == b"preserve"
-    owned_relay.wait_stopped(paths.direct_sync_root)
-    assert owned_relay.children[0][1].poll() is not None
-    # This proves absence, not a clean exit; the admission/STOPPED-write gap is
-    # disclosed in tests/KNOWN-GAPS.md and has a separate failing diagnostic.
+    assert observed == ["hkcu"]
+    assert {path: path.read_bytes() for path in protected} == before
+    assert exit_code == 0, "resident relay did not exit cleanly after public removal"
+    assert child.poll() == 0
+    assert final["status"] == "STOPPED" and final["cycle_count"] >= 1
+    assert final["last_cycle"] == expected_cycle
+    pause_state = read_operator_pause(pause_path)
+    assert pause_state["paused"] is True and pause_state["marker_valid"] is True
+    lease = acquire_runtime_instance(lease_key)
+    assert lease is not None
+    lease.release()
+    assert stderr_path.read_bytes() == b""
 
 
 def test_public_remove_does_not_downgrade_lost_relay_result(tmp_path):

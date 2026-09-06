@@ -6830,6 +6830,7 @@ class ContainerAudit:
         return {
             "profile": metrics.profile,
             "short_large_text": metrics.short_large_text,
+            "content_sized_cards": metrics.content_sized_cards,
             "outer_padding": metrics.outer_padding,
             "card_gap": metrics.card_gap,
             "card_minsize": metrics.card_minsize,
@@ -6879,12 +6880,16 @@ class ContainerAudit:
             if clock_label is not None:
                 clock_label.configure(font=(self.DEFAULT_FONT, metrics["clock_font"], 'bold'))
                 clock_label.grid_configure(pady=(0, metrics["clock_gap"]))
+            # Relay text wraps to several lines while status/time stay
+            # on one line. Give non-content-sized cards two relay shares
+            # within the uniform group; compact cards keep their original weights.
+            multiline_primary_cards = not metrics["content_sized_cards"]
             for row in (2, 3, 4):
                 parent_frame.grid_rowconfigure(
                     row,
-                    weight=1,
+                    weight=2 if multiline_primary_cards and row == 3 else 1,
                     minsize=metrics["primary_card_minsize"],
-                    uniform="primary_info_cards",
+                    uniform="" if metrics["content_sized_cards"] else "primary_info_cards",
                 )
             parent_frame.grid_rowconfigure(5, weight=1, minsize=metrics["follow_up_minsize"])
             parent_frame.grid_rowconfigure(6, weight=0, minsize=metrics["secondary_card_minsize"])
@@ -6893,6 +6898,12 @@ class ContainerAudit:
                 if card:
                     card["frame"].configure(padding=metrics["card_padding"])
                     card["frame"].grid_configure(pady=(0, metrics["card_gap"]))
+                    caption = card.get("label")
+                    if caption is not None:
+                        caption.configure(
+                            font=(self.DEFAULT_FONT, 10)
+                            if metrics["content_sized_cards"] else "",
+                        )
                     card["value"].configure(
                         font=(self.DEFAULT_FONT, metrics["value_font"], 'bold'),
                         anchor='center',
@@ -6907,6 +6918,11 @@ class ContainerAudit:
             if context_frame is not None:
                 context_frame.configure(padding=metrics["context_padding"])
                 context_frame.grid_configure(pady=(0, metrics["card_gap"]))
+            for caption in getattr(self, "_right_context_captions", ()):
+                caption.configure(
+                    font=(self.DEFAULT_FONT, 10)
+                    if metrics["content_sized_cards"] else "",
+                )
             context_value_font = metrics["context_value_font"]
             if context_value_font <= 0:
                 token_fonts = getattr(getattr(self, "style_tokens", None), "fonts", None)
@@ -6921,12 +6937,14 @@ class ContainerAudit:
                     justify='center',
                 )
                 last_scan_value.grid_configure(
-                    pady=(3 if metrics["short_large_text"] else 4, 6 if metrics["short_large_text"] else 12)
+                    pady=(2, 4) if metrics["content_sized_cards"] else
+                    (3 if metrics["short_large_text"] else 4, 6 if metrics["short_large_text"] else 12)
                 )
             context_separator = getattr(self, "_right_context_separator", None)
             if context_separator is not None:
                 context_separator.grid_configure(
-                    pady=(0, 6 if metrics["short_large_text"] else 10)
+                    pady=(0, 4 if metrics["content_sized_cards"] else
+                          6 if metrics["short_large_text"] else 10)
                 )
             follow_up = getattr(self, "follow_up_label", None)
             if follow_up is not None:
@@ -6935,11 +6953,21 @@ class ContainerAudit:
                     anchor='center',
                     justify='center',
                 )
-                follow_up.grid_configure(pady=(3 if metrics["short_large_text"] else 4, 0))
+                follow_up.grid_configure(pady=(2 if metrics["content_sized_cards"] else
+                                              3 if metrics["short_large_text"] else 4, 0))
             for key in ("avg_time", "best_time"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
                     card["frame"].configure(padding=metrics["secondary_card_padding"])
+                    # Compact cards need compact captions too: the root's
+                    # larger caption font wraps the best-time title and pushes
+                    # both required values below the short sidebar.
+                    caption = card.get("label")
+                    if caption is not None:
+                        caption.configure(
+                            font=(self.DEFAULT_FONT, 10)
+                            if not metrics["legend_visible"] else "",
+                        )
                     card["value"].configure(
                         font=(self.DEFAULT_FONT, metrics["secondary_value_font"], 'bold'),
                         anchor='center',
@@ -7766,12 +7794,13 @@ class ContainerAudit:
         self._right_context_frame = context_frame
         context_frame.grid(row=5, column=0, sticky='nsew', pady=(0, 10))
         context_frame.grid_columnconfigure(0, weight=1)
-        ttk.Label(
+        last_scan_caption = ttk.Label(
             context_frame,
             text="마지막 정상 스캔",
             style='Card.Subtle.TLabel',
             anchor='w',
-        ).grid(row=0, column=0, sticky='ew')
+        )
+        last_scan_caption.grid(row=0, column=0, sticky='ew')
         self.last_scan_value_label = ttk.Label(
             context_frame,
             text="-",
@@ -7784,12 +7813,14 @@ class ContainerAudit:
         context_separator = ttk.Separator(context_frame, orient='horizontal')
         self._right_context_separator = context_separator
         context_separator.grid(row=2, column=0, sticky='ew', pady=(0, 10))
-        ttk.Label(
+        follow_up_caption = ttk.Label(
             context_frame,
             text="다음 행동",
             style='Card.Subtle.TLabel',
             anchor='w',
-        ).grid(row=3, column=0, sticky='ew')
+        )
+        follow_up_caption.grid(row=3, column=0, sticky='ew')
+        self._right_context_captions = (last_scan_caption, follow_up_caption)
         self.follow_up_label = ttk.Label(
             context_frame,
             text="현품표 라벨을 스캔하세요.",
@@ -7861,7 +7892,7 @@ class ContainerAudit:
             justify='center',
         )
         value_label.pack(fill='x', expand=True, anchor='center')
-        self._bind_label_to_container_width(value_label, card, padding=24)
+        self._bind_label_to_container_width(value_label, value_label, padding=8)
         return {'frame': card, 'label': label, 'value': value_label}
 
     def _validate_barcode_input(self, p_text: str) -> bool:

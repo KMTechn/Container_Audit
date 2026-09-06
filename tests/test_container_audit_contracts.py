@@ -545,7 +545,8 @@ def test_right_sidebar_metrics_stretch_cards_on_tall_screens():
 
     assert tall["card_minsize"] > short["card_minsize"]
     assert tall["card_gap"] >= short["card_gap"]
-    assert short["card_minsize"] >= 78
+    assert short["content_sized_cards"] is True
+    assert short["card_minsize"] == 0
 
 
 class DummyToggle:

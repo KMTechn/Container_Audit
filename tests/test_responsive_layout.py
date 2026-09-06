@@ -188,13 +188,12 @@ def test_right_sidebar_prioritizes_status_and_follow_up_over_secondary_stats():
     wide = right_sidebar_metrics(510, 1040, profile="wide")
 
     for metrics in (compact, wide):
-        assert metrics.primary_card_minsize > metrics.secondary_card_minsize
-        assert metrics.follow_up_minsize > metrics.secondary_card_minsize
-        assert metrics.follow_up_minsize > metrics.primary_card_minsize
         assert metrics.card_minsize == metrics.primary_card_minsize
         assert metrics.value_font > metrics.secondary_value_font
+    assert compact.content_sized_cards is True
+    assert compact.primary_card_minsize == compact.follow_up_minsize == compact.secondary_card_minsize == 0
+    assert wide.follow_up_minsize > wide.primary_card_minsize > wide.secondary_card_minsize
     assert wide.primary_card_minsize > compact.primary_card_minsize
-    assert compact.follow_up_minsize >= 200
     assert wide.follow_up_minsize >= 190
 
 
@@ -209,8 +208,8 @@ def test_short_large_text_sidebar_caps_decorative_space_and_keeps_follow_up_prim
     assert short.card_padding < roomy.card_padding
     assert short.context_padding < roomy.context_padding
     assert short.card_gap < roomy.card_gap
-    assert short.follow_up_minsize > short.primary_card_minsize
-    assert short.primary_card_minsize > short.secondary_card_minsize
+    assert short.content_sized_cards is True
+    assert short.follow_up_minsize == short.primary_card_minsize == short.secondary_card_minsize == 0
     assert short.value_font > short.secondary_value_font
     # 1324 physical px at 1.4 is only 946 logical px, so it must retain the
     # constrained tier instead of expanding decorative padding.
@@ -256,12 +255,12 @@ def test_scale14_short_sidebar_preserves_complete_value_hierarchy():
     assert metrics.value_font == 14
     assert metrics.secondary_value_font == 12
     assert metrics.context_value_font == 11
-    assert metrics.card_gap == 3
-    assert metrics.date_gap == 1
-    assert metrics.clock_gap == 3
-    assert metrics.card_padding == 4
-    assert metrics.context_padding == 4
-    assert metrics.secondary_card_padding == 4
+    assert metrics.card_gap == 2
+    assert metrics.date_gap == 0
+    assert metrics.clock_gap == 2
+    assert metrics.card_padding == 2
+    assert metrics.context_padding == 2
+    assert metrics.secondary_card_padding == 2
 
 
 def test_short_large_text_sidebar_metrics_round_trip_without_accumulation():
@@ -299,8 +298,11 @@ def test_right_sidebar_reserves_value_lines_through_short_1080p_height():
     for metrics in (compact, standard, short_wide):
         assert metrics.short_large_text is True
         assert metrics.card_padding <= 8
-        assert metrics.primary_card_minsize >= 96
-        assert metrics.follow_up_minsize >= 190
+        if metrics.content_sized_cards:
+            assert metrics.primary_card_minsize == metrics.follow_up_minsize == 0
+        else:
+            assert metrics.primary_card_minsize >= 96
+            assert metrics.follow_up_minsize >= 190
     assert compact.legend_visible is False
     assert standard.legend_visible is False
     assert short_wide.legend_visible is True

@@ -111,6 +111,7 @@ class RightSidebarMetrics:
 
     profile: LayoutProfileName
     short_large_text: bool
+    content_sized_cards: bool
     outer_padding: int
     card_gap: int
     primary_card_minsize: int
@@ -778,20 +779,23 @@ def right_sidebar_metrics(
                 16,
             )
     else:
-        outer_padding = _clamped_int(width * 0.035, 8 * normalized_scale, 18 * normalized_scale)
-        card_gap = _clamped_int(height * 0.011, 5 * normalized_scale, 14 * normalized_scale)
+        # Keep the roomy type hierarchy, but spend the available height on
+        # wrapped values. Reuse the constrained tier's decorative budget;
+        # primary cards retain more padding than that tier's 8 px.
+        outer_padding = _clamped_int(width * 0.025, 8, 10)
+        card_gap = _clamped_int(height * 0.006, 5, 6)
         primary_card_minsize = _clamped_int(height * 0.115, 78 * normalized_scale, 142 * normalized_scale)
         secondary_card_minsize = _clamped_int(height * 0.070, 50 * normalized_scale, 88 * normalized_scale)
         follow_up_minsize = _clamped_int(height * 0.145, 88 * normalized_scale, 172 * normalized_scale)
-        legend_pad_y = _clamped_int(height * 0.014, 7 * normalized_scale, 18 * normalized_scale)
+        legend_pad_y = 6
         legend_visible = True
         date_font = max(1, int(18 * normalized_scale))
         clock_font = max(1, int(24 * normalized_scale))
-        date_gap = 5
-        clock_gap = 20
-        card_padding = 20
-        context_padding = 16
-        secondary_card_padding = 10
+        date_gap = 2
+        clock_gap = 4
+        card_padding = 12
+        context_padding = 10
+        secondary_card_padding = 7
 
         value_candidate = min(width * 0.060, height * 0.042)
         value_font = _clamped_int(value_candidate, 18 * normalized_scale, 31 * normalized_scale)
@@ -804,9 +808,20 @@ def right_sidebar_metrics(
         # the sidebar's narrow width alone must not downgrade a wide display.
         context_value_font = 0
 
+    content_sized_cards = height < 768
+    if content_sized_cards:
+        # Equal row minima squeeze a multiline relay status while reserving
+        # unused space in one-line cards. Let actual text size the short rows
+        # and reclaim header/padding space, keeping all value fonts unchanged.
+        primary_card_minsize = secondary_card_minsize = follow_up_minsize = 0
+        date_font, clock_font = 10, 14
+        date_gap, clock_gap, card_gap = 0, 2, 2
+        card_padding = context_padding = secondary_card_padding = 2
+
     return RightSidebarMetrics(
         profile=name,
         short_large_text=short_large_text,
+        content_sized_cards=content_sized_cards,
         outer_padding=outer_padding,
         card_gap=card_gap,
         primary_card_minsize=primary_card_minsize,

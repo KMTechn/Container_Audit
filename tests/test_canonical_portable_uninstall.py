@@ -75,7 +75,8 @@ elif sys.argv[1] == 'remove':
         registry.write_text(json.dumps({'exists': False, 'kind': '', 'data': ''}))
     def get():
         return json.loads(registry.read_text())['data']
-    defaults = onboarding.remove_current_user_setup.__wrapped__.__kwdefaults__
+    removal = onboarding.remove_current_user_setup
+    defaults = getattr(removal, '__wrapped__', removal).__kwdefaults__
     defaults['autostart_remover'] = lambda: user_relay.remove_user_relay_autostart(deleter=delete, getter=get)
     from container_audit_product_host import dispatch_product_mode
     raise SystemExit(dispatch_product_mode(['--remove-current-user-setup', '--app-root', sys.argv[2]]))

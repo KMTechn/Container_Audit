@@ -42,7 +42,7 @@ from user_relay import (
     start_user_relay_process,
     user_relay_stop_path,
 )
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 from vendor.kmtech_zero_pe import (
     ADMIN_RECOVERY_ACTION,
     AdminRecoveryRequired as PossessionKeyAdminRecoveryRequired,
@@ -1404,7 +1404,6 @@ def onboard_current_user(
         ) from exc
 
 
-@writer_sink("current_user_setup_removal")
 def remove_current_user_setup(
     app_root: str | os.PathLike[str],
     *,
@@ -1415,7 +1414,9 @@ def remove_current_user_setup(
     ] = request_user_relay_stop,
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
-    paths.status_dir.mkdir(parents=True, exist_ok=True)
+    status_dir: Path = paths.status_dir
+    with writer_admission("current_user_setup_removal"):
+        status_dir.mkdir(parents=True, exist_ok=True)
     report: dict[str, Any] = {
         "report_version": REMOVAL_REPORT_VERSION,
         "status": "UNKNOWN",
@@ -1432,7 +1433,10 @@ def remove_current_user_setup(
         "failure": "",
     }
     try:
-        report["relay_autostart"] = dict(autostart_remover())
+        with writer_admission("current_user_setup_removal"):
+            report["relay_autostart"] = dict(autostart_remover())
+        # The relay needs admission for its final STOPPED write before it can
+        # release the runtime lease. Keep this wait outside our mutation scope.
         report["relay_process"] = dict(relay_stopper(paths.direct_sync_root))
         autostart_status = str(report["relay_autostart"].get("status") or "")
         relay_status = str(report["relay_process"].get("status") or "")

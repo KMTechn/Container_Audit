@@ -361,6 +361,43 @@
       "caller_guard_sources": [],
       "coverage_status": "covered",
       "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "decorated_source": "current_user_setup_removal",
+      "direct_callers": [
+        "current_user_onboarding.removal_main"
+      ],
+      "file": "current_user_onboarding.py",
+      "kind": "function",
+      "line": 1407,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 1419,
+          "operation": "status_dir.mkdir",
+          "writer_admission_sources": [
+            "current_user_setup_removal"
+          ]
+        }
+      ],
+      "node": "current_user_onboarding.remove_current_user_setup",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
         "Container_Audit.ContainerAudit._log_event",
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -5271,7 +5308,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 125,
+    "closure_direct_mutation_function_count": 126,
     "closure_module_count": 90,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 65,
@@ -5768,7 +5805,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "07e97a91497b5bb6bd4ebb9f9a37cfddb1f2e50efbe9e7efed1af7ca4a0a086a",
+  "inventory_sha256": "7ad7b9f3e1bd66a4a96eafe4e5249b8e2266b67ac1e71a089ddf8bf353cea01b",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -5899,6 +5936,7 @@
         "container_audit_product_host._write_json_atomic",
         "current_user_onboarding._write_json_atomic",
         "current_user_onboarding._write_json_atomic_create_new",
+        "current_user_onboarding.remove_current_user_setup",
         "direct_sync_auto_bootstrap._run_command",
         "direct_sync_auto_bootstrap._write_json",
         "direct_sync_push._connect_relay_db",
@@ -16943,7 +16981,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.restore_current_user_lifecycle_after_replacement",
-      "line": 1478,
+      "line": 1482,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -16988,11 +17026,11 @@
       "source": "current_user_onboarding_storage"
     },
     {
-      "direct_mutation_site_count": 0,
+      "direct_mutation_site_count": 1,
       "file": "current_user_onboarding.py",
       "function": "current_user_onboarding.remove_current_user_setup",
-      "line": 1408,
-      "marker_kind": "decorator",
+      "line": 1407,
+      "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
     },
     {
@@ -17151,7 +17189,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 15857,
+      "line": 15888,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
