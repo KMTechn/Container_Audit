@@ -10,7 +10,7 @@ Preserved source evidence is indexed by `E:/KMTech/coordinator-takeover-20260905
 
 ## Independent capture validator
 
-The authoritative external capture validator is unavailable. Its dedicated contract comparison explicitly skips; real builder PNG/state/hash checks run independently. See [contracts/README.md](contracts/README.md).
+The reviewed reconstruction is vendored and its existing CA consumer requires the exact local bytes instead of skipping on absence. Main accepted the independent source review and the admitted h02 integration result: 238 PASS / 714 ordered phase PASS, with zero FAIL/ERROR/SKIP across the complete 103-case consumer and 135-case contract modules. The finite current custody comparison also matched; original h01/h02 controller, index byte/read-only preservation and first Main reader failures remain FAILED, and the exact index writer remains UNPROVEN. Main accepts this bounded source unit for its single commit; FULL, exact build/freeze and installed/native qualification remain NOT TESTED. The historical original and organizational authority remain unavailable/unproven, including the consumer's required five organization-pending checks; real builder PNG/state/hash checks retain their separate scope. See [contracts/README.md](contracts/README.md) for provenance and [CA-G07](../docs/spec/BACKLOG.md#ca-g07) for exact evidence, warnings and remaining criteria.
 
 ## Duplicate-notice recent-row context (ca14 usability candidate)
 

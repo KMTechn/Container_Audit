@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import io
 import json
 import os
@@ -1327,10 +1328,19 @@ def test_external_bundle_builder_emits_canonical_actual_values_from_png_bytes(tm
     _external_bundle_with_verified_builder_values(tmp_path)
 
 
-def test_external_bundle_matches_authoritative_validator_when_vendored(tmp_path):
-    validator = Path(__file__).parent / "contracts" / "capture_validator" / "validate_capture_bundle_v1.py"
+def _require_reviewed_capture_validator() -> Path:
+    validator = Path(__file__).resolve().parents[1] / "tools" / "validate_capture_bundle_v1.py"
     if not validator.is_file():
-        pytest.skip("authoritative capture validator unavailable; see tests/contracts/README.md")
+        pytest.fail(f"reviewed capture validator is missing: {validator}")
+    if hashlib.sha256(validator.read_bytes()).hexdigest() != (
+        "86713b77bd004a3577b53221be8667362d67984f915395dec95727ca5b1235e1"
+    ):
+        pytest.fail(f"capture validator does not match the reviewed bytes: {validator}")
+    return validator
+
+
+def test_external_bundle_matches_authoritative_validator_when_vendored(tmp_path):
+    validator = _require_reviewed_capture_validator()
     evidence_root = _external_bundle_with_verified_builder_values(tmp_path)
     describe_path = tmp_path / "describe.json"
     describe_path.write_text(
@@ -3501,3 +3511,25 @@ def test_roundtrip_widget_identity_missing_key_widget_fails_closed():
 
     with pytest.raises(RuntimeError, match="follow_up_label"):
         capture_tool.collect_roundtrip_widget_identity(app)
+
+
+def test_capture_validator_uses_reviewed_repository_copy():
+    validator = _require_reviewed_capture_validator()
+    assert validator == Path(__file__).resolve().parents[1] / "tools" / "validate_capture_bundle_v1.py"
+    assert hashlib.sha256(validator.read_bytes()).hexdigest() == (
+        "86713b77bd004a3577b53221be8667362d67984f915395dec95727ca5b1235e1"
+    )
+
+
+@pytest.mark.parametrize("validator_state", ("missing", "wrong_bytes"))
+def test_capture_validator_requires_reviewed_bytes(tmp_path, monkeypatch, validator_state):
+    monkeypatch.setitem(
+        globals(), "__file__", str(tmp_path / "tests" / Path(__file__).name)
+    )
+    validator = tmp_path / "tools" / "validate_capture_bundle_v1.py"
+    if validator_state == "wrong_bytes":
+        validator.parent.mkdir()
+        validator.write_bytes(b"not the reviewed validator\n")
+    message = "is missing" if validator_state == "missing" else "does not match the reviewed bytes"
+    with pytest.raises(pytest.fail.Exception, match=message):
+        _require_reviewed_capture_validator()

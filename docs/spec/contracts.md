@@ -1,0 +1,168 @@
+# 데이터·상태·통합 계약
+
+[제품·기능 카드](README.md) · [운영](operations.md) · [백로그](BACKLOG.md) · [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md) · [공통 용어](../../../Program_Spec_Hub/GLOSSARY.md)
+
+기준일 2026-09-07, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`와 당시 수정 작업 트리를 대상으로 한다. [정확한 소스·증거 경계](README.md#1-기준과-증거-사용법)를 함께 적용한다. 아래는 소스에서 확인한 계약이며 대상 서버의 활성 설정·설치 provider·실행 성공은 별도 증거가 필요하다. 상대 저장소의 조사 HEAD는 [SOURCE-MAP 및 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md)에 있으며 링크 대상이 이후 바뀌면 재대조한다.
+
+## 1. 정본과 버전
+
+CA는 스캔·작업 상태·전송 의도를 소유한다. 중앙 제품 소유·위치·bundle membership·version·receipt 정본은 [Web logistics ledger service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py)가 소유한다. 관측 이벤트의 수신·투영은 [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py)와 [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py)가 소유한다. 이벤트 업로드만으로 물류 원장을 확정하거나 역산하지 않는다.
+
+| 계약·저장 형식 | 조사 시 선언 | 소스·적용 한계 |
+|---|---|---|
+| 배포 계약 lock | bundle `1.0.3`, corrective revision `1`, 최소 installer/verifier `1.0.3.4` | [contract.lock.json](../../contract.lock.json). 소스 선언이며 설치본 동일성은 미확인. `db_schema_supported 0..0`을 모든 로컬 SQLite의 schema version으로 일반화하지 않는다. |
+| 물류 API | `logistics-v1` | [transfer_seal.CONTRACT_VERSION](../../transfer_seal.py), [Web API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py) |
+| 봉인 intent / 로컬 완료 | `container-audit-transfer-seal-v1` / `container-audit-transfer-completion-v1` | [TransferSealStore](../../transfer_seal.py) |
+| 물류 operation lease | `terminal-operation-lease-v1` | [terminal_operation_lease](../../terminal_operation_lease.py). producer runtime lease와 별개. |
+| 조회 중 보류 | `container-audit-preflight-scan-hold-v1` | [preflight_scan_hold](../../preflight_scan_hold.py) |
+| 제품 교체 / GOOD resolver | `container-audit-member-exchange-v1` / `logistics-good-replacement-source-v1` | [transfer_member_exchange](../../transfer_member_exchange.py) |
+| producer 파일 업로드 | `producer-ingest-source-file-v1`, 서명 `PRODUCER-HMAC-SHA256-V1` | [direct_sync_push](../../direct_sync_push.py); lock에는 producer-ingest-v1 capability와 common-event-envelope-v1이 별도로 선언됨. |
+
+교체 업무의 상세 정본은 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md), 장기 전송·보존 규칙은 [DIRECT_SYNC_DATA_PLATFORM_NOTES](../../DIRECT_SYNC_DATA_PLATFORM_NOTES.md)를 재사용한다. 오래된 [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)의 machine-profile 및 ACK 설명은 [CA-G03](BACKLOG.md#ca-g03)의 차이가 있으므로 현재 사용자 경로·로컬 완료 기준으로 무조건 적용하지 않는다.
+
+<a id="ca-data"></a>
+## 2. 엔터티·식별자·수량·시간
+
+| 항목 | 의미·키·모집단 | 근거 |
+|---|---|---|
+| 원본 PHS2 | 정확히 `PHS/SRC/ITG/CLC/LBL/HSH`; `ITG/LBL/HSH`로 중앙 identity를 조회하고 `CLC` 품목을 대조. `QT`를 덧붙이거나 목표 60을 추정하지 않음. | [compact 검증 / TransferSourcePreflight](../../transfer_seal.py) |
+| product barcode / unit ID | 스캐너 문자열과 중앙 단위 ID는 별개. 완료 때 barcode↔unit을 exact 매핑. `normalize_barcode`는 NFKC·strip·대문자 정규화; GUI 입력 단계의 원문 중복 검사와 같은 단계가 아님. | [product_scan](../../product_scan.py), [TransferSealCoordinator._map_scans](../../transfer_seal.py) |
+| bundle / transfer / work group | 중앙 구성원 소유 단위와 이적 묶음·source topology. 단순히 PHS 문자열이나 로컬 tray ID와 같다고 가정하지 않음. | [TransferSealCoordinator._build_command / _build_work_group_command](../../transfer_seal.py), [Web seal service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py) |
+| intent ID / local_completion_id | CA 내구 처리와 로컬 완료의 식별. 중앙 scope/key receipt와 연결하지만 같은 상태나 같은 ID가 아님. | [TransferSealStore.prepare / _ensure_linked_event](../../transfer_seal.py) |
+| `(authority_scope_id, idempotency_key)` | 중앙 명령 재생 범위. 같은 key의 다른 fingerprint는 충돌이며 key를 바꿔 우회하지 않음. | [Web replay_or_conflict](../../../WorkerAnalysisGUI-web/logistics_ledger/idempotency.py) |
+| authority/plane epoch·entity version | 인증·원장 문맥 및 낙관적 경합 확인 값. member hash는 구성원 동일성 증거로 쓰며 수량으로 대체 불가. | [LogisticsTransferClient.assert_authority](../../transfer_seal.py), [Web ledger](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py) |
+| source_file_id / content hash / relay ID | whole-file 전송 identity·내용 버전·큐 항목. 물류 idempotency key와 구분. install/source scope와 함께 수신 중복을 판정. | [build_source_file_plan](../../direct_sync_push.py), [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py) |
+| `tray_capacity` | 현재 PHS2의 중앙 GOOD 목표 수. NG·다른 PHS 제품을 포함하지 않는 검사 대상 모집단. 호환 경로의 fallback 수량을 표준으로 승격하지 않음. | [preflight 및 complete_tray](../../Container_Audit.py) |
+| `scan_count` / `barcode_count` | 현재/완료 목록 길이 / distinct barcode 수. `scanned_product_barcodes`와 `product_barcodes`는 호환 소비용 같은 목록이므로 합산하지 않음. | [build_tray_complete_detail](../../event_payloads.py) |
+| `qty_uom=piece` | 완료 이벤트의 단위 표기. 물류 UOM은 중앙 bundle 값이며 `EA`, `Pcs`, `piece`의 무조건 환산은 승인된 정의가 없음. | [event_payloads](../../event_payloads.py), [CA-G01](BACKLOG.md#ca-g01) |
+| `scan_position` | 1부터의 스캔 순번. 실물 트레이 슬롯·XYZ 좌표·중앙 location ID가 아님. 실제 위치 검사 요구는 미정. | [build_scan_ok_detail](../../event_payloads.py), [CA-G02](BACKLOG.md#ca-g02) |
+| `interval_sec`, `work_time_sec`, `total_idle_seconds` | 초 단위 간격·작업시간·유휴시간. 승인 성능 목표나 장비 처리율이 아님. | [event_payloads](../../event_payloads.py) |
+| `row_count`, `byte_length` | 업로드 CSV 데이터 행 수·파일 바이트 수. 한 완료 행에 여러 제품이 있으므로 제품 수/트레이 수와 다름. | [build_source_file_plan](../../direct_sync_push.py) |
+| `pcs_completed` | Web의 CA 완료 이벤트 barcode 목록 길이, 없거나 0이면 `barcode_count`/`scan_count` fallback. seal ACK 수·현재 재고를 의미하지 않음. | [common_projection._session_row_from_container_audit_projection](../../../WorkerAnalysisGUI-web/common_projection.py) |
+
+CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣는다. 실제 파일은 `utf-8-sig`, `newline=""`; 내구 호출은 flush/fsync를 수행한다. `TRAY_COMPLETE` details에는 위 수량 외 `master_label_code`, `master_label_fields`, `item_code`, 작업자/시각 문맥, partial/restored/test 플래그와 필요 시 inspection trace·seal 상태를 연결한다. 전체 필드 정본은 [event_payloads](../../event_payloads.py), [ContainerAudit._log_event / _attach_transfer_seal_detail](../../Container_Audit.py), [event_log_store](../../event_log_store.py)다.
+
+이벤트 작업 시각은 로컬 naive ISO 값일 수 있으며 Web은 CA source에 `Asia/Seoul`을 적용해 UTC로 정규화한다. operation lease와 relay 시각은 UTC `Z` 문맥을 사용한다. 발생·로컬 저장·서버 수신·투영·화면 표시 시각은 별개다. CA 세션 변환은 start/end와 event/received 계열 fallback에서 날짜를 만들므로 모든 지표가 동일 업무일 규칙이라는 가정은 금한다. [common_projection 시간 정규화 및 세션 변환](../../../WorkerAnalysisGUI-web/common_projection.py), [terminal_operation_lease.utc_text](../../terminal_operation_lease.py), [direct_sync_push](../../direct_sync_push.py). 자정 경계·시계차·화면 필터 실제 검증은 [CA-G01](BACKLOG.md#ca-g01)이다.
+
+## 3. 완료 상태와 관측 지점
+
+| 관측 지점 | 완료로 확인할 조건 | 그 조건만으로 알 수 없는 것 |
+|---|---|---|
+| 로컬 입력 보존 | current/hold/parked snapshot 또는 해당 내구 기록 성공 | 중앙 membership·seal 승인 |
+| 로컬 업무 완료 | `LINKED` 및 local completion/checkpoint·완료 사건의 해당 경계 확인 | `ACKED`, producer ingest, 다음 공정 소비 |
+| 중앙 명령 확정 | scope/key와 exact 결과를 검증한 receipt → seal intent `ACKED` | CSV 업로드 및 분석 화면 최신성 |
+| producer 수신·projection | 파일 identity·행 합계·committed 및 `COMPLETE` 등 엄격 receipt 충족 | 물류 seal ACK·모든 소비 API/화면 갱신 |
+| 소비 화면 | 해당 API/flag/필터에서 실제 데이터 readback 및 렌더 확인 | 다른 기간·다른 화면·다른 환경에서도 최신이라는 주장 |
+
+위 표는 [TransferSealStore / Coordinator](../../transfer_seal.py), [complete_tray](../../Container_Audit.py), [direct_sync_push receipt 검사](../../direct_sync_push.py), [Web projection](../../../WorkerAnalysisGUI-web/common_projection.py)의 경계를 설명한다. 모든 효과가 한 transaction인 것은 아니며 물류 명령과 producer 전송의 도착 순서를 보장하지 않는다.
+
+<a id="ca-c01"></a>
+## CA-C01 로컬 상태·내구성·소유권
+
+**방향:** GUI/coordination → 사용자 state·이벤트·intent → 같은 사용자 재시작 복구. [CA-01](README.md#ca-01), [CA-04](README.md#ca-04), [CA-08](README.md#ca-08), [CA-09](README.md#ca-09).
+
+- `TraySession`은 원본 PHS2, 품목/목표, 스캔 목록·시간, preflight/lease 문맥과 복구 플래그를 보존한다. current JSON과 보류 JSON은 [ContainerAudit._current_tray_state_snapshot / _load_current_tray_state](../../Container_Audit.py), [tray_state](../../tray_state.py), [parked_tray_store](../../parked_tray_store.py)가 관리한다. 소유자는 작업자와 컴퓨터 문맥이며 다른 작업자의 같은 현품표 보류도 검사한다.
+- preflight hold는 `LOOKUP`, `LOOKUP_FAILED`, `DRAINING`과 FIFO sequence를 저장한다. 부정확한 sequence/schema/context는 오류이며 quarantined snapshot 복구는 별도 동작이다. [preflight_scan_hold](../../preflight_scan_hold.py)
+- seal intent 상태는 `PREPARED`, `COMMAND_READY`, `RETRY_WAIT`, `ACKED`, `OPERATOR_REVIEW`; `LINKED`는 별도 로컬 completion 기록이다. 둘을 한 enum으로 합치지 않는다. command bind 뒤 요청 문맥을 보존하고 completion checkpoint 이후 전송한다. [TransferSealStore](../../transfer_seal.py)
+- CSV append는 경로별 process/interprocess lock을 쓰고 내구 모드에서 flush/fsync한다. 완료 재기록은 event type+idempotency key로 기존 행을 확인한 뒤 append한다. SQLite projection receipt와 CSV append 사이 종료 시에도 재생을 판단할 수 있지만 SQLite·JSON·CSV 전체를 하나의 transaction이라고 주장하지 않는다. [append_event_log_entry_idempotent](../../event_log_store.py), [complete_tray](../../Container_Audit.py)
+- 취소 실패는 목록 복원, 보류 복원은 대상 저장·감사와 원본 정리 순서, 손상 state는 격리/보존을 따른다. [undo_last_scan / restore_parked_tray](../../Container_Audit.py). 실패·재시작 각 경계의 실행 증거와 백업 복구 요구는 [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06)에 연결한다.
+
+<a id="ca-c02"></a>
+## CA-C02 검사 완료 구성원 → CA preflight·lease
+
+**방향:** Inspection → Web canonical GOOD/NG → CA 조회. 생산자는 [Inspection _complete_linked_normal_session](../../../Inspection_worker/core/business_logic.py) 및 [complete_session](../../../Inspection_worker/core/direct_sync_runtime.py), 조회자는 [LogisticsTransferClient / TransferSourcePreflight](../../transfer_seal.py), 서버는 [logistics API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py)다.
+
+| 경로 | 입력·응답에서 보존할 의미 |
+|---|---|
+| `POST /logistics/api/v1/sessions/{id}/complete` | 검사 완료의 ITG·품목·UOM·실제 GOOD/NG 구성원. CA가 재판정하지 않음. |
+| `GET /logistics/api/v1/bundles/resolve` 및 `/phs-labels/resolve` | 원본 exact PHS2 identity, 현재 GOOD member와 unit↔barcode·품목/UOM·version 대조. |
+| `POST /logistics/api/v1/operation-leases/issue` | authority scope·plane·epoch·대상 구성원과 요청을 묶은 검증 가능한 물류 operation lease. |
+
+lease는 서명·keyring·binding·기간·membership 검증을 요구한다. 클라이언트 코드의 유효 duration 범위는 60초~24시간이며 실제 서버 발급 기간이나 현장 오프라인 보장 시간을 뜻하지 않는다. [terminal_operation_lease.validate_claims / verify_jws](../../terminal_operation_lease.py). 이미 저장된 로컬 완료가 있으면 `_verified_operation_lease`는 그 `operation_completed_at`으로 저장 lease를 재검증한다. 현재 시각의 만료만 보고 기존 완료를 취소하는 규칙과 다르며, 새 작업에 만료 lease를 사용하는 허가는 아니다. [TransferSealCoordinator._verified_operation_lease](../../transfer_seal.py). 조회 중 입력 보존은 CA-C01, lease 없는 PHS2 및 exact 불일치 차단은 [CA-07](README.md#ca-07)이다. 배포 identity/capability·만료 경계 실제 검증은 [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
+
+<a id="ca-c03"></a>
+## CA-C03 CA → Web 이적 봉인·receipt
+
+**API:** `POST /logistics/api/v1/transfers/seal`, 명령 `SEAL_TRANSFER_BUNDLE`; 재확인은 `GET /logistics/api/v1/receipts/{scope}/{key}`. 클라이언트 [seal_transfer / get_receipt / TransferSealCoordinator](../../transfer_seal.py), 수신 [Web API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py), 원장 [seal service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py), 멱등 [replay_or_conflict](../../../WorkerAnalysisGUI-web/logistics_ledger/idempotency.py).
+
+- **인증·권한:** HTTPS JSON에 bearer/API token, `X-Logistics-Source-Host-Id`, `X-Logistics-Device-Id`, `X-Logistics-Program=Container_Audit`, `Idempotency-Key`를 사용한다. 서버 machine scope와 클라이언트 authority/plane/epoch가 맞아야 한다. redirect는 차단한다. 작업자 표시 이름은 이 권한을 대체하지 않는다. [LogisticsTransferClient._headers / _request / assert_authority](../../transfer_seal.py), [Web _identity 및 route guards](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py)
+- **필수 의미:** scope/key, command type·contract, member IDs/hash/scanned barcodes, 예상 entity versions, source/work-group topology, operation lease를 불변 context에 연결한다. 상세 단일/작업그룹 payload는 `_build_command`, `_build_work_group_command`가 정본이다. 허용되지 않은 partial subset을 임의 생성하지 않는다.
+- **원자성:** 중앙 transaction의 membership/소유·seal·receipt 효과는 서버 소유다. 로컬 SQLite `LINKED`, JSON checkpoint, CSV 완료 기록과 중앙 transaction은 분리되어 있다. `local_completion_id`가 있으면 중앙 대기/검토와 로컬 완료를 병행 표시할 수 있다. [complete_tray](../../Container_Audit.py)
+- **중복·오류:** 동일 scope/key·동일 fingerprint 재생은 기존 결과를 조회하며 다른 fingerprint는 충돌한다. 전송 응답 유실 또는 committed 오류에서는 receipt를 조회한다. exact receipt 검증 뒤 `ACKED`, retryable은 `RETRY_WAIT`, 영구/정합 문제는 `OPERATOR_REVIEW`로 남긴다. CSV 실패의 `LOCAL_EVENT_RETRY`는 중앙 거부와 별개다. [attempt / record_error / record_receipt](../../transfer_seal.py)
+- **순서:** `pending_ids`는 생성 순서·rowid, `drain_pending_through`는 대상까지 FIFO 순회한다. 각 attempt가 실패했다는 이유만으로 모든 뒤 명령을 무조건 막는 전역 strict FIFO라고 일반화하지 않는다. producer queue의 due-time 조건도 별도다.
+- **수용·잔여:** [CA-12](README.md#ca-12)의 local/central 각각 한 번·원 key 유지·중단 복구와 [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). 중앙 ACK 후 포장 소비는 다음 계약의 별도 결과다.
+
+<a id="ca-c04"></a>
+## CA-C04 CA → Web 봉인 전 제품 교체
+
+**API:** `GET /logistics/api/v1/replacements/good-source/resolve`, `POST /logistics/api/v1/bundles/{id}/members/replace`; `REPLACE_BUNDLE_MEMBERS`. [CA client/coordinator](../../transfer_member_exchange.py), [wire client](../../transfer_seal.py), [Web API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py), [replace_bundle_members](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py).
+
+정본 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md)는 동일 품목·UOM, 1~2쌍, 대상 및 각 공여 bundle의 expected version을 같은 명령으로 CAS하는 조건을 규정한다. 공여 PHS는 `EXACTLY_ONE_ACTIVE_MEMBER`; 여러 member이면 `REPLACEMENT_SOURCE_NOT_SINGLETON`으로 차단한다. 1~2쌍 전체 성공 또는 전체 실패이며 기존 제품은 `PROCESS_DAMAGE_HOLD`로 이동한다.
+
+receipt는 pair·exact membership/hash·version 및 `RETAIN_IDENTITY_LABEL`, `target_label_identity_remains_valid=true`, `target_label_membership_bound=false`를 증명해야 한다. 이 조건 없이 원래 실물 라벨이 계속 유효하다고 가정하지 않는다. 중앙 ACK 뒤 로컬 적용 중 종료는 intent와 현재 트레이를 대조해 복구한다. 봉인 뒤 CA 수정은 금지하고 Label의 별도 `REPLACE_SEALED_TRANSFER_MEMBERS` 계약으로 넘긴다. 그 계약은 새 seal revision/token/QR을 만들며 Label F4의 새 전자 QR 재확인까지 CA 작업과 혼동하지 않는다. [Label package_logistics](../../../Label_Match/package_logistics.py), [CA-10](README.md#ca-10).
+
+capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transfer_client_from_env](../../transfer_seal.py)가 대조한다. 실제 설치 서버의 활성 값과 동시 경쟁 결과는 미확인이다. [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
+
+<a id="ca-c05"></a>
+## CA-C05 CA 파일 snapshot → producer ingest·projection
+
+**방향/API:** CA relay → Web `POST /api/producer-ingest/v1/source-file`; multipart metadata+file. [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py), [enqueue_completed_source_file](../../direct_sync_runtime.py), [Web producer_ingest_source_file](../../../WorkerAnalysisGUI-web/app.py), [handle_source_file_request](../../../WorkerAnalysisGUI-web/producer_ingest.py).
+
+- **schema·키:** metadata는 contract, install identity, source_file_id, content SHA256, byte_length, row_count, batch identity를 포함한다. whole-file snapshot의 hash/바이트와 큐 상태를 맞춰 전송한다. 새로운 파일 내용은 단순히 이전 relay의 ACK로 생략할 수 없다.
+- **권한·lease:** HTTPS의 HMAC·nonce·timestamp 및 producer runtime lease를 사용한다. runtime lease는 writer/producer 권한이며 CA-C02의 물류 operation lease와 다르다. 실제 write flag·등록 상태·provider는 [producer_runtime_client](../../producer_runtime_client.py), [Web route](../../../WorkerAnalysisGUI-web/app.py)의 대상 배포에서 확인해야 한다.
+- **엄격 ACK:** 2xx만으로 충분하지 않다. committed·identity, request/upload trace의 일치, `status=accepted`, `retryable=false`, error 없음, `next_retry_after=null`, `projection_disposition=COMPLETE`, inserted/replayed/errors/quarantined 행 합계와 `errors=0`, `quarantined=0`을 함께 확인한다. [_committed_receipt_issue 및 응답 분류](../../direct_sync_push.py)
+- **부분 효과·오류:** 수신이 commit됐지만 오류/격리/projection 미완료가 있으면 자동 성공으로 바꾸지 않는다. `pending`, `leased`, `retry_wait`, `acked`, `failed_permanent`, `operator_review`로 큐 상태를 구분하고 spool·상태를 보존한다. 일시 오류는 제한된 선형 지연+jitter와 유효 `Retry-After`를 사용하며 `0`도 유효하다. [전송 정본](../../DIRECT_SYNC_DATA_PLATFORM_NOTES.md)
+- **순서·재시작:** due인 pending/retry_wait 중 `created_at, relay_id` 순서로 `BEGIN IMMEDIATE` claim을 한다. 아직 due가 아닌 앞 항목이 모든 뒤 항목을 막는 전역 strict FIFO는 아니다. stale local lease 복구와 status CAS는 물류 lease 만료 처리와 별개다. [claim_relay_batch / reset_stale_relay_leases](../../direct_sync_push.py)
+- **중복·cursor:** 이 경로는 source snapshot·수신 event identity·install/source scope를 사용한다. CA가 소비하는 일반 warehouse response cursor 계약으로 바꾸지 않는다. 서버 projection 재생과 모든 화면 갱신은 각각 확인해야 한다. [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py), [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py)
+
+수용 기준은 [CA-13](README.md#ca-13), 누락·지연 및 보존 요구는 [CA-G01](BACKLOG.md#ca-g01), [CA-G06](BACKLOG.md#ca-g06)이다.
+
+<a id="ca-c06"></a>
+## CA-C06 Web 이적 구성원 → Label 포장 소비
+
+**소비 API:** `GET /logistics/api/v1/bundles/resolve?bundle_role=PACKAGE_SOURCE`. Label은 원본 PHS2 `ITG/LBL/HSH`로 현재 TRANSFER와 exact 구성원을 조회하고 최종 포장 명령에서 CAS를 재확인한다. CA가 새 seal QR의 재스캔을 기본 포장 시작 조건으로 강제하지 않는다. [Label resolve_transfer_bundle / resolve_package_source_projection](../../../Label_Match/package_logistics.py), [Label CODEX](../../../Label_Match/CODEX.md), [Web resolve route](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py).
+
+Label의 원본 PHS2 한 번→선택 F4→F3 흐름, F4 뒤 새 전자 QR 확인, 포장 세트/제품 수량, 취소·재고 반환의 차이는 Label 명세 소유다. CA 완료 barcode 수를 포장 세트 수로 재사용하지 않는다. 이 인계의 실제 설치본 결과와 seal lineage 검증은 [CA-G04](BACKLOG.md#ca-g04), [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md)에 연결한다.
+
+<a id="ca-c07"></a>
+## CA-C07 Web projection → 분석 API·화면
+
+**정적 소비 사슬:** CA 완료/스캔 CSV → [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py) → [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py) → [app.projection_dashboard_sessions_df 및 분석 API](../../../WorkerAnalysisGUI-web/app.py) → [dashboard_standard.source.js](../../../WorkerAnalysisGUI-web/static/dashboard_standard.source.js), [index.html](../../../WorkerAnalysisGUI-web/templates/index.html).
+
+`TRAY_COMPLETE`는 `TRANSFER_LEGACY`, 스캔·생명주기 사건은 `TRANSFER_ACTIVITY` 분류를 사용한다. `LEGACY`라는 분류명만으로 현재 producer 경로를 폐기 기능이라고 판정하지 않는다. local-only 사건은 relay 비재귀 scan 경계 밖에 두며 시험·복구 플래그와 source scope를 유지한다. [event_stream_policy](../../event_stream_policy.py), [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py).
+
+CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해당 변환/목록 조회에 seal `ACKED` 필터가 확인되지 않았다. 따라서 이적 처리 실적을 중앙 봉인 확정량으로 표기할 근거가 부족하다. 물류 snapshot의 현재 재고와도 합산하지 않는다. 표준 dashboard는 이적 처리 수량/트레이·대기 수량을 소비하지만 모든 화면의 집계 경로, 배포 flag, 누락/지연 표시까지 확인한 것은 아니다. [_session_row_from_container_audit_projection / list_container_audit_dashboard_sessions](../../../WorkerAnalysisGUI-web/common_projection.py), [period.transfer 렌더링](../../../WorkerAnalysisGUI-web/static/dashboard_standard.source.js).
+
+**수용 기준:** 동일 source identity의 재생 중복 억제, 해당 기간·품목·작업자 필터의 수량/시간 정의, API→화면 값과 최신성 readback을 확인한다. 이적실 명령 ACK와 다른 지표임을 작업자가 해석할 수 있어야 한다. 허용 반영 지연·업무일 정의·완료 문구 결정은 [CA-G01](BACKLOG.md#ca-g01)과 중앙 지표 담당의 작업이다.
+
+<a id="ca-c08"></a>
+## CA-C08 중앙 품목 CSV → CA 검증 캐시
+
+**API:** `GET /inbound/api/item-catalog.csv`. CA [item_catalog_sync.refresh_item_catalog](../../item_catalog_sync.py)와 `ContainerAudit.load_items`가 요청·검증·사용하며, Web [api_item_catalog_csv / _require_item_catalog_csv_reader](../../../WorkerAnalysisGUI-web/blueprints/inbound/__init__.py)가 route와 읽기 권한을 소유한다.
+
+검증 cache, 실제 사용 snapshot, startup diagnostic을 구분한다. 승인된 snapshot이 사라지거나 UTF-8 parsing이 실패한 경로는 오류다. legacy assets를 읽는 경우의 `utf-8-sig/cp949/euc-kr/utf-8` fallback은 중앙 검증 실패를 무조건 허용하는 정책이 아니다. [load_items](../../Container_Audit.py). API 읽기 권한·실제 갱신 및 유효 cache 허용 기간은 대상 서버 증거가 필요하다. [CA-02](README.md#ca-02), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
+
+<a id="ca-c09"></a>
+## CA-C09 CA ↔ Web 현품표 정합·출력 journal
+
+현품표 후보 조회·교체 준비·교체 조회·print 요청/완료·활성화는 [LogisticsTransferClient의 phs 관련 메서드](../../transfer_seal.py), [PHSReconciliationExchangeCoordinator](../../phs_reconciliation_workflow.py), [PHSLabelExchangeJournal](../../phs_label_workflow.py)와 [Web phs route](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py)가 대응한다. 상세 payload와 지원 route는 이 소스의 정본을 참조하며 제품 member 교체 API와 합치지 않는다.
+
+아래 route는 `/logistics/api/v1` 아래의 클라이언트 선언이다. 후보/정합 기본 경로와 단독 교체 호환 경로를 구분하며 실제 설치 서버의 활성 지원은 [CA-G05](BACKLOG.md#ca-g05)에서 확인한다.
+
+| 호출 | 입력·용도 |
+|---|---|
+| `GET /phs-work-reconciliations/actions/resolve` | scope·scan payload·process context·limit로 정합 action 조회 |
+| `GET /phs-work-instructions/candidates` | scope·업무일·품목·목표 제품 수·limit로 후보 조회; 목표 수는 원본 QR의 QT 추가가 아님 |
+| `POST /phs-labels/adopt` | 원본 QR·scope·선택 expected session version을 이용한 기존 라벨 채택 경로 |
+| `POST /phs-work-reconciliations/{id}/label-exchange/prepare` | action IDs·expected reconciliation version·멱등 key로 정합 교체 준비 |
+| `POST /phs-label-exchanges/prepare` | exchange kind·sources·targets·key를 쓰는 별도 단독 준비 경로 |
+| `GET /phs-label-exchanges/{id}` | scope와 exchange ID로 현재 상태 재조회 |
+| `POST /phs-label-exchanges/{id}/prints` | label ID·key로 print attempt 요청 |
+| `POST /phs-label-print-attempts/{id}/complete` | succeeded와 artifact hash/proof 또는 error code/message 기록 |
+| `POST /phs-label-exchanges/{id}/activate` | expected exchange version으로 활성화 요청 |
+
+scope·식별자·권한은 [LogisticsTransferClient](../../transfer_seal.py)가 검사하며 교체 준비/출력 요청의 멱등 key와 활성화 expected version의 역할을 구분한다. 모든 POST가 같은 키 필드를 갖는다고 가정하지 않는다.
+
+source/target identity·membership·topology·version 및 action을 대조하고, 중앙 준비 상태와 로컬 출력 journal을 연결한다. 중앙 `PREPARED`, `PRINT_FAILED`, `PRINT_PARTIAL`, `READY`, `COMMITTED` 상태 및 로컬 ACK 대기 상태는 서로 다른 관측값이다. 출력 artifact hash와 `spool_job_id` 등 `_print_proof`를 확인한 뒤 print 완료·활성화 요청을 보낸다. [execute / _validate_exchange / _record_print_failure / _validate_artifact](../../phs_reconciliation_workflow.py).
+
+중앙 commit과 로컬 journal 또는 실물 인쇄는 분산된 효과다. 출력 일부 성공·응답 유실·파일 변조는 재조회/확인과 정확한 journal 재사용으로 처리하고, 취소/재출력 가능 여부를 현재 중앙 상태에서 판단한다. 이 계약의 spool 증거는 실제 종이 배출·부착 증거가 아니다. [CA-11](README.md#ca-11), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).

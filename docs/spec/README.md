@@ -1,0 +1,186 @@
+# Container_Audit 기술 명세
+
+이 문서는 **원본 PHS2의 중앙 GOOD 구성원을 전량 확인하고 이적 결과를 내구 저장하는 Windows 작업자 앱**의 소스 기준선이다. 로컬 완료, 중앙 물류 확정, 분석 전송, 화면 반영을 각각 추적한다. 기능 변경 시 함께 갱신할 규칙은 [AGENTS.md](../../AGENTS.md)에 있다.
+
+[계약·데이터](contracts.md) · [운영·복구](operations.md) · [남은 작업](BACKLOG.md) · [전체 허브](../../../Program_Spec_Hub/README.md) · [통합 관계](../../../Program_Spec_Hub/INTEGRATIONS.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
+
+## 1. 기준과 증거 사용법
+
+- 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.
+- 기반 조사: [CA 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md), [소스 위치 색인](E:/KMTech/spec-hub-research-20260907/Container_Audit/SOURCE-MAP.tsv), [교차 의미 대조](E:/KMTech/spec-hub-research-20260907/hub-architecture/CROSS-PROGRAM.md). 아래 링크와 심볼은 현행 소스 또는 그 연구의 정적 확인 범위다. 전체 함수·모든 UI 분기·실제 설치 provider를 망라한 목록은 아니다. 계정 인계 후 기존 세 문서를 보존해 검토하고 운영·백로그를 보완했으며, [재개 시점 보존 목록](E:/KMTech/spec-hub-build-20260907/Container_Audit/resume-pre-state.json)에 문서 외 파일과 index 기준을 따로 남겼다.
+- 상세 명세 기준선과 지속 갱신 규칙은 작성·로컬 정적 대조 후 **Main 교차 검토 수용 완료** 상태다. [교차 검토](E:/KMTech/spec-hub-build-20260907/cross-review/REVIEW.md)와 [중앙 S01](../../../Program_Spec_Hub/BACKLOG.md#specification)에 범위와 후속 보완을 연결한다. 기능별 **수용 기준**은 현행 계약에서 도출한 확인 항목이며, 새 사업 규칙이나 새 기능의 승인으로 해석하지 않는다. 요구 자체가 미정인 항목은 [백로그](BACKLOG.md)에 남긴다.
+
+| 판단 축 | 이번 기준선의 판정·적용 범위 |
+|---|---|
+| 구현 | 아래 인용한 경로·조건의 존재를 정적으로 대조했다. 전체 기능 실행 성공을 주장하지 않는다. |
+| 실제 연동 | 정적 송수신 계약 연결은 확인했으나 대상 설치본의 생산→중앙→소비 결과는 이 작업으로 입증하지 않았다. 기존 증거 적용 여부는 중앙 준비도에서 관리한다. |
+| 수용 검증 | **NOT TESTED — 이번 문서 작업에서는 앱·테스트·VM·서버를 실행하지 않았다.** 이전 실행 결과를 대체하는 판정이 아니다. |
+| 운영 준비 | 설치·실장비·재시작·재설치·롤백·통합 E2E의 정확한 환경별 근거는 [READINESS](../../../Program_Spec_Hub/READINESS.md)가 소유한다. 문서 완성과 별개다. |
+
+**공유 capture validator의 한정된 소스 통합은 Main 수용 완료, Main 단일 커밋 수용 완료**다. [독립 소스 검토](E:/KMTech/coordinator-handoff-20260907-01a07992/ca-validator-independent/REVIEW.md)와 실제 h02의 **238 PASS / 714 ordered phase PASS, FAIL/ERROR/SKIP 0**을 [Main 소스 단위 판단](E:/KMTech/coordinator-handoff-20260907-01a07992/ca-validator-source-unit-close/MAIN-DISPOSITION.md)에 연결한다. 원래 두 전체 모듈의 103+135개 선택, 실제 consumer subprocess·exit3·FAIL=0·organization pending 5개 조건과 source/config identity를 유지한 범위다. [이번 적용성 검토](E:/KMTech/coordinator-handoff-20260907-01a07992/ca-validator-source-unit-close/PREPARATION.md)는 기존 9개 통합 경로와 admitted source를 대조하고 현재 문서 상태만 보완한다. 준비 워커는 새 실행이나 커밋을 하지 않았다.
+
+[19:16 KST index 분석](E:/KMTech/coordinator-handoff-20260907-01a07992/ca238-index-forensic-prepare/MAIN-FORENSIC.md)의 469개 entry/TREE 동일·stat cache 71개 차이와 별도로, Main은 [현재 유한 비교](E:/KMTech/coordinator-handoff-20260907-01a07992/ca238-current-custody-prepare/MAIN-current-original238-READBACK.json)의 **7,809 guest·24 host 불일치 0**, 지정 identity 57개 inactive·9개 tree·2개 Ready task·원래 desktop 일치를 수용했다. 이는 고정한 집합/시점의 관측이며 지속적 무변경이나 장비 전체 무활동을 입증하지 않는다. 원래 h01/h02 controller·index byte/read-only 보존 및 최초 Main reader는 **FAILED**, 정확한 index writer와 속성 변경 원인은 **UNPROVEN**으로 남긴다. `closureReady`, `inputsPreserved`, `runtimeAcceptance`, `qualification`은 모두 false다. FULL·exact build/freeze·설치 업무·cold boot·재설치·롤백·실제 통합은 **NOT TESTED**이며 Ready를 올리지 않는다. 상세 범위와 다음 단계는 [CA-G07](BACKLOG.md#ca-g07), [KNOWN-GAPS](../../tests/KNOWN-GAPS.md), [중앙 준비도](../../../Program_Spec_Hub/READINESS.md)에 연결한다.
+
+## 2. 사용자·제품 경계와 지원 경로
+
+이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.
+
+CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [Inspection의 _complete_linked_normal_session](../../../Inspection_worker/core/business_logic.py), 제품 소유·위치·버전·멱등 receipt 정본은 [Web logistics ledger](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py), 포장 확정은 [Label package_logistics](../../../Label_Match/package_logistics.py)가 담당한다. ERPnext는 별도 제품이며 그쪽 스캔 요구나 한도를 CA에 적용하지 않는다. 이들 프로그램 전체가 항상 단일 직렬 공정으로 실행된다는 가정도 하지 않는다.
+
+| 지원 구분 | 진입점·조건 | 현재 경계·근거 |
+|---|---|---|
+| 기본 작업 | `Container_Audit.py:main` → `start_work` → 원본 exact PHS2 | 중앙 registry·GOOD 목표·lease 확인 후 제품 전량 검사. [CA-03](#ca-03), [CA-07](#ca-07) |
+| 배포 진입 | canonical portable 설치 후 [launch-container-audit.cmd](../../portable/launch-container-audit.cmd) | 현재 사용자 onboarding과 relay, 보호된 코드 루트. 소스 실행과 패키지 실행의 동일성은 별도 확인. [운영](operations.md#ca-o01) |
+| 조건부 제품 교체 | 봉인 전 현재 트레이의 교체 UI | capability·버전·동일 품목/UOM·단일 구성원 공여 PHS 조건. [CA-10](#ca-10) |
+| 조건부 현품표 정합 교체 | F8·중앙 후보 선택 | 중앙 journal·Windows 출력·활성화. Shift-F8에는 legacy single fallback 진입이 남아 있다. [CA-11](#ca-11), [ContainerAudit.__init__](../../Container_Audit.py) |
+| 호환·시험 | 비compact 현품표/13자리 품목 코드, 과거 부분 제출·교환 분기 | `_process_barcode_logic`와 `submit_current_tray` 등에 코드가 남아 있다. 이를 표준 PHS2 부분 제출 허용으로 해석하지 않는다. 현장 지원 범위 재확인은 [CA-G03](BACKLOG.md#ca-g03). |
+| 내부 시험 명령 | `enable_internal_test_commands`가 허용된 개발 실행 | 기본 설정 false, frozen 실행에서는 설정을 제거한다. `_RUN_AUTO_TEST_`, `TEST_LOG_…`는 일반 운영 입력이 아니다. [설정 템플릿](../../config/container_audit_settings.json), `_drop_release_disabled_settings` |
+| 관리용 host 모드 | `--container-audit-direct-sync-relay`, `--container-audit-user-relay`, `--onboard-current-user`, `--remove-current-user-setup`, `--restore-current-user-lifecycle-after-replacement` | [dispatch_product_mode](../../container_audit_product_host.py)의 비GUI 경로. 작업자 트레이 기능과 구분한다. |
+| 퇴역 운영 경로 | Syncthing / `C:\Sync` | HTTPS direct-sync 운영 저장소에서 제외하며 해당 data root를 거부한다. `legacy`라는 이름의 모든 코드가 폐기됐다는 뜻은 아니다. [storage_policy](../../storage_policy.py), [전송 정책](../../DIRECT_SYNC_DATA_PLATFORM_NOTES.md) |
+
+## 3. 정상 흐름과 중단 지점
+
+1. 시작 계약·단일 인스턴스·현재 사용자 준비·품목 갱신 후 작업자를 선택한다. 미완성 onboarding이나 저장 경로 충돌은 시작 실패로 처리한다. [main / _prepare_gui_startup](../../Container_Audit.py), [current_user_onboarding](../../current_user_onboarding.py)
+2. 원본 PHS2를 입력한다. 중앙 조회 중 먼저 들어온 제품은 내구 FIFO에 보류한다. 조회 실패 시 같은 PHS2로 재시도하며 다른 현품표로 보류를 덮어쓰지 않는다. [CA-03](#ca-03), [CA-04](#ca-04)
+3. 중앙 GOOD 목표만큼 제품을 읽는다. 형식·품목·중복·초과 오류는 증가 완료로 처리하지 않는다. 마지막에는 barcode↔unit 집합과 lease 구성원을 정확히 대조한다. [CA-05](#ca-05), [CA-07](#ca-07)
+4. 완료 intent·로컬 `LINKED`·완료 checkpoint를 보존하고 불변 명령을 중앙에 재전송한다. 로컬 완료 ID가 없는 미확정 트레이와 이미 로컬 완료된 중앙 대기 건은 UI 허용 행동이 다르다. [CA-12](#ca-12)
+5. 운영 이벤트는 별도 relay가 업로드한다. 중앙 이적 구성원의 포장 소비는 Label의 `PACKAGE_SOURCE` 조회로 이어진다. producer ACK나 대시보드 실적만으로 다음 물류 명령을 확정하지 않는다. [CA-C05](contracts.md#ca-c05), [CA-C06](contracts.md#ca-c06), [CA-C07](contracts.md#ca-c07)
+
+작업 중 수정은 취소·리셋·보류 UI로 처리한다. 통신 실패, 로컬 저장 실패, 중앙 충돌, 출력 불확실은 각각 다른 복구 대상이다. 현품표·실물·작업 ID와 원본 상태를 보존하고 [장애 인계 표](operations.md#ca-o04)를 따른다. 이 문서는 미확정 상태를 무시한 실물 이동을 승인하지 않는다.
+
+## 4. 기능 목록과 상세 카드
+
+| 안정 ID | 업무·대표 심볼 | 관련 계약 |
+|---|---|---|
+| [CA-01](#ca-01) | 시작·작업자 선택: `main`, `start_work` | [CA-C01](contracts.md#ca-c01) |
+| [CA-02](#ca-02) | 품목 준비: `refresh_item_catalog`, `load_items` | [CA-C08](contracts.md#ca-c08) |
+| [CA-03](#ca-03) | exact PHS2 조회: `TransferSourcePreflight` | [CA-C02](contracts.md#ca-c02) |
+| [CA-04](#ca-04) | 조회 중 입력 보존: `_hold_scan_during_preflight` | [CA-C01](contracts.md#ca-c01) |
+| [CA-05](#ca-05) | 제품 스캔: `decide_product_scan` | [수량·입력](contracts.md#ca-data) |
+| [CA-06](#ca-06) | 순번·시간·수량 표시: `build_scan_ok_detail` | [수량·입력](contracts.md#ca-data) |
+| [CA-07](#ca-07) | 전량·lease 대조: `_map_scans`, `_verified_operation_lease` | [CA-C03](contracts.md#ca-c03) |
+| [CA-08](#ca-08) | 취소·리셋: `undo_last_scan`, `reset_current_work` | [CA-C01](contracts.md#ca-c01) |
+| [CA-09](#ca-09) | 보류·재시작: `park_current_tray`, `_load_current_tray_state` | [CA-C01](contracts.md#ca-c01) |
+| [CA-10](#ca-10) | 봉인 전 제품 교체: `TransferMemberExchangeCoordinator` | [CA-C04](contracts.md#ca-c04) |
+| [CA-11](#ca-11) | 현품표 정합·출력: `PHSReconciliationExchangeCoordinator` | [CA-C09](contracts.md#ca-c09) |
+| [CA-12](#ca-12) | 로컬 완료·중앙 재확인: `complete_tray`, `TransferSealCoordinator` | [CA-C03](contracts.md#ca-c03) |
+| [CA-13](#ca-13) | 전송·상태: `enqueue_completed_source_file`, `drain_one_relay_batch` | [CA-C05](contracts.md#ca-c05), [CA-C07](contracts.md#ca-c07) |
+
+13개는 핵심 업무를 묶은 탐색용 ID이며 기능 총수·완성도 분모가 아니다. 세부 관리자 창, 모든 legacy 교환 분기, 전체 설치 옵션, 장시간 실장비 특성은 추가 조사 대상이다. 각 카드의 담당은 CA 개발 역할이며 교차 계약은 명시된 상대 프로그램 담당과 협업한다. 네 판단 축의 이번 공통 범위는 §1을 적용한다.
+
+<a id="ca-01"></a>
+### CA-01 시작·작업자 선택
+
+- **시작·입력:** 소스/패키지 진입 후 등록된 작업자 이름 또는 보호 관리자 로그인. `main`의 계약 확인·단일 인스턴스·onboarding 준비와 `start_work`가 경계다. [Container_Audit.py](../../Container_Audit.py), [runtime_instance.py](../../runtime_instance.py)
+- **검증·저장·결과:** 이름 등록과 보호 관리자 인증을 구분하고 사용자 상태 경로를 준비한다. 복구 대상이 있으면 현재 트레이 복구 흐름으로 진입한다. 작업자 선택만으로 서버 권한을 만들지 않는다. [worker_registry](../../worker_registry.py), [current_user_onboarding](../../current_user_onboarding.py)
+- **실패·취소·재시작:** 중복 실행, 부분 onboarding, 읽기 불가능한 보호 상태는 오류를 보존해 진입을 중단한다. 임의 초기화 대신 동일 사용자·원본 상태의 복구 가능성을 확인한다.
+- **수용 기준:** 정상 사용자로 준비된 상태를 재사용하고, 불완전 준비·중복 실행을 성공 화면으로 넘기지 않으며, 재시작 후 작업자와 트레이 소유권을 잘못 연결하지 않는다.
+- **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [운영 진입](operations.md#ca-o01), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). 실제 설치본·사용자별 시작 증거 연결이 남아 있다.
+
+<a id="ca-02"></a>
+### CA-02 품목 기준 준비
+
+- **시작·입력:** 시작 시 중앙 `/inbound/api/item-catalog.csv`를 갱신하고 검증된 snapshot을 사용한다. [refresh_item_catalog](../../item_catalog_sync.py), [ContainerAudit.load_items](../../Container_Audit.py)
+- **검증·저장·결과:** 검증 캐시와 startup diagnostic을 보존한다. 검증 snapshot이 요구되는 경로에서 snapshot을 잃거나 파싱에 실패하면 오류이며, 무조건 패키지 `assets/Item.csv`로 성공 처리하지 않는다. legacy 파일 경로의 인코딩 fallback과 구분한다.
+- **실패·취소·재시작:** 통신·CSV·cache 오류를 진단 사유와 연결한다. 캐시 허용 여부는 `refresh_item_catalog`의 실제 분기를 따르며 임의로 낡은 품목을 정본으로 선택하지 않는다.
+- **수용 기준:** 품목 코드·명칭·규격이 검증된 동일 snapshot에서 읽히고, 갱신 실패와 파싱 실패 시 허용/중단 결과가 계약과 일치해야 한다.
+- **연결·남은 일:** [CA-C08](contracts.md#ca-c08), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). 운영 캐시 신선도 목표와 실제 장애 복구 증거는 미정/미확인이다.
+
+<a id="ca-03"></a>
+### CA-03 원본 exact PHS2와 중앙 preflight
+
+- **시작·입력:** 제품보다 먼저 `PHS/SRC/ITG/CLC/LBL/HSH`의 정확한 6필드 PHS2를 스캔한다. `QT` 추가·필드 누락·중복을 거부하고 `ITG/LBL/HSH`를 중앙 registry와 맞춘다. [TransferSourcePreflight 및 compact 검증](../../transfer_seal.py)
+- **검증·저장·결과:** 품목·UOM·현재 GOOD member와 operation lease를 검증한 결과를 트레이 상태에 연결한다. 목표는 중앙 GOOD 구성원 수이며 60으로 추정하지 않는다. [ContainerAudit._begin_compact_phs2_preflight / _process_barcode_logic](../../Container_Audit.py)
+- **실패·취소·재시작:** 조회 실패면 새 트레이 성공으로 전환하지 않는다. 조회 중 입력은 [CA-04](#ca-04)로 보존하고 같은 현품표로 재시도한다. lease·identity가 맞지 않으면 완료를 허용하지 않는다.
+- **수용 기준:** 잘못된 6필드·다른 label/hash·불일치 구성원을 차단하고, 실제 중앙 GOOD 수가 표시 목표와 완료 대조의 기준이 되어야 한다.
+- **연결·남은 일:** [CA-C02](contracts.md#ca-c02), [CA-G03](BACKLOG.md#ca-g03), [CA-G04](BACKLOG.md#ca-g04). [preflight 회귀 소스](../../tests/test_phs2_master_preflight.py)는 기준 연결용이며 이번 실행 결과가 아니다.
+
+<a id="ca-04"></a>
+### CA-04 중앙 조회 중 빠른 입력 보존
+
+- **시작·입력:** `_master_preflight_pending` 동안 Enter로 접수된 스캔을 현재 PHS2에 묶어 내구 FIFO에 넣는다. [process_barcode / _hold_scan_during_preflight](../../Container_Audit.py), [preflight_scan_hold.py](../../preflight_scan_hold.py)
+- **검증·저장·결과:** `LOOKUP` → `DRAINING` 또는 `LOOKUP_FAILED` 상태와 순서를 snapshot에 남긴다. 보류 접수 확인 뒤 입력창을 정리하며 성공 조회 뒤 순서대로 정상 제품 검증에 넘긴다.
+- **실패·취소·재시작:** 쓰기 실패·가득 찬 보류·context 불일치를 성공 접수로 표시하지 않는다. 실패 조회의 다른 현품표 입력을 차단한다. 격리/복구 경로는 `quarantine`, `restore_quarantined`, `_restore_preflight_scan_hold`가 담당한다.
+- **수용 기준:** 조회 지연·실패·프로세스 종료 뒤 같은 현품표로 돌아오면 접수된 순서와 개수가 보존되고, 미접수 입력은 작업자에게 구별되어야 한다.
+- **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 최대 연속 입력 요구·실측 처리량은 정해지지 않았다.
+
+<a id="ca-05"></a>
+### CA-05 제품 바코드 검사
+
+- **시작·입력:** 활성 트레이에서 제품 문자열을 스캔한다. GUI는 외곽 공백을 `strip()`하고, `decide_product_scan`은 전달값의 길이·제어문자·수식/HTML/경로 위험 형식·품목 포함·중복·용량을 검사한다. [product_scan.py](../../product_scan.py), [process_barcode / _process_barcode_logic](../../Container_Audit.py)
+- **검증·저장·결과:** 현행 `ITEM_CODE_LENGTH=13`, 제품 문자열 최대 128자이며 품목코드보다 길어야 한다. 여러 품목이 매칭되는 모호성은 GUI에서 추가 차단한다. 정상 입력은 트레이 목록·상태와 `SCAN_OK`로 이어지고 목표 도달 시 완료 대조에 진입한다.
+- **실패·취소·재시작:** 형식·품목·중복·초과는 개수 증가 없이 경고·실패 사건으로 처리한다. 취소는 [CA-08](#ca-08), 상태 저장 후 복구는 [CA-09](#ca-09)를 따른다. 이 단계의 동일 품목 통과가 중앙 member임을 최종 증명하지는 않는다.
+- **수용 기준:** 오류별 목록·수량·경고 상태가 일치하고, 같은 트레이 중복과 초과가 완료량에 더해지지 않아야 한다. 재시작 뒤 마지막 접수 여부를 식별할 수 있어야 한다.
+- **연결·남은 일:** [수량·입력 계약](contracts.md#ca-data), [CA-G04](BACKLOG.md#ca-g04), [CA-A01](BACKLOG.md#ca-a01). 128자는 코드 제한이며 ERPnext의 수량 제한과 무관하다.
+
+<a id="ca-06"></a>
+### CA-06 순번·수량·작업시간 표시
+
+- **시작·입력:** 정상 스캔마다 순서·간격, 완료 때 barcode 목록·작업시간·오류·유휴시간을 구성한다. [build_scan_ok_detail / build_tray_complete_detail](../../event_payloads.py)
+- **검증·저장·결과:** `scan_position`은 1부터의 **입력 순번**, `interval_sec`·`work_time_sec`는 초다. `scan_count`는 현재 목록 수, `tray_capacity`는 목표이며 실물 슬롯 좌표나 중앙 위치 ID가 아니다. UI 최근 입력·수량은 [scan_display](../../scan_display.py)와 메인 화면이 소비한다.
+- **실패·취소·재시작:** 취소·복구·부분/시험 상태는 이벤트 플래그와 함께 해석한다. 경고 중 최근 행 가시성은 [기존 관측](../../tests/KNOWN-GAPS.md)에 남은 사용성 후보이며 데이터 유실 확정 결함은 아니다.
+- **수용 기준:** 목록 수와 현재 표시가 맞고 초 단위와 순번 의미가 보존되어야 한다. 실제 슬롯 배치 검사 여부는 별도 요구 확정 전 수용 완료로 세지 않는다.
+- **연결·남은 일:** [CA-C07](contracts.md#ca-c07), [CA-G01](BACKLOG.md#ca-g01), [CA-G02](BACKLOG.md#ca-g02), [CA-A02](BACKLOG.md#ca-a02).
+
+<a id="ca-07"></a>
+### CA-07 전량·exact 구성원 완료 조건
+
+- **시작·입력:** 마지막 제품 또는 완료 요청에서 중앙 목표·스캔 목록·operation lease·버전 문맥을 검증한다. [request_complete_tray / complete_tray](../../Container_Audit.py)
+- **검증·저장·결과:** `_map_scans`는 barcode를 unit으로 매핑하고 lease member 집합과 정확히 맞춘다. lease 없는 PHS2, 부족 수량, 비멤버·집합 불일치를 완료 명령으로 넘기지 않는다. [TransferSealCoordinator._verified_operation_lease / _map_scans](../../transfer_seal.py)
+- **실패·취소·재시작:** 전량 불일치면 현재 트레이를 유지하고 실물/중앙 구성원을 대조한다. 표준 PHS2 부분 제출은 차단한다. 교체·보류·복구를 통해 허용 조건을 다시 만족시켜야 한다.
+- **수용 기준:** 개수만 같은 다른 구성원, 중복 unit, 신규 완료 시 만료/다른 context lease가 거짓 완료를 만들지 않아야 하며, 유효한 exact 집합만 [CA-12](#ca-12)로 이어져야 한다. 이미 기록된 로컬 완료를 복구할 때는 저장된 완료 시각으로 lease를 재검증하는 분기를 구분한다.
+- **연결·남은 일:** [CA-C03](contracts.md#ca-c03), [CA-G04](BACKLOG.md#ca-g04). lease 취득 후 통신 단절의 compact PHS2 근거를 별도로 연결한다.
+
+<a id="ca-08"></a>
+### CA-08 마지막 스캔 취소·리셋
+
+- **시작·입력:** 활성 작업의 마지막 입력 취소 또는 현재 작업 리셋 요청. [undo_last_scan / reset_current_work](../../Container_Audit.py)
+- **검증·저장·결과:** 전이 중 변경 guard를 통과한 후 목록·시간·상태와 감사 사건을 맞춘다. 취소 저장/감사 실패에서는 이전 목록을 복원한다. 리셋은 중앙에 이미 확정된 물류를 되돌리는 명령과 동일하지 않다.
+- **실패·취소·재시작:** 진행 중 callback을 무효화해 오래된 입력이 새 트레이에 섞이지 않게 한다. 로컬 기록 실패를 숨긴 채 성공 취소로 끝내지 않으며, 재시작은 보존 상태 기준으로 복구한다.
+- **수용 기준:** 정상 취소는 마지막 한 항목만 제거하고, 저장 실패에는 이전 목록·개수가 유지되어야 한다. 리셋 후 지연 callback이 새 작업을 변경하지 않아야 한다.
+- **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 중앙 확정 이후 수정은 별도 계약의 조건으로 판단한다.
+
+<a id="ca-09"></a>
+### CA-09 보류·복원·비정상 종료 복구
+
+- **시작·입력:** 진행 트레이 보류, 본인 보류 목록 선택, 재시작 시 current state 발견. [park_current_tray / restore_parked_tray / _load_current_tray_state](../../Container_Audit.py), [parked_tray_store](../../parked_tray_store.py)
+- **검증·저장·결과:** 작업자 소유권과 다른 작업자의 같은 현품표 보류 중복을 검사한다. 복원 상태와 복원 사건의 저장, 원본 정리 순서를 관리한다. 완료 상태 재발견 시 완료 intent와 대조한다.
+- **실패·취소·재시작:** 손상/불일치 상태는 격리·defer 경로로 보존하며 임의 빈 트레이로 대체하지 않는다. 원본 보류 삭제 전에 복원 내구 경계를 확인한다.
+- **수용 기준:** 보류→종료→복원이 barcode·순서·소유권을 유지하고, 어느 쓰기 단계에서 종료해도 유일한 원본을 잃거나 이중 활성 트레이를 만들지 않아야 한다.
+- **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). CSV만으로는 이 복구 상태를 재구성할 수 없다.
+
+<a id="ca-10"></a>
+### CA-10 봉인 전 제품 1~2쌍 교체
+
+- **시작·입력:** 중앙 `PHS/AVAILABLE` 대상의 손상 제품과 새 GOOD 제품 1~2쌍. 공여 PHS의 활성 구성원은 정확히 하나여야 한다. [정본 교체 정책](../MEMBER_EXCHANGE_POLICY.md)
+- **검증·저장·결과:** 품목/UOM·대상/공여 버전을 확인하고 한 `REPLACE_BUNDLE_MEMBERS` transaction으로 처리한다. 손상품은 `PROCESS_DAMAGE_HOLD`, 새 GOOD는 대상 PHS로 이동한다. SQLite intent와 exact receipt를 남기고 receipt 확인 뒤 로컬 목록을 한 번에 교체한다. [transfer_member_exchange](../../transfer_member_exchange.py)
+- **실패·취소·재시작:** 충돌·복수 구성원 공여·receipt 불일치는 부분 로컬 교체를 허용하지 않는다. ACK 후 로컬 적용 중 종료하면 저장된 intent와 트레이 상태를 대조한다. 원래 라벨 identity 유지 증거도 필요하다.
+- **수용 기준:** 1~2쌍 전체 성공/실패, 중앙·로컬 exact 집합 일치, 동일 키 재생의 단일 효과, 동시 CAS 경쟁의 한쪽 성공을 확인한다. 봉인 후 CA 로컬 목록 수정은 차단되어야 한다.
+- **연결·남은 일:** [CA-C04](contracts.md#ca-c04), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). [server-contract 테스트](../../tests/test_transfer_member_exchange_server_contract.py)는 저장된 HTTP 응답 재생이며 실제 서버 경쟁 검증과 구별한다.
+
+<a id="ca-11"></a>
+### CA-11 현품표 정합·출력·활성화
+
+- **시작·입력:** F8 정합 후보/작업 지시 선택 후 중앙 source/target과 현품표 증거를 확인한다. 제품 교체와 별도 업무다. [ContainerAudit._on_phs_label_exchange_shortcut](../../Container_Audit.py), [PHSReconciliationExchangeCoordinator](../../phs_reconciliation_workflow.py)
+- **검증·저장·결과:** 중앙 교체 준비 → durable print journal → 서버 발급 출력물 → print proof 등록 → 활성화 순서를 관리한다. 로컬 파일 hash와 `spool_job_id` 등 증거를 검증한다. [phs_label_workflow](../../phs_label_workflow.py)
+- **실패·취소·재시작:** `PRINT_FAILED`/`PRINT_PARTIAL`·중앙 ACK 대기·불확실 재출력을 journal로 구별한다. 원본 파일이 바뀌거나 출력 결과가 불명확하면 확인 없이 재출력/활성화를 진행하지 않는다. 중앙 `COMMITTED`와 로컬 상태를 재조회해 복구한다.
+- **수용 기준:** 중간 실패 후 동일 교체 건을 복구하고, 일부 출력·ACK 유실에서도 잘못된 라벨 활성화나 무인지 중복 출력이 없어야 한다. spool 성공과 실제 종이 출력·부착은 별도 관측으로 남긴다.
+- **연결·남은 일:** [CA-C09](contracts.md#ca-c09), [장비](operations.md#ca-o03), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). 실물 출력과 legacy fallback의 배포 지원은 미확인이다.
+
+<a id="ca-12"></a>
+### CA-12 로컬 완료·중앙 봉인·재확인
+
+- **시작·입력:** [CA-07](#ca-07)의 전량·lease 검증을 만족한 트레이. 고정 작업 시각·작업자·멱등 키·member/version 문맥을 사용한다. [complete_tray](../../Container_Audit.py), [TransferSealStore.prepare / bind_command / confirm_completion_checkpoint](../../transfer_seal.py)
+- **검증·저장·결과:** SQLite intent와 `LINKED` 기록, GUI 완료 checkpoint를 확인한 뒤 불변 명령을 보낸다. `TRAY_COMPLETE`는 동기 내구 기록을 사용한다. `ACKED`는 중앙 receipt 검증 결과이며 로컬 완료 ID와 별개다.
+- **실패·취소·재시작:** local completion ID도 ACK도 없는 트레이는 잠근다. 이미 `LINKED`인 작업의 중앙 지연/검토가 로컬 완료를 취소하지 않는다. 응답 유실은 원 key receipt 조회·재전송, 영구 충돌은 `OPERATOR_REVIEW`, 로컬 이벤트 실패는 `LOCAL_EVENT_RETRY`로 구별한다. [TransferSealCoordinator.attempt](../../transfer_seal.py), `complete_tray`
+- **수용 기준:** lease→intent→checkpoint→중앙 receipt→CSV→화면의 각각을 관측하고, 재시작/응답 유실에서 중앙 이동·로컬 완료가 각각 한 번이며 원 key가 유지되어야 한다. `LINKED`와 `ACKED` 표시/다음 입력 guard가 실제 내구 상태와 일치해야 한다.
+- **연결·남은 일:** [CA-C03](contracts.md#ca-c03), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). [transfer_seal 테스트](../../tests/test_transfer_seal.py)의 BND offline fixture를 현장 compact PHS2의 lease 복구 증거로 승계하지 않는다.
+
+<a id="ca-13"></a>
+### CA-13 이벤트 업로드·전송 상태·분석 소비
+
+- **시작·입력:** events CSV를 whole-file snapshot으로 spool/queue에 등록하고 사용자 relay가 HTTPS 업로드한다. [enqueue_completed_source_file](../../direct_sync_runtime.py), [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py)
+- **검증·저장·결과:** 파일 identity·SHA256·바이트/행수·서명·runtime lease와 엄격한 receipt를 확인해 `acked` 처리한다. local-only/시험 사건은 [event_stream_policy](../../event_stream_policy.py)의 경계로 분리한다. 물류 봉인 command ACK와는 다른 전송이다.
+- **실패·취소·재시작:** pause·디스크 압력·stale lease·일시 오류·committed 오류를 구별한다. 재시도 상태와 spool을 보존하며 receipt 검증 전 삭제하지 않는다. 자동 retry와 운영 검토를 혼동하지 않는다.
+- **수용 기준:** 같은 snapshot 재전송이 projection 중복을 만들지 않고, receipt의 행 합계·identity·COMPLETE와 UI 상태가 맞아야 한다. 대시보드 반영은 API/화면 readback을 별도로 확인한다.
+- **연결·남은 일:** [CA-C05](contracts.md#ca-c05), [CA-C07](contracts.md#ca-c07), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 전송 속도·화면 최신성 목표와 운영 측정은 미정이다.
