@@ -37,13 +37,23 @@
 
 Main의 별도 cleanup 지시에 따라 기존 pytest 소유 24개 identity를 확인하고 interpreter 12개를 외부 종료했다. abort 제어의 launcher 재확인 실패는 보존하며, [독립 최종 readback](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/CLEANUP-RESULT.md)이 **24개 부재·descendant closure empty·원래 Explorer 불변**을 입증했다. VM01 정리와 제품 준비도는 별개이고 FULL 재실행·build·설치·통합 수용은 이 작업에서 수행하지 않았다.
 
-### 2026-09-08 VM01 target207 실행 실패와 작은 수정 후보
+### 2026-09-08 VM01 target207 실행 실패와 후속 실행 준비
 
 [실제 실행 보고](E:/KMTech/ca-execution-rp-0908/REPORT.md)는 replay121678/Fast OFF에서 위 동결 `e1db07a9`의 새 Support **8,539개·stable·불일치0**, genuine source481 Stage, 독립 MainStage **13,665개·PROVEN/stable**을 기록한다. 원래 17 selector의 정확한 **207개 ID를 순서대로 수집**했으나 첫 uninstall fixture 두 사례가 임시 packet의 `INSTALL_CANONICAL_PORTABLE.ps1` 수정에서 `PermissionError`로 실패했다. 원래 `--maxfail=2`에 따라 **0 PASS / 2 FAIL / 0 SKIP, 205개 미실행**이며, capability skip 사유는 이번 실행에서 관측되지 않았다. owner/pytest는 자연 종료1, controller/supervisor는 2다. 과거 host204 PASS/3 SKIP을 새 대상 결과로 승계하지 않는다.
 
 실패용 Export는 **45/45개·9,218,869바이트·stable·누락/overflow0**를 보존했다. 독립 [MAIN-Full](E:/KMTech/ca-target-rp-0908/focused/logs/MAIN-Full.json)은 controller의 실제 image 필드가 `null`이어서 `Base controller argv differs`로 **FAILED**이고 `actual=null`이다. 위 207개/2실패 집계는 회수된 collection·phase·JUnit·actual-result의 별도 진단이며 Main 수용값이 아니다. 마지막 02:47:18.8988799Z 표본은 **13,666개 대조 불일치0·원래81 identity inactive·잔여 lane0·recorded child0**다. 조건부 FULL은 시작하지 않았다.
 
-작은 로컬 후보는 [fixture](../../tests/test_zero_touch_installer.py)의 7개 `copy2`를 `copyfile`로 바꾸어 동결 원본 바이트·읽기 전용 속성을 유지하면서 의도적으로 수정하는 임시 복사본만 쓰기 가능하게 한다. [새 회귀](../../tests/test_portable_fixture_source_permissions.py)는 기존 17 selector 밖의 별도 모듈이며 host **RED 1 FAIL → GREEN 1 PASS**, 기존 두 영향 사례도 **2 PASS/31.64초**, 기록 relay6개 부재다. 소스·archive/bundle·소비된 제어 원본은 그대로이며 후보는 미커밋이다. 실제 retained handle에서 image를 조회하는 별도 제어 후보의 PS5/PS7 host 검증도 보고서에 연결한다. 두 후보의 독립 검토·새 입력 결속·새 guest 실행은 Main의 후속 경로이며 **NOT TESTED**, 원래 FULL/보존 FAILED와 **Ready 0/6**은 유지한다.
+작은 수정은 [fixture](../../tests/test_zero_touch_installer.py)의 7개 `copy2`를 `copyfile`로 바꾸어 동결 원본 바이트·읽기 전용 속성을 유지하면서 의도적으로 수정하는 임시 복사본만 쓰기 가능하게 한다. [새 회귀](../../tests/test_portable_fixture_source_permissions.py)는 기존 17 selector 밖의 별도 모듈이며 host **RED 1 FAIL → GREEN 1 PASS**, 실제 다른 바이트로 수정하도록 보강한 최종 회귀도 **1 PASS/0.22초**다. 기존 두 영향 사례는 **2 PASS/31.64초**, 기록 relay6개 부재다. 실제 retained handle에서 image를 조회하는 별도 제어 후보의 PS5/PS7 host 검증도 보고서에 연결하며 기존 source·archive/bundle·소비된 제어와 실패 증거는 보존한다.
+
+Main은 두 수정 방식의 독립 검토를 수용했고, [새 genuine Git 후보](E:/KMTech/ca-execution-rp-0908/successor/SUCCESSOR-MANIFEST.json) `68dd0c520ed2b8bd585301999cb35624702a05a5`/tree `5960560260eb3a6226b419cfa24493c154757be0`의 **482개 blob**을 별도 E 사본에 마감했다. [후속 packet](E:/KMTech/ca-execution-rp-0908/successor/PREPARED-INPUTS.json)은 새 `C:\Qualification\ca207n\s`와 조건부 `C:\Qualification\cafulln\s`에 같은 소스를 결속하고, 기존 실패 lane의 564개 파일 pin·실패 task 결과2·총85개 과거 identity를 보존 조건으로 추가했다. 원래 207개 선택과 FULL `tests`·성공 조건은 유지했고 준비 이후 실제 결과는 아래에 구분한다. 현재 C 저장소 HEAD는 `e1db07a9`이고 수정은 미커밋 상태다. E 후보에는 마감 당시 세 명세도 포함되며 그 뒤의 상태 설명은 별도 문서 차이다.
+
+Main의 후속 배정으로 실행한 `ca207n`의 실제 결과는 **207 PASS / FAIL·ERROR·SKIP 0, 296.59초**다. 원래207 선택·실행 순서·621 phase가 모두 완료됐으며 과거 host3 capability SKIP을 승계하지 않았다. [독립 MAIN-Full](E:/KMTech/ca-execution-rp-0908/successor/packets/focused/logs/MAIN-Full.json)은 **PROVEN/stable**, sourceTestsPassed·controlsPassed·processClosure를 확인했고 14,231개 guest 파일과 기록 child42개 부재를 대조했다. 출력45/45개·9,972,263바이트는 누락0이다. 실제 controller image도 정확한 guest Python 경로로 관측됐다. 이 성공 조건을 Main에 보고한 뒤 별도 `cafulln`의 새 Support·source482 Stage·독립 MainStage가 통과했고 전체 `tests` 실행을 시작했다. **새 FULL 결과는 진행 중**이며 설치·GUI·운영 준비를 뜻하지 않는다. 원래 두 실패 실행과 보존 FAILED, **Ready 0/6**을 유지한다.
+
+### 2026-09-08 긴급 정지 후 재개·정확한 소스 통합
+
+[재개 보고](E:/KMTech/ca-resume-0908/REPORT.md)는 사용자 긴급 정지와 복원을 제품 실패와 구분한다. 실제 C 저장소를 수용된 `68dd0c520ed2b8bd585301999cb35624702a05a5`/tree `5960560260eb3a6226b419cfa24493c154757be0`로 fast-forward했고 기존 두 test 파일이 이 커밋과 일치한다. 이전 작업 트리와 더 최신인 세 상태 문서는 E 사본·범위를 한정한 Git stash로 보존했다. 위의 C HEAD `e1db07a9`·미커밋 설명은 후보 준비 당시 이력이며, 실행에 사용한 E 후보·bundle/archive·제어는 변경하지 않았다.
+
+수용된 focused207은 재실행하지 않았다. 첫 PowerShell Direct 읽기는 실제 시작 `2026-09-08T04:30:44.0534955Z`부터 8분 이상 응답이 없어 정확히 식별한 host 관측기만 종료했다. task/RPC와 파일 읽기를 분리한 후속 진단은 새 guest session 생성이 `04:43:24.5274473Z`까지 반환했으나 파일 전용 `Invoke-Command`가 반환하지 않은 경계를 확인한 뒤 정확한 host 관측기만 종료했다. VM01은 Running·heartbeat 정상이나 **새 FULL 결과는 UNPROVEN**이다. Main은 정확한 소스 통합을 수용했고 회수 경로를 조정 중이다. 사용자가 닫은 원래 host 실행기의 자연 종료·완전한 외부 stream은 입증하지 않으며 대체 metadata를 만들지 않는다. 기존 guest 테스트·host 입력·VM 설정은 건드리지 않았다. 설치·GUI·복구·rollback·실제 통합과 **Ready 0/6**은 별도다.
 
 ## 2. 사용자·제품 경계와 지원 경로
 
