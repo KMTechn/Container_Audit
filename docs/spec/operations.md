@@ -102,3 +102,24 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 | 수신→화면 최신성 | whole-file relay·projection·API·렌더의 분리, `pcs_completed`는 관측 완료 수량 | 허용 지연/업무일·누락 경고·복구 후 따라잡기 시간 미정, live 측정 없음. [CA-C07](contracts.md#ca-c07) |
 
 통신 timeout·poll 간격·retry 지연은 구현 파라미터이고 작업자 응답시간 SLA가 아니다. 성능/복구 목표 확정은 [CA-G01](BACKLOG.md#ca-g01), [CA-G06](BACKLOG.md#ca-g06), 실제 측정·장비·후속 설치 입증은 [CA-G04](BACKLOG.md#ca-g04)가 담당한다.
+
+<a id="ca-o07"></a>
+## CA-O07 2026-09-08 FULL 실패의 환경·fixture 경계
+
+[실패 분석 보고](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/REPORT.md)와 [102개 testcase 색인](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/failure-inventory.tsv)은 원래 VM01 FULL의 회수 원본을 사용한다. 102 FAIL/2,526 PASS/31 SKIP, pytest 자연 종료 1, FULL·일반 export FAILED를 유지한다. forensic 25파일 회수 성공은 정상 export나 qualification PASS가 아니다.
+
+| 관측 | 원인·다음 교정의 범위 |
+|---|---|
+| PS5 출력 81 실패 | [기존 helper](../../tests/powershell_contracts.py)에 UTF-8 producer와 양쪽 stream의 strict consumer를 구현했다. `-File` 대상은 quoted `-Command`에서 원 script scope로 호출하고 native exit·argument·개행을 보존한다. reader thread에서 stream을 잃는 대신 decode 오류가 호출 thread에서 실패한다. locale 추정·ignore/replace·None fallback은 없다. 실제 guest codepage는 여전히 미확인이다. |
+| relay PID 12 실패·24개 잔류 | native base interpreter를 CPython venv launcher 환경으로 직접 실행하며 `os.getpid() == Popen.pid` assertion을 유지한다. context manager가 시작 확인·preimage assertion 전부터 cleanup을 소유하고 초기 relay stdout/stderr를 저장한다. delegated onboarding startup 실패도 소유 child를 종료한다. 원래 VM 잔류 24개와 이번 host child 정리는 별도 근거다. |
+| Git provenance 7 실패 | 원래 `.git`의 HEAD/config만 있는 inventory는 불변이다. 새 E checkout은 genuine main history bundle에서 준비한 commit/object/ref/index와 명시된 fixture/doc 변경을 가지며 기존 7개 사례가 PASS했다. 후보 tree·index 및 커밋 전 상태는 [후보 보고](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/CANDIDATE.md)에 기록한다. 임의 HEAD나 provenance bypass는 없다. |
+| 완료 재시도 일일 집계 1 실패 | 승인된 [clock diff](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/fixture-clock-proposal.patch)를 저장소에 적용해 `date.today()`와 `datetime.now()`를 같은 fixture 시각으로 묶었다. 기존 두 사례는 새 [초기 경계 실행](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/boundary-01/junit.xml)에서 모두 PASS이며 제품 구현·assertion은 동일하다. |
+| exact executable fixture 1 실패 | genuine base executable을 복사·hash 대조하고 archive hash·native PID/image path·wrong-image/hash 거부를 유지한다. identity JSON과 child stdout/stderr를 보존한다. 새 host 경계 사례 PASS는 원래 25개 회수 파일에 없던 내부 실패 사유를 소급 입증하지 않는다. |
+
+Main grant `msg_22a3607bde7e`에 따른 [정리 결과](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/CLEANUP-RESULT.md)는 모든 24개 native handle의 birth/SID/session/executable/command hash·parent 및 unknown descendant 부재를 확인한 뒤 interpreter 12개만 직접 종료했다. 원래 로그 25개와 신선한 before identity를 E에 보존했다. PS5 JSON array admission 실패와 뒤이은 launcher 3988 재확인 실패는 FAILED로 남기고, 별도 PSDirect session의 최종 읽기가 24개 부재·closure empty·원래 Explorer 4184 불변을 확인했다. 새 kill/VM 상태 변경 없이 Main의 VM01 해제 판단으로 넘겼으며 원래 FULL FAILED는 그대로다.
+
+2026-09-08 구현·검증 후보의 실제 범위는 [CANDIDATE](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/CANDIDATE.md)에 연결한다. 초기 경계 14 PASS, authentic Git 7 PASS와 별도로 긴 E root의 PS5 MAX_PATH 실패(첫 계약 실행 176 PASS/7 FAIL/3 capability SKIP, 짧게 조정한 in-root retry 2 FAIL 후 중단)를 보존한다. 첫 실행의 기록된 native relay PID 34개, retry의 4개에 대한 유한 관측은 active owned 0이다. 독립 검토와 승인된 소스 마감은 [ACCEPTANCE](E:/KMTech/ca-rp-0908/ACCEPTANCE.md)로 후속 연결하며, target FULL·installer/backend qualification·VM access는 이번에도 수행하지 않았다.
+
+최종 [short E/Windows venv 실행](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/focused-03.xml)은 **204 PASS / 3 capability SKIP / FAIL·ERROR 0 (207개)**다. 원래 102개 실패 node 중 100 PASS·8.3 alias capability SKIP 2개이며, PID 12개와 Git 7개는 모두 PASS했다. [유한 child 관측](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/focused-03-children.json)은 기록된 relay PID 37개 중 active owned 0이다. 원래 FULL FAILED·guest codepage/원래 exact-artifact 내부 사유 미확인·대상 FULL NOT TESTED를 유지한다.
+
+후속 source는 [SUCCESSOR-MANIFEST](E:/KMTech/ca-rp-0908/SUCCESSOR-MANIFEST.json)의 실제 commit/tree와 genuine Git history bundle·object archive로 식별한다. 원래 bundle/patch/archive와 provider cache는 보존한다. 기존 host 실행과의 차이는 정확히 세 명세 경로의 설명이며 전체 문서를 임의로 실행 입력에서 제외한 판정이 아니다. 원래 child 관측의 세부는 **36 ABSENT·1 PID_REUSED_NOT_OWNED**, active owned 0이며 새 live 관측으로 쓰지 않는다. [TARGET-HANDOFF](E:/KMTech/ca-rp-0908/TARGET-HANDOFF.md)의 실제 pinned venv·PS5/PS7/Git 확인, 짧은 소유 output 경로, 원래 207개 node·capability·child 종료 검증 후 Main이 별도 FULL의 자연 종료·원본 양쪽 stream·export/readback을 수용해야 한다. 새 VM 배정·실행은 Main 소유이며 소스 마감만으로 build·설치·GUI·backend 또는 Ready를 올리지 않는다.

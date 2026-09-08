@@ -10,6 +10,8 @@ import subprocess
 
 import pytest
 
+from tests.powershell_contracts import run_powershell
+
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER = ROOT / "tools" / "container_writer_session.ps1"
 CONTRACT = ROOT / "tools" / "container_writer_session_contract.json"
@@ -74,7 +76,7 @@ def _run_adapter(
 ) -> subprocess.CompletedProcess[str]:
     authority_name = _session_authority_name(arguments) if session_authority else None
     with _held_session_authority(authority_name):
-        return subprocess.run(
+        return run_powershell(
             [
                 _powershell(),
                 "-NoLogo",
@@ -821,7 +823,7 @@ def test_installers_reject_changed_writer_bytes_before_placement(tmp_path, relat
     if caller == "bootstrap":
         result = _run_installer(release, install)
     else:
-        result = subprocess.run([
+        result = run_powershell([
             _powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
             "-File", str(release / "INSTALL_CANONICAL_PORTABLE.ps1"), "-SourceRoot", str(release),
             "-InstallRoot", str(install), "-PlanOnly", "-AllowNoncanonicalLayoutForTest", "-SkipSignatureValidationForTest",

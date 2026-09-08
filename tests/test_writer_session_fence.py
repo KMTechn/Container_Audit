@@ -11,6 +11,8 @@ import threading
 
 import pytest
 
+from tests.powershell_contracts import run_powershell
+
 import writer_session_fence as fence
 
 
@@ -109,7 +111,7 @@ def test_noncanonical_admission_mutex_derivation_matches_winps_for_unicode_roots
         + "'"
         for root in roots
     )
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             str(WINPS),
             "-NoProfile",
@@ -303,7 +305,7 @@ def test_powershell_delegated_operation_requires_exact_live_source_tuple(
             f"-DelegationToken '{token}' -Source '{source}'; "
             "Exit-ContainerWriterAdmission $lease; 'PASS'"
         )
-        return subprocess.run(
+        return run_powershell(
             [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
             text=True,
             capture_output=True,
@@ -756,7 +758,7 @@ if (-not (Test-Path -LiteralPath (Get-ContainerWriterFenceActivePath '{str(contr
 Exit-ContainerWriterSessionAuthority $authority
 'PASS'
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
         text=True,
         capture_output=True,
@@ -801,7 +803,7 @@ try {{
 finally {{ Exit-ContainerWriterSessionAuthority $authority }}
 'PASS'
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
         text=True,
         capture_output=True,
@@ -857,7 +859,7 @@ try {{
 finally {{ Exit-ContainerWriterSessionAuthority $authority }}
 'PASS'
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
         text=True,
         capture_output=True,

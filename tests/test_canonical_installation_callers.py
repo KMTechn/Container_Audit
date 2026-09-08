@@ -13,7 +13,7 @@ from tests.canonical_scheduler_fixture import (
     DURABLE_AUDIT_OBSERVER, PREPLACEMENT_OBSERVER, SCHEDULER_OS,
 )
 from tests.test_canonical_portable_uninstall import (
-    _assert_one_live_relay, _assert_preserved_and_released, _finish, _install,
+    _assert_one_live_relay, _assert_preserved_and_released, _install,
     _launch_relay, _live_preimage, _quote_fixture_executable, _setup, _sha, _tree,
 )
 
@@ -70,10 +70,9 @@ def test_canonical_later_failure_restores_verified_old_tree_through_bound_child(
     text = text.replace(boundary, boundary + "\n    if ($Mode -ceq '--onboard-current-user') { throw 'LATER_PRODUCT_BOUNDARY_FAILURE' }")
     canonical.write_text(text, encoding='utf-8-sig')
     _distinct_replacement(source)
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    assert before['code']['app\\main.py'] != before['source']['app\\main.py']
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        assert before['code']['app\\main.py'] != before['source']['app\\main.py']
         result = _install(tmp_path, env, source, install)
         assert result.returncode != 0
         assert (tmp_path / 'reinstall-audit.json').exists(), result.stderr
@@ -113,8 +112,6 @@ def test_canonical_later_failure_restores_verified_old_tree_through_bound_child(
         assert all(row['fence_active'] is False for row in launches)
         assert current['CommandLine'] == quoted
         assert child.poll() is not None
-    finally:
-        _finish(tmp_path, child)
 
 
 def test_canonical_replacement_crosses_stopped_and_restarted_writer_boundaries(tmp_path):
@@ -138,9 +135,8 @@ else { Get-CanonicalWriterPreimageForQuiesce $install }"""
     text = text.replace(save, '    Move-Item $temp $Path -Force\n' + DURABLE_AUDIT_OBSERVER + '\n}')
     canonical.write_text(text, encoding='utf-8-sig')
     _distinct_replacement(source)
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
         result = _install(tmp_path, env, source, install)
         assert result.returncode == 0, result.stderr
         audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
@@ -187,5 +183,3 @@ else { Get-CanonicalWriterPreimageForQuiesce $install }"""
         assert [row['fence_active'] for row in launches] == [False, True, False]
         assert current['CommandLine'] == json.loads(before['registry'])['data']
         assert child.poll() is not None
-    finally:
-        _finish(tmp_path, child)

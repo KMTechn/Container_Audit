@@ -8,6 +8,8 @@ import zipfile
 
 import pytest
 
+from tests.native_process_fixtures import native_python_executable
+
 from tools.run_test1_exact_artifact import (
     ArtifactIdentityError, launch_exact_artifact, query_process_executable_path, sha256_file,
 )
@@ -19,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_exact_artifact_launch_records_identity_and_blocks_hash_drift(tmp_path):
     executable = tmp_path / "installed" / "python.exe"
     executable.parent.mkdir()
-    shutil.copy2(sys.executable, executable)
+    base_executable = native_python_executable()
+    shutil.copy2(base_executable, executable)
+    assert sha256_file(executable) == sha256_file(base_executable)
     for library in (*Path(sys.base_prefix).glob("python*.dll"), *Path(sys.base_prefix).glob("vcruntime*.dll")):
         shutil.copy2(library, executable.parent / library.name)
     archive = tmp_path / "release.zip"
@@ -55,7 +59,7 @@ def test_exact_artifact_launch_records_identity_and_blocks_hash_drift(tmp_path):
         identity = launch_exact_artifact(**options, evidence_json=evidence)
         recorded = json.loads(evidence.read_text())
         assert identity == recorded
-        assert recorded["status"] == "PASS"
+        assert recorded["status"] == "PASS", recorded
         assert recorded["archive"]["sha256"] == sha256_file(archive)
         assert recorded["archive_member"]["matches_installed_executable"] is True
         assert recorded["installed_executable"]["sha256"] == sha256_file(executable)
@@ -66,10 +70,10 @@ def test_exact_artifact_launch_records_identity_and_blocks_hash_drift(tmp_path):
         assert queried[0][0] == children[0].pid
         assert children[0].poll() == 0
 
-        image[0] = Path(sys.executable)
+        image[0] = base_executable
         with pytest.raises(ArtifactIdentityError, match="OS-reported process executable path"):
             launch_exact_artifact(**options, evidence_json=tmp_path/"wrong-process.json")
-        assert queried[-1][1].resolve() == Path(sys.executable).resolve()
+        assert queried[-1][1].resolve() == base_executable
         assert children[-1].poll() is not None
         assert json.loads((tmp_path/"wrong-process.json").read_text())["status"] == "BLOCKED"
         with pytest.raises(ArtifactIdentityError, match="archive SHA-256 mismatch"):

@@ -5,9 +5,10 @@ import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import shutil
-import subprocess
 
 import pytest
+
+from tests.powershell_contracts import run_powershell
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -36,7 +37,7 @@ def _run_installer(source_root: Path, install_root: Path, *extra: str):
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
     package_helper = source_root / "INSTALL_THIS_PC.ps1"
     installer_path = package_helper if package_helper.is_file() else INSTALLER
-    return subprocess.run(
+    return run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -72,7 +73,7 @@ def _run_restore(
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
     installer_path = install_root / "INSTALL_THIS_PC.ps1"
-    return subprocess.run(
+    return run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -242,7 +243,7 @@ def _private_ca_pem() -> bytes:
 def test_bootstrap_powershell_parses():
     for script in (INSTALLER, PORTABLE_INSTALLER, INTEGRITY_HELPER):
         escaped = str(script).replace("'", "''")
-        completed = subprocess.run(
+        completed = run_powershell(
             [
                 _powershell(),
                 "-NoLogo",
@@ -266,7 +267,7 @@ def test_bootstrap_powershell_parses():
 
 
 def test_direct_production_helper_requires_exact_writer_delegation_before_elevation():
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -299,7 +300,7 @@ def test_direct_production_helper_rejects_well_formed_but_inactive_delegation(
     environment = dict(os.environ)
     environment["LOCALAPPDATA"] = str(tmp_path / "local-app-data")
     writer_fence_sha256 = hashlib.sha256(WRITER_FENCE_HELPER.read_bytes()).hexdigest()
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -388,7 +389,7 @@ catch {
 if ($script:stopCalls -ne 0 -or $script:unregisterCalls -ne 0) { exit 14 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -474,7 +475,7 @@ if ([string]::IsNullOrWhiteSpace($autostartRollbackFailure)) { exit 26 }
 if ($script:saveCalls -ne 1) { exit 27 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -582,7 +583,7 @@ catch {
 if ($script:mutationCalls -ne 0) { exit 22 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -675,7 +676,7 @@ elseif ($failure -cne 'CANONICAL_RELAY_BINDING_MISMATCH') {
     throw "Expected relay binding rejection, got: $failure"
 }
 '''
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False, capture_output=True, text=True, timeout=60, env=environment,
     )
@@ -769,7 +770,7 @@ if ($script:readCalls -ne 4) { exit 20 }
 if ($script:mutationCalls -ne 0) { exit 21 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -816,7 +817,7 @@ if ((Get-CanonicalInstallSuccessStatus $false) -cne 'PASS') { exit 12 }
 if ((Get-CanonicalInstallSuccessStatus $true) -cne 'TEST_ONLY_PARTIAL') { exit 13 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -1107,7 +1108,7 @@ foreach ($path in @(
 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -1183,7 +1184,7 @@ if (Test-JsonPositiveInt32 $payload.string_zero) { exit 18 }
 if (Test-JsonPositiveInt32 $payload.zero_pid) { exit 19 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -1215,7 +1216,7 @@ def test_portable_plan_rejects_stringized_manifest_metrics(tmp_path, metric_fiel
     install = tmp_path / "apps" / "current"
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1297,7 +1298,7 @@ def test_portable_plan_rejects_string_false_public_contract_booleans(
     install = tmp_path / "apps" / "current"
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1389,7 +1390,7 @@ catch {
 if ($script:mutationCalls -ne 0) { exit 16 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1449,7 +1450,7 @@ if ([string]$snapshot.classification -cne 'CANONICAL_ABSENT_NONCANONICAL_DISABLE
 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -1506,7 +1507,7 @@ def test_portable_preflight_failure_removes_prepared_writer_session(tmp_path):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
     environment["LOCALAPPDATA"] = str(local_app_data)
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1548,7 +1549,7 @@ def test_portable_plan_quotes_space_and_unicode_paths_without_registry_mutation(
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
 
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1590,7 +1591,7 @@ def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
 
-    top = subprocess.run(
+    top = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1612,7 +1613,7 @@ def test_portable_scripts_refuse_mixed_executable_and_source_packets(tmp_path):
         timeout=60,
         env=environment,
     )
-    helper = subprocess.run(
+    helper = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1651,7 +1652,7 @@ def test_portable_plan_rejects_wrong_entrypoint_before_mutation(tmp_path):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
 
-    completed = subprocess.run(
+    completed = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1693,7 +1694,7 @@ def test_bootstrap_accepts_portable_tree_and_integrity_readback(tmp_path):
     environment = dict(os.environ)
     environment["KMTECH_TEST_BOOTSTRAP_HELPER"] = str(INTEGRITY_HELPER)
     environment["KMTECH_TEST_PACKAGE_ROOT"] = str(install)
-    verified = subprocess.run(
+    verified = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1932,7 +1933,7 @@ def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(
     environment = dict(os.environ)
     environment["KMTECH_TEST_BOOTSTRAP_HELPER"] = str(INTEGRITY_HELPER)
     environment["KMTECH_TEST_PACKAGE_ROOT"] = str(package)
-    generate = subprocess.run(
+    generate = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1964,7 +1965,7 @@ def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(
     relocated.parent.mkdir()
     shutil.move(str(package), str(relocated))
     environment["KMTECH_TEST_PACKAGE_ROOT"] = str(relocated)
-    verify = subprocess.run(
+    verify = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -1985,7 +1986,7 @@ def test_portable_build_integrity_record_survives_relocation_and_blocks_tamper(
     assert verify.returncode == 0, verify.stderr or verify.stdout
 
     (relocated / "runtime.dll").write_bytes(b"tampered")
-    blocked = subprocess.run(
+    blocked = run_powershell(
         [
             _powershell(),
             "-NoLogo",
@@ -2173,7 +2174,7 @@ if ($script:launches[2].ArgumentList -cne ($prefix + '--onboard-current-user' + 
 if ($script:launches[3].ArgumentList -cne ($prefix + '--remove-current-user-setup' + $appRoot)) { exit 17 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -2240,7 +2241,7 @@ if ((Invoke-Readback '' ([pscustomobject]@{ base_url = 'https://worker.kmtecherp
 if ((Invoke-Readback '' ([pscustomobject]@{ status = 'READY' })) -cne 'ADMITTED') { exit 20 }
 exit 0
 """
-    completed = subprocess.run(
+    completed = run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,
@@ -2255,7 +2256,7 @@ exit 0
 def _run_portable_plan(source: Path, install: Path, *extra: str):
     environment = dict(os.environ)
     environment["KMTECH_FACTORY_INSTALL_TEST_MODE"] = "1"
-    return subprocess.run(
+    return run_powershell(
         [
             _powershell(),
             "-NoLogo",

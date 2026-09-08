@@ -1,5 +1,5 @@
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import importlib
 from types import SimpleNamespace
 
@@ -45,6 +45,11 @@ def fixed_operation_lease_clock(monkeypatch, request):
         def utcnow(cls):
             return cls.fromtimestamp(FIXED_LEASE_NOW.timestamp(), timezone.utc).replace(tzinfo=None)
 
+    class LeaseDate(date):
+        @classmethod
+        def today(cls):
+            return LeaseDatetime.now().date()
+
     modules=[importlib.import_module(name) for name in
              ('terminal_operation_lease','transfer_seal','transfer_member_exchange','phs_label_workflow','tray_state','Container_Audit')]
     for module in [*modules,request.module]:
@@ -54,6 +59,7 @@ def fixed_operation_lease_clock(monkeypatch, request):
         elif getattr(clock,'datetime',None) is datetime:
             proxy=SimpleNamespace(**{name:value for name,value in vars(clock).items() if not name.startswith('__')})
             proxy.datetime=LeaseDatetime
+            proxy.date=LeaseDate
             monkeypatch.setattr(module,'datetime',proxy)
     return FIXED_LEASE_NOW
 

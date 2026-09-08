@@ -21,6 +21,20 @@
 
 [19:16 KST index 분석](E:/KMTech/coordinator-handoff-20260907-01a07992/ca238-index-forensic-prepare/MAIN-FORENSIC.md)의 469개 entry/TREE 동일·stat cache 71개 차이와 별도로, Main은 [현재 유한 비교](E:/KMTech/coordinator-handoff-20260907-01a07992/ca238-current-custody-prepare/MAIN-current-original238-READBACK.json)의 **7,809 guest·24 host 불일치 0**, 지정 identity 57개 inactive·9개 tree·2개 Ready task·원래 desktop 일치를 수용했다. 이는 고정한 집합/시점의 관측이며 지속적 무변경이나 장비 전체 무활동을 입증하지 않는다. 원래 h01/h02 controller·index byte/read-only 보존 및 최초 Main reader는 **FAILED**, 정확한 index writer와 속성 변경 원인은 **UNPROVEN**으로 남긴다. `closureReady`, `inputsPreserved`, `runtimeAcceptance`, `qualification`은 모두 false다. FULL·exact build/freeze·설치 업무·cold boot·재설치·롤백·실제 통합은 **NOT TESTED**이며 Ready를 올리지 않는다. 상세 범위와 다음 단계는 [CA-G07](BACKLOG.md#ca-g07), [KNOWN-GAPS](../../tests/KNOWN-GAPS.md), [중앙 준비도](../../../Program_Spec_Hub/READINESS.md)에 연결한다.
 
+### 2026-09-08 FULL 실패 분석 후속
+
+위 문서 기준선의 미실행 판정과 별도로, clean `11b4ac514f2c5d1bd012b9ac735bb01632f5ad30`에서 시작한 [FULL 실패 분석](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/REPORT.md)은 회수된 원본 JUnit·phase·stdout의 **102 FAILED / 2,526 PASSED / 31 SKIPPED, 총 2,659개**를 대조했다. 원래 pytest는 자연 종료 1이며 FULL·일반 export는 **FAILED**다. 25개 파일의 안정 표본 회수와 13,167개 expected pin 불일치 0은 전체 테스트 성공이 아니다. runtime에 추가된 `utf_8_sig.cpython-312.pyc` 한 파일도 제품 소스 손상으로 판정하지 않는다.
+
+실패는 PS5 출력 decoding 81개, venv relay PID fixture 12개, commit 없는 Git 문맥 7개, 부분 고정 clock 1개, exact-executable fixture 1개로 분류했다. 마지막 fixture의 내부 실패 사유는 아직 **UNPROVEN**이다. 완료 재시도 두 사례는 host의 변경 없는 소스에서 1 FAIL/1 PASS, E의 clock fixture만 수정한 사본에서 2 PASS였으며 제품·assertion 수정이나 실제 서버/GUI 검증은 없다. [운영 근거](operations.md#ca-o07)와 [CA-G08](BACKLOG.md#ca-g08)에 제안·잔여 검증을 구분한다.
+
+후속 [fixture/environment 후보](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/CANDIDATE.md)는 승인된 clock 패치, native Windows interpreter/venv 실행과 첫 assertion 전 cleanup 소유권, base executable 복사, strict UTF-8 PowerShell helper를 구현했다. 제품 코드·PID/hash/진단 수용 조건은 유지한다. 실제 초기 headless 경계 14 PASS와 authentic Git 문맥의 기존 7개 provenance 사례 PASS를 새 근거로 구분하며, 긴 E 경로에서의 계약 실행 실패와 잔여 검증도 후보 보고서에 보존한다. 2026-09-08 replay 계정의 새 검토자가 [독립 소스 수용·마감](E:/KMTech/ca-rp-0908/ACCEPTANCE.md)을 수행했다. 대상 FULL·설치·backend·GUI 검증은 수행하지 않았다.
+
+최종 [short E/Windows venv 실행](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/focused-03.xml)은 **204 PASS / 3 capability SKIP / FAIL·ERROR 0 (207개)**다. 원래 102개 실패 node 중 100 PASS·8.3 alias capability SKIP 2개이며, PID 12개와 Git 7개는 모두 PASS했다. [유한 child 관측](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-fixture-candidate/focused-03-children.json)은 기록된 relay PID 37개 중 active owned 0이다. 원래 FULL FAILED·guest codepage/원래 exact-artifact 내부 사유 미확인·대상 FULL NOT TESTED를 유지한다.
+
+독립 검토는 원래 16경로 patch·후보 tree `6c5bf9bbf66bd3c53b765251c76607215083412c`와 481개 archive blob을 대조했다. focused 실행 후 변경은 위 세 명세의 상태 설명이며 실행한 제품·fixture·test blob은 동일하다. 이번 마감의 추가 변경도 같은 세 명세에 한정하므로 207개 focused 시험을 반복 실행하지 않고 기존 host 근거의 범위를 유지한다. 실제 successor commit/tree·bundle/archive·바이트 비교는 [마감 근거](E:/KMTech/ca-rp-0908/SUCCESSOR-MANIFEST.json), 새 대상의 207개 선택과 별도 FULL 요건은 [대상 인계](E:/KMTech/ca-rp-0908/TARGET-HANDOFF.md)에 연결한다. 소스 마감은 대상 수용이나 운영 준비 상승이 아니며 **Ready 0/6**을 유지한다.
+
+Main의 별도 cleanup 지시에 따라 기존 pytest 소유 24개 identity를 확인하고 interpreter 12개를 외부 종료했다. abort 제어의 launcher 재확인 실패는 보존하며, [독립 최종 readback](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/CLEANUP-RESULT.md)이 **24개 부재·descendant closure empty·원래 Explorer 불변**을 입증했다. VM01 정리와 제품 준비도는 별개이고 FULL 재실행·build·설치·통합 수용은 이 작업에서 수행하지 않았다.
+
 ## 2. 사용자·제품 경계와 지원 경로
 
 이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.
@@ -169,6 +183,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 
 <a id="ca-12"></a>
 ### CA-12 로컬 완료·중앙 봉인·재확인
+
+- **2026-09-08 좁은 후속 검증:** 완료 CSV 재생 후 일일 집계는 `_load_session_state`의 현재 날짜를 따른다. 원래 실패 한 건은 lease fixture가 `datetime.now()`만 9월 6일로 고정하고 `date.today()`를 고정하지 않은 원인으로 좁혔다. 기존 assertion을 유지한 두 사례를 E의 일관된 fixture clock으로 실행한 2 PASS는 [CA-G08](BACKLOG.md#ca-g08)의 headless fixture 제안 근거다. 승인된 patch를 적용한 최종 focused 실행에서도 두 사례가 PASS했고 현장 완료/서버 ACK 성공의 증거는 아니다.
 
 - **시작·입력:** [CA-07](#ca-07)의 전량·lease 검증을 만족한 트레이. 고정 작업 시각·작업자·멱등 키·member/version 문맥을 사용한다. [complete_tray](../../Container_Audit.py), [TransferSealStore.prepare / bind_command / confirm_completion_checkpoint](../../transfer_seal.py)
 - **검증·저장·결과:** SQLite intent와 `LINKED` 기록, GUI 완료 checkpoint를 확인한 뒤 불변 명령을 보낸다. `TRAY_COMPLETE`는 동기 내구 기록을 사용한다. `ACKED`는 중앙 receipt 검증 결과이며 로컬 완료 ID와 별개다.

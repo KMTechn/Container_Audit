@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.powershell_contracts import run_powershell
+
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALLER = ROOT / "INSTALL_THIS_PC.ps1"
@@ -24,7 +26,7 @@ def _powershell() -> str:
 def _run_powershell(
     command: str, environment: dict[str, str]
 ) -> subprocess.CompletedProcess:
-    return subprocess.run(
+    return run_powershell(
         [_powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
         check=False,
         capture_output=True,

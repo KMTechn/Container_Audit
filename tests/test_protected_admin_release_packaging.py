@@ -4,10 +4,11 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import zipfile
 
 import pytest
+
+from tests.powershell_contracts import run_powershell
 
 import update_service
 from tests.native_process_fixtures import native_argument_recorder
@@ -51,7 +52,7 @@ def _run(wrapper, tmp_path, *arguments, exit_code=0):
     receipt = tmp_path / 'arguments.json'
     env = dict(os.environ, CA_ARGUMENT_RECEIPT=str(receipt), CA_ARGUMENT_EXIT_CODE=str(exit_code))
     powershell = Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    result = subprocess.run([str(powershell), '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(wrapper), *arguments],
+    result = run_powershell([str(powershell), '-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', str(wrapper), *arguments],
                             env=env, cwd=tmp_path, capture_output=True, text=True, timeout=20)
     return result, json.loads(receipt.read_text()) if receipt.exists() else None
 

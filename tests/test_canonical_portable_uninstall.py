@@ -6,6 +6,7 @@ identity, session authority, delegation, and code removal/recovery are real.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -19,6 +20,8 @@ import uuid
 import pytest
 
 from tests.test_zero_touch_installer import _portable_release_fixture, _powershell
+from tests.native_process_fixtures import native_python_environment, native_python_executable
+from tests.powershell_contracts import run_powershell
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -99,18 +102,28 @@ else:
         registry.write_text(json.dumps({'exists': True, 'kind': 'String', 'data': command}))
     def launch(arguments):
         environment = dict(os.environ)
+        environment['__PYVENV_LAUNCHER__'] = environment['CA_UNINSTALL_VENV_LAUNCHER']
         environment['CA_UNINSTALL_LAUNCH_EXECUTABLE'] = arguments[0]
         environment['CA_UNINSTALL_LAUNCH_COMMAND'] = subprocess.list2cmdline(arguments)
         child = subprocess.Popen(
             [os.environ['CA_UNINSTALL_PYTHON'], '-I', '-B', __file__, 'relay'],
             env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and child.poll() is None:
-            if (root / 'relay.ready').exists() and int((root / 'relay.pid').read_text()) == child.pid:
-                return child.pid
-            time.sleep(.05)
-        raise AssertionError('delegated onboarding relay did not start')
+        try:
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline and child.poll() is None:
+                if (root / 'relay.ready').exists() and int((root / 'relay.pid').read_text()) == child.pid:
+                    return child.pid
+                time.sleep(.05)
+            raise AssertionError('delegated onboarding relay did not start')
+        except BaseException:
+            (root / 'finish').touch()
+            try:
+                child.wait(timeout=12)
+            except subprocess.TimeoutExpired:
+                child.terminate()
+                child.wait(timeout=5)
+            raise
     def relay_launcher(selected_app):
         result = user_relay.start_user_relay_process(selected_app, launcher=launch)
         result['process_id'] = result.pop('launcher_result')
@@ -201,7 +214,7 @@ function Get-CimInstance {
 
 
 def _ps(path, env, *args):
-    return subprocess.run(
+    return run_powershell(
         [_powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
          '-ExecutionPolicy', 'Bypass', '-File', str(path), *args],
         env=env, capture_output=True, text=True, timeout=90,
@@ -209,14 +222,15 @@ def _ps(path, env, *args):
 
 
 def _setup(tmp_path, fault=''):
-    env = os.environ.copy()
+    env = native_python_environment()
     for name in ('LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA', 'TEMP', 'TMP'):
         target = tmp_path / name
         target.mkdir()
         env[name] = str(target)
     env.update(PYTHONDONTWRITEBYTECODE='1', KMTECH_FACTORY_INSTALL_TEST_MODE='1',
                CA_UNINSTALL_REPO=str(ROOT), CA_UNINSTALL_ROOT=str(tmp_path),
-               CA_UNINSTALL_PYTHON=sys.executable,
+               CA_UNINSTALL_PYTHON=str(native_python_executable()),
+               CA_UNINSTALL_VENV_LAUNCHER=sys.executable,
                CA_UNINSTALL_MUTEX='Local\\Container.UninstallTest.' + uuid.uuid4().hex)
     env['PSModulePath'] = str(Path(os.environ['SystemRoot']) / 'System32/WindowsPowerShell/v1.0/Modules')
     env.pop('CONTAINER_AUDIT_DATA_ROOT', None)
@@ -292,14 +306,20 @@ def _setup(tmp_path, fault=''):
     return env, source, install, protected
 
 
+@contextmanager
 def _launch_relay(tmp_path, env):
-    child = subprocess.Popen([sys.executable, '-I', '-B', env['CA_UNINSTALL_HOST'], 'relay'],
-                             env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.monotonic() + 10
-    while not (tmp_path / 'relay.ready').exists() and child.poll() is None and time.monotonic() < deadline:
-        time.sleep(.05)
-    assert (tmp_path / 'relay.ready').exists(), 'isolated relay did not start'
-    return child
+    with (tmp_path / 'relay.stdout').open('xb') as stdout, (tmp_path / 'relay.stderr').open('xb') as stderr:
+        child = subprocess.Popen([env['CA_UNINSTALL_PYTHON'], '-I', '-B', env['CA_UNINSTALL_HOST'], 'relay'],
+                                 env=env, stdout=stdout, stderr=stderr,
+                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / 'relay.ready').exists() and child.poll() is None and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert (tmp_path / 'relay.ready').exists(), 'isolated relay did not start; see relay.stderr'
+        yield child
+    finally:
+        _finish(tmp_path, child)
 
 
 def _finish(tmp_path, child):
@@ -410,9 +430,8 @@ def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
     quoted = _quote_fixture_executable(env)
     canonical_registry = (tmp_path / 'registry.json').read_bytes()
     assert json.loads(canonical_registry)['data'] != quoted
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
         if operation == 'uninstall_then_reinstall':
             result = _run(tmp_path, env, source, install)
             if 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr:
@@ -446,8 +465,6 @@ def test_quoted_live_relay_uninstall_and_reinstall(tmp_path, operation):
         assert calls.count('--onboard-current-user') == 1
         assert calls.count('--remove-current-user-setup') == (2 if operation == 'uninstall_then_reinstall' else 1)
         assert (tmp_path/'preimage-readback.log').read_text(encoding='utf-8-sig').splitlines() == calls
-    finally:
-        _finish(tmp_path, child)
 
 
 @pytest.mark.parametrize('difference', [
@@ -467,16 +484,13 @@ def test_live_relay_command_difference_rejected_before_mutation(tmp_path, differ
     env['CA_UNINSTALL_LAUNCH_COMMAND'] = commands[difference]
     if difference == 'executable':
         env['CA_UNINSTALL_LAUNCH_EXECUTABLE'] = env['CA_UNINSTALL_LAUNCH_EXECUTABLE'].replace('pythonw.exe', 'python.exe')
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
         result = _run(tmp_path, env, source, install)
         _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
         _assert_preserved_and_released(env, protected)
         launches, _ = _assert_one_live_relay(tmp_path, env)
         assert len(launches) == 1
-    finally:
-        _finish(tmp_path, child)
 
 
 def test_incompatible_installed_writer_identity_is_rejected_before_fence_or_relay_mutation(tmp_path):
@@ -496,9 +510,8 @@ def test_incompatible_installed_writer_identity_is_rejected_before_fence_or_rela
     refreshed = _ps(tmp_path/'record.ps1', env)
     assert refreshed.returncode == 0, refreshed.stderr
     _quote_fixture_executable(env)
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
         result = _install(tmp_path, env, source, install)
         assert result.returncode != 0
         assert child.poll() is None
@@ -509,16 +522,13 @@ def test_incompatible_installed_writer_identity_is_rejected_before_fence_or_rela
         assert not (tmp_path/'reinstall-audit.json').exists()
         assert 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER' in result.stderr
         _assert_preserved_and_released(env, protected)
-    finally:
-        _finish(tmp_path, child)
 
 
 def test_quoted_live_relay_post_removal_rollback_preserves_raw_command(tmp_path):
     env, source, install, protected = _setup(tmp_path, 'after_removal')
     quoted = _quote_fixture_executable(env)
-    child = _launch_relay(tmp_path, env)
-    before = _live_preimage(tmp_path, env, source, install, child)
-    try:
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
         result = _run(tmp_path, env, source, install)
         if 'CANONICAL_RELAY_BINDING_MISMATCH' in result.stderr:
             _assert_binding_rejection_untouched(tmp_path, env, source, install, child, before, result)
@@ -537,8 +547,6 @@ def test_quoted_live_relay_post_removal_rollback_preserves_raw_command(tmp_path)
         assert all(row['CommandLine'] == quoted for row in launches)
         assert all(row['ExecutablePath'] == before['observation']['ExecutablePath'] for row in launches)
         assert all(row['fence_active'] is False for row in launches)
-    finally:
-        _finish(tmp_path, child)
 
 
 @pytest.mark.parametrize('scenario', ['success', 'partial', 'refusal', 'forged', 'interactive',
@@ -550,8 +558,7 @@ def test_normal_uninstall_real_removal_and_exact_recovery(tmp_path, scenario):
         env['CA_UNINSTALL_REFUSE'] = '1'
     if scenario == 'interactive':
         env['CA_UNINSTALL_INTERACTIVE'] = '1'
-    child = _launch_relay(tmp_path, env)
-    try:
+    with _launch_relay(tmp_path, env) as child:
         result = _run(tmp_path, env, source, install)
         control = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/control'
         assert all(p.read_bytes() == b'protected-fixture-must-be-preserved' for p in protected)
@@ -592,8 +599,6 @@ def test_normal_uninstall_real_removal_and_exact_recovery(tmp_path, scenario):
             if scenario == 'refusal':
                 assert child.poll() is None, 'refusing original relay was terminated'
         assert _tree(source) == {k: v for k, v in original.items() if k != 'bootstrap-integrity.json'}
-    finally:
-        _finish(tmp_path, child)
 
 
 @pytest.mark.parametrize('scenario', ['tampered_code', 'missing_record', 'foreign_registry', 'missing_target', 'old_manifest'])
