@@ -188,11 +188,18 @@ function Test-BootstrapSamePath([string]$Left, [string]$Right) {
     )
 }
 
-function Assert-BootstrapNoReparsePoint([string]$Path, [string]$Purpose) {
+function Assert-BootstrapNoReparsePoint([string]$Path, [string]$Purpose, [switch]$PathOnly) {
     $root = Get-StrictFullPath $Path $Purpose
     if (-not (Test-Path -LiteralPath $root)) { throw "$Purpose is unavailable." }
     $items = @((Get-Item -LiteralPath $root -Force -ErrorAction Stop))
-    if ($items[0].PSIsContainer) {
+    $ancestor = Split-Path -Parent $root
+    while ($ancestor) {
+        $items += Get-Item -LiteralPath $ancestor -Force -ErrorAction Stop
+        $next = Split-Path -Parent $ancestor
+        if ($next -eq $ancestor) { break }
+        $ancestor = $next
+    }
+    if (-not $PathOnly -and $items[0].PSIsContainer) {
         $items += @(Get-ChildItem -LiteralPath $root -Force -Recurse -ErrorAction Stop)
     }
     foreach ($item in $items) {
@@ -356,7 +363,7 @@ function Write-BootstrapReplacementReceipt(
     $full = Get-StrictFullPath $Path 'replacement receipt path'
     $parent = Split-Path -Parent $full
     New-Item -ItemType Directory -Path $parent -Force | Out-Null
-    Assert-BootstrapNoReparsePoint $parent 'replacement receipt parent'
+    Assert-BootstrapNoReparsePoint $parent 'replacement receipt parent' -PathOnly
     if ((Test-Path -LiteralPath $full) -and -not $AllowReplace.IsPresent) {
         throw 'Replacement receipt path already exists.'
     }
@@ -391,14 +398,13 @@ function Read-BootstrapReplacementReceipt(
     catch { throw 'Replacement receipt JSON is invalid.' }
 }
 
-function Invoke-BootstrapVerifiedReplacementRestore(
+function Get-BootstrapVerifiedReplacementRestoreState(
     $Receipt,
     [string]$ReceiptPath,
     [string]$InstallRoot,
     [string]$ExpectedAppId,
     [string]$ExpectedTransactionId,
-    [string]$ExpectedHelperSha256,
-    [switch]$InjectFailureAfterDisplace
+    [string]$ExpectedHelperSha256
 ) {
     $current = Get-StrictFullPath $InstallRoot 'restore current root'
     $parent = Get-StrictFullPath (Split-Path -Parent $current) 'restore parent'
@@ -416,12 +422,13 @@ function Invoke-BootstrapVerifiedReplacementRestore(
         -not (Test-BootstrapSamePath ([string]$Receipt.install_parent) $parent) -or
         -not (Test-BootstrapSamePath (Split-Path -Parent $rollback) $parent) -or
         -not (Test-BootstrapSamePath (Split-Path -Parent $failed) $parent) -or
-        [IO.Path]::GetFileName($rollback) -cnotmatch '^\.current\.rollback\.[0-9a-f]{32}$' -or
+        $ExpectedTransactionId -cnotmatch '^[0-9a-f]{32}$' -or
+        [IO.Path]::GetFileName($rollback) -cne ".current.rollback.$ExpectedTransactionId" -or
         [IO.Path]::GetFileName($failed) -cne ".current.failed.$ExpectedTransactionId"
     ) {
         throw 'Replacement receipt identity or path binding is invalid.'
     }
-    Assert-BootstrapNoReparsePoint $parent 'replacement restore parent'
+    Assert-BootstrapNoReparsePoint $parent 'replacement restore parent' -PathOnly
     $parentAcl = Get-BootstrapAclIdentity $parent
     if (
         [string]$Receipt.parent_acl.owner_sid -cne [string]$parentAcl.owner_sid -or
@@ -430,13 +437,12 @@ function Invoke-BootstrapVerifiedReplacementRestore(
         $Receipt.parent_acl.access_rules_protected -ne $parentAcl.access_rules_protected -or
         [string]$Receipt.parent_acl.sddl_sha256 -cne [string]$parentAcl.sddl_sha256
     ) { throw 'Replacement restore parent ACL identity differs.' }
-    $siblings = @(Get-ChildItem -LiteralPath $parent -Directory -Force | Where-Object {
-        $_.Name -match '^\.current\.(rollback|failed)\.'
-    } | ForEach-Object { $_.FullName })
-    $allowed = @($rollback, $failed | Where-Object { Test-Path -LiteralPath $_ -PathType Container })
-    foreach ($sibling in $siblings) {
-        if (@($allowed | Where-Object { Test-BootstrapSamePath $_ $sibling }).Count -ne 1) {
-            throw 'An unrelated replacement sibling makes restore ambiguous.'
+    # Only the receipt-selected trees participate in this transaction. Retained
+    # history is neither read nor moved; each selected tree is checked recursively.
+    foreach ($selected in @($current, $rollback, $failed)) {
+        if ((Test-Path -LiteralPath $selected) -and
+            -not (Test-Path -LiteralPath $selected -PathType Container)) {
+            throw 'Replacement restore selected path is not a directory.'
         }
     }
 
@@ -455,7 +461,34 @@ function Invoke-BootstrapVerifiedReplacementRestore(
     $restored = $currentExists -and -not $rollbackExists -and $failedExists -and
         (Test-BootstrapReplacementTreeIdentity $Receipt.old $currentIdentity) -and
         (Test-BootstrapReplacementTreeIdentity $Receipt.new $failedIdentity)
-    if ($restored) {
+    if (-not $pending -and -not $displaced -and -not $restored) {
+        throw 'Replacement restore state is ambiguous or drifted.'
+    }
+    return [pscustomobject][ordered]@{
+        status = if ($restored) { 'RESTORED' } elseif ($pending) { 'PENDING' } else { 'DISPLACED' }
+        install_root = $current
+        rollback_root = $rollback
+        failed_new_root = $failed
+    }
+}
+
+function Invoke-BootstrapVerifiedReplacementRestore(
+    $Receipt,
+    [string]$ReceiptPath,
+    [string]$InstallRoot,
+    [string]$ExpectedAppId,
+    [string]$ExpectedTransactionId,
+    [string]$ExpectedHelperSha256,
+    [switch]$InjectFailureAfterDisplace
+) {
+    $state = Get-BootstrapVerifiedReplacementRestoreState `
+        -Receipt $Receipt -ReceiptPath $ReceiptPath -InstallRoot $InstallRoot `
+        -ExpectedAppId $ExpectedAppId -ExpectedTransactionId $ExpectedTransactionId `
+        -ExpectedHelperSha256 $ExpectedHelperSha256
+    $current = [string]$state.install_root
+    $rollback = [string]$state.rollback_root
+    $failed = [string]$state.failed_new_root
+    if ([string]$state.status -ceq 'RESTORED') {
         return [pscustomobject][ordered]@{
             status = 'ALREADY_RESTORED'
             install_root = $current
@@ -464,11 +497,8 @@ function Invoke-BootstrapVerifiedReplacementRestore(
             failed_new_preserved = $true
         }
     }
-    if (-not $pending -and -not $displaced) {
-        throw 'Replacement restore state is ambiguous or drifted.'
-    }
     try {
-        if ($pending) { Move-Item -LiteralPath $current -Destination $failed -ErrorAction Stop }
+        if ([string]$state.status -ceq 'PENDING') { Move-Item -LiteralPath $current -Destination $failed -ErrorAction Stop }
         if ($InjectFailureAfterDisplace.IsPresent) { throw 'Injected restore failure after current displacement.' }
         Move-Item -LiteralPath $rollback -Destination $current -ErrorAction Stop
         $restoredOld = Get-BootstrapReplacementTreeIdentity $current $current

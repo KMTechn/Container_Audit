@@ -70,7 +70,9 @@ Main이 기존 source 공개키와 CPython3.12.10 x64 경로를 배정한 뒤 �
 
 실제 ordinary GUI에서 작업자 등록·작업 시작은 성공했다. 첫 PHS2는 NG 소유 구성원이 섞인 work group 때문에07:17:05Z `PHS_WORK_GROUP_SOURCE_NOT_AVAILABLE`로 거부되어 내구 `LOOKUP_FAILED` hold를 남겼다. Main이 승인한 QA용 정상 보호 관리자 설정·GUI 인증 후 제품의 격리 경로로 원본 hash를 유지했다. 유효한 case02는 ordinary worker로 목표2·부분 제출 거부·중복 거부·보류/정상 앱 재시작/동일 snapshot 복원을 통과하고 정확한2개 GOOD로 로컬 `TRAY_COMPLETE`/`LINKED`를 기록했다. 실제 seal은07:46:27Z Web 전역 JSON validator의 `INVALID_INPUT`으로 `OPERATOR_REVIEW`/attempt1이며 중앙 ACK가 없다. 이벤트 업로드의 성공과 별개다.
 
-case03·seal 정상 후속·cold boot·제거/재설치·exact rollback은 미완료다. 새 code가 남는 첫 실패의 상태 혼동은 현재 source `35a0883`에서 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 경고로 바로잡고 신규 fresh 실패 회귀1·기존 교체 복원 회귀1 및 기존 inventory check PASS를 확인했다. 동결 ZIP·설치본에는 이 수정이 포함되지 않으며 과거 full 결과를 수정 소스에 승계하지 않는다. [계약](contracts.md#ca-c10), [환경·명령·복원 범위](operations.md#ca-o09), [CA-G09](BACKLOG.md#ca-g09). 종합 Ready 판정은 Main의 별도 수용이다.
+새 code가 남는 첫 실패의 상태 혼동은 source `35a0883`에서 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 경고로 바로잡고 신규 fresh 실패 회귀1·기존 교체 복원 회귀1 및 기존 inventory check PASS를 확인했다. 원래 frozen68dd ZIP에는 이 수정이 없으며 과거 full 결과를 수정 소스에 승계하지 않는다.
+
+**09:31Z 후속:** 관리자 재시도와 inventory pin 수정이 포함된 별도 source `a7d714f6` 후보는 같은 guest의 정상 canonical 교체로08:49:23Z PASS/REPLACED_VERIFIED다. 실제 관리자 메뉴에서 case02 원 명령을09:21:22Z 재전송해 **ACKED/attempt2**, 원 완료 시각·명령 hash·로컬 완료1·검토 이력1을 유지했다. [Web 독립 조회](E:/KMTech/web-integration-20260908/ca-original-retry-central-readback.json)는 중앙 receipt1·원 lease 소비·같은2개 구성원을 확인했고 Main 수용 뒤 Label에 정상 생성 QR 파일과 bundle 소유를 인계했다. 새 case04는 목표3·일반 취소/재스캔·전량 완료 후 **ACKED/attempt1**이며 [로컬 두 영수증](E:/KMTech/ca-install-qualification-20260908/case04-seal-public-results-02.jsonl)과 [일반 완료 화면](E:/KMTech/ca-install-qualification-20260908/guest-case04-complete.png)을 보존했다. case03은 미착수 만료 lease와 정상 보류 자료를 유지하며 Main이 조정 custody를 맡는다. cold boot·제거/재설치·적용 가능한 exact rollback은 계속 검증 중이다. [계약](contracts.md#ca-c10), [환경·명령·복원 범위](operations.md#ca-o09), [CA-G09](BACKLOG.md#ca-g09). 종합 Ready 판정은 Main의 별도 수용이다.
 
 ## 2. 사용자·제품 경계와 지원 경로
 
@@ -199,6 +201,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **실패·취소·재시작:** 손상/불일치 상태는 격리·defer 경로로 보존하며 임의 빈 트레이로 대체하지 않는다. 원본 보류 삭제 전에 복원 내구 경계를 확인한다.
 - **수용 기준:** 보류→종료→복원이 barcode·순서·소유권을 유지하고, 어느 쓰기 단계에서 종료해도 유일한 원본을 잃거나 이중 활성 트레이를 만들지 않아야 한다.
 - **실제 관측:** [case02 정상 앱 재시작](E:/KMTech/ca-install-qualification-20260908/case02-restarted-before-restore.txt)에서 1/2 상태의 parked JSON은 같은 hash로 남았고, [복원](E:/KMTech/ca-install-qualification-20260908/case02-restored-summary.txt)은 동일 snapshot을 current로 옮겼다. 이 결과는 임의 시점 강제 종료·OS cold boot까지 증명하지 않는다.
+- **별도 a7 lifecycle 관측:**09:39 cold boot 자동 relay 시작과09:53 정상 uninstall/reinstall 뒤 업무9·identity3 자료의 hash 보존 및 ordinary worker 화면 완료2·보류1·대기0을 확인했다. 당시 보류는 case03 미착수0스캔1152B이고 case02/04는 ACKED다. [CA-O09](operations.md#ca-o09)의 source/OS/시점별 범위를 유지하며 임의 crash나 새 공개 코드 rollback의 실제 PASS로 합치지 않는다.
 - **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). CSV만으로는 이 복구 상태를 재구성할 수 없다.
 
 <a id="ca-10"></a>
@@ -222,7 +225,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-12"></a>
 ### CA-12 로컬 완료·중앙 봉인·재확인
 
-- **2026-09-08 승인된 source 후속:** frozen 설치의 bound `OPERATOR_REVIEW`에는 정상 재전송 동작이 없었다. Main `msg_9d5415ea3be1`에 따라 운영 메뉴의 관리자 확인 재시도를 구현했다. 활성 트레이가 없는 인증된 관리자만 기존 요청 한 건을 확인하고, 동기 local-only 감사 기록 뒤 같은 command/key/lease/완료 시각을 재전송한다. 실패는 계속 검토 상태이며 자동 재시도에 편입하지 않는다. 실제 변경 후보 설치·GUI·중앙 ACK 검증은 아직 실행 전이다. [회귀](../../tests/test_supervisor_transfer_review_retry.py), [계약](contracts.md#ca-c03), [CA-G09](BACKLOG.md#ca-g09).
+- **2026-09-08 승인된 source 후속:** frozen 설치의 bound `OPERATOR_REVIEW`에는 정상 재전송 동작이 없었다. Main `msg_9d5415ea3be1`에 따라 운영 메뉴의 관리자 확인 재시도를 구현했다. 활성 트레이가 없는 인증된 관리자만 기존 요청 한 건을 확인하고, 동기 local-only 감사 기록 뒤 같은 command/key/lease/완료 시각을 재전송한다. 실패는 계속 검토 상태이며 자동 재시도에 편입하지 않는다. 수정 후보 `a7d714f6`는 같은 guest에서 정상 canonical `REPLACED_VERIFIED`/exit0이며, 실제 보호 관리자 메뉴와 원래 case02 품목/수량2/작업자 확인창을 관측했다. 중앙 ACK는 아직 미검증이다. [회귀](../../tests/test_supervisor_transfer_review_retry.py), [계약](contracts.md#ca-c03), [CA-G09](BACKLOG.md#ca-g09).
 
 - **2026-09-08 좁은 후속 검증:** 완료 CSV 재생 후 일일 집계는 `_load_session_state`의 현재 날짜를 따른다. 원래 실패 한 건은 lease fixture가 `datetime.now()`만 9월 6일로 고정하고 `date.today()`를 고정하지 않은 원인으로 좁혔다. 기존 assertion을 유지한 두 사례를 E의 일관된 fixture clock으로 실행한 2 PASS는 [CA-G08](BACKLOG.md#ca-g08)의 headless fixture 제안 근거다. 승인된 patch를 적용한 최종 focused 실행에서도 두 사례가 PASS했고 현장 완료/서버 ACK 성공의 증거는 아니다.
 
@@ -231,6 +234,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **실패·취소·재시작:** local completion ID도 ACK도 없는 트레이는 잠근다. 이미 `LINKED`인 작업의 중앙 지연/검토가 로컬 완료를 취소하지 않는다. 응답 유실은 원 key receipt 조회·재전송, 영구 충돌은 `OPERATOR_REVIEW`, 로컬 이벤트 실패는 `LOCAL_EVENT_RETRY`로 구별한다. [TransferSealCoordinator.attempt](../../transfer_seal.py), `complete_tray`
 - **수용 기준:** lease→intent→checkpoint→중앙 receipt→CSV→화면의 각각을 관측하고, 재시작/응답 유실에서 중앙 이동·로컬 완료가 각각 한 번이며 원 key가 유지되어야 한다. `LINKED`와 `ACKED` 표시/다음 입력 guard가 실제 내구 상태와 일치해야 한다.
 - **연결·남은 일:** [CA-C03](contracts.md#ca-c03), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). [transfer_seal 테스트](../../tests/test_transfer_seal.py)의 BND offline fixture를 현장 compact PHS2의 lease 복구 증거로 승계하지 않는다.
+- **실제 설치본 후속:** `a7d714f6`/개발 backend `c0c0d51`에서 원 case02의 정상 관리자 감사 재시도는09:21:22Z ACKED/attempt2, 새 case04의 일반 GOOD3 완료는09:25:36Z ACKED/attempt1이다. 각각 로컬 LINKED1이며 원 case02의 기존 review1·명령·완료 시각은 유지됐다. 중앙 case02 receipt1의 독립 조회와 downstream 인계는 [CA-O09](operations.md#ca-o09), 이후 OS/설치 복구는 별도 판정이다.
 
 <a id="ca-13"></a>
 ### CA-13 이벤트 업로드·전송 상태·분석 소비

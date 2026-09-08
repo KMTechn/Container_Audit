@@ -6,6 +6,9 @@ param(
     [string]$ServerBaseUrl = "",
     [switch]$PlanOnly,
     [switch]$Uninstall,
+    [switch]$RestoreVerifiedReplacement,
+    [string]$RestoreReceiptPath = "",
+    [string]$RestoreReceiptSha256 = "",
     [switch]$AllowNoncanonicalLayoutForTest,
     [switch]$SkipSignatureValidationForTest
 )
@@ -858,6 +861,38 @@ function ShaText([string]$Value) {
     }
     finally { $hash.Dispose() }
 }
+function Read-CanonicalReplacementRestore {
+    $receipt = Read-BootstrapReplacementReceipt $restoreReceiptFull $RestoreReceiptSha256
+    $receipt = ReadReplacementReceipt `
+        -Path $restoreReceiptFull -ExpectedTransactionId ([string]$receipt.transaction_id) `
+        -ExpectedInstallRoot $install -ExpectedSourceManifest $sourceManifest `
+        -ExpectedManifestSha256 $sourceManifestSha256 -ExpectedHelperSha256 $sourceHelperSha256 `
+        -ExpectedIntegrityHelperSha256 $sourceIntegrityHelperSha256
+    if ((Sha $restoreReceiptFull) -cne $RestoreReceiptSha256) {
+        throw 'Replacement receipt changed during canonical readback.'
+    }
+    $state = Get-BootstrapVerifiedReplacementRestoreState `
+        -Receipt $receipt -ReceiptPath $restoreReceiptFull -InstallRoot $install `
+        -ExpectedAppId 'container_audit' -ExpectedTransactionId ([string]$receipt.transaction_id) `
+        -ExpectedHelperSha256 $sourceHelperSha256
+    if ([string]$state.status -cnotin @('PENDING','RESTORED')) {
+        throw 'Canonical restore requires a verified current tree for normal runtime quiescence.'
+    }
+    $oldRoot = if ([string]$state.status -ceq 'PENDING') { [string]$state.rollback_root } else { $install }
+    $oldManifest = InstalledManifest $oldRoot $SkipSignatureValidationForTest
+    $oldInventory = Assert-WriterSinkInventory `
+        (Join-Path $oldRoot 'tools\container_writer_sink_inventory.json') `
+        ([string]$oldManifest.writer_sink_inventory_sha256) `
+        ([string]$oldManifest.writer_sink_inventory_contract_sha256)
+    if ((Get-WriterInventorySemantics $oldInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+        throw 'CODE_RESTORE_WRITER_SEMANTICS_DIFFER'
+    }
+    return [pscustomobject]@{
+        receipt=$receipt
+        state=[string]$state.status
+        old_inventory_sha256=[string]$oldManifest.writer_sink_inventory_contract_sha256
+    }
+}
 function FileObservation([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
         return [ordered]@{ exists=$false; path=$Path; bytes=0; mtime_utc=''; sha256='' }
@@ -1213,6 +1248,15 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
 }
 
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
+if ($RestoreVerifiedReplacement) {
+    if ($Uninstall -or $ServerBaseUrl -or -not $RestoreReceiptPath -or
+        $RestoreReceiptSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'Canonical restore requires an exact receipt path/hash and cannot combine install or uninstall options.'
+    }
+}
+elseif ($RestoreReceiptPath -or $RestoreReceiptSha256) {
+    throw 'Restore receipt arguments require -RestoreVerifiedReplacement.'
+}
 $source = Full $SourceRoot 'SourceRoot'; $install = Full $InstallRoot 'InstallRoot'
 $SourceRoot = $source
 if (-not $testMode -and -not (Same $install $CanonicalRoot)) { throw 'InstallRoot is not canonical.' }
@@ -1236,6 +1280,7 @@ $wanted = Command $install
 if ($PlanOnly) {
     "install_status=PLAN_ONLY"
     if ($Uninstall) { 'operation=UNINSTALL'; 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' }
+    if ($RestoreVerifiedReplacement) { 'operation=RESTORE_VERIFIED_REPLACEMENT'; 'restore_identity_status=NOT_CHECKED_PLAN_ONLY' }
     "install_root=$install"
     "autostart_command=$wanted"
     "onboarding_server_base_url=$onboardingServerBaseUrlLabel"
@@ -1262,6 +1307,19 @@ if (Test-Path -LiteralPath $install -PathType Container) {
     }
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
+if ($RestoreVerifiedReplacement) {
+    $codeParent = Split-Path -Parent $install
+    $restoreReceiptFull = Full $RestoreReceiptPath 'RestoreReceiptPath'
+    foreach ($external in @($source, $lad, $restoreReceiptFull)) {
+        if ((Same $external $codeParent) -or
+            $external.StartsWith($codeParent + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Canonical restore requires source, receipt and user data outside the code parent.'
+        }
+    }
+    # This preflight is read-only and is repeated under fresh ownership before
+    # quiescence. No prepared receipt or authority from the old install is reused.
+    $publicRestore = Read-CanonicalReplacementRestore
+}
 if ($Uninstall) {
     foreach ($pair in @(@($source, $install), @($lad, $install), @($source, $lad))) {
         if ((Same $pair[0] $pair[1]) -or
@@ -1335,8 +1393,8 @@ $writerBefore = if ($testMode) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
 else { Get-CanonicalWriterPreimageForQuiesce $install }
-if ($Uninstall -and [bool]$writerBefore.present) {
-    throw 'Uninstall requires the current-user layout without legacy scheduled writers.'
+if (($Uninstall -or $RestoreVerifiedReplacement) -and [bool]$writerBefore.present) {
+    throw 'Uninstall/restore requires the current-user layout without legacy scheduled writers.'
 }
 $uninstallCodeStarted = $false
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
@@ -1378,7 +1436,7 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
 $audit = [ordered]@{
     schema='container-audit-canonical-portable-install-v2'
-    operation=if ($Uninstall) { 'UNINSTALL' } else { 'INSTALL' }
+    operation=if ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
     status='PREIMAGE_SAVED'
     run_id=$runId
     captured_at=(Get-Date).ToUniversalTime().ToString('o')
@@ -1477,6 +1535,98 @@ $enteredPlacementTry = $true
         if (-not $existingVerified) {
             throw 'CODE_PRESTATE_NOT_VERIFIED_REPLACE'
         }
+    }
+    if ($RestoreVerifiedReplacement) {
+        if (-not $existingVerified) { throw 'Canonical restore current tree is not verified.' }
+        $publicRestore = Read-CanonicalReplacementRestore
+        $selectedReceipt = $publicRestore.receipt
+        $selectedTransactionId = [string]$selectedReceipt.transaction_id
+        $audit.code_replacement.transaction_id = $selectedTransactionId
+        $audit.code_replacement.controller_transaction_id = $Script:CanonicalWriterFenceTransactionId
+        $audit.code_replacement.receipt_path = $restoreReceiptFull
+        $audit.code_replacement.receipt_sha256 = $RestoreReceiptSha256
+        $audit.code_replacement.rollback_root = [string]$selectedReceipt.rollback_root
+        $audit.code_replacement.prestate = [string]$publicRestore.state
+        Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
+        $mutated = $true
+        Product $install '--remove-current-user-setup'
+        $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
+            [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) {
+            throw 'Canonical restore current-user quiescence readback failed.'
+        }
+        $restoreStopSha256 = Sha $stop
+        $audit.status = 'RESTORE_RUNTIME_QUIESCED'
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
+        $publicRestoreArguments = @(
+            '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+            '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+            '-InstallRoot',$install, '-ElevationLogPath',$elevationLogPath,
+            '-RestoreVerifiedReplacement', '-ReplacementTransactionId',$selectedTransactionId,
+            '-ReplacementReceiptPath',$restoreReceiptFull, '-ReplacementReceiptSha256',$RestoreReceiptSha256,
+            '-RestoreEvidencePath',$replacementRestoreEvidencePath,
+            '-WriterFenceHelperPath',$writerFenceHelperPath,
+            '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+            '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
+            '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+            '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
+            '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
+        )
+        if ($testMode) { $publicRestoreArguments += '-AllowNoncanonicalLayoutForTest' }
+        & $winps @publicRestoreArguments
+        if ($LASTEXITCODE -ne 0) { throw "Canonical code restore failed: $LASTEXITCODE" }
+        $currentTreeInventorySha256 = [string]$publicRestore.old_inventory_sha256
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $currentTreeInventorySha256
+        $restoreEvidence = ReadReplacementRestoreEvidence `
+            -Path $replacementRestoreEvidencePath -ExpectedTransactionId $selectedTransactionId `
+            -ExpectedReceiptPath $restoreReceiptFull -ExpectedReceiptSha256 $RestoreReceiptSha256 `
+            -ExpectedInstallRoot $install
+        $verifiedRestore = Read-CanonicalReplacementRestore
+        if ([string]$verifiedRestore.state -cne 'RESTORED') { throw 'Canonical exact restore readback failed.' }
+        $placement = 'RESTORED_VERIFIED'
+        $audit.code_placement = $placement
+        $audit.code_replacement.status = [string]$restoreEvidence.action
+        $audit.code_replacement.restore_evidence_path = $replacementRestoreEvidencePath
+        $audit.code_replacement.restore_evidence_sha256 = Sha $replacementRestoreEvidencePath
+        $audit.code_replacement.later_restore_surface = 'CONSUMED'
+        if ((Sha $stop) -cne $restoreStopSha256) { throw 'Canonical restore stop marker changed.' }
+        Restore $before
+        Remove-Item -LiteralPath $stop -Force
+        $check = Snapshot
+        if ([bool]$check.exists -ne [bool]$before.exists -or
+            [string]$check.kind -cne [string]$before.kind -or
+            [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop)) {
+            throw 'Canonical restore runtime preimage readback failed.'
+        }
+        $audit.after = $check
+        $audit.status = 'RESTORE_AWAITING_FENCE_RELEASE'
+        Save $auditPath $audit
+        $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
+            -Path $productCompleteAuthorizationPath -Phase 'PRODUCT_COMPLETE' -AuditPath $auditPath
+        $canonicalWriterFenceLastReleaseAuthorizationPath = [string]$releaseAuthorization.path
+        $canonicalWriterFenceLastReleaseAuthorizationSha256 = [string]$releaseAuthorization.sha256
+        Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+        Clear-CanonicalWriterFenceReleaseDelegation
+        Stop-CanonicalWriterFenceRelease $releaseAuthorization
+        $canonicalWriterFenceActive = $false
+        foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
+        if ($old.Count -gt 0) { Start-Sleep -Seconds 3 }
+        [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
+        $audit.status = 'PASS_RESTORED_VERIFIED_DATA_PRESERVED'
+        $audit.rollback.applied = $true
+        $audit.rollback.runtime_restored = $true
+        $audit.rollback.code_exact = $true
+        $audit.completed_at = [DateTime]::UtcNow.ToString('o')
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        'restore_status=PASS_RESTORED_VERIFIED_DATA_PRESERVED'
+        'prior_code_exact=true'
+        'failed_new_preserved=true'
+        'current_user_runtime_preimage_restored=true'
+        "audit_path=$auditPath"
+        return
     }
     if ($Uninstall) {
         if (-not $existingVerified -or $placement -cne 'REUSED_VERIFIED' -or
@@ -1626,7 +1776,7 @@ $enteredPlacementTry = $true
             $audit.code_replacement.receipt_path=$replacementReceiptPath
             $audit.code_replacement.receipt_sha256=$replacementReceiptSha256
             $audit.code_replacement.rollback_root=[string]$replacementReceipt.rollback_root
-            $audit.code_replacement.later_restore_surface='READY_PENDING_FINAL_COMPOSITE'
+            $audit.code_replacement.later_restore_surface='READY_PUBLIC_CANONICAL_RESTORE'
         }
         else { $placement = 'PASS_NEW_VERIFIED' }
     }
@@ -1746,7 +1896,7 @@ $enteredPlacementTry = $true
         "replacement_receipt_path=$replacementReceiptPath"
         "replacement_receipt_sha256=$replacementReceiptSha256"
         "replacement_transaction_id=$replacementTransactionId"
-        'later_phase_replacement_restore_status=READY_PENDING_FINAL_COMPOSITE'
+        'later_phase_replacement_restore_status=READY_PUBLIC_CANONICAL_RESTORE'
     }
     'cold_boot_status=UNPROVEN'
     "audit_path=$auditPath"
@@ -1891,6 +2041,27 @@ catch {
         catch { Write-Output 'rollback_audit_status=UNAVAILABLE' }
         'uninstall_recovery_status=PASS_EXACT_PREIMAGE_SAFE_TO_RETRY'
         throw $original
+    }
+    if ($RestoreVerifiedReplacement) {
+        # A child can restore the code and then fail while writing its evidence.
+        # Select the exact surviving tree before invoking any product recovery.
+        try {
+            $survivingRestore = Read-CanonicalReplacementRestore
+            if ([string]$survivingRestore.state -ceq 'RESTORED') {
+                $currentTreeInventorySha256 = [string]$survivingRestore.old_inventory_sha256
+                $placement = 'RESTORED_VERIFIED'
+                $audit.code_placement = $placement
+            }
+            $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $currentTreeInventorySha256
+            $audit.code_replacement.status = [string]$survivingRestore.state
+        }
+        catch {
+            $audit.status = 'RESTORE_FAILED_CODE_STATE_UNVERIFIED'
+            $audit.failure_type = $original.Exception.GetType().Name
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+            throw 'Canonical restore failed; code state is unverified and writers remain fenced.'
+        }
     }
     $autostartRollbackFailure=''
     $codeRollbackFailure=''
@@ -2076,7 +2247,9 @@ catch {
     }
     # A fresh placement has no old code tree to restore. Its verified files
     # remain available even after the current-user runtime preimage is restored.
-    $audit.status = if ($placement -ceq 'PASS_NEW_VERIFIED') {
+    $audit.status = if ($RestoreVerifiedReplacement) {
+        'FAILED_RESTORE_RUNTIME_RECOVERED'
+    } elseif ($placement -ceq 'PASS_NEW_VERIFIED') {
         'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
     } else {
         'FAILED_ROLLED_BACK'

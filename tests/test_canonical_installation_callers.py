@@ -10,12 +10,14 @@ import json
 from pathlib import Path
 import shutil
 
+import pytest
+
 from tests.canonical_scheduler_fixture import (
     DURABLE_AUDIT_OBSERVER, PREPLACEMENT_OBSERVER, SCHEDULER_OS,
 )
 from tests.test_canonical_portable_uninstall import (
     _assert_one_live_relay, _assert_preserved_and_released, _install,
-    _launch_relay, _live_preimage, _quote_fixture_executable, _setup, _sha, _tree,
+    _launch_relay, _live_preimage, _ps, _quote_fixture_executable, _setup, _sha, _tree,
 )
 
 
@@ -54,6 +56,140 @@ def _distinct_replacement(source):
     path.write_text(json.dumps(manifest), encoding='utf-8')
     (source / 'app/main.py').write_text('# distinct replacement code\n', encoding='utf-8')
     _bind_packet(source)
+
+
+def _public_restore(tmp_path, env, source, install, receipt, digest, label='restore'):
+    (tmp_path / 'expected-registry-preimage.json').write_bytes((tmp_path / 'registry.json').read_bytes())
+    result = _ps(source / 'INSTALL_CANONICAL_PORTABLE.ps1', env,
+                 '-SourceRoot', str(source), '-InstallRoot', str(install),
+                 '-RestoreVerifiedReplacement', '-RestoreReceiptPath', str(receipt),
+                 '-RestoreReceiptSha256', digest,
+                 '-EvidencePath', str(tmp_path / f'{label}-audit.json'),
+                 '-AllowNoncanonicalLayoutForTest', '-SkipSignatureValidationForTest')
+    (tmp_path / f'{label}-stdout.log').write_text(result.stdout, encoding='utf-8')
+    (tmp_path / f'{label}-stderr.log').write_text(result.stderr, encoding='utf-8')
+    return result
+
+
+def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatable(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    _distinct_replacement(source)
+    history = install.parent / ('.current.rollback.' + 'd' * 32)
+    history.mkdir()
+    (history / 'preserved.txt').write_text('unrelated historical custody', encoding='utf-8')
+    history_before = _tree(history)
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        replaced = _install(tmp_path, env, source, install)
+        assert replaced.returncode == 0, replaced.stderr
+        original_audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+        replacement = original_audit['code_replacement']
+        receipt = Path(replacement['receipt_path'])
+        receipt_before = receipt.read_bytes()
+        new_code = _tree(install)
+        product_calls = (tmp_path / 'product-calls.log').read_text().splitlines()
+        _, original_runtime = _assert_one_live_relay(tmp_path, env)
+
+        # Each invocation is a new native controller process, after the original
+        # installer owner and its fence have ended. Its prepared proof is fresh.
+        restored = _public_restore(tmp_path, env, source, install, receipt, replacement['receipt_sha256'])
+        assert restored.returncode == 0, restored.stderr
+        audit = json.loads((tmp_path / 'restore-audit.json').read_text(encoding='utf-8-sig'))
+        assert audit['operation'] == 'RESTORE_VERIFIED_REPLACEMENT'
+        assert audit['status'] == 'PASS_RESTORED_VERIFIED_DATA_PRESERVED'
+        assert audit['code_replacement']['status'] == 'RESTORED'
+        assert audit['code_replacement']['transaction_id'] == replacement['transaction_id']
+        assert audit['code_replacement']['controller_transaction_id'] != replacement['transaction_id']
+        evidence = json.loads(Path(audit['code_replacement']['restore_evidence_path']).read_text())
+        assert evidence['status'] == 'PASS' and evidence['prior_code_exact'] is True
+        assert evidence['failed_new_preserved'] is True
+        assert _tree(install) == before['code']
+        assert _tree(Path(evidence['failed_new_root'])) == new_code
+        assert _tree(history) == history_before
+        assert receipt.read_bytes() == receipt_before
+        assert _tree(source) == before['source']
+        assert (tmp_path / 'product-calls.log').read_text().splitlines()[len(product_calls):] == ['--remove-current-user-setup']
+        launches, current = _assert_one_live_relay(tmp_path, env)
+        assert current['ProcessId'] != original_runtime['ProcessId']
+        assert current['CommandLine'] == original_runtime['CommandLine']
+        assert launches[-1]['fence_active'] is False
+        prepared = list((Path(env['LOCALAPPDATA']) / 'KMTech/ContainerAudit/install-audit').glob('*-writer-prepared.json'))
+        proofs = [json.loads(path.read_text(encoding='utf-8-sig')) for path in prepared]
+        assert len(proofs) == 2
+        assert len({p['session_id'] for p in proofs}) == len({p['attempt_id'] for p in proofs}) == 2
+        _assert_preserved_and_released(env, protected)
+
+        repeated = _public_restore(tmp_path, env, source, install, receipt, replacement['receipt_sha256'], 'repeat')
+        assert repeated.returncode == 0, repeated.stderr
+        repeat_audit = json.loads((tmp_path / 'repeat-audit.json').read_text(encoding='utf-8-sig'))
+        assert repeat_audit['code_replacement']['status'] == 'ALREADY_RESTORED'
+        assert repeat_audit['status'] == 'PASS_RESTORED_VERIFIED_DATA_PRESERVED'
+        assert _tree(install) == before['code']
+        assert _tree(history) == history_before and receipt.read_bytes() == receipt_before
+        _assert_preserved_and_released(env, protected)
+        _assert_one_live_relay(tmp_path, env)
+
+
+@pytest.mark.parametrize('failure', ['receipt_hash', 'integrity_record', 'elevation_cancel', 'after_displace', 'after_restore'])
+def test_public_late_restore_failure_preserves_exact_code_and_runtime(tmp_path, failure):
+    env, source, install, protected = _setup(tmp_path)
+    canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    text = canonical.read_text(encoding='utf-8-sig')
+    call = '        & $winps @publicRestoreArguments'
+    assert text.count(call) == 1
+    if failure == 'elevation_cancel':
+        # Cancellation at the external child-launch boundary, before code work.
+        text = text.replace(call, "        throw (New-Object ComponentModel.Win32Exception 1223)")
+    elif failure == 'after_displace':
+        text = text.replace(call, "        $publicRestoreArguments += '-InjectRestoreFailureAfterDisplaceForTest'\n" + call)
+    canonical.write_text(text, encoding='utf-8-sig')
+    if failure == 'after_restore':
+        helper = source / 'INSTALL_THIS_PC.ps1'
+        body = helper.read_text(encoding='utf-8-sig')
+        boundary = '        Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $evidence | Out-Null'
+        assert body.count(boundary) == 1
+        helper.write_text(body.replace(boundary, "        throw 'RESTORE_EVIDENCE_WRITE_FAILURE'"), encoding='utf-8-sig')
+    _distinct_replacement(source)
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        replaced = _install(tmp_path, env, source, install)
+        assert replaced.returncode == 0, replaced.stderr
+        original = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))['code_replacement']
+        receipt = Path(original['receipt_path'])
+        digest = original['receipt_sha256']
+        if failure == 'receipt_hash':
+            digest = '0' * 64
+        if failure == 'integrity_record':
+            # A legitimate reinstall can change this record without changing any
+            # code bytes. An older receipt must still reject that exact drift.
+            record = install / 'bootstrap-integrity.json'
+            record.write_bytes(record.read_bytes() + b'\n')
+        code_before = _tree(install)
+        registry_before = json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig'))
+        calls_before = (tmp_path / 'product-calls.log').read_bytes()
+        _, runtime_before = _assert_one_live_relay(tmp_path, env)
+
+        result = _public_restore(tmp_path, env, source, install, receipt, digest)
+
+        assert result.returncode != 0
+        assert _tree(install) == (before['code'] if failure == 'after_restore' else code_before)
+        assert _sha(receipt) == original['receipt_sha256']
+        assert _tree(source) == before['source']
+        assert json.loads((tmp_path / 'registry.json').read_text(encoding='utf-8-sig')) == registry_before
+        _assert_preserved_and_released(env, protected)
+        launches, current = _assert_one_live_relay(tmp_path, env)
+        assert current['CommandLine'] == runtime_before['CommandLine']
+        assert launches[-1]['fence_active'] is False
+        if failure in {'receipt_hash', 'integrity_record'}:
+            assert current['ProcessId'] == runtime_before['ProcessId']
+            assert (tmp_path / 'product-calls.log').read_bytes() == calls_before
+            assert not (tmp_path / 'restore-audit.json').exists()
+        else:
+            audit = json.loads((tmp_path / 'restore-audit.json').read_text(encoding='utf-8-sig'))
+            assert audit['status'] == 'FAILED_RESTORE_RUNTIME_RECOVERED', result.stderr
+            assert audit['rollback']['runtime_restored'] is True
+            assert current['ProcessId'] != runtime_before['ProcessId']
+            assert audit['code_replacement']['status'] == ('RESTORED' if failure == 'after_restore' else 'PENDING')
 
 
 def test_canonical_fresh_onboarding_failure_reports_retained_verified_code(tmp_path):

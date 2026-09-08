@@ -1835,6 +1835,73 @@ def test_bootstrap_later_restore_is_receipt_bound_resumable_and_preserves_failed
     assert "replacement_restore_status=ALREADY_RESTORED" in repeated.stdout
 
 
+@pytest.mark.parametrize('boundary', ['historical_junction', 'selected_rollback_junction', 'wrong_transaction_rollback'])
+def test_bootstrap_restore_scopes_history_but_binds_selected_paths(tmp_path, boundary):
+    first = _portable_release_fixture(tmp_path, directory='first', source_commit='a' * 40)
+    second = _portable_release_fixture(tmp_path, directory='second', source_commit='b' * 40,
+                                       main_payload='# successor\n')
+    install = tmp_path / 'apps/current'
+    receipt = tmp_path / 'receipts/replacement.json'
+    txn = '7' * 32
+    assert _run_installer(first, install).returncode == 0
+    history = install.parent / ('.current.rollback.' + '8' * 32)
+    history.mkdir()
+    (history / 'custody.txt').write_bytes(b'preserve unrelated history')
+    target = tmp_path / 'unrelated-target'
+    target.mkdir()
+    (target / 'sentinel.txt').write_bytes(b'never follow or mutate this target')
+    junction = history / 'unrelated-link'
+
+    def link(path, destination):
+        quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        result = run_powershell([
+            _powershell(), '-NoProfile', '-NonInteractive', '-Command',
+            'New-Item -ItemType Junction -Path ' + quote(path) + ' -Target ' + quote(destination) + ' | Out-Null',
+        ], capture_output=True, text=True, check=False, timeout=15)
+        assert result.returncode == 0, result.stderr
+
+    if boundary == 'historical_junction':
+        link(junction, target)
+    try:
+        replaced = _run_installer(second, install, '-ReplaceExistingVerifiedPortable',
+                                  '-ReplacementTransactionId', txn, '-ReplacementReceiptPath', str(receipt))
+        assert replaced.returncode == 0, replaced.stderr
+        payload = json.loads(receipt.read_text(encoding='utf-8-sig'))
+        original_receipt = receipt.read_bytes()
+        current_main = (install / 'app/main.py').read_bytes()
+        rollback = Path(payload['rollback_root'])
+        if boundary == 'selected_rollback_junction':
+            preserved = install.parent / 'selected-old-preserved'
+            assert preserved.resolve().is_relative_to(tmp_path.resolve())
+            rollback.rename(preserved)
+            junction = rollback
+            link(junction, preserved)
+        elif boundary == 'wrong_transaction_rollback':
+            renamed = install.parent / ('.current.rollback.' + '9' * 32)
+            assert renamed.resolve().is_relative_to(tmp_path.resolve())
+            rollback.rename(renamed)
+            payload['rollback_root'] = str(renamed)
+            receipt.write_text(json.dumps(payload), encoding='utf-8')
+        restored = _run_restore(install, receipt, hashlib.sha256(receipt.read_bytes()).hexdigest(),
+                                txn, tmp_path / 'restore.json')
+        if boundary == 'historical_junction':
+            assert restored.returncode == 0, restored.stderr
+            assert 'replacement_restore_status=RESTORED' in restored.stdout
+            assert receipt.read_bytes() == original_receipt
+        else:
+            assert restored.returncode != 0
+            assert (install / 'app/main.py').read_bytes() == current_main
+            assert not Path(payload['failed_root']).exists()
+            expected = 'reparse point' if boundary == 'selected_rollback_junction' else 'identity or path binding'
+            assert expected in restored.stderr
+        assert (history / 'custody.txt').read_bytes() == b'preserve unrelated history'
+        assert (target / 'sentinel.txt').read_bytes() == b'never follow or mutate this target'
+    finally:
+        # Remove the owned junction node, never recurse into its target.
+        if boundary in {'historical_junction', 'selected_rollback_junction'} and os.path.lexists(junction):
+            os.rmdir(junction)
+
+
 def test_bootstrap_restore_failure_is_explicit_and_contains_pre_restore_state(tmp_path):
     first_source = _portable_release_fixture(
         tmp_path,

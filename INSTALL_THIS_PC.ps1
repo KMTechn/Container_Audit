@@ -59,17 +59,9 @@ function Test-SamePath([string]$Left, [string]$Right) {
     }
 }
 
-function Assert-NoReparsePoint([string]$Path, [string]$Purpose) {
+function Assert-NoReparsePoint([string]$Path, [string]$Purpose, [switch]$PathOnly) {
     if (-not (Test-Path -LiteralPath $Path)) { return }
-    $items = @((Get-Item -LiteralPath $Path -Force))
-    if ((Get-Item -LiteralPath $Path -Force).PSIsContainer) {
-        $items += @(Get-ChildItem -LiteralPath $Path -Force -Recurse)
-    }
-    foreach ($item in $items) {
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "$Purpose must not contain a reparse point: $($item.FullName)"
-        }
-    }
+    Assert-BootstrapNoReparsePoint $Path $Purpose -PathOnly:$PathOnly
 }
 
 function Install-CurrentUserTlsCaBootstrap([string]$SourcePath, [string]$LocalAppDataRoot) {
@@ -311,7 +303,7 @@ function ConvertTo-NormalizedAclRights([int64]$Rights) {
 }
 
 function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
-    Assert-NoReparsePoint $Path "Hardened code ACL readback"
+    Assert-NoReparsePoint $Path "Hardened code ACL readback" -PathOnly:(-not $Recursive)
     $expected = @{
         'S-1-5-18' = [int64][System.Security.AccessControl.FileSystemRights]::FullControl
         'S-1-5-32-544' = [int64][System.Security.AccessControl.FileSystemRights]::FullControl
@@ -381,7 +373,7 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
 
 function Set-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
     try {
-        Assert-NoReparsePoint $Path "Hardened code ACL target"
+        Assert-NoReparsePoint $Path "Hardened code ACL target" -PathOnly:(-not $Recursive)
         $icacls = Join-Path ([Environment]::SystemDirectory) 'icacls.exe'
         $ownerArgs = @($Path, '/setowner', '*S-1-5-32-544', '/L')
         $resetArgs = @($Path, '/reset', '/L')
@@ -891,12 +883,6 @@ try {
                 (Test-PathWithin $replacementReceiptFull $applicationParent) -or
                 (Test-Path -LiteralPath $replacementReceiptFull)
             ) { throw 'Replacement receipt must be a new path outside the code parent.' }
-            $ambiguousSiblings = @(Get-ChildItem -LiteralPath $applicationParent -Directory -Force | Where-Object {
-                $_.Name -match '^\.current\.(rollback|failed)\.'
-            })
-            if ($ambiguousSiblings.Count -ne 0) {
-                throw 'Verified replacement found an unrelated rollback or failed sibling.'
-            }
             Assert-ContainerReplacementRestoreQuiescent `
                 -CurrentRoot $installRootFull `
                 -SkipOwnedTaskCheckForGuardedTest:$testOverride

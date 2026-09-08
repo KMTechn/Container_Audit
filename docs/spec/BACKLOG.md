@@ -61,6 +61,8 @@
 | producer·소비 화면 | 재전송/committed 오류·CSV 복구의 receipt 행 합계·projection 중복·기간/수량·API/화면 값 일치 | Web flags·CA-G01 정의 필요 |
 | 설치·복원 | 설치 후 첫 업무·cold boot·재설치·교체/롤백 후 current/parked/intent·미전송 상태와 사용자 귀속 일치 | 기존 qualification 권한/대상 고정 필요 |
 
+- **2026-09-08 실제 추가 근거:** 지정 VM의 a7 설치본은 정상 cold boot/자동 relay, Uninstall04, Reinstall05와 업무9·identity3 hash 보존·일반 worker 화면을 [CA-O09](operations.md#ca-o09)에서 확인했다. 실제 공개 사후 rollback은 기존 frozen controller 진입점 공백과 원 receipt.new record drift를 확인한 뒤 Main 승인으로 작은 canonical 수정/새 진짜 교체 preimage/원 owner 종료 후 복원 검증을 진행 중이다. 강제 crash·실장비·다른 소스/설치본 수용은 이 근거에 없다.
+
 <a id="ca-g05"></a>
 ## CA-G05 실제 설치 구성·권한·장비 지원 범위
 
@@ -115,6 +117,9 @@
 - **현재 업무·정리:** case01 mixed NG work group을 즉시 GOOD-only 양성 사례로 취급하던 fixture 가정은 Web readback을 근거로 폐기했다. 원래 거부·NG 이력과 hold는 정상 QA supervisor 설정·masked GUI 인증·제품 quarantine으로 보존했고 ordinary WORKER로 돌아왔다. case02 preflight/목표2·부분 제출 거부·중복 거부·보류/정상 앱 재시작/동일 snapshot 복원·정확한2개 GOOD 로컬 완료는 실제 PASS 범위다. 이 흐름에서 안전한 상태를 건너뛰는 새 validator나 임의 파일 조작은 추가하지 않았다.
 - **담당·다음 행동·완료 기준:** 일반 후속 설치는 exit0/PASS·READY/REUSED이고 정상 recovery 후 실제 case02 seal은 Web 전역 JSON validator의 `INVALID_INPUT`으로 OPERATOR_REVIEW/attempt1이다. Web은 보호된 실제 command의 거부 predicate와 정상 수정 경계를 확인한다. CA는 원본명령·LINKED/TRAY_COMPLETE를 보존하고 [CA-O09](operations.md#ca-o09)의 중앙 ACK/별도 producer·화면 대조·case03·cold boot·제거/재설치와 적용 가능한 exact rollback을 계속한다. 첫 fresh 실패·seal 실패·미실행을 유지하며 source 회귀·문서 갱신·producer 성공 자체를 종합 Ready나 물류 ACK로 합치지 않는다.
 - **확인된 복구 한계·승인 후속:** frozen `TransferSealCoordinator.attempt`는 OPERATOR_REVIEW에서 즉시 반환하고 pending 목록도 제외한다. 기존 UI 재시도는 command bind 전만 지원하므로 Web 수정만으로 이 terminal intent를 정상 same-key 재전송할 수 없다. Main `msg_9d5415ea3be1`의 명시적 승인으로 불변 command/동일 key/정상 receipt 검증을 유지하는 관리자 확인 재시도를 source에 구현했다. 자동 terminal retry·DB 수선·원래 완료 시각 변경은 없다. Web 관측 lease 만료는08:11:34Z이나 원래 완료 시각은 기간 안이다. Web `msg_e3bd2837e6a3`는 현 server가 기존 receipt를 먼저 재생하며 미확정 lease도 원래 완료 시각·서명·fence·상태를 대조해 늦은 제출을 판정한다고 확인했다. 변경 후보 build/정상 설치/실제 원 key ACK는 아직 미실행이며 frozen 실패는 유지한다.
+- **09:31Z 실제 해소·남은 범위:** 첫 변경 후보 `fc24bc7`의 stale inventory pin에 의한 PlanOnly 실패를 보존하고 pin3곳을 맞춘 `a7d714f6` ZIP의 정상 교체는 PASS다. 실제 관리자 메뉴의 원 case02 재시도는09:21:22Z ACKED/attempt2이고 원 command/완료 시각·LINKED1/review1 유지 및 중앙 receipt1을 Main/Web이 수용했다. 새 case04 목표3·스캔 취소/재스캔·전량 완료는 ACKED/attempt1/LINKED1이다. 과거 문단의 미실행/실패는 그 시점의 이력으로 남긴다. case02 exact product QR는 Label에 소유 인계했고 재수정하지 않는다. 미착수 case03의 expired/unreconciled lease·정상 보류1152B는 삭제하지 않으며 Main `msg_69014d6df084`가 custody를 맡아 독립 cold boot·제거/재설치·지원되는 rollback을 계속한다. [실제 증거와 잔여](operations.md#ca-o09)를 근거로 판정하며 fresh 실패 자체와 종합 Ready0/6을 성공으로 바꾸지 않는다.
+- **09:57~10:45Z lifecycle·복원 후속:** exact a7의 일반 cold boot·자동 relay·uninstall/reinstall·현재 업무/identity 보존은 실제 PASS 범위다. 첫 f2 receipt는 old68dd preimage가 남아도 current a7의 정상 재설치 record hash와 달라 재사용할 수 없다. Main `msg_f47a9cbad540`/`msg_4189c4bb64b6`는 원본 drift를 보존하고 fresh ownership으로 공개 code-only restore를 구현·새 정상 교체/원 owner 종료 후 실제 복원하도록 승인했다. 현재 source의 lower helper5 PASS와 controller fixture 경로 길이 실패/수정 검증을 구분한다. 새 frozen artifact/정상 교체 receipt/old code와 relay의 실제 실행/두 ACKED·미착수 보류·identity 보존이 남으며 설치본 a7의 기존 PASS를 그 후보에 자동 승계하지 않는다.
+- **현재 source 결과:** 공개 controller6·lower helper62·기존 canonical/uninstall/inventory64의 해당132사례는 PASS다. 최초 긴 fixture 경로6 FAIL과 정적 호출 수1 FAIL은 원본으로 보존하고 필요한 범위만 수정·재확인했다. [CA-O09](operations.md#ca-o09)의 exact source inventory/실제 a7 writer 의미 대조까지 확인했으며, 다음은 정상 successor 교체로 새 receipt를 확보한 뒤 원 owner 종료/재시작 이후 취소·공개 복원·일반 old runtime과 업무/identity 보존의 실제 수용이다.
 
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
