@@ -61,7 +61,7 @@
 | producer·소비 화면 | 재전송/committed 오류·CSV 복구의 receipt 행 합계·projection 중복·기간/수량·API/화면 값 일치 | Web flags·CA-G01 정의 필요 |
 | 설치·복원 | 설치 후 첫 업무·cold boot·재설치·교체/롤백 후 current/parked/intent·미전송 상태와 사용자 귀속 일치 | 기존 qualification 권한/대상 고정 필요 |
 
-- **2026-09-08 실제 추가 근거:** 지정 VM의 a7 설치본은 정상 cold boot/자동 relay, Uninstall04, Reinstall05와 업무9·identity3 hash 보존·일반 worker 화면을 [CA-O09](operations.md#ca-o09)에서 확인했다. 실제 공개 사후 rollback은 기존 frozen controller 진입점 공백과 원 receipt.new record drift를 확인한 뒤 Main 승인으로 작은 canonical 수정/새 진짜 교체 preimage/원 owner 종료 후 복원 검증을 진행 중이다. 강제 crash·실장비·다른 소스/설치본 수용은 이 근거에 없다.
+- **2026-09-08 실제 추가 근거:** 지정 VM의 a7는 정상 cold boot/자동 relay, Uninstall04, Reinstall05와 업무9·identity3 hash 보존·일반 worker 화면을 확인했다. 별도 frozen d440의 새 진짜 교체 receipt·원 owner 종료/cold boot 뒤 공개 Restore09는 native/task0 및 exact a7/Run/relay/업무/identity 복원, failed-new d440·historical68dd 보존이다. 복원 GUI의 F4 target GOOD2도 ACKED/attempt1이며 [CA-O09](operations.md#ca-o09)에 연결한다. 원 f2 record drift와 취소07/동의 미관측08 실패는 유지한다. 강제 crash·실장비·다른 소스/설치본 수용은 이 근거에 없다.
 
 <a id="ca-g05"></a>
 ## CA-G05 실제 설치 구성·권한·장비 지원 범위
@@ -110,6 +110,8 @@
 
 <a id="ca-g09"></a>
 ## CA-G09 복사 VM의 등록 충돌과 일반 설치 후속
+
+- **11:55Z 현재 판정:** 지정 VM의 정상 등록 recovery·a7 업무/설치 lifecycle, d440 진짜 교체/취소 회복/공개 Restore09, 복원 a7 F4 target GOOD2 ACK와 마지막 cold boot까지 실제 확인했다. Main은 d440 source review와 Restore09의 exact 증거를 독립 수용했고 Web은 F4 receipt1/exact2를 확인했다. F4는 Label/Web에 명시 인계, VM은 Off로 Main에 반환하여 CA의 적용 가능한 일반 qualification 작업을 완료했다. 이전 bullet의 미실행·실패는 당시 이력이다. 남은 독립 경계는 F4 downstream 교체/포장 수용, case03 expired/unreconciled의 Main custody, 실장비/강제 crash/다른 환경이며 전체 Ready를 임의 승격하지 않는다. [CA-O09](operations.md#ca-o09)와 [최종 실행 보고서](E:/KMTech/ca-install-qualification-20260908/REPORT.md)로 source/artifact·VM 반환·증거 범위를 대조한다.
 
 - **유형·우선순위·상태:** 실제 qualification 후속, P1, 첫 fresh 실패 보존·정상 recovery와 후속 설치 PASS·업무 검증 중. [첫 시도](E:/KMTech/ca-install-qualification-20260908/REPORT.md)의 frozen source68dd/동일 ZIP은 guest PlanOnly·HTTPS·일반 사용자 token·코드 배치까지 통과했으나 registration `producer_identity_conflict`로 canonical exit1 / **FAILED_ROLLED_BACK**다. 위 CA-G08의 설치 NOT TESTED는 빌드 당시 이력이며 현재 결과에 자동 적용하지 않는다.
 - **원인·보존할 계약:** 초기 로컬 6종 자료 ABSENT와 새 possession key가 있어도 MachineGuid+SID+app 파생 lookup ID는 기존 중앙 active epoch6과 일치했다. [CA-C10](contracts.md#ca-c10), [Web 공개 lineage](E:/KMTech/web-integration-20260908/ca-enrollment-lineage.json). Main의 기존 소유 배정 후 정상 recovery가 epoch7과 manifest/서버 검증을 통과하고 별도 Web operation grant가 승인됐다. 임의 ID·키 삭제나 인증 우회는 없으며 식별자 파생 정책은 유지한다.

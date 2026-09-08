@@ -74,6 +74,8 @@ Main이 기존 source 공개키와 CPython3.12.10 x64 경로를 배정한 뒤 �
 
 **09:31Z 후속:** 관리자 재시도와 inventory pin 수정이 포함된 별도 source `a7d714f6` 후보는 같은 guest의 정상 canonical 교체로08:49:23Z PASS/REPLACED_VERIFIED다. 실제 관리자 메뉴에서 case02 원 명령을09:21:22Z 재전송해 **ACKED/attempt2**, 원 완료 시각·명령 hash·로컬 완료1·검토 이력1을 유지했다. [Web 독립 조회](E:/KMTech/web-integration-20260908/ca-original-retry-central-readback.json)는 중앙 receipt1·원 lease 소비·같은2개 구성원을 확인했고 Main 수용 뒤 Label에 정상 생성 QR 파일과 bundle 소유를 인계했다. 새 case04는 목표3·일반 취소/재스캔·전량 완료 후 **ACKED/attempt1**이며 [로컬 두 영수증](E:/KMTech/ca-install-qualification-20260908/case04-seal-public-results-02.jsonl)과 [일반 완료 화면](E:/KMTech/ca-install-qualification-20260908/guest-case04-complete.png)을 보존했다. case03은 미착수 만료 lease와 정상 보류 자료를 유지하며 Main이 조정 custody를 맡는다. cold boot·제거/재설치·적용 가능한 exact rollback은 계속 검증 중이다. [계약](contracts.md#ca-c10), [환경·명령·복원 범위](operations.md#ca-o09), [CA-G09](BACKLOG.md#ca-g09). 종합 Ready 판정은 Main의 별도 수용이다.
 
+**11:55Z 최신 실제 후속:** 별도 frozen source `d440b1f7`의 정상 교체로 새 receipt를 만든 뒤 원 owner 종료·cold boot를 거쳐 공개 canonical Restore09가 native/task0, **PASS_RESTORED_VERIFIED_DATA_PRESERVED**다. exact old a7·원 Run/relay·업무9/identity3와 historical68dd를 유지했고 failed-new d440을 보존했다. 취소07/동의 미관측08의 native1 실패는 그대로 남긴다. 복원된 ordinary a7 GUI에서 새 F4 target GOOD2가11:43:40Z **ACKED/attempt1**이며 완료3·전송 대기0이다. Web의 독립 receipt1/exact2 확인 뒤 Label/Web에 bundle을 명시 인계했고, 마지막 복원 후 cold boot의 자동 relay·세 ACKED/업무/identity 보존 및 전송30건 acked를 확인한 VM은 정상 Off로 Main에 반환했다. 실제 화면 보류는 기존 일반 보류1+격리1의 **2건**으로 이전 요약을 정정했다. [정확한 source·receipt·실행 범위](operations.md#ca-o09), [보고서](E:/KMTech/ca-install-qualification-20260908/REPORT.md), [남은 범위](BACKLOG.md#ca-g09)를 따른다. 새 FULL·강제 crash·실장비 검증이나 종합 Ready 판정은 이 결과에 없다.
+
 ## 2. 사용자·제품 경계와 지원 경로
 
 이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.
@@ -201,7 +203,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **실패·취소·재시작:** 손상/불일치 상태는 격리·defer 경로로 보존하며 임의 빈 트레이로 대체하지 않는다. 원본 보류 삭제 전에 복원 내구 경계를 확인한다.
 - **수용 기준:** 보류→종료→복원이 barcode·순서·소유권을 유지하고, 어느 쓰기 단계에서 종료해도 유일한 원본을 잃거나 이중 활성 트레이를 만들지 않아야 한다.
 - **실제 관측:** [case02 정상 앱 재시작](E:/KMTech/ca-install-qualification-20260908/case02-restarted-before-restore.txt)에서 1/2 상태의 parked JSON은 같은 hash로 남았고, [복원](E:/KMTech/ca-install-qualification-20260908/case02-restored-summary.txt)은 동일 snapshot을 current로 옮겼다. 이 결과는 임의 시점 강제 종료·OS cold boot까지 증명하지 않는다.
-- **별도 a7 lifecycle 관측:**09:39 cold boot 자동 relay 시작과09:53 정상 uninstall/reinstall 뒤 업무9·identity3 자료의 hash 보존 및 ordinary worker 화면 완료2·보류1·대기0을 확인했다. 당시 보류는 case03 미착수0스캔1152B이고 case02/04는 ACKED다. [CA-O09](operations.md#ca-o09)의 source/OS/시점별 범위를 유지하며 임의 crash나 새 공개 코드 rollback의 실제 PASS로 합치지 않는다.
+- **별도 a7 lifecycle 관측:**09:39 cold boot 자동 relay 시작과09:53 정상 uninstall/reinstall 뒤 업무9·identity3 자료의 hash 보존 및 ordinary worker 화면 완료2·보류2·대기0을 확인했다. 보류 합계는 case03 미착수0스캔1152B와 case01 격리521B이며 case02/04는 ACKED다. 이후 d440 공개 Restore09로 exact a7 복원 및 실제 일반 worker/F4 완료를 확인했다. [CA-O09](operations.md#ca-o09)의 source/OS/시점별 범위를 유지하며 임의 crash 검증으로 합치지 않는다.
 - **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). CSV만으로는 이 복구 상태를 재구성할 수 없다.
 
 <a id="ca-10"></a>
@@ -225,6 +227,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-12"></a>
 ### CA-12 로컬 완료·중앙 봉인·재확인
 
+- **복원 후 별도 F4 관측:** exact a7를 공개 복원한 ordinary worker는 새 target GOOD2를11:43:39Z 완료하고11:43:40Z ACKED/attempt1/LINKED1을 기록했다. [세 intent 공개 조회](E:/KMTech/ca-install-qualification-20260908/f4-seal-public-results-01.jsonl)는 기존 case02/04도 그대로 유지함을 확인한다. Label용 두 donor는 미사용이며 downstream 교체/포장 결과는 Label/Web 소유의 별도 판정이다.
+
 - **2026-09-08 승인된 source 후속:** frozen 설치의 bound `OPERATOR_REVIEW`에는 정상 재전송 동작이 없었다. Main `msg_9d5415ea3be1`에 따라 운영 메뉴의 관리자 확인 재시도를 구현했다. 활성 트레이가 없는 인증된 관리자만 기존 요청 한 건을 확인하고, 동기 local-only 감사 기록 뒤 같은 command/key/lease/완료 시각을 재전송한다. 실패는 계속 검토 상태이며 자동 재시도에 편입하지 않는다. 수정 후보 `a7d714f6`는 같은 guest에서 정상 canonical `REPLACED_VERIFIED`/exit0이며, 실제 보호 관리자 메뉴와 원래 case02 품목/수량2/작업자 확인창을 관측했다. 중앙 ACK는 아직 미검증이다. [회귀](../../tests/test_supervisor_transfer_review_retry.py), [계약](contracts.md#ca-c03), [CA-G09](BACKLOG.md#ca-g09).
 
 - **2026-09-08 좁은 후속 검증:** 완료 CSV 재생 후 일일 집계는 `_load_session_state`의 현재 날짜를 따른다. 원래 실패 한 건은 lease fixture가 `datetime.now()`만 9월 6일로 고정하고 `date.today()`를 고정하지 않은 원인으로 좁혔다. 기존 assertion을 유지한 두 사례를 E의 일관된 fixture clock으로 실행한 2 PASS는 [CA-G08](BACKLOG.md#ca-g08)의 headless fixture 제안 근거다. 승인된 patch를 적용한 최종 focused 실행에서도 두 사례가 PASS했고 현장 완료/서버 ACK 성공의 증거는 아니다.
@@ -238,6 +242,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 
 <a id="ca-13"></a>
 ### CA-13 이벤트 업로드·전송 상태·분석 소비
+
+- **F4 실제 추가 전송:** 복원 a7의 F4 완료 뒤 GUI 대기0·[relay29건 전부 acked](E:/KMTech/ca-install-qualification-20260908/after-f4-relay-queue.jsonl)를 확인했다. 물류 seal receipt·producer receipt·projection/API·브라우저 표시 범위는 각각 [CA-O09](operations.md#ca-o09)의 증거로 구분하며 queue ACK만으로 소비 화면 수용을 주장하지 않는다.
 
 - **시작·입력:** events CSV를 whole-file snapshot으로 spool/queue에 등록하고 사용자 relay가 HTTPS 업로드한다. [enqueue_completed_source_file](../../direct_sync_runtime.py), [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py)
 - **검증·저장·결과:** 파일 identity·SHA256·바이트/행수·서명·runtime lease와 엄격한 receipt를 확인해 `acked` 처리한다. local-only/시험 사건은 [event_stream_policy](../../event_stream_policy.py)의 경계로 분리한다. 물류 봉인 command ACK와는 다른 전송이다.
