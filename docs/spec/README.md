@@ -62,6 +62,14 @@ Main의 후속 배정으로 실행한 `ca207n`의 실제 결과는 **207 PASS / 
 Main이 기존 source 공개키와 CPython3.12.10 x64 경로를 배정한 뒤 같은 source68dd의 [실제 portable build](E:/KMTech/ca-build-0908/build-result.json)는 **exit0/9.688초**로 완료됐다. exact dependency7개·writer inventory·묶인 runtime의 isolated import closure, PE46개 전부 Valid/unsigned0, 기존 canonical PlanOnly·helper DryRun을 통과했다. [ZIP](E:/KMTech/ca-build-0908/Container_Audit-68dd0c52-portable.zip)은17,156,131바이트·SHA256 `b8dcd72c0205201eadda5a93d531a767e7ff9552b8519067468d1bfb7de84b40`, 2,283개 파일이며 CRC와 포함 manifest 일치도 확인했다. 첫 PlanOnly의 host 모듈 autoload 실패는 보존했고 기존 repository runner와 같은 Windows PowerShell module 경로를 자식 환경에만 적용한 재검사는 성공했다. source/key/trust·제품 동작은 바꾸지 않았다. [설치 인계](E:/KMTech/ca-build-0908/INSTALL-PREPARATION.md)에 정확한 후보와 다음 Main 배정 조건을 기록한다. **실제 설치·GUI·복구·rollback·통합은 NOT TESTED**, signed feed/키 회전 호환은 UNPROVEN이며 **Ready 0/6**이다.
 
 
+### 2026-09-08 새 복사 VM의 일반 설치 실패·정상 recovery 후속
+
+위 빌드 당시 미실행 상태 이후, 같은 ZIP/source68dd를 배정된 `KMTech-CA-Qualification-20260908-01`에 전송해 해시 일치·guest PlanOnly·기존 `kmadmin`의 session1/medium integrity·개발 backend의 CA-verified HTTPS200/sourcec04343ce를 확인했다. [첫 일반 설치 원본](E:/KMTech/ca-install-qualification-20260908/REPORT.md)은 실제 top-level canonical 경로와 guest UAC를 사용했으며 코드 배치는 **PROVEN / PASS_NEW_VERIFIED**, 등록은 **FAILED / producer_identity_conflict**다. 06:46:26Z canonical exit1·`FAILED_ROLLED_BACK`으로 종료했고 GUI 업무는 시작하지 않았다.
+
+초기 로컬 등록 자료 6종은 모두 ABSENT였지만, 현행 설치 식별자는 MachineGuid+현재 사용자 SID+app에서 파생된다. VM 복사본·새 Hyper-V ID·빈 앱 폴더만으로 중앙의 새 장치가 되지는 않는다. 새 possession key의 자동 등록을 서버가 거부했고, Main이 기존 epoch6 소유를 이 guest에 배정한 뒤 정상 관리자 recovery와 별도 operation grant로 epoch7을 등록했다. 같은 frozen 후보의 후속 canonical은07:03:06Z **exit0/PASS, REUSED_VERIFIED, READY/REUSED**다. 첫 실패를 fresh PASS로 바꾸지 않는다.
+
+실제 ordinary GUI에서 작업자 등록·작업 시작은 성공했다. 첫 PHS2는07:17:05Z `PHS_WORK_GROUP_SOURCE_NOT_AVAILABLE`로 거부되어 내구 `LOOKUP_FAILED` hold를 남겼고 제품 스캔·이적은 아직 없다. 전량 이적·중앙 seal ACK·전송/화면 대조·restart/cold boot·제거/재설치·exact rollback은 후속 검증 중이다. 새 code가 남는 첫 실패의 상태 혼동은 현재 소스에서 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 경고로 바로잡고 신규 fresh 실패 회귀1·기존 교체 복원 회귀1 PASS를 확인했다. 동결 ZIP·설치본에는 이 수정이 포함되지 않으며 과거 full 결과를 수정 소스에 승계하지 않는다. [계약](contracts.md#ca-c10), [환경·명령·복원 범위](operations.md#ca-o09), [CA-G09](BACKLOG.md#ca-g09). 종합 Ready 판정은 Main의 별도 수용이다.
+
 ## 2. 사용자·제품 경계와 지원 경로
 
 이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.

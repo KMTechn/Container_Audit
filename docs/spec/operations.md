@@ -154,3 +154,26 @@ CA portable builder의 기존 [준비 검사](E:/KMTech/ca-resume-0908/BUILD-PRE
 기존 PE scanner는46개 모두 Valid/unsigned0/other0이다. [기존 installer 사전 검사](E:/KMTech/ca-build-0908/installer-preflight-winps-results.json)는 canonical PlanOnly와 helper DryRun 자연 종료0/0·stderr0, registry 변경/identity 생성 없음, source2283개 aggregate SHA `66562e4f21f91bf6d24109a03f096da088452545209bd0cc319096ddd4aceeea`를 기록했다. 첫 PlanOnly는 inherited PowerShell7 module 경로에서 Security module autoload 실패였고 그 원본을 보존했다. repository runner의 Windows PowerShell module 경로를 자식 process에만 적용한 뒤 성공했으며 source·machine 설정·signature 정책을 바꾸지 않았다.
 
 [ZIP identity](E:/KMTech/ca-build-0908/artifact.json)는17,156,131바이트·SHA `b8dcd72c0205201eadda5a93d531a767e7ff9552b8519067468d1bfb7de84b40`, 2283개/48,805,144 uncompressed bytes, CRC와 manifest 일치를 확인한다. [다음 설치 준비](E:/KMTech/ca-build-0908/INSTALL-PREPARATION.md)는 같은 후보의 top-level installer와 Main이 새로 배정할 VM/current-user/개발 HTTPS origin을 요구한다. host 설치·GUI·default server 접속은 없었다. 실제 설치·업무·persistence/cold boot·uninstall/reinstall·rollback·backend E2E는 **NOT TESTED**, signed feed/키 회전 호환은 **UNPROVEN**, Ready0/6이다.
+
+<a id="ca-o09"></a>
+## CA-O09 새 복사 VM의 첫 일반 설치·등록 충돌
+
+위 빌드 이후 [실제 시도와 원본](E:/KMTech/ca-install-qualification-20260908/REPORT.md)은 source `68dd0c520ed2b8bd585301999cb35624702a05a5` / tree `5960560260eb3a6226b419cfa24493c154757be0`와 동일 ZIP을 사용한다. 동결 입력·설치본은 바꾸지 않았으며 source207/FULL·별도 E31을 반복하지 않았다. 아래 별도 상태 설명 수정은 현재 저장소 소스에만 적용한다.
+
+| 관측 범위 | 실제 값·판정 |
+|---|---|
+| 대상·사용자 | Main이 전용 배정한 VM `3c5da10e-1a66-4dc8-92c8-f922a7a1ff93`, `KMTech-CA-Qualification-20260908-01`; E-backed 원본 export 복사본, Windows11 Pro26200. 기존 `KMTECH-GEN-01\kmadmin`, console session1, medium integrity·비승격을 실제 관측했다. |
+| 초기 앱 상태 | canonical code·business/relay state·CA task/process 부재; onboarding이 관측한 identity/credential/manifest/profile/secret/registration-report 6종도 ABSENT. 중앙 identity 신규성은 별도이며 결과적으로 충돌했다. |
+| 전송·정상 준비 | ZIP17,156,131B·원본 SHA 일치·2283파일; guest top-level PlanOnly exit0. IP172.22.130.13, Main의 기존18443 허용 추가, DNS100.107.44.33·TCP 연결·공개 CA 검증 HTTPS200/sourcec04343ce를 확인했다. |
+| 실제 명령 | guest `C:\Qualification\ca-install-20260908\portable\INSTALL_CANONICAL_PORTABLE.ps1`에 같은 SourceRoot, `-InstallRoot C:\KMTech\Apps\Container_Audit\current`, task evidence JSON, `-ServerBaseUrl https://desktop-03pcrd7.taile4847b.ts.net:18443`. [정확한 호출](E:/KMTech/ca-install-qualification-20260908/apply-controls/apply-canonical.ps1). test-only flag·서명 우회·독립 코드 helper apply는 사용하지 않았다. |
+| 코드 배치 | ordinary interactive task가 정상 helper UAC를 요청했고 assigned guest 키보드로 승인했다. elevated helper는06:45:45Z `PASS`, canonical은 `PASS_NEW_VERIFIED`; 설치 integrity aggregate `66562e4f21f91bf6d24109a03f096da088452545209bd0cc319096ddd4aceeea`. 전체 설치 PASS와 구분한다. |
+| 등록·canonical 결과 | registration2·onboarding4·canonical1,06:46:26Z `FAILED_ROLLED_BACK`. `producer_identity_conflict` / `ADMIN_RECOVERY_REQUIRED`, 신규 possession key와 기존 active epoch6의 key가 다르다. [CA-C10](contracts.md#ca-c10). |
+| rollback 한계 | 제품은 runtime/current-user lifecycle 복원 true를 기록했다.06:51:20Z Run relay 값·identity/credential/manifest와 설치본 process는 없고 apply task Ready, 새 code root·integrity record는 남았다. 이 상태를 exact 설치 전 부재 복원이나 전체 rollback qualification PASS로 해석하지 않는다. |
+
+원본 실패11파일/15,250B를 E로 회수해 전송 hash 불일치0을 확인했다. 보호된 token은 파일→process 환경으로만 전달하고 값은 증거에 넣지 않는다. Main `msg_874f9cd5907d`가 기존 epoch6 소유를 이 guest에 배정한 뒤 Web의 정상 recovery authorization을 보호 경로로 전달했다. 설치된 도구의 실제 current_user recovery는06:58:52Z `ADMIN_RECOVERY_REGISTERED`, epoch7, 서버·admin recovery·manifest 검증 true, secret 파일 삭제 true다. wrapper의 native exit 값은 null로 남아 있으므로 임의 exit0으로 보충하지 않는다. [제품 recovery 원본](E:/KMTech/ca-install-qualification-20260908/recovery-01/worker_pc_registration.json)과 Web 승인 관측은 성공이며, 그 직후 OPERATION_PENDING과 별도 operation grant 승인(만료09:01:04Z)을 구분한다.
+
+동일 후보의 [일반 후속 호출](E:/KMTech/ca-install-qualification-20260908/continuation-controls/apply-canonical02.ps1)은07:01:45~07:03:06Z 자연 종료0, `PASS`·`REUSED_VERIFIED`·`READY/REUSED`, exact relay launch PROVEN이다. 실제 잔류 relay PID6232와 stop marker 부재를 관측했고13파일/30,033B를 E로 회수해 hash 불일치0이다. 자동 시작은 `PROVEN_NON_REBOOT_APPROXIMATION`이며 cold boot를 증명하지 않는다.
+
+일반 installed launcher의 GUI PID8428/session1에서 실제 작업자 `CA-QA-20260908` 등록·WORK_START를 확인했다. guest 화면과 ordinary session 창 관측으로 확인했으며 host 입력은 없다. 준비된 [실제 API 생성 두 업무 입력](E:/KMTech/web-integration-20260908/CA-BUSINESS-FIXTURES.json)의 case01을07:17:05Z 입력했을 때 `PHS_WORK_GROUP_SOURCE_NOT_AVAILABLE`로 거부되었다. [실제 내구 hold와 로컬 사건](E:/KMTech/ca-install-qualification-20260908/case01-preflight-failure.txt)의 `preflight-b91da26a3dba7ba35512eb844e723e9a`는 LOOKUP_FAILED/items0이며 제품 스캔·seal은 없다. Web의 정상 source 준비 경계 확인 뒤 계속하며 전량/NG 제외·중앙 seal ACK·producer/화면 대조·restart/cold boot·제거/재설치·exact rollback은 미완료다.
+
+**현재 소스의 작은 수정:** fresh 코드 배치 뒤 runtime 복원만 된 실패를 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 경고로 기록한다. 기존 실패 원본·동결 후보는 그대로다. [새 fresh 실패 회귀](../../tests/test_canonical_installation_callers.py)는 RED1 뒤 실제 상태를 고쳐 GREEN1/3.83초이고, 같은 제품 코드의 기존 교체 tree 복원 회귀도1 PASS다. 중간 실행의 새 회귀1 FAIL은 PowerShell 경고 줄바꿈에 대한 test 문자열 비교 문제로 보존했고 whitespace 정규화 후 그 사례만 재검사했다. 기존 writer inventory는 stale 확인 뒤 installer 줄 위치10개·파생 hash만 갱신했으며 [최종 check](E:/KMTech/ca-install-qualification-20260908/writer-inventory-final.txt) exit0, writer/권한 의미 변경은 없다. full suite 재실행·새 설치본 build는 없으며 이 로컬 근거를 frozen guest 수용과 합치지 않는다.

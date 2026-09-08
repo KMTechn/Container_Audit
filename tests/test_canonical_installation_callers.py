@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 from tests.canonical_scheduler_fixture import (
     DURABLE_AUDIT_OBSERVER, PREPLACEMENT_OBSERVER, SCHEDULER_OS,
@@ -53,6 +54,38 @@ def _distinct_replacement(source):
     path.write_text(json.dumps(manifest), encoding='utf-8')
     (source / 'app/main.py').write_text('# distinct replacement code\n', encoding='utf-8')
     _bind_packet(source)
+
+
+def test_canonical_fresh_onboarding_failure_reports_retained_verified_code(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    assert install.resolve().is_relative_to(tmp_path.resolve())
+    shutil.rmtree(install)
+    registry = tmp_path / 'registry.json'
+    absent = {'exists': False, 'kind': '', 'data': ''}
+    registry.write_text(json.dumps(absent), encoding='utf-8')
+    canonical = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    text = canonical.read_text(encoding='utf-8-sig')
+    boundary = "function Product([string]$Root, [string]$Mode) {"
+    assert text.count(boundary) == 1
+    text = text.replace(boundary, boundary + "\n    if ($Mode -ceq '--onboard-current-user') { throw 'ENROLLMENT_IDENTITY_CONFLICT' }")
+    canonical.write_text(text, encoding='utf-8-sig')
+    _bind_packet(source)
+    source_before = _tree(source)
+
+    result = _install(tmp_path, env, source, install)
+
+    assert result.returncode != 0
+    audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+    assert audit['status'] == 'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
+    assert audit['code_placement'] == 'PASS_NEW_VERIFIED'
+    assert audit['rollback']['runtime_restored'] is True
+    assert 'ENROLLMENT_IDENTITY_CONFLICT' in result.stderr
+    assert 'New verified code remains at ' + str(install) in ' '.join(result.stdout.split())
+    assert {k: v for k, v in _tree(install).items() if k != 'bootstrap-integrity.json'} == source_before
+    assert _tree(source) == source_before
+    assert json.loads(registry.read_text(encoding='utf-8-sig')) == absent
+    assert not (tmp_path / 'relay.ready').exists()
+    _assert_preserved_and_released(env, protected)
 
 
 def test_canonical_later_failure_restores_verified_old_tree_through_bound_child(tmp_path):

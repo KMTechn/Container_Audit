@@ -106,6 +106,14 @@
 - **실제 portable build·artifact 준비:** Main이 기존 source 공개키와 CPython3.12.10 x64를 배정한 뒤 unchanged source68dd의 [기존 builder](E:/KMTech/ca-build-0908/build-result.json)는 자연 종료0/9.688초·stderr0이다. packaged runtime import closure·exact dependency7개·writer inventory, PE46개 Valid/unsigned0, canonical PlanOnly·helper DryRun 종료0을 확인했다. 첫 PlanOnly의 inherited module 경로 실패는 보존했고 repository runner와 같은 Windows module 경로를 자식 환경에만 적용해 성공했다. [ZIP identity](E:/KMTech/ca-build-0908/artifact.json)는17,156,131바이트/2283개 파일·SHA `b8dcd72c0205201eadda5a93d531a767e7ff9552b8519067468d1bfb7de84b40`, CRC·manifest 일치다. 키 생성·trust 변경·signature bypass는 없다.
 - **담당·다음 행동:** CA의 source tests·회수·custody·소스 통합·정확한 portable build/로컬 준비는 위 범위에서 완료했고 Main이 중앙 수용과 다음 자원을 소유한다. readonly 원본·source/archive/index·default capture·제품 assertion은 유지했다. [설치 인계](E:/KMTech/ca-build-0908/INSTALL-PREPARATION.md)의 같은 artifact로 Main이 배정할 새 VM/current-user/개발 HTTPS origin에서 실제 설치·업무 GUI·restart/cold boot·uninstall/reinstall·rollback·backend 통합을 검증할 차례이며 모두 **NOT TESTED**다. signed feed/키 회전 호환과 예전 exact-artifact 내부 사유는 미입증이다. VM01은 반환됐으며 새 host 기록만을 위해 source tests를 반복하지 않는다. 중앙 Q01 차이는 Main에 통지하고 **Ready 0/6**은 유지한다.
 
+<a id="ca-g09"></a>
+## CA-G09 복사 VM의 등록 충돌과 일반 설치 후속
+
+- **유형·우선순위·상태:** 실제 qualification 후속, P1, 첫 fresh 실패 보존·정상 recovery와 후속 설치 PASS·업무 검증 중. [첫 시도](E:/KMTech/ca-install-qualification-20260908/REPORT.md)의 frozen source68dd/동일 ZIP은 guest PlanOnly·HTTPS·일반 사용자 token·코드 배치까지 통과했으나 registration `producer_identity_conflict`로 canonical exit1 / **FAILED_ROLLED_BACK**다. 위 CA-G08의 설치 NOT TESTED는 빌드 당시 이력이며 현재 결과에 자동 적용하지 않는다.
+- **원인·보존할 계약:** 초기 로컬 6종 자료 ABSENT와 새 possession key가 있어도 MachineGuid+SID+app 파생 lookup ID는 기존 중앙 active epoch6과 일치했다. [CA-C10](contracts.md#ca-c10), [Web 공개 lineage](E:/KMTech/web-integration-20260908/ca-enrollment-lineage.json). Main의 기존 소유 배정 후 정상 recovery가 epoch7과 manifest/서버 검증을 통과하고 별도 Web operation grant가 승인됐다. 임의 ID·키 삭제나 인증 우회는 없으며 식별자 파생 정책은 유지한다.
+- **복원·현재 소스:** lifecycle rollback 후 Run/relay/등록 자료 부재를 확인했지만 새 verified code는 남는다. 현재 소스는 이 경우의 상태를 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`로 바로잡고 경로 경고를 추가했다. 신규 fresh 실패1·기존 교체 복원1 회귀 PASS이며 frozen 설치본에는 미포함, 전체 exact rollback은 **UNPROVEN**이다. 원래 실패11파일과 성공 후속13파일은 별도로 hash 일치 보존했다.
+- **담당·다음 행동·완료 기준:** 같은 후보의 일반 후속 설치는07:03:06Z exit0/PASS·READY/REUSED이며 ordinary GUI/worker 시작도 성공했다. case01 첫 PHS2는 `PHS_WORK_GROUP_SOURCE_NOT_AVAILABLE`로 내구 LOOKUP_FAILED hold를 남겼다. Web은 정상 source 준비 경계를 확인하고 CA는 [CA-O09](operations.md#ca-o09)의 전량 GOOD/NG 제외·seal ACK/producer/화면·보류/재시작/cold boot·제거/재설치와 적용 가능한 exact rollback을 계속한다. 첫 fresh 실패와 실제 미실행을 보존하며 source 회귀·문서 갱신 자체를 종합 Ready 상승으로 합치지 않는다.
+
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
 

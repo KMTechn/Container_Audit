@@ -5805,7 +5805,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "7ad7b9f3e1bd66a4a96eafe4e5249b8e2266b67ac1e71a089ddf8bf353cea01b",
+  "inventory_sha256": "f6f875095db1ef31b0137dfe9b111188c34b20f8ceb46c3097936144d3c788d0",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -8500,8 +8500,8 @@
           "guard_kind": "session_authority",
           "guard_line": 1344,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
-          "lifetime_end_line": 2088,
-          "release_line": 2088,
+          "lifetime_end_line": 2097,
+          "release_line": 2097,
           "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
@@ -10094,13 +10094,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2078,
+            "line": 2084,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2079,
+            "line": 2085,
             "non_production_mode": ""
           }
         ],
@@ -11342,7 +11342,7 @@
         "guard_line": 1344,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "release_line": 2088,
+        "release_line": 2097,
         "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 18,
         "writer_site_kinds": [
@@ -13787,8 +13787,8 @@
           "guard_kind": "session_authority",
           "guard_line": 1344,
           "guard_name": "Enter-ContainerWriterSessionAuthority",
-          "lifetime_end_line": 2088,
-          "release_line": 2088,
+          "lifetime_end_line": 2097,
+          "release_line": 2097,
           "release_name": "Exit-ContainerWriterSessionAuthority",
           "required": true,
           "valid": true,
@@ -15381,13 +15381,13 @@
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2078,
+            "line": 2084,
             "non_production_mode": ""
           },
           {
             "caller": "__script__",
             "guarded_top_level": true,
-            "line": 2079,
+            "line": 2085,
             "non_production_mode": ""
           }
         ],
@@ -16629,7 +16629,7 @@
         "guard_line": 1344,
         "guard_name": "Enter-ContainerWriterSessionAuthority",
         "guarded": true,
-        "release_line": 2088,
+        "release_line": 2097,
         "release_name": "Exit-ContainerWriterSessionAuthority",
         "writer_site_count": 18,
         "writer_site_kinds": [

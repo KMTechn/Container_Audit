@@ -17,6 +17,8 @@ CA는 스캔·작업 상태·전송 의도를 소유한다. 중앙 제품 소유
 | 조회 중 보류 | `container-audit-preflight-scan-hold-v1` | [preflight_scan_hold](../../preflight_scan_hold.py) |
 | 제품 교체 / GOOD resolver | `container-audit-member-exchange-v1` / `logistics-good-replacement-source-v1` | [transfer_member_exchange](../../transfer_member_exchange.py) |
 | producer 파일 업로드 | `producer-ingest-source-file-v1`, 서명 `PRODUCER-HMAC-SHA256-V1` | [direct_sync_push](../../direct_sync_push.py); lock에는 producer-ingest-v1 capability와 common-event-envelope-v1이 별도로 선언됨. |
+| 현재 사용자 최초 등록 | `producer-self-enrollment-v2` | [current_user_onboarding](../../current_user_onboarding.py), [등록·소유 증명](../../tools/register_container_audit_worker_pc.py), [CA-C10](#ca-c10). |
+| 설치 lookup 식별자 | `container-audit-install-identity-v1` | MachineGuid+현재 사용자 SID+app 파생이며 possession proof와 별개. [derive_path_independent_install_id](../../tools/register_container_audit_worker_pc.py). |
 
 교체 업무의 상세 정본은 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md), 장기 전송·보존 규칙은 [DIRECT_SYNC_DATA_PLATFORM_NOTES](../../DIRECT_SYNC_DATA_PLATFORM_NOTES.md)를 재사용한다. 오래된 [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)의 machine-profile 및 ACK 설명은 [CA-G03](BACKLOG.md#ca-g03)의 차이가 있으므로 현재 사용자 경로·로컬 완료 기준으로 무조건 적용하지 않는다.
 
@@ -166,3 +168,14 @@ scope·식별자·권한은 [LogisticsTransferClient](../../transfer_seal.py)가
 source/target identity·membership·topology·version 및 action을 대조하고, 중앙 준비 상태와 로컬 출력 journal을 연결한다. 중앙 `PREPARED`, `PRINT_FAILED`, `PRINT_PARTIAL`, `READY`, `COMMITTED` 상태 및 로컬 ACK 대기 상태는 서로 다른 관측값이다. 출력 artifact hash와 `spool_job_id` 등 `_print_proof`를 확인한 뒤 print 완료·활성화 요청을 보낸다. [execute / _validate_exchange / _record_print_failure / _validate_artifact](../../phs_reconciliation_workflow.py).
 
 중앙 commit과 로컬 journal 또는 실물 인쇄는 분산된 효과다. 출력 일부 성공·응답 유실·파일 변조는 재조회/확인과 정확한 journal 재사용으로 처리하고, 취소/재출력 가능 여부를 현재 중앙 상태에서 판단한다. 이 계약의 spool 증거는 실제 종이 배출·부착 증거가 아니다. [CA-11](README.md#ca-11), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
+
+<a id="ca-c10"></a>
+## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
+
+**정상 진입:** [current_user_onboarding._registration_runner](../../current_user_onboarding.py)는 `--self-enroll --require-machine-credential-bundle --credential-scope current_user`로 등록 도구를 호출한다. 승인된 HTTPS origin의 `POST /api/producer-ingest/v2/enroll`을 사용하며 token은 `CONTAINER_AUDIT_ENROLLMENT_TOKEN` process 환경, 공개 CA는 `CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH`로 전달할 수 있다. TLS CA는 정상 등록 후 profile/producer 설정에 보존되는 경로이며 검증 해제나 기본 운영 origin fallback이 아니다.
+
+로컬 identity가 없는 기본 경로는 [derive_path_independent_install_id / _resolve_producer_identity](../../tools/register_container_audit_worker_pc.py)의 MachineGuid+현재 사용자 SID+app+계약 버전으로 `producer_install_id`를 파생하고, 그 값에서 `source_host_id`와 기본 `producer_id`를 파생한다. hostname·설치 폴더·Hyper-V VM ID를 새로 정하는 것으로 이 lookup 식별자가 바뀌지는 않는다. 파일 경로 독립성은 재설치 식별 연속성을 위한 동작이며 서버 소유 증명을 대체하지 않는다. `producer_identity.json`·possession key·credential/epoch와 정상 reattach/관리자 recovery는 별도 상태다.
+
+**실제 거부·정상 복구:** [2026-09-08 일반 설치 실패](E:/KMTech/ca-install-qualification-20260908/REPORT.md)에서 로컬 등록 자료 ABSENT인 복사 VM은 기존 중앙 producer/install 식별자와 같고 새 possession fingerprint는 달랐다. [Web 공개 lineage](E:/KMTech/web-integration-20260908/ca-enrollment-lineage.json)의 기존 active epoch6과 충돌해 `producer_identity_conflict` / `ADMIN_RECOVERY_REQUIRED`로 끝났다. Main의 기존 소유 배정 후 설치된 등록 도구의 `--admin-recovery-secret-file`·current_user 경로로 `ADMIN_RECOVERY_REGISTERED`/epoch7·서버/manifest 검증 true를 확인했다. recovery 직후 `OPERATION_PENDING`과 이후 Web의 범위·기간이 제한된 `SEAL_TRANSFER_BUNDLE` grant 승인은 별도 단계다. secret 파일은 제품이 성공 후 삭제했고 보호 입력의 값은 증거에 포함하지 않는다. 이 후속을 자동 소유권 이전이나 첫 enrollment PASS로 해석하지 않는다. [CA-G09](BACKLOG.md#ca-g09).
+
+**설치 실패 상태:** [현재 canonical](../../INSTALL_CANONICAL_PORTABLE.ps1)의 `container-audit-canonical-portable-install-v2`는 새 `PASS_NEW_VERIFIED` 배치 뒤 후속 실패에서 runtime/current-user preimage만 복원하고 새 verified code가 남으면 `FAILED_RUNTIME_RESTORED_CODE_RETAINED`와 남은 경로 경고를 기록한다. 기존 tree를 실제로 복원하는 교체 실패의 `FAILED_ROLLED_BACK`과 구분한다. 이는 상태 설명 수정이며 코드 삭제·복원 범위나 소유 증명 정책을 바꾸지 않는다. source68dd 동결 후보의 첫 실제 audit는 이전 `FAILED_ROLLED_BACK` 문자열을 그대로 보존하므로 [CA-O09](operations.md#ca-o09)의 관측 범위와 함께 읽는다.

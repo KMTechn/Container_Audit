@@ -2074,9 +2074,18 @@ catch {
         if ($evidenceFull) { Save $evidenceFull $audit }
         throw "AUTOSTART_ROLLBACK_FAILED: $($_.Exception.GetType().Name)"
     }
-    $audit.status='FAILED_ROLLED_BACK'
+    # A fresh placement has no old code tree to restore. Its verified files
+    # remain available even after the current-user runtime preimage is restored.
+    $audit.status = if ($placement -ceq 'PASS_NEW_VERIFIED') {
+        'FAILED_RUNTIME_RESTORED_CODE_RETAINED'
+    } else {
+        'FAILED_ROLLED_BACK'
+    }
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
+    if ($placement -ceq 'PASS_NEW_VERIFIED') {
+        Write-Warning "Current-user runtime restored. New verified code remains at $install"
+    }
     throw $original
 }
 finally {
