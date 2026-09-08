@@ -141,22 +141,24 @@ def _portable_release_fixture(
     launcher = b"@echo off\r\n"
     (release / "launch-container-audit.cmd").write_bytes(launcher)
     (release / "tools").mkdir()
-    shutil.copy2(PORTABLE_INSTALLER, release / "INSTALL_CANONICAL_PORTABLE.ps1")
-    shutil.copy2(INSTALLER, release / "INSTALL_THIS_PC.ps1")
-    shutil.copy2(INTEGRITY_HELPER, release / "tools" / "bootstrap_integrity.ps1")
-    shutil.copy2(
+    # Tests customize these disposable copies; preserve frozen source bytes
+    # without carrying its read-only attribute into the fixture packet.
+    shutil.copyfile(PORTABLE_INSTALLER, release / "INSTALL_CANONICAL_PORTABLE.ps1")
+    shutil.copyfile(INSTALLER, release / "INSTALL_THIS_PC.ps1")
+    shutil.copyfile(INTEGRITY_HELPER, release / "tools" / "bootstrap_integrity.ps1")
+    shutil.copyfile(
         WRITER_SESSION_ADAPTER,
         release / "tools" / "container_writer_session.ps1",
     )
-    shutil.copy2(
+    shutil.copyfile(
         WRITER_SESSION_CONTRACT,
         release / "tools" / "container_writer_session_contract.json",
     )
-    shutil.copy2(
+    shutil.copyfile(
         WRITER_FENCE_HELPER,
         release / "tools" / "container_writer_fence.ps1",
     )
-    shutil.copy2(
+    shutil.copyfile(
         WRITER_SINK_INVENTORY,
         release / "tools" / "container_writer_sink_inventory.json",
     )

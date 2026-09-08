@@ -33,7 +33,17 @@
 
 독립 검토는 원래 16경로 patch·후보 tree `6c5bf9bbf66bd3c53b765251c76607215083412c`와 481개 archive blob을 대조했다. focused 실행 후 변경은 위 세 명세의 상태 설명이며 실행한 제품·fixture·test blob은 동일하다. 이번 마감의 추가 변경도 같은 세 명세에 한정하므로 207개 focused 시험을 반복 실행하지 않고 기존 host 근거의 범위를 유지한다. 실제 successor commit/tree·bundle/archive·바이트 비교는 [마감 근거](E:/KMTech/ca-rp-0908/SUCCESSOR-MANIFEST.json), 새 대상의 207개 선택과 별도 FULL 요건은 [대상 인계](E:/KMTech/ca-rp-0908/TARGET-HANDOFF.md)에 연결한다. 소스 마감은 대상 수용이나 운영 준비 상승이 아니며 **Ready 0/6**을 유지한다.
 
+2026-09-08 Main이 수용한 `e1db07a9de60564f6bc92d1f52d0332d459d1361`/tree `4271b456449b23810d6302b2865974cac4080fa7`의 **대상 실행 packet 준비**는 [최신 준비 보고](E:/KMTech/ca-target-rp-0908/REPORT.md)에 연결한다. guest E 드라이브를 가정하지 않고 VM01의 짧은 `C:\Qualification\ca207\s`와 별도 `C:\Qualification\cafull\s`를 바인딩했다. source481·genuine Git·신선한 provider admission, 정확한 207 node와 조건부 FULL `tests`, 유한 native child/진단 export 및 Main 독립 readback control을 E에서 준비·host fixture 검증했다. 이번 작업의 제품 시험·VM 접속은 **NOT TESTED**이며 기존 207개 host 시험도 재실행하지 않았다. 실행 입력은 위 커밋의 모든 문서를 포함한 481개 blob으로 동결하고, 현재 세 명세의 준비 상태 설명은 별도 미커밋 문서 차이로 남긴다. 원래 실패와 **Ready 0/6**은 유지한다.
+
 Main의 별도 cleanup 지시에 따라 기존 pytest 소유 24개 identity를 확인하고 interpreter 12개를 외부 종료했다. abort 제어의 launcher 재확인 실패는 보존하며, [독립 최종 readback](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/CLEANUP-RESULT.md)이 **24개 부재·descendant closure empty·원래 Explorer 불변**을 입증했다. VM01 정리와 제품 준비도는 별개이고 FULL 재실행·build·설치·통합 수용은 이 작업에서 수행하지 않았다.
+
+### 2026-09-08 VM01 target207 실행 실패와 작은 수정 후보
+
+[실제 실행 보고](E:/KMTech/ca-execution-rp-0908/REPORT.md)는 replay121678/Fast OFF에서 위 동결 `e1db07a9`의 새 Support **8,539개·stable·불일치0**, genuine source481 Stage, 독립 MainStage **13,665개·PROVEN/stable**을 기록한다. 원래 17 selector의 정확한 **207개 ID를 순서대로 수집**했으나 첫 uninstall fixture 두 사례가 임시 packet의 `INSTALL_CANONICAL_PORTABLE.ps1` 수정에서 `PermissionError`로 실패했다. 원래 `--maxfail=2`에 따라 **0 PASS / 2 FAIL / 0 SKIP, 205개 미실행**이며, capability skip 사유는 이번 실행에서 관측되지 않았다. owner/pytest는 자연 종료1, controller/supervisor는 2다. 과거 host204 PASS/3 SKIP을 새 대상 결과로 승계하지 않는다.
+
+실패용 Export는 **45/45개·9,218,869바이트·stable·누락/overflow0**를 보존했다. 독립 [MAIN-Full](E:/KMTech/ca-target-rp-0908/focused/logs/MAIN-Full.json)은 controller의 실제 image 필드가 `null`이어서 `Base controller argv differs`로 **FAILED**이고 `actual=null`이다. 위 207개/2실패 집계는 회수된 collection·phase·JUnit·actual-result의 별도 진단이며 Main 수용값이 아니다. 마지막 02:47:18.8988799Z 표본은 **13,666개 대조 불일치0·원래81 identity inactive·잔여 lane0·recorded child0**다. 조건부 FULL은 시작하지 않았다.
+
+작은 로컬 후보는 [fixture](../../tests/test_zero_touch_installer.py)의 7개 `copy2`를 `copyfile`로 바꾸어 동결 원본 바이트·읽기 전용 속성을 유지하면서 의도적으로 수정하는 임시 복사본만 쓰기 가능하게 한다. [새 회귀](../../tests/test_portable_fixture_source_permissions.py)는 기존 17 selector 밖의 별도 모듈이며 host **RED 1 FAIL → GREEN 1 PASS**, 기존 두 영향 사례도 **2 PASS/31.64초**, 기록 relay6개 부재다. 소스·archive/bundle·소비된 제어 원본은 그대로이며 후보는 미커밋이다. 실제 retained handle에서 image를 조회하는 별도 제어 후보의 PS5/PS7 host 검증도 보고서에 연결한다. 두 후보의 독립 검토·새 입력 결속·새 guest 실행은 Main의 후속 경로이며 **NOT TESTED**, 원래 FULL/보존 FAILED와 **Ready 0/6**은 유지한다.
 
 ## 2. 사용자·제품 경계와 지원 경로
 
