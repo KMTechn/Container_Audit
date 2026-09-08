@@ -123,6 +123,13 @@
 - **09:57~10:45Z lifecycle·복원 후속:** exact a7의 일반 cold boot·자동 relay·uninstall/reinstall·현재 업무/identity 보존은 실제 PASS 범위다. 첫 f2 receipt는 old68dd preimage가 남아도 current a7의 정상 재설치 record hash와 달라 재사용할 수 없다. Main `msg_f47a9cbad540`/`msg_4189c4bb64b6`는 원본 drift를 보존하고 fresh ownership으로 공개 code-only restore를 구현·새 정상 교체/원 owner 종료 후 실제 복원하도록 승인했다. 현재 source의 lower helper5 PASS와 controller fixture 경로 길이 실패/수정 검증을 구분한다. 새 frozen artifact/정상 교체 receipt/old code와 relay의 실제 실행/두 ACKED·미착수 보류·identity 보존이 남으며 설치본 a7의 기존 PASS를 그 후보에 자동 승계하지 않는다.
 - **현재 source 결과:** 공개 controller6·lower helper62·기존 canonical/uninstall/inventory64의 해당132사례는 PASS다. 최초 긴 fixture 경로6 FAIL과 정적 호출 수1 FAIL은 원본으로 보존하고 필요한 범위만 수정·재확인했다. [CA-O09](operations.md#ca-o09)의 exact source inventory/실제 a7 writer 의미 대조까지 확인했으며, 다음은 정상 successor 교체로 새 receipt를 확보한 뒤 원 owner 종료/재시작 이후 취소·공개 복원·일반 old runtime과 업무/identity 보존의 실제 수용이다.
 
+<a id="ca-g10"></a>
+## CA-G10 최종 frozen d440의 별도 fresh 대상 수용
+
+- **유형·상태:** 최종 산출물 qualification 후속, P1, 요청한 native 수용·근거 정리 **수행 완료(지원 recovery 포함)**. 별도 c029 VM의 실제 CA 부재·exact d440·ordinary PlanOnly0, 지원 등록/설치 계속, 기본 첫 작업자/GUI, 실제 cold boot와 정상 제거/재설치 및 사용자 상태 보존을 [CA-O10](operations.md#ca-o10)과 [최종 보고서](E:/KMTech/ca-final-qualification-20260908/REPORT.md)에 연결한다. 최초 Install01의 자연스러운 ownership 충돌/native1은 **FAILED**로 남기며 무지원 fresh 등록을 PASS로 닫지 않는다.
+- **실제 결과·담당:** Main의 새 QA 소유 배정과 Web 단회 recovery로 실제 생성된 current_user key/epoch8을 등록한 뒤 Install02·Uninstall03·Reinstall04는 각각 native/task0다. 실제 빈 작업자 목록에서 CA-FINAL-QA를 등록했고 cold boot/재설치 후 같은 이름으로 기본 GUI를 재개했다. 작업자/설정2·identity3 파일의 exact 보존, 제거 시 코드/Run/process 부재, 재설치 시 exact d440/새 integrity record를 분리 확인했다. VM은14:43:14Z 정상 Off로 Main에 반환했고 CA의 추가 native 실행은 남지 않았다. 임의 identity·token·ledger·clock 수정과 업무 재연은 없다.
+- **재사용·남은 제품 경계:** Main이 이미 수용한 d440→a7 Restore09와 변하지 않은 a7 업무 근거는 원래 candidate/receipt/VM 범위로 재사용했다. 새 VM 때문에 같은 교체/복원 cycle이나 FULL/빌드를 반복하지 않았으며,132 affected 사례도 원래 동일 입력 범위의 근거다. 추가 실패나 관련 동작 변화가 없으면 추가 실행은 필요하지 않다. 복사 OS 대상의 최초 등록 실패, `OPERATION_PENDING` 권한 상태, 물리 스캐너/프린터·공장 배포·전체 readiness는 각각 별도 미수용/미검증 경계로 유지하며 CA-G09와 case03/F4의 기존 소유·수용 상태를 바꾸지 않는다.
+
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
 

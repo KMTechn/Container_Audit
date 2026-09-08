@@ -76,6 +76,14 @@ Main이 기존 source 공개키와 CPython3.12.10 x64 경로를 배정한 뒤 �
 
 **11:55Z 최신 실제 후속:** 별도 frozen source `d440b1f7`의 정상 교체로 새 receipt를 만든 뒤 원 owner 종료·cold boot를 거쳐 공개 canonical Restore09가 native/task0, **PASS_RESTORED_VERIFIED_DATA_PRESERVED**다. exact old a7·원 Run/relay·업무9/identity3와 historical68dd를 유지했고 failed-new d440을 보존했다. 취소07/동의 미관측08의 native1 실패는 그대로 남긴다. 복원된 ordinary a7 GUI에서 새 F4 target GOOD2가11:43:40Z **ACKED/attempt1**이며 완료3·전송 대기0이다. Web의 독립 receipt1/exact2 확인 뒤 Label/Web에 bundle을 명시 인계했고, 마지막 복원 후 cold boot의 자동 relay·세 ACKED/업무/identity 보존 및 전송30건 acked를 확인한 VM은 정상 Off로 Main에 반환했다. 실제 화면 보류는 기존 일반 보류1+격리1의 **2건**으로 이전 요약을 정정했다. [정확한 source·receipt·실행 범위](operations.md#ca-o09), [보고서](E:/KMTech/ca-install-qualification-20260908/REPORT.md), [남은 범위](BACKLOG.md#ca-g09)를 따른다. 새 FULL·강제 crash·실장비 검증이나 종합 Ready 판정은 이 결과에 없다.
 
+### 2026-09-08 최종 d440의 별도 fresh-app 대상 수용
+
+Main이 배정한 별도 `c029c9d7-1061-4676-92f7-5307cf3d80de` / `KMTech-CA-Final-Qualification-20260908-01`에서13:23:49Z 실제 코드·CA 사용자/identity 자료·DirectSync·Run·relay·CA task 부재를 확인했다. 기존 frozen d440 ZIP17,162,800B/SHA `6c5a07b5b6122c82c1e51d3ff3ab335c5697320b664e1ee67666245645175493`와 manifest `bb2825f36d5659a40f6ee1275f0a74d66de70651593400d342e041ef0408c3e7`를 사용했다. 복사 OS 식별자를 유지한 최초 ordinary Install01은 실제 producer 소유 충돌로 **native1 / FAILED_RUNTIME_RESTORED_CODE_RETAINED**였으며 원본13파일을 보존한다. Main/Web의 지원 recovery는 제품이 실제 만든 current_user key를 재사용해 **epoch8 / native0**, 후속 Install02는 **native/task0 / PASS·REUSED_VERIFIED**다. Web은 기존97 receipt ID·full row hash/rowid 보존을 독립 확인했다. 이 결과를 무지원 fresh 중앙 등록 PASS로 해석하지 않는다.
+
+기본 launcher의 실제 첫 작업자 `CA-FINAL-QA` 등록·작업 시작, 정상 Off→boot 후 자동 ordinary relay와 저장 작업자 재시작, canonical 제거/재설치 각각 **native/task0** 및 재설치 후 기본 GUI를 확인했다. 정상 close 후의 작업자·설정2파일과 producer identity/credential/manifest3파일은 cold boot와 제거/재설치에서 byte/hash가 일치한다. Windows servicing의26200.8037→9168 변화와 재설치가 새로 만든 integrity record는 별도로 기록했다. 최종 VM은14:43:14Z **정상 Off/uptime0**로 Main에 반환했으며, 현재 요청의 native qualification은 완료다. [실행 보고서](E:/KMTech/ca-final-qualification-20260908/REPORT.md), [정확한 후보·수용·실패 범위](operations.md#ca-o10), [남은 제품 경계](BACKLOG.md#ca-g10)를 따른다. 물리 장비·공장 배포·전체 Ready 판정은 이 완료에 포함하지 않는다.
+
+기존 a7 업무/lifecycle와 d440→a7 공개 Restore09는 원래 candidate·receipt·VM 범위에서 유지한다. Main은 새 VM이라는 이유만으로 같은 교체/복원 cycle을 반복하지 않도록 명시했다. 제품 소스는 변경하지 않았고 테스트·빌드는 재실행하지 않았으며, 새 실패나 관련 동작 변화가 있으면 해당 범위만 다시 판단한다. 이전 fresh 등록 실패·취소·동의 미관측·case03 custody와 F4 downstream 소유권도 그대로 보존한다.
+
 ## 2. 사용자·제품 경계와 지원 경로
 
 이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.
