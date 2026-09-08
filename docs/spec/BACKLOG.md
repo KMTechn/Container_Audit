@@ -2,15 +2,17 @@
 
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
+**현재 상태 — 2026-09-09 문서 확인:** 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**다. 기본 GUI·cold boot·정상 제거/재설치·사용자 상태 보존의 실제 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패는 **FAILED**로 보존하며, 물리 장비·공장 배포·전체 readiness는 별도 범위로 **Ready 0/6**을 유지한다.
+
 기준일 2026-09-07. 아래 우선순위와 담당은 정리 제안/책임 역할이며 새 개발 승인·기한·인력 배정이 아니다. P0는 기존 qualification 실패 처리, P1은 계약/운영 판단에 필요한 공백, P2는 요구 미확정 추가 제안이다. 정적 확인, 기존 실행, 이번 문서 검토의 범위는 [README](README.md#1-기준과-증거-사용법)를 따른다.
 
-승인된 다섯 문서의 소스 기준선과 지속 갱신 규칙은 Main 교차 검토 수용을 마쳤다. 후속 작업은 기존 capture validator 통합의 적용성 대조·현재 상태 보완·단일 커밋 검토 준비이며 제품/test 코드 변경이나 실행을 포함하지 않는다. 현재 조사만으로 별도의 **승인된 제품 기능 미구현**을 확정할 근거는 없다. 추가 아이디어와 찾지 못한 실행 증거를 구현 결함으로 세지 않는다. 대표 13개 기능 카드도 전체 기능 수나 완료율의 분모가 아니다.
+**이전 validator 문서 작업 이력:** 승인된 다섯 문서의 소스 기준선과 지속 갱신 규칙은 Main 교차 검토 수용을 마쳤다. 당시 후속 작업은 기존 capture validator 통합의 적용성 대조·현재 상태 보완·단일 커밋 검토 준비였으며 제품/test 코드 변경이나 실행을 포함하지 않았다. 해당 조사만으로 별도의 **승인된 제품 기능 미구현**을 확정할 근거는 없다. 추가 아이디어와 찾지 못한 실행 증거를 구현 결함으로 세지 않는다. 대표 13개 기능 카드도 전체 기능 수나 완료율의 분모가 아니다.
 
 2026-09-08 후속 FULL 실패 분석·별도 cleanup과 E의 좁은 fixture 검증은 [CA-G08](#ca-g08)에 기록한다. 앞 문단의 미실행 설명은 이전 validator 문서 작업의 범위이며 이 후속 실행을 포함하지 않는다.
 
 ## 문서 작성 진행과 제품 준비도
 
-| 관리 대상 | 현재 상태 | 완료/다음 판단 |
+| 관리 대상 | 당시 상태 | 완료/다음 판단 |
 |---|---|---|
 | CA 문서 기준선 | 작성·로컬 정적 대조 및 Main 교차 검토 수용 완료 | [AGENTS](../../AGENTS.md), [README](README.md), [contracts](contracts.md), [operations](operations.md), 이 문서가 범위. [IMPLEMENTATION](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)·[교차 검토](E:/KMTech/spec-hub-build-20260907/cross-review/REVIEW.md)·[중앙 S01](../../../Program_Spec_Hub/BACKLOG.md#specification). |
 | 구현·개발 진행 | 공유 validator 소스 통합의 한정 수용 완료, Main 단일 커밋 수용 완료 | 기존 9개 통합 경로와 명세 5개를 [검토 준비](E:/KMTech/coordinator-handoff-20260907-01a07992/ca-validator-source-unit-close/PREPARATION.md)에 연결. 준비 워커의 제품/test/config 코드 변경·staging·commit 없음. |

@@ -4,6 +4,8 @@
 
 [계약·데이터](contracts.md) · [운영·복구](operations.md) · [남은 작업](BACKLOG.md) · [전체 허브](../../../Program_Spec_Hub/README.md) · [통합 관계](../../../Program_Spec_Hub/INTEGRATIONS.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
+**현재 상태 — 2026-09-09 문서 확인:** 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**다. 기본 GUI·cold boot·정상 제거/재설치·사용자 상태 보존의 실제 범위는 [CA-G10](BACKLOG.md#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패는 **FAILED**로 보존하며, 물리 장비·공장 배포·전체 readiness는 별도 범위로 **Ready 0/6**을 유지한다.
+
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.
