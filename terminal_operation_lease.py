@@ -2021,7 +2021,7 @@ class OperationLeaseStore:
                 lease_id=lease_id,
                 target_status=ISSUE_ACKED,
                 allowed_statuses=frozenset(
-                    {ISSUE_LOCAL_COMPLETED, ISSUE_ACKED}
+                    {ISSUE_LOCAL_COMPLETED, ISSUE_OPERATOR_REVIEW, ISSUE_ACKED}
                 ),
             )
             connection.commit()
@@ -2103,15 +2103,15 @@ class OperationLeaseStore:
             ).fetchone():
                 return "ROTATED"
             if connection.execute(
-                "SELECT 1 FROM terminal_operation_lease_reviews WHERE lease_id=?",
-                (lease_id,),
-            ).fetchone():
-                return "OPERATOR_REVIEW"
-            if connection.execute(
                 "SELECT 1 FROM terminal_operation_lease_receipts WHERE lease_id=?",
                 (lease_id,),
             ).fetchone():
                 return "ACKED"
+            if connection.execute(
+                "SELECT 1 FROM terminal_operation_lease_reviews WHERE lease_id=?",
+                (lease_id,),
+            ).fetchone():
+                return "OPERATOR_REVIEW"
             if connection.execute(
                 "SELECT 1 FROM terminal_operation_lease_completions WHERE lease_id=?",
                 (lease_id,),

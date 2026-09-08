@@ -711,6 +711,128 @@ def test_terminal_lease_conflict_preserves_local_evidence_for_review(
         ).fetchone()[0] == 1
 
 
+def _rejected_review(tmp_path, retry_response=None):
+    posted = []
+
+    def handler(call):
+        if call["method"] == "POST" and call["url"].endswith("/transfers/seal"):
+            posted.append(call)
+            if len(posted) == 1:
+                return FakeResponse(400, {
+                    "ok": False, "retryable": False, "committed": False,
+                    "error": {"code": "INVALID_INPUT", "message": "rejected"},
+                })
+            if retry_response is not None:
+                return retry_response(call)
+            return FakeResponse(200, {"ok": True, "data": _consumed_receipt(call["json"])})
+        if call["method"] == "GET" and "/receipts/" in call["url"]:
+            return FakeResponse(404, {"ok": False})
+        raise AssertionError(call["url"])
+
+    coordinator, manager, session, resolved, scan_payload, db_path = _accepted_coordinator(tmp_path, handler)
+    prepared = _prepare_lease_transfer(coordinator, resolved, scan_payload, "operation-lease-test-01")
+    assert coordinator.attempt(prepared.intent_id).status == "OPERATOR_REVIEW"
+    return coordinator, manager, prepared.intent_id, posted, db_path
+
+
+def test_supervisor_review_retry_preserves_command_and_timely_completion_after_expiry(tmp_path, monkeypatch):
+    coordinator, manager, intent_id, posted, db_path = _rejected_review(tmp_path)
+    original = dict(coordinator.store.load(intent_id))
+    completion = dict(manager.store.completion("operation-lease-test-01"))
+    original_review = dict(coordinator.store.post_review_case_for_intent(intent_id))
+    # The machine restarts after expiry; the signed completion time stays intact.
+    import terminal_operation_lease as lease_module
+    original_clock = lease_module.datetime
+
+    class LaterClock(original_clock):
+        @classmethod
+        def now(cls, tz=None):
+            return original_clock.now(tz) + timedelta(days=1)
+
+    monkeypatch.setattr(lease_module, "datetime", LaterClock)
+    restarted = TransferSealCoordinator(
+        TransferSealStore(db_path), coordinator.client,
+        OperationLeaseManager(OperationLeaseStore(db_path), manager.keyring),
+    )
+    audits = []
+    assert restarted.attempt(intent_id).status == "OPERATOR_REVIEW"
+    assert restarted.drain_pending() == []
+    assert len(posted) == 1
+    result = restarted.retry_operator_review(
+        intent_id, supervisor="protected-admin", authorize=lambda: True,
+        record_audit=lambda detail: audits.append(dict(detail)) or True,
+    )
+    assert result.status == result.operation_lease_state == "ACKED"
+    assert len(posted) == 2
+    assert posted[0]["json"] == posted[1]["json"]
+    assert posted[0]["headers"]["Idempotency-Key"] == posted[1]["headers"]["Idempotency-Key"]
+    current = dict(restarted.store.load(intent_id))
+    for key in ("command_json", "command_hash", "command_id", "idempotency_key", "local_completion_id"):
+        assert current[key] == original[key]
+    assert dict(manager.store.completion("operation-lease-test-01")) == completion
+    assert dict(restarted.store.post_review_case_for_intent(intent_id)) == original_review
+    assert restarted.store.post_review_cases(active_only=True) == []
+    assert len(restarted.store.post_review_cases()) == 1
+    assert len(audits) == 1 and audits[0]["command_hash"] == original["command_hash"]
+    assert "token" not in audits[0]
+    assert manager.store.state("operation-lease-test-01") == "ACKED"
+    with manager.store._connect() as connection:
+        for table in ("transfer_completion_ledger", "terminal_operation_lease_completions", "terminal_operation_lease_receipts", "terminal_operation_lease_reviews"):
+            assert connection.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("failure", ["unauthorized", "audit_failed", "authorization_changed", "command_tampered", "checkpoint_missing", "already_acked"])
+def test_supervisor_review_retry_fails_closed_before_post(tmp_path, failure):
+    coordinator, manager, intent_id, posted, db_path = _rejected_review(tmp_path)
+    if failure in {"command_tampered", "checkpoint_missing", "already_acked"}:
+        with coordinator.store._connect() as connection:
+            if failure == "command_tampered":
+                connection.execute("DROP TRIGGER trg_transfer_command_immutable")
+                connection.execute("UPDATE transfer_seal_intents SET command_hash='tampered' WHERE intent_id=?", (intent_id,))
+            elif failure == "checkpoint_missing":
+                connection.execute("UPDATE transfer_seal_intents SET completion_checkpoint_confirmed=0 WHERE intent_id=?", (intent_id,))
+            else:
+                connection.execute("UPDATE transfer_seal_intents SET status='ACKED' WHERE intent_id=?", (intent_id,))
+            connection.commit()
+    auth_calls = []
+
+    def authorize():
+        auth_calls.append(True)
+        return failure != "unauthorized" and not (failure == "authorization_changed" and len(auth_calls) > 1)
+
+    before = dict(coordinator.store.load(intent_id))
+    with pytest.raises(TransferSealError):
+        coordinator.retry_operator_review(
+            intent_id, supervisor="protected-admin", authorize=authorize,
+            record_audit=lambda _detail: failure != "audit_failed",
+        )
+    assert dict(coordinator.store.load(intent_id)) == before
+    assert len(posted) == 1
+
+
+@pytest.mark.parametrize("failure", ["transport", "conflict", "bad_receipt"])
+def test_supervisor_retry_failure_stays_review_and_never_auto_retries(tmp_path, failure):
+    def retry_response(call):
+        if failure == "transport":
+            raise ConnectionError("lost response")
+        if failure == "conflict":
+            return FakeResponse(409, {"ok": False, "retryable": True, "error": {"code": "OPERATION_LEASE_EXPECTED_VERSIONS_MISMATCH", "message": "conflict"}})
+        receipt = _consumed_receipt(call["json"], fence=99)
+        return FakeResponse(200, {"ok": True, "data": receipt})
+
+    coordinator, manager, intent_id, posted, _db_path = _rejected_review(tmp_path, retry_response)
+    result = coordinator.retry_operator_review(
+        intent_id, supervisor="protected-admin", authorize=lambda: True,
+        record_audit=lambda _detail: True,
+    )
+    assert result.status == result.operation_lease_state == "OPERATOR_REVIEW"
+    assert not result.receipt_id
+    assert coordinator.store.pending_ids() == []
+    assert coordinator.drain_pending() == []
+    assert len(posted) == 2
+    assert posted[0]["json"] == posted[1]["json"]
+
+
 def test_durable_lease_completion_failure_blocks_transfer_attempt(tmp_path):
     coordinator, manager, session, resolved, scan_payload, _db_path = (
         _accepted_coordinator(

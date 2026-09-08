@@ -698,7 +698,7 @@ def _writer_surfaces():
 WRITER_SURFACES = _writer_surfaces()
 
 
-def test_transfer_writer_owner_census_remains_exactly_25():
+def test_transfer_writer_owner_census_includes_explicit_review_retry():
     counts = {
         class_name: sum(
             1
@@ -710,10 +710,10 @@ def test_transfer_writer_owner_census_remains_exactly_25():
     assert counts == {
         "TransferMemberExchangeCoordinator": 4,
         "TransferMemberExchangeStore": 7,
-        "TransferSealCoordinator": 5,
+        "TransferSealCoordinator": 6,
         "TransferSealStore": 9,
     }
-    assert len(WRITER_SURFACES) == 25
+    assert len(WRITER_SURFACES) == 26
 
 
 @pytest.mark.parametrize(
@@ -730,6 +730,18 @@ def test_every_public_transfer_writer_asserts_owner_first(
     methods = _public_methods(class_node)
     method = methods[method_name]
     calls = _method_calls(method)
+    if "self._attempt_row" in calls:
+        # Follow the shared transport helper, retaining its owner-first guard.
+        helper = next(
+            node for node in class_node.body
+            if isinstance(node, ast.FunctionDef) and node.name == "_attempt_row"
+        )
+        first_helper = _first_executable_statement(helper)
+        assert isinstance(first_helper, ast.Expr)
+        assert isinstance(first_helper.value, ast.Call)
+        assert _call_name(first_helper.value) == "self._assert_owner"
+        assert _central_calls(helper)
+        calls |= _method_calls(helper)
     if class_name in STORE_CLASS_NAMES:
         assert _constant_sql_writes(method), (
             filename,

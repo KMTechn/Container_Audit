@@ -6518,6 +6518,18 @@ class ContainerAudit:
             label="전송 상태 상세",
             command=self._show_direct_sync_status_details,
         )
+        menu.add_command(
+            label="완료 작업 중앙 반영 재시도 (관리자)",
+            command=self._retry_transfer_post_review,
+            state=(
+                tk.NORMAL
+                if self._is_preflight_hold_supervisor()
+                and not active_tray
+                and not transfer_lane_busy
+                and not replacement_active
+                else tk.DISABLED
+            ),
+        )
         menu.add_separator()
         menu.add_command(
             label="현재 작업 리셋",
@@ -13021,6 +13033,93 @@ class ContainerAudit:
         self._transfer_post_review_refresh_pending = True
         return self._schedule_transfer_post_review_refresh()
 
+    def _retry_transfer_post_review(self) -> bool:
+        """Offer one reviewed completion through the existing supervisor lane."""
+        if not self._is_preflight_hold_supervisor():
+            messagebox.showwarning("관리자 인증 필요", "관리자로 로그인해 주세요.", parent=self.root)
+            return False
+        if (
+            getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            or self._warning_state_presenter().state.is_blocking
+            or getattr(self, "_ui_close_requested", False)
+            or getattr(self, "master_label_replace_state", None)
+        ):
+            return False
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return False
+        cases = tuple(getattr(self, "_transfer_post_review_cases", ()) or ())
+        case = next((row for row in cases if row.get("command_bound")), None)
+        if case is None:
+            self._refresh_transfer_post_review_state()
+            messagebox.showinfo(
+                "완료 작업 확인", "재시도할 저장 요청이 없습니다. 전송 상태를 확인해 주세요.",
+                parent=self.root,
+            )
+            return False
+        supervisor = persistent_operator_name(str(getattr(self, "worker_name", "") or ""))
+        generation = int(getattr(self, "_scan_callback_epoch", 0) or 0)
+        if not messagebox.askyesno(
+            "완료 작업 중앙 반영 재시도",
+            f"품목: {case['item_id']}\n수량: {case['scan_count']}개\n"
+            f"완료 작업자: {case['operator']}\n\n"
+            "관리자 확인을 마쳤습니까? 저장된 완료 요청을 그대로 다시 보냅니다.",
+            parent=self.root,
+        ):
+            return False
+
+        def authorized() -> bool:
+            return bool(
+                self._is_preflight_hold_supervisor()
+                and persistent_operator_name(str(getattr(self, "worker_name", "") or "")) == supervisor
+                and int(getattr(self, "_scan_callback_epoch", 0) or 0) == generation
+                and not getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            )
+
+        def audit(detail: Mapping[str, Any]) -> bool:
+            return bool(self._log_event(
+                "TRANSFER_SEAL_REVIEW_RETRY_REQUESTED", detail=dict(detail),
+                synchronous=True, worker_name_override=supervisor,
+            ))
+
+        def work() -> SealAttempt:
+            return self._transfer_seal_runtime().retry_operator_review(
+                str(case["intent_id"]), supervisor=supervisor,
+                authorize=authorized, record_audit=audit,
+            )
+
+        def finish(result: SealAttempt) -> None:
+            self._refresh_transfer_post_review_state()
+            self._update_action_button_states()
+            if result.status == "ACKED":
+                messagebox.showinfo(
+                    "중앙 반영 확인", "저장된 완료 작업의 중앙 반영을 확인했습니다.", parent=self.root,
+                )
+            else:
+                messagebox.showwarning(
+                    "관리자 확인 계속 필요",
+                    "완료 기록을 보존했습니다. 중앙 반영이 확인되지 않아 관리자 확인 상태를 유지합니다.",
+                    parent=self.root,
+                )
+
+        def fail(exc: BaseException) -> None:
+            self._refresh_transfer_post_review_state()
+            self._update_action_button_states()
+            messagebox.showwarning(
+                "완료 작업 확인 필요",
+                str(exc) if isinstance(exc, TransferSealError) else "요청을 처리하지 못했습니다. 저장 기록을 확인해 주세요.",
+                parent=self.root,
+            )
+
+        admission = lane.submit(LaneTask(
+            name="transfer-post-review-retry", generation=generation,
+            work=work, finish=finish, fail=fail,
+            on_idle=self._schedule_pending_transfer_coordinator_work,
+            shutdown_policy=DRAIN_TO_DURABLE_HANDOFF,
+        ))
+        self._update_action_button_states()
+        return bool(admission.accepted)
+
     def _schedule_transfer_post_review_refresh(self) -> bool:
         if (
             not getattr(self, "_transfer_post_review_refresh_pending", False)
@@ -13047,7 +13146,7 @@ class ContainerAudit:
             try:
                 cases = tuple(
                     dict(row)
-                    for row in self._transfer_seal_runtime().store.post_review_cases()
+                    for row in self._transfer_seal_runtime().store.post_review_cases(active_only=True)
                 )
             except Exception:
                 cases = ()
@@ -13143,6 +13242,7 @@ class ContainerAudit:
         refresh_requested = bool(outcome.get("refresh_requested"))
         replay_failed = bool(outcome.get("replay_failed"))
         cases = tuple(outcome.get("cases") or ())
+        self._transfer_post_review_cases = cases
 
         presented_ids = getattr(
             self,

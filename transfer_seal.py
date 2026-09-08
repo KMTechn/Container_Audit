@@ -3245,6 +3245,10 @@ class TransferSealStore:
         )
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            previous = self._load_in_connection(conn, intent_id)
+            if previous is not None and previous["status"] == "OPERATOR_REVIEW":
+                # A failed explicit review retry never enables automatic retry.
+                status = "OPERATOR_REVIEW"
             conn.execute(
                 """UPDATE transfer_seal_intents
                       SET status=?,last_error_code=?,last_error_message=?,attempt_count=attempt_count+1,
@@ -3306,17 +3310,24 @@ class TransferSealStore:
             raise KeyError(normalized_intent)
         return row
 
-    def post_review_cases(self) -> list[sqlite3.Row]:
+    def post_review_cases(self, *, active_only: bool = False) -> list[sqlite3.Row]:
         self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT review.*, outbox.outbox_sequence,
+                          intent.status AS intent_status, intent.item_id,
+                          intent.operator, intent.scan_count,
+                          (intent.command_json IS NOT NULL) AS command_bound,
                           outbox.payload_json AS outbox_payload_json,
                           outbox.payload_hash AS outbox_payload_hash
                      FROM transfer_post_review_cases AS review
                      JOIN transfer_post_review_outbox AS outbox
                        ON outbox.review_case_id=review.review_case_id
-                    ORDER BY outbox.outbox_sequence"""
+                     JOIN transfer_seal_intents AS intent
+                       ON intent.intent_id=review.intent_id
+                    WHERE (?=0 OR intent.status='OPERATOR_REVIEW')
+                    ORDER BY outbox.outbox_sequence""",
+                (int(active_only),),
             ).fetchall()
         return list(rows)
 
@@ -5072,6 +5083,68 @@ class TransferSealCoordinator:
             return self._attempt_from_row(row)
         if row["status"] == "OPERATOR_REVIEW":
             return self._attempt_from_row(row)
+        return self._attempt_row(row)
+
+    def retry_operator_review(
+        self,
+        intent_id: str,
+        *,
+        supervisor: str,
+        authorize: Callable[[], bool],
+        record_audit: Callable[[Mapping[str, Any]], bool],
+    ) -> SealAttempt:
+        """Explicitly retry one intact command after durable supervisor audit."""
+        self._assert_owner()
+        if not str(supervisor or "").strip() or not bool(authorize()):
+            raise TransferSealError(
+                "SUPERVISOR_AUTHORIZATION_REQUIRED", "관리자 인증이 필요합니다."
+            )
+        row = self.store.load(intent_id)
+        if (
+            row["status"] != "OPERATOR_REVIEW"
+            or not bool(row["completion_checkpoint_confirmed"])
+            or not row["local_completion_id"]
+            or not row["command_json"]
+            or row["receipt_json"] is not None
+            or row["seal_qr_payload"] is not None
+        ):
+            raise TransferSealError(
+                "TRANSFER_REVIEW_RETRY_NOT_AVAILABLE",
+                "저장된 완료 요청을 재시도할 수 있는 상태가 아닙니다.",
+            )
+        context = json.loads(row["command_json"])
+        self._validate_bound_command(row, context)
+        review = self.store.post_review_case_for_intent(intent_id)
+        if review["local_completion_id"] != row["local_completion_id"]:
+            raise TransferSealError(
+                "TRANSFER_COMMAND_INTEGRITY_MISMATCH",
+                "관리자 확인 기록과 완료 요청이 일치하지 않습니다.",
+            )
+        evidence = {
+            "review_case_id": str(review["review_case_id"]),
+            "transfer_intent_id": intent_id,
+            "transfer_idempotency_key": str(row["idempotency_key"]),
+            "local_completion_id": str(row["local_completion_id"]),
+            "command_hash": str(row["command_hash"]),
+            "operation_lease_id": str(row["operation_lease_id"]),
+            "supervisor": str(supervisor).strip(),
+            "prior_error_code": str(row["last_error_code"] or ""),
+            "prior_attempt_count": int(row["attempt_count"]),
+        }
+        if not bool(record_audit(evidence)):
+            raise TransferSealError(
+                "TRANSFER_REVIEW_AUDIT_REQUIRED",
+                "관리자 재시도 기록을 저장하지 못했습니다. 요청을 보내지 않았습니다.",
+            )
+        if not bool(authorize()):
+            raise TransferSealError(
+                "SUPERVISOR_AUTHORIZATION_REQUIRED", "관리자 인증이 변경되었습니다."
+            )
+        return self._attempt_row(row)
+
+    def _attempt_row(self, row: sqlite3.Row) -> SealAttempt:
+        self._assert_owner()
+        intent_id = str(row["intent_id"])
         try:
             if row["command_json"] is None:
                 context = self._build_command(row)
