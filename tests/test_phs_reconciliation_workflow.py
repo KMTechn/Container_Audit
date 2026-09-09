@@ -1743,9 +1743,6 @@ def test_reconciliation_ui_execution_preserves_tray_scan_progress_and_focus(
         ("status", message)
     )
     app._schedule_focus_return = lambda: calls.append(("focus",))
-    app._phs_exchange_status_from_worker = lambda message: calls.append(
-        ("worker_status", message)
-    )
     app._set_phs_reconciliation_context = lambda value: setattr(
         app, "_phs_reconciliation_context", value
     )
@@ -1836,9 +1833,6 @@ def test_startup_local_print_starting_recovery_uses_keyboard_confirmation(
         ("status", message)
     )
     app._schedule_focus_return = lambda: calls.append(("focus",))
-    app._phs_exchange_status_from_worker = lambda message: calls.append(
-        ("worker_status", message)
-    )
     app._set_phs_reconciliation_context = lambda value: setattr(
         app, "_phs_reconciliation_context", value
     )

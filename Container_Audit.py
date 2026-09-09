@@ -93,7 +93,7 @@ from label_qr import (
     parse_new_format_qr,
     parse_positive_quantity,
 )
-from parked_tray_store import ParkedTrayStore, sanitize_filename
+from parked_tray_store import ParkedTrayStore
 from preflight_scan_hold import (
     HOLD_DRAINING,
     HOLD_LOOKUP,
@@ -243,7 +243,6 @@ from update_service import (
     is_sha256,
     is_newer_version,
     parse_sha256_checksum,
-    parse_version_tag,
     release_asset_name_from_url,
     update_candidate_from_private_manifest,
     validate_release_asset_url,
@@ -439,9 +438,6 @@ def _default_automatic_install_policy() -> Dict[str, Any]:
         "preserve_paths": list(UPDATE_REQUIRED_PRESERVE_PATHS),
         "restart_executable": UPDATE_RESTART_EXECUTABLE,
     }
-
-def _parse_version_tag(version: str) -> Optional[tuple[int, int, int]]:
-    return parse_version_tag(version)
 
 def _is_newer_version(latest_version: str, current_version: str) -> bool:
     return is_newer_version(latest_version, current_version)
@@ -1275,11 +1271,6 @@ class ContainerAudit:
             self.best_time_store.save(self.best_time_records)
         except Exception as e:
             print(f"최고 기록 저장 실패: {e}")
-
-    def _cleanup_old_records(self):
-        """30일이 지난 오래된 기록을 삭제합니다."""
-        if not self.best_time_records: return
-        self.best_time_records = self.best_time_store.cleanup(self.best_time_records)
 
     def _update_best_time_records(self, new_time: float):
         """새로운 완료 시간을 받아 최고 기록을 갱신하고 저장합니다."""
@@ -4145,38 +4136,6 @@ class ContainerAudit:
         except (tk.TclError, AttributeError):
             return
 
-    def _layout_center_action_group_buttons(self, group: dict, group_width: int, pad_x: int = 8) -> None:
-        buttons = group.get("buttons", [])
-        if not buttons:
-            return
-        group_key = group.get("key", "")
-        inner_frame = group.get("button_frame")
-        if inner_frame is None:
-            return
-        try:
-            if group_key == "primary":
-                columns = 1
-            elif group_key == "danger":
-                columns = 3 if group_width >= 240 else 2 if group_width >= 170 else 1
-            else:
-                columns = min(len(buttons), 2 if group_width >= 240 else 1)
-
-            for button in buttons:
-                button.grid_forget()
-            for column in range(max(3, len(buttons))):
-                inner_frame.grid_columnconfigure(column, weight=0, uniform="")
-            for index, button in enumerate(buttons):
-                button.grid(
-                    row=index // columns,
-                    column=index % columns,
-                    sticky='ew',
-                    padx=max(2, pad_x // 2),
-                    pady=(0, max(4, int(6 * self.scale_factor))),
-                )
-                inner_frame.grid_columnconfigure(index % columns, weight=1, uniform=f"center_{group_key}_actions")
-        except (tk.TclError, AttributeError):
-            return
-
     def _configure_widget_options(self, widget, **kwargs) -> None:
         if widget is None:
             return
@@ -5792,19 +5751,6 @@ class ContainerAudit:
             return True
         self._phs_reconciliation_resolve_task_handle = admission.handle
         return True
-
-    def _phs_exchange_status_from_worker(self, _message: str) -> None:
-        try:
-            self.root.after(
-                0,
-                lambda: self.show_status_message(
-                    "현품표 출력·교체를 진행하고 있습니다.",
-                    self.COLOR_PRIMARY,
-                    duration=0,
-                ),
-            )
-        except (tk.TclError, AttributeError):
-            pass
 
     def _execute_selected_phs_label_exchange(self) -> None:
         if self._reject_mutation_during_preflight_hold():
@@ -8024,9 +7970,6 @@ class ContainerAudit:
             self.current_item_label['text'] = "현품표 라벨을 스캔하세요."
             self.current_item_label['foreground'] = self.COLOR_TEXT_SUBTLE
     
-    def _sanitize_filename(self, filename: str) -> str:
-        return sanitize_filename(filename)
-
     def _cancel_master_preflight(self) -> None:
         self._master_preflight_epoch = int(getattr(self, "_master_preflight_epoch", 0)) + 1
         poll_job = getattr(self, "_master_preflight_poll_job", None)
@@ -11154,15 +11097,6 @@ class ContainerAudit:
             self.show_status_message(f"휴식 상태입니다. 스캔하여 작업을 재개하세요.", self.COLOR_IDLE, duration=10000)
         else:
             status_widget['text'] = "작업 중"; status_widget['foreground'] = self.COLOR_SUCCESS
-
-    def _on_column_resize(self, event: tk.Event, tree: ttk.Treeview, name: str):
-        if tree.identify_region(event.x, event.y) == "separator":
-            self.root.after(10, self._save_column_widths, tree, name)
-            self._schedule_focus_return()
-
-    def _save_column_widths(self, tree: ttk.Treeview, name: str):
-        for col_id in tree["columns"]: self.column_widths[f'{name}_{col_id}'] = tree.column(col_id, "width")
-        self.save_settings()
 
     def _start_warning_beep(self):
         if getattr(self, "_warning_beep_active", False):

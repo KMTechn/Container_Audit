@@ -68,9 +68,10 @@ Container Audit
 pip install -r requirements.txt
 
 # 의존성 목록
-requests    # GitHub API 통신
-pygame     # 오디오 피드백
-Pillow     # 이미지 처리
+requests    # HTTPS API 통신
+chardet     # CSV 인코딩 처리
+qrcode      # QR 생성
+native_audio / vendor.kmtech_zero_pe.raster  # 배포 사운드·이미지 구현
 tkinter    # GUI 프레임워크 (Python 내장)
 ```
 
@@ -81,11 +82,14 @@ tkinter    # GUI 프레임워크 (Python 내장)
 python Container_Audit.py
 
 # 변경 영역 quick-check
-python -m pytest -q -p no:cacheprovider <changed-test-node>
+python -B tools/run_repository_tests.py --work-root E:\KMTech\<task>\Container_Audit <changed-test-node>
 ```
 
-일부 entrypoint만 다시 `py_compile`하지 않는다. 최종 전체 회귀는 `main` push의
-Full CI가 exact SHA에서 한 번 실행한다.
+변경된 동작·호출 경로를 기존 focused 시험으로 확인하고, 출력과 임시 상태는 해당 E 작업
+루트에 격리한다. 새 SHA나 문서 수정만으로 Full·build·재설치·업무 replay를 반복하지 않는다.
+기존 검증의 적용 범위와 실제 변경·실패·미해결 위험을 비교해 필요한 검증만 추가한다.
+선택된 여섯 프로그램 qualification은 Main이 마감했으며 accepted `d440b1f7` 설치 산출물과
+원래 실패 증거는 보존한다. 실제 새 배포에는 해당 배포 권한과 artifact 검증을 적용한다.
 
 ### 설치와 최초 실행
 

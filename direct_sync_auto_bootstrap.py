@@ -348,9 +348,3 @@ def start_direct_sync_auto_bootstrap(
     )
     thread.start()
     return thread
-
-
-def _install_report_relay_topology(_report: dict[str, Any]) -> str:
-    """Retired compatibility hook retained for old diagnostics only."""
-
-    return "retired_scheduled_task_contract"

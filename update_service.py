@@ -170,12 +170,6 @@ UPDATE_SECRET_QUERY_KEYS = {
     "token",
 }
 UPDATE_SECRET_QUERY_PREFIXES = ("x_amz_", "x_goog_")
-DIRECT_GITHUB_ARTIFACT_HOSTS = frozenset(
-    {
-        "objects.githubusercontent.com",
-        "github-releases.githubusercontent.com",
-    }
-)
 GITHUB_UPDATE_HOSTS = frozenset({"api.github.com", "github.com", "www.github.com"})
 
 
@@ -250,17 +244,6 @@ def assert_https_update_url(url: str, *, require_zip: bool = False) -> str:
         if normalized_key in UPDATE_SECRET_QUERY_KEYS or normalized_key.startswith(UPDATE_SECRET_QUERY_PREFIXES):
             raise ValueError("업데이트 URL에 장기 인증 토큰을 직접 포함할 수 없습니다.")
     return text
-
-
-def is_direct_github_artifact_url(url: str) -> bool:
-    parsed = urlparse(str(url or "").strip())
-    host = (parsed.hostname or "").lower()
-    path = parsed.path.lower()
-    if host in {"github.com", "www.github.com"} and "/releases/download/" in path:
-        return True
-    if host == "api.github.com" and "/releases/assets/" in path:
-        return True
-    return host in DIRECT_GITHUB_ARTIFACT_HOSTS
 
 
 def is_github_hosted_update_url(url: str) -> bool:
@@ -568,14 +551,6 @@ def file_sha256(path: str | Path) -> str:
 
 def is_sha256(value: str) -> bool:
     return isinstance(value, str) and re.fullmatch(r"[A-Fa-f0-9]{64}", value.strip()) is not None
-
-
-def verify_update_file_hash(path: str | Path, expected_sha256: str) -> None:
-    if not is_sha256(str(expected_sha256 or "").strip()):
-        raise ValueError("업데이트 ZIP SHA256 검증에는 64자 예상 해시가 필요합니다.")
-    actual = file_sha256(path)
-    if actual.lower() != str(expected_sha256).strip().lower():
-        raise ValueError("업데이트 ZIP SHA256 체크섬이 일치하지 않습니다.")
 
 
 def verify_update_checksum(zip_path: str | Path, checksum_text: str, *, expected_filename: str = "") -> None:

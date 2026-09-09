@@ -1,6 +1,15 @@
 # Container_Audit release gate contract
 
-This contract separates fast feedback, exact-SHA local regression, local artifact qualification, publication, and TEST1 field evidence. GitHub Actions is not a release gate.
+This contract separates changed-area regression, local artifact qualification, publication, and field evidence. GitHub Actions is not a release gate.
+
+The selected six-program qualification was closed by Main before the approved
+2026-09-09 S05 source simplification. Preserve the accepted `d440b1f7` artifacts
+and original failures. A new source commit does not require another Full run,
+native build, installation, or business replay: reuse applicable evidence and
+check changed behavior with focused existing tests. Broaden verification only
+for relevant changes, failures, or unresolved risks. The publication and
+deployment controls below apply when those actions are actually assigned;
+they are not extra gates for routine source or documentation maintenance.
 
 ## Factory Contract adoption status
 
@@ -21,7 +30,7 @@ canonical adoption.
 | Gate | Accident prevented | Unique signal | Timing | Failure decision |
 | --- | --- | --- | --- | --- |
 | quick-check | Changed-area contract breakage | Focused pytest node; Python 3.11 import/version compatibility is a distinct CI lane | During development, before candidate freeze | Fix the affected area; do not advance the candidate |
-| local-ci | Functional regression | Exact-commit/tree local tests and source release-config contract in the isolated environment; Python 3.11 compatibility remains distinct | Before the pre-push candidate build and again whenever source changes | Do not build or publish a candidate whose local exact-SHA gates are not `PROVEN` |
+| local-ci | Functional regression | Focused existing tests of changed behavior plus applicable retained evidence; record source/environment and limits | When behavior, a failure, or an unresolved risk requires verification | Resolve affected failures before advancing that behavior; a new SHA alone does not invalidate unchanged evidence |
 | release-gate | Wrong tag/SHA or rebuilt/altered package/archive/hash | Pre-push build in an isolated local bare mirror/clone under the already-created FINAL tag object, exact local qualification receipt, external immutable-policy gate, immutable release snapshots, and downloaded-vs-preserved local byte parity | Build and qualify before any push; publish `main`; wait for zero nonterminal workflows; satisfy policy gate; push the unchanged tag; publish and compare the immutable asset | Any missing, moved, recreated, rebuilt, mutable, or mismatched identity/byte fails; use a new patch version and keep rollout at 0 |
 | test1-e2e | Frozen GUI, scanner, relay, canary, or rollback failure | Exact qualified ZIP on TEST1, real UI/scanner, direct-sync receipt, update and rollback preservation | After immutable release byte parity, before stable rollout | Keep rollout at 0 and quarantine the artifact |
 
@@ -143,12 +152,12 @@ python -c "import Container_Audit, update_service; print('python311_compatibilit
 python -m pytest -q -p no:cacheprovider tests/test_release_version.py tests/test_release_config.py
 ```
 
-The isolated local gate owns the full suite for the exact candidate SHA:
+Run selected existing checks with owned temporary state and evidence. Dependency
+installation is the separate one-time setup above. Select the full suite only
+when the changed scope or unresolved risks require it:
 
 ```powershell
-python -m pip install -r requirements.txt
-python -m pip install -r requirements-dev.txt
-python -m pytest -q -p no:cacheprovider
+python -B tools/run_repository_tests.py --work-root E:\KMTech\<task>\Container_Audit <changed-test-node>
 ```
 
 The tag workflow is verification-only. It does not install build dependencies, run PyInstaller, prepare/reseal an identity or manifest, recompress the package, create/edit a release, upload an asset, or promote the private feed. It prebinds the pushed annotated tag object and peel to checked-out `HEAD` and `origin/main` and parses the exact canonical message `Release <tag>\n`. It records any exact-SHA hosted-CI status factually, but `Hosted-CI-Release-Gate` remains `WAIVED_NOT_TESTED`; absence, failure, or a later attempt does not by itself reject bytes that passed the governing local gates. It may prove the immutable release body's hash/size, checksum, API asset metadata, extracted main EXE, embedded identities, and sealed-manifest self-consistency. Because a hosted runner cannot access the preserved qualified local bytes, its report must say governing local byte parity is `NOT_TESTED`.

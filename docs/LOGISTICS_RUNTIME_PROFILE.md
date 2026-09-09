@@ -1,70 +1,42 @@
 # Container Audit 중앙 물류 PC 프로필
 
-중앙 이적·제품 교체를 필수로 운영하는 PC는 공통 machine profile v1을 설치한다.
-기본 위치는 `%ProgramData%\KMTech\Logistics\runtime-profile.json`이다. JSON에는 토큰을
-저장하지 않고 `bearer_token_ref=dpapi:secrets/bearer-token.dpapi`만 기록한다. 토큰은
-고정 entropy를 사용한 Windows machine-scope DPAPI blob이며, 설치 폴더 ACL은
-SYSTEM/Administrators 전체 권한과 지정 작업 계정 읽기 권한만 남긴다.
+현행 canonical portable 설치는 현재 사용자 onboarding을 통해
+`%LOCALAPPDATA%\KMTech\Logistics\profiles\Container_Audit\runtime-profile.json`과
+사용자 DPAPI 자격증명을 준비한다. `CONTAINER_AUDIT_DATA_ROOT`로 격리한 실행에서는
+`<data_root>/logistics-profile/runtime-profile.json`을 사용한다. 실제 선택 순서와
+시작 경계는 [CA-O02](spec/operations.md#ca-o02),
+[current_user_onboarding.py](../current_user_onboarding.py),
+[logistics_runtime_profile.py](../logistics_runtime_profile.py)를 따른다.
 
-관리자 PowerShell 예시:
+## 호환 machine profile
 
-```powershell
-$secureToken = Read-Host 'PC 전용 bearer token' -AsSecureString
-$tokenPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-try {
-  $env:KM_LOGISTICS_INSTALL_BEARER_TOKEN = `
-    [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenPtr)
-  .\KMTech_Logistics_Profile_Install.exe --base-url https://worker.example.com `
-    --authority-scope PLANT-01 --authority-epoch 7 --plane-epoch 3 `
-    --device-id CONTAINER-PC-01 --source-host-id CONTAINER-PC-01 `
-    --reader-principal 'KMTECH\container-operator' --dry-run
-  .\KMTech_Logistics_Profile_Install.exe --base-url https://worker.example.com `
-    --authority-scope PLANT-01 --authority-epoch 7 --plane-epoch 3 `
-    --device-id CONTAINER-PC-01 --source-host-id CONTAINER-PC-01 `
-    --reader-principal 'KMTECH\container-operator'
-} finally {
-  Remove-Item Env:KM_LOGISTICS_INSTALL_BEARER_TOKEN -ErrorAction SilentlyContinue
-  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenPtr)
-}
-[Environment]::SetEnvironmentVariable(
-  'KM_LOGISTICS_PROFILE_PATH',
-  'C:\ProgramData\KMTech\Logistics\runtime-profile.json',
-  'Machine'
-)
-[Environment]::SetEnvironmentVariable('KM_LOGISTICS_REQUIRED', '1', 'Machine')
-.\KMTech_Logistics_Profile_Check.exe
-```
+현재 사용자 profile을 선택하지 않은 경로에는 app-scoped machine profile과
+Machine 환경 그룹, 허용된 process fallback이 남아 있다. 과거 공통
+`%ProgramData%\KMTech\Logistics\runtime-profile.json`과 별도
+`KMTech_Logistics_Profile_Install.exe`/`Check.exe` 예제를 현행 portable 설치의
+필수 단계로 사용하지 않는다. 현재 패키지는 실제 import되는 Python helper를 포함한다.
 
-`KM_LOGISTICS_PROFILE_PATH`와 `KM_LOGISTICS_REQUIRED`는 반드시 `/M` Machine 값으로
-같이 설치한다. 둘 중 하나라도 Machine에 있으면 동명 process 값은 사용하지 않는다.
-토큰을 명령줄 인자, JSON, 로그, 설치 report에 넣지 않는다. 회전은 새 PC 전용 토큰을
-환경변수로 주입하고 `--replace`로 명시한다.
+machine profile을 사용하는 배정에는 `KM_LOGISTICS_PROFILE_PATH`와
+`KM_LOGISTICS_REQUIRED`의 Machine 그룹을 함께 확인한다. Machine 값 일부를
+process 환경으로 보충하지 않는다. JSON에는 평문 토큰을 넣지 않고 DPAPI 참조를
+기록하며, machine-scope DPAPI와 SYSTEM/Administrators 및 지정 계정의 ACL 경계를
+유지한다. 토큰을 명령줄, 로그, report에 기록하지 않는다. profile·토큰·epoch·ACL
+변경에는 해당 대상의 실제 배포/보안 권한이 필요하며, 이 문서는 변경 권한이 아니다.
 
-`KM_LOGISTICS_REQUIRED=1`에서는 프로필 누락·평문 토큰·HTTP/loopback URL·scope/epoch/
-plane 불일치를 Tk와 백그라운드 retry 시작 전에 검사한다. 이 시작 검사는 로컬 프로필과
-DPAPI 자격증명만 검증하며 서버에 연결하지 않는다. 따라서 서버 장애 중에도 프로그램을
-열어 내구 저장된 작업을 확인·복구할 수 있지만, 중앙 ACK 전에는 PHS2 완료나 물리 이적을
-성공 처리하지 않는다. 환경변수 기반 기존 설정은 필수 모드가 아닐 때만 호환된다.
+## 시작 검증과 업무 상태
 
-`KMTech_Logistics_Profile_Check.exe`도 로컬 프로필 검증용이다. 운영 투입 readiness는
-별도의 승인된 live probe가 `logistics_transfer_client_from_env(probe_required=True)`와
-동일한 authenticated capability 검사를 수행해 통과해야 한다. 로컬 Check 성공만으로
-서버 연결·인증·capability 준비 완료를 판정하지 않는다.
+필수 profile 모드에서는 프로필 누락·평문 토큰·HTTP/loopback URL·scope/epoch/plane
+불일치를 Tk와 백그라운드 retry 시작 전에 검사한다. 로컬 profile/DPAPI 확인과 서버의
+authenticated capability 확인은 서로 다른 관측이다. 로컬 확인만으로 서버 준비를
+판정하지 않는다.
 
-## 10~30대 전환 순서
+중앙 ACK가 아직 없어도 내구 저장된 로컬 완료는 `LINKED`로 남을 수 있다.
+`ACKED`는 exact 중앙 receipt 검증 후의 상태이며, 이 두 상태를 같은 성공으로
+취급하지 않는다. 물리 이적과 다음 공정 판단은 [CA-C03](spec/contracts.md#ca-c03),
+[CA-12](spec/README.md#ca-12)의 계약을 따른다. 서버 장애 중 복구 가능한 로컬
+자료와 실패 증거를 보존하고 임의 재전송·identity 초기화·DPAPI 삭제를 하지 않는다.
 
-1. 서버의 scope/authority epoch/plane epoch와 PC별 token, `device_id`,
-   `source_host_id`, 승인 작업 계정을 먼저 확정한다. PC 식별자는 중복시키지 않는다.
-2. 1대에서 dry-run, 실제 설치, 로컬 Check, 별도 live capability probe, 이적 1건과
-   제품 교체 1건을 확인한다.
-3. 2~3대가 동시에 서로 다른 이적을 처리하고, 같은 교체 후보를 경쟁시키는 시험을 한다.
-   중앙 CAS에서 한 요청만 승인되고 나머지는 재조회/충돌로 끝나야 한다.
-4. 5대 단위로 배포한다. 토큰 자체는 수집하지 않고 PC ID, scope/epoch, Check 결과만
-   배포 증적으로 남긴다.
-5. 전체 전환 뒤 음수 재고, 제품의 중복 active owner, idempotency receipt 누락,
-   `REPLACEMENT_SOURCE_NOT_SINGLETON` 이외의 donor 소비 오류가 0인지 확인한다.
-
-토큰이나 epoch를 회전할 때만 `--replace`를 사용한다. 교체 뒤 로컬 Check가 실패하면
-앱을 시작하지 않고, live probe가 실패하면 신규 운영 작업을 시작하지 않는다. 긴급
-복귀도 먼저 Machine 필수 게이트 변경 승인을 받은 뒤 수행하고, DPAPI 파일 삭제는
-마지막 별도 승인 단계로 둔다.
+선택된 여섯 프로그램 qualification과 accepted `d440b1f7`는 Main의 기존 수용 범위로
+유지한다. 새 SHA마다 profile 재설치나 업무 replay를 요구하지 않는다. 배정된 새 배포,
+관련 동작 변화 또는 실제 실패가 있을 때 그 범위의 기존 검증과 관측을 사용한다.
+CONTAINER_AUDIT1–3은 별도 명시 권한이 없는 production no-change 대상이다.

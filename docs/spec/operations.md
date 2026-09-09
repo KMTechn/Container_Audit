@@ -2,6 +2,9 @@
 
 [제품·기능](README.md) · [데이터·통합 계약](contracts.md) · [백로그](BACKLOG.md) · [중앙 준비도](../../../Program_Spec_Hub/READINESS.md)
 
+현재 S05 소스 단순화와 검증 범위는 [CA-O11](#ca-o11)을 따른다. 아래 과거 실행의
+실패·증거·당시 gate는 보존 기록이며 새 SHA마다 반복할 실행 지시가 아니다.
+
 기준일 2026-09-07. [README의 HEAD·수정 트리·기존 증거 경계](README.md#1-기준과-증거-사용법)를 적용한다. 아래의 현재 동작은 인용 소스의 정적 확인이며 설치·장비·서버 실행 결과가 아니다. 이번 문서 작업의 실행은 **NOT TESTED**이고 과거 실행 결과는 중앙 준비도에 보존한다. 수용 항목은 현행 계약을 확인할 기준이며 미정인 운영 목표는 임의로 정하지 않는다.
 
 <a id="ca-o01"></a>
@@ -264,3 +267,39 @@ case04는09:24Z 목표3 preflight 후 제품1/2 스캔·일반 Undo로 [제품1�
 기존 credential 함수의 module-private 접근 실패와 absent Run 속성 reader 오류는 제품 변경 전 task control 실패이며 원본을 보존하고 원인을 고쳤다. Plan 결과의 PowerShell `Get-Content` 확장 메타데이터가27,584,307B JSON을 만든 별도 reader 문제도 보존했다. 크기 검사로 전체 대화 출력을 막았고2,442B compact는 같은 관측의 native/task/user 필드와 실제 line value만 추린 것이다. PlanOnly를 다시 실행하지 않았으며 후속 reader는 plain .NET string을 사용한다. 실행 중 native stdout의 공유 잠금 때문에 실패한 reader는 process 종료 뒤에만 원본 line을 읽도록 고쳤으며 제품 child를 재실행하지 않았다. 첫 정상 shutdown 중 controller가 종료돼 task `1073807364`/최종 native marker 없음은 native0으로 바꾸지 않고 실제 OS 이벤트/Off로 판정했다. 최종 task reader의 null trigger를1로 세는 필드는 trigger 근거에서 제외했다. 자세한 명령·공개 lineage·원본·실패·scope는 [REPORT](E:/KMTech/ca-final-qualification-20260908/REPORT.md)를 따른다.
 
 Main reply `msg_0b2fc814c41b`에 따라 원래 d440→a7 공개 Restore09와 변하지 않은 업무 근거를 원 candidate/receipt/VM 범위에서 재사용했다. 새 VM만을 이유로 추가 a7/d440 교체·복원 cycle은 수행하지 않았다. 현재 요청의 native 실행은 끝났지만 최초 무지원 fresh 등록은 실제 FAILED이며, 지원 recovery 결과와 합쳐 자동 등록 PASS를 만들지 않는다. 새 실패나 관련 동작 변화가 생긴 경우에만 실제 보존 preimage/receipt를 사용하는 공개 복원 필요성을 다시 판단한다. 물리 스캐너/프린터·공장 배포·전체 readiness와 case03/F4 downstream custody는 별도 범위다. [CA-G10](BACKLOG.md#ca-g10).
+
+
+<a id="ca-o11"></a>
+## CA-O11 2026-09-09 S05 소스 단순화
+
+선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다.
+이번 작업은 clean `f3702837c085737686f195230d36be4dbe8ca201`에서 시작한 CA 소스
+정리이며 accepted `d440b1f7` 설치본·runtime·원래 실패·실행 산출물을 변경하지 않았다.
+
+- **제거 근거:** 전체 tracked 소스의 import·이름/문자열·GUI binding·CLI·CI·패키징을
+  대조해 호출되지 않는 UI layout/column/최고 기록 helper, 업데이트
+  URL/hash helper, relay backpressure hard-block helper와 퇴역 topology 반환을 제거했다.
+  실제 backpressure 경고·drain·disk 차단·업데이트 검증·화면 layout 경로는 유지한다.
+- **보고서 도구:** `tools/direct_sync_phase_g_container_audit_runtime_report.py`와
+  `tools/validate_test1_manifest_transport.py` 및 그 전용 두 test 모듈을 제거했다.
+  Phase G는 직접 relay 시험과 겹치는 synthetic report이며, TEST1 validator는 현재
+  consumer 없는 pins/build-evidence 결속 도구다. Web의 옛 Phase G 실행 문서는
+  역사 근거로 보존하고 Main에 경로 영향을 보고했다.
+- **실제 consumer:** portable 도구 closure는 `direct_sync_relay_runner.py`,
+  `install_logistics_runtime_profile.py`, `register_container_audit_worker_pc.py`의
+  세 경로로 유지한다. `kmtech_factory_contracts`, `vendor/kmtech_zero_pe`, release
+  검증·capture validator·운영 진단은 제거하지 않았다. installer가 사용하는 writer
+  inventory는 기존 derivation으로 갱신하고 Python/PowerShell/계약 hash를 결속했다.
+- **검증 범위:** headless 기존 layout·현품표 교체·relay 오류/복구·업데이트 검증과
+  writer inventory 정합성 및 실제 source/lease 경로의 focused 시험을 사용한다.
+  Windows host Python 3.12.10에서 **236 PASS / 8 real_gui deselected**, 별도
+  writer inventory consumer hash 확인 **1 PASS**이며 FAIL/ERROR/SKIP은 없다.
+  명령·실제 결과·환경·한계와 final commit은
+  [RESULT](E:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 기록한다.
+  새 Full·native build·설치·업무 replay·서버 검증은 **NOT TESTED**이며 이 소스
+  정리의 자동 gate가 아니다. production CONTAINER_AUDIT1–3은 no-change다.
+
+[CODEX](../../CODEX.md), [README](../../README.md),
+[release 안내](../../RELEASE_GATE_CONTRACT.md),
+[profile 안내](../LOGISTICS_RUNTIME_PROFILE.md)는 현재 경로와 적용 가능한 검증으로
+정정했다. Main 독립 소스 검토는 [CA-G11](BACKLOG.md#ca-g11)에 연결한다.

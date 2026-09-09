@@ -4,7 +4,12 @@
 
 [계약·데이터](contracts.md) · [운영·복구](operations.md) · [남은 작업](BACKLOG.md) · [전체 허브](../../../Program_Spec_Hub/README.md) · [통합 관계](../../../Program_Spec_Hub/INTEGRATIONS.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
-**현재 상태 — 2026-09-09 문서 확인:** 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**다. 기본 GUI·cold boot·정상 제거/재설치·사용자 상태 보존의 실제 범위는 [CA-G10](BACKLOG.md#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패는 **FAILED**로 보존하며, 물리 장비·공장 배포·전체 readiness는 별도 범위로 **Ready 0/6**을 유지한다.
+**현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 기본 GUI·cold boot·정상 제거/재설치·사용자 상태 보존의 범위는 [CA-G10](BACKLOG.md#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 과거 아래의 시점별 준비도 판단은 보존한다. 물리 장비·공장 배포는 별도 범위다.
+
+S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를 제거하는 소스 작업이다.
+실제 runtime/tool import·패키징·공유 계약을 유지하며, 변경된 동작은 기존 focused
+시험으로 확인한다. 새 Full·build·설치·서버 작업을 요구하지 않는다.
+[변경·검증 범위](operations.md#ca-o11), [후속 검토](BACKLOG.md#ca-g11)를 따른다.
 
 ## 1. 기준과 증거 사용법
 

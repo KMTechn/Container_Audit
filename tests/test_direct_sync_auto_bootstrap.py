@@ -229,6 +229,3 @@ def test_module_contains_no_task_install_or_elevation_path():
         "Verb RunAs",
     ):
         assert forbidden not in text
-    assert bootstrap._install_report_relay_topology({}) == (
-        "retired_scheduled_task_contract"
-    )

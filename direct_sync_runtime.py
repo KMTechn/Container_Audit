@@ -782,26 +782,6 @@ def _write_paused_status(config: DirectSyncRuntimeConfig, *, event: str) -> dict
     return _append_runtime_event_with_status(config, event, status)
 
 
-def _write_backpressure_status(
-    config: DirectSyncRuntimeConfig,
-    *,
-    backpressure: Mapping[str, Any],
-    event: str,
-    stale_leases_reset: int = 0,
-) -> dict[str, Any]:
-    status = _write_runtime_status(
-        config,
-        status="blocked_queue_backpressure",
-        queue=backpressure.get("queue") if isinstance(backpressure.get("queue"), Mapping) else _safe_relay_queue_status(config.db_path),
-        disk={"status": "not_checked", "reason": "queue_backpressure"},
-        stale_leases_reset=stale_leases_reset,
-        queue_backpressure=backpressure,
-        error_code="queue_backpressure",
-        error_message="direct-sync relay active queue exceeds configured enqueue threshold",
-    )
-    return _append_runtime_event_with_status(config, event, status)
-
-
 def _queue_backpressure_event(backpressure: Mapping[str, Any]) -> str:
     if backpressure.get("status") == "pass":
         return "queue_backpressure_clear"

@@ -2,7 +2,7 @@
 
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
-**현재 상태 — 2026-09-09 문서 확인:** 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**다. 기본 GUI·cold boot·정상 제거/재설치·사용자 상태 보존의 실제 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패는 **FAILED**로 보존하며, 물리 장비·공장 배포·전체 readiness는 별도 범위로 **Ready 0/6**을 유지한다.
+**현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 상세 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 아래 과거 시점의 판단을 보존하며 물리 장비·공장 배포는 별도 범위다. 현재 소스 단순화의 변경·검증·독립 검토는 [CA-G11](#ca-g11)에 기록한다.
 
 기준일 2026-09-07. 아래 우선순위와 담당은 정리 제안/책임 역할이며 새 개발 승인·기한·인력 배정이 아니다. P0는 기존 qualification 실패 처리, P1은 계약/운영 판단에 필요한 공백, P2는 요구 미확정 추가 제안이다. 정적 확인, 기존 실행, 이번 문서 검토의 범위는 [README](README.md#1-기준과-증거-사용법)를 따른다.
 
@@ -38,11 +38,11 @@
 <a id="ca-g03"></a>
 ## CA-G03 기존 안내와 현행 지원 경로의 불일치
 
-- **유형·우선순위·상태:** 확인된 문서 불일치/지원 범위 확인, P1, 새 명세에 차이 명시 완료·기존 문서 수정 대기. 오래된 기술/운영 설명이 잘못된 설치·작업 판단을 유발할 수 있다.
-- **확인한 차이:** [CODEX](../../CODEX.md)의 pygame/PyInstaller 설명과 현행 [native_audio](../../native_audio.py)·[portable launcher](../../portable/launch-container-audit.cmd)는 다르다. [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)의 공통 ProgramData profile·중앙 ACK 전 로컬 성공 불허 설명은 현재 [사용자 onboarding](../../current_user_onboarding.py)·[CA-12의 LINKED 분기](README.md#ca-12)와 구분이 필요하다. 과거 [2026-06 연구](../../../docs/program-research-20260617/container-audit-transfer.md)의 `C:/Sync`·버전은 역사 자료다.
+- **유형·우선순위·상태:** 확인된 문서 불일치/지원 범위 확인, P1. S05에서 CA 소유의 [CODEX](../../CODEX.md), [README](../../README.md), [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)를 현행 native audio/raster·portable·사용자 profile·LINKED/ACKED 경계로 정정했다.
+- **보존한 이력:** 과거 pygame/Pillow·공통 ProgramData profile·별도 profile EXE 안내는 현행 필수 설치 단계가 아니다. 과거 [2026-06 연구](../../../docs/program-research-20260617/container-audit-transfer.md)의 `C:/Sync`·버전은 역사 자료다.
 - **범위 확인:** 비compact/부분 제출 코드·Shift-F8 fallback·내부 시험 명령이 존재한다고 일반 운영 지원으로 승격하지 않는다. [지원 경로 표](README.md#2-사용자제품-경계와-지원-경로)와 [CA-C09](contracts.md#ca-c09)를 기준으로 실제 배포/현장 지원 여부를 정리한다.
 - **완료 기준:** 해당 기존 문서 소유자가 현행 소스와 역사/호환 조건을 구분해 안내를 정합시키고, 지원 경로·설정·수용 기준·날짜를 연결한다. 새 규칙이나 과거 현장 PASS를 만들지 않는다.
-- **담당·의존·다음 행동:** CA 문서 담당+Main. 이번 소유 범위는 다섯 문서뿐이므로 기존 CODEX·운영 프로필·상위 역사 자료는 보존했다. Main에 차이를 알리고 해당 문서의 후속 소유 작업으로 넘긴다. CA-G05의 배포 선택 확인은 별도로 진행 가능하다.
+- **담당·의존·다음 행동:** CA 문서 담당+Main. CA 안내 정정은 S05에 포함하며 상위 역사 자료는 보존한다. 비compact/부분 제출 등 현장 지원 범위 재확인은 별도 요구이고 이 정리에서 삭제하거나 승격하지 않았다.
 
 <a id="ca-g04"></a>
 ## CA-G04 정상·장애·장비·설치 수용 근거 연결
@@ -131,6 +131,19 @@
 - **유형·상태:** 최종 산출물 qualification 후속, P1, 요청한 native 수용·근거 정리 **수행 완료(지원 recovery 포함)**. 별도 c029 VM의 실제 CA 부재·exact d440·ordinary PlanOnly0, 지원 등록/설치 계속, 기본 첫 작업자/GUI, 실제 cold boot와 정상 제거/재설치 및 사용자 상태 보존을 [CA-O10](operations.md#ca-o10)과 [최종 보고서](E:/KMTech/ca-final-qualification-20260908/REPORT.md)에 연결한다. 최초 Install01의 자연스러운 ownership 충돌/native1은 **FAILED**로 남기며 무지원 fresh 등록을 PASS로 닫지 않는다.
 - **실제 결과·담당:** Main의 새 QA 소유 배정과 Web 단회 recovery로 실제 생성된 current_user key/epoch8을 등록한 뒤 Install02·Uninstall03·Reinstall04는 각각 native/task0다. 실제 빈 작업자 목록에서 CA-FINAL-QA를 등록했고 cold boot/재설치 후 같은 이름으로 기본 GUI를 재개했다. 작업자/설정2·identity3 파일의 exact 보존, 제거 시 코드/Run/process 부재, 재설치 시 exact d440/새 integrity record를 분리 확인했다. VM은14:43:14Z 정상 Off로 Main에 반환했고 CA의 추가 native 실행은 남지 않았다. 임의 identity·token·ledger·clock 수정과 업무 재연은 없다.
 - **재사용·남은 제품 경계:** Main이 이미 수용한 d440→a7 Restore09와 변하지 않은 a7 업무 근거는 원래 candidate/receipt/VM 범위로 재사용했다. 새 VM 때문에 같은 교체/복원 cycle이나 FULL/빌드를 반복하지 않았으며,132 affected 사례도 원래 동일 입력 범위의 근거다. 추가 실패나 관련 동작 변화가 없으면 추가 실행은 필요하지 않다. 복사 OS 대상의 최초 등록 실패, `OPERATION_PENDING` 권한 상태, 물리 스캐너/프린터·공장 배포·전체 readiness는 각각 별도 미수용/미검증 경계로 유지하며 CA-G09와 case03/F4의 기존 소유·수용 상태를 바꾸지 않는다.
+
+<a id="ca-g11"></a>
+## CA-G11 승인된 S05 소스 단순화
+
+- **범위:** 호출되지 않는 UI·업데이트·relay helper, TEST1 transport-pin validator,
+  Phase G synthetic report 및 그 보고서 전용 시험을 제거했다. 실제 업무·오류/재시도
+  회귀와 runtime/shared provider·설치 consumer는 유지한다.
+- **검증·보존:** [CA-O11](operations.md#ca-o11)과
+  [RESULT](E:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 정확한
+  base/final commit, focused 명령·결과·한계와 남긴 도구의 이유를 기록한다.
+  accepted `d440b1f7`·원래 실패·production CONTAINER_AUDIT1–3은 유지한다.
+- **다음 행동:** Main이 이 소스 변경을 독립 검토한다. 이는 마감된 선택 여섯 프로그램
+  qualification의 재실행 조건이나 새 배포 승인이 아니다.
 
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
