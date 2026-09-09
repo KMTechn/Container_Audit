@@ -8719,6 +8719,7 @@ class ContainerAudit:
                         head.raw_barcode,
                         _durable_scan_log=True,
                         _durable_scan_id=head.scan_id,
+                        _catalog_decision=decision,
                     )
                 )
                 current_barcodes = list(
@@ -9496,6 +9497,7 @@ class ContainerAudit:
         *,
         _durable_scan_log: bool = False,
         _durable_scan_id: str = "",
+        _catalog_decision: Optional[ProductScanDecision] = None,
     ):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
@@ -9690,11 +9692,15 @@ class ContainerAudit:
             self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             self._save_current_tray_state()
             return
-        catalog_decision = decide_catalog_product_match(
-            self.current_tray.item_code,
-            raw_barcode,
-            self._item_catalog().matching_codes_in_barcode(raw_barcode),
-        )
+        # A held head supplies its catalog result in this same synchronous call.
+        # Routing and the basic gate above still run; no result survives a callback.
+        catalog_decision = _catalog_decision
+        if catalog_decision is None:
+            catalog_decision = decide_catalog_product_match(
+                self.current_tray.item_code,
+                raw_barcode,
+                self._item_catalog().matching_codes_in_barcode(raw_barcode),
+            )
         if not catalog_decision.accepted:
             self.current_tray.mismatch_error_count += 1
             self.current_tray.has_error_or_reset = True

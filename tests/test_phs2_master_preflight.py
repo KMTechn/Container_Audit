@@ -640,11 +640,16 @@ def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
 
 
 def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ack(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
     gate = threading.Event()
     client = BlockingClient(_resolved(count=3), gate=gate)
     app = _app(tmp_path, client)
+    matches = []
+    matching = ItemCatalog.matching_codes_in_barcode
+    monkeypatch.setattr(ItemCatalog, "matching_codes_in_barcode", lambda catalog, raw: (
+        matches.append(raw), matching(catalog, raw)
+    )[1])
     app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
         app.current_tray.scanned_barcodes.append(barcode),
         app.current_tray.scan_times.append(scan_time),
@@ -706,12 +711,18 @@ def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ac
         lambda: app.current_tray.scanned_barcodes == [first, tail]
         and not app._preflight_hold_store().exists(),
     )
+    assert matches == [first, tail]
 
 
-def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path):
+def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path, monkeypatch):
     gate = threading.Event()
     client = BlockingClient(_resolved(count=2), gate=gate)
     app = _app(tmp_path, client)
+    matches = []
+    matching = ItemCatalog.matching_codes_in_barcode
+    monkeypatch.setattr(ItemCatalog, "matching_codes_in_barcode", lambda catalog, raw: (
+        matches.append(raw), matching(catalog, raw)
+    )[1])
     app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
         app.current_tray.scanned_barcodes.append(barcode),
         app.current_tray.scan_times.append(scan_time),
@@ -749,6 +760,7 @@ def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path):
     assert len(scan_ok_attempts) == 2
     assert scan_ok_attempts[0]["idempotency_key"] == scan_ok_attempts[1]["idempotency_key"]
     assert scan_ok_attempts[1]["deduplicate"] is True
+    assert matches == [held_product]
 
 
 @pytest.mark.parametrize(
