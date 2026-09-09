@@ -136,3 +136,23 @@ def decide_product_scan(tray: Any, barcode: str, *, item_code_length: int) -> Pr
             },
         )
     return ProductScanDecision(status=SCAN_ACCEPTED)
+
+
+def decide_catalog_product_match(
+    expected_item_code: str, raw_barcode: str, matching_codes: list[str],
+) -> ProductScanDecision:
+    """Apply catalog ambiguity rules after the basic product-scan gate."""
+    codes = list(dict.fromkeys(matching_codes))
+    if len(codes) > 1:
+        event_name = "SCAN_FAIL_AMBIGUOUS_ITEM_CODE"
+        detail = {"matching_item_codes": codes}
+    elif len(codes) == 1 and codes[0] != expected_item_code:
+        event_name = "SCAN_FAIL_MISMATCH"
+        detail = {"matched_item_code": codes[0]}
+    else:
+        return ProductScanDecision(status=SCAN_ACCEPTED)
+    return ProductScanDecision(
+        status=SCAN_MISMATCH,
+        event_name=event_name,
+        event_detail={"expected": expected_item_code, "scanned": raw_barcode, **detail},
+    )

@@ -145,6 +145,13 @@
 - **다음 행동:** Main이 이 소스 변경을 독립 검토한다. 이는 마감된 선택 여섯 프로그램
   qualification의 재실행 조건이나 새 배포 승인이 아니다.
 
+<a id="ca-g12"></a>
+## CA-G12 스캔 판정·다음 입력 최적화와 실제 VM 업무 수용
+
+- **상태·범위:** 구현 중. CA-S1a는 일반/held의 중복 catalog 정책을 기존 `ProductScanDecision`으로 모으고, 기본 gate·오류별 사건/경고·일반 카운터와 held 내구/FIFO 차이를 보존한다.
+- **현재 증거:** `9e38334f` baseline 30 PASS, 구조 변경 후 40 PASS. 정상 및 모호/긴 다른 품목, 기본 거부의 catalog 미조회, held 감사 실패 시 원 head 보존·동일 key 재시도와 tail 재개를 검증했다. [기준·고정 목표](E:/KMTech/optimization-implementation-20260909/Container_Audit/BASELINE-AND-TARGETS.md), [CA-O06](operations.md#ca-o06).
+- **남은 완료 조건:** 측정된 held 성공의 반복 catalog 검색 제거와 같은 조건의 전후 목표 검증, Main이 배정한 격리 VM/backend에서 실제 Computer Use로 시작·스캔·거부/확인·보류/복구·exact 완료·다음 작업 검증. Main이 Label/Web handoff 및 전체 입고→출하 연결을 수용하기 전 종합 최적화 완료로 표시하지 않는다. 생산 CONTAINER_AUDIT1–3과 원 업무·복구 증거는 유지한다.
+
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
 

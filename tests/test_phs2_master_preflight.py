@@ -751,6 +751,108 @@ def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path):
     assert scan_ok_attempts[1]["deduplicate"] is True
 
 
+@pytest.mark.parametrize(
+    ("other_code", "raw", "event_name", "extra", "title"),
+    [
+        ("BBB2270730100", f"{ITEM}-BBB2270730100-001",
+         "SCAN_FAIL_AMBIGUOUS_ITEM_CODE",
+         {"matching_item_codes": [ITEM, "BBB2270730100"]}, "품목 코드 모호"),
+        (f"{ITEM}99", f"PREFIX-{ITEM}99-SUFFIX", "SCAN_FAIL_MISMATCH",
+         {"matched_item_code": f"{ITEM}99"}, "품목 코드 불일치"),
+    ],
+)
+def test_held_catalog_rejection_preserves_event_warning_and_fifo_on_audit_retry(
+    tmp_path, other_code, raw, event_name, extra, title,
+):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=3), gate=gate)
+    app = _app(tmp_path, client)
+    app.items_data = [*app.items_data, {"Item Code": other_code}]
+    app.warning_presenter = WarningPresenter()
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    order = []
+    rejects = []
+
+    def warning(shown_title, message, _color):
+        order.append("warning")
+        app.warnings.append(shown_title)
+        app.warning_presenter.present(Notice(
+            code="held.catalog", title=shown_title, message=message,
+            severity=NoticeSeverity.ERROR, blocking=True,
+        ))
+
+    def log(event, detail=None, **kwargs):
+        if event == event_name:
+            order.append("audit")
+            rejects.append((event, detail, kwargs))
+            return len(rejects) > 1
+        return True
+
+    app.show_fullscreen_warning = warning
+    app._log_event = log
+    tail = f"{ITEM}-VALID-TAIL"
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=1.0)
+    app._process_barcode_logic(raw)
+    app._process_barcode_logic(tail)
+    _pump_until(app.root, lambda: len(app._preflight_hold_store().load().items) == 2)
+    gate.set()
+    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(app.root, lambda: bool(rejects))
+
+    store = app._preflight_hold_store()
+    scan_id = store.load().items[0].scan_id
+    assert [item.raw_barcode for item in store.load().items] == [raw, tail]
+    assert app.current_tray.scanned_barcodes == []
+    assert app.current_tray.mismatch_error_count == 0
+    assert app.current_tray.has_error_or_reset is False
+    expected = (event_name, {"expected": ITEM, "scanned": raw, **extra}, {
+        "synchronous": True, "idempotency_key": f"preflight-held-reject:{scan_id}",
+        "deduplicate": True,
+    })
+    assert rejects == [expected]
+    assert app.warnings == [title]
+    assert order == ["warning", "audit"]
+
+    app.warning_presenter.acknowledge()
+    app._drain_preflight_hold_head()
+    _pump_until(app.root, lambda: [
+        item.raw_barcode for item in app._preflight_hold_snapshot.items
+    ] == [tail])
+    assert [item.raw_barcode for item in store.load().items] == [tail]
+    assert rejects == [expected, expected]
+    assert app.warnings == [title, title]
+    assert app.current_tray.scanned_barcodes == []
+    app.warning_presenter.acknowledge()
+    _pump_until(app.root, lambda: not store.exists())
+    assert app.current_tray.scanned_barcodes == [tail]
+
+
+@pytest.mark.parametrize("held", [False, True])
+@pytest.mark.parametrize("case", ["format", "mismatch", "duplicate", "full"])
+def test_basic_scan_rejections_do_not_search_catalog(tmp_path, held, case):
+    app = _app(tmp_path, None)
+    raw = f"{ITEM}-PRODUCT"
+    app.current_tray = TraySession(master_label_code=COMPACT_QR, item_code=ITEM, tray_size=1)
+    if case == "format":
+        raw = ITEM
+    elif case == "mismatch":
+        raw = "BBB2270730100-PRODUCT"
+    elif case == "duplicate":
+        app.current_tray.scanned_barcodes = [raw]
+    else:
+        app.current_tray.scanned_barcodes = [f"{ITEM}-EARLIER"]
+    app._item_catalog = lambda: pytest.fail("basic rejection must precede catalog lookup")
+    if held:
+        assert not app._preflight_held_scan_decision(raw).accepted
+    else:
+        app._process_barcode_logic(raw)
+        assert app.events[-1][0].startswith("SCAN_FAIL_")
+
+
 def test_preflight_final_held_scan_completes_only_after_hold_ack(tmp_path):
     gate = threading.Event()
     client = BlockingClient(_resolved(count=1), gate=gate)

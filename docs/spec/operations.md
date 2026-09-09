@@ -101,7 +101,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 | 대상 | 현재 코드의 제한/동작 | 승인 목표·측정 |
 |---|---|---|
-| 입력 문자열 | 13자리 품목코드, 제품 최대 128자 | 장비별 문자·연속 스캔 처리율 목표/실측 미확인. [product_scan](../../product_scan.py) |
+| 입력 문자열 | GUI 기본 최소 길이 13, 제품 최대 128자; catalog matcher 자체는 가변 길이·중첩/독립 출현을 지원 | 장비별 문자·연속 스캔 처리율 목표/실측 미확인. [product_scan](../../product_scan.py), [item_catalog](../../item_catalog.py) |
 | preflight hold | `_preflight_hold_store`: `max(1, TRAY_SIZE + 8)`; 별도 dispatcher queue는 `max(4, TRAY_SIZE + 12)` | 고정 60개 업무 한도가 아니다. 목표 GOOD 수와 버퍼 용량을 구분. 포화·디스크 지연 실측 미확인. [Container_Audit.py](../../Container_Audit.py) |
 | 로컬/중앙 동시 작업 | data-root mutex, 로컬 파일/DB 잠금, 중앙 version CAS·lease | 동시에 운영할 PC 수·허용 경합률/지연 미정. 서버 경합 E2E는 미입증. [runtime_instance](../../runtime_instance.py), [CA-C03~04](contracts.md#ca-c03) |
 | relay 저장 압력 | `DirectSyncRuntimeConfig`의 `min_free_bytes`, `max_active_queue_count`, `max_active_queue_age_seconds` 기본 0; 실제 배포값은 별도 | 0을 검증된 무제한 용량이나 승인된 장애 임계치로 해석하지 않음. [direct_sync_runtime](../../direct_sync_runtime.py) |
@@ -109,6 +109,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 | 수신→화면 최신성 | whole-file relay·projection·API·렌더의 분리, `pcs_completed`는 관측 완료 수량 | 허용 지연/업무일·누락 경고·복구 후 따라잡기 시간 미정, live 측정 없음. [CA-C07](contracts.md#ca-c07) |
 
 통신 timeout·poll 간격·retry 지연은 구현 파라미터이고 작업자 응답시간 SLA가 아니다. 성능/복구 목표 확정은 [CA-G01](BACKLOG.md#ca-g01), [CA-G06](BACKLOG.md#ca-g06), 실제 측정·장비·후속 설치 입증은 [CA-G04](BACKLOG.md#ca-g04)가 담당한다.
+
+2026-09-09 최적화는 원본 `9e38334f`의 합성 normal/held, catalog 50/1,000개 기준을 먼저 측정했다. [고정 기준·목표](E:/KMTech/optimization-implementation-20260909/Container_Audit/BASELINE-AND-TARGETS.md)는 handler CPU와 실제 파일 저장 companion을 분리하며, field SLA나 실제 VM paint/네트워크 latency를 주장하지 않는다. CA-S1a 이후 집중 시험은 40 PASS이며 새 held 시험의 disk ACK와 UI callback을 혼동한 최초 2 FAIL도 E 증거에 보존했다. 실제 VM Computer Use 전체 업무 수용은 [CA-G12](BACKLOG.md#ca-g12)의 별도 완료 조건이다.
 
 <a id="ca-o07"></a>
 ## CA-O07 2026-09-08 FULL 실패의 환경·fixture 경계

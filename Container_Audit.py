@@ -119,6 +119,7 @@ from product_scan import (
     SCAN_MISMATCH,
     SCAN_TRAY_FULL,
     ProductScanDecision,
+    decide_catalog_product_match,
     decide_product_scan,
 )
 from product_exchange import (
@@ -8805,34 +8806,11 @@ class ContainerAudit:
         )
         if decision.status != SCAN_ACCEPTED:
             return decision
-        matching_codes = list(
-            dict.fromkeys(
-                self._item_catalog().matching_codes_in_barcode(raw_barcode)
-            )
+        return decide_catalog_product_match(
+            self.current_tray.item_code,
+            raw_barcode,
+            self._item_catalog().matching_codes_in_barcode(raw_barcode),
         )
-        if len(matching_codes) > 1:
-            return ProductScanDecision(
-                status=SCAN_MISMATCH,
-                event_name="SCAN_FAIL_AMBIGUOUS_ITEM_CODE",
-                event_detail={
-                    "expected": self.current_tray.item_code,
-                    "scanned": raw_barcode,
-                    "matching_item_codes": matching_codes,
-                },
-            )
-        if len(matching_codes) == 1 and (
-            matching_codes[0] != self.current_tray.item_code
-        ):
-            return ProductScanDecision(
-                status=SCAN_MISMATCH,
-                event_name="SCAN_FAIL_MISMATCH",
-                event_detail={
-                    "expected": self.current_tray.item_code,
-                    "scanned": raw_barcode,
-                    "matched_item_code": matching_codes[0],
-                },
-            )
-        return decision
 
     def _durably_reject_preflight_hold_head(
         self,
@@ -9712,33 +9690,19 @@ class ContainerAudit:
             self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             self._save_current_tray_state()
             return
-        matching_codes = list(dict.fromkeys(self._item_catalog().matching_codes_in_barcode(raw_barcode)))
-        if len(matching_codes) > 1:
+        catalog_decision = decide_catalog_product_match(
+            self.current_tray.item_code,
+            raw_barcode,
+            self._item_catalog().matching_codes_in_barcode(raw_barcode),
+        )
+        if not catalog_decision.accepted:
             self.current_tray.mismatch_error_count += 1
             self.current_tray.has_error_or_reset = True
-            self.show_fullscreen_warning("품목 코드 모호", "제품 바코드에 여러 품목 코드가 포함되어 있습니다.", self.COLOR_DANGER)
-            self._log_event(
-                "SCAN_FAIL_AMBIGUOUS_ITEM_CODE",
-                detail={
-                    "expected": self.current_tray.item_code,
-                    "scanned": raw_barcode,
-                    "matching_item_codes": matching_codes,
-                },
-            )
-            self._save_current_tray_state()
-            return
-        if len(matching_codes) == 1 and matching_codes[0] != self.current_tray.item_code:
-            self.current_tray.mismatch_error_count += 1
-            self.current_tray.has_error_or_reset = True
-            self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
-            self._log_event(
-                "SCAN_FAIL_MISMATCH",
-                detail={
-                    "expected": self.current_tray.item_code,
-                    "scanned": raw_barcode,
-                    "matched_item_code": matching_codes[0],
-                },
-            )
+            if catalog_decision.event_name == "SCAN_FAIL_AMBIGUOUS_ITEM_CODE":
+                self.show_fullscreen_warning("품목 코드 모호", "제품 바코드에 여러 품목 코드가 포함되어 있습니다.", self.COLOR_DANGER)
+            else:
+                self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
+            self._log_event(catalog_decision.event_name, detail=catalog_decision.event_detail)
             self._save_current_tray_state()
             return
         
