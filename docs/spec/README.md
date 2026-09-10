@@ -172,6 +172,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 
 - **시작·입력:** `_master_preflight_pending` 동안 Enter로 접수된 스캔을 현재 PHS2에 묶어 내구 FIFO에 넣는다. [process_barcode / _hold_scan_during_preflight](../../Container_Audit.py), [preflight_scan_hold.py](../../preflight_scan_hold.py)
 - **검증·저장·결과:** `LOOKUP` → `DRAINING` 또는 `LOOKUP_FAILED` 상태와 순서를 snapshot에 남긴다. 보류 접수 확인 뒤 입력창을 정리하며 성공 조회 뒤 순서대로 정상 제품 검증에 넘긴다.
+- **화면 최신성:** 보류 저장 성공을 받은 같은 UI callback에서 중앙 안내의 보류 수를 해당 snapshot에 맞춘다. 조회 실패 snapshot은 `중앙 조회 실패`와 남은 개수(0건 포함)를 표시하며, 조회 중 문구나 새 현품표 입력 안내를 남기지 않는다. 표시 갱신은 저장·FIFO·입력 제한을 변경하지 않는다.
 - **스캔당 처리:** 새 held 성공은 같은 동기 호출에서 catalog 판정을 한 번 검색해 재사용한다. router와 기본 형식·품목·중복·용량 gate는 다시 확인하며 판정은 callback 밖에 보관하지 않는다. 이미 내구 접수된 head의 감사 재시도는 재검색/목록 재추가 없이 원 receipt를 대조한다.
 - **실패·취소·재시작:** 쓰기 실패·가득 찬 보류·context 불일치를 성공 접수로 표시하지 않는다. 실패 조회는 보류0건이어도 다른 현품표·작업자 변경을 차단한다. 같은 현품표 재조회와, 인증된 보호 관리자가 원본을 복원 가능한 격리 목록으로 옮기는 경로를 구분한다. 일반 작업자에게 임의 삭제/취소 경로는 없다. `quarantine`, `restore_quarantined`, `_restore_preflight_scan_hold`, `_quarantine_preflight_hold_for_supervisor`가 담당한다.
 - **수용 기준:** 조회 지연·실패·프로세스 종료 뒤 같은 현품표로 돌아오면 접수된 순서와 개수가 보존되고, 미접수 입력은 작업자에게 구별되어야 한다.

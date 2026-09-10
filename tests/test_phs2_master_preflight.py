@@ -106,6 +106,11 @@ class Toggle:
         self.value = value
 
 
+class LabelState(dict):
+    def winfo_exists(self):
+        return True
+
+
 class BlockingClient:
     def __init__(self, response, *, gate=None, error=None):
         self.response = response
@@ -355,7 +360,8 @@ def _app(tmp_path, client):
     app._update_last_activity_time = lambda: None
     app.show_fullscreen_warning = lambda *args, **kwargs: app.warnings.append(args)
     app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
-    app._update_current_item_label = lambda *args, **kwargs: None
+    app.current_item_label = LabelState()
+    app._update_operator_context = lambda: None
     app._save_current_tray_state = lambda: True
     app._delete_current_tray_state = lambda: True
     app._log_event = lambda event, detail=None, **kwargs: app.events.append(
@@ -387,10 +393,18 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert app._master_preflight_pending is True
     assert app.current_tray.master_label_code == ""
     assert len(app.root.jobs) == 1
+    initial_label = dict(app.current_item_label)
 
     held_product = f"{ITEM}-HELD-DURING-PREFLIGHT"
     app._process_barcode_logic(held_product)
     assert app.current_tray.scanned_barcodes == []
+    _pump_until(
+        app.root,
+        lambda: getattr(app, "_preflight_hold_snapshot", None) is not None
+        and len(app._preflight_hold_snapshot.items) == 1,
+    )
+    held_label = dict(app.current_item_label)
+    held_snapshot = app._preflight_hold_store().load()
 
     gate.set()
     app._master_preflight_thread.join(timeout=2.0)
@@ -414,6 +428,10 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert app.current_tray.operation_lease_id == "operation-lease-fixture-01"
     assert app.current_tray.scanned_barcodes == [held_product]
     assert not app._preflight_hold_store().exists()
+    assert initial_label["text"] == "중앙 검사 완료 수량 확인 중 · 보류 0건"
+    assert held_label["text"] == "중앙 검사 완료 수량 확인 중 · 보류 1건"
+    assert held_label["foreground"] == app.COLOR_PRIMARY
+    assert [item.raw_barcode for item in held_snapshot.items] == [held_product]
     event_name, detail, kwargs = next(
         event for event in app.events if event[0] == "MASTER_LABEL_SCANNED_NEW"
     )
@@ -560,7 +578,8 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
     assert [row["status"] for row in attempts] == ["PREFETCHED"]
 
 
-def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path):
+@pytest.mark.parametrize("held_count", [0, 2])
+def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path, held_count):
     gate = threading.Event()
     client = BlockingClient(
         _resolved(count=4),
@@ -572,7 +591,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path)
         app.current_tray.scanned_barcodes.append(barcode),
         app.current_tray.scan_times.append(scan_time),
     )
-    held = [f"{ITEM}-HELD-A", f"{ITEM}-HELD-B"]
+    held = [f"{ITEM}-HELD-A", f"{ITEM}-HELD-B"][:held_count]
 
     app._process_barcode_logic(COMPACT_QR)
     assert client.started.wait(timeout=1.0)
@@ -592,6 +611,11 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path)
     failed = app._preflight_hold_store().load()
     assert [item.raw_barcode for item in failed.items] == held
     assert app.current_tray.master_label_code == ""
+    assert app._preflight_scan_input_locked is True
+    assert app.current_item_label["text"] == (
+        f"중앙 조회 실패 · 보류 {len(failed.items)}건 (삭제되지 않음)"
+    )
+    assert app.current_item_label["foreground"] == app.COLOR_DANGER
 
     client.error = None
     client.gate = None
@@ -606,6 +630,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path)
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.scanned_barcodes == held
     assert not app._preflight_hold_store().exists()
+    assert "중앙 조회 실패" not in app.current_item_label["text"]
 
 
 def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(

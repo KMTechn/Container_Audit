@@ -8000,6 +8000,7 @@ class ContainerAudit:
     def _update_current_item_label(self, instruction: str = ""):
         self._update_operator_context()
         if not (hasattr(self, 'current_item_label') and self.current_item_label.winfo_exists()): return
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
 
         # 현품표 교체 상태 메시지 표시
         if self.master_label_replace_state == 'awaiting_old_completed':
@@ -8023,7 +8024,6 @@ class ContainerAudit:
             self.current_item_label['foreground'] = self.COLOR_DANGER
             return
         elif getattr(self, "_master_preflight_pending", False):
-            snapshot = getattr(self, "_preflight_hold_snapshot", None)
             held_count = (
                 len(snapshot.items)
                 if isinstance(snapshot, PreflightHoldSnapshot)
@@ -8033,6 +8033,15 @@ class ContainerAudit:
                 f"중앙 검사 완료 수량 확인 중 · 보류 {held_count}건"
             )
             self.current_item_label['foreground'] = self.COLOR_PRIMARY
+            return
+        elif (
+            isinstance(snapshot, PreflightHoldSnapshot)
+            and snapshot.state == HOLD_LOOKUP_FAILED
+        ):
+            self.current_item_label['text'] = (
+                f"중앙 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)"
+            )
+            self.current_item_label['foreground'] = self.COLOR_DANGER
             return
 
         # 기본 작업 상태 메시지
@@ -8682,6 +8691,7 @@ class ContainerAudit:
             self._master_preflight_pending = False
             self._set_preflight_scan_input_locked(True)
             self._update_action_button_states()
+            self._update_current_item_label()
             self.show_status_message(
                 f"중앙 조회 실패 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
                 self.COLOR_DANGER,
@@ -9023,6 +9033,7 @@ class ContainerAudit:
                 self._preflight_hold_append_pending = False
             _item, snapshot = result
             self._preflight_hold_snapshot = snapshot
+            self._update_current_item_label()
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)

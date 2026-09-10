@@ -150,9 +150,10 @@
 <a id="ca-g12"></a>
 ## CA-G12 스캔 판정·다음 입력 최적화와 실제 VM 업무 수용
 
-- **상태·범위:** 소스·고정 합성 목표 검증 완료, 실제 VM 업무 수용 대기. CA-S1a `920831d`는 일반/held의 중복 catalog 정책을 기존 `ProductScanDecision`으로 모으며, 후속 변경은 같은 동기 호출의 held 검색을 2→1회로 줄인다. 기본 gate·오류별 사건/경고·일반 카운터와 held 내구/FIFO 차이는 유지한다.
+- **상태·범위:** 소스·고정 합성 목표 검증과 accepted `8f7cd08` 원본 업무의 거부·보류·복원·정확한 완료 수용은 완료됐다. 실제 전후 사용자 결과·다음 입력 성능은 UNPROVEN이다. CA-S1a `920831d`는 일반/held의 중복 catalog 정책을 기존 `ProductScanDecision`으로 모으며, 후속 변경은 같은 동기 호출의 held 검색을 2→1회로 줄인다. 기본 gate·오류별 사건/경고·일반 카운터와 held 내구/FIFO 차이는 유지한다.
 - **현재 증거:** `9e38334f` baseline 30 PASS, 구조 변경 후 40 PASS, 검색 재사용 후 59 focused PASS. 정상 및 모호/긴 다른 품목, 기본 거부의 catalog 미조회, held 감사 실패 시 원 head 보존·동일 key 재시도와 tail 재개, 완료 전 ACK와 stale input을 검증했다. 1,000 CPU/200 파일 저장 표본의 고정 목표 결과는 [RESULT](E:/KMTech/optimization-implementation-20260909/Container_Audit/RESULT.md), [기준·목표](E:/KMTech/optimization-implementation-20260909/Container_Audit/BASELINE-AND-TARGETS.md), [CA-O06](operations.md#ca-o06)를 따른다.
-- **남은 완료 조건:** Main이 배정한 격리 VM/backend에서 실제 Computer Use로 시작·스캔·거부/확인·보류/복구·exact 완료·다음 작업 검증. Main이 Label/Web handoff 및 전체 입고→출하 연결을 수용하기 전 종합 최적화 완료로 표시하지 않는다. 생산 CONTAINER_AUDIT1–3과 원 업무·복구 증거는 유지한다.
+- **2026-09-10 보류 표시 후속:** 실제 before 화면의 중앙0·상태1·내구1은 보류 callback 뒤 중앙 안내가 갱신되지 않은 문제였다. 두 callback의 기존 renderer 갱신과 실패 snapshot 표시를 수정했고, 기존 회귀에서 실제 문구·보류1·실패0/2·동일 현품표 FIFO 복구와 영향 경로를 포함한 40개 focused 검사가 PASS했다. 초기 RED와 callback 전 표시를 읽은 시험 실패·수정된 RED를 [별도 근거](E:/KMTech/optimization-implementation-20260909/Container_Audit/held-count-fix-20260910/RESULT.md)에 보존한다. 원래 issuer release 68.592585초/한도60초 실패, current 미실행과 실제 성능 UNPROVEN은 유지한다.
+- **남은 완료 조건:** Main이 최종 소스 독립 검토 뒤 배정하는 격리 VM에서 고정 observer·목표로 정확한 결과와 다음 실제 입력의 전후 비교를 검증한다. 기존 source export·실패 trace·attempt02 packet은 보존하며 완료된 원 업무를 새 SHA 때문에 반복하지 않는다. Main의 Label/Web handoff 및 전체 입고→출하 연결 수용과 구분하고 종합 최적화 완료로 표시하지 않는다. 생산 CONTAINER_AUDIT1–3과 원 업무·복구 증거는 유지한다.
 
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
