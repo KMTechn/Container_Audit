@@ -16,6 +16,66 @@ from warning_presenter import (
 pytestmark = pytest.mark.real_gui
 
 
+@pytest.mark.parametrize('width,height', [(480, 650), (760, 790), (1060, 962)])
+def test_native_large_text_actions_and_scan_remain_reachable(native_tk_root, width, height):
+    app, outer = build_center(native_tk_root, scale=2.5, width=width, height=height)
+    for child in outer.winfo_children():
+        child.destroy()
+    content = app._large_text_pane(outer)
+    app._create_center_content(content)
+    app.scanned_listbox.insert('end', 'retained scan row')
+    native_tk_root.update()
+    viewport = content._layout_viewport
+    viewport.yview_moveto(1)
+    native_tk_root.update()
+    for button in action_buttons(app):
+        assert_contained(button, viewport)
+        assert button.winfo_width() >= button.winfo_reqwidth()
+        assert button.winfo_height() >= button.winfo_reqheight()
+    app.scan_entry.focus_force()
+    native_tk_root.update()
+    assert_contained(app.scan_entry, viewport)
+    assert app.scanned_listbox.get(0, 'end') == ('retained scan row',)
+    settled_height = content.winfo_height()
+    native_tk_root.update()
+    assert content.winfo_height() == settled_height
+    # Rebuild destroys only this viewport's root bindings and pending jobs.
+    content.master.master.destroy()
+    native_tk_root.update()
+
+
+def test_native_large_text_exchange_reserves_input_footer_and_scrolls_tables(native_tk_root, monkeypatch):
+    app, _outer = build_center(native_tk_root, scale=2.5)
+    app.current_tray = TraySession()
+    monkeypatch.setattr(app, '_transfer_member_exchange_blocks_local_action', lambda _action: False)
+    monkeypatch.setattr(app, '_exact_transfer_exchange_blocked', lambda: False)
+    monkeypatch.setattr(app, '_invalidate_pending_scan_callbacks', lambda: None)
+    monkeypatch.setattr(app, '_update_action_button_states', lambda: None)
+    app._show_exchange_dialog_after_coordinator_admission()
+    native_tk_root.update()
+    dialog = app.exchange_dialog
+    try:
+        for widget in (app.exchange_scan_entry, app.exchange_complete_button, app.exchange_cancel_button):
+            assert_contained(widget, dialog)
+            assert widget.winfo_height() >= widget.winfo_reqheight()
+        assert str(app.exchange_complete_button.cget('state')) == 'disabled'
+        app.exchange_quantity_var.set(2)
+        for tree in (app.exchange_defective_tree, app.exchange_good_tree):
+            assert_contained(tree, dialog)
+            tree.insert('', 'end', iid='first', values=('1', 'SYNTHETIC-FIRST'))
+            tree.insert('', 'end', iid='second', values=('2', 'SYNTHETIC-SECOND'))
+            tree.see('second')
+            tree.xview_moveto(1)
+            native_tk_root.update()
+            bounds = tree.bbox('second')
+            assert bounds and bounds[1] + bounds[3] <= tree.winfo_height()
+            assert float(tree.xview()[1]) == 1.0
+        assert app.exchange_quantity_var.get() == 2
+        assert app.exchange_scan_entry.get() == ''
+    finally:
+        dialog.destroy()
+
+
 def _walk(widget):
     yield widget
     for child in widget.winfo_children():

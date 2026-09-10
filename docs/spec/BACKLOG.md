@@ -162,6 +162,8 @@
 - **확인 근거:** 최초 불완전 fake coordinator의 AttributeError, 수정된 disabled/normal RED와 종료 중 재활성화 RED를 보존했다. 초기 후보 영향 검사11 PASS, native 일반 클릭으로 운영 메뉴 열림, 대표 빈 화면·긴 합성 작업자 이름·정상 종료 native0 및 최종 guard 검사를 [RESULT](E:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)에 연결한다. 종료 guard는 native 실행 뒤의 소스 변경이며 이전 후보와 일치하는 실행으로 표시하지 않는다. VM2는 process0/task Ready0/trigger0/원래 화면 모드로 Main에 반환했다. baseline native:null을 task0으로 대체하지 않는다.
 - **남은 완료 조건:** 전체0.7/2.5 배율 끝점, 채워진 표·긴 한글 품목/바코드, 교환 dialog의 wrap/가로 접근/입력·footer, F8와 오류·복구·작업 인수/전환을 다음 배정에서 확인한다. 실제 최종 저장 배율1.8, 조기 painting 흔적, helper 포커스로 실패한 교환 진입 시도를 완전한 native 증거로 승격하지 않는다. 화면 해상도를 실행 도중 낮출 때의 최소 창 크기는 초기 실행 작업 영역 맞춤과 구분한다.
 - **담당·다음 행동:** CA는 독립 소스 점검과 작은 재현 시나리오를 준비하고 Main은 같은 Claude 검토 및 후속 VM 회전을 조정한다. speculative UI 후보 때문에 다른 프로그램의 현재 slot을 막지 않으며, 기존 CA-G12 Goal3 성능 미완료·실패 자료·accepted 업무를 유지한다.
+- **VM3 후속 관측:** e868837의 실제 저장0.7/2.5를 확인했다. 기본 빈 교환 창의 수량1/2·입력·footer는 PASS이며, 2.5의 1024 복원 명령/표 손실, 1920 최대화·1296 복원 문구 잘림, 큰 화면의 빈 교환 footer는 FAILED다. [정상 반환](E:/KMTech/optimization-implementation-20260909/parallel-vm-ui/CA/vm3-e868837/VM3-HANDBACK.md)을 Main이 수용했으며 VM3는 재배정 전 CA 권한이 없다. 이전 VM2 배율1.8과 helper 실패는 별도 보존한다.
+- **실패 대응 후보:** 기존 2x 이상 구간의 좌측/중앙 세로 이동·포커스 위치 노출, 실제 요청 폭 기반 명령 재배치, 이미지 선택 줄바꿈, 교환 표의 두 행/스크롤 및 입력·footer 우선 배치를 원본 C에 구현한다. [후속 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/RESULT.md)에 정확한 patch·유지 코드 증감·영향 검사와 native 미실행을 기록한다. 기존 native geometry 검사에 좁은 2.5 사례만 추가하며 새 검증 framework나 글자 상한을 만들지 않는다. 이 후보의 Claude 검토와 실제 VM 재검사, 기존 미관측 업무 UI 및 Goal3는 남아 있다.
 
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안

@@ -3735,8 +3735,8 @@ class ContainerAudit:
         self.paned_window.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         for pane in [self.left_pane, self.center_pane, self.right_pane]:
             for widget in pane.winfo_children(): widget.destroy()
-        self._create_left_sidebar_content(self.left_pane)
-        self._create_center_content(self.center_pane)
+        self._create_left_sidebar_content(self._large_text_pane(self.left_pane))
+        self._create_center_content(self._large_text_pane(self.center_pane))
         self._create_right_sidebar_content(self.right_pane)
         self.root.after(50, self._set_initial_sash_positions)
         self._start_clock()
@@ -3758,6 +3758,93 @@ class ContainerAudit:
             self._reset_ui_to_waiting_state()
         self.scan_entry.focus()
         self.root.after(100, self._schedule_phs_label_exchange_recovery)
+
+    def _large_text_pane(self, parent):
+        # The existing 2x+ tier deliberately keeps enlarged text. Give its
+        # overflowing content a viewport instead of reducing that preference.
+        if getattr(self, "scale_factor", 1.0) < 2.0:
+            return parent
+        pane_style = parent.cget('style')
+        viewport = ttk.Frame(parent, style=pane_style)
+        viewport.pack(fill=tk.BOTH, expand=True)
+        background = self.COLOR_SIDEBAR_BG if pane_style == 'Sidebar.TFrame' else self.COLOR_BG
+        canvas = tk.Canvas(viewport, highlightthickness=0, background=background)
+        scrollbar = ttk.Scrollbar(viewport, orient='vertical', command=canvas.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        content = ttk.Frame(canvas, style=pane_style)
+        content._layout_viewport = canvas
+        window = canvas.create_window(0, 0, window=content, anchor='nw')
+        pending = None
+        pending_focus = None
+
+        def resize():
+            nonlocal pending
+            pending = None
+            width = max(1, canvas.winfo_width())
+            height = max(canvas.winfo_height(), content.winfo_reqheight())
+            canvas.itemconfigure(window, width=width, height=height)
+            canvas.configure(scrollregion=(0, 0, width, height))
+
+        def belongs(widget):
+            return widget is canvas or str(widget).startswith(str(content) + '.') or widget is content
+
+        def schedule(event):
+            nonlocal pending
+            if belongs(event.widget) and pending is None:
+                pending = self.root.after_idle(resize)
+
+        def reveal(event):
+            nonlocal pending_focus
+            pending_focus = None
+            if not belongs(event.widget) or event.widget is canvas:
+                return
+            top = event.widget.winfo_rooty() - content.winfo_rooty()
+            bottom = top + event.widget.winfo_height()
+            visible_top = canvas.canvasy(0)
+            height = canvas.winfo_height()
+            if top < visible_top or bottom > visible_top + height:
+                target = top if top < visible_top else bottom - height
+                canvas.yview_moveto(max(0, target) / max(1, content.winfo_height()))
+
+        def schedule_reveal(event):
+            nonlocal pending_focus
+            if belongs(event.widget):
+                if pending_focus is not None:
+                    self.root.after_cancel(pending_focus)
+                pending_focus = self.root.after_idle(reveal, event)
+
+        def wheel(event):
+            if (not belongs(event.widget) or not event.delta or event.state & 4
+                    or event.widget.winfo_class() in {'Entry', 'TEntry', 'Listbox', 'Treeview', 'TSpinbox'}):
+                return
+            canvas.yview_scroll(-3 if event.delta > 0 else 3, 'units')
+            return 'break'
+
+        bindings = [
+            (sequence, self.root.bind(sequence, callback, add='+'))
+            for sequence, callback in (
+                ('<Configure>', schedule), ('<FocusIn>', schedule_reveal), ('<MouseWheel>', wheel)
+            )
+        ]
+
+        def dispose(event):
+            if event.widget is content:
+                if pending is not None:
+                    self.root.after_cancel(pending)
+                if pending_focus is not None:
+                    self.root.after_cancel(pending_focus)
+                for sequence, binding in bindings:
+                    self.root.unbind(sequence, binding)
+
+        content.bind('<Destroy>', dispose, add='+')
+        pending = self.root.after_idle(resize)
+        return content
+
+    @staticmethod
+    def _pane_viewport_height(frame):
+        return getattr(frame, '_layout_viewport', frame).winfo_height()
 
     def _get_pane_layout_metrics(self, total_width: int) -> Dict[str, int]:
         total_height = 768
@@ -4010,7 +4097,7 @@ class ContainerAudit:
             if parent_frame is None:
                 return
             center_width = parent_frame.winfo_width()
-            center_height = parent_frame.winfo_height()
+            center_height = self._pane_viewport_height(parent_frame)
             list_height = listbox.winfo_height()
         except (tk.TclError, AttributeError, TypeError):
             return
@@ -4122,12 +4209,13 @@ class ContainerAudit:
         generation = current_generation
         try:
             center_width = center_width or parent_frame.winfo_width()
-            center_height = center_height or parent_frame.winfo_height()
+            center_height = center_height or self._pane_viewport_height(parent_frame)
         except (tk.TclError, AttributeError):
             return
         if center_width <= 1 or center_height <= 1:
             return
         metrics = self._get_center_layout_metrics(center_width, center_height)
+        self._layout_center_action_buttons(center_width, metrics["button_pad_x"])
         # Action wording changes at 960 px even when all geometry metrics stay
         # identical.  Include that derived state so a slow sash drag cannot
         # leave compact/full labels cached on the wrong side of the boundary.
@@ -4175,7 +4263,6 @@ class ContainerAudit:
             button_frame = getattr(self, "_center_button_frame", None)
             if button_frame is not None:
                 button_frame.grid_configure(pady=(metrics["button_top"], 0))
-                self._layout_center_action_buttons(center_width, metrics["button_pad_x"])
             self._center_layout_metrics = metrics_key
         except (tk.TclError, AttributeError):
             return
@@ -4189,10 +4276,14 @@ class ContainerAudit:
             if center_width <= 0:
                 center_width = button_frame.winfo_width()
             center_frame = getattr(self, "_center_content_frame", None)
-            center_height = center_frame.winfo_height() if center_frame is not None else 1080
+            center_height = self._pane_viewport_height(center_frame) if center_frame is not None else 1080
             vertical_scale = self._center_vertical_scale(center_height)
             self._refresh_action_button_labels(center_width)
-            columns = len(buttons) if center_width >= 620 else 2
+            required_width = max(button.winfo_reqwidth() for button in buttons) + 2 * pad_x
+            columns = max(1, min(len(buttons), (int(center_width) - 40) // max(1, required_width)))
+            signature = (tuple(buttons), columns, pad_x, vertical_scale)
+            if signature == getattr(self, '_center_action_layout_signature', None):
+                return
             for index, button in enumerate(buttons):
                 button.grid_forget()
                 button.grid(
@@ -4208,6 +4299,7 @@ class ContainerAudit:
                     weight=1 if column < columns else 0,
                     uniform="center_actions" if column < columns else "",
                 )
+            self._center_action_layout_signature = signature
         except (tk.TclError, AttributeError):
             return
 
@@ -6674,7 +6766,7 @@ class ContainerAudit:
         previous_compact_height = getattr(self, "_left_sidebar_compact", None)
         try:
             parent_width = int(parent_frame.winfo_width())
-            parent_height = int(parent_frame.winfo_height())
+            parent_height = int(self._pane_viewport_height(parent_frame))
             compact_large_text = scale >= 1.2 and 1 < parent_width < 420
             compact_height = (
                 parent_height > 1
@@ -6683,7 +6775,8 @@ class ContainerAudit:
             tray_image_checkbox = getattr(self, "tray_image_checkbox", None)
             if tray_image_checkbox is not None:
                 tray_image_checkbox.configure(
-                    text="트레이 이미지" if compact_large_text else "트레이 이미지 보기"
+                    text="트레이 이미지" if compact_large_text else "트레이 이미지 보기",
+                    wraplength=max(60, parent_width - 50),
                 )
             if getattr(self, "show_tray_image_var", None) is not None and self.show_tray_image_var.get():
                 parent_frame.grid_rowconfigure(0, weight=3)
@@ -7435,7 +7528,13 @@ class ContainerAudit:
         bottom_frame.grid(row=1, column=0, sticky='nsew')
         bottom_frame.grid_columnconfigure(0, weight=1)
         bottom_frame.grid_rowconfigure(1, weight=1)
-        self.tray_image_checkbox = ttk.Checkbutton(bottom_frame, text="트레이 이미지 보기", variable=self.show_tray_image_var, command=self._update_tray_image_display, style='TCheckbutton')
+        self.tray_image_checkbox = tk.Checkbutton(
+            bottom_frame, text="트레이 이미지 보기", variable=self.show_tray_image_var,
+            command=self._update_tray_image_display, font=(self.DEFAULT_FONT, self.style_tokens.fonts.body),
+            background=self.COLOR_SIDEBAR_BG, foreground=self.COLOR_TEXT,
+            activebackground=self.COLOR_SIDEBAR_BG, activeforeground=self.COLOR_TEXT,
+            highlightthickness=0, anchor='w', justify='left',
+        )
         self.tray_image_checkbox.grid(row=0, column=0, sticky='w', pady=(10, 5))
         self.tray_image_label = ttk.Label(bottom_frame, background=self.COLOR_SIDEBAR_BG, anchor='center')
         self.tray_image_label.grid(row=1, column=0, sticky='nsew', pady=(0, 10))
@@ -7784,6 +7883,13 @@ class ContainerAudit:
             self.submit_tray_button,
             self.operations_button,
         ]
+        for button in self._center_action_buttons:
+            button.bind(
+                '<Configure>',
+                lambda event, generation=center_generation: self._schedule_scanned_listbox_layout_refresh(
+                    event, generation=generation,
+                ),
+            )
         self._center_action_groups = []
         self._layout_center_action_buttons(720, initial_center_metrics["button_pad_x"])
         self._update_action_button_states()
@@ -14703,17 +14809,19 @@ class ContainerAudit:
         # 메인 프레임
         main_frame = ttk.Frame(exchange_dialog, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.grid_columnconfigure(0, weight=1)
+        main_frame.grid_rowconfigure(3, weight=1)
 
         # 제목
         title_label = ttk.Label(
             main_frame,
             text="현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환",
                                font=(self.DEFAULT_FONT, 16, 'bold'))
-        title_label.pack(pady=(0, 20))
+        title_label.grid(row=0, column=0, pady=(0, 20))
 
         # 수량 선택 프레임
         quantity_frame = ttk.Frame(main_frame)
-        quantity_frame.pack(fill=tk.X, pady=(0, 20))
+        quantity_frame.grid(row=1, column=0, sticky='ew', pady=(0, 20))
 
         ttk.Label(quantity_frame, text="교환할 수량:",
                  font=(self.DEFAULT_FONT, 12, 'bold')).pack(side=tk.LEFT)
@@ -14738,11 +14846,12 @@ class ContainerAudit:
         self.exchange_status_label = ttk.Label(main_frame,
                                              text="교환할 수량을 선택한 후 불량품을 스캔하세요.",
                                              font=(self.DEFAULT_FONT, 12))
-        self.exchange_status_label.pack(pady=10)
+        self.exchange_status_label.grid(row=2, column=0, sticky='ew', pady=10)
+        self._bind_label_to_container_width(self.exchange_status_label, main_frame, padding=40)
 
         # 목록 프레임
         list_frame = ttk.Frame(main_frame)
-        list_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 20))
+        list_frame.grid(row=3, column=0, sticky='nsew', pady=(0, 20))
         list_frame.grid_columnconfigure(0, weight=1)
         list_frame.grid_columnconfigure(1, weight=1)
         list_frame.grid_rowconfigure(0, weight=1)
@@ -14751,40 +14860,52 @@ class ContainerAudit:
         defective_frame = ttk.LabelFrame(list_frame, text="스캔된 불량품", padding=10)
         defective_frame.grid(row=0, column=0, sticky='nsew', padx=(0, 5))
 
-        self.exchange_defective_tree = ttk.Treeview(defective_frame, columns=('no', 'barcode'), show='headings', height=8)
+        self.exchange_defective_tree = ttk.Treeview(defective_frame, columns=('no', 'barcode'), show='headings', height=2)
         self.exchange_defective_tree.heading('no', text='순번')
         self.exchange_defective_tree.heading('barcode', text='불량품 바코드')
         self.exchange_defective_tree.column('no', width=50, anchor='center')
         self.exchange_defective_tree.column('barcode', anchor='w')
         self._apply_tree_row_styles(self.exchange_defective_tree)
-        self.exchange_defective_tree.pack(fill=tk.BOTH, expand=True)
 
         # 양품 목록
         good_frame = ttk.LabelFrame(list_frame, text="스캔된 양품", padding=10)
         good_frame.grid(row=0, column=1, sticky='nsew', padx=(5, 0))
 
-        self.exchange_good_tree = ttk.Treeview(good_frame, columns=('no', 'barcode'), show='headings', height=8)
+        self.exchange_good_tree = ttk.Treeview(good_frame, columns=('no', 'barcode'), show='headings', height=2)
         self.exchange_good_tree.heading('no', text='순번')
         self.exchange_good_tree.heading('barcode', text='양품 바코드')
         self.exchange_good_tree.column('no', width=50, anchor='center')
         self.exchange_good_tree.column('barcode', anchor='w')
         self._apply_tree_row_styles(self.exchange_good_tree)
-        self.exchange_good_tree.pack(fill=tk.BOTH, expand=True)
+        heading_font = tkfont.Font(root=self.root, font=self.style.lookup('Treeview.Heading', 'font'))
+        for frame, tree in ((defective_frame, self.exchange_defective_tree), (good_frame, self.exchange_good_tree)):
+            frame.grid_columnconfigure(0, weight=1)
+            frame.grid_rowconfigure(0, weight=1)
+            for column in ('no', 'barcode'):
+                minimum = heading_font.measure(tree.heading(column, 'text')) + 24
+                tree.column(column, width=minimum, minwidth=minimum, stretch=column == 'barcode')
+            tree.grid(row=0, column=0, sticky='nsew')
+            vertical = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)
+            vertical.grid(row=0, column=1, sticky='ns')
+            tree.configure(yscrollcommand=vertical.set)
+            horizontal = ttk.Scrollbar(frame, orient='horizontal', command=tree.xview)
+            horizontal.grid(row=1, column=0, sticky='ew')
+            tree.configure(xscrollcommand=horizontal.set)
 
         # 스캔 입력 프레임
         scan_frame = ttk.Frame(main_frame)
-        scan_frame.pack(fill=tk.X, pady=(0, 20))
+        scan_frame.grid(row=4, column=0, sticky='ew', pady=(0, 20))
 
         ttk.Label(scan_frame, text="바코드 스캔:",
                  font=(self.DEFAULT_FONT, 12, 'bold')).pack(side=tk.LEFT)
 
         self.exchange_scan_entry = ttk.Entry(scan_frame, font=(self.DEFAULT_FONT, 14), width=30)
-        self.exchange_scan_entry.pack(side=tk.LEFT, padx=(10, 0))
+        self.exchange_scan_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 0))
         self.exchange_scan_entry.bind('<Return>', self._on_exchange_scan)
 
         # 버튼 프레임
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X)
+        button_frame.grid(row=5, column=0, sticky='ew')
 
         self.exchange_complete_button = ttk.Button(button_frame, text="교환 완료",
                                                   command=self._complete_exchange,

@@ -113,6 +113,39 @@ def test_exchange_dialog_keeps_default_size_and_stays_screen_bounded():
     ) == (1184, 704)
 
 
+def test_center_actions_reflow_using_requested_label_width_and_keep_order():
+    class Action(DummyButton):
+        def __init__(self, width):
+            super().__init__()
+            self.width = width
+            self.position = None
+
+        def winfo_reqwidth(self):
+            return self.width
+
+        def grid_forget(self):
+            self.position = None
+
+        def grid(self, **kwargs):
+            self.position = kwargs
+
+    class Frame(CapturingLayoutParent):
+        def grid_columnconfigure(self, *_args, **_kwargs):
+            pass
+
+    app = _headless_app()
+    app.scale_factor = 2.5
+    app._center_content_frame = Frame(740, 700)
+    app._center_button_frame = Frame(700, 140)
+    app._center_action_buttons = [Action(width) for width in (190, 230, 220, 185)]
+    app._refresh_action_button_labels = lambda _width: None
+    for width, columns in ((740, 2), (1060, 4), (480, 1), (740, 2)):
+        app._layout_center_action_buttons(width, 12)
+        for index, button in enumerate(app._center_action_buttons):
+            assert (button.position['row'], button.position['column']) == divmod(index, columns)
+            assert (width - 40) // columns >= button.width + 24
+
+
 def test_normalize_app_settings_clamps_numeric_scale_and_drops_malformed_values():
     settings = container_audit_module.normalize_app_settings(
         {

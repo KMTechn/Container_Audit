@@ -31,6 +31,14 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 
 VM2의 격리된 일반 Tk 진입에서 기존 작업자 상태를 보존하고 메뉴와 대표 빈 화면을 확인한 뒤 정상 종료 native0·owned process0·task Ready/result0·원래1024×768 화면 모드 복원을 확인했다. 이 native 후보는 종료 guard 추가 전 소스이며, 후속 guard는 기존 headless 회귀로 확인한다. 메뉴 popup은 desktop 안에 있으며 root만 캡처한 그림의 잘림은 제품 결함이 아니다. 기존 Ctrl+wheel을 반복했지만 최종 저장 배율은 **1.8**이므로 파일명의 min/max나 제스처 횟수로 전체0.7/2.5 끝점 수용을 주장하지 않는다. 긴 품목/바코드, 채워진 표, 연결된 복구 및 실제 Goal3 전후 성능은 별도 미완료 범위다.
 
+### 2026-09-10 실제 2.5 배율 실패와 후속 배치 수정
+
+Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고 일반 종료 후 저장된 **0.7 / 2.5** 배율을 각각 확인했다. 0.7의 빈 화면, 기본 교환 창의 수량1→2·입력·footer는 관측 범위에서 PASS다. 2.5에서는 1024×768 화면의 복원 창에서 중앙 명령/표가 사라지고, 1920×1080 최대화 및 1296×859 복원 창에서도 명령 문구가 잘렸다. 같은 큰 화면의 빈 교환 창도 하단 버튼이 줄처럼 잘려 **FAILED**다. 두 앱 실행의 정상 종료 native0, 원래 화면 모드·Explorer·네트워크 보존 및 process0/task Ready0 반환은 [VM3 결과](E:/KMTech/optimization-implementation-20260909/parallel-vm-ui/CA/vm3-e868837/VM3-HANDBACK.md)에 고정했다.
+
+후속 소스는 기존 2x 이상 큰 글자 구간의 좌측/중앙 내용을 세로로 이동할 수 있게 하고, 실제 버튼 요청 폭에 따라 열 수를 정한다. 입력에 포커스가 오면 해당 위치를 보여주고, 표/입력의 원래 스크롤과 Ctrl+wheel 배율 변경은 유지한다. 크기 계산에는 확장된 내용 높이 대신 실제 viewport 높이를 사용하며 재생성 때 추가 바인딩과 예약 작업을 해제한다. 트레이 이미지 선택 문구는 줄바꿈한다. 교환 창은 입력·완료/취소 행을 확보한 뒤 두 쌍까지의 표에 남은 높이를 배정하고, 측정한 열 제목 폭과 가로/세로 이동을 제공한다. 폰트 상한·수량1~2·교환/멤버십·저장 규칙은 바꾸지 않는다.
+
+수정 후보의 headless 영향 검사와 기존 native 검사에 추가한 좁은 시나리오는 [후속 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/RESULT.md)에 기록한다. 이 수정의 실제 화면 수용은 **NOT TESTED**이며 Main의 Claude 검토 및 다음 VM 배정이 남아 있다. 이전 배율 실패, 전체 UI의 미관측 분기와 Goal3 전후 성능 미완료를 이 소스 수정으로 해소했다고 판단하지 않는다.
+
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.
