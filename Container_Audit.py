@@ -2117,6 +2117,7 @@ class ContainerAudit:
         signature = self._responsive_style_signature_for_size(content_width, content_height)
         if signature != getattr(self, "_responsive_style_signature", None):
             self.apply_scaling()
+            self._apply_left_sidebar_layout()
             # The right context values are configured directly rather than
             # exclusively through ttk styles.  Reapply them after the root
             # token profile changes so compact tokens cannot survive a
@@ -3737,7 +3738,7 @@ class ContainerAudit:
             for widget in pane.winfo_children(): widget.destroy()
         self._create_left_sidebar_content(self._large_text_pane(self.left_pane))
         self._create_center_content(self._large_text_pane(self.center_pane))
-        self._create_right_sidebar_content(self.right_pane)
+        self._create_right_sidebar_content(self._large_text_pane(self.right_pane))
         self.root.after(50, self._set_initial_sash_positions)
         self._start_clock()
         self._start_idle_checker()
@@ -3800,8 +3801,11 @@ class ContainerAudit:
             pending_focus = None
             if not belongs(event.widget) or event.widget is canvas:
                 return
-            top = event.widget.winfo_rooty() - content.winfo_rooty()
-            bottom = top + event.widget.winfo_height()
+            try:
+                top = event.widget.winfo_rooty() - content.winfo_rooty()
+                bottom = top + event.widget.winfo_height()
+            except tk.TclError:
+                return  # A focused child can be removed while this pane survives.
             visible_top = canvas.canvasy(0)
             height = canvas.winfo_height()
             if top < visible_top or bottom > visible_top + height:
@@ -3817,7 +3821,7 @@ class ContainerAudit:
 
         def wheel(event):
             if (not belongs(event.widget) or not event.delta or event.state & 4
-                    or event.widget.winfo_class() in {'Entry', 'TEntry', 'Listbox', 'Treeview', 'TSpinbox'}):
+                    or event.widget.winfo_class() in {'Listbox', 'Treeview', 'TSpinbox'}):
                 return
             canvas.yview_scroll(-3 if event.delta > 0 else 3, 'units')
             return 'break'
@@ -6777,6 +6781,7 @@ class ContainerAudit:
                 tray_image_checkbox.configure(
                     text="트레이 이미지" if compact_large_text else "트레이 이미지 보기",
                     wraplength=max(60, parent_width - 50),
+                    font=(self.DEFAULT_FONT, self.style_tokens.fonts.body),
                 )
             if getattr(self, "show_tray_image_var", None) is not None and self.show_tray_image_var.get():
                 parent_frame.grid_rowconfigure(0, weight=3)
@@ -6986,7 +6991,7 @@ class ContainerAudit:
             return
         generation = current_generation
         try:
-            height = parent_frame.winfo_height()
+            height = self._pane_viewport_height(parent_frame)
         except (tk.TclError, AttributeError):
             return
         if height <= 1:
@@ -14877,12 +14882,11 @@ class ContainerAudit:
         self.exchange_good_tree.column('no', width=50, anchor='center')
         self.exchange_good_tree.column('barcode', anchor='w')
         self._apply_tree_row_styles(self.exchange_good_tree)
-        heading_font = tkfont.Font(root=self.root, font=self.style.lookup('Treeview.Heading', 'font'))
         for frame, tree in ((defective_frame, self.exchange_defective_tree), (good_frame, self.exchange_good_tree)):
             frame.grid_columnconfigure(0, weight=1)
             frame.grid_rowconfigure(0, weight=1)
             for column in ('no', 'barcode'):
-                minimum = heading_font.measure(tree.heading(column, 'text')) + 24
+                minimum = self._tree_column_required_width(tree, column, tree.heading(column, 'text'), fallback=50)
                 tree.column(column, width=minimum, minwidth=minimum, stretch=column == 'barcode')
             tree.grid(row=0, column=0, sticky='nsew')
             vertical = ttk.Scrollbar(frame, orient='vertical', command=tree.yview)

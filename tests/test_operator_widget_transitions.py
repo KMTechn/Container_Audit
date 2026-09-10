@@ -35,13 +35,61 @@ def test_native_large_text_actions_and_scan_remain_reachable(native_tk_root, wid
     app.scan_entry.focus_force()
     native_tk_root.update()
     assert_contained(app.scan_entry, viewport)
+    if width < 1000:
+        assert content.winfo_height() > viewport.winfo_height()
+        viewport.yview_moveto(0)
+        native_tk_root.update()
+        before = viewport.yview()
+        app.scan_entry.event_generate('<MouseWheel>', delta=-120, state=0)
+        native_tk_root.update()
+        assert viewport.yview()[0] > before[0]
     assert app.scanned_listbox.get(0, 'end') == ('retained scan row',)
     settled_height = content.winfo_height()
     native_tk_root.update()
     assert content.winfo_height() == settled_height
+    transient_entry = ttk.Entry(content)
+    transient_entry.place(x=0, y=0)
+    native_tk_root.update()
+    transient_entry.event_generate('<FocusIn>')
+    transient_entry.destroy()
+    native_tk_root.update()  # A queued focus reveal must tolerate a removed child.
     # Rebuild destroys only this viewport's root bindings and pending jobs.
     content.master.master.destroy()
     native_tk_root.update()
+
+
+def test_native_large_text_sidebars_keep_footer_and_profile_font(native_tk_root):
+    from tkinter.font import Font
+
+    app, _center = build_center(native_tk_root, scale=2.5)
+    app.worker_name = 'CA-UI-긴이름작업자-20260910'
+    app.show_tray_image_var = tk.BooleanVar(master=native_tk_root, value=False)
+    left = ttk.Frame(native_tk_root, style='Sidebar.TFrame')
+    left.place(x=0, y=0, width=240, height=600)
+    left_content = app._large_text_pane(left)
+    app._create_left_sidebar_content(left_content)
+    right = ttk.Frame(native_tk_root, style='Sidebar.TFrame')
+    right.place(x=700, y=0, width=220, height=600)
+    right_content = app._large_text_pane(right)
+    app._create_right_sidebar_content(right_content)
+    sizes = []
+    for width, height in ((5000, 2400), (1024, 768)):
+        resize_root(native_tk_root, width, height)
+        app._refresh_responsive_styles_if_needed()
+        native_tk_root.update()
+        actual_size = Font(root=native_tk_root, font=app.tray_image_checkbox.cget('font')).actual('size')
+        assert actual_size == app.style_tokens.fonts.body
+        sizes.append(actual_size)
+        for content in (left_content, right_content):
+            content._layout_viewport.yview_moveto(1)
+        native_tk_root.update()
+        assert_contained(app.tray_image_checkbox, left_content._layout_viewport)
+        assert app.tray_image_checkbox.winfo_height() >= app.tray_image_checkbox.winfo_reqheight()
+        for key in ('avg_time', 'best_time'):
+            for widget in app.info_cards[key].values():
+                assert_contained(widget, right_content._layout_viewport)
+                assert widget.winfo_height() >= widget.winfo_reqheight()
+    assert sizes[0] != sizes[1]
 
 
 def test_native_large_text_exchange_reserves_input_footer_and_scrolls_tables(native_tk_root, monkeypatch):

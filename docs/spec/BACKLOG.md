@@ -164,6 +164,7 @@
 - **담당·다음 행동:** CA는 독립 소스 점검과 작은 재현 시나리오를 준비하고 Main은 같은 Claude 검토 및 후속 VM 회전을 조정한다. speculative UI 후보 때문에 다른 프로그램의 현재 slot을 막지 않으며, 기존 CA-G12 Goal3 성능 미완료·실패 자료·accepted 업무를 유지한다.
 - **VM3 후속 관측:** e868837의 실제 저장0.7/2.5를 확인했다. 기본 빈 교환 창의 수량1/2·입력·footer는 PASS이며, 2.5의 1024 복원 명령/표 손실, 1920 최대화·1296 복원 문구 잘림, 큰 화면의 빈 교환 footer는 FAILED다. [정상 반환](E:/KMTech/optimization-implementation-20260909/parallel-vm-ui/CA/vm3-e868837/VM3-HANDBACK.md)을 Main이 수용했으며 VM3는 재배정 전 CA 권한이 없다. 이전 VM2 배율1.8과 helper 실패는 별도 보존한다.
 - **실패 대응 후보:** 기존 2x 이상 구간의 좌측/중앙 세로 이동·포커스 위치 노출, 실제 요청 폭 기반 명령 재배치, 이미지 선택 줄바꿈, 교환 표의 두 행/스크롤 및 입력·footer 우선 배치를 원본 C에 구현한다. [후속 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/RESULT.md)에 정확한 patch·유지 코드 증감·영향 검사와 native 미실행을 기록한다. 기존 native geometry 검사에 좁은 2.5 사례만 추가하며 새 검증 framework나 글자 상한을 만들지 않는다. 이 후보의 Claude 검토와 실제 VM 재검사, 기존 미관측 업무 UI 및 Goal3는 남아 있다.
+- **Claude 검토 후 보완:** f193888의 실제 검토와 Main `msg_ad35233ca670`에 따라 기존 열 폭 helper를 재사용하고, profile 변경의 checkbox 폰트·삭제된 focus 대상 guard·한 줄 입력 위 wheel을 보완한다. 같은 관측16의 우측 평균/최고 카드도 사용자 전체 UI 범위에 포함하므로 기존 viewport를 적용한다. F5 scrollbar 자동 숨김은 필수가 아니며 Listbox 경계 handoff는 실제 필요 관측 전 추가하지 않는다. 한 열의 전체 문구 폭, 실제 두 번째 교환 행, 우측 footer·wheel·focus는 [검토 후 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/review-correction/RESULT.md)의 좁은 native 시나리오로 확인한다. 42 PASS는 새 산술 실행 근거이며 실제 Tk 렌더링 근거와 구분한다. 빈 font 문자열의 TclError는 미입증이므로 helper 재사용의 근거로 삼지 않는다. 원 검토·실패는 보존한다.
 
 <a id="ca-a01"></a>
 ## CA-A01 비멤버 조기 안내 제안
