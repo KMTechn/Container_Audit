@@ -13,9 +13,9 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 
 ### 2026-09-10 UI 전수 점검과 idle 후 작업 명령 갱신
 
-기존 coordinator 작업의 finish는 lane이 busy인 동안 화면을 갱신한다. 그때 비활성화된 운영 작업 버튼이 작업 종료 후 남지 않도록, 기존 idle continuation에서 후속 작업을 먼저 고려한 뒤 현재 action 상태를 다시 계산한다. 종료 요청 뒤에는 이 새 갱신을 건너뛰며, 대기 중인 작업·보류·중앙 복구의 기존 차단 조건은 유지한다. 실제 lane을 사용하는 기존 회귀에 busy/idle와 종료 중 버튼 상태를 추가했으며 최종 영향 검사 **11 PASS**다. [UI 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)와 [CA-G13](BACKLOG.md#ca-g13)에 검사 결과·범위와 후속 작업을 기록한다.
+기존 coordinator 작업의 finish는 lane이 busy인 동안 화면을 갱신한다. 그때 비활성화된 운영 작업 버튼이 작업 종료 후 남지 않도록, 기존 idle continuation에서 후속 작업을 먼저 고려한 뒤 현재 action 상태를 다시 계산한다. 종료 요청 뒤에는 이 새 갱신을 건너뛰며, 대기 중인 작업·보류·중앙 복구의 기존 차단 조건은 유지한다. 실제 lane을 사용하는 기존 회귀에 busy/idle와 종료 중 버튼 상태를 추가했으며 최종 영향 검사 **11 PASS**다. [UI 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)와 [CA-G13](BACKLOG.md#ca-g13)에 검사 결과·범위와 후속 작업을 기록한다.
 
-별도 탭 대신 아래 화면·상태를 점검 대상으로 관리한다. [소스 호출 목록](E:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/SOURCE-UI-INVENTORY-deduplicated.json)은 e69a0cb의 167개 중복 없는 UI 생성/modal 호출 위치를 포함하며, 내부 helper도 포함하므로 화면 수나 native 수용 수가 아니다.
+별도 탭 대신 아래 화면·상태를 점검 대상으로 관리한다. [소스 호출 목록](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/SOURCE-UI-INVENTORY-deduplicated.json)은 e69a0cb의 167개 중복 없는 UI 생성/modal 호출 위치를 포함하며, 내부 helper도 포함하므로 화면 수나 native 수용 수가 아니다.
 
 | UI 영역 | 실제 구성과 주요 분기 | 이번 native 범위 |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고
 
 후속 소스는 기존 2x 이상 큰 글자 구간의 세 영역을 세로로 이동할 수 있게 하고, 실제 버튼 요청 폭에 따라 열 수를 정한다. 입력에 포커스가 오면 해당 위치를 보여주고, 한 줄 입력 위의 wheel은 바깥 영역을 이동시킨다. 표의 원래 스크롤과 Ctrl+wheel 배율 변경은 유지한다. 크기 계산에는 확장된 내용 높이 대신 실제 viewport 높이를 사용하며 재생성 때 추가 바인딩과 예약 작업을 해제하고, 예약 후 삭제된 입력은 무시한다. 트레이 이미지 선택 문구는 줄바꿈하며 창 크기에 따른 폰트 profile 변경도 반영한다. 우측 평균/최고 카드도 같은 viewport로 접근한다. 교환 창은 입력·완료/취소 행을 확보한 뒤 두 쌍까지의 표에 남은 높이를 배정하고, 기존 열 폭 helper 및 가로/세로 이동을 사용한다. 작은 화면에서 두 행 동시 표시를 보장하는 뜻은 아니며 각 행의 실제 접근을 확인해야 한다. 폰트 상한·수량1~2·교환/멤버십·저장 규칙은 바꾸지 않는다.
 
-수정 후보의 headless 영향 검사와 기존 native 검사에 추가한 좁은 시나리오는 [검토 후 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/review-correction/RESULT.md)에 기록한다. 실제 Claude가 f193888을 검토했고 Main은 작은 수정과 native 확인을 지시했다. 42 PASS에는 새 열 수 산술 실행이 포함되지만 실제 Tk 렌더링의 근거는 아니다. 이 수정의 실제 화면 수용은 **NOT TESTED**이며 정확한 VM 배정과 후속 확인이 남아 있다. 이전 배율 실패, 전체 UI의 미관측 분기와 Goal3 전후 성능 미완료를 이 소스 수정으로 해소했다고 판단하지 않는다.
+수정 후보의 headless 영향 검사와 기존 native 검사에 추가한 좁은 시나리오는 [검토 후 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/review-correction/RESULT.md)에 기록한다. 실제 Claude가 f193888을 검토했고 Main은 작은 수정과 native 확인을 지시했다. 42 PASS에는 새 열 수 산술 실행이 포함되지만 실제 Tk 렌더링의 근거는 아니다. 이 수정의 실제 화면 수용은 **NOT TESTED**이며 정확한 VM 배정과 후속 확인이 남아 있다. 이전 배율 실패, 전체 UI의 미관측 분기와 Goal3 전후 성능 미완료를 이 소스 수정으로 해소했다고 판단하지 않는다.
 
 ## 1. 기준과 증거 사용법
 
