@@ -397,6 +397,7 @@ def _startup_transfer_recovery_app(
     calls = {"seal": [], "member": []}
     seal_store = _PendingRecoveryStore(seal_intent_ids)
     seal_coordinator = TransferSealCoordinator.__new__(TransferSealCoordinator)
+    seal_coordinator.client = None
     seal_coordinator.store = seal_store
     seal_coordinator._owner_thread_id_provider = lambda: lane.worker_thread_id
 
@@ -762,10 +763,15 @@ def test_startup_transfer_recovery_runs_only_on_shared_lane_worker(
             member_intent_ids=("member-1",),
         )
     )
+    app.operations_button = CompletionActionStateWidget(app, [])
 
     try:
         app.start_work()
+        app._update_action_button_states()
+        assert app.operations_button.options["state"] == container_module.tk.DISABLED
         root.run_until(lambda: not lane.is_busy())
+        root.run_one()  # Run the coordinator continuation queued after lane idle.
+        assert app.operations_button.options["state"] == container_module.tk.NORMAL
 
         assert seal_store.intent_ids == []
         assert member_store.intent_ids == []
@@ -866,9 +872,13 @@ def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_p
         )
     )
     close_calls = []
+    action_updates = []
+    app.operations_button = CompletionActionStateWidget(app, action_updates)
 
     try:
         app.start_work()
+        app._update_action_button_states()
+        assert app.operations_button.options["state"] == container_module.tk.DISABLED
         assert started.wait(timeout=1.0)
         app._scan_callback_pending = False
         app._ui_close_requested = False
@@ -898,6 +908,11 @@ def test_close_waits_for_inflight_startup_transfer_recovery_on_shared_lane(tmp_p
         )
 
         assert close_calls == ["preserve", ("finalize", "CLOSED", False)]
+        root.run_one()  # Include any coordinator continuation queued during drain.
+        assert all(
+            update["action_state"] == container_module.tk.DISABLED
+            for update in action_updates
+        )
     finally:
         release.set()
         if lane.state != "CLOSED":

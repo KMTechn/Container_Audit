@@ -11,6 +11,26 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 시험으로 확인한다. 새 Full·build·설치·서버 작업을 요구하지 않는다.
 [변경·검증 범위](operations.md#ca-o11), [후속 검토](BACKLOG.md#ca-g11)를 따른다.
 
+### 2026-09-10 UI 전수 점검과 idle 후 작업 명령 갱신
+
+기존 coordinator 작업의 finish는 lane이 busy인 동안 화면을 갱신한다. 그때 비활성화된 운영 작업 버튼이 작업 종료 후 남지 않도록, 기존 idle continuation에서 후속 작업을 먼저 고려한 뒤 현재 action 상태를 다시 계산한다. 종료 요청 뒤에는 이 새 갱신을 건너뛰며, 대기 중인 작업·보류·중앙 복구의 기존 차단 조건은 유지한다. 실제 lane을 사용하는 기존 회귀에 busy/idle와 종료 중 버튼 상태를 추가했으며 최종 영향 검사 **11 PASS**다. [UI 결과](E:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)와 [CA-G13](BACKLOG.md#ca-g13)에 검사 결과·범위와 후속 작업을 기록한다.
+
+별도 탭 대신 아래 화면·상태를 점검 대상으로 관리한다. [소스 호출 목록](E:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/SOURCE-UI-INVENTORY-deduplicated.json)은 e69a0cb의 167개 중복 없는 UI 생성/modal 호출 위치를 포함하며, 내부 helper도 포함하므로 화면 수나 native 수용 수가 아니다.
+
+| UI 영역 | 실제 구성과 주요 분기 | 이번 native 범위 |
+| --- | --- | --- |
+| 작업자 진입 | 등록/기존 이름 선택, 신규 이름 입력·등록 안내, 작업 시작·변경 | 긴 합성 한글 이름 등록·선택·시작 |
+| 좌측 작업 영역 | 작업자·현 작업 카드, 품목 요약 Treeview, 보류 Treeview 전환·복원, 트레이 이미지 선택 | 빈 요약과 긴 작업자 이름; 채워진 행·복원은 후속 |
+| 중앙 검사 영역 | 현품표/제품 단계, scan entry, 스캔 Listbox, 경고·확인·복구 안내, 취소/보류/제출/운영 작업 | 빈 대기 화면과 기존 글자 크기 제스처; 업무·오류별 상태는 후속 |
+| 현품표 교체 | F8/교체 안내, 후보 선택 Combobox와 조회·재시도·조정 분기 | API 없음 안내만; 중앙 연결 분기는 후속 |
+| 우측 상태 영역 | 작업 상태·전송 상태/상세, 소요 시간, 최근 스캔·다음 행동, 평균·최고 기록 | 빈 상태 카드·footer의 가시성 |
+| 운영 작업 메뉴 | 전송 상세, 관리자 재시도, 리셋, 완료 현품표/개별 제품 교환 | idle 뒤 일반 클릭으로 메뉴 열림·문구 가시성 |
+| 제품 교환 창 | active/legacy 공용 Toplevel, 수량1~2, 불량/양품 표, 상태·입력·완료/취소 | 미수용; 창 열기 시도는 helper 포커스 실패로 근거 제외 |
+| 공통 modal | 시작/품목/업데이트 안내, 오류·확인·작업 인수·복원·삭제·종료 분기 | 등록 및 정상 종료 확인만 |
+| 내부·대체 UI | inline 안내가 없을 때의 fullscreen 경고, 내부 시험 품목 선택, 별도 update helper | 일반 작업자 수용과 구분; 소스 목록에 보존 |
+
+VM2의 격리된 일반 Tk 진입에서 기존 작업자 상태를 보존하고 메뉴와 대표 빈 화면을 확인한 뒤 정상 종료 native0·owned process0·task Ready/result0·원래1024×768 화면 모드 복원을 확인했다. 이 native 후보는 종료 guard 추가 전 소스이며, 후속 guard는 기존 headless 회귀로 확인한다. 메뉴 popup은 desktop 안에 있으며 root만 캡처한 그림의 잘림은 제품 결함이 아니다. 기존 Ctrl+wheel을 반복했지만 최종 저장 배율은 **1.8**이므로 파일명의 min/max나 제스처 횟수로 전체0.7/2.5 끝점 수용을 주장하지 않는다. 긴 품목/바코드, 채워진 표, 연결된 복구 및 실제 Goal3 전후 성능은 별도 미완료 범위다.
+
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.

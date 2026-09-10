@@ -13223,6 +13223,8 @@ class ContainerAudit:
             if self._schedule_member_exchange_reconcile():
                 return
         self._schedule_transfer_post_review_refresh()
+        if not getattr(self, "_ui_close_requested", False):
+            self._update_action_button_states()
 
     def _finish_transfer_post_review_refresh(
         self,
