@@ -322,7 +322,7 @@ exception_handler() → _log_event('ERROR_OCCURRED')
 
 ### M7 화면 증거 계약
 
-정본은 `E:/KMTech/production-readiness-20260830/HANDOVER/CAPTURE-BUNDLE-V1-CONTRACT.md`이고 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 외부 묶음은 `E:/requal-evidence/capture-bundle-v1/<app>/<app>__<commit12>__<YYYYMMDDTHHMMSSZ>__<nonce8>/`에 두며, `HANDOVER-INDEX.md`가 가리키는 불변 `indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json`에서 `app=Container_Audit` 항목을 찾아 bundle `manifest.json`의 `captures[].state_id`로 조회합니다. 저장소 쪽 선언은 창을 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`의 `{schema, app, required_state_ids}` envelope로 확인합니다.
+정본은 `E:/KMTech/production-readiness-20260830/HANDOVER/CAPTURE-BUNDLE-V1-CONTRACT.md`이고 스키마 이름은 정확히 `M7 external capture bundle v1`입니다. 외부 묶음은 `D:/KMTech/cold-program-material/from-E/requal-evidence/capture-bundle-v1/<app>/<app>__<commit12>__<YYYYMMDDTHHMMSSZ>__<nonce8>/`에 두며, `HANDOVER-INDEX.md`가 가리키는 불변 `indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json`에서 `app=Container_Audit` 항목을 찾아 bundle `manifest.json`의 `captures[].state_id`로 조회합니다. 저장소 쪽 선언은 창을 열지 않는 `python -B tools/capture_container_operator_ui.py --describe-m7-contract`의 `{schema, app, required_state_ids}` envelope로 확인합니다.
 
 필수 state ID는 `m7_phs2_preflight`, `m7_central_preflight_queue`, `m7_completion_busy`, `m7_recovery_transition`, `m7_direct_sync_backlog_ack`, `m7_exact_good_membership`, `m7_lease_fail_closed`, `m7_transfer_receipt_status`, `m7_partial_atomic_exchange`입니다. 디렉터리·파일명, manifest field와 create-new 순서는 위 정본만 따르며 이 README에는 그 계약을 재정의하거나 미래 digest를 기록하지 않습니다.
 

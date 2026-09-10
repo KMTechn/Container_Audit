@@ -55,7 +55,7 @@ M7_REQUIRED_STATE_IDS = (
 DEFAULT_STATE_IDS = M7_REQUIRED_STATE_IDS
 M7_EXTERNAL_CAPTURE_BUNDLE_SCHEMA = "M7 external capture bundle v1"
 M7_EXTERNAL_CAPTURE_APP = "Container_Audit"
-M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION = "E:/requal-evidence/capture-bundle-v1/"
+M7_EXTERNAL_CAPTURE_APPROVAL_LOCATION = "D:/KMTech/cold-program-material/from-E/requal-evidence/capture-bundle-v1/"
 M7_EXTERNAL_CAPTURE_INDEX = (
     "HANDOVER-INDEX.md -> indexes/handover-index__<YYYYMMDDTHHMMSSZ>__<nonce8>.json"
 )
