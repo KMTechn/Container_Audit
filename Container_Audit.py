@@ -346,6 +346,76 @@ def _position_tk_root_absolute(root: Any, left: int, top: int) -> None:
         raise ctypes.WinError(ctypes.get_last_error())
 
 
+def _get_tk_root_work_area(root: Any):
+    """Read work, outer and client bounds in the owning UI thread's DPI context."""
+
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    class MonitorInfo(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+            ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD),
+        ]
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.GetAncestor.argtypes = (wintypes.HWND, wintypes.UINT)
+    user32.GetAncestor.restype = wintypes.HWND
+    user32.MonitorFromWindow.argtypes = (wintypes.HWND, wintypes.DWORD)
+    user32.MonitorFromWindow.restype = wintypes.HANDLE
+    user32.GetMonitorInfoW.argtypes = (wintypes.HANDLE, ctypes.POINTER(MonitorInfo))
+    user32.GetMonitorInfoW.restype = wintypes.BOOL
+    for name in ("GetWindowRect", "GetClientRect"):
+        function = getattr(user32, name)
+        function.argtypes = (wintypes.HWND, ctypes.POINTER(wintypes.RECT))
+        function.restype = wintypes.BOOL
+    hwnd = user32.GetAncestor(wintypes.HWND(int(root.winfo_id())), 2)  # GA_ROOT
+    if not hwnd:
+        raise ctypes.WinError(ctypes.get_last_error())
+    monitor = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
+    info = MonitorInfo()
+    info.cbSize = ctypes.sizeof(info)
+    outer, client = wintypes.RECT(), wintypes.RECT()
+    if not (monitor and user32.GetMonitorInfoW(monitor, ctypes.byref(info))
+            and user32.GetWindowRect(hwnd, ctypes.byref(outer))
+            and user32.GetClientRect(hwnd, ctypes.byref(client))):
+        raise ctypes.WinError(ctypes.get_last_error())
+    return (
+        (info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom),
+        (outer.left, outer.top, outer.right, outer.bottom),
+        (client.right, client.bottom),
+    )
+
+
+def fit_restored_window_to_work_area(root: Any) -> None:
+    """Keep the ordinary restored client plus its actual frame inside rcWork."""
+
+    bounds = _get_tk_root_work_area(root)
+    if bounds is None:
+        return
+    work, outer, client = bounds
+    frame = tuple(outer[i + 2] - outer[i] - client[i] for i in range(2))
+    available = tuple(work[i + 2] - work[i] - frame[i] for i in range(2))
+    if min(client) <= 0 or min(frame) < 0 or min(available) <= 0:
+        raise OSError("Invalid window/client/work-area bounds")
+    size = tuple(min(value, limit) for value, limit in zip(client, available))
+    position = tuple(
+        max(work[i], min(outer[i], work[i + 2] - size[i] - frame[i]))
+        for i in range(2)
+    )
+    # Tk geometry and minsize are client pixels. Lower the minimum first;
+    # never mix physical DWM rectangles or the app's text scale into this fit.
+    root.minsize(*(min(value, limit) for value, limit in zip(root.minsize(), available)))
+    if size != client:
+        root.geometry(f"{size[0]}x{size[1]}")
+    root.update_idletasks()
+    if position != outer[:2]:
+        _position_tk_root_absolute(root, *position)
+        root.update_idletasks()
+
+
 def apply_startup_geometry(
     root: Any,
     geometry: str,
@@ -1007,9 +1077,13 @@ class ContainerAudit:
             self.root.geometry(self.DEFAULT_RESTORED_GEOMETRY)
             self.root.update_idletasks()
             try:
+                fit_restored_window_to_work_area(self.root)
+            except OSError as exc:
+                print(f"Window work-area fit unavailable: {exc}")
+            try:
                 self.root.state('zoomed')
             except tk.TclError:
-                self.root.geometry(self.DEFAULT_RESTORED_GEOMETRY)
+                pass  # Retain the fitted normal geometry when zoom is unavailable.
         self.root.configure(bg=self.COLOR_BG)
         try:
             self.root.iconbitmap(resource_path(os.path.join('assets', 'logo.ico')))

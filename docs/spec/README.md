@@ -141,6 +141,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-01"></a>
 ### CA-01 시작·작업자 선택
 
+- **일반 창 배치:** 기본 복원 크기 `1280x820`과 최소 `1024x720`은 해당 monitor의 작업 영역에 실제 client+frame이 들어가는 범위에서 유지한다. 일반 초기화는 같은 UI thread의 `GetWindowRect`·`GetClientRect`·`GetMonitorInfo.rcWork`로 최소/복원 크기를 먼저 맞춘 뒤 기존 최대화 시작을 유지한다. 명시적 `CONTAINER_AUDIT_STARTUP_GEOMETRY`의 signed absolute 배치는 별도 기존 경로다. [화면 수용 범위](operations.md#ca-o03)를 함께 따른다.
+
 - **시작·입력:** 소스/패키지 진입 후 등록된 작업자 이름 또는 보호 관리자 로그인. `main`의 계약 확인·단일 인스턴스·onboarding 준비와 `start_work`가 경계다. [Container_Audit.py](../../Container_Audit.py), [runtime_instance.py](../../runtime_instance.py)
 - **검증·저장·결과:** 이름 등록과 보호 관리자 인증을 구분하고 사용자 상태 경로를 준비한다. 복구 대상이 있으면 현재 트레이 복구 흐름으로 진입한다. 작업자 선택만으로 서버 권한을 만들지 않는다. [worker_registry](../../worker_registry.py), [current_user_onboarding](../../current_user_onboarding.py)
 - **실패·취소·재시작:** 중복 실행, 부분 onboarding, 읽기 불가능한 보호 상태는 오류를 보존해 진입을 중단한다. 임의 초기화 대신 동일 사용자·원본 상태의 복구 가능성을 확인한다.

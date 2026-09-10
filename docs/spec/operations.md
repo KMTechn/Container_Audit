@@ -50,6 +50,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 | 장비/입력 | 확인한 소스 동작 | 수용 기준·미확인 범위 |
 |---|---|---|
+| 일반 복원 창 | 실제 monitor `rcWork`에서 client와 frame을 함께 맞추고 작은 작업 영역에서는 최소 크기도 제한한다. 충분히 큰 화면의 기본 크기·최대화 시작·명시적 signed 배치는 유지한다. | 복원/최대화 빈 다음-현품표 화면에서 명령 4개·상태 줄 전체와 버튼 중심이 작업 영역 안에 있고 Entry·경고 band가 사용 가능해야 한다. [8f7 실제 clipping 관측](E:/KMTech/optimization-implementation-20260909/Container_Audit/vm-gui-20260910T0205/VIEWPORT-DIAGNOSIS.md)과 [수정 전 고정 기준](E:/KMTech/optimization-implementation-20260909/Container_Audit/viewport-fix/ACCEPTANCE-BEFORE-EDIT.md)을 보존한다. 새 source의 실제 빈 화면 확인은 Main의 별도 VM slot 전까지 UNPROVEN이며 DPI 원인을 단정하지 않는다. |
 | 스캐너 종료 | worker/scan/exchange Entry에 `<Return>` binding; 일반 제품은 `process_barcode`에서 문자열 `strip()` | 지원 스캐너의 실제 접미 Enter·CR/LF·키보드 배열/IME, QR 구분자 전달을 확인해야 한다. Tab·무접미·임의 Unicode 스캐너를 모두 지원한다고 주장하지 않는다. [Entry bindings](../../Container_Audit.py) |
 | 입력 형식·연속 스캔 | exact PHS2 6필드, 제품 최대 128자·13자리 품목 코드 포함 조건; preflight 동안 내구 FIFO | 장비의 연속 입력과 조회 실패/재시작에서 접수 여부·순서를 대조한다. 수량 60이나 ERPnext 한도를 제품 요구로 적용하지 않는다. [CA-03~05](README.md#ca-03), [product_scan](../../product_scan.py) |
 | 포커스·단축키 | 스캔 Entry 포커스 복귀, notice 확인의 Return/Escape, F8 정합 교체 및 Shift-F8 호환 진입 | 경고·보류 복원·modal 종료 뒤 입력이 잘못된 창에 들어가지 않는지 지원 배율/화면에서 확인한다. 실제 스캐너·200% 배율 전체 성공은 미입증이다. [메인 UI](../../Container_Audit.py), [CA-A02](BACKLOG.md#ca-a02) |

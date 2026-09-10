@@ -47,6 +47,8 @@
 <a id="ca-g04"></a>
 ## CA-G04 정상·장애·장비·설치 수용 근거 연결
 
+- **2026-09-10 일반 복원 창 후속:** accepted `8f7cd08`의 exact 원본 901/902/903은 정상 seal/ACK·보류/닫기/재실행/복원 근거로 수용됐지만, 복원 창 `1944x1182`의 하단 명령 줄 clipping은 별도 실제 관측이다. [고정 수용 기준과 수정 범위](E:/KMTech/optimization-implementation-20260909/Container_Audit/viewport-fix/ACCEPTANCE-BEFORE-EDIT.md)에 따라 일반 복원 rectangle/최소 크기만 실제 monitor 작업 영역에 맞춘다. 기존 startup tests에서 작은 영역·frame·음수 원점의 RED4를 보존했고 영향 검사67 PASS다. 새 source의 복원/최대화 빈 화면 수용 및 기존 Goal3 전후 사용자 결과 비교는 아직 UNPROVEN이며 Main이 후속 slot을 배정한다. 완료된 업무를 새 SHA 때문에 반복하지 않는다.
+
 - **유형·우선순위·상태:** 실제 검증 공백, P1, 기존 근거 적용성 검토/미실행 범위 대기. 정적 계약 일치와 저장된 응답 재생만으로 현장 동작을 확정할 수 없다.
 - **근거:** [CA 연구 S30~31](E:/KMTech/spec-hub-research-20260907/Container_Audit/SOURCE-MAP.tsv), [preflight 테스트](../../tests/test_phs2_master_preflight.py), [transfer seal 테스트](../../tests/test_transfer_seal.py), [교체 server-contract 테스트](../../tests/test_transfer_member_exchange_server_contract.py). BND offline fixture는 compact PHS2 현장 offline 근거가 아니며 저장 HTTP 응답 replay는 실제 서버 CAS 경쟁을 입증하지 않는다. 이번 테스트 파일 실행/수정은 없다.
 - **담당·선행:** CA 검증 담당+Main, 필요 시 Inspection/Web/Label 담당. 정확한 소스/dirty 차이·패키지·서버·provider/flags·기존 증거를 먼저 연결하고 CA-G07의 수용 장애를 분리한다. 이미 통과한 시험을 문서 때문에 일괄 재실행하지 않는다.
