@@ -41,6 +41,12 @@ Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고
 
 수정 후보의 headless 영향 검사와 기존 native 검사에 추가한 좁은 시나리오는 [검토 후 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/large-text-fix-20260910/review-correction/RESULT.md)에 기록한다. 실제 Claude가 f193888을 검토했고 Main은 작은 수정과 native 확인을 지시했다. 42 PASS에는 새 열 수 산술 실행이 포함되지만 실제 Tk 렌더링의 근거는 아니다. 2026-09-11 전용 VM6fcb에서 정확한2b5871c의 일반 Tk 화면을1920×1080 최대화로 직접 확인하고 정상 종료 native0 및 저장 배율2.5를 읽었다. 큰 글자 명령 문구·교환 수량1/2의 입력/footer, 잘못된 코드 안내와 확인 복귀,1280×900 복원 후 세로 이동으로 명령/이미지 선택에 접근한 범위는 관측 완료다. 기존 좁은 native 검사5개는 **PASS**(skip0,3.05초; runner4.218초/native0)이며 투명한 offscreen 위젯 검사와 실제 앱 화면을 구분한다. [전용 VM 결과와 제한](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/UI-RESULT.md)에 전체 그림·소스/runtime·종료 근거를 연결한다. 이후 수집 단계의 메모리 압박/PowerShell 창 소실은 원인 미확정으로 별도 보존하며 새 제품 실패나 검사 실패로 단정하지 않는다. 실제 Claude Opus5 후속 검토는 소스/UI/native 범위 PASS이며 제품 보완·재실행 요구는 없다. native runner PID7052 기록을 바로잡고 원 기록을 보존했다. 2.5 우측 값 글자의 기존 높이 상한으로 일부 값이1.0보다 작게 표시되는 점, 시스템 오류창의 기본 글자 크기와 수량 변경 후 spinbox에 남는 포커스는 공개된 제한이다. 마지막 항목은 기존 F8 연결 흐름에서 관측하며 별도 검사를 추가하지 않는다. 채워진 업무·연결 복구·전체 흐름은 남아 있다. 이전 배율 실패, 전체 UI의 미관측 분기와 Goal3 전후 성능 미완료를 이 소스 수정으로 해소했다고 판단하지 않는다.
 
+### 2026-09-11 트레이 PNG 해독 비용 후속
+
+트레이 표시의 기존 PNG 해독기는 실제 세 트레이 자산의 무필터 행에서도 채널별 필터 계산과 픽셀별 포장을 수행했다. 기존 `RasterImage.from_png_bytes`에 무필터 RGB/RGBA 행의 채널 슬라이스 복사만 추가한다. 원본 자산·픽셀·알파, PNG 검증, 다른 필터, bilinear 크기 변경과 Tk 표시 순서를 유지하며 이미지 캐시는 추가하지 않는다. 품목·경로·파일 내용·표시 크기 변경과 숨김/오류 시 초기화는 기존 표시 함수가 계속 처리한다. vendored 원본 hash와 로컬 변경의 현재 hash를 구분하고 기존 writer inventory·소비자 pin도 맞춘다.
+
+[근거와 비교 계획](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-IMAGE-OPTIMIZATION.md)의 승인된 원본 단회 headless 해독은200.2321ms였으며 실제 VM의383.64ms 미관측 구간 전체 원인이나 최종 UI 이득을 뜻하지 않는다. 정확한 네 자산 픽셀·RGB/RGBA와 필터·오류 거부·실제 표시 함수의 갱신/초기화·PHS 렌더러의 영향 검사22 PASS, 기존 writer inventory/pin 검사3 PASS를 보존한다. 실제 Claude 검토와 동일 계측 native 전후 비교는 Main의 후속 자원 배정에서 확인하며 [CA-G12](BACKLOG.md#ca-g12)의 미완료 상태를 유지한다.
+
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.

@@ -5,9 +5,11 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import struct
 import subprocess
 import sys
 from types import SimpleNamespace
+import zlib
 
 import native_audio
 import pytest
@@ -17,6 +19,7 @@ from tools import stage_pure_python_charset_normalizer as staging
 from tests.native_process_fixtures import native_argument_recorder
 from tests.powershell_contracts import run_functions
 from tests.spec_contracts import evaluate_spec
+from vendor.kmtech_zero_pe.raster import RasterError, RasterImage
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,10 +59,14 @@ def _portable_production_imports(roots: set[str]) -> list[tuple[str, str]]:
     return matches
 
 
-def test_seq259_rendering_vendor_is_byte_identical():
+def test_rendering_vendor_records_exact_local_patch_and_upstream_provenance():
     manifest = json.loads((VENDOR / "RENDER_VENDOR.json").read_text(encoding="utf-8"))
-    assert _sha256(VENDOR / "raster.py") == (
+    assert manifest["source_artifact"] == "E:/KMTech/autoloop-20260824/seq259-zero-pe-contract"
+    assert manifest["local_modifications"]["raster.py"]["upstream_sha256"] == (
         "1296fc461e349cc02c1379b09096559203d2ec22cdc27c780958a05006d97c48"
+    )
+    assert _sha256(VENDOR / "raster.py") == (
+        "107316713ca47981007dab694b03db049d2c146fc05501c8cd5c7b4c9765bc4c"
     )
     assert _sha256(VENDOR / "gdi_print.py") == (
         "48453e70a4bdd2008c2e4565bf647a852f319322458f9dc5a094a064274faece"
@@ -68,6 +75,160 @@ def test_seq259_rendering_vendor_is_byte_identical():
         "gdi_print.py": _sha256(VENDOR / "gdi_print.py"),
         "raster.py": _sha256(VENDOR / "raster.py"),
     }
+
+
+def _png_from_scanlines(color_type, scanlines):
+    def chunk(kind, payload):
+        return (
+            struct.pack(">I", len(payload)) + kind + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 3, 2, 8, color_type, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(scanlines))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _filtered_scanline(raw, previous, channels, filter_kind):
+    encoded = bytearray([filter_kind])
+    for index, value in enumerate(raw):
+        left = raw[index - channels] if index >= channels else 0
+        above = previous[index]
+        corner = previous[index - channels] if index >= channels else 0
+        if filter_kind == 1:
+            predictor = left
+        elif filter_kind == 2:
+            predictor = above
+        elif filter_kind == 3:
+            predictor = (left + above) // 2
+        elif filter_kind == 4:
+            estimate = left + above - corner
+            predictor = min(
+                enumerate((left, above, corner)),
+                key=lambda candidate: (abs(estimate - candidate[1]), candidate[0]),
+            )[1]
+        else:
+            predictor = 0
+        encoded.append((value - predictor) & 255)
+    return bytes(encoded)
+
+
+@pytest.mark.parametrize("color_type,channels", [(2, 3), (6, 4)])
+@pytest.mark.parametrize("filter_kind", range(5))
+def test_raster_png_decodes_exact_colors_alpha_and_previous_row(color_type, channels, filter_kind):
+    pixels = [
+        (10, 20, 30, 0), (80, 90, 100, 1), (255, 0, 77, 128),
+        (11, 22, 33, 254), (99, 10, 110, 255), (0, 255, 17, 64),
+    ]
+    first = bytes(channel for pixel in pixels[:3] for channel in pixel[:channels])
+    second = bytes(channel for pixel in pixels[3:] for channel in pixel[:channels])
+    # The first raw row exercises the tray-asset path; the next row exercises
+    # each supported filter against that reconstructed previous row.
+    scanlines = b"\0" + first + _filtered_scanline(second, first, channels, filter_kind)
+    image = RasterImage.from_png_bytes(_png_from_scanlines(color_type, scanlines))
+    expected = bytes(
+        channel for red, green, blue, alpha in pixels
+        for channel in (blue, green, red, alpha if channels == 4 else 255)
+    )
+    assert (image.width, image.height, image.bgra) == (3, 2, expected)
+
+
+@pytest.mark.parametrize("name,width,height,expected", [
+    ("HMC_LHD_RHD.png", 174, 64, "15318da1832bee28c679a08d257c5f622737b04f65afd84dc1312b8636807be5"),
+    ("KMC_LHD.png", 792, 291, "ba43d304b8b5960f01aabe10f4a183a8a17ecfbafd05c8228d8ce2e1f7e43e95"),
+    ("KMC_RHD.png", 174, 64, "975a1fc9b96ec4335c132cb8fc5a6e1d4894dd48c9070068d64d9bc8faedd525"),
+    ("logo.png", 1024, 720, "ff90839d31c021d0180720fea2793af42f1eff4b54685b6d1903f20534f5ed23"),
+])
+def test_raster_png_preserves_original_asset_pixels(name, width, height, expected):
+    # Goldens independently decoded with the already-installed host Pillow;
+    # this test and the shipped renderer do not depend on Pillow.
+    image = RasterImage.from_png(ROOT / "assets" / name)
+    assert (image.width, image.height) == (width, height)
+    assert hashlib.sha256(image.bgra).hexdigest() == expected
+
+
+@pytest.mark.parametrize("failure", ["crc", "filter", "scanline_length", "trailing", "color_type"])
+def test_raster_png_keeps_validation_before_returning_pixels(failure):
+    rows = b"\0" + bytes(range(12)) + b"\0" + bytes(range(12, 24))
+    if failure == "filter":
+        rows = rows[:13] + b"\5" + rows[14:]
+    elif failure == "scanline_length":
+        rows = rows[:-1]
+    png = _png_from_scanlines(0 if failure == "color_type" else 6, rows)
+    if failure == "crc":
+        png = png[:29] + bytes([png[29] ^ 1]) + png[30:]
+    elif failure == "trailing":
+        png += b"extra"
+    with pytest.raises(RasterError):
+        RasterImage.from_png_bytes(png)
+
+
+def test_tray_image_display_tracks_asset_item_size_visibility_and_errors(tmp_path, monkeypatch):
+    import Container_Audit as application
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(RasterImage.solid(4, 2, (255, 0, 0)).to_png_bytes())
+    second.write_bytes(RasterImage.solid(2, 4, (0, 0, 255)).to_png_bytes())
+    catalog = {"first": {"Tray Image": str(first)}, "second": {"Tray Image": str(second)}}
+    bounds = {"width": 60, "height": 200}
+    visible = {"value": True}
+    options = {}
+    label = SimpleNamespace(
+        master=SimpleNamespace(winfo_width=lambda: bounds["width"]),
+        winfo_exists=lambda: True, config=lambda **values: options.update(values), image=None,
+    )
+    app = SimpleNamespace(
+        tray_image_label=label,
+        left_pane=SimpleNamespace(winfo_height=lambda: bounds["height"]),
+        show_tray_image_var=SimpleNamespace(get=lambda: visible["value"]),
+        current_tray=SimpleNamespace(item_code="first"),
+        _item_catalog=lambda: SimpleNamespace(find_by_code=lambda code: catalog.get(code)),
+        _apply_left_sidebar_layout=lambda: None, _schedule_focus_return=lambda: None,
+        COLOR_DANGER="danger", COLOR_TEXT_SUBTLE="subtle",
+    )
+    app._clear_tray_image_label = lambda text="", foreground=None: application.ContainerAudit._clear_tray_image_label(app, text, foreground)
+    monkeypatch.setattr(
+        RasterImage, "to_tk_photo_image",
+        lambda image, *, master: SimpleNamespace(width=image.width, height=image.height, bgra=image.bgra),
+    )
+    update = lambda: application.ContainerAudit._update_tray_image_display(app)
+
+    update()
+    assert (label.image.width, label.image.height) == (40, 20)
+    assert label.image.bgra == bytes((0, 0, 255, 255)) * (40 * 20)
+    update()  # Repeated use must keep the same correct pixels.
+    assert label.image.bgra == bytes((0, 0, 255, 255)) * (40 * 20)
+    bounds["width"] = 80
+    update()
+    assert (label.image.width, label.image.height) == (60, 30)
+
+    first.write_bytes(RasterImage.solid(4, 2, (0, 255, 0)).to_png_bytes())
+    update()  # Replacement at the same item and asset path must be observed.
+    assert label.image.bgra == bytes((0, 255, 0, 255)) * (60 * 30)
+    app.current_tray.item_code = "second"
+    update()
+    assert (label.image.width, label.image.height) == (30, 60)
+    assert label.image.bgra == bytes((255, 0, 0, 255)) * (30 * 60)
+
+    visible["value"] = False
+    update()
+    assert label.image is None and options["image"] == "" and options["text"] == ""
+    visible["value"] = True
+    update()
+    assert label.image.bgra == bytes((255, 0, 0, 255)) * (30 * 60)
+    catalog["second"]["Tray Image"] = str(tmp_path / "missing.png")
+    update()
+    assert label.image is None and options["image"] == ""
+    assert options["text"].startswith("이미지 오류:") and options["foreground"] == "danger"
+    app.current_tray.item_code = "unregistered"
+    update()
+    assert label.image is None and "등록되지 않았습니다" in options["text"]
+    app.current_tray.item_code = ""
+    update()
+    assert label.image is None and "현품표를 먼저" in options["text"]
 
 
 def test_runtime_dependencies_remove_pillow_and_pygame():

@@ -245,14 +245,25 @@ class RasterImage:
             offset += 1
             encoded = filtered[offset : offset + row_bytes]
             offset += row_bytes
+            if filter_kind == 0:
+                # Unfiltered scanlines already contain the exact RGB(A)
+                # bytes. Pack channels without per-byte or per-pixel loops.
+                output_end = output_offset + int(width) * 4
+                bgra[output_offset:output_end:4] = encoded[2::channels]
+                bgra[output_offset + 1:output_end:4] = encoded[1::channels]
+                bgra[output_offset + 2:output_end:4] = encoded[0::channels]
+                bgra[output_offset + 3:output_end:4] = (
+                    encoded[3::4] if channels == 4 else b"\xff" * int(width)
+                )
+                previous = bytearray(encoded)
+                output_offset = output_end
+                continue
             current = bytearray(row_bytes)
             for index, encoded_byte in enumerate(encoded):
                 left = current[index - channels] if index >= channels else 0
                 above = previous[index]
                 upper_left = previous[index - channels] if index >= channels else 0
-                if filter_kind == 0:
-                    value = encoded_byte
-                elif filter_kind == 1:
+                if filter_kind == 1:
                     value = encoded_byte + left
                 elif filter_kind == 2:
                     value = encoded_byte + above
