@@ -336,7 +336,7 @@ def test_native_scan_rows_survive_notice_completion_and_recovery(native_operator
         assert '2건' in app.scanned_list_header_label.cget('text')
 
 
-def test_native_action_copy_and_rows_round_trip_without_exposing_hidden_operations(native_operator):
+def test_native_action_copy_and_rows_round_trip_without_exposing_hidden_operations(native_operator, request):
     app, center, _right = native_operator
     observations = []
     for width in [959, 960, 580, 959]:
@@ -345,18 +345,25 @@ def test_native_action_copy_and_rows_round_trip_without_exposing_hidden_operatio
         app._apply_center_layout(center, width, 900)
         app.root.update()
         buttons = action_buttons(app)
+        bounds = [rectangle(button) for button in buttons]
+        requested = [(button.winfo_reqwidth(), button.winfo_reqheight()) for button in buttons]
+        request.node.user_properties.append(('action_geometry', repr((width, bounds, requested))))
         for button in buttons:
             assert_contained(button, center)
-        spans = [(button.winfo_rooty(), button.winfo_rooty() + button.winfo_height()) for button in buttons]
-        if width == 580:
-            assert max(y for y, _bottom in spans[:2]) < min(bottom for _y, bottom in spans[:2])
-            assert max(bottom for _y, bottom in spans[:2]) <= min(y for y, _bottom in spans[2:])
-            assert max(y for y, _bottom in spans[2:]) < min(bottom for _y, bottom in spans[2:])
-        else:
+        for index, (x, y, button_width, button_height) in enumerate(bounds):
+            req_width, req_height = requested[index]
+            assert button_width >= req_width and button_height >= req_height, (width, bounds, requested)
+            for next_x, next_y, _next_width, next_height in bounds[index + 1:]:
+                if max(y, next_y) < min(y + button_height, next_y + next_height):
+                    assert x + button_width <= next_x, (width, bounds)
+                else:
+                    assert y + button_height <= next_y, (width, bounds)
+        if width != 580:
+            spans = [(y, y + height) for _x, y, _width, height in bounds]
             assert max(y for y, _bottom in spans) < min(bottom for _y, bottom in spans)
         assert app.submit_tray_button.cget('text') == ('트레이 제출' if width >= 960 else '제출')
         assert set(app._center_button_frame.winfo_children()) == set(buttons)
-        observations.append([rectangle(button) for button in buttons])
+        observations.append(bounds)
     assert observations[0] == observations[-1]
 
 
