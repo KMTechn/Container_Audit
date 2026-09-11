@@ -355,7 +355,7 @@ def test_native_action_copy_and_rows_round_trip_without_exposing_hidden_operatio
         else:
             assert max(y for y, _bottom in spans) < min(bottom for _y, bottom in spans)
         assert app.submit_tray_button.cget('text') == ('트레이 제출' if width >= 960 else '제출')
-        assert not any(w.winfo_ismapped() for w in [app.reset_button, app.replace_master_label_button, app.exchange_button])
+        assert set(app._center_button_frame.winfo_children()) == set(buttons)
         observations.append([rectangle(button) for button in buttons])
     assert observations[0] == observations[-1]
 

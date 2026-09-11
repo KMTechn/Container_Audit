@@ -247,25 +247,23 @@ def _completion_app(tmp_path, *, delete_succeeds, prior_operator_review):
 
 def test_operator_review_disables_active_tray_mutation_buttons():
     app = _operator_review_app()
-    app.reset_button = DummyWidget()
+    app.operations_button = DummyWidget()
     app.park_button = DummyWidget()
     app.undo_button = DummyWidget()
     app.submit_tray_button = DummyWidget()
-    app.replace_master_label_button = DummyWidget()
-    app.exchange_button = DummyWidget()
     app._exact_transfer_exchange_blocked = lambda: False
     app._use_compact_action_labels = lambda: False
 
     app._update_action_button_states()
 
     actual_states = {
-        "reset": app.reset_button["state"],
+        "operations": app.operations_button["state"],
         "park": app.park_button["state"],
         "undo": app.undo_button["state"],
         "submit": app.submit_tray_button["state"],
     }
     assert actual_states == {
-        "reset": container_audit_module.tk.DISABLED,
+        "operations": container_audit_module.tk.DISABLED,
         "park": container_audit_module.tk.DISABLED,
         "undo": container_audit_module.tk.DISABLED,
         "submit": container_audit_module.tk.DISABLED,
@@ -274,12 +272,9 @@ def test_operator_review_disables_active_tray_mutation_buttons():
 
 def test_operator_review_does_not_expose_submit_retry_command_or_label():
     app = _operator_review_app()
-    app.reset_button = DummyWidget()
     app.park_button = DummyWidget()
     app.undo_button = DummyWidget()
     app.submit_tray_button = DummyWidget()
-    app.replace_master_label_button = DummyWidget()
-    app.exchange_button = DummyWidget()
     app._exact_transfer_exchange_blocked = lambda: False
     app._use_compact_action_labels = lambda: False
 
@@ -361,14 +356,11 @@ def _commandless_successor_review_app(tmp_path):
 
 def test_commandless_successor_review_exposes_only_safe_retry(tmp_path):
     app, _intent_id = _commandless_successor_review_app(tmp_path)
-    app.reset_button = DummyWidget()
     app.park_button = DummyWidget()
     app.undo_button = DummyWidget()
     app.submit_tray_button = DummyWidget()
     app.operations_button = DummyWidget()
     app.change_worker_button = DummyWidget()
-    app.replace_master_label_button = DummyWidget()
-    app.exchange_button = DummyWidget()
     app.phs_label_exchange_button = DummyWidget()
     app.phs_label_legacy_fallback_button = DummyWidget()
     app.phs_label_candidate_load_button = DummyWidget()
@@ -385,7 +377,7 @@ def test_commandless_successor_review_exposes_only_safe_retry(tmp_path):
         app.submit_tray_button.options["command"].__name__
         == "_retry_precommand_operator_review_completion"
     )
-    assert app.reset_button["state"] == container_audit_module.tk.DISABLED
+    assert app.operations_button["state"] == container_audit_module.tk.DISABLED
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
 
 
@@ -456,21 +448,23 @@ def test_commandless_successor_retry_restores_lock_after_early_failure(
     assert errors
 
 
-def test_stale_operator_review_disables_replacement_and_exchange_buttons():
+def test_stale_operator_review_disables_operations_menu_and_blocks_popup(monkeypatch):
     app = _operator_review_app(active_tray=False)
-    app.reset_button = DummyWidget()
+    app.operations_button = DummyWidget()
     app.park_button = DummyWidget()
     app.undo_button = DummyWidget()
     app.submit_tray_button = DummyWidget()
-    app.replace_master_label_button = DummyWidget()
-    app.exchange_button = DummyWidget()
     app._exact_transfer_exchange_blocked = lambda: False
     app._use_compact_action_labels = lambda: False
 
     app._update_action_button_states()
 
-    assert app.replace_master_label_button["state"] == container_audit_module.tk.DISABLED
-    assert app.exchange_button["state"] == container_audit_module.tk.DISABLED
+    assert app.operations_button["state"] == container_audit_module.tk.DISABLED
+    monkeypatch.setattr(
+        container_audit_module.tk, "Menu",
+        lambda *_args, **_kwargs: pytest.fail("operator review must block the menu"),
+    )
+    app._show_operations_menu()
 
 
 def test_operator_review_blocks_undo_without_mutating_or_persisting_scan():

@@ -1498,14 +1498,11 @@ def test_active_hold_disables_phs_execute_button():
     app.phs_label_exchange_coordinator = None
     app.phs_label_candidate_var = SimpleNamespace(get=lambda: "candidate")
     for widget_name in (
-        "reset_button",
         "park_button",
         "undo_button",
         "submit_tray_button",
         "operations_button",
         "change_worker_button",
-        "replace_master_label_button",
-        "exchange_button",
         "phs_label_exchange_button",
         "phs_label_legacy_fallback_button",
         "phs_label_candidate_load_button",

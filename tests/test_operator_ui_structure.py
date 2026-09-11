@@ -446,16 +446,10 @@ def test_scale14_center_actions_fit_capture_tk_scaling_at_compact_and_wide_width
             normal = app._action_button_labels(
                 compact=compact,
                 operator_review=False,
-                replacement_active=False,
-                exchange_dialog_open=False,
-                exact_exchange_blocked=False,
             )
             review = app._action_button_labels(
                 compact=compact,
                 operator_review=True,
-                replacement_active=False,
-                exchange_dialog_open=False,
-                exact_exchange_blocked=False,
             )
             labels_and_styles = (
                 (normal["undo"], "WidthContract.Secondary.TButton", budgets[0]),
@@ -536,9 +530,6 @@ def test_real_root_configure_refreshes_button_styles_compact_wide_compact(monkey
                 labels = app._action_button_labels(
                     compact=True,
                     operator_review=False,
-                    replacement_active=False,
-                    exchange_dialog_open=False,
-                    exact_exchange_blocked=False,
                 )
                 requested_widths = []
                 for key, button_style, available_width in (

@@ -4354,14 +4354,9 @@ class ContainerAudit:
         compact: bool,
         operator_review: bool,
         precommand_retry: bool = False,
-        replacement_active: bool,
-        exchange_dialog_open: bool,
-        exact_exchange_blocked: bool,
-        active_transfer_exchange_available: bool = False,
     ) -> Dict[str, str]:
         if compact:
             return {
-                "reset": "리셋",
                 "undo": "스캔 취소",
                 "park": "보류",
                 "submit": (
@@ -4372,21 +4367,8 @@ class ContainerAudit:
                     else "제출"
                 ),
                 "operations": "운영 작업",
-                "replace": (
-                    "교체 취소"
-                    if replacement_active
-                    else ("중앙 교체" if exact_exchange_blocked else "교체")
-                ),
-                "exchange": (
-                    "현재 제품 교체"
-                    if active_transfer_exchange_available
-                    else "중앙 교환"
-                    if exact_exchange_blocked
-                    else ("교환 창" if exchange_dialog_open else "교환")
-                ),
             }
         return {
-            "reset": "현재 작업 리셋",
             "undo": "스캔 취소",
             "park": "트레이 보류",
             "submit": (
@@ -4397,37 +4379,12 @@ class ContainerAudit:
                 else "트레이 제출"
             ),
             "operations": "운영 작업 ▾",
-            "replace": (
-                "교체 취소"
-                if replacement_active
-                else (
-                    "중앙 교체 워크플로 필요"
-                    if exact_exchange_blocked
-                    else "🔄 완료 현품표 교체"
-                )
-            ),
-            "exchange": (
-                "🔁 현재 이적 제품 교체"
-                if active_transfer_exchange_available
-                else "중앙 교환 워크플로 필요"
-                if exact_exchange_blocked
-                else ("교환 창 보기" if exchange_dialog_open else "🔁 개별 제품 교환")
-            ),
         }
 
     def _refresh_action_button_labels(self, center_width: int) -> None:
         completion = self._warning_state_presenter().state.completion
         operator_review = bool(
             completion is not None and completion.outcome is CompletionOutcome.OPERATOR_REVIEW
-        )
-        replacement_active = bool(getattr(self, "master_label_replace_state", None))
-        exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
-        exact_exchange_blocked = bool(getattr(self, "_exact_exchange_mode_active", False))
-        tray = getattr(self, "current_tray", None)
-        active_transfer_exchange_available = bool(
-            exact_exchange_blocked
-            and getattr(tray, "master_label_code", "")
-            and (getattr(tray, "scanned_barcodes", None) or [])
         )
         precommand_retry = (
             self._precommand_operator_review_retry_context() is not None
@@ -4436,19 +4393,12 @@ class ContainerAudit:
             compact=1 < int(center_width or 0) < 960,
             operator_review=operator_review,
             precommand_retry=precommand_retry,
-            replacement_active=replacement_active,
-            exchange_dialog_open=exchange_dialog_open,
-            exact_exchange_blocked=exact_exchange_blocked,
-            active_transfer_exchange_available=active_transfer_exchange_available,
         )
         for key, widget_name in (
-            ("reset", "reset_button"),
             ("undo", "undo_button"),
             ("park", "park_button"),
             ("submit", "submit_tray_button"),
             ("operations", "operations_button"),
-            ("replace", "replace_master_label_button"),
-            ("exchange", "exchange_button"),
         ):
             self._configure_widget_options(getattr(self, widget_name, None), text=labels[key])
 
@@ -4464,27 +4414,16 @@ class ContainerAudit:
         precommand_retry = (
             self._precommand_operator_review_retry_context() is not None
         )
-        replacement_active = bool(getattr(self, "master_label_replace_state", None))
-        exchange_dialog_open = self._widget_exists(getattr(self, "exchange_dialog", None))
         lane = getattr(self, "_ui_lane", None)
         transfer_lane_busy = bool(lane is not None and lane.is_busy())
-        exact_exchange_blocked = self._exact_transfer_exchange_blocked()
+        # Preserve the conservative exact-mode latch independently of menu widgets.
+        self._exact_transfer_exchange_blocked()
         phs_transition_blocked = self._phs_label_exchange_transition_pending()
-        active_transfer_exchange_available = bool(
-            exact_exchange_blocked
-            and active_tray
-            and scanned_count
-            and not transfer_lane_busy
-        )
         compact_labels = self._use_compact_action_labels()
         labels = self._action_button_labels(
             compact=compact_labels,
             operator_review=operator_review,
             precommand_retry=precommand_retry,
-            replacement_active=replacement_active,
-            exchange_dialog_open=exchange_dialog_open,
-            exact_exchange_blocked=exact_exchange_blocked,
-            active_transfer_exchange_available=active_transfer_exchange_available,
         )
         if retryable_completion:
             if blocking_completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
@@ -4495,13 +4434,10 @@ class ContainerAudit:
         if bool(getattr(self, "_completion_lane_busy", False)):
             labels["submit"] = "완료 처리 중"
             for key, widget_name in (
-                ("reset", "reset_button"),
                 ("undo", "undo_button"),
                 ("park", "park_button"),
                 ("submit", "submit_tray_button"),
                 ("operations", "operations_button"),
-                ("replace", "replace_master_label_button"),
-                ("exchange", "exchange_button"),
             ):
                 self._configure_widget_options(
                     getattr(self, widget_name, None),
@@ -4525,11 +4461,6 @@ class ContainerAudit:
             tk.DISABLED
             if operator_review or phs_transition_blocked or preflight_context_locked
             else tk.NORMAL
-        )
-        self._configure_widget_options(
-            getattr(self, "reset_button", None),
-            text=labels["reset"],
-            state=mutation_state if active_tray else tk.DISABLED,
         )
         self._configure_widget_options(
             getattr(self, "park_button", None),
@@ -4581,53 +4512,6 @@ class ContainerAudit:
             ),
         )
 
-        if replacement_active:
-            self._configure_widget_options(
-                getattr(self, "replace_master_label_button", None),
-                text=labels["replace"],
-                style='Danger.TButton',
-                state=(
-                    tk.DISABLED
-                    if operator_review or preflight_context_locked
-                    else tk.NORMAL
-                ),
-            )
-        else:
-            self._configure_widget_options(
-                getattr(self, "replace_master_label_button", None),
-                text=labels["replace"],
-                style='Secondary.TButton',
-                state=(
-                    tk.DISABLED
-                    if operator_review
-                    or preflight_context_locked
-                    or active_tray
-                    or exchange_dialog_open
-                    or (exact_exchange_blocked and not replacement_active)
-                    or transfer_lane_busy
-                    else tk.NORMAL
-                ),
-            )
-
-        self._configure_widget_options(
-            getattr(self, "exchange_button", None),
-            text=labels["exchange"],
-            state=(
-                tk.NORMAL
-                if active_transfer_exchange_available
-                and not operator_review
-                and not preflight_context_locked
-                and not replacement_active
-                else tk.DISABLED
-                if operator_review
-                or preflight_context_locked
-                or active_tray
-                or replacement_active
-                or exact_exchange_blocked
-                or transfer_lane_busy
-                else tk.NORMAL
-            ),
-        )
         single_available = self._phs_label_exchange_available_for_tray()
         reconciliation_available = (
             self._phs_reconciliation_exchange_available()
@@ -7877,11 +7761,7 @@ class ContainerAudit:
         self.undo_button = ttk.Button(button_frame, text="마지막 스캔 취소", command=self.undo_last_scan, state=tk.DISABLED, style='Secondary.TButton', width=0)
         self.park_button = ttk.Button(button_frame, text="트레이 보류", command=self.park_current_tray, style='Warning.TButton', width=0)
         self.operations_button = ttk.Button(button_frame, text="운영 작업 ▾", command=self._show_operations_menu, style='Secondary.TButton', width=0)
-        # Compatibility handles for existing state logic and tests. These
-        # actions are intentionally exposed only through the operations menu.
-        self.reset_button = ttk.Button(button_frame, text="작업 리셋", command=self.reset_current_work, style='Danger.TButton')
-        self.replace_master_label_button = ttk.Button(button_frame, text="완료 현품표 교체", command=self.initiate_master_label_replacement, style='Secondary.TButton')
-        self.exchange_button = ttk.Button(button_frame, text="개별 제품 교환", command=self.show_exchange_dialog, style='Secondary.TButton')
+        # Secondary actions are created on demand in the operations menu.
         self._center_action_buttons = [
             self.undo_button,
             self.park_button,

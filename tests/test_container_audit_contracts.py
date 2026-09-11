@@ -625,35 +625,28 @@ class RaisingIntVar:
         raise container_audit_module.tk.TclError("expected integer")
 
 
-def test_action_button_states_follow_tray_scans_and_modal_modes():
+def test_action_button_states_follow_tray_scans():
     app = _headless_app()
     app.current_tray = TraySession()
     app.master_label_replace_state = None
-    app.reset_button = DummyButton()
     app.park_button = DummyButton()
     app.undo_button = DummyButton()
     app.submit_tray_button = DummyButton()
-    app.replace_master_label_button = DummyButton()
-    app.exchange_button = DummyButton()
+    app.operations_button = DummyButton()
 
     app._update_action_button_states()
 
-    assert app.reset_button["state"] == container_audit_module.tk.DISABLED
     assert app.park_button["state"] == container_audit_module.tk.DISABLED
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
     assert app.submit_tray_button["state"] == container_audit_module.tk.DISABLED
-    assert app.replace_master_label_button["state"] == container_audit_module.tk.NORMAL
-    assert app.exchange_button["state"] == container_audit_module.tk.NORMAL
+    assert app.operations_button["state"] == container_audit_module.tk.NORMAL
 
     app.current_tray = TraySession(master_label_code="ACTIVE")
     app._update_action_button_states()
 
-    assert app.reset_button["state"] == container_audit_module.tk.NORMAL
     assert app.park_button["state"] == container_audit_module.tk.NORMAL
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
     assert app.submit_tray_button["state"] == container_audit_module.tk.DISABLED
-    assert app.replace_master_label_button["state"] == container_audit_module.tk.DISABLED
-    assert app.exchange_button["state"] == container_audit_module.tk.DISABLED
 
     app.current_tray.scanned_barcodes.append("AAA2270730100-001")
     app._update_action_button_states()
@@ -661,29 +654,64 @@ def test_action_button_states_follow_tray_scans_and_modal_modes():
     assert app.undo_button["state"] == container_audit_module.tk.NORMAL
     assert app.submit_tray_button["state"] == container_audit_module.tk.NORMAL
 
-    app.current_tray = TraySession()
-    app.master_label_replace_state = "awaiting_old_completed"
-    app._update_action_button_states()
 
-    assert app.replace_master_label_button["text"] == "교체 취소"
-    assert app.replace_master_label_button["style"] == "Danger.TButton"
-    assert app.replace_master_label_button["state"] == container_audit_module.tk.NORMAL
-    assert app.exchange_button["state"] == container_audit_module.tk.DISABLED
-
-
-def test_action_button_states_treat_open_exchange_dialog_as_existing_flow():
+@pytest.mark.parametrize(
+    ("active", "exact", "replacement", "dialog_open", "busy", "states"),
+    [
+        (False, False, False, False, False, ("disabled", "normal", "normal")),
+        (True, False, False, False, False, ("normal", "disabled", "disabled")),
+        (True, True, False, False, False, ("normal", "disabled", "normal")),
+        (False, False, True, False, False, ("disabled", "normal", "disabled")),
+        (False, False, False, True, False, ("disabled", "disabled", "normal")),
+        (False, False, False, False, True, ("disabled", "disabled", "disabled")),
+    ],
+)
+def test_operations_menu_preserves_secondary_action_admission(
+    monkeypatch, active, exact, replacement, dialog_open, busy, states
+):
     app = _headless_app()
-    app.current_tray = TraySession()
-    app.master_label_replace_state = None
-    app.replace_master_label_button = DummyButton()
-    app.exchange_button = DummyButton()
-    app.exchange_dialog = type("DummyDialog", (), {"winfo_exists": lambda self: True})()
+    app.current_tray = TraySession(
+        master_label_code="ACTIVE" if active else "",
+        scanned_barcodes=["AAA2270730100-001"] if active else [],
+    )
+    app.master_label_replace_state = "awaiting_old_completed" if replacement else None
+    app.exchange_dialog = type("Dialog", (), {"winfo_exists": lambda self: dialog_open})()
+    app._ui_lane = type("Lane", (), {"is_busy": lambda self: busy})()
+    app._exact_transfer_exchange_blocked = lambda: exact
+    app._is_preflight_hold_supervisor = lambda: False
+    app.root = type("MenuRoot", (), {
+        "winfo_pointerx": lambda self: 0, "winfo_pointery": lambda self: 0,
+    })()
+    entries = []
+    popup = []
 
-    app._update_action_button_states()
+    class Menu:
+        def __init__(self, *_args, **_kwargs):
+            pass
 
-    assert app.replace_master_label_button["state"] == container_audit_module.tk.DISABLED
-    assert app.exchange_button["state"] == container_audit_module.tk.NORMAL
-    assert app.exchange_button["text"] == "교환 창 보기"
+        def add_command(self, **kwargs):
+            entries.append(kwargs)
+
+        def add_separator(self):
+            pass
+
+        def tk_popup(self, *_args):
+            popup.append("shown")
+
+        def grab_release(self):
+            popup.append("released")
+
+    monkeypatch.setattr(container_audit_module.tk, "Menu", Menu)
+    app._show_operations_menu()
+
+    commands = {entry["command"].__name__: entry for entry in entries}
+    actions = ("reset_current_work", "initiate_master_label_replacement", "show_exchange_dialog")
+    assert tuple(commands[name]["state"] for name in actions) == states
+    assert popup == ["shown", "released"]
+    if replacement:
+        assert commands["initiate_master_label_replacement"]["label"] == "현품표 교체 취소"
+    if active and exact:
+        assert commands["show_exchange_dialog"]["label"] == "현재 이적 제품 교체"
 
 
 class DummyRoot:
@@ -10063,12 +10091,9 @@ def test_replacement_scanner_flow_writes_correction_and_direct_sync_plan(tmp_pat
     app._scan_callback_epoch = 0
     app.focus_return_job = None
     app.root = CapturingRoot()
-    app.reset_button = DummyButton()
     app.park_button = DummyButton()
     app.undo_button = DummyButton()
     app.submit_tray_button = DummyButton()
-    app.replace_master_label_button = DummyButton()
-    app.exchange_button = DummyButton()
     app.exchange_dialog = None
     app.COLOR_PRIMARY = "primary"
     app.COLOR_SUCCESS = "success"

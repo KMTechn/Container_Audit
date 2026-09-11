@@ -13,6 +13,8 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 
 ### 2026-09-10 UI 전수 점검과 idle 후 작업 명령 갱신
 
+2026-09-11 후속 소비자 점검으로 화면에 배치되지 않고 label/state 쓰기·시험 metadata에만 남은 리셋/완료 현품표 교체/개별 제품 교환의 Tk 버튼 세 개를 제거했다. 실제 명령은 기존 운영 작업 메뉴가 열릴 때 현재 상태로 구성하며, 공통 configure helper·F8/Shift-F8·수량·권한·보류/중앙 복구 진입점은 유지한다. [변경과 소비 근거](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/HIDDEN-ACTIONS-CHANGE.md)의 영향 회귀는34 PASS다. 수정 전 단회 진단은 숨은 교환 버튼 configure에서408.4923ms wall/15.625ms thread CPU를 관측했고 [19개 원본 회수](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/CURRENT-DIAGNOSTIC.md)를 완료했다. 이 값은 원인·반복 성능 이득을 입증하지 않으며, 새 후보의 native UI·독립 검토와 연결 전체 흐름은 아직 미완료다.
+
 기존 coordinator 작업의 finish는 lane이 busy인 동안 화면을 갱신한다. 그때 비활성화된 운영 작업 버튼이 작업 종료 후 남지 않도록, 기존 idle continuation에서 후속 작업을 먼저 고려한 뒤 현재 action 상태를 다시 계산한다. 종료 요청 뒤에는 이 새 갱신을 건너뛰며, 대기 중인 작업·보류·중앙 복구의 기존 차단 조건은 유지한다. 실제 lane을 사용하는 기존 회귀에 busy/idle와 종료 중 버튼 상태를 추가했으며 최종 영향 검사 **11 PASS**다. [UI 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)와 [CA-G13](BACKLOG.md#ca-g13)에 검사 결과·범위와 후속 작업을 기록한다.
 
 별도 탭 대신 아래 화면·상태를 점검 대상으로 관리한다. [소스 호출 목록](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/SOURCE-UI-INVENTORY-deduplicated.json)은 e69a0cb의 167개 중복 없는 UI 생성/modal 호출 위치를 포함하며, 내부 helper도 포함하므로 화면 수나 native 수용 수가 아니다.
