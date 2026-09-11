@@ -298,7 +298,7 @@ Main reply `msg_0b2fc814c41b`에 따라 원래 d440→a7 공개 Restore09와 변
   Windows host Python 3.12.10에서 **236 PASS / 8 real_gui deselected**, 별도
   writer inventory consumer hash 확인 **1 PASS**이며 FAIL/ERROR/SKIP은 없다.
   명령·실제 결과·환경·한계와 final commit은
-  [RESULT](E:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 기록한다.
+  [RESULT](D:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 기록한다.
   새 Full·native build·설치·업무 replay·서버 검증은 **NOT TESTED**이며 이 소스
   정리의 자동 gate가 아니다. production CONTAINER_AUDIT1–3은 no-change다.
 

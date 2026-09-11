@@ -141,7 +141,7 @@
   Phase G synthetic report 및 그 보고서 전용 시험을 제거했다. 실제 업무·오류/재시도
   회귀와 runtime/shared provider·설치 consumer는 유지한다.
 - **검증·보존:** [CA-O11](operations.md#ca-o11)과
-  [RESULT](E:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 정확한
+  [RESULT](D:/KMTech/s05-simplification-20260909/Container_Audit/RESULT.md)에 정확한
   base/final commit, focused 명령·결과·한계와 남긴 도구의 이유를 기록한다.
   accepted `d440b1f7`·원래 실패·production CONTAINER_AUDIT1–3은 유지한다.
 - **다음 행동:** Main이 이 소스 변경을 독립 검토한다. 이는 마감된 선택 여섯 프로그램
