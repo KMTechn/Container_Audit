@@ -167,6 +167,8 @@ CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해
 
 scope·식별자·권한은 [LogisticsTransferClient](../../transfer_seal.py)가 검사하며 교체 준비/출력 요청의 멱등 key와 활성화 expected version의 역할을 구분한다. 모든 POST가 같은 키 필드를 갖는다고 가정하지 않는다.
 
+**작업계획 변경의 CA 소비 경계(2026-09-11 소스 확인):** CA는 중앙에 게시된 PLANNED 지시 후보를 조회하고 실행 직전 instruction ID/version을 다시 대조한다. 정합 실행은 `EXCHANGE_DATE` 묶음 또는 단일 `SPLIT`/`MERGE`만 허용하며, current-actuals 계획의 `ADD`/`RESIZE`/`CANCEL`을 적용하는 소비자는 아니다. Web의 계획 적용·게시를 CA의 물리 라벨 prepare/print/activate와 구분한다. 일반 검사 목표는 검증된 중앙 GOOD member count이고, 단독 라벨 변경은 기존 canonical PHS2·스캔 목록·트레이 수량을 덮어쓰지 않는다. 열린 CA 트레이로 계획 변경을 자동 push하는 경로는 확인되지 않았으며, 시작 시 품목 cache 갱신을 작업계획 갱신으로 해석하지 않는다. [소스별 확인·배포 미입증 범위](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/PLAN-CONSUMER-AUDIT.md)와 [CA-G05](BACKLOG.md#ca-g05)에 후속을 기록한다.
+
 source/target identity·membership·topology·version 및 action을 대조하고, 중앙 준비 상태와 로컬 출력 journal을 연결한다. 중앙 `PREPARED`, `PRINT_FAILED`, `PRINT_PARTIAL`, `READY`, `COMMITTED` 상태 및 로컬 ACK 대기 상태는 서로 다른 관측값이다. 출력 artifact hash와 `spool_job_id` 등 `_print_proof`를 확인한 뒤 print 완료·활성화 요청을 보낸다. [execute / _validate_exchange / _record_print_failure / _validate_artifact](../../phs_reconciliation_workflow.py).
 
 중앙 commit과 로컬 journal 또는 실물 인쇄는 분산된 효과다. 출력 일부 성공·응답 유실·파일 변조는 재조회/확인과 정확한 journal 재사용으로 처리하고, 취소/재출력 가능 여부를 현재 중앙 상태에서 판단한다. 이 계약의 spool 증거는 실제 종이 배출·부착 증거가 아니다. [CA-11](README.md#ca-11), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
