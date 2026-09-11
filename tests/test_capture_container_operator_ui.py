@@ -945,9 +945,28 @@ def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts()
     }
 
     assert assertions["m7_phs2_preflight"]["expected_input_state"] == "disabled"
-    assert set(assertions["m7_completion_busy"]["expected_disabled_controls"]) == set(
-        capture_tool.M7_ACTION_NAMES
-    )
+    assert set(assertions["m7_completion_busy"]["expected_disabled_controls"]) == {
+        "undo", "park", "submit", "operations", "change_worker", "phs_label_exchange",
+    }
+    assert assertions["m7_partial_atomic_exchange"]["expected_enabled_controls"] == [
+        "operations",
+    ]
+    partial_fixture = {
+        "state_id": "m7_partial_atomic_exchange",
+        "m7_assertions": assertions["m7_partial_atomic_exchange"],
+    }
+    partial_rendered = {
+        "m7_scene_receipt": {},
+        "action_buttons": {"operations": {"text": "운영 작업 ▾", "state": "normal"}},
+    }
+    visible = build_m7_scene_gate(partial_fixture, partial_rendered)
+    assert visible["checks"]["operations_menu_entry_visible"] is True
+    assert visible["passed"] is False  # Menu visibility cannot prove exchange semantics.
+    partial_rendered["action_buttons"] = {
+        "exchange": {"text": "현재 이적 제품 교체", "state": "normal"},
+    }
+    hidden_only = build_m7_scene_gate(partial_fixture, partial_rendered)
+    assert hidden_only["checks"]["operations_menu_entry_visible"] is False
     membership = assertions["m7_exact_good_membership"]["member_set"]
     assert membership["member_count"] == 3
     assert membership["active_scan_count"] == 3

@@ -110,14 +110,11 @@ M7_PRODUCTION_BINDING_PATHS = (
     *M7_PRODUCT_TEXT_BLOBS[1:],
 )
 M7_ACTION_NAMES = (
-    "reset",
     "undo",
     "park",
     "submit",
     "operations",
     "change_worker",
-    "replace",
-    "exchange",
     "phs_label_exchange",
 )
 
@@ -207,13 +204,10 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
         ),
         "input_state": "disabled",
         "disabled_controls": (
-            "reset",
             "undo",
             "park",
             "operations",
             "change_worker",
-            "replace",
-            "exchange",
             "phs_label_exchange",
         ),
     },
@@ -225,7 +219,7 @@ M7_SCENE_CONTRACT: dict[str, dict[str, Any]] = {
         ),
         "input_state": "normal",
         "disabled_controls": (),
-        "enabled_controls": ("exchange",),
+        "enabled_controls": ("operations",),
     },
 }
 MIN_SCALE = 0.7
@@ -5382,9 +5376,10 @@ def build_m7_scene_gate(
         checks["partial_completion_block_visible"] = bool(status_variants) and (
             notice_message == status_variants[0]
         )
-        checks["atomic_exchange_control_visible"] = (
-            "현재 이적 제품 교체"
-            in str((actions.get("exchange") or {}).get("text") or "")
+        # This scene shows the menu entry, not an open menu or exchange dialog.
+        checks["operations_menu_entry_visible"] = (
+            "운영 작업"
+            in str((actions.get("operations") or {}).get("text") or "")
         )
     return {
         "gate_applicable": True,
