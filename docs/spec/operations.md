@@ -113,6 +113,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 2026-09-09 최적화는 원본 `9e38334f`의 합성 normal/held, catalog 50/1,000개 기준을 먼저 측정했다. [고정 기준·목표](D:/KMTech/optimization-implementation-20260909/Container_Audit/BASELINE-AND-TARGETS.md)는 handler CPU와 실제 파일 저장 companion을 분리하며, field SLA나 실제 VM paint/네트워크 latency를 주장하지 않는다. CA-S1a `920831d` 이후 같은 호출의 held 검색 재사용은 59 focused PASS와 고정 CPU/파일 저장 회귀 목표를 충족했다. 새 held 시험의 disk ACK와 UI callback을 혼동한 최초 2 FAIL도 E 증거에 보존했다. 검색은 held 한 건 2→1회, 8건 16→8회이며 저장/SCAN_OK/ACK 횟수는 같다. [전후 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/RESULT.md)와 실제 VM Computer Use 전체 업무 수용 [CA-G12](BACKLOG.md#ca-g12)를 구분한다.
 
+2026-09-11 [잔여 native 실행 준비](D:/KMTech/optimization-implementation-20260909/Container_Audit/remaining-goal-prep-20260911/PLAN.md)는 기존 local 목표를 유지하며20쌍/40arm의 행동별 경험적 분포를 별도로 설계했다. 동일50행 입력·원본9e/최종2b·AB/BA 순서와 기존3ms/문자·50ms poll을 고정하고 startup/로그인과 실제 Return 이후를 분리한다. 경험적p95는19/20순위이며 population 꼬리 보장이 아니고, 다음 실제 접수 상한에는 controller 대기가 포함되어 최초 허용 시간으로 해석하지 않는다. 정확한 전체 표시와 내구 결과를 함께 확인하며 실패·timeout·부분 갱신·부하 차이를 제외해 성공 표본을 채우지 않는다. unsigned 입력·경로 delta와 parser만 host에서 확인했으며 실제 측정·guest·서명·전송은 미실행이다. Main이 방법 검토와 실제 충돌 자원을 배정하고, 별도 정상 연결 업무는 진짜 M06 수신GOOD1·중앙 봉인 ACK·후속 Label/Web 영수증을 사용한다.
+
 <a id="ca-o07"></a>
 ## CA-O07 2026-09-08 FULL 실패의 환경·fixture 경계
 

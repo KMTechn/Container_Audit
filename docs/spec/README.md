@@ -51,6 +51,12 @@ Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고
 
 이후 배정된 전용 VM의 동일 계측 원본9e→최종2b 단회 pair는 양쪽140 source·일반 로그인/held1/정상1/중복1/정상 저장 종료native0를 확인했다. 실제 KMC_LHD 해독은260.8662→7.5839ms, 기존 전체 이미지 함수는446.7746→217.4882ms였고 완전히 표시된378×138 RGB 픽셀은 동일했다. 응답 해제부터 완전한 이미지·정상001 결과1/3까지의 보수적 경계는0–1152.2920→0–560.2907ms이며, 지속 상태/누락 transient 없음 조건의 경계984.6079–1152.2920→300.0841–560.2907ms와 구분한다. 원본의 중앙 보류 수0 결함, 최종 후보의 일반002 부분 갱신 화면, 일반002 완전 결과 상한63.5051→155.8373ms도 그대로 기록한다. [원본86파일/48그림·계산·자원·한계](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-IMAGE-OPTIMIZATION.md)의 이미지 경로 단회 개선을 전체 UI 성능·p95·최초 안전 입력이나 종합0/6 완료로 해석하지 않는다. guest/수집 작업은13:38:56Z에 반환했고 실제 Claude 결과 검토는 제품·증거 필수 수정0이며, 문서R1에 따라 보고서 선두와 원인 분해를 교정해 전체1/3 가시 차이와 decoder 내부 구간의 이득을 분리했다. Main이 이 한정된 제품·증거 범위를 수용했다. [최종 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-PAIR-RESULT.md)와 [원래 Goal·M06 잔여 인계](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/REMAINING-GOAL-HANDOFF.md)를 따르며 전체0/6은 유지한다.
 
+### 2026-09-11 원래 사용자 결과·연결 업무의 host 준비
+
+수용된 decoder 단위와 문서R1을 유지하고, 원본9e/최종2b·기존50행 catalog·공통 observer/controller를 재사용하는 [유한 실행 설계](D:/KMTech/optimization-implementation-20260909/Container_Audit/remaining-goal-prep-20260911/PLAN.md)를 준비했다. 기존 CPU1,000/파일200 표본을 desktop 근거로 바꾸지 않는다. 새 native 설계는20쌍/40arm, AB/BA 각10쌍이며 입력→첫 의미 있는 표시, 정확한 내구·전체 표시, 실제 다음 접수의 상한을 분리한다. 경험적p95는20개 중19번째 값으로 꼬리 정밀도가 낮고, controller 대기 후 접수는 최초 허용 시각이 아니다. 새 SLA·회귀율은 만들지 않았다.
+
+양쪽140 Git blob과 재사용 입력, 세 실행 파일의 경로만 바꾼 delta 및 parser를 host에서 확인했다. 관측기/제품 로직 변경·guest/서명/분포 실행은 없으며 Main의 실제 방법 검토·자원 배정 후 실행한다. 원8f7의 중복/다른 품목/보류·복원·exact3 봉인 근거는 원 버전 범위로 유지한다. 최종 연결 업무는 upstream의 실제 M06 NG→Rework GOOD→별도 수신 PHS2 GOOD1을 받아 정확한1개 봉인·Label·출하까지 이어야 한다. target1을 보류 시험용3개로 늘리거나 원901–904를 재생하지 않는다. [CA-G12](BACKLOG.md#ca-g12)의 전체 지연 개선·연결 완료와 종합0/6은 여전히 미완료다.
+
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.
