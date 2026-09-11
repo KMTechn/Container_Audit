@@ -45,7 +45,11 @@ Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고
 
 트레이 표시의 기존 PNG 해독기는 실제 세 트레이 자산의 무필터 행에서도 채널별 필터 계산과 픽셀별 포장을 수행했다. 기존 `RasterImage.from_png_bytes`에 무필터 RGB/RGBA 행의 채널 슬라이스 복사만 추가한다. 원본 자산·픽셀·알파, PNG 검증, 다른 필터, bilinear 크기 변경과 Tk 표시 순서를 유지하며 이미지 캐시는 추가하지 않는다. 품목·경로·파일 내용·표시 크기 변경과 숨김/오류 시 초기화는 기존 표시 함수가 계속 처리한다. vendored 원본 hash와 로컬 변경의 현재 hash를 구분하고 기존 writer inventory·소비자 pin도 맞춘다.
 
-[근거와 비교 계획](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-IMAGE-OPTIMIZATION.md)의 승인된 원본 단회 headless 해독은200.2321ms였으며 실제 VM의383.64ms 미관측 구간 전체 원인이나 최종 UI 이득을 뜻하지 않는다. 정확한 네 자산 픽셀·RGB/RGBA와 필터·오류 거부·실제 표시 함수의 갱신/초기화·PHS 렌더러의 영향 검사22 PASS, 기존 writer inventory/pin 검사3 PASS를 보존한다. 실제 Claude 검토와 동일 계측 native 전후 비교는 Main의 후속 자원 배정에서 확인하며 [CA-G12](BACKLOG.md#ca-g12)의 미완료 상태를 유지한다.
+[근거와 비교 계획](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-IMAGE-OPTIMIZATION.md)의 승인된 원본 단회 headless 해독은200.2321ms였으며 실제 VM의383.64ms 미관측 구간 전체 원인이나 최종 UI 이득을 뜻하지 않는다. 정확한 네 자산 픽셀·RGB/RGBA와 필터·오류 거부·실제 표시 함수의 갱신/초기화·PHS 렌더러의 영향 검사22 PASS, 기존 writer inventory/pin 검사3 PASS를 보존한다. 이후 실제 Claude 검토와 동일 계측 native 전후 비교는 아래의 한정된 범위로 수용했으며 [CA-G12](BACKLOG.md#ca-g12)의 전체 목표 미완료 상태를 유지한다.
+
+실제 Claude는 정확한 `2b5127b`의 [독립 소스 검토](D:/KMTech/optimization-implementation-20260909/COORDINATOR-RECOVERY-20260911-1144/ca-tray-decoder-review/REVIEW.md)를 PASS/필수 수정0으로 마감했고 Main이 수용했다. 원본/후보의2,822개 합성 이미지와29개 잘못된 입력, 실제 트레이 픽셀 및140개 source blob을 독립 대조한 범위다. 과거 E의 upstream artifact는 현재 없으며 원본 hash는 보존된 CA `e1b64f3` Git blob으로 확인한다.
+
+이후 배정된 전용 VM의 동일 계측 원본9e→최종2b 단회 pair는 양쪽140 source·일반 로그인/held1/정상1/중복1/정상 저장 종료native0를 확인했다. 실제 KMC_LHD 해독은260.8662→7.5839ms, 기존 전체 이미지 함수는446.7746→217.4882ms였고 완전히 표시된378×138 RGB 픽셀은 동일했다. 응답 해제부터 완전한 이미지·정상001 결과1/3까지의 보수적 경계는0–1152.2920→0–560.2907ms이며, 지속 상태/누락 transient 없음 조건의 경계984.6079–1152.2920→300.0841–560.2907ms와 구분한다. 원본의 중앙 보류 수0 결함, 최종 후보의 일반002 부분 갱신 화면, 일반002 완전 결과 상한63.5051→155.8373ms도 그대로 기록한다. [원본86파일/48그림·계산·자원·한계](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-IMAGE-OPTIMIZATION.md)의 이미지 경로 단회 개선을 전체 UI 성능·p95·최초 안전 입력이나 종합0/6 완료로 해석하지 않는다. guest/수집 작업은13:38:56Z에 반환했고 실제 Claude 결과 검토는 필수 수정0으로 마감해 Main이 이 한정된 범위를 수용했다. [최종 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/TRAY-PAIR-RESULT.md)와 [원래 Goal·M06 잔여 인계](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/REMAINING-GOAL-HANDOFF.md)를 따르며 전체0/6은 유지한다.
 
 ## 1. 기준과 증거 사용법
 
