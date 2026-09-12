@@ -10,6 +10,7 @@ import queue
 import shutil
 import subprocess
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -5924,7 +5925,8 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
     assert errors == []
 
 
-def test_product_scan_rolls_back_when_state_save_fails():
+@pytest.mark.parametrize("held", [False, True])
+def test_product_scan_rolls_back_when_state_save_fails(held):
     app = _headless_app()
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
@@ -5938,7 +5940,8 @@ def test_product_scan_rolls_back_when_state_save_fails():
     app.ITEM_CODE_LENGTH = 13
     app.COLOR_SUCCESS = "success"
     app.COLOR_DANGER = "danger"
-    app.success_sound = None
+    sounds = []
+    app.success_sound = SimpleNamespace(play=lambda: sounds.append("success"))
     app.root = CapturingRoot()
     app.scanned_listbox = CapturingListbox()
     app.undo_button = {"state": "disabled"}
@@ -5955,7 +5958,10 @@ def test_product_scan_rolls_back_when_state_save_fails():
     messages = []
     app.show_status_message = lambda *args, **kwargs: messages.append(args)
 
-    app._process_barcode_logic("AAA2270730100-001")
+    app._process_barcode_logic(
+        "AAA2270730100-001", _durable_scan_log=held,
+        _durable_scan_id="held-001" if held else "",
+    )
 
     assert app.current_tray.scanned_barcodes == []
     assert app.current_tray.scan_times == []
@@ -5964,9 +5970,12 @@ def test_product_scan_rolls_back_when_state_save_fails():
     assert app.center_updated is True
     assert app.item_label_updated is True
     assert messages[0][0].startswith("스캔 상태 저장에 실패")
+    assert sounds == []
+    assert not getattr(app.current_tray, "preflight_scan_receipts", {})
 
 
-def test_product_scan_saves_before_logging_scan_ok():
+@pytest.mark.parametrize("held", [False, True])
+def test_product_scan_saves_before_logging_scan_ok(held):
     app = _headless_app()
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
@@ -5979,7 +5988,8 @@ def test_product_scan_saves_before_logging_scan_ok():
     app.master_label_replace_state = None
     app.ITEM_CODE_LENGTH = 13
     app.COLOR_SUCCESS = "success"
-    app.success_sound = None
+    sounds = []
+    app.success_sound = SimpleNamespace(play=lambda: sounds.append(list(saved)))
     app.root = CapturingRoot()
     app.scanned_listbox = CapturingListbox()
     app.undo_button = {"state": "disabled"}
@@ -5989,14 +5999,18 @@ def test_product_scan_saves_before_logging_scan_ok():
     saved = []
     app._save_current_tray_state = lambda: saved.append(list(app.current_tray.scanned_barcodes)) or True
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, **kwargs: logged.append(
         {"event": event, "saved_before_log": list(saved), "detail": detail}
     ) or True
     app.complete_tray = lambda: setattr(app, "completed", True)
 
-    app._process_barcode_logic("AAA2270730100-001")
+    app._process_barcode_logic(
+        "AAA2270730100-001", _durable_scan_log=held,
+        _durable_scan_id="held-001" if held else "",
+    )
 
     assert saved == [["AAA2270730100-001"]]
+    assert sounds == [[["AAA2270730100-001"]]]
     assert logged[0]["event"] == "SCAN_OK"
     assert logged[0]["saved_before_log"] == [["AAA2270730100-001"]]
     assert logged[0]["detail"]["product_barcode"] == "AAA2270730100-001"

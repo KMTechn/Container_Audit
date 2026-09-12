@@ -9895,6 +9895,8 @@ class ContainerAudit:
                 self.undo_button['state'] = tk.DISABLED
             self.show_status_message("스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다.", self.COLOR_DANGER)
             return
+        if self.success_sound:
+            self.success_sound.play()
         presenter = self._warning_state_presenter()
         self._last_normal_scan_display_item_code = str(self.current_tray.item_code or "")
         presenter.record_normal_scan(raw_barcode)
@@ -9939,7 +9941,6 @@ class ContainerAudit:
             return scan_audit_durable
 
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
-        if self.success_sound: self.success_sound.play()
         self.current_tray.scanned_barcodes.append(barcode)
         self.current_tray.scan_times.append(scan_time)
         count = len(self.current_tray.scanned_barcodes)
