@@ -728,6 +728,8 @@ def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ac
                 for item in app._preflight_hold_store().load().items
             ]
             == [tail]
+            # ACK resumes draining from the UI snapshot, after the writer applies it.
+            and app._preflight_hold_snapshot == app._preflight_hold_store().load()
         ),
     )
 
