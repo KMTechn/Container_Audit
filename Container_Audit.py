@@ -4600,6 +4600,7 @@ class ContainerAudit:
                 )
             except Exception:
                 recovery_pending = True
+        self._phs_label_exchange_recovery_visible = recovery_pending
         self._configure_widget_options(
             getattr(self, "phs_label_exchange_execute_button", None),
             state=(
@@ -4623,6 +4624,7 @@ class ContainerAudit:
             ),
         )
         self._refresh_phs_active_label_info()
+        self._apply_notice_visibility()
 
     def _phs_reconciliation_exchange_available(self) -> bool:
         coordinator = getattr(self, "phs_label_exchange_coordinator", None)
@@ -5207,7 +5209,9 @@ class ContainerAudit:
         reconciliation = getattr(
             self, "_phs_reconciliation_context", None
         )
-        if isinstance(reconciliation, Mapping):
+        if getattr(self, "_phs_label_exchange_recovery_visible", False):
+            text = "미완료 현품표 교체 · F8로 복구"
+        elif isinstance(reconciliation, Mapping):
             summaries = (
                 self.phs_label_exchange_coordinator.reconciliation
                 .target_summaries(reconciliation)
@@ -5345,6 +5349,7 @@ class ContainerAudit:
         try:
             if panel is not None:
                 panel.grid()
+                self._phs_label_exchange_panel_open = True
         except (tk.TclError, AttributeError):
             self.show_status_message(
                 "보조 날짜 교환 화면을 열 수 없습니다.",
@@ -5407,6 +5412,7 @@ class ContainerAudit:
         self._set_phs_label_exchange_panel_mode(
             reconciliation_mode=reconciliation_mode
         )
+        self._phs_label_exchange_panel_open = True
         try:
             if panel.winfo_ismapped():
                 self._phs_reconciliation_scan_armed = reconciliation_mode
@@ -5446,6 +5452,7 @@ class ContainerAudit:
             )
             return
         self._phs_reconciliation_scan_armed = False
+        self._phs_label_exchange_panel_open = False
         self.phs_label_exchange_frame.grid_remove()
         self.show_status_message("현품표 교체 화면을 닫았습니다.", self.COLOR_PRIMARY)
         self._schedule_focus_return()
@@ -7702,7 +7709,8 @@ class ContainerAudit:
         )
         self.phs_label_exchange_execute_button = ttk.Button(
             self.phs_label_exchange_frame,
-            text="선택 교환 실행",
+            text=("서버 지시 교체 실행" if getattr(self, "_phs_reconciliation_context", None)
+                  else "선택 교환 실행"),
             command=self._execute_selected_phs_label_exchange,
             style="Success.TButton",
         )
@@ -7734,12 +7742,16 @@ class ContainerAudit:
             pady=(6, 0),
         )
         self._set_phs_label_exchange_panel_mode(
-            reconciliation_mode=self._phs_reconciliation_exchange_available()
+            reconciliation_mode=(
+                self._phs_reconciliation_exchange_available()
+                and not getattr(self, "_phs_legacy_single_fallback_mode", False)
+            )
         )
-        if hasattr(self.phs_label_exchange_frame, "grid_remove"):
-            self.phs_label_exchange_frame.grid_remove()
-        else:
-            self.phs_label_exchange_frame.grid_forget()
+        if not getattr(self, "_phs_label_exchange_panel_open", False):
+            if hasattr(self.phs_label_exchange_frame, "grid_remove"):
+                self.phs_label_exchange_frame.grid_remove()
+            else:
+                self.phs_label_exchange_frame.grid_forget()
         scan_list_frame = ttk.Frame(parent_frame, style='TFrame')
         self._scan_list_frame = scan_list_frame
         scan_list_frame.grid(row=5, column=0, sticky='nsew')
@@ -11448,7 +11460,9 @@ class ContainerAudit:
         has_notice = state.active_notice is not None or state.is_blocking
         panel = getattr(self, "phs_label_exchange_frame", None)
         try:
-            exchange_open = panel is not None and bool(panel.winfo_manager())
+            exchange_open = (
+                panel is not None and bool(panel.winfo_manager())
+            ) or getattr(self, "_phs_label_exchange_recovery_visible", False)
             visible = has_notice or exchange_open
             for name, show in (
                 ("notice_frame", visible),

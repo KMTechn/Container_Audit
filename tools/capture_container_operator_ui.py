@@ -3749,7 +3749,12 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
             critical_widgets[name] = (widget, True, True)
     notice_state = app.warning_presenter.state
     exchange_panel = getattr(app, "phs_label_exchange_frame", None)
-    exchange_open = exchange_panel is not None and bool(exchange_panel.winfo_manager())
+    exchange_open = (
+        exchange_panel is not None and bool(exchange_panel.winfo_manager())
+    ) or getattr(app, "_phs_label_exchange_recovery_visible", False)
+    if exchange_open:
+        critical_widgets["label_exchange"] = (app.phs_label_exchange_button, True, True)
+        critical_widgets["label_exchange_context"] = (app.phs_active_label_info_label, True, True)
     notice_expected = notice_state.active_notice is not None or notice_state.is_blocking or exchange_open
     if not notice_expected:
         critical_widgets.pop("notice")

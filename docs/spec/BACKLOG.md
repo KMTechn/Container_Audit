@@ -173,6 +173,8 @@
 <a id="ca-g13"></a>
 ## CA-G13 전체 UI 가시성·포커스와 idle 후 명령 복귀
 
+- **후보 정적 후속:** 교체 화면의 열림/보조 모드를 글자 크기 재구성에서 유지하고, 저장된 미완료 교체가 있으면 일반 메뉴가 막혀도 기존 F8 교체 진입을 보이도록 보완했다. 관련 기존 비GUI35 PASS(`tests/6404989d1b`)이며 native 회귀는 실제 배정 시 열기→재구성→조회 중 닫기 거부→복구 진입을 확인한다.
+
 - **2026-09-12 일상 정보 축소 후보:** 반복 스캔 안내·현품표 교체 설명·최근 스캔/시간 통계를 조건부 안내와 작업 상세로 옮기고, 전송은 대기 수/확인 필요와 상세 버튼을 남겼다. `LINKED` 로컬 저장과 중앙 `ACKED` 표시를 구별한다. 호스트 영향 검사553 PASS, 원래100ms 단회 기준100.973ms 실패1은 보존하고 조기 실패에도 lane을 정리하도록 기존 시험을 보완한 별도1 PASS를 기록했다. dirty source를 거부한 기존 capture provenance5 FAIL도 보존하며 커밋 결속 후 확인한다. 새 native 후보는 미실행이며 실제 routine/active/pending/error/details/menu·포커스·크기 변경을 다음으로 확인한다. [전후 표·검증·custody](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md).
 
 - **상태·범위:** 사용자 전수 UI 점검 요청으로 [실제 UI 목록](README.md#2026-09-10-ui-전수-점검과-idle-후-작업-명령-갱신)을 추가했다. e69a0cb 기반으로 idle 후 운영 작업 버튼 갱신과 기존 종료 요청 flag guard를 두 줄 보완하고 기존 회귀에 실제 lane busy/idle·close 상태를 검사한다. 수량·membership·authorization·내구 저장 조건은 변경하지 않는다.

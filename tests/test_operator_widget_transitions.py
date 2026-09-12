@@ -276,13 +276,19 @@ def test_native_routine_disclosures_preserve_warning_quantity_and_scan_rows(nati
 def test_native_exchange_disclosure_opens_with_f8_and_cannot_hide_pending_work(native_operator, monkeypatch):
     app, center, _right = native_operator
     monkeypatch.setattr(app, '_phs_reconciliation_exchange_available', lambda: True)
-    monkeypatch.setattr(app, '_phs_label_exchange_transition_pending', lambda: False)
     assert not app.phs_label_exchange_frame.winfo_ismapped()
     assert app._on_phs_label_exchange_shortcut() == 'break'
     app.root.update()
     assert app._phs_reconciliation_scan_armed is True
     assert_contained(app.phs_label_exchange_frame, center)
     assert_contained(app.phs_label_exchange_close_button, center)
+    # Font changes rebuild the center; an armed workflow must remain visible.
+    for child in center.winfo_children():
+        child.destroy()
+    app._create_center_content(center)
+    app.root.update()
+    assert app._phs_reconciliation_scan_armed is True
+    assert_contained(app.phs_label_exchange_frame, center)
     app._phs_reconciliation_resolve_pending = True
     app.phs_label_exchange_close_button.invoke()
     app.root.update()
@@ -293,6 +299,19 @@ def test_native_exchange_disclosure_opens_with_f8_and_cannot_hide_pending_work(n
     app.root.update()
     assert not app.phs_label_exchange_frame.winfo_ismapped()
     assert app._phs_reconciliation_scan_armed is False
+    # A durable incomplete exchange must remain discoverable with its menu blocked.
+    from types import SimpleNamespace
+    app.phs_label_exchange_coordinator = SimpleNamespace(
+        journal=SimpleNamespace(load=lambda: {'status': 'PENDING', 'workflow_kind': 'RECONCILIATION'}),
+    )
+    app.warning_presenter.clear()
+    app._update_action_button_states()
+    app._render_warning_state()
+    app.root.update()
+    assert str(app.operations_button.cget('state')) == 'disabled'
+    assert_contained(app.phs_label_exchange_button, center)
+    assert_contained(app.phs_active_label_info_label, center)
+    assert 'F8로 복구' in app.phs_active_label_info_label.cget('text')
 
 
 def test_native_duplicate_ack_restores_input_and_preserves_actual_rows(native_operator):
