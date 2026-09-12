@@ -6942,7 +6942,8 @@ class ContainerAudit:
             compact = metrics["content_sized_cards"]
             self.style.configure(
                 'SidebarDetail.Secondary.TButton',
-                font=(self.DEFAULT_FONT, 10, 'bold'), padding=(6, 2),
+                font=(self.DEFAULT_FONT, max(10, int(10 * self.scale_factor)), 'bold'),
+                padding=(6, 2),
             )
             for name in ('work_details_button', 'direct_sync_details_button'):
                 button = getattr(self, name, None)

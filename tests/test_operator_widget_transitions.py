@@ -546,6 +546,16 @@ def test_native_compact_right_values_are_readable_at_supported_scales(
     app, _center, right = native_operator
     for key, text in [('avg_time', '01:23.4'), ('best_time', '00:58.2')]:
         app.info_cards[key]['value'].configure(text=text)
+    for button in (app.work_details_button, app.direct_sync_details_button):
+        assert_contained(button, right)
+        assert button.winfo_width() >= button.winfo_reqwidth()
+        assert button.winfo_height() >= button.winfo_reqheight()
+    record_testsuite_property(
+        f'detail_button_font_scale_{app.scale_factor}',
+        Font(root=app.root, font=app.style.lookup(
+            app.work_details_button.cget('style'), 'font'
+        )).actual('size'),
+    )
     for state, pending, failed, review, ack in [
         ('blocked', 0, 0, 0, ''),
         ('ready', 0, 0, 0, '2026-09-06T03:00:00Z'),
