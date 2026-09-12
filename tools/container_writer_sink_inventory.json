@@ -10,17 +10,17 @@
       "direct_callers": [],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 826,
+      "line": 827,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 837,
+          "line": 838,
           "operation": "open",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 847,
+          "line": 848,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -52,11 +52,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3726,
+      "line": 3730,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3730,
+          "line": 3734,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -1607,6 +1607,31 @@
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "event_outbox_project",
+      "direct_callers": [],
+      "file": "event_log_store.py",
+      "kind": "function",
+      "line": 51,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 65,
+          "operation": "open",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "event_log_store.EventLogOutbox.drain",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
       "covered_entrypoints": [
         "Container_Audit.ContainerAudit._log_event",
         "Container_Audit.__file_entry__",
@@ -1620,11 +1645,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 37,
+      "line": 86,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 40,
+          "line": 89,
           "operation": "parent.mkdir",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1632,7 +1657,7 @@
         },
         {
           "category": "filesystem",
-          "line": 45,
+          "line": 94,
           "operation": "os.open",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1640,7 +1665,7 @@
         },
         {
           "category": "filesystem",
-          "line": 46,
+          "line": 95,
           "operation": "os.write",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1648,7 +1673,7 @@
         },
         {
           "category": "filesystem",
-          "line": 57,
+          "line": 106,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1656,7 +1681,7 @@
         },
         {
           "category": "filesystem",
-          "line": 72,
+          "line": 121,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1692,11 +1717,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 94,
+      "line": 143,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 101,
+          "line": 150,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -2822,6 +2847,7 @@
         "Container_Audit.ContainerAudit._save_work_session_state",
         "Container_Audit.ContainerAudit.save_settings",
         "best_time_records.BestTimeRecordStore.save",
+        "event_log_store.EventLogOutbox._persist_unstaged",
         "legacy_state_migration._seed_legacy_ui_settings_once",
         "legacy_state_migration.migrate_legacy_code_root_state",
         "parked_tray_store.ParkedTrayStore.defer_recovery_state",
@@ -5308,7 +5334,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 126,
+    "closure_direct_mutation_function_count": 127,
     "closure_module_count": 90,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
@@ -5323,8 +5349,8 @@
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 172,
-    "total_cross_language_sink_count": 173,
+    "sink_function_count": 174,
+    "total_cross_language_sink_count": 175,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -5531,6 +5557,7 @@
     ],
     "event_contracts": [],
     "event_log_store": [
+      "storage_utils",
       "writer_session_fence"
     ],
     "event_payloads": [
@@ -5805,7 +5832,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "abd8c51413fa682fb2bf2edb1bbbbb4949f0301762902b6547b0ce3373a863d9",
+  "inventory_sha256": "ea93ad102d2bd422f16bc9c9fbf53d0344dac06989438e26ccefa6b17ed78edf",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -5831,6 +5858,8 @@
         "event_csv_idempotent_append",
         "event_csv_unlocked_append",
         "event_interprocess_lock",
+        "event_outbox_project",
+        "event_outbox_stage",
         "factory_contract_identity",
         "factory_contract_package_json",
         "factory_contract_set",
@@ -17126,6 +17155,8 @@
     "event_csv_idempotent_append",
     "event_csv_unlocked_append",
     "event_interprocess_lock",
+    "event_outbox_project",
+    "event_outbox_stage",
     "factory_contract_identity",
     "factory_contract_package_json",
     "factory_contract_set",
@@ -17369,7 +17400,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry",
-      "line": 78,
+      "line": 127,
       "marker_kind": "decorator",
       "source": "event_csv_append"
     },
@@ -17377,7 +17408,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry_idempotent",
-      "line": 112,
+      "line": 161,
       "marker_kind": "decorator",
       "source": "event_csv_idempotent_append"
     },
@@ -17385,7 +17416,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store._append_event_log_entry_unlocked",
-      "line": 94,
+      "line": 143,
       "marker_kind": "decorator",
       "source": "event_csv_unlocked_append"
     },
@@ -17393,9 +17424,25 @@
       "direct_mutation_site_count": 5,
       "file": "event_log_store.py",
       "function": "event_log_store._interprocess_file_lock",
-      "line": 37,
+      "line": 86,
       "marker_kind": "writer_admission",
       "source": "event_interprocess_lock"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "event_log_store.py",
+      "function": "event_log_store.EventLogOutbox.drain",
+      "line": 51,
+      "marker_kind": "decorator",
+      "source": "event_outbox_project"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "event_log_store.py",
+      "function": "event_log_store.EventLogOutbox.stage",
+      "line": 39,
+      "marker_kind": "decorator",
+      "source": "event_outbox_stage"
     },
     {
       "direct_mutation_site_count": 1,
@@ -17433,7 +17480,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1400,
+      "line": 1404,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17441,7 +17488,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 16106,
+      "line": 16156,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17449,7 +17496,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3726,
+      "line": 3730,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17457,7 +17504,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2706,
+      "line": 2710,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17465,7 +17512,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3102,
+      "line": 3106,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -18497,7 +18544,7 @@
       "direct_mutation_site_count": 2,
       "file": "Container_Audit.py",
       "function": "Container_Audit._write_update_download",
-      "line": 826,
+      "line": 827,
       "marker_kind": "decorator",
       "source": "update_download"
     },

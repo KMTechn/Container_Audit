@@ -1995,30 +1995,90 @@ def test_async_log_event_uses_path_captured_at_queue_time(tmp_path):
 
 def test_async_log_writer_records_write_failures(tmp_path, monkeypatch):
     app = _headless_app()
+    app.worker_name = "홍길동"
     app.log_file_path = str(tmp_path / "events.csv")
     app.log_queue = queue.Queue()
 
     def fail_append(*_args, **_kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(container_audit_module, "append_event_log_entry", fail_append)
-    app.log_queue.put(
-        {
-            "log_file_path": app.log_file_path,
-            "log_entry": {
-                "timestamp": "2026-06-24T09:00:00",
-                "worker_name": "홍길동",
-                "event": "SCAN_OK",
-                "details": "{}",
-            },
-        }
-    )
+    monkeypatch.setattr(event_log_store, "append_event_log_entry_idempotent", fail_append)
+    assert app._log_event("SCAN_OK", {"barcode": "BC-1"})
     app.log_queue.put(None)
 
     app._event_log_writer()
 
-    assert app.last_log_write_error == "로그 파일 쓰기 오류: disk full"
-    assert app.log_write_errors == ["로그 파일 쓰기 오류: disk full"]
+    assert app.last_log_write_error == "로그 파일 쓰기 오류: OSError"
+    assert app.log_write_errors == ["로그 파일 쓰기 오류: OSError"]
+    assert len(list((tmp_path / "_event_outbox").glob("*.json"))) == 1
+    app.root = CapturingRoot()
+    app.COLOR_SUCCESS, app.COLOR_DANGER = "success", "danger"
+    notices = []
+    app.show_status_message = lambda *args, **kwargs: notices.append(args)
+    app._poll_event_log_notice()
+    assert "저장 실패" in notices[0][0]
+    assert "재시도 중" in notices[0][0]
+
+
+@pytest.mark.parametrize("append_before_failure", [False, True])
+def test_async_event_retry_keeps_original_key_payload_and_order_after_restart(tmp_path, monkeypatch, append_before_failure):
+    app = _headless_app()
+    app.worker_name = "original-worker"
+    app.log_file_path = str(tmp_path / "original.csv")
+    app.log_queue = queue.Queue()
+    assert app._log_event("SCAN_OK", {"barcode": "BC-1", "scan_position": 1})
+    assert app._log_event("SCAN_OK", {"barcode": "BC-2", "scan_position": 2})
+    pending = sorted((tmp_path / "_event_outbox").glob("*.json"))
+    originals = [json.loads(path.read_text(encoding="utf-8"))["log_entry"] for path in pending]
+    original_append = event_log_store.append_event_log_entry_idempotent
+
+    def fail_append(*args, **kwargs):
+        if append_before_failure:
+            original_append(*args, **kwargs)
+        raise OSError("synthetic interrupted append")
+
+    monkeypatch.setattr(event_log_store, "append_event_log_entry_idempotent", fail_append)
+    assert app._flush_pending_event_logs() is False
+    assert [json.loads(path.read_text(encoding="utf-8"))["log_entry"] for path in pending] == originals
+    # A synchronous completion must not overtake the failed earlier event.
+    app.log_queue = queue.Queue()
+    assert app._log_event("TRAY_COMPLETE", {"barcode_count": 2}, synchronous=True) is False
+
+    monkeypatch.setattr(event_log_store, "append_event_log_entry_idempotent", original_append)
+    restarted = _headless_app()
+    restarted.worker_name = "next-worker"
+    restarted.log_file_path = str(tmp_path / "next-day.csv")
+    restarted._event_log_outbox(restarted.log_file_path)
+    restarted.log_queue = queue.Queue()
+    restarted.log_queue.put(None)
+    restarted._event_log_writer()
+    # Replaying recovery again must have no further effect.
+    assert restarted._flush_pending_event_logs()
+    with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
+        assert list(csv.DictReader(handle)) == originals
+    assert not Path(restarted.log_file_path).exists()
+    assert not list((tmp_path / "_event_outbox").glob("*.json"))
+
+
+def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch):
+    app = _headless_app()
+    app.worker_name = "worker"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app.log_queue = queue.Queue()
+    original_write = event_log_store.atomic_write_json
+    monkeypatch.setattr(event_log_store, "atomic_write_json", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    assert app._log_event("SCAN_OK", {"barcode": "BC-1"}) is False
+    assert app._event_log_outbox_instance.has_unstaged
+    assert "종료하지 마세요" in app._event_log_notice
+
+    monkeypatch.setattr(event_log_store, "atomic_write_json", original_write)
+    assert app._flush_pending_event_logs()
+    assert not app._event_log_outbox_instance.has_unstaged
+    with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 1
+    assert json.loads(rows[0]["details"])["barcode"] == "BC-1"
 
 
 def test_event_log_store_appends_header_once(tmp_path):

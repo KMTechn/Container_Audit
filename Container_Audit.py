@@ -56,6 +56,7 @@ from direct_sync_health import (
 )
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import (
+    EventLogOutbox,
     append_event_log_entry,
     append_event_log_entry_idempotent,
 )
@@ -1258,6 +1259,8 @@ class ContainerAudit:
         self.last_log_write_error: Optional[str] = None
         
         self.log_queue: queue.Queue = queue.Queue()
+        self._event_log_outbox_instance = EventLogOutbox(Path(self.save_folder) / "_event_outbox")
+        self._event_log_notice = None
         self.log_file_path: Optional[str] = None
         self._event_log_close_requested = False
         self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
@@ -1281,6 +1284,7 @@ class ContainerAudit:
         self._setup_styles()
         self.root.bind('<Configure>', self._schedule_responsive_style_refresh, add="+")
         self.show_worker_input_screen()
+        self._poll_event_log_notice()
         
         self.root.bind('<Control-MouseWheel>', self.on_ctrl_wheel)
         self.root.bind('<F8>', self._on_phs_label_exchange_shortcut, add="+")
@@ -12044,33 +12048,69 @@ class ContainerAudit:
                 pass
             return
         self._event_log_close_join_attempts = 0
+        outbox = getattr(self, "_event_log_outbox_instance", None)
+        if outbox is not None and outbox.has_unstaged:
+            self._event_log_close_requested = False
+            self._ui_close_requested = False
+            self.log_thread = threading.Thread(target=self._event_log_writer, daemon=True)
+            self.log_thread.start()
+            self.show_status_message(
+                "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하세요. 저장 전에는 종료할 수 없습니다.",
+                self.COLOR_DANGER, duration=0,
+            )
+            self._poll_event_log_notice()
+            return
         stop_all_sounds()
         self.root.destroy()
 
+    def _event_log_outbox(self, log_file_path: str) -> EventLogOutbox:
+        store = getattr(self, "_event_log_outbox_instance", None)
+        if store is None:
+            directory = Path(getattr(self, "save_folder", "") or Path(log_file_path).parent)
+            store = self._event_log_outbox_instance = EventLogOutbox(directory / "_event_outbox")
+        return store
+
+    def _flush_pending_event_logs(self) -> bool:
+        store = getattr(self, "_event_log_outbox_instance", None)
+        if store is None:
+            return True
+        try:
+            store.drain()
+        except Exception as exc:
+            message = f"로그 파일 쓰기 오류: {exc.__class__.__name__}"
+            if message != getattr(self, "last_log_write_error", None):
+                self._record_log_write_error(message)
+            self._event_log_notice = "로그 저장 실패 · 원 기록을 유지하고 재시도 중입니다. 저장 공간을 확인하세요."
+            return False
+        if getattr(self, "_event_log_notice", None):
+            self._event_log_notice = "로그 저장 재시도를 완료했습니다."
+        return True
+
+    def _poll_event_log_notice(self) -> None:
+        notice = getattr(self, "_event_log_notice", None)
+        if notice:
+            recovered = notice == "로그 저장 재시도를 완료했습니다."
+            self.show_status_message(
+                notice, self.COLOR_SUCCESS if recovered else self.COLOR_DANGER,
+                duration=4000 if recovered else 0,
+            )
+            if recovered:
+                self._event_log_notice = None
+        if not getattr(self, "_event_log_close_requested", False):
+            self.root.after(200, self._poll_event_log_notice)
+
     def _event_log_writer(self):
+        self._flush_pending_event_logs()
         while True:
             try:
                 queued_item = self.log_queue.get(timeout=1.0)
             except queue.Empty:
+                self._flush_pending_event_logs()
                 continue
             try:
+                self._flush_pending_event_logs()
                 if queued_item is None:
                     break
-                if isinstance(queued_item, dict) and 'log_entry' in queued_item:
-                    log_file_path = queued_item.get('log_file_path')
-                    log_entry = queued_item['log_entry']
-                else:
-                    log_file_path = self.log_file_path
-                    log_entry = queued_item
-                if not log_file_path:
-                    time.sleep(0.1)
-                    self.log_queue.put(queued_item)
-                    continue
-                append_event_log_entry(log_file_path, log_entry)
-            except Exception as e:
-                error_message = f"로그 파일 쓰기 오류: {e}"
-                self._record_log_write_error(error_message)
-                print(error_message)
             finally:
                 if hasattr(self.log_queue, "task_done"):
                     self.log_queue.task_done()
@@ -12157,6 +12197,8 @@ class ContainerAudit:
         if not target_log_file_path: return False
         normalized_idempotency_key = str(idempotency_key or "").strip()
         raw_detail = dict(detail or {})
+        if not synchronous and not normalized_idempotency_key:
+            normalized_idempotency_key = str(raw_detail.get("idempotency_key") or uuid.uuid4().hex)
         local_only = (
             str(event_type or "").strip() in LOCAL_ONLY_EVENT_TYPES
             or bool(getattr(getattr(self, "current_tray", None), "is_test_tray", False))
@@ -12209,6 +12251,8 @@ class ContainerAudit:
             try:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
                     self.log_queue.join()
+                if not self._flush_pending_event_logs():
+                    return False
                 if normalized_idempotency_key and deduplicate:
                     appended = append_event_log_entry_idempotent(
                         target_log_file_path,
@@ -12237,6 +12281,12 @@ class ContainerAudit:
                 self._record_log_write_error(error_message)
                 print(error_message)
                 return False
+        try:
+            self._event_log_outbox(target_log_file_path).stage(target_log_file_path, log_entry)
+        except Exception as exc:
+            self._record_log_write_error(f"로그 재시도 사본 저장 오류: {exc.__class__.__name__}")
+            self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
+            return False
         self.log_queue.put({'log_file_path': target_log_file_path, 'log_entry': log_entry})
         return True
 

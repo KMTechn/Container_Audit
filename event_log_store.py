@@ -5,11 +5,14 @@ import json
 import os
 import threading
 import time
+import uuid
+from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict
 
 from writer_session_fence import writer_admission, writer_sink
+from storage_utils import atomic_write_json
 
 
 EVENT_LOG_HEADERS = ["timestamp", "worker_name", "event", "details"]
@@ -17,6 +20,52 @@ LOCK_TIMEOUT_SECONDS = 10.0
 LOCK_STALE_SECONDS = 300.0
 _LOCKS_GUARD = threading.Lock()
 _PATH_LOCKS: dict[str, threading.Lock] = {}
+
+
+class EventLogOutbox:
+    """Keep original payloads until their idempotent CSV projection is durable."""
+
+    def __init__(self, directory: str | Path):
+        self.directory = Path(directory)
+        self._lock = threading.RLock()
+        self._unstaged: deque[dict[str, Any]] = deque()
+
+    @property
+    def has_unstaged(self) -> bool:
+        with self._lock:
+            return bool(self._unstaged)
+
+    @writer_sink("event_outbox_stage")
+    def stage(self, log_file_path: str, log_entry: Dict[str, Any]) -> None:
+        with self._lock:
+            self._unstaged.append({"log_file_path": log_file_path, "log_entry": dict(log_entry)})
+            self._persist_unstaged()
+
+    def _persist_unstaged(self) -> None:
+        while self._unstaged:
+            path = self.directory / f"{time.time_ns():020d}-{uuid.uuid4().hex}.json"
+            atomic_write_json(path, self._unstaged[0])
+            self._unstaged.popleft()
+
+    @writer_sink("event_outbox_project")
+    def drain(self) -> None:
+        with self._lock:
+            self._persist_unstaged()
+            for path in sorted(self.directory.glob("*.json")):
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                entry = payload["log_entry"]
+                detail = json.loads(entry["details"])
+                appended = append_event_log_entry_idempotent(
+                    payload["log_file_path"], entry,
+                    event_type=entry["event"], idempotency_key=detail["idempotency_key"],
+                    durable=True,
+                )
+                if not appended:
+                    # A prior fsync/ACK may have failed after the row reached CSV.
+                    with open(payload["log_file_path"], "ab") as handle:
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                path.unlink()
 
 
 def _lock_for_path(log_file_path: str) -> threading.Lock:
