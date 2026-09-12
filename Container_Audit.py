@@ -6952,14 +6952,14 @@ class ContainerAudit:
                     ))
             work_details = getattr(self, 'work_details_button', None)
             if work_details is not None:
-                work_details.grid_configure(pady=(0, metrics['card_gap']))
+                work_details.grid_configure(pady=(0, 0 if compact else metrics['card_gap']))
             sync_details = getattr(self, 'direct_sync_details_button', None)
             if sync_details is not None:
-                sync_details.pack_configure(pady=(2 if compact else 6, 0))
+                sync_details.pack_configure(pady=(0 if compact else 6, 0))
             for key in ("status", "direct_sync", "stopwatch"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
-                    card["frame"].configure(padding=metrics["card_padding"])
+                    card["frame"].configure(padding=0 if compact else metrics["card_padding"])
                     card["frame"].grid_configure(pady=(0, metrics["card_gap"]))
                     caption = card.get("label")
                     if caption is not None:
@@ -6979,7 +6979,7 @@ class ContainerAudit:
                 )
             context_frame = getattr(self, "_right_context_frame", None)
             if context_frame is not None:
-                context_frame.configure(padding=metrics["context_padding"])
+                context_frame.configure(padding=0 if compact else metrics["context_padding"])
                 context_frame.grid_configure(pady=(0, metrics["card_gap"]))
             for caption in getattr(self, "_right_context_captions", ()):
                 caption.configure(
@@ -7000,13 +7000,13 @@ class ContainerAudit:
                     justify='center',
                 )
                 last_scan_value.grid_configure(
-                    pady=(2, 4) if metrics["content_sized_cards"] else
+                    pady=(0, 2) if metrics["content_sized_cards"] else
                     (3 if metrics["short_large_text"] else 4, 6 if metrics["short_large_text"] else 12)
                 )
             context_separator = getattr(self, "_right_context_separator", None)
             if context_separator is not None:
                 context_separator.grid_configure(
-                    pady=(0, 4 if metrics["content_sized_cards"] else
+                    pady=(0, 2 if metrics["content_sized_cards"] else
                           6 if metrics["short_large_text"] else 10)
                 )
             follow_up = getattr(self, "follow_up_label", None)
@@ -7016,12 +7016,12 @@ class ContainerAudit:
                     anchor='center',
                     justify='center',
                 )
-                follow_up.grid_configure(pady=(2 if metrics["content_sized_cards"] else
+                follow_up.grid_configure(pady=(0 if metrics["content_sized_cards"] else
                                               3 if metrics["short_large_text"] else 4, 0))
             for key in ("avg_time", "best_time"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
-                    card["frame"].configure(padding=metrics["secondary_card_padding"])
+                    card["frame"].configure(padding=0 if compact else metrics["secondary_card_padding"])
                     # Compact cards need compact captions too: the root's
                     # larger caption font wraps the best-time title and pushes
                     # both required values below the short sidebar.
