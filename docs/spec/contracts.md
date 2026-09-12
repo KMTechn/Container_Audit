@@ -46,6 +46,11 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 이벤트 작업 시각은 로컬 naive ISO 값일 수 있으며 Web은 CA source에 `Asia/Seoul`을 적용해 UTC로 정규화한다. operation lease와 relay 시각은 UTC `Z` 문맥을 사용한다. 발생·로컬 저장·서버 수신·투영·화면 표시 시각은 별개다. CA 세션 변환은 start/end와 event/received 계열 fallback에서 날짜를 만들므로 모든 지표가 동일 업무일 규칙이라는 가정은 금한다. [common_projection 시간 정규화 및 세션 변환](../../../WorkerAnalysisGUI-web/common_projection.py), [terminal_operation_lease.utc_text](../../terminal_operation_lease.py), [direct_sync_push](../../direct_sync_push.py). 자정 경계·시계차·화면 필터 실제 검증은 [CA-G01](BACKLOG.md#ca-g01)이다.
 
+부분 제출·13자리 호환 입력 분기는 현장 원장 표본 확인 전 제거 금지다.
+확장 축 ②(제품·바코드 양식 변경)의 정책 adapter 대상으로 보존하며,
+실제 원장 표본의 형식별 발생 여부와 저장 상태 이행·지원 종료를 확인한 뒤 제거를 검토한다.
+표준 compact PHS2는 중앙 GOOD 구성원 전량 확인을 유지하고 부족 수량의 부분 제출을 차단한다.
+
 ## 3. 완료 상태와 관측 지점
 
 | 관측 지점 | 완료로 확인할 조건 | 그 조건만으로 알 수 없는 것 |
