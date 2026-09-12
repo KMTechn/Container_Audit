@@ -93,32 +93,74 @@ def test_native_large_text_sidebars_keep_footer_and_profile_font(native_tk_root)
     assert sizes[0] != sizes[1]
 
 
-def test_native_large_text_exchange_reserves_input_footer_and_scrolls_tables(native_tk_root, monkeypatch):
-    app, _outer = build_center(native_tk_root, scale=2.5)
+@pytest.mark.parametrize('scale', [0.7, 2.5])
+def test_native_large_text_exchange_reserves_input_footer_and_scrolls_tables(native_tk_root, monkeypatch, scale):
+    app, _outer = build_center(native_tk_root, scale=scale)
     app.current_tray = TraySession()
     monkeypatch.setattr(app, '_transfer_member_exchange_blocks_local_action', lambda _action: False)
     monkeypatch.setattr(app, '_exact_transfer_exchange_blocked', lambda: False)
     monkeypatch.setattr(app, '_invalidate_pending_scan_callbacks', lambda: None)
     monkeypatch.setattr(app, '_update_action_button_states', lambda: None)
+    toplevel = tk.Toplevel
+
+    def offscreen_dialog(*args, **kwargs):
+        dialog = toplevel(*args, **kwargs)
+        dialog.withdraw()
+        dialog.overrideredirect(True)
+        dialog.attributes('-alpha', 0.0)
+        dialog.geometry('+10000+10000')
+        dialog.winfo_screenwidth = lambda: 1024
+        dialog.winfo_screenheight = lambda: 768
+        return dialog
+
+    monkeypatch.setattr(tk, 'Toplevel', offscreen_dialog)
     app._show_exchange_dialog_after_coordinator_admission()
-    native_tk_root.update()
     dialog = app.exchange_dialog
+    dialog.deiconify()
+    native_tk_root.update()
     try:
+        assert dialog.winfo_width() <= 928
+        assert dialog.winfo_height() <= 672
         for widget in (app.exchange_scan_entry, app.exchange_complete_button, app.exchange_cancel_button):
             assert_contained(widget, dialog)
             assert widget.winfo_height() >= widget.winfo_reqheight()
         assert str(app.exchange_complete_button.cget('state')) == 'disabled'
         app.exchange_quantity_var.set(2)
+        session = app.current_exchange_session
+        session.defective_barcodes = ['SYNTHETIC-FIRST-' + 'A' * 80, 'SYNTHETIC-SECOND-' + 'B' * 80]
+        session.good_barcodes = ['SYNTHETIC-GOOD-1', 'SYNTHETIC-GOOD-2']
+        app._update_exchange_display()
+        native_tk_root.update()
+        viewport = app.exchange_body._layout_viewport
+        viewport.yview_moveto(1)
+        native_tk_root.update()
         for tree in (app.exchange_defective_tree, app.exchange_good_tree):
-            assert_contained(tree, dialog)
-            tree.insert('', 'end', iid='first', values=('1', 'SYNTHETIC-FIRST'))
-            tree.insert('', 'end', iid='second', values=('2', 'SYNTHETIC-SECOND'))
-            tree.see('second')
+            assert_contained(tree, viewport)
+            rows = tree.get_children()
+            assert len(rows) == 2
+            tree.see(rows[-1])
             tree.xview_moveto(1)
             native_tk_root.update()
-            bounds = tree.bbox('second')
-            assert bounds and bounds[1] + bounds[3] <= tree.winfo_height()
+            for row in rows:
+                bounds = tree.bbox(row)
+                assert bounds and bounds[1] >= 0 and bounds[1] + bounds[3] <= tree.winfo_height()
             assert float(tree.xview()[1]) == 1.0
+        if scale == 2.5:
+            assert app.exchange_body.winfo_height() > viewport.winfo_height()
+            viewport.yview_moveto(0)
+            app.exchange_status_label.event_generate('<MouseWheel>', delta=-120, state=0)
+            native_tk_root.update()
+            assert viewport.yview()[0] > 0
+            viewport.yview_moveto(0)
+            app.exchange_defective_tree.focus_force()
+            app.exchange_defective_tree.event_generate('<Next>')
+            native_tk_root.update()
+            assert viewport.yview()[0] > 0
+        app.exchange_quantity_spin.focus_force()
+        native_tk_root.update()
+        assert_contained(app.exchange_quantity_spin, viewport)
+        for widget in (app.exchange_scan_entry, app.exchange_complete_button, app.exchange_cancel_button):
+            assert_contained(widget, dialog)
         assert app.exchange_quantity_var.get() == 2
         assert app.exchange_scan_entry.get() == ''
     finally:

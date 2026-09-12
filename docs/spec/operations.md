@@ -48,6 +48,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o03"></a>
 ## CA-O03 스캐너·키보드·화면·사운드·출력
 
+- 개별 교환 창은 화면 높이−96px cap 안에서 입력·완료/취소를 고정한다. 설명·수량·표는 세로 scrollbar/wheel/PageUp/PageDown으로 접근하고 수량에 포커스하면 자동 노출한다. 두 행/heading/가로 scrollbar의 최소 높이를 확보하며 글자나 정보를 줄이지 않는다. 확대/축소 native bbox 검사는 `tests/test_operator_widget_transitions.py`의 기존 교환 사례를 사용한다(이 구현 레인에서는 NOT TESTED).
+
 2026-09-12 UI 변경은 일상 안내 band와 작업 상세를 접고, 알림/현품표 교체 및 사용자가 연 상세만 펼친다.
 `저장 전송` 카드의 `상세`는 Tab으로 접근하고 닫은 뒤 비차단 상태에서 스캔 포커스로 복귀한다.
 교체 화면 닫기는 진행 중인 조회/교체/복구/차단 상태를 해제하지 않는다.

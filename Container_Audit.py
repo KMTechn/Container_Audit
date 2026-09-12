@@ -3766,10 +3766,10 @@ class ContainerAudit:
         self.scan_entry.focus()
         self.root.after(100, self._schedule_phs_label_exchange_recovery)
 
-    def _large_text_pane(self, parent):
+    def _large_text_pane(self, parent, *, force=False):
         # The existing 2x+ tier deliberately keeps enlarged text. Give its
         # overflowing content a viewport instead of reducing that preference.
-        if getattr(self, "scale_factor", 1.0) < 2.0:
+        if not force and getattr(self, "scale_factor", 1.0) < 2.0:
             return parent
         pane_style = parent.cget('style')
         viewport = ttk.Frame(parent, style=pane_style)
@@ -3785,6 +3785,7 @@ class ContainerAudit:
         window = canvas.create_window(0, 0, window=content, anchor='nw')
         pending = None
         pending_focus = None
+        event_root = parent.winfo_toplevel()
 
         def resize():
             nonlocal pending
@@ -3802,14 +3803,14 @@ class ContainerAudit:
             if belongs(event.widget) and pending is None:
                 pending = self.root.after_idle(resize)
 
-        def reveal(event):
+        def reveal(widget):
             nonlocal pending_focus
             pending_focus = None
-            if not belongs(event.widget) or event.widget is canvas:
+            if not belongs(widget) or widget is canvas:
                 return
             try:
-                top = event.widget.winfo_rooty() - content.winfo_rooty()
-                bottom = top + event.widget.winfo_height()
+                top = widget.winfo_rooty() - content.winfo_rooty()
+                bottom = top + widget.winfo_height()
             except tk.TclError:
                 return  # A focused child can be removed while this pane survives.
             visible_top = canvas.canvasy(0)
@@ -3823,19 +3824,31 @@ class ContainerAudit:
             if belongs(event.widget):
                 if pending_focus is not None:
                     self.root.after_cancel(pending_focus)
-                pending_focus = self.root.after_idle(reveal, event)
+                pending_focus = self.root.after_idle(reveal, event.widget)
 
         def wheel(event):
             if (not belongs(event.widget) or not event.delta or event.state & 4
-                    or event.widget.winfo_class() in {'Listbox', 'Treeview', 'TSpinbox'}):
+                    or event.widget.winfo_class() in {'Listbox', 'TSpinbox'}):
                 return
+            if event.widget.winfo_class() == 'Treeview':
+                if not force:
+                    return
+                first, last = event.widget.yview()
+                if (event.delta > 0 and first > 0) or (event.delta < 0 and last < 1):
+                    return
             canvas.yview_scroll(-3 if event.delta > 0 else 3, 'units')
             return 'break'
 
+        def page(event):
+            if force and belongs(event.widget):
+                canvas.yview_scroll(-1 if event.keysym == 'Prior' else 1, 'pages')
+                return 'break'
+
         bindings = [
-            (sequence, self.root.bind(sequence, callback, add='+'))
+            (sequence, event_root.bind(sequence, callback, add='+'))
             for sequence, callback in (
-                ('<Configure>', schedule), ('<FocusIn>', schedule_reveal), ('<MouseWheel>', wheel)
+                ('<Configure>', schedule), ('<FocusIn>', schedule_reveal), ('<MouseWheel>', wheel),
+                ('<Prior>', page), ('<Next>', page),
             )
         ]
 
@@ -3846,9 +3859,10 @@ class ContainerAudit:
                 if pending_focus is not None:
                     self.root.after_cancel(pending_focus)
                 for sequence, binding in bindings:
-                    self.root.unbind(sequence, binding)
+                    event_root.unbind(sequence, binding)
 
         content.bind('<Destroy>', dispose, add='+')
+        content._reveal_widget = reveal
         pending = self.root.after_idle(resize)
         return content
 
@@ -14867,17 +14881,22 @@ class ContainerAudit:
         main_frame = ttk.Frame(exchange_dialog, padding=20)
         main_frame.pack(fill=tk.BOTH, expand=True)
         main_frame.grid_columnconfigure(0, weight=1)
-        main_frame.grid_rowconfigure(3, weight=1)
+        main_frame.grid_rowconfigure(0, weight=1)
+        body_host = ttk.Frame(main_frame)
+        body_host.grid(row=0, column=0, sticky='nsew', pady=(0, 20))
+        body = self._large_text_pane(body_host, force=True)
+        body.grid_columnconfigure(0, weight=1)
+        self.exchange_body = body
 
         # 제목
         title_label = ttk.Label(
-            main_frame,
+            body,
             text="현재 이적 제품 교체" if active_transfer_exchange else "개별 제품 교환",
                                font=(self.DEFAULT_FONT, 16, 'bold'))
         title_label.grid(row=0, column=0, pady=(0, 20))
 
         # 수량 선택 프레임
-        quantity_frame = ttk.Frame(main_frame)
+        quantity_frame = ttk.Frame(body)
         quantity_frame.grid(row=1, column=0, sticky='ew', pady=(0, 20))
 
         ttk.Label(quantity_frame, text="교환할 수량:",
@@ -14900,17 +14919,17 @@ class ContainerAudit:
                  font=(self.DEFAULT_FONT, 12)).pack(side=tk.LEFT)
 
         # 상태 라벨
-        self.exchange_status_label = ttk.Label(main_frame,
+        self.exchange_status_label = ttk.Label(body,
                                              text="교환할 수량을 선택한 후 불량품을 스캔하세요.",
                                              font=(self.DEFAULT_FONT, 12))
         self.exchange_status_label.grid(row=2, column=0, sticky='ew', pady=10)
-        self._bind_label_to_container_width(self.exchange_status_label, main_frame, padding=40)
+        self._bind_label_to_container_width(self.exchange_status_label, body, padding=40)
 
         # 목록 프레임
-        list_frame = ttk.Frame(main_frame)
+        list_frame = ttk.Frame(body)
         list_frame.grid(row=3, column=0, sticky='nsew', pady=(0, 20))
-        list_frame.grid_columnconfigure(0, weight=1)
-        list_frame.grid_columnconfigure(1, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1, uniform='exchange_tables')
+        list_frame.grid_columnconfigure(1, weight=1, uniform='exchange_tables')
         list_frame.grid_rowconfigure(0, weight=1)
 
         # 불량품 목록
@@ -14947,10 +14966,17 @@ class ContainerAudit:
             horizontal = ttk.Scrollbar(frame, orient='horizontal', command=tree.xview)
             horizontal.grid(row=1, column=0, sticky='ew')
             tree.configure(xscrollcommand=horizontal.set)
+            tree.update_idletasks()
+            row_height = max(1, int(self.style.lookup(tree.cget('style') or 'Treeview', 'rowheight') or 20))
+            heading_and_border = max(0, tree.winfo_reqheight() - 2 * row_height)
+            frame.grid_rowconfigure(0, minsize=heading_and_border + 2 * row_height)
+            frame.grid_rowconfigure(1, minsize=horizontal.winfo_reqheight())
+        list_frame.update_idletasks()
+        body.grid_rowconfigure(3, minsize=max(defective_frame.winfo_reqheight(), good_frame.winfo_reqheight()) + 20)
 
         # 스캔 입력 프레임
         scan_frame = ttk.Frame(main_frame)
-        scan_frame.grid(row=4, column=0, sticky='ew', pady=(0, 20))
+        scan_frame.grid(row=1, column=0, sticky='ew', pady=(0, 20))
 
         ttk.Label(scan_frame, text="바코드 스캔:",
                  font=(self.DEFAULT_FONT, 12, 'bold')).pack(side=tk.LEFT)
@@ -14961,7 +14987,7 @@ class ContainerAudit:
 
         # 버튼 프레임
         button_frame = ttk.Frame(main_frame)
-        button_frame.grid(row=5, column=0, sticky='ew')
+        button_frame.grid(row=2, column=0, sticky='ew')
 
         self.exchange_complete_button = ttk.Button(button_frame, text="교환 완료",
                                                   command=self._complete_exchange,
@@ -14992,6 +15018,8 @@ class ContainerAudit:
         # Windows display scaling can make the natural content taller than the
         # old fixed 800x600 client area.  Size after layout so the scan input
         # and action buttons remain visible without changing exchange logic.
+        exchange_dialog.update_idletasks()
+        body._layout_viewport.configure(height=body.winfo_reqheight())
         exchange_dialog.update_idletasks()
         dialog_width, dialog_height = calculate_exchange_dialog_size(
             exchange_dialog.winfo_reqwidth(),
@@ -15120,6 +15148,15 @@ class ContainerAudit:
         for i, barcode in enumerate(session.good_barcodes):
             tag = 'even' if i % 2 == 0 else 'odd'
             self._insert_tree_row(self.exchange_good_tree, '', 'end', values=(i+1, barcode), tags=(tag,))
+        for tree in (self.exchange_defective_tree, self.exchange_good_tree):
+            rows = tree.get_children()
+            if rows and hasattr(tree, 'see'):
+                width = self._tree_column_required_width(tree, 'barcode', tree.heading('barcode', 'text'), fallback=160)
+                tree.column('barcode', width=width, minwidth=width)
+                tree.see(rows[-1])
+        body = getattr(self, 'exchange_body', None)
+        if body is not None and body.winfo_exists():
+            self.root.after_idle(body._reveal_widget, self.exchange_good_tree if session.good_barcodes else self.exchange_defective_tree)
 
     def _update_exchange_status(self):
         """교환 상태 메시지를 업데이트합니다."""

@@ -112,6 +112,16 @@ def test_exchange_dialog_keeps_default_size_and_stays_screen_bounded():
         screen_width=1280,
         screen_height=800,
     ) == (1184, 704)
+    # Expanded heading + two rows + input/footer may exceed this cap;
+    # the dialog body must scroll while fixed controls retain their height.
+    assert container_audit_module.calculate_exchange_dialog_size(
+        required_width=1600, required_height=900,
+        screen_width=1024, screen_height=768,
+    ) == (928, 672)
+    assert container_audit_module.calculate_exchange_dialog_size(
+        required_width=500, required_height=420,
+        screen_width=1024, screen_height=768,
+    ) == (800, 600)
 
 
 def test_center_actions_reflow_using_requested_label_width_and_keep_order():
