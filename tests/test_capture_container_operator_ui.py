@@ -989,7 +989,7 @@ def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts()
     assert [item["passed"] for item in lease_variants] == [False, True, True]
     relay = assertions["m7_direct_sync_backlog_ack"]["direct_sync"]
     assert relay["health"]["pending_count"] == 2
-    assert relay["card_model"]["summary"].startswith("대기 2 · 최근 성공 ")
+    assert relay["card_model"]["summary"] == "전송 대기 2건"
     variants = assertions["m7_transfer_receipt_status"]["receipt"][
         "completion_variants"
     ]
