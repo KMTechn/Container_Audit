@@ -370,6 +370,7 @@ def _app(tmp_path, client):
     app.current_item_label = LabelState()
     app._update_operator_context = lambda: None
     app._save_current_tray_state = lambda: True
+    app._save_tray_state_snapshot = lambda state: True
     app._delete_current_tray_state = lambda: True
     app._log_event = lambda event, detail=None, **kwargs: app.events.append(
         (event, detail, kwargs)

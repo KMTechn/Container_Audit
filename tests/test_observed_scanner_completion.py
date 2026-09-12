@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from tests.operation_lease_fixtures import fixed_operation_lease_clock
 
-pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
 
 from Container_Audit import ContainerAudit, TraySession
 from tests.test_container_audit_contracts import _completion_app
@@ -184,7 +184,7 @@ def test_new_preflight_activation_publishes_real_current_member_readiness(tmp_pa
         if name not in vars(app):
             setattr(app, name, value)
     # Use the actual state and completion-event writes in this combined path.
-    for name in ("_save_current_tray_state", "_delete_current_tray_state", "_log_event"):
+    for name in ("_save_current_tray_state", "_save_tray_state_snapshot", "_delete_current_tray_state", "_log_event"):
         vars(app).pop(name, None)
     _bind_member_store(app, tmp_path)
     app._transfer_member_exchange_attempt_snapshot = {

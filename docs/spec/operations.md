@@ -77,6 +77,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o04"></a>
 ## CA-O04 장애·오프라인·취소·재시작 인계
 
+- 일반/held 스캔의 상태 저장·감사, 제품 입력의 유휴 해제·오류 기록, GUI 완료 checkpoint와 CSV fsync는 기존 직렬 lane worker에서 실행한다. 수량·성공음은 상태 저장 ACK 뒤 반영하며 완료는 내구 기록 후 확정한다. 저장 중 미접수된 다음 입력은 입력창에 유지된다. 정상 종료는 lane→held writer→event writer 순서로 진행 중 저장을 정리하며, 새 epoch에 오래된 결과를 적용하지 않는다. 동기 복구·시작/설정 등 다른 저장 경로가 모두 비동기로 전환된 것은 아니다.
+
 - 일반 이벤트 저장 실패는 200ms UI 상태 확인을 통해 저장 실패·재시도 안내를 표시하고, writer는 대기/재시작 때 `events/_event_outbox`의 원 payload를 재생한다. writer admission의 5초 mutex timeout·fence 거절로 사본 저장에 진입하지 못하거나 사본 쓰기가 실패한 경우도 접수는 False이며 메모리에 원 payload/key와 순서를 유지하고 저장 공간 확인·PC 종료 금지를 안내한다. 메모리에만 남은 사건이 있으면 정상 종료를 거부하고 writer 재시도를 계속한다. admission을 다시 얻거나 사본 저장만 성공한 시점에는 복구 완료를 표시하지 않으며, 원 사건의 내구 CSV append(동일 key의 기존 행이면 fsync)와 사본 정리가 모두 성공한 뒤에만 표시한다. 사본이 내구 저장된 append 실패는 재시작 복구 가능하며, 전원 차단 시 메모리만 남은 사건까지 보존한다고 주장하지 않는다.
 
 - 최고 기록은 양의 유한 시간만 표시한다. 잘못된 값은 제외하고 시작 시 안내하며, 정리/새 기록으로 덮어쓰기 전에 설정 폴더의 `best_time_records.json.bad-*`에 손상 원본을 보존한다. 읽기/정리 저장 실패 시 원본을 유지한다.

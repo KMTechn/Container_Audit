@@ -2799,7 +2799,7 @@ def test_direct_sync_card_keeps_pending_neutral_and_terminal_amber():
     assert card["value"].options["text"] == "전송 대기 없음"
 
 
-def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
+def test_gui_completion_is_nonblocking_and_persists_on_worker(tmp_path):
     root = HealthPumpRoot()
     app = ContainerAudit.__new__(ContainerAudit)
     app.root = root
@@ -2850,7 +2850,7 @@ def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
         operation_lease_id="operation-lease-complete",
     )
 
-    def save_state():
+    def save_state(_state):
         checkpoint_thread_ids.append(threading.get_ident())
         return True
 
@@ -2861,14 +2861,15 @@ def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
         assert gate.wait(timeout=2.0)
         return attempt
 
-    def complete_tray(*, _prepared_transfer_attempt=None):
+    def complete_tray(*, _prepared_transfer_attempt=None, _lane_prechecked=False):
+        yield from ()
         finish_thread_ids.append(threading.get_ident())
         assert _prepared_transfer_attempt is attempt
         return True
 
-    app._save_current_tray_state = save_state
+    app._save_tray_state_snapshot = save_state
     app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
-    app.complete_tray = complete_tray
+    app._complete_tray_steps = complete_tray
 
     try:
         started = time.perf_counter()
@@ -2884,12 +2885,12 @@ def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
         gate.set()
         app._completion_task_handle.join(timeout=2.0)
         deadline = time.monotonic() + 2.0
-        while not finish_thread_ids and time.monotonic() < deadline:
+        while (not finish_thread_ids or app._ui_lane.is_busy()) and time.monotonic() < deadline:
             if root.jobs:
                 root.run_next()
             time.sleep(0.005)
 
-        assert checkpoint_thread_ids == [owner_thread_id]
+        assert checkpoint_thread_ids == worker_thread_ids
         assert finish_thread_ids == [owner_thread_id]
         assert worker_thread_ids and worker_thread_ids[0] != owner_thread_id
         assert app._completion_lane_busy is False
@@ -2967,16 +2968,17 @@ def test_gui_completion_recomputes_actions_after_lane_becomes_idle(
         return attempt
 
     app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
-    app.complete_tray = lambda *, _prepared_transfer_attempt=None: (
-        _prepared_transfer_attempt is attempt
-    )
+    def complete_steps(*, _prepared_transfer_attempt=None, _lane_prechecked=False):
+        yield from ()
+        return _prepared_transfer_attempt is attempt
+    app._complete_tray_steps = complete_steps
 
     try:
         assert app.request_complete_tray() is True
         app._completion_task_handle.join(timeout=2.0)
         deadline = time.monotonic() + 2.0
         while (
-            len(updates) < 3 or app._ui_lane.is_busy()
+            not updates or app._ui_lane.is_busy()
         ) and time.monotonic() < deadline:
             if root.jobs:
                 root.run_next()
@@ -2989,22 +2991,10 @@ def test_gui_completion_recomputes_actions_after_lane_becomes_idle(
             "lane_state": "IDLE",
             "action_state": container_module.tk.DISABLED,
         }
-        assert updates[1] == {
-            "completion_busy": False,
-            "lane_busy": terminal_path == "fail",
-            "lane_state": "BUSY" if terminal_path == "fail" else "IDLE",
-            "action_state": (
-                container_module.tk.DISABLED
-                if terminal_path == "fail" else container_module.tk.NORMAL
-            ),
-        }
-        post_idle_refresh_seen = any(
-            not update["completion_busy"]
-            and not update["lane_busy"]
-            and update["lane_state"] == "IDLE"
-            for update in updates[2:]
-        )
-        assert post_idle_refresh_seen is True
+        # A single refresh after the idle barrier is enough on success;
+        # failure may additionally present its intermediate busy state.
+        assert any(not update["completion_busy"] and not update["lane_busy"]
+                   and update["lane_state"] == "IDLE" for update in updates[1:])
         assert updates[-1] == {
             "completion_busy": False,
             "lane_busy": False,
@@ -3021,7 +3011,7 @@ def test_stale_completion_terminal_settles_busy_before_actual_idle_action_refres
     tmp_path,
     terminal_path,
 ):
-    from tk_serial_ui_lane import StaleUiResultError
+    from tk_serial_ui_lane import StaleUiCheckpointError, StaleUiResultError
 
     root = HealthPumpRoot()
     app = ContainerAudit.__new__(ContainerAudit)
@@ -3086,12 +3076,13 @@ def test_stale_completion_terminal_settles_busy_before_actual_idle_action_refres
             raise RuntimeError("injected stale completion failure")
         return attempt
 
-    def complete_tray(*, _prepared_transfer_attempt=None):
+    def complete_tray(*, _prepared_transfer_attempt=None, _lane_prechecked=False):
+        yield from ()
         complete_tray_calls.append(_prepared_transfer_attempt)
         return True
 
     app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
-    app.complete_tray = complete_tray
+    app._complete_tray_steps = complete_tray
 
     try:
         assert app.request_complete_tray(
@@ -3130,8 +3121,9 @@ def test_stale_completion_terminal_settles_busy_before_actual_idle_action_refres
             + ("SETTLED" if settled else "REPRODUCED")
         )
 
-        assert isinstance(stale_error, StaleUiResultError)
-        assert stale_error.code == "UI_LANE_STALE_RESULT"
+        expected = StaleUiCheckpointError if terminal_path == "success" else StaleUiResultError
+        assert isinstance(stale_error, expected)
+        assert stale_error.code == expected.code
         assert stale_error.task_generation == 10
         assert stale_error.current_generation == 11
         assert completion_callbacks == []

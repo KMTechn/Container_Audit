@@ -5104,6 +5104,7 @@ def test_wakeup_from_waiting_idle_does_not_log_idle_end():
 
 def test_wakeup_from_active_idle_records_previous_idle_duration():
     app = _headless_app()
+    app.worker_name = "fixture worker"
     app.is_idle = True
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100", total_idle_seconds=5.0)
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 0, 0)
@@ -5117,7 +5118,7 @@ def test_wakeup_from_active_idle_records_previous_idle_duration():
     app.stopwatch_updated = False
     app.status_messages = []
     app._log_event = lambda *args, **kwargs: app.logged.append((args, kwargs))
-    app._save_current_tray_state = lambda: setattr(app, "saved", True)
+    app._save_tray_state_snapshot = lambda state: setattr(app, "saved", True)
     app._set_idle_style = lambda is_idle: app.styles.append(is_idle)
     app._update_stopwatch = lambda: setattr(app, "stopwatch_updated", True)
     app.show_status_message = lambda *args, **kwargs: app.status_messages.append((args, kwargs))
@@ -5705,6 +5706,7 @@ def test_mismatch_scan_saves_dirty_current_tray_state(tmp_path):
 
 def test_product_scan_rejects_when_tray_is_already_full():
     app = _headless_app()
+    app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=1",
         item_code="AAA2270730100",
@@ -5722,7 +5724,7 @@ def test_product_scan_rejects_when_tray_is_already_full():
     app.logged = []
     app.show_fullscreen_warning = lambda *args, **kwargs: setattr(app, "warning", args)
     app._log_event = lambda *args, **kwargs: app.logged.append((args, kwargs)) or True
-    app._save_current_tray_state = lambda: setattr(app, "saved", True)
+    app._save_tray_state_snapshot = lambda state: setattr(app, "saved", True)
     app.complete_tray = lambda: (_ for _ in ()).throw(AssertionError("full tray overscan should not complete"))
 
     app._process_barcode_logic("AAA2270730100-002")
@@ -6112,6 +6114,7 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
 @pytest.mark.parametrize("held", [False, True])
 def test_product_scan_rolls_back_when_state_save_fails(held):
     app = _headless_app()
+    app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
         item_code="AAA2270730100",
@@ -6132,7 +6135,7 @@ def test_product_scan_rolls_back_when_state_save_fails(held):
     app._update_last_activity_time = lambda: None
     app._update_center_display = lambda: setattr(app, "center_updated", True)
     app._update_current_item_label = lambda: setattr(app, "item_label_updated", True)
-    app._save_current_tray_state = lambda: False
+    app._save_tray_state_snapshot = lambda state: False
     app.complete_tray = lambda: (_ for _ in ()).throw(
         AssertionError("failed product scan save should not complete the tray")
     )
@@ -6161,6 +6164,7 @@ def test_product_scan_rolls_back_when_state_save_fails(held):
 @pytest.mark.parametrize("held", [False, True])
 def test_product_scan_saves_before_logging_scan_ok(held):
     app = _headless_app()
+    app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
         item_code="AAA2270730100",
@@ -6181,7 +6185,7 @@ def test_product_scan_saves_before_logging_scan_ok(held):
     app._update_center_display = lambda: None
     app._update_current_item_label = lambda: None
     saved = []
-    app._save_current_tray_state = lambda: saved.append(list(app.current_tray.scanned_barcodes)) or True
+    app._save_tray_state_snapshot = lambda state: saved.append(list(state["scanned_barcodes"])) or True
     logged = []
     app._log_event = lambda event, detail=None, **kwargs: logged.append(
         {"event": event, "saved_before_log": list(saved), "detail": detail}
@@ -6214,6 +6218,7 @@ def test_product_scan_clamps_clock_rollback_interval_before_scan_ok(monkeypatch)
             return value if tz is None else value.replace(tzinfo=tz)
 
     app = _headless_app()
+    app.worker_name = "fixture-worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=3",
         item_code="AAA2270730100",
@@ -6232,7 +6237,7 @@ def test_product_scan_clamps_clock_rollback_interval_before_scan_ok(monkeypatch)
     app._update_last_activity_time = lambda: None
     app._update_center_display = lambda: None
     app._update_current_item_label = lambda: None
-    app._save_current_tray_state = lambda: True
+    app._save_tray_state_snapshot = lambda state: True
     logged = []
     app._log_event = lambda event, detail=None, synchronous=False: logged.append(
         {"event": event, "detail": detail}
@@ -6329,6 +6334,7 @@ def test_product_scan_logs_unsafe_format_failure_without_raw_payload_or_state_mu
 
 def test_product_scan_rejects_barcode_matching_multiple_item_codes():
     app = _headless_app()
+    app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=2",
         item_code="AAA2270730100",
@@ -6346,10 +6352,10 @@ def test_product_scan_rejects_barcode_matching_multiple_item_codes():
     ]
     app._update_last_activity_time = lambda: None
     saved = []
-    app._save_current_tray_state = lambda: saved.append(
+    app._save_tray_state_snapshot = lambda state: saved.append(
         {
-            "mismatch_error_count": app.current_tray.mismatch_error_count,
-            "has_error_or_reset": app.current_tray.has_error_or_reset,
+            "mismatch_error_count": state["mismatch_error_count"],
+            "has_error_or_reset": state["has_error_or_reset"],
         }
     ) or True
     logged = []
@@ -6382,6 +6388,7 @@ def test_product_scan_rejects_barcode_matching_multiple_item_codes():
 
 def test_product_scan_rejects_catalog_resolved_different_overlapping_item_code():
     app = _headless_app()
+    app.worker_name = "fixture worker"
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA227073|QT=2",
         item_code="AAA227073",
@@ -6399,10 +6406,10 @@ def test_product_scan_rejects_catalog_resolved_different_overlapping_item_code()
     ]
     app._update_last_activity_time = lambda: None
     saved = []
-    app._save_current_tray_state = lambda: saved.append(
+    app._save_tray_state_snapshot = lambda state: saved.append(
         {
-            "mismatch_error_count": app.current_tray.mismatch_error_count,
-            "has_error_or_reset": app.current_tray.has_error_or_reset,
+            "mismatch_error_count": state["mismatch_error_count"],
+            "has_error_or_reset": state["has_error_or_reset"],
         }
     ) or True
     logged = []
@@ -6630,6 +6637,7 @@ def test_worker_scanner_full_tray_flow_writes_csv_sequence_before_relay_plan(tmp
     app.COLOR_SIDEBAR_BG = "sidebar"
     app.COLOR_TEXT = "text"
     app._save_current_tray_state = lambda: True
+    app._save_tray_state_snapshot = lambda state: True
     app._delete_current_tray_state = lambda: True
     app._stop_stopwatch = lambda: setattr(app, "stopwatch_stopped", True)
     app._stop_idle_checker = lambda: setattr(app, "idle_stopped", True)
@@ -7597,7 +7605,7 @@ def test_prepared_contract_is_reflushed_before_retrying_after_storage_recovers(
     durable_contract_saved = False
     calls = []
 
-    def save_state():
+    def save_state(state):
         nonlocal durable_contract_saved
         calls.append("save-success" if storage_available else "save-failed")
         if storage_available:
@@ -7619,7 +7627,7 @@ def test_prepared_contract_is_reflushed_before_retrying_after_storage_recovers(
             local_completion_id="local-completion-storage-recovered",
         )
 
-    app._save_current_tray_state = save_state
+    app._save_tray_state_snapshot = save_state
     app._prepare_and_attempt_transfer_seal = prepare_and_attempt
     app._log_event = lambda *_args, **_kwargs: True
 

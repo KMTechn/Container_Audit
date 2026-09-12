@@ -63,7 +63,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 - 제품 형식 오류 안내는 길이/제어문자/위험 형식/트레이 설정의 판정 reason에 맞춘 안전한 문구를 일반·held 경로에서 공통 사용한다. 위험 원문은 안내에 삽입하지 않고 감사 detail에는 hash·길이만 남긴다.
 
-- 일반·held 제품의 성공음은 current JSON atomic write/flush/fsync 성공 뒤 한 번만 재생한다. 저장 실패 시 목록·receipt를 롤백하고 성공음을 내지 않는다. held FIFO 제거는 이후 동기 감사 ACK를 별도로 기다린다.
+- 일반·held 제품의 current JSON atomic write/flush/fsync는 기존 직렬 UI lane worker가 수행한다. Tk는 저장 ACK 뒤에만 목록·수량·receipt·성공음을 한 번 반영하고, 실패하면 이전 목록·파일을 유지한다. 저장 중 다음 입력은 미접수 상태로 입력창에 남고 선행 저장을 추월하지 않는다. held FIFO 제거는 이후 같은 worker의 동기 감사 ACK를 별도로 기다린다. 종료는 진행 중 lane과 held writer를 drain하며, epoch가 바뀐 결과는 새 트레이를 변경하지 않는다.
 - 일반 비동기 사건은 원 시각·작업자·대상 CSV·details·멱등 key를 먼저 메모리 FIFO에 보존하고, writer admission을 얻어 `events/_event_outbox/*.json`에 atomic write/flush/fsync한 뒤 접수한다. admission의 5초 mutex timeout·fence 거절 또는 사본 저장 실패는 접수 False이며 원 payload/key를 메모리에 남겨 다음 허가된 쓰기에서 앞 사건부터 재시도한다. admission/fence 규칙은 모든 디스크 쓰기에 그대로 적용된다. writer는 순서대로 동일 key로 내구 CSV append를 재시도하고 성공 뒤 사본을 지운다. append 뒤 응답/정리 실패 및 재시작에도 같은 행을 중복 추가하지 않는다. 실패한 앞 사건을 동기 사건이 추월하지 않으며 완료의 별도 `LOCAL_EVENT_RETRY` 경계는 유지한다.
 - outbox 순번은 남은 사본의 최대 순번을 이어받아 단조 증가하므로 시스템 시계 역행·재시작이 원 사건 순서를 바꾸지 않는다.
 
@@ -72,7 +72,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 - `TraySession`은 원본 PHS2, 품목/목표, 스캔 목록·시간, preflight/lease 문맥과 복구 플래그를 보존한다. current JSON과 보류 JSON은 [ContainerAudit._current_tray_state_snapshot / _load_current_tray_state](../../Container_Audit.py), [tray_state](../../tray_state.py), [parked_tray_store](../../parked_tray_store.py)가 관리한다. 소유자는 작업자와 컴퓨터 문맥이며 다른 작업자의 같은 현품표 보류도 검사한다.
 - preflight hold는 `LOOKUP`, `LOOKUP_FAILED`, `DRAINING`과 FIFO sequence를 저장한다. 부정확한 sequence/schema/context는 오류이며 quarantined snapshot 복구는 별도 동작이다. FAILED hold의 새 작업 전환은 보류0건이라도 인증된 보호 관리자 격리·감사 기록을 요구한다. 일반 작업자 또는 재시작이 파일을 지우거나 다른 PHS2로 덮어쓰지 않는다. [preflight_scan_hold](../../preflight_scan_hold.py), [권한·quarantine 호출자](../../Container_Audit.py).
 - seal intent 상태는 `PREPARED`, `COMMAND_READY`, `RETRY_WAIT`, `ACKED`, `OPERATOR_REVIEW`; `LINKED`는 별도 로컬 completion 기록이다. 둘을 한 enum으로 합치지 않는다. command bind 뒤 요청 문맥을 보존하고 completion checkpoint 이후 전송한다. [TransferSealStore](../../transfer_seal.py)
-- CSV append는 경로별 process/interprocess lock을 쓰고 내구 모드에서 flush/fsync한다. 완료 재기록은 event type+idempotency key로 기존 행을 확인한 뒤 append한다. 같은 key라도 parsed details가 다르면 거부하며, held 성공/거부 역시 동기 감사 성공 전 FIFO head를 제거하지 않는다. SQLite projection receipt와 CSV append 사이 종료 시에도 재생을 판단할 수 있지만 SQLite·JSON·CSV 전체를 하나의 transaction이라고 주장하지 않는다. [append_event_log_entry_idempotent](../../event_log_store.py), [complete_tray](../../Container_Audit.py)
+- CSV append는 경로별 process/interprocess lock을 쓰고 내구 모드에서 flush/fsync한다. 완료 재기록은 event type+idempotency key로 기존 행을 확인한 뒤 append한다. 색인·캐시·metadata로 사건의 부재를 판정하지 않고 기존처럼 CSV 전체 내용을 직접 읽는다. 같은 key라도 parsed details가 다르면 거부하며, held 성공/거부 역시 동기 감사 성공 전 FIFO head를 제거하지 않는다. GUI 완료의 prepared checkpoint·재시도 계약 저장·CSV join/fsync는 같은 lane worker에서 순서대로 실행하고 UI 단계만 Tk에 전달한다. 동기 복구 진입점도 같은 저장 순서를 실행한다. SQLite projection receipt와 CSV append 사이 종료 시에도 재생을 판단할 수 있지만 SQLite·JSON·CSV 전체를 하나의 transaction이라고 주장하지 않는다. [append_event_log_entry_idempotent](../../event_log_store.py), [complete_tray](../../Container_Audit.py)
 - 취소 실패는 목록 복원, 보류 복원은 대상 저장·감사와 원본 정리 순서, 손상 state는 격리/보존을 따른다. [undo_last_scan / restore_parked_tray](../../Container_Audit.py). 실패·재시작 각 경계의 실행 증거와 백업 복구 요구는 [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06)에 연결한다.
 
 <a id="ca-c02"></a>

@@ -12,6 +12,11 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+현재 스캔 저장·held 감사·GUI 완료의 JSON/CSV 내구 작업은 직렬 worker로 이동했다.
+CSV 중복 판단은 전체 내용을 직접 읽으며 색인·metadata 기반 부재 판정은 도입하지 않는다.
+합성 callback 시간과 실제 디스크 ACK 시간은 구별한다. 실제 스캐너 연속 입력·저장 지연/실패 안내·종료 drain의 화면 확인과 현장 지연 분포는 남아 있으며 GUI/VM/운영 수용으로 승계하지 않는다.
+보류 JSON 전체 검색은 유지한다. 대량 보류의 실사용 건수와 허용 지연을 먼저 확인해야 하며 파일 회전/보관 정책은 이번 소스 변경에 포함하지 않는다.
+
 | 관리 대상 | 당시 상태 | 완료/다음 판단 |
 |---|---|---|
 | CA 문서 기준선 | 작성·로컬 정적 대조 및 Main 교차 검토 수용 완료 | [AGENTS](../../AGENTS.md), [README](README.md), [contracts](contracts.md), [operations](operations.md), 이 문서가 범위. [IMPLEMENTATION](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)·[교차 검토](E:/KMTech/spec-hub-build-20260907/cross-review/REVIEW.md)·[중앙 S01](../../../Program_Spec_Hub/BACKLOG.md#specification). |

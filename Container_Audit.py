@@ -166,6 +166,7 @@ from storage_policy import build_container_audit_storage_paths, ensure_container
 from storage_utils import atomic_write_json
 from tk_serial_ui_lane import (
     DRAIN_TO_DURABLE_HANDOFF,
+    DRAIN_TO_TERMINAL,
     LANE_BROKEN,
     LANE_BUSY,
     LANE_CLOSED,
@@ -2671,6 +2672,13 @@ class ContainerAudit:
                 return False
             state = self._current_tray_state_snapshot()
             return self._save_tray_state_snapshot(state)
+
+    def _current_tray_save_operation(self) -> Callable[[], bool]:
+        """Freeze the UI-owned state before handing its write to the lane."""
+        if not self.current_tray.master_label_code:
+            return lambda: False
+        state = self._current_tray_state_snapshot()
+        return lambda: self._save_tray_state_snapshot(state)
 
     @writer_sink("gui_tray_state_save")
     def _save_tray_state_snapshot(self, state: Dict[str, Any]) -> bool:
@@ -8829,11 +8837,36 @@ class ContainerAudit:
             )
 
     def _drain_preflight_hold_head(self) -> None:
+        steps = self._drain_preflight_hold_steps()
+        if hasattr(getattr(self, "root", None), "tk"):
+            if getattr(self, "_ui_lane", None) is not None and self._ui_lane.is_busy():
+                return
+            advanced = False
+            def finish(result):
+                nonlocal advanced
+                advanced = bool(result)
+            self._submit_scan_steps(
+                steps, finish=finish,
+                on_idle=lambda: self._resume_preflight_hold_drain() if advanced else None,
+            )
+        else:
+            if self._run_durable_ui_steps(steps):
+                self._resume_preflight_hold_drain()
+
+    def _resume_preflight_hold_drain(self) -> None:
+        if getattr(self, "_ui_close_requested", False):
+            return
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
-        if not isinstance(snapshot, PreflightHoldSnapshot) or not snapshot.items:
+        if snapshot is None or not snapshot.items:
             self._preflight_hold_draining = False
             self._complete_after_preflight_hold_drain()
-            return
+        else:
+            self.root.after(0, self._drain_preflight_hold_head)
+
+    def _drain_preflight_hold_steps(self):
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if not isinstance(snapshot, PreflightHoldSnapshot) or not snapshot.items:
+            return True
         if snapshot.state != HOLD_DRAINING:
             return
         if self._warning_state_presenter().state.is_blocking:
@@ -8852,21 +8885,19 @@ class ContainerAudit:
         if not already_durable:
             decision = self._preflight_held_scan_decision(head.raw_barcode)
             if decision.status != SCAN_ACCEPTED:
-                already_durable = self._durably_reject_preflight_hold_head(
+                already_durable = yield from self._durably_reject_preflight_hold_head(
                     head,
                     decision,
                 )
                 audit_durable = already_durable
             else:
                 before_count = len(current_barcodes)
-                audit_durable = bool(
-                    self._process_barcode_logic(
-                        head.raw_barcode,
-                        _durable_scan_log=True,
-                        _durable_scan_id=head.scan_id,
-                        _catalog_decision=decision,
-                    )
+                scan_steps = self._process_barcode_logic(
+                    head.raw_barcode, _durable_scan_log=True,
+                    _durable_scan_id=head.scan_id, _catalog_decision=decision,
+                    _defer_persistence=True,
                 )
+                audit_durable = bool((yield from scan_steps) if scan_steps is not None else False)
                 current_barcodes = list(
                     getattr(
                         getattr(self, "current_tray", None),
@@ -8882,7 +8913,7 @@ class ContainerAudit:
                     and receipts.get(head.raw_barcode) == head.scan_id
                 )
         else:
-            audit_durable = self._persist_existing_held_scan_audit(
+            audit_durable = yield lambda: self._persist_existing_held_scan_audit(
                 head.raw_barcode,
                 scan_id=head.scan_id,
                 scan_position=current_barcodes.index(head.raw_barcode) + 1,
@@ -8897,29 +8928,17 @@ class ContainerAudit:
 
         store = self._preflight_hold_store()
 
-        def finish(updated: Optional[PreflightHoldSnapshot]) -> None:
-            self._preflight_hold_snapshot = updated
-            if updated is None:
-                self._preflight_hold_draining = False
-                self._complete_after_preflight_hold_drain()
-                return
-            self.root.after(0, self._drain_preflight_hold_head)
-
-        admission = self._preflight_hold_writer().submit(
-            lambda: store.ack_head(head.scan_id),
-            finish,
-            lambda exc: self.show_status_message(
+        try:
+            updated = yield lambda: store.ack_head(head.scan_id)
+        except Exception:
+            self.show_status_message(
                 "제품은 저장됐지만 보류 목록 확인을 마치지 못했습니다. 재시작 시 자동 대조합니다.",
                 self.COLOR_DANGER,
                 duration=0,
-            ),
-        )
-        if not admission.accepted:
-            self.show_status_message(
-                "제품은 저장됐지만 보류 목록 갱신이 지연 중입니다.",
-                self.COLOR_DANGER,
-                duration=0,
             )
+            return False
+        self._preflight_hold_snapshot = updated
+        return True
 
     def _preflight_scan_receipts(self) -> Dict[str, str]:
         tray = getattr(self, "current_tray", None)
@@ -8962,7 +8981,7 @@ class ContainerAudit:
         self,
         head: Any,
         decision: ProductScanDecision,
-    ) -> bool:
+    ):
         title = "보류 스캔 확인"
         message = "보류 중 접수된 제품 바코드를 반영하지 않았습니다."
         if decision.status == SCAN_FORMAT_ERROR:
@@ -8983,15 +9002,14 @@ class ContainerAudit:
         self.show_fullscreen_warning(title, message, self.COLOR_DANGER)
         if not decision.event_name:
             return False
-        return bool(
-            self._log_event(
-                decision.event_name,
-                detail=dict(decision.event_detail),
-                synchronous=True,
-                idempotency_key=f"preflight-held-reject:{head.scan_id}",
-                deduplicate=True,
-            )
+        durable = yield lambda: self._log_event(
+            decision.event_name,
+            detail=dict(decision.event_detail),
+            synchronous=True,
+            idempotency_key=f"preflight-held-reject:{head.scan_id}",
+            deduplicate=True,
         )
+        return bool(durable)
 
     def _persist_existing_held_scan_audit(
         self,
@@ -9638,6 +9656,43 @@ class ContainerAudit:
             self._set_scan_callback_pending(False)
 
     def _process_barcode_logic(
+        self, raw_barcode: str, *, _durable_scan_log: bool = False,
+        _durable_scan_id: str = "", _catalog_decision=None,
+        _defer_persistence: bool = False,
+    ):
+        steps = self._process_barcode_steps(
+            raw_barcode, _durable_scan_log=_durable_scan_log,
+            _durable_scan_id=_durable_scan_id, _catalog_decision=_catalog_decision,
+        )
+        if _defer_persistence:
+            return steps
+        scan_tray = getattr(self, "current_tray", None)
+        # Master/preflight/replacement routing already owns its own lane task.
+        # Only active product input enters the serial persistence sequence here.
+        live_product = bool(
+            hasattr(getattr(self, "root", None), "tk")
+            and getattr(scan_tray, "master_label_code", "")
+            and not getattr(self, "master_label_replace_state", None)
+            and not getattr(self, "_master_preflight_pending", False)
+            and not getattr(self, "internal_test_commands_enabled", False)
+            and not self._parse_new_format_qr(raw_barcode)
+        )
+        if live_product:
+            scan_epoch = int(getattr(self, "_scan_callback_epoch", 0))
+            before_count = len(scan_tray.scanned_barcodes)
+            def on_idle() -> None:
+                self._update_action_button_states()
+                if (not _durable_scan_log
+                        and self.current_tray is scan_tray
+                        and int(getattr(self, "_scan_callback_epoch", 0)) == scan_epoch
+                        and not getattr(self, "_ui_close_requested", False)
+                        and len(scan_tray.scanned_barcodes) > before_count
+                        and len(scan_tray.scanned_barcodes) >= scan_tray.tray_size):
+                    self.root.after(0, self.request_complete_tray)
+            return self._submit_scan_steps(steps, on_idle=on_idle)
+        return self._run_durable_ui_steps(steps)
+
+    def _process_barcode_steps(
         self,
         raw_barcode: str,
         *,
@@ -9684,7 +9739,10 @@ class ContainerAudit:
             elif self.master_label_replace_state == 'awaiting_removed_items':
                 self._handle_removed_item_scan(raw_barcode)
             return
-        self._update_last_activity_time()
+        if hasattr(getattr(self, "root", None), "tk"):
+            yield from self._activity_steps()
+        else:
+            self._update_last_activity_time()
         
         # --- 테스트 기능 트리거 ---
         test_command = (
@@ -9811,13 +9869,13 @@ class ContainerAudit:
         scan_decision = decide_product_scan(self.current_tray, raw_barcode, item_code_length=self.ITEM_CODE_LENGTH)
         if scan_decision.status == SCAN_FORMAT_ERROR:
             if scan_decision.event_name:
-                self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
+                yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
             self.show_fullscreen_warning("바코드 형식 오류", scan_decision.format_error_message, self.COLOR_DANGER); return
         if scan_decision.status == SCAN_MISMATCH:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
             self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
-            self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
-            self._save_current_tray_state()
+            yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
+            (yield self._current_tray_save_operation())
             return
         if scan_decision.status == SCAN_DUPLICATE:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
@@ -9830,13 +9888,13 @@ class ContainerAudit:
                 f"이미 스캔된 제품입니다.\n{duplicate_display}",
                 self.COLOR_DANGER,
             )
-            self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
-            self._save_current_tray_state()
+            yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
+            (yield self._current_tray_save_operation())
             return
         if scan_decision.status == SCAN_TRAY_FULL:
             self.show_fullscreen_warning("트레이 수량 초과", "현재 트레이는 이미 목표 수량에 도달했습니다. 트레이 완료 처리를 먼저 진행하세요.", self.COLOR_DANGER)
-            self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
-            self._save_current_tray_state()
+            yield lambda: self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
+            (yield self._current_tray_save_operation())
             return
         # A held head supplies its catalog result in this same synchronous call.
         # Routing and the basic gate above still run; no result survives a callback.
@@ -9854,77 +9912,103 @@ class ContainerAudit:
                 self.show_fullscreen_warning("품목 코드 모호", "제품 바코드에 여러 품목 코드가 포함되어 있습니다.", self.COLOR_DANGER)
             else:
                 self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)
-            self._log_event(catalog_decision.event_name, detail=catalog_decision.event_detail)
-            self._save_current_tray_state()
+            yield lambda: self._log_event(catalog_decision.event_name, detail=catalog_decision.event_detail)
+            (yield self._current_tray_save_operation())
             return
         
+        tray = self.current_tray
+        epoch = int(getattr(self, "_scan_callback_epoch", 0))
         now = datetime.datetime.now()
-        interval = max(0.0, (now - self.current_tray.scan_times[-1]).total_seconds()) if self.current_tray.scan_times else 0.0
-        self.add_scanned_barcode(raw_barcode, now, interval)
+        interval = max(0.0, (now - tray.scan_times[-1]).total_seconds()) if tray.scan_times else 0.0
+        state = self._current_tray_state_snapshot()
+        state["scanned_barcodes"].append(raw_barcode)
+        state["scan_times"].append(now.isoformat())
         if _durable_scan_id:
-            self._preflight_scan_receipts()[raw_barcode] = _durable_scan_id
-        if not self._save_current_tray_state():
-            if _durable_scan_id:
-                receipts = getattr(
-                    self.current_tray,
-                    "preflight_scan_receipts",
-                    {},
-                )
-                if receipts.get(raw_barcode) == _durable_scan_id:
-                    receipts.pop(raw_barcode, None)
-            self.current_tray.scanned_barcodes.pop()
-            self.current_tray.scan_times.pop()
-            self.scanned_listbox.delete(0)
+            state.setdefault("preflight_scan_receipts", {})[raw_barcode] = _durable_scan_id
+        try:
+            saved = yield lambda: self._save_tray_state_snapshot(state)
+        except Exception:
+            saved = False
+        if self.current_tray is not tray or int(getattr(self, "_scan_callback_epoch", 0)) != epoch:
+            return False
+        if not saved:
             self._update_center_display()
             self._update_current_item_label()
-            if not self.current_tray.scanned_barcodes:
-                self.undo_button['state'] = tk.DISABLED
             self.show_status_message("스캔 상태 저장에 실패했습니다. 스캔을 반영하지 않습니다.", self.COLOR_DANGER)
-            return
-        if self.success_sound:
-            self.success_sound.play()
+            return False
         presenter = self._warning_state_presenter()
-        self._last_normal_scan_display_item_code = str(self.current_tray.item_code or "")
+        self._last_normal_scan_display_item_code = str(tray.item_code or "")
         presenter.record_normal_scan(raw_barcode)
         presenter.clear()
         self._stop_warning_beep()
-        self._render_warning_state()
-        scan_log_kwargs: Dict[str, Any] = {
-            "synchronous": _durable_scan_log,
-        }
+        # Install the final notice state before the single count/item render.
+        self.add_scanned_barcode(raw_barcode, now, interval)
         if _durable_scan_id:
-            scan_log_kwargs.update(
-                {
-                    "idempotency_key": (
-                        f"preflight-held-scan:{_durable_scan_id}"
-                    ),
-                    "deduplicate": True,
-                }
-            )
-        scan_audit_durable = bool(self._log_event(
-            'SCAN_OK',
-            detail=build_scan_ok_detail(
-                raw_barcode,
-                interval_sec=interval,
-                scan_position=len(self.current_tray.scanned_barcodes),
-                scan_contract_version=self.SCAN_CONTRACT_VERSION,
-            ),
-            **scan_log_kwargs,
-        ))
-        
-        if len(self.current_tray.scanned_barcodes) >= self.current_tray.tray_size:
+            self._preflight_scan_receipts()[raw_barcode] = _durable_scan_id
+        if self.success_sound:
+            self.success_sound.play()
+        scan_log_kwargs = {"synchronous": _durable_scan_log}
+        if _durable_scan_id:
+            scan_log_kwargs.update(idempotency_key=f"preflight-held-scan:{_durable_scan_id}", deduplicate=True)
+        detail = build_scan_ok_detail(
+            raw_barcode, interval_sec=interval,
+            scan_position=len(tray.scanned_barcodes),
+            scan_contract_version=self.SCAN_CONTRACT_VERSION,
+        )
+        audit_durable = yield lambda: self._log_event('SCAN_OK', detail=detail, **scan_log_kwargs)
+        if len(tray.scanned_barcodes) >= tray.tray_size:
             if _durable_scan_log:
-                # The durable hold owns ordering until its head is audit-ACKed
-                # and removed.  Completion is scheduled by the final hold ACK.
                 self._preflight_completion_due = True
-            elif hasattr(getattr(self, "root", None), "tk"):
-                self.request_complete_tray()
-            else:
-                # Preserve the deterministic headless/domain seam used by
-                # qualification while all live Tk entrypoints use the lane.
+            elif not hasattr(getattr(self, "root", None), "tk"):
                 self.complete_tray()
-        if _durable_scan_log:
-            return scan_audit_durable
+        return bool(audit_durable)
+
+    def _run_durable_ui_steps(self, steps, *, lane=None):
+        """Advance UI state on its owner; execute yielded durable work serially.
+
+        The synchronous domain/recovery caller uses the identical sequence.
+        Exceptions are returned to the suspended step so its rollback remains
+        next to the write. The lane fences every UI checkpoint by generation.
+        """
+        def advance(value, error):
+            try:
+                return False, steps.throw(error) if error is not None else steps.send(value)
+            except StopIteration as done:
+                return True, done.value
+        value, error = None, None
+        while True:
+            done, operation = (lane.call_ui_sync(advance, value, error)
+                               if lane is not None else advance(value, error))
+            if done:
+                return operation
+            try:
+                value, error = operation(), None
+            except Exception as exc:
+                value, error = None, exc
+
+    def _submit_scan_steps(self, steps, *, finish=None, on_idle=None):
+        lane = self._ui_task_lane()
+        def fail(exc):
+            print(f"스캔 내구 처리 실패: {exc.__class__.__name__}")
+            self.show_status_message(
+                "스캔 저장 확인 필요 · 현재 입력과 보류 기록을 확인하세요.",
+                self.COLOR_DANGER, duration=0,
+            )
+        admission = lane.submit(LaneTask(
+            name="scan-persistence",
+            generation=int(getattr(self, "_scan_callback_epoch", 0)),
+            work=lambda: self._run_durable_ui_steps(steps, lane=lane),
+            finish=finish or (lambda result: None), fail=fail,
+            on_idle=on_idle,
+            shutdown_policy=DRAIN_TO_TERMINAL,
+        ))
+        if not admission.accepted:
+            steps.close()
+            self.show_status_message("이전 스캔 저장 중입니다. 입력값을 유지합니다.", self.COLOR_DANGER)
+            return False
+        self._scan_persistence_task_handle = admission.handle
+        self._update_action_button_states()
+        return True
 
     def add_scanned_barcode(self, barcode: str, scan_time: datetime.datetime, interval: float):
         self.current_tray.scanned_barcodes.append(barcode)
@@ -10097,7 +10181,12 @@ class ContainerAudit:
         else:
             self._schedule_focus_return()
 
-    def _persist_prepared_completion_contract(
+    def _persist_prepared_completion_contract(self, prepared_attempt, **kwargs):
+        return self._run_durable_ui_steps(
+            self._prepared_completion_contract_steps(prepared_attempt, **kwargs)
+        )
+
+    def _prepared_completion_contract_steps(
         self,
         prepared_attempt: SealAttempt,
         *,
@@ -10108,7 +10197,7 @@ class ContainerAudit:
         completion_was_restored: bool,
         master_label: str,
         mutation_identity: Optional[Mapping[str, Any]] = None,
-    ) -> None:
+    ):
         if mutation_identity is not None and not self._mutation_finish_can_apply(
             mutation_identity,
             operation="tray-completion-checkpoint",
@@ -10138,9 +10227,9 @@ class ContainerAudit:
                 log_may_have_been_attempted=False,
             )
         self._pending_completion_event_contract = prepared_contract
-        if self._save_current_tray_state():
+        if (yield self._current_tray_save_operation()):
             return
-        self._present_completion_outcome(
+        yield from self._completion_outcome_steps(
             CompletionOutcome.RETRY_WAIT,
             item_name=self.current_tray.item_name,
             master_label=master_label,
@@ -10275,7 +10364,7 @@ class ContainerAudit:
             else None
         )
 
-        def work() -> Dict[str, Any]:
+        def work() -> bool:
             attempt = self._prepare_and_attempt_transfer_seal_snapshot(
                 coordinator=coordinator,
                 source_label_payload=source_label_payload,
@@ -10285,16 +10374,17 @@ class ContainerAudit:
                 scanned_barcodes=scanned_barcodes,
                 relay_log_file_path=relay_log_path,
                 operation_lease_id=operation_lease_id,
-                on_prepared=lambda attempt: lane.call_ui_sync(
-                    self._persist_prepared_completion_contract,
-                    attempt,
-                    existing_event_contract=existing_contract_snapshot,
-                    completion_observed_at=completion_observed_at,
-                    projection_log_path=projection_log_path,
-                    completion_projection_worker=completion_projection_worker,
-                    completion_was_restored=completion_was_restored,
-                    master_label=master_label,
-                    mutation_identity=finish_identity,
+                on_prepared=lambda attempt: self._run_durable_ui_steps(
+                    self._prepared_completion_contract_steps(
+                        attempt,
+                        existing_event_contract=existing_contract_snapshot,
+                        completion_observed_at=completion_observed_at,
+                        projection_log_path=projection_log_path,
+                        completion_projection_worker=completion_projection_worker,
+                        completion_was_restored=completion_was_restored,
+                        master_label=master_label,
+                        mutation_identity=finish_identity,
+                    ), lane=lane,
                 ),
             )
             precommand_query = None
@@ -10323,45 +10413,22 @@ class ContainerAudit:
                     },
                     "precommand": None,
                 }
-            return {
-                "attempt": attempt,
-                "ui_snapshot": ui_snapshot,
-            }
-
-        completion_outcome: Optional[Mapping[str, Any]] = None
-
-        def finish(outcome: Mapping[str, Any]) -> None:
-            nonlocal completion_outcome
-            completion_outcome = outcome
-
-        def apply_completion(outcome: Mapping[str, Any]) -> None:
-            completed = False
-            try:
-                self._apply_transfer_coordinator_ui_snapshot(
-                    outcome.get("ui_snapshot")
-                )
-                attempt = outcome.get("attempt")
-                if not isinstance(attempt, SealAttempt):
-                    return
-                if not self._mutation_finish_can_apply(
-                    finish_identity,
-                    operation="tray-completion",
-                ):
-                    return
+            def completion_steps():
+                self._apply_transfer_coordinator_ui_snapshot(ui_snapshot)
+                if not self._mutation_finish_can_apply(finish_identity, operation="tray-completion"):
+                    return False
                 if self._completion_lane_identity() != identity:
-                    self.show_status_message(
-                        "완료 결과는 저장됐지만 화면 작업이 바뀌어 자동 초기화하지 않았습니다.",
-                        self.COLOR_DANGER,
-                        duration=0,
-                    )
-                    return
-                completed = bool(
-                    self.complete_tray(_prepared_transfer_attempt=attempt)
-                )
-            finally:
-                self._set_completion_lane_busy(False)
-                if completion_callback is not None:
-                    completion_callback(completed)
+                    return False
+                return (yield from self._complete_tray_steps(
+                    _prepared_transfer_attempt=attempt, _lane_prechecked=True,
+                ))
+            return bool(self._run_durable_ui_steps(completion_steps(), lane=lane))
+
+        completed = False
+
+        def finish(outcome: bool) -> None:
+            nonlocal completed
+            completed = outcome
 
         def fail(exc: BaseException) -> None:
             print(f"트레이 완료 lane 실패: {exc.__class__.__name__}")
@@ -10371,16 +10438,14 @@ class ContainerAudit:
                 self.COLOR_DANGER,
                 duration=0,
             )
-            if completion_callback is not None:
-                completion_callback(False)
 
         def on_idle() -> None:
-            # finish runs with the lane still active. Local completion must
-            # retain its ordinary busy/exchange guards and run at the idle
-            # barrier, before another task can be admitted.
-            if completion_outcome is not None:
-                apply_completion(completion_outcome)
-            self._update_action_button_states()
+            current_generation = int(getattr(self, "_scan_callback_epoch", 0)) == identity[-1]
+            if completed and current_generation:
+                self._invalidate_pending_scan_callbacks()
+            self._set_completion_lane_busy(False)
+            if current_generation and completion_callback is not None:
+                completion_callback(completed)
 
         self._set_completion_lane_busy(True)
         admission = lane.submit(
@@ -10400,10 +10465,16 @@ class ContainerAudit:
         self._completion_task_handle = admission.handle
         return True
 
-    def complete_tray(
+    def complete_tray(self, *, _prepared_transfer_attempt: Optional[SealAttempt] = None):
+        return self._run_durable_ui_steps(self._complete_tray_steps(
+            _prepared_transfer_attempt=_prepared_transfer_attempt,
+        ))
+
+    def _complete_tray_steps(
         self,
         *,
         _prepared_transfer_attempt: Optional[SealAttempt] = None,
+        _lane_prechecked: bool = False,
     ):
         if self._reject_mutation_during_preflight_hold():
             return False
@@ -10419,7 +10490,7 @@ class ContainerAudit:
             "이적 봉인 및 완료"
         ):
             return False
-        if self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
+        if not _lane_prechecked and self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
             return False
         master_label_fields = self._parse_new_format_qr(self.current_tray.master_label_code) or {}
         requires_central_ack = str(master_label_fields.get("PHS") or "").strip() == "2"
@@ -10523,7 +10594,7 @@ class ContainerAudit:
                     self._active_completion_event_contract() is not None
                     and self._active_blocking_completion_snapshot() is None
                 ):
-                    self._present_completion_outcome(
+                    yield from self._completion_outcome_steps(
                         CompletionOutcome.RETRY_WAIT,
                         item_name=self.current_tray.item_name,
                         master_label=master_label,
@@ -10551,7 +10622,7 @@ class ContainerAudit:
             != str(transfer_attempt.intent_id or "")
         ):
             self._freeze_completion_measurements(completion_observed_at)
-            self._present_completion_outcome(
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.OPERATOR_REVIEW,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10571,7 +10642,7 @@ class ContainerAudit:
                 "서버 확인 미완료 · 현재 트레이와 스캔 목록을 유지합니다.\n"
                 "작업을 계속하지 말고 관리자에게 알려 주세요."
             )
-            self._present_completion_outcome(
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.OPERATOR_REVIEW,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10592,7 +10663,7 @@ class ContainerAudit:
                 and existing_event_contract.get("log_may_have_been_attempted") is True
             ):
                 self._freeze_completion_measurements(completion_observed_at)
-                self._present_completion_outcome(
+                yield from self._completion_outcome_steps(
                     CompletionOutcome.OPERATOR_REVIEW,
                     item_name=self.current_tray.item_name,
                     master_label=master_label,
@@ -10621,7 +10692,7 @@ class ContainerAudit:
                 log_may_have_been_attempted=False,
             )
             self._pending_completion_event_contract = retry_contract
-            self._present_completion_outcome(
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.RETRY_WAIT,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10645,7 +10716,7 @@ class ContainerAudit:
             log_detail["is_restored_session"] = completion_was_restored
         except Exception as e:
             print(f"고정된 트레이 완료 기록 생성 실패: {e}")
-            self._present_completion_outcome(
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.OPERATOR_REVIEW,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10697,8 +10768,8 @@ class ContainerAudit:
         )
         log_detail["idempotency_key"] = completion_event_contract["idempotency_key"]
         self._pending_completion_event_contract = completion_event_contract
-        if not self._save_current_tray_state():
-            self._present_completion_outcome(
+        if not (yield self._current_tray_save_operation()):
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.LOCAL_EVENT_RETRY,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10722,7 +10793,7 @@ class ContainerAudit:
             if completion_projection_is_other_worker
             else {}
         )
-        if not self._log_event(
+        if not (yield lambda: self._log_event(
             'TRAY_COMPLETE',
             detail=log_detail,
             synchronous=True,
@@ -10731,8 +10802,8 @@ class ContainerAudit:
             log_file_path_override=str(projection_log_path),
             deduplicate=prior_log_attempt,
             **completion_log_overrides,
-        ):
-            self._present_completion_outcome(
+        )):
+            yield from self._completion_outcome_steps(
                 CompletionOutcome.LOCAL_EVENT_RETRY,
                 item_name=self.current_tray.item_name,
                 master_label=master_label,
@@ -10751,7 +10822,7 @@ class ContainerAudit:
         )
         if post_review_required:
             try:
-                post_review_case = self._project_transfer_post_review_for_intent(
+                post_review_case = yield lambda: self._project_transfer_post_review_for_intent(
                     transfer_attempt.intent_id
                 )
             except Exception:
@@ -10822,15 +10893,16 @@ class ContainerAudit:
                 work_time = float(log_detail["work_time_sec"])
                 self.completed_tray_times.append(work_time) # 주간 평균 계산을 위해 유지
                 try:
-                    self._update_best_time_records(work_time) # 30일 최고 기록 갱신
+                    yield lambda: self._update_best_time_records(work_time) # 30일 최고 기록 갱신
                 except Exception as e:
                     print(f"최고 기록 갱신 실패: {e}")
         self._pending_completion_event_contract = None
         self.current_tray = TraySession()
-        self._invalidate_pending_scan_callbacks()
-        state_delete_failed = self._delete_current_tray_state() is False
+        if not _lane_prechecked:
+            self._invalidate_pending_scan_callbacks()
+        state_delete_failed = (yield self._delete_current_tray_state) is False
         if state_delete_failed:
-            self._log_event(
+            yield lambda: self._log_event(
                 'TRAY_STATE_DELETE_FAILED_AFTER_COMPLETION',
                 detail={
                     'master_label_code': master_label,
@@ -11146,9 +11218,12 @@ class ContainerAudit:
         if self.idle_check_job: self.root.after_cancel(self.idle_check_job); self.idle_check_job = None
 
     def _update_last_activity_time(self):
+        return self._run_durable_ui_steps(self._activity_steps())
+
+    def _activity_steps(self):
         activity_time = datetime.datetime.now()
         if self.is_idle:
-            self._wakeup_from_idle(activity_time=activity_time)
+            yield from self._wakeup_steps(activity_time=activity_time)
         self.last_activity_time = activity_time
 
     def _check_for_idle(self, idle_epoch: Optional[int] = None):
@@ -11177,6 +11252,9 @@ class ContainerAudit:
             self.idle_check_job = self.root.after(1000, self._check_for_idle, getattr(self, "_idle_check_epoch", 0))
 
     def _wakeup_from_idle(self, *, activity_time: Optional[datetime.datetime] = None):
+        return self._run_durable_ui_steps(self._wakeup_steps(activity_time=activity_time))
+
+    def _wakeup_steps(self, *, activity_time: Optional[datetime.datetime] = None):
         if not self.is_idle: return
         if self._preflight_context_blocks_mutation():
             return
@@ -11190,8 +11268,8 @@ class ContainerAudit:
         if self.last_activity_time:
             idle_duration = (activity_time - self.last_activity_time).total_seconds()
             self.current_tray.total_idle_seconds += idle_duration
-            self._log_event('IDLE_END', detail={'duration_sec': f"{idle_duration:.2f}"})
-            self._save_current_tray_state()
+            yield lambda: self._log_event('IDLE_END', detail={'duration_sec': f"{idle_duration:.2f}"})
+            yield self._current_tray_save_operation()
         self._set_idle_style(is_idle=False)
         self._start_idle_checker()
         self._start_stopwatch(resume=True)
@@ -11559,7 +11637,10 @@ class ContainerAudit:
         self._update_action_button_states()
         return snapshot
 
-    def _present_completion_outcome(
+    def _present_completion_outcome(self, outcome, **kwargs):
+        return self._run_durable_ui_steps(self._completion_outcome_steps(outcome, **kwargs))
+
+    def _completion_outcome_steps(
         self,
         outcome: CompletionOutcome,
         *,
@@ -11570,7 +11651,7 @@ class ContainerAudit:
         message: str,
         receipt_id: str = "",
         error_code: str = "",
-    ) -> CompletionOutcomeSnapshot:
+    ):
         snapshot = CompletionOutcomeSnapshot(
             outcome=outcome,
             item_name=str(item_name or ""),
@@ -11583,7 +11664,7 @@ class ContainerAudit:
         )
         if snapshot.blocks_completion:
             self._pending_operator_review_snapshot = snapshot
-            if not self._save_current_tray_state():
+            if not (yield self._current_tray_save_operation()):
                 snapshot = CompletionOutcomeSnapshot(
                     outcome=snapshot.outcome,
                     item_name=snapshot.item_name,
