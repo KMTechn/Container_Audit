@@ -21,6 +21,7 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 전송 대기/확인 필요 상태는 계속 보이고 시각·진단은 명시적 `전송 상세`에서 확인한다.
 `LINKED`는 `이 PC 저장 완료`, `ACKED`는 완료로 구별한다.
 차단 알림·확인/재시도·보류/복원·수량·멤버십·인증·내구 저장 계약은 유지한다.
+차단 중 큰 안내도 `아래 안내를 확인하세요`로 전환하고, 확인/해결 뒤 현재 작업의 스캔 안내로 돌아온다.
 호스트 비GUI 영향 검증과 아직 미실행인 새 native 후보의 구분은
 [결과](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md),
 [CA-G13](BACKLOG.md#ca-g13), [CA-O03](operations.md#ca-o03)을 따른다.

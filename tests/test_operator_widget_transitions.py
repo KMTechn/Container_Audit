@@ -328,12 +328,14 @@ def test_native_duplicate_ack_restores_input_and_preserves_actual_rows(native_op
     app.root.update()
     assert app.info_cards['status']['value'].cget('text') == '중복 확인'
     assert str(app.scan_entry.cget('state')) == 'disabled'
+    assert app.current_item_label.cget('text') == '아래 안내를 확인하세요.'
     assert_contained(app.notice_ack_button, center)
     assert app.scanned_listbox.get(0, 'end') == before
     app.notice_ack_button.invoke()
     app.root.update()
     assert app.warning_presenter.state.active_notice is None
     assert app.info_cards['status']['value'].cget('text') == '작업 중'
+    assert app.current_item_label.cget('text') == '다음 제품을 스캔하세요.'
     assert app.follow_up_label.cget('text') == '다음 제품 스캔'
     assert str(app.scan_entry.cget('state')) == 'normal'
     assert app.scanned_listbox.get(0, 'end') == before

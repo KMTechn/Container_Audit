@@ -11362,6 +11362,14 @@ class ContainerAudit:
             scan_entry = getattr(self, "scan_entry", None)
             if scan_entry is not None:
                 scan_entry.configure(state=tk.DISABLED if state.is_blocking else tk.NORMAL)
+            current_instruction = getattr(self, "current_item_label", None)
+            if current_instruction is not None:
+                if state.is_blocking:
+                    current_instruction.configure(text="아래 안내를 확인하세요.")
+                    self._blocking_instruction_visible = True
+                elif getattr(self, "_blocking_instruction_visible", False):
+                    self._blocking_instruction_visible = False
+                    self._update_current_item_label()
             last_scan_label = getattr(self, "last_scan_value_label", None)
             if last_scan_label is not None:
                 last_scan_label.configure(
