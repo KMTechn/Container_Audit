@@ -48,6 +48,13 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o03"></a>
 ## CA-O03 스캐너·키보드·화면·사운드·출력
 
+2026-09-12 UI 후보는 일상 안내 band와 작업 상세를 접고, 알림/현품표 교체 및 사용자가 연 상세만 펼친다.
+`전송 상세`는 Tab으로 접근하고 닫은 뒤 스캔 포커스로 복귀한다.
+교체 화면 닫기는 진행 중인 조회/교체/복구/차단 상태를 해제하지 않는다.
+가시성 수집기는 접힌 내용 대신 실제 상세 진입점을 검사하며, 알림이 필요한 상태는 계속 필수로 검사한다.
+새 후보의 실제 VM 가시성·포커스·배율 수용은 배정 후 검증 대상이다.
+[당일 결과와 원 실패](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md)를 따른다.
+
 | 장비/입력 | 확인한 소스 동작 | 수용 기준·미확인 범위 |
 |---|---|---|
 | 일반 복원 창 | 실제 monitor `rcWork`에서 client와 frame을 함께 맞추고 작은 작업 영역에서는 최소 크기도 제한한다. 충분히 큰 화면의 기본 크기·최대화 시작·명시적 signed 배치는 유지한다. | 복원/최대화 빈 다음-현품표 화면에서 명령 4개·상태 줄 전체와 버튼 중심이 작업 영역 안에 있고 Entry·경고 band가 사용 가능해야 한다. [8f7 실제 clipping 관측](D:/KMTech/optimization-implementation-20260909/Container_Audit/vm-gui-20260910T0205/VIEWPORT-DIAGNOSIS.md)과 [수정 전 고정 기준](D:/KMTech/optimization-implementation-20260909/Container_Audit/viewport-fix/ACCEPTANCE-BEFORE-EDIT.md)을 보존한다. 새 source의 실제 빈 화면 확인은 Main의 별도 VM slot 전까지 UNPROVEN이며 DPI 원인을 단정하지 않는다. |

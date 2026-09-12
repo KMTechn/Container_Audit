@@ -3650,6 +3650,11 @@ def _notice_critical_widget_specs(app: Any) -> dict[str, tuple[Any, bool, bool]]
     """Inspect notice contents using Tk's wrap-aware requested label size."""
 
     specs: dict[str, tuple[Any, bool, bool]] = {}
+    presenter = getattr(app, "warning_presenter", None)
+    if presenter is not None and not (
+        presenter.state.active_notice is not None or presenter.state.is_blocking
+    ):
+        return specs
     title = getattr(app, "notice_title_label", None)
     message = getattr(app, "notice_message_label", None)
     if title is not None:
@@ -3732,6 +3737,22 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
         "right_secondary": (app._secondary_stats_frame, False, False),
         "status_bar_text": (app.status_label, False, True),
     }
+    if not getattr(app, "_work_details_expanded", True):
+        for name in ("right_context", "right_last_scan", "right_follow_up", "right_secondary"):
+            critical_widgets.pop(name)
+    for name, attribute in (
+        ("work_details", "work_details_button"),
+        ("relay_details", "direct_sync_details_button"),
+    ):
+        widget = getattr(app, attribute, None)
+        if widget is not None:
+            critical_widgets[name] = (widget, True, True)
+    notice_state = app.warning_presenter.state
+    exchange_panel = getattr(app, "phs_label_exchange_frame", None)
+    exchange_open = exchange_panel is not None and bool(exchange_panel.winfo_manager())
+    notice_expected = notice_state.active_notice is not None or notice_state.is_blocking or exchange_open
+    if not notice_expected:
+        critical_widgets.pop("notice")
     for name in tuple(critical_widgets):
         value = critical_widgets[name]
         if len(value) == 2:
@@ -3878,7 +3899,10 @@ def collect_ui_geometry(app: Any) -> dict[str, Any]:
         "scan_list_layout_signature": scan_list_layout_signature,
         "scan_list_below_notice": (
             app.scanned_listbox.winfo_rooty()
-            >= app.notice_frame.winfo_rooty() + app.notice_frame.winfo_height()
+            >= (
+                app.notice_frame.winfo_rooty() + app.notice_frame.winfo_height()
+                if notice_expected else app.scan_entry.winfo_rooty() + app.scan_entry.winfo_height()
+            )
         ),
         "core_action_button_count": len(core_action_records),
         "core_action_common_parent": len(

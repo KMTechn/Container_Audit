@@ -112,17 +112,23 @@ def _compact_timestamp(value: str) -> str:
 
 def relay_health_card_model(health: RelayHealth) -> dict[str, str]:
     tone = "amber" if health.operator_attention else "neutral"
-    detail = (
-        f"저장 상태 확인 필요 · "
-        f"{health.failed_permanent_count + health.operator_review_count}건"
-        if health.operator_attention
-        else "정상 대기" if health.pending_count else "전송 정상"
-    )
+    review_count = health.failed_permanent_count + health.operator_review_count
+    if health.state == "blocked":
+        summary = "전송 확인 필요"
+        detail = f"대기 {health.pending_count}건 · 전송 상세 확인"
+        if review_count:
+            detail += f" · 담당자 확인 {review_count}건"
+    elif health.operator_attention:
+        summary = f"담당자 확인 {review_count}건"
+        detail = f"전송 대기 {health.pending_count}건"
+    elif health.pending_count:
+        summary = f"전송 대기 {health.pending_count}건"
+        detail = "자동 전송 예정"
+    else:
+        summary = "전송 대기 없음"
+        detail = ""
     return {
-        "summary": (
-            f"대기 {health.pending_count} · 최근 성공 "
-            f"{_compact_timestamp(health.last_acked_at)}"
-        ),
+        "summary": summary,
         "detail": detail,
         "tone": tone,
     }
@@ -136,6 +142,7 @@ def relay_health_detail_model(health: RelayHealth) -> dict[str, str]:
         "가장 오래된 대기": _compact_timestamp(health.oldest_pending_at),
         "마지막 ACK": _compact_timestamp(health.last_acked_at),
         "상태": health.state,
+        "진단 코드": health.error_code or "없음",
     }
 
 

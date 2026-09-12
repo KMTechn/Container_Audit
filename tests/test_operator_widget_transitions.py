@@ -72,6 +72,7 @@ def test_native_large_text_sidebars_keep_footer_and_profile_font(native_tk_root)
     right.place(x=700, y=0, width=220, height=600)
     right_content = app._large_text_pane(right)
     app._create_right_sidebar_content(right_content)
+    app.work_details_button.invoke()
     sizes = []
     for width, height in ((5000, 2400), (1024, 768)):
         resize_root(native_tk_root, width, height)
@@ -141,6 +142,8 @@ def native_operator(native_tk_root, request):
     width, height = configuration.get('right_size', (420, 900))
     right.place(x=1000, y=0, width=width, height=height)
     app._create_right_sidebar_content(right)
+    # Existing detailed-readout checks exercise the operator's disclosure.
+    app.work_details_button.invoke()
     app.status_label = tk.Label(root, text='스캐너 준비')
     app.status_label.place(x=0, y=950, width=800, height=40)
     app._update_center_display()
@@ -234,6 +237,62 @@ def test_native_operator_has_one_scan_history_and_one_progress_count(native_oper
     assert app.follow_up_label.cget('text') == '다음 제품 스캔'
     for widget in [app.last_scan_value_label, app.follow_up_label, app.scanned_listbox]:
         assert_contained(widget, right if widget is not app.scanned_listbox else center)
+
+
+def test_native_routine_disclosures_preserve_warning_quantity_and_scan_rows(native_operator):
+    app, center, right = native_operator
+    _tray(app, ['AAA2270730100-001'])
+    rows = app.scanned_listbox.get(0, 'end')
+    app.work_details_button.invoke()
+    app.root.update()
+    assert not app.notice_frame.winfo_ismapped()
+    assert not app._right_context_frame.winfo_ismapped()
+    assert not app._secondary_stats_frame.winfo_ismapped()
+    assert_contained(app.work_details_button, right)
+    assert_contained(app.direct_sync_details_button, right)
+
+    app.warning_presenter.present(Notice(
+        code='scan.duplicate', title='중복 스캔', message='이미 처리된 제품입니다.',
+        severity=NoticeSeverity.ERROR, blocking=True,
+    ))
+    app._update_center_display()
+    for expanded in (True, False):
+        app.work_details_button.invoke()
+        center.place_configure(width=760 if expanded else 900)
+        app.root.update()
+        assert bool(app._right_context_frame.winfo_ismapped()) is expanded
+        assert_contained(app.notice_frame, center)
+        assert_contained(app.notice_ack_button, center)
+        assert str(app.scan_entry.cget('state')) == 'disabled'
+        assert app.main_count_label.cget('text') == '1 / 3'
+        assert app.scanned_listbox.get(0, 'end') == rows
+    app.notice_ack_button.invoke()
+    app.root.update()
+    assert not app.notice_frame.winfo_ismapped()
+    assert str(app.scan_entry.cget('state')) == 'normal'
+    assert app.scanned_listbox.get(0, 'end') == rows
+
+
+def test_native_exchange_disclosure_opens_with_f8_and_cannot_hide_pending_work(native_operator, monkeypatch):
+    app, center, _right = native_operator
+    monkeypatch.setattr(app, '_phs_reconciliation_exchange_available', lambda: True)
+    monkeypatch.setattr(app, '_phs_label_exchange_transition_pending', lambda: False)
+    assert not app.phs_label_exchange_frame.winfo_ismapped()
+    assert app._on_phs_label_exchange_shortcut() == 'break'
+    app.root.update()
+    assert app._phs_reconciliation_scan_armed is True
+    assert_contained(app.phs_label_exchange_frame, center)
+    assert_contained(app.phs_label_exchange_close_button, center)
+    app._phs_reconciliation_resolve_pending = True
+    app.phs_label_exchange_close_button.invoke()
+    app.root.update()
+    assert app.phs_label_exchange_frame.winfo_ismapped()
+    assert app._phs_reconciliation_scan_armed is True
+    app._phs_reconciliation_resolve_pending = False
+    app.phs_label_exchange_close_button.invoke()
+    app.root.update()
+    assert not app.phs_label_exchange_frame.winfo_ismapped()
+    assert app._phs_reconciliation_scan_armed is False
 
 
 def test_native_duplicate_ack_restores_input_and_preserves_actual_rows(native_operator):
@@ -473,7 +532,7 @@ def test_native_compact_right_values_are_readable_at_supported_scales(
         app.root.update()
         model = relay_health_card_model(health)
         value = app.info_cards['direct_sync']['value']
-        assert value.cget('text') == f"{model['summary']}\n{model['detail']}"
+        assert value.cget('text') == '\n'.join(filter(None, (model['summary'], model['detail'])))
         # A contained label can still clip its actual multiline text.
         assert value.winfo_height() >= value.winfo_reqheight()
         for card in app.info_cards.values():
@@ -530,7 +589,7 @@ def test_native_constrained_relay_states_fit_actual_maximized_pane(
         app.root.update()
         model = relay_health_card_model(health)
         expected = {
-            'status': '대기 중', 'direct_sync': f"{model['summary']}\n{model['detail']}",
+            'status': '대기 중', 'direct_sync': '\n'.join(filter(None, (model['summary'], model['detail']))),
             'stopwatch': '-', 'avg_time': '01:23.4', 'best_time': '00:58.2',
             'last_scan': '-', 'follow_up': '현품표 라벨 스캔',
         }

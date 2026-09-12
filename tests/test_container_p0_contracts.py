@@ -2587,7 +2587,8 @@ def test_direct_sync_health_pending_is_neutral_and_terminal_is_review(tmp_path):
     assert review.operator_attention is True
     card = module.relay_health_card_model(review)
     assert card["tone"] == "amber"
-    assert "저장 상태 확인 필요" in card["detail"]
+    assert card["summary"] == "담당자 확인 1건"
+    assert card["detail"] == "전송 대기 1건"
     assert "source.csv" not in json.dumps(card, ensure_ascii=False)
 
 
@@ -2780,7 +2781,22 @@ def test_direct_sync_card_keeps_pending_neutral_and_terminal_amber():
 
     app._apply_direct_sync_health(review)
     assert card["frame"].options["style"] == "RelayAttention.TFrame"
-    assert "저장 상태 확인 필요 · 2건" in card["value"].options["text"]
+    assert "담당자 확인 2건" in card["value"].options["text"]
+    assert "전송 대기 3건" in card["value"].options["text"]
+
+    # An unreadable queue with no counted rows must never look like success.
+    blocked = health_module.RelayHealth("blocked", 0, 0, 0, "", "", "", "queue_unreadable")
+    app._apply_direct_sync_health(blocked)
+    assert card["frame"].options["style"] == "RelayAttention.TFrame"
+    assert "전송 확인 필요" in card["value"].options["text"]
+    assert "전송 상세 확인" in card["value"].options["text"]
+    assert "queue_unreadable" not in card["value"].options["text"]
+    assert health_module.relay_health_detail_model(blocked)["진단 코드"] == "queue_unreadable"
+
+    ready = health_module.RelayHealth("ready", 0, 0, 0, "", "", "")
+    app._apply_direct_sync_health(ready)
+    assert card["frame"].options["style"] == "Card.TFrame"
+    assert card["value"].options["text"] == "전송 대기 없음"
 
 
 def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
@@ -2854,31 +2870,38 @@ def test_gui_completion_is_nonblocking_and_checkpoints_on_tk(tmp_path):
     app._prepare_and_attempt_transfer_seal_snapshot = prepare_snapshot
     app.complete_tray = complete_tray
 
-    started = time.perf_counter()
-    assert app.request_complete_tray() is True
-    assert time.perf_counter() - started < 0.1
-    assert prepared.wait(timeout=1.0)
-
-    deadline = time.monotonic() + 2.0
-    while not checkpoint_thread_ids and time.monotonic() < deadline:
-        if root.jobs:
-            root.run_next()
-        time.sleep(0.005)
-    gate.set()
-    app._completion_task_handle.join(timeout=2.0)
-    deadline = time.monotonic() + 2.0
-    while not finish_thread_ids and time.monotonic() < deadline:
-        if root.jobs:
-            root.run_next()
-        time.sleep(0.005)
-
     try:
+        started = time.perf_counter()
+        assert app.request_complete_tray() is True
+        assert time.perf_counter() - started < 0.1
+        assert prepared.wait(timeout=1.0)
+
+        deadline = time.monotonic() + 2.0
+        while not checkpoint_thread_ids and time.monotonic() < deadline:
+            if root.jobs:
+                root.run_next()
+            time.sleep(0.005)
+        gate.set()
+        app._completion_task_handle.join(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while not finish_thread_ids and time.monotonic() < deadline:
+            if root.jobs:
+                root.run_next()
+            time.sleep(0.005)
+
         assert checkpoint_thread_ids == [owner_thread_id]
         assert finish_thread_ids == [owner_thread_id]
         assert worker_thread_ids and worker_thread_ids[0] != owner_thread_id
         assert app._completion_lane_busy is False
     finally:
+        # Even an early timing assertion must release the owned non-daemon lane.
+        gate.set()
         app._ui_lane.close_idle()
+        deadline = time.monotonic() + 2.0
+        while app._ui_lane.state != "CLOSED" and time.monotonic() < deadline:
+            if root.jobs:
+                root.run_next()
+            time.sleep(0.005)
 
 
 @pytest.mark.parametrize("terminal_path", ["finish", "fail"])

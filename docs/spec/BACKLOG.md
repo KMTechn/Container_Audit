@@ -173,6 +173,8 @@
 <a id="ca-g13"></a>
 ## CA-G13 전체 UI 가시성·포커스와 idle 후 명령 복귀
 
+- **2026-09-12 일상 정보 축소 후보:** 반복 스캔 안내·현품표 교체 설명·최근 스캔/시간 통계를 조건부 안내와 작업 상세로 옮기고, 전송은 대기 수/확인 필요와 상세 버튼을 남겼다. `LINKED` 로컬 저장과 중앙 `ACKED` 표시를 구별한다. 호스트 영향 검사553 PASS, 원래100ms 단회 기준100.973ms 실패1은 보존하고 조기 실패에도 lane을 정리하도록 기존 시험을 보완한 별도1 PASS를 기록했다. dirty source를 거부한 기존 capture provenance5 FAIL도 보존하며 커밋 결속 후 확인한다. 새 native 후보는 미실행이며 실제 routine/active/pending/error/details/menu·포커스·크기 변경을 다음으로 확인한다. [전후 표·검증·custody](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md).
+
 - **상태·범위:** 사용자 전수 UI 점검 요청으로 [실제 UI 목록](README.md#2026-09-10-ui-전수-점검과-idle-후-작업-명령-갱신)을 추가했다. e69a0cb 기반으로 idle 후 운영 작업 버튼 갱신과 기존 종료 요청 flag guard를 두 줄 보완하고 기존 회귀에 실제 lane busy/idle·close 상태를 검사한다. 수량·membership·authorization·내구 저장 조건은 변경하지 않는다.
 - **확인 근거:** 최초 불완전 fake coordinator의 AttributeError, 수정된 disabled/normal RED와 종료 중 재활성화 RED를 보존했다. 초기 후보 영향 검사11 PASS, native 일반 클릭으로 운영 메뉴 열림, 대표 빈 화면·긴 합성 작업자 이름·정상 종료 native0 및 최종 guard 검사를 [RESULT](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)에 연결한다. 종료 guard는 native 실행 뒤의 소스 변경이며 이전 후보와 일치하는 실행으로 표시하지 않는다. VM2는 process0/task Ready0/trigger0/원래 화면 모드로 Main에 반환했다. baseline native:null을 task0으로 대체하지 않는다.
 - **남은 완료 조건:** 전체0.7/2.5 배율 끝점, 채워진 표·긴 한글 품목/바코드, 교환 dialog의 wrap/가로 접근/입력·footer, F8와 오류·복구·작업 인수/전환을 다음 배정에서 확인한다. 실제 최종 저장 배율1.8, 조기 painting 흔적, helper 포커스로 실패한 교환 진입 시도를 완전한 native 증거로 승격하지 않는다. 화면 해상도를 실행 도중 낮출 때의 최소 창 크기는 초기 실행 작업 영역 맞춤과 구분한다.

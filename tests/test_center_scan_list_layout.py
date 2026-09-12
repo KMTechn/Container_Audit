@@ -19,6 +19,8 @@ def _resize(app, parent, width, height):
 
 def test_current_tray_scan_list_is_the_expanding_row_below_notice(native_tk_root):
     app, parent = build_center(native_tk_root)
+    app.show_status_message("입력한 제품을 확인하세요.", app.COLOR_DANGER, duration=0)
+    app.root.update()
     for widget in [app.notice_frame, app.scanned_listbox, *action_buttons(app)]:
         assert_contained(widget, parent)
     notice = rectangle(app.notice_frame)

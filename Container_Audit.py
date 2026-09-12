@@ -4268,6 +4268,7 @@ class ContainerAudit:
             if button_frame is not None:
                 button_frame.grid_configure(pady=(metrics["button_top"], 0))
             self._center_layout_metrics = metrics_key
+            self._apply_notice_visibility()
         except (tk.TclError, AttributeError):
             return
 
@@ -5253,7 +5254,10 @@ class ContainerAudit:
             self._render_warning_state()
         elif self._reject_mutation_during_preflight_hold():
             pass
-        elif getattr(self, "_phs_label_exchange_pending", False):
+        elif any(getattr(self, name, False) for name in (
+            "_phs_label_exchange_pending", "_phs_label_candidate_pending",
+            "_phs_reconciliation_resolve_pending", "_phs_label_refresh_pending",
+        )):
             self._schedule_focus_return()
         elif getattr(self, "_phs_reconciliation_context", None):
             self._execute_selected_phs_label_exchange()
@@ -5424,6 +5428,26 @@ class ContainerAudit:
                     )
         except (tk.TclError, AttributeError):
             return
+        self._schedule_focus_return()
+
+    def _close_phs_label_exchange_panel(self) -> None:
+        if (
+            self._warning_state_presenter().state.is_blocking
+            or getattr(self, "_phs_reconciliation_context", None)
+            or self._phs_label_exchange_transition_pending()
+            or any(getattr(self, name, False) for name in (
+                "_phs_label_exchange_pending", "_phs_label_candidate_pending",
+                "_phs_reconciliation_resolve_pending", "_phs_label_refresh_pending",
+            ))
+        ):
+            self.show_status_message(
+                "진행 중인 현품표 교체 또는 복구를 먼저 완료하세요.",
+                self.COLOR_DANGER,
+            )
+            return
+        self._phs_reconciliation_scan_armed = False
+        self.phs_label_exchange_frame.grid_remove()
+        self.show_status_message("현품표 교체 화면을 닫았습니다.", self.COLOR_PRIMARY)
         self._schedule_focus_return()
 
     def _set_phs_label_candidates(
@@ -6520,6 +6544,10 @@ class ContainerAudit:
             command=self._show_direct_sync_status_details,
         )
         menu.add_command(
+            label="현품표 교체 (F8)",
+            command=self._on_phs_label_exchange_shortcut,
+        )
+        menu.add_command(
             label="완료 작업 중앙 반영 재시도 (관리자)",
             command=self._retry_transfer_post_review,
             state=(
@@ -6886,7 +6914,7 @@ class ContainerAudit:
             return
         try:
             parent_frame.configure(padding=(metrics["outer_padding"], metrics["outer_padding"]))
-            parent_frame.grid_rowconfigure(6, weight=0)
+            parent_frame.grid_rowconfigure(5, weight=0, minsize=0)
             date_label = getattr(self, "date_label", None)
             if date_label is not None:
                 date_label.configure(font=(self.DEFAULT_FONT, metrics["date_font"], 'bold'))
@@ -6895,19 +6923,15 @@ class ContainerAudit:
             if clock_label is not None:
                 clock_label.configure(font=(self.DEFAULT_FONT, metrics["clock_font"], 'bold'))
                 clock_label.grid_configure(pady=(0, metrics["clock_gap"]))
-            # Relay text wraps to several lines while status/time stay
-            # on one line. Give non-content-sized cards two relay shares
-            # within the uniform group; compact cards keep their original weights.
-            multiline_primary_cards = not metrics["content_sized_cards"]
             for row in (2, 3, 4):
                 parent_frame.grid_rowconfigure(
                     row,
-                    weight=2 if multiline_primary_cards and row == 3 else 1,
+                    weight=1,
                     minsize=metrics["primary_card_minsize"],
                     uniform="" if metrics["content_sized_cards"] else "primary_info_cards",
                 )
-            parent_frame.grid_rowconfigure(5, weight=1, minsize=metrics["follow_up_minsize"])
-            parent_frame.grid_rowconfigure(6, weight=0, minsize=metrics["secondary_card_minsize"])
+            parent_frame.grid_rowconfigure(6, weight=0, minsize=0)
+            parent_frame.grid_rowconfigure(7, weight=0, minsize=0)
             for key in ("status", "direct_sync", "stopwatch"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
@@ -6988,17 +7012,11 @@ class ContainerAudit:
                         anchor='center',
                         justify='center',
                     )
-            legend_frame = getattr(self, "_legend_frame", None)
-            if legend_frame is not None:
-                legend_frame.configure(padding=(0, metrics["legend_pad_y"]))
-                if metrics["legend_visible"]:
-                    legend_frame.grid(row=7, column=0, sticky='sew')
-                else:
-                    legend_frame.grid_forget()
             # Cache only after every widget in this generation accepted the
             # metrics.  A configure event during reconstruction must not make
             # a partially styled generation look complete.
             self._right_sidebar_layout_metrics = metrics_key
+            self._apply_work_details_visibility()
         except (tk.TclError, AttributeError):
             return
 
@@ -7586,6 +7604,15 @@ class ContainerAudit:
             pady=(0, 10),
         )
         self.phs_label_exchange_frame.grid_columnconfigure(3, weight=1)
+        self.phs_label_exchange_close_button = ttk.Button(
+            self.phs_label_exchange_frame,
+            text="교체 화면 닫기",
+            command=self._close_phs_label_exchange_panel,
+            style="Secondary.TButton",
+        )
+        self.phs_label_exchange_close_button.grid(
+            row=2, column=0, columnspan=4, sticky="e", pady=(6, 0),
+        )
         self.phs_reconciliation_instruction_label = ttk.Label(
             self.phs_label_exchange_frame,
             text="현재 또는 완료된 이적 현품표를 스캔하세요.",
@@ -7782,6 +7809,7 @@ class ContainerAudit:
 
     def _create_right_sidebar_content(self, parent_frame):
         self._right_sidebar_frame = parent_frame
+        self._work_details_expanded = getattr(self, "_work_details_expanded", False)
         if hasattr(parent_frame, "unbind"):
             try:
                 parent_frame.unbind('<Configure>')
@@ -7805,8 +7833,15 @@ class ContainerAudit:
         self.info_cards['direct_sync']['frame'].grid(row=3, column=0, sticky='nsew', pady=(0, 10))
         self.info_cards['stopwatch']['frame'].grid(row=4, column=0, sticky='nsew', pady=(0, 10))
         self.info_cards['direct_sync']['value'].configure(
-            text="대기 0 · 최근 성공 없음\n전송 상태 확인 중",
+            text="전송 상태 확인 중",
         )
+        self.direct_sync_details_button = ttk.Button(
+            self.info_cards['direct_sync']['frame'],
+            text="전송 상세",
+            command=self._show_direct_sync_status_details,
+            style='Secondary.TButton',
+        )
+        self.direct_sync_details_button.pack(pady=(6, 0))
         for widget in self.info_cards['direct_sync'].values():
             try:
                 widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
@@ -7816,7 +7851,14 @@ class ContainerAudit:
 
         context_frame = ttk.Frame(parent_frame, style='Card.TFrame', padding=16)
         self._right_context_frame = context_frame
-        context_frame.grid(row=5, column=0, sticky='nsew', pady=(0, 10))
+        self.work_details_button = ttk.Button(
+            parent_frame,
+            text="작업 상세 ▸",
+            command=self._toggle_work_details,
+            style='Secondary.TButton',
+        )
+        self.work_details_button.grid(row=5, column=0, sticky='ew', pady=(0, 10))
+        context_frame.grid(row=6, column=0, sticky='nsew', pady=(0, 10))
         context_frame.grid_columnconfigure(0, weight=1)
         last_scan_caption = ttk.Label(
             context_frame,
@@ -7857,7 +7899,7 @@ class ContainerAudit:
 
         secondary_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame')
         self._secondary_stats_frame = secondary_frame
-        secondary_frame.grid(row=6, column=0, sticky='ew')
+        secondary_frame.grid(row=7, column=0, sticky='ew')
         for column in (0, 1):
             secondary_frame.grid_columnconfigure(column, weight=1, uniform="secondary_stats")
         self.info_cards['avg_time'] = self._create_info_card(secondary_frame, "평균")
@@ -7870,15 +7912,7 @@ class ContainerAudit:
         self.info_cards['best_time']['value'].configure(style='SecondaryCard.Value.TLabel')
         self.info_cards['avg_time']['frame'].grid(row=0, column=0, sticky='nsew', padx=(0, 5))
         self.info_cards['best_time']['frame'].grid(row=0, column=1, sticky='nsew', padx=(5, 0))
-        legend_frame = ttk.Frame(parent_frame, style='Sidebar.TFrame', padding=(0,15))
-        self._legend_frame = legend_frame
-        legend_frame.grid(row=7, column=0, sticky='sew')
-        ttk.Label(
-            legend_frame,
-            text="상태는 문구와 색상으로 함께 표시",
-            style='Subtle.TLabel',
-            wraplength=280,
-        ).pack(anchor='w')
+        self._apply_work_details_visibility()
         parent_frame.bind(
             '<Configure>',
             lambda event, generation=right_generation: self._apply_right_sidebar_layout(
@@ -7896,6 +7930,23 @@ class ContainerAudit:
         self._render_warning_state()
         if hasattr(self.root, "tk"):
             self._schedule_direct_sync_health_refresh(delay_ms=0)
+
+    def _toggle_work_details(self) -> None:
+        self._work_details_expanded = not getattr(self, "_work_details_expanded", False)
+        self._apply_work_details_visibility()
+        if not self._work_details_expanded:
+            self._schedule_focus_return()
+
+    def _apply_work_details_visibility(self) -> None:
+        expanded = bool(getattr(self, "_work_details_expanded", False))
+        button = getattr(self, "work_details_button", None)
+        if button is None:
+            return
+        button.configure(text="작업 상세 ▾" if expanded else "작업 상세 ▸")
+        for name in ("_right_context_frame", "_secondary_stats_frame"):
+            frame = getattr(self, name, None)
+            if frame is not None:
+                frame.grid() if expanded else frame.grid_remove()
 
     def _create_info_card(self, parent: ttk.Frame, label_text: str) -> Dict[str, ttk.Widget]:
         card = ttk.Frame(parent, style='Card.TFrame', padding=20)
@@ -11315,12 +11366,10 @@ class ContainerAudit:
                         text="중복 확인" if duplicate_notice else "오류 확인",
                         foreground=self.COLOR_DANGER,
                     )
-                elif (
-                    state.completion is not None
-                    and state.completion.outcome
-                    in {CompletionOutcome.ACKED, CompletionOutcome.LINKED}
-                ):
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
                     status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
+                elif state.completion is not None and state.completion.outcome is CompletionOutcome.LINKED:
+                    status_value.configure(text="이 PC 저장 완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
@@ -11388,9 +11437,35 @@ class ContainerAudit:
                 follow_up_label.configure(text=follow_up)
         except (tk.TclError, AttributeError):
             return
+        self._apply_notice_visibility()
         self._schedule_notice_message_wrap_refresh(
             generation=getattr(self, "_center_widget_generation", 0)
         )
+
+    def _apply_notice_visibility(self) -> None:
+        """Reserve the notice band for feedback and the selected exchange task."""
+        state = self._warning_state_presenter().state
+        has_notice = state.active_notice is not None or state.is_blocking
+        panel = getattr(self, "phs_label_exchange_frame", None)
+        try:
+            exchange_open = panel is not None and bool(panel.winfo_manager())
+            visible = has_notice or exchange_open
+            for name, show in (
+                ("notice_frame", visible),
+                ("notice_title_label", has_notice),
+                ("notice_message_label", has_notice),
+                ("phs_label_exchange_button", exchange_open),
+                ("phs_active_label_info_label", exchange_open),
+            ):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.grid() if show else widget.grid_remove()
+            parent = getattr(self, "_center_content_frame", None)
+            if parent is not None:
+                # A hidden frame must not leave the old warning minimum behind.
+                parent.grid_rowconfigure(4, minsize=0)
+        except (tk.TclError, AttributeError):
+            return
 
     def _acknowledge_active_notice(self) -> None:
         if self._precommand_operator_review_retry_context() is not None:
@@ -12261,7 +12336,7 @@ class ContainerAudit:
             )
         )
         card["value"].configure(
-            text=f"{model['summary']}\n{model['detail']}",
+            text="\n".join(value for value in (model['summary'], model['detail']) if value),
             style=(
                 "RelayAttention.Value.TLabel"
                 if attention
@@ -12288,6 +12363,7 @@ class ContainerAudit:
             "\n".join(f"{label}: {value}" for label, value in detail.items()),
             parent=getattr(self, "root", None),
         )
+        self._schedule_focus_return()
 
     def _trigger_session_direct_sync(self, reason: str) -> None:
         app_root = getattr(self, "application_path", "")

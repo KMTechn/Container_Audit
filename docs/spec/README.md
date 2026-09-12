@@ -11,6 +11,19 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 시험으로 확인한다. 새 Full·build·설치·서버 작업을 요구하지 않는다.
 [변경·검증 범위](operations.md#ca-o11), [후속 검토](BACKLOG.md#ca-g11)를 따른다.
 
+### 2026-09-12 일상 스캔과 상세 정보 분리
+
+일상 화면은 품목·중앙 확정 목표/현재 개수·스캔 입력·다음 행동을 유지한다.
+반복되던 스캐너 준비 안내는 실제 알림 또는 선택한 현품표 교체 작업이 있을 때만 펼친다.
+현품표 교체는 운영 작업 → 현품표 교체 또는 기존 F8에서 열며, 조회/교체/복구가 진행 중이면 닫기를 거부한다.
+최근 정상 스캔·보조 안내·평균/최고 기록은 우측 `작업 상세`에서 펼친다.
+전송 대기/확인 필요 상태는 계속 보이고 시각·진단은 명시적 `전송 상세`에서 확인한다.
+`LINKED`는 `이 PC 저장 완료`, `ACKED`는 완료로 구별한다.
+차단 알림·확인/재시도·보류/복원·수량·멤버십·인증·내구 저장 계약은 유지한다.
+호스트 비GUI 영향 검증과 아직 미실행인 새 native 후보의 구분은
+[결과](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md),
+[CA-G13](BACKLOG.md#ca-g13), [CA-O03](operations.md#ca-o03)을 따른다.
+
 ### 2026-09-10 UI 전수 점검과 idle 후 작업 명령 갱신
 
 2026-09-11 후속 소비자 점검으로 화면에 배치되지 않고 label/state 쓰기·시험 metadata에만 남은 리셋/완료 현품표 교체/개별 제품 교환의 Tk 버튼 세 개를 제거했다. 실제 명령은 기존 운영 작업 메뉴가 열릴 때 현재 상태로 구성하며, 공통 configure helper·F8/Shift-F8·수량·권한·보류/중앙 복구 진입점은 유지한다. [변경과 소비 근거](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/HIDDEN-ACTIONS-CHANGE.md)의 영향 회귀는34 PASS다. 숨은 버튼의 state/text를 가시성 근거로 소비하던 capture M7도 실제 여섯 제어와 운영 메뉴 진입으로 보정했다(기존 capture11 PASS 및 강화한 기존 사례1 PASS). 메뉴 진입 가시성만으로 교환 허용·원자 처리까지 증명하지 않는다. 수정 전 단회 진단은 숨은 교환 버튼 configure에서408.4923ms wall/15.625ms thread CPU를 관측했고 [19개 원본 회수](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/CURRENT-DIAGNOSTIC.md)를 완료했다. 이 값은 원인·반복 성능 이득을 입증하지 않는다. 새 후보의 단회 native 명령 배치 검사는 기존580px의 고정2+2 행 assertion에서1 FAIL/native1로 종료했고 원본과 process0 확인을 보존했다. 실제 요청 폭에 따른 열 수 계약에 맞춰 기존 검사만 요청 크기 확보·포함·겹침 없음·시각적 순서·문구·넓은 행·왕복 안정성으로 보정했다. [정확한7d62910 단회 native 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/NATIVE-ACTION-RESULT.md)는1 PASS/skip0/native0이고 실제580px 배치는3+1이다. 첫 실패와 새 결과28파일 원본·해시, 정상 process0·양쪽 임시 nonce 삭제를 보존했으며 실제 Claude는 제품과 보정 검사에 필수 수정 없음으로 검토했다. 성능 이득·연결 전체 흐름 수용은 여전히 미완료다.
