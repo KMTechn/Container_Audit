@@ -11,6 +11,14 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 시험으로 확인한다. 새 Full·build·설치·서버 작업을 요구하지 않는다.
 [변경·검증 범위](operations.md#ca-o11), [후속 검토](BACKLOG.md#ca-g11)를 따른다.
 
+### 2026-09-12 실제 M06 GOOD1 이적 완료
+
+현행 제품 `0ea7251`의 실제 원본 PHS2·GOOD 멤버 1개를 기존 연결 VM에서 처리했다.
+로컬 완료 1건·중앙 봉인 `COMMITTED`·동일 receipt의 `ACKED/attempt1`과 producer
+`COMPLETE`를 확인했으며 Main은 실제 Label 인계와 VM 반환을 수용했다.
+[업무·복구 근거](operations.md#ca-o12)와 [남은 범위](BACKLOG.md#ca-g12)를 따른다.
+Label 이후 연결 업무·성능 분포·다음 실제 작업·별도 큰 글자 교체 행 제한은 남아 있다.
+
 ### 2026-09-12 일상 스캔과 상세 정보 분리
 
 일상 화면은 품목·중앙 확정 목표/현재 개수·스캔 입력·다음 행동을 유지한다.

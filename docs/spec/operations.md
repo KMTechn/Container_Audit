@@ -320,3 +320,17 @@ Main reply `msg_0b2fc814c41b`에 따라 원래 d440→a7 공개 Restore09와 변
 [release 안내](../../RELEASE_GATE_CONTRACT.md),
 [profile 안내](../LOGISTICS_RUNTIME_PROFILE.md)는 현재 경로와 적용 가능한 검증으로
 정정했다. Main 독립 소스 검토는 [CA-G11](BACKLOG.md#ca-g11)에 연결한다.
+
+<a id="ca-o12"></a>
+## CA-O12 2026-09-12 실제 M06 GOOD1 이적과 기존 연결 복구
+
+- **수용 경계:** 현행 제품 `0ea7251`·앱 SHA256 `76B21C347C7D56203ECB2CBB0AEC0A5FF334FF7EB6842F23B4BE5C1B0FCC2DB3`로 원본 PHS2와 멤버 `AAA2270710000901` 1개를 정상 GUI에 입력했다. local 완료·lease 완료는 각각 1건이며 intent `transfer-intent-956969133254cd85b028713d02224ded`는 `ACKED/attempt1`이다. 중앙 receipt `receipt_b2307da63bdd4b92b08e30b7c3aceed9`는 `COMMITTED`이고 로컬 receipt와 정확히 같다. 원본 3개 완료의 전체 로컬 행과 중앙 receipt는 실행 전후 동일하다.
+- **중앙·인계:** 기존 scope `TEST1-OPT-20260909-02/authority3/plane1`과 backend `e46dd947`에서 PHS `phs_0ef8d963f98c4621bf48683fda85aed3`는 `AVAILABLE/v1`에서 `CONSUMED/v2`로 바뀌었다. 대상 `TRANSFER-9BFF9D4E70D69D6E4B16FA9E`는 `AVAILABLE/v1/member1`, active `transfer-seal_da62e8b9b5014e6d93d8e5057dcb4661/rev1`이다. 실제 물리 PHS2와 반환된 seal QR의 보호 파일 경로·크기·해시 및 원래 unit/member/receipt 결속은 [LABEL-HANDOFF.json](D:/KMTech/optimization-implementation-20260909/Container_Audit/M06-final-20260912/LABEL-HANDOFF.json)에 있다. QR 본문·자격 증명은 명세에 복사하지 않는다.
+- **최초 등록 실패와 재배정:** 최초6fcb VM에는 기존 연결 프로필이 없었다. 승인된 정상 등록은 `ADMIN_RECOVERY_REQUIRED/producer_identity_conflict`로 업무 입력 전에 실패했다. 실패·생성된 possession key를 보존하고 새 identity 복구 없이 Main 재배정으로 원본 연결76a3를 사용했다. 최초 VM은 생성 task root만 회수 후 제거하고 `Saved/0`으로 반환했다.
+- **기존 연결 복구:** 원본76a3의 kmadmin/session1·profile·credential·producer/device/install identity와 runtime을 유지했다. 만료된 공개 CA는 같은 공개 키의 유효 인증서로 기존 신뢰 파일만 갱신하고 이전 파일을 보존했다. 최초 PHS 조회의 `OPERATION_LEASE_MACHINE_SCOPE_FORBIDDEN`은 Main의 실제 조회에서 원래 grant 만료로 확인됐다. Main이 같은 grant/identity/scope를 정상 관리 진입점으로 갱신한 뒤, 앱에 유지된 같은 PHS2를 확인 버튼으로 한 번 재시도했다. 재등록·인증 우회·PHS 재붙여넣기·업무 replay·backend 재시작은 수행하지 않았다. Main의 이후 Label grant 갱신과 이 시점의 보존 확인을 구분한다.
+- **producer와 반환:** 새 relay 1건은 `ACKED/attempt1`, accepted/committed/`COMPLETE`, inserted4/replayed0/errors0/quarantined0이며 최종17개 queue 행이 모두 ACKED다. 정상 GUI native0 종료, Python0·생성 task0·기존98 task 보존/running0, hold 없음/parked0을 확인했다. 현재140 source/기존 runtime을 검증하고 변경 전34개 source와 작업 증거를 D에 해시 검증 후 회수했다. 게스트 task root만 일반 삭제하고 원본76a3는 `2026-09-12T07:51:10.5988147Z`에 `Saved/0`으로 반환했다. Main은 [실제 handoff·반환](D:/KMTech/optimization-implementation-20260909/Container_Audit/M06-final-20260912/MAIN-M06-HANDOFF-ACCEPTANCE.md)을 수용했으며 이후 게스트 접근은 새 배정 범위다.
+- **화면·성능 한계:** 실제1920×1080 최대화 화면에서 M06 목표1·중앙 확인·입력 포커스와 완료 후 품목 집계1·다음 현품표 입력 포커스를 직접 관측했다. 자동 완료는 현재 목록을 비우므로 중간1/1 행 화면·새 실제 작업 접수·최초 안전 입력 시각은 증명하지 않는다. WMI 키보드 호출 반환 시각은 실제 Return/최초 화면 시각이 아니며 단회 결과는 p50/p95나 물리 스캐너·프린터 수용이 아니다. 기존 UI host104/native5 PASS를 재사용하고 별도1024×768·글자2.5 교체 행 clipping, 원래 실패와 성능 분포 후속은 유지한다. 새 suite/build·target1 교체/보류·추가 재고는 실행하지 않았다.
+
+실제 환경·최초 실패·지원 복구·시각 원본·완료/전송·VM 보존·문서 검증은
+[RESULT](D:/KMTech/optimization-implementation-20260909/Container_Audit/M06-final-20260912/RESULT.md)에 연결한다.
+이 CA 구간 수용으로 Label/Web 이후 연결 업무나 원래 전체 Goal을 완료 처리하지 않는다.
