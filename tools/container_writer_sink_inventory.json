@@ -1581,11 +1581,11 @@
       "direct_callers": [],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 51,
+      "line": 56,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 65,
+          "line": 70,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -1614,11 +1614,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 86,
+      "line": 91,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 89,
+          "line": 94,
           "operation": "parent.mkdir",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1626,7 +1626,7 @@
         },
         {
           "category": "filesystem",
-          "line": 94,
+          "line": 99,
           "operation": "os.open",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1634,7 +1634,7 @@
         },
         {
           "category": "filesystem",
-          "line": 95,
+          "line": 100,
           "operation": "os.write",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1642,7 +1642,7 @@
         },
         {
           "category": "filesystem",
-          "line": 106,
+          "line": 111,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1650,7 +1650,7 @@
         },
         {
           "category": "filesystem",
-          "line": 121,
+          "line": 126,
           "operation": "os.unlink",
           "writer_admission_sources": [
             "event_interprocess_lock"
@@ -1686,11 +1686,11 @@
       ],
       "file": "event_log_store.py",
       "kind": "function",
-      "line": 143,
+      "line": 148,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 150,
+          "line": 155,
           "operation": "open",
           "writer_admission_sources": []
         }
@@ -5801,7 +5801,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "b36012f37fea0223fdc4bc35b8982cfc6638f19dbb953fcd9f595248fbc3e7d0",
+  "inventory_sha256": "f0325a88f226753e49f52a021795ccfcec325f9620dfa259f021be5415efa54e",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17367,7 +17367,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry",
-      "line": 127,
+      "line": 132,
       "marker_kind": "decorator",
       "source": "event_csv_append"
     },
@@ -17375,7 +17375,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.append_event_log_entry_idempotent",
-      "line": 161,
+      "line": 166,
       "marker_kind": "decorator",
       "source": "event_csv_idempotent_append"
     },
@@ -17383,7 +17383,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store._append_event_log_entry_unlocked",
-      "line": 143,
+      "line": 148,
       "marker_kind": "decorator",
       "source": "event_csv_unlocked_append"
     },
@@ -17391,7 +17391,7 @@
       "direct_mutation_site_count": 5,
       "file": "event_log_store.py",
       "function": "event_log_store._interprocess_file_lock",
-      "line": 86,
+      "line": 91,
       "marker_kind": "writer_admission",
       "source": "event_interprocess_lock"
     },
@@ -17399,7 +17399,7 @@
       "direct_mutation_site_count": 1,
       "file": "event_log_store.py",
       "function": "event_log_store.EventLogOutbox.drain",
-      "line": 51,
+      "line": 56,
       "marker_kind": "decorator",
       "source": "event_outbox_project"
     },
@@ -17407,7 +17407,7 @@
       "direct_mutation_site_count": 0,
       "file": "event_log_store.py",
       "function": "event_log_store.EventLogOutbox.stage",
-      "line": 39,
+      "line": 43,
       "marker_kind": "decorator",
       "source": "event_outbox_stage"
     },

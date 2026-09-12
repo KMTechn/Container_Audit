@@ -2051,6 +2051,21 @@ def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch)
     assert app._event_log_outbox_instance.has_unstaged
     assert "종료하지 마세요" in app._event_log_notice
 
+    from tests.test_tk_serial_ui_lane import FakeTkRoot
+    app.root = FakeTkRoot()
+    app.log_thread = SimpleNamespace(is_alive=lambda: False)
+    started = []
+    monkeypatch.setattr(container_audit_module.threading, "Thread", lambda **kwargs: SimpleNamespace(
+        start=lambda: started.append(kwargs), is_alive=lambda: False,
+    ))
+    monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
+    app.save_settings = app._cancel_all_jobs = lambda: None
+    app.show_status_message = lambda *args, **kwargs: None
+    app._finalize_application_close()
+    assert not app.root.destroyed
+    assert len(started) == 1
+    assert app._event_log_close_requested is False
+
     monkeypatch.setattr(event_log_store, "atomic_write_json", original_write)
     assert app._flush_pending_event_logs()
     assert not app._event_log_outbox_instance.has_unstaged
@@ -2058,6 +2073,26 @@ def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch)
         rows = list(csv.DictReader(handle))
     assert len(rows) == 1
     assert json.loads(rows[0]["details"])["barcode"] == "BC-1"
+    app._finalize_application_close()
+    assert app.root.destroyed
+
+
+def test_event_outbox_keeps_fifo_when_clock_moves_backwards_across_restart(tmp_path, monkeypatch):
+    ticks = iter([300, 200, 100])
+    monkeypatch.setattr(event_log_store.time, "time_ns", lambda: next(ticks))
+    store = event_log_store.EventLogOutbox(tmp_path / "outbox")
+    log_path = tmp_path / "events.csv"
+    for index in range(3):
+        if index == 2:
+            store = event_log_store.EventLogOutbox(tmp_path / "outbox")
+        store.stage(str(log_path), {
+            "timestamp": str(index), "worker_name": "original", "event": "SCAN_OK",
+            "details": json.dumps({"idempotency_key": f"scan-{index}", "scan_position": index + 1}),
+        })
+    store.drain()
+    with log_path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [json.loads(row["details"])["scan_position"] for row in rows] == [1, 2, 3]
 
 
 def test_event_log_store_appends_header_once(tmp_path):

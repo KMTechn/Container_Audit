@@ -29,6 +29,10 @@ class EventLogOutbox:
         self.directory = Path(directory)
         self._lock = threading.RLock()
         self._unstaged: deque[dict[str, Any]] = deque()
+        self._sequence = max(
+            (int(path.name[:20]) for path in self.directory.glob("*.json")
+             if path.name[:20].isdigit()), default=0,
+        )
 
     @property
     def has_unstaged(self) -> bool:
@@ -43,7 +47,8 @@ class EventLogOutbox:
 
     def _persist_unstaged(self) -> None:
         while self._unstaged:
-            path = self.directory / f"{time.time_ns():020d}-{uuid.uuid4().hex}.json"
+            self._sequence = max(self._sequence + 1, time.time_ns())
+            path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
             atomic_write_json(path, self._unstaged[0])
             self._unstaged.popleft()
 
