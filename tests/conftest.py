@@ -2,6 +2,8 @@ import hashlib
 import os
 from pathlib import Path
 import sys
+import threading
+import time
 import tkinter
 from tkinter import messagebox, simpledialog
 
@@ -205,3 +207,48 @@ def fail_fast_on_real_gui(monkeypatch, request):
 @pytest.fixture
 def headless_gui_error_type():
     return HeadlessGuiInvocationError
+
+
+@pytest.fixture
+def owned_tk_workers(monkeypatch):
+    """Drain test-owned workers even when an assertion skips the normal close."""
+    from tk_serial_ui_lane import TkSerialUiLane
+    from preflight_scan_hold import PreflightScanHoldWriter
+
+    before = set(threading.enumerate())
+    workers = []
+    for cls, thread_attribute in ((TkSerialUiLane, "worker_thread"),
+                                  (PreflightScanHoldWriter, "thread")):
+        original = cls.__init__
+
+        def initialize(instance, *args, _init=original, _thread=thread_attribute, **kwargs):
+            try:
+                _init(instance, *args, **kwargs)
+            finally:
+                if hasattr(instance, _thread):
+                    workers.append((instance, getattr(instance, _thread)))
+
+        monkeypatch.setattr(cls, "__init__", initialize)
+    try:
+        yield workers
+    finally:
+        errors = []
+        deadline = time.monotonic() + 15
+        while any(thread.is_alive() for _, thread in workers):
+            for worker, thread in list(workers):
+                if not thread.is_alive():
+                    continue
+                try:
+                    worker.close_idle()
+                    if thread.is_alive():
+                        worker._pump()
+                except BaseException as exc:
+                    errors.append(f"{type(exc).__name__}: {exc}")
+            if time.monotonic() >= deadline:
+                break
+            threading.Event().wait(0.002)
+        leaked = [thread.name for thread in threading.enumerate()
+                  if thread not in before and not thread.daemon]
+        owned_live = [thread.name for _, thread in workers if thread.is_alive()]
+        assert not leaked and not owned_live, f"worker leak: {leaked + owned_live}; cleanup: {errors}"
+        assert not errors, f"worker cleanup errors: {errors}"

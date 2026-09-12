@@ -86,8 +86,9 @@ class TaskHandle:
     def _mark_work_done(self) -> None:
         self._work_done.set()
 
-    def join(self, timeout: float | None = None) -> None:
-        self._work_done.wait(timeout)
+    def join(self, timeout: float | None = None) -> bool:
+        """Return whether work completed; UI application still needs the owner pump."""
+        return self._work_done.wait(timeout)
 
     def is_alive(self) -> bool:
         return not self._work_done.is_set()

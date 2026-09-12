@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("owned_tk_workers")
+
 
 class FakeTkRoot:
     def __init__(self) -> None:
@@ -65,6 +67,47 @@ def _close(root, lane) -> None:
         return
     lane.close_idle()
     root.run_until(lambda: lane.state == "CLOSED")
+
+
+def test_completion_handle_reports_timeout_until_work_finishes():
+    module, _, _ = _symbols()
+    handle = module.TaskHandle()
+    assert handle.join(timeout=0) is False
+    handle._mark_work_done()
+    assert handle.join(timeout=0) is True
+
+
+def test_assertion_failure_still_drains_lane_and_pytest_exits(tmp_path):
+    import json
+    import subprocess
+    import sys
+
+    (tmp_path / "conftest.py").write_text(
+        "from tests.conftest import owned_tk_workers\n", encoding="utf-8")
+    test_file = tmp_path / "test_forced_failure.py"
+    test_file.write_text(
+        "import pytest\n"
+        "from tests.test_tk_serial_ui_lane import FakeTkRoot\n"
+        "from tk_serial_ui_lane import TkSerialUiLane, LaneTask\n"
+        "@pytest.mark.usefixtures('owned_tk_workers')\n"
+        "def test_forced_failure():\n"
+        "    lane = TkSerialUiLane(FakeTkRoot())\n"
+        "    lane.submit(LaneTask('checkpoint', 0, lambda: lane.call_ui_sync(lambda: True), lambda value: None, lambda exc: None))\n"
+        "    assert False, 'intentional assertion before close'\n", encoding="utf-8")
+    result_path = tmp_path / "threads.json"
+    probe = (
+        "import json, pathlib, pytest, sys, threading; "
+        "code = pytest.main(['-q', '-p', 'no:cacheprovider', sys.argv[1], '--basetemp', sys.argv[3]]); "
+        "live = [t.name for t in threading.enumerate() if t is not threading.main_thread() and not t.daemon]; "
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(live), encoding='utf-8'); sys.exit(code)"
+    )
+    result = subprocess.run(
+        [sys.executable, "-B", "-c", probe, str(test_file), str(result_path), str(tmp_path / "child")],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "1 failed" in result.stdout
+    assert json.loads(result_path.read_text(encoding="utf-8")) == []
 
 
 def test_blocked_work_does_not_block_tk_pump():

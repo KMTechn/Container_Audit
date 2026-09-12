@@ -25,7 +25,7 @@ from transfer_seal import (
 )
 from tests.operation_lease_fixtures import signed_transfer_artifact, fixed_operation_lease_clock
 
-pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock')
+pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
 from warning_presenter import Notice, NoticeSeverity, WarningPresenter
 
 
@@ -78,7 +78,7 @@ class ScheduledRoot:
         callback(*args)
 
 
-def _pump_until(root, predicate, *, timeout=2.0):
+def _pump_until(root, predicate, *, timeout=15.0, phase="UI application"):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -86,7 +86,13 @@ def _pump_until(root, predicate, *, timeout=2.0):
         if root.jobs:
             root.run_next()
         time.sleep(0.005)
-    assert predicate()
+    assert predicate(), f"timed out during {phase}; queued UI callbacks={len(root.jobs)}"
+
+
+def _wait_for_preflight_work(app):
+    handle = app._master_preflight_thread
+    _pump_until(app.root, lambda: handle.join(timeout=0), phase="preflight work completion")
+    assert handle.join(timeout=0), "preflight completion handle timed out"
 
 
 def _pump_for(root, *, duration=0.35):
@@ -352,6 +358,7 @@ def _app(tmp_path, client):
     app.COLOR_DANGER = "danger"
     app.COLOR_PRIMARY = "primary"
     app.COLOR_IDLE = "yellow"
+    app.success_sound = None
     app._phs_replacement_notice_pairs = set()
     app.warnings = []
     app.statuses = []
@@ -389,7 +396,7 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     elapsed = time.perf_counter() - started
 
     assert elapsed < 0.25
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     assert app._master_preflight_pending is True
     assert app.current_tray.master_label_code == ""
     assert len(app.root.jobs) == 1
@@ -407,7 +414,7 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     held_snapshot = app._preflight_hold_store().load()
 
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: app.current_tray.scanned_barcodes == [held_product]
@@ -485,9 +492,9 @@ def test_admin_released_prefetch_uses_fresh_durable_key_for_same_physical_qr(
     app = _app(tmp_path, client)
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
-    app._master_preflight_thread.join(timeout=2.0)
-    app.root.run_next()
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
+    _wait_for_preflight_work(app)
+    _pump_until(app.root, lambda: not app._master_preflight_pending)
 
     assert app.current_tray.master_label_code == COMPACT_QR
     assert app.current_tray.operation_lease_id == (
@@ -550,12 +557,12 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
     app = _app(tmp_path, client)
 
     app._process_barcode_logic(COMPACT_QR)
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(app.root, lambda: not app._master_preflight_pending)
     assert app.current_tray.master_label_code == ""
 
     app._process_barcode_logic(COMPACT_QR)
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: app.current_tray.master_label_code == COMPACT_QR,
@@ -594,17 +601,18 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path,
     held = [f"{ITEM}-HELD-A", f"{ITEM}-HELD-B"][:held_count]
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     for barcode in held:
         app._process_barcode_logic(barcode)
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: (
             not app._master_preflight_pending
             and app._preflight_hold_store().exists()
             and app._preflight_hold_store().load().state == "LOOKUP_FAILED"
+            and app._preflight_hold_snapshot == app._preflight_hold_store().load()
         ),
     )
 
@@ -620,7 +628,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path,
     client.error = None
     client.gate = None
     app._process_barcode_logic(COMPACT_QR)
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: app.current_tray.scanned_barcodes == held
@@ -642,17 +650,17 @@ def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
     held_product = f"{ITEM}-HELD-STALE"
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     app._process_barcode_logic(held_product)
     app._cancel_master_preflight()
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: (
             app._preflight_hold_store().exists()
             and app._preflight_hold_store().load().state == HOLD_LOOKUP_FAILED
-            and getattr(app, "_preflight_hold_snapshot", None) is not None
+            and getattr(app, "_preflight_hold_snapshot", None) == app._preflight_hold_store().load()
         ),
     )
 
@@ -698,7 +706,7 @@ def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ac
     tail = f"{ITEM}-HELD-B"
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     for barcode in (first, first, tail):
         app._process_barcode_logic(barcode)
     _pump_until(
@@ -709,7 +717,7 @@ def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ac
         ),
     )
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: (
@@ -766,10 +774,10 @@ def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path, m
     held_product = f"{ITEM}-HELD-AUDIT"
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     app._process_barcode_logic(held_product)
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(
         app.root,
         lambda: app.current_tray.scanned_barcodes == [held_product],
@@ -832,12 +840,12 @@ def test_held_catalog_rejection_preserves_event_warning_and_fifo_on_audit_retry(
     app._log_event = log
     tail = f"{ITEM}-VALID-TAIL"
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     app._process_barcode_logic(raw)
     app._process_barcode_logic(tail)
     _pump_until(app.root, lambda: len(app._preflight_hold_store().load().items) == 2)
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(app.root, lambda: bool(rejects))
 
     store = app._preflight_hold_store()
@@ -905,10 +913,10 @@ def test_preflight_final_held_scan_completes_only_after_hold_ack(tmp_path):
     held_product = f"{ITEM}-HELD-FINAL"
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     app._process_barcode_logic(held_product)
     gate.set()
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     _pump_until(app.root, lambda: bool(completion_hold_states))
 
     assert completion_hold_states == [False]
@@ -1029,8 +1037,8 @@ def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path
     app = _app(tmp_path, client)
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
-    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
+    _wait_for_preflight_work(app)
     app.root.run_next()
 
     assert app.current_tray.master_label_code == ""
@@ -1046,8 +1054,8 @@ def test_compact_phs2_incomplete_registry_lifecycle_fails_closed(tmp_path):
     app = _app(tmp_path, client)
 
     app._process_barcode_logic(COMPACT_QR)
-    assert client.started.wait(timeout=1.0)
-    app._master_preflight_thread.join(timeout=2.0)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
+    _wait_for_preflight_work(app)
     app.root.run_next()
 
     assert app.current_tray.master_label_code == ""
@@ -1091,7 +1099,7 @@ def test_compact_phs2_missing_central_client_fails_closed(tmp_path):
     app = _app(tmp_path, None)
 
     app._process_barcode_logic(COMPACT_QR)
-    app._master_preflight_thread.join(timeout=2.0)
+    _wait_for_preflight_work(app)
     app.root.run_next()
 
     assert app.current_tray.master_label_code == ""

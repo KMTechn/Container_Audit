@@ -132,6 +132,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o07"></a>
 ## CA-O07 2026-09-08 FULL 실패의 환경·fixture 경계
 
+- `tk_serial_ui_lane`/PHS2 preflight headless fixture는 assertion 실패에도 `finally`에서 소유 lane·hold writer를 drain/close하고 잔존 non-daemon thread를 검사한다. `TaskHandle.join(timeout)`의 bool은 작업 완료만 뜻하므로 테스트는 별도로 UI 적용(hold 파일과 최신 snapshot 일치 포함)을 기다린다. 제품 lane은 non-daemon을 유지한다.
+
 [실패 분석 보고](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/REPORT.md)와 [102개 testcase 색인](E:/KMTech/coordinator-handoff-20260907-01a07992/repo-parallel-0826/ca-failure-triage/failure-inventory.tsv)은 원래 VM01 FULL의 회수 원본을 사용한다. 102 FAIL/2,526 PASS/31 SKIP, pytest 자연 종료 1, FULL·일반 export FAILED를 유지한다. forensic 25파일 회수 성공은 정상 export나 qualification PASS가 아니다.
 
 | 관측 | 원인·다음 교정의 범위 |
