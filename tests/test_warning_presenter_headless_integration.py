@@ -82,6 +82,7 @@ def _raise(message):
 
 def _scan_app(*, save_succeeds, events):
     app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "홍길동"
     app.current_tray = TraySession(
         master_label_code=MASTER_LABEL,
         item_code=ITEM_CODE,
@@ -117,7 +118,7 @@ def _scan_app(*, save_succeeds, events):
     app._update_center_display = lambda: None
     app._update_current_item_label = lambda *args, **kwargs: None
     app._render_warning_state = lambda: events.append(("render", None))
-    app._save_current_tray_state = lambda: events.append(("save_state", save_succeeds)) or save_succeeds
+    app._save_tray_state_snapshot = lambda _state: events.append(("save_state", save_succeeds)) or save_succeeds
     app._log_event = lambda event, **kwargs: events.append(("log_event", event)) or True
     app.show_status_message = lambda *args, **kwargs: events.append(("status", args[0]))
     app.complete_tray = lambda: _raise("a two-of-three tray must not complete")
@@ -186,7 +187,7 @@ def _completion_app(*, save_root, seal_status, ledger_succeeds, events):
         return True
 
     app._log_event = log_event
-    app._save_current_tray_state = lambda: events.append(("save_state", None)) or True
+    app._save_tray_state_snapshot = lambda _state: events.append(("save_state", None)) or True
     app.show_status_message = lambda *args, **kwargs: events.append(("status", args[0]))
     app._stop_stopwatch = lambda: events.append(("stop_stopwatch", None))
     app._stop_idle_checker = lambda: events.append(("stop_idle", None))
