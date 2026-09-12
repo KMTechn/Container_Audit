@@ -6961,7 +6961,7 @@ class ContainerAudit:
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
                     card["frame"].configure(padding=0 if compact else metrics["card_padding"])
-                    card["frame"].grid_configure(pady=(0, metrics["card_gap"]))
+                    card["frame"].grid_configure(pady=(0, 0 if compact else metrics["card_gap"]))
                     caption = card.get("label")
                     if caption is not None:
                         caption.configure(
