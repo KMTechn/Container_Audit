@@ -6942,7 +6942,6 @@ class ContainerAudit:
             compact = metrics["content_sized_cards"]
             self.style.configure(
                 'SidebarDetail.Secondary.TButton',
-                font=(self.DEFAULT_FONT, max(10, int(10 * self.scale_factor)), 'bold'),
                 padding=(6, 2),
             )
             for name in ('work_details_button', 'direct_sync_details_button'):
@@ -7867,11 +7866,14 @@ class ContainerAudit:
         )
         self.direct_sync_details_button = ttk.Button(
             self.info_cards['direct_sync']['frame'],
-            text="전송 상세",
+            text="상세",
             command=self._show_direct_sync_status_details,
             style='Secondary.TButton',
         )
-        self.direct_sync_details_button.pack(pady=(6, 0))
+        self.direct_sync_details_button.pack(
+            before=self.info_cards['direct_sync']['label'],
+            side='right', anchor='n', padx=(4, 0),
+        )
         for widget in self.info_cards['direct_sync'].values():
             try:
                 widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
