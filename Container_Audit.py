@@ -7869,6 +7869,7 @@ class ContainerAudit:
             text="상세",
             command=self._show_direct_sync_status_details,
             style='Secondary.TButton',
+            width=0,
         )
         self.direct_sync_details_button.pack(
             before=self.info_cards['direct_sync']['label'],
