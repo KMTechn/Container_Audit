@@ -1,6 +1,8 @@
 import datetime
 import json
 
+import pytest
+
 from best_time_records import BestTimeRecordStore
 
 
@@ -25,6 +27,8 @@ def test_best_time_store_load_cleans_stale_and_invalid_records(tmp_path):
     assert records == {"2026-06-23": 120.0}
     persisted = json.loads(path.read_text(encoding="utf-8"))
     assert persisted == {"2026-06-23": 120.0}
+    assert len(list(tmp_path.glob("best_time_records.json.bad-*"))) == 1
+    assert store.load_warning
 
 
 def test_best_time_store_update_only_persists_new_daily_best(tmp_path):
@@ -49,3 +53,24 @@ def test_best_time_store_corrupt_file_loads_empty_without_overwriting(tmp_path):
 
     assert store.load(today=datetime.date(2026, 6, 23)) == {}
     assert path.read_text(encoding="utf-8") == "{not-json}"
+    assert store.load_warning
+    store.update_best_time({}, 100, today=datetime.date(2026, 6, 23))
+    assert next(tmp_path.glob("best_time_records.json.bad-*")).read_text(encoding="utf-8") == "{not-json}"
+
+
+@pytest.mark.parametrize("invalid", [float("nan"), float("inf"), -float("inf"), 0, -1, True, "NaN"])
+def test_nonfinite_or_nonpositive_best_time_preserves_original_and_safe_display(tmp_path, invalid):
+    path = tmp_path / "best_time_records.json"
+    original = json.dumps({"2026-06-23": invalid, "2026-06-22": 120})
+    path.write_text(original, encoding="utf-8")
+    store = BestTimeRecordStore(path)
+    today = datetime.date(2026, 6, 23)
+
+    records = store.load(today=today)
+
+    assert records == {"2026-06-22": 120.0}
+    assert int(min(records.values()) // 60) == 2
+    assert store.load_warning
+    assert next(tmp_path.glob("*.bad-*")).read_text(encoding="utf-8") == original
+    assert store.cleanup({"2026-06-23": invalid}, today=today, persist=False) == {}
+    assert store.update_best_time(records, invalid, today=today) == records

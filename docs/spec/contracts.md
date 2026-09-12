@@ -61,6 +61,8 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
 
+- 제품 형식 오류 안내는 길이/제어문자/위험 형식/트레이 설정의 판정 reason에 맞춘 안전한 문구를 일반·held 경로에서 공통 사용한다. 위험 원문은 안내에 삽입하지 않고 감사 detail에는 hash·길이만 남긴다.
+
 - 일반·held 제품의 성공음은 current JSON atomic write/flush/fsync 성공 뒤 한 번만 재생한다. 저장 실패 시 목록·receipt를 롤백하고 성공음을 내지 않는다. held FIFO 제거는 이후 동기 감사 ACK를 별도로 기다린다.
 
 **방향:** GUI/coordination → 사용자 state·이벤트·intent → 같은 사용자 재시작 복구. [CA-01](README.md#ca-01), [CA-04](README.md#ca-04), [CA-08](README.md#ca-08), [CA-09](README.md#ca-09).

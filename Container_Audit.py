@@ -1339,6 +1339,8 @@ class ContainerAudit:
         self.best_time_file_path = str(self.storage_paths.best_time_records_path)
         self.best_time_store = BestTimeRecordStore(self.best_time_file_path)
         self.best_time_records = self.best_time_store.load()
+        if self.best_time_store.load_warning:
+            self.root.after(0, messagebox.showwarning, "최고 기록 확인", self.best_time_store.load_warning)
 
     def _save_best_time_records(self):
         """현재 최고 기록 데이터를 파일에 저장합니다."""
@@ -8981,7 +8983,7 @@ class ContainerAudit:
         message = "보류 중 접수된 제품 바코드를 반영하지 않았습니다."
         if decision.status == SCAN_FORMAT_ERROR:
             title = "바코드 형식 오류"
-            message = "보류 중 접수된 제품 바코드 형식이 올바르지 않습니다."
+            message = decision.format_error_message
         elif decision.status == SCAN_DUPLICATE:
             title = "바코드 중복"
             message = "보류 중 같은 제품 바코드가 중복 접수되어 두 번째 입력을 반영하지 않았습니다."
@@ -9826,7 +9828,7 @@ class ContainerAudit:
         if scan_decision.status == SCAN_FORMAT_ERROR:
             if scan_decision.event_name:
                 self._log_event(scan_decision.event_name, detail=scan_decision.event_detail)
-            self.show_fullscreen_warning("바코드 형식 오류", f"제품 바코드는 {self.ITEM_CODE_LENGTH}자리보다 길어야 합니다.", self.COLOR_DANGER); return
+            self.show_fullscreen_warning("바코드 형식 오류", scan_decision.format_error_message, self.COLOR_DANGER); return
         if scan_decision.status == SCAN_MISMATCH:
             self.current_tray.mismatch_error_count += 1; self.current_tray.has_error_or_reset = True
             self.show_fullscreen_warning("품목 코드 불일치!", f"제품의 품목 코드가 일치하지 않습니다.\n[기준: {self.current_tray.item_code}]", self.COLOR_DANGER)

@@ -88,6 +88,32 @@ def test_decide_product_scan_rejects_unsafe_product_barcodes_without_storing_raw
     assert len(decision.event_detail["raw_barcode_sha256"]) == 64
     assert "raw_barcode" not in decision.event_detail
     assert barcode not in str(decision.event_detail)
+    assert barcode not in decision.format_error_message
+    assert "13자리보다" not in decision.format_error_message
+
+
+@pytest.mark.parametrize("reason, expected", [
+    ("barcode_too_short", "13자리보다 길어야"),
+    ("barcode_too_long", "128자 이하"),
+    ("control_character", "제어 문자"),
+    ("formula_prefix", "시작 문자"),
+    ("html_or_script_marker", "문자 형식"),
+    ("path_traversal_marker", "경로 형식"),
+    ("unknown", "제품 라벨을 확인"),
+])
+def test_format_error_message_explains_reason_without_echoing_input(reason, expected):
+    decision = product_scan.ProductScanDecision(
+        product_scan.SCAN_FORMAT_ERROR,
+        event_detail={"reason": reason, "item_code_length": 13, "raw_barcode": "<unsafe>"},
+    )
+    assert expected in decision.format_error_message
+    assert "<unsafe>" not in decision.format_error_message
+
+
+def test_invalid_length_setting_does_not_expose_unsafe_barcode():
+    decision = product_scan.decide_product_scan(_tray(), "<unsafe>", item_code_length="bad")
+    assert "raw_barcode" not in decision.event_detail
+    assert "<unsafe>" not in str(decision.event_detail)
 
 
 def test_decide_product_scan_rejects_item_mismatch_with_event_detail():
