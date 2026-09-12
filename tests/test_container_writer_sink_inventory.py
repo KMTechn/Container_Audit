@@ -214,7 +214,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         row["coverage_status"] == "covered"
         for row in payload["closure_direct_mutation_functions"]
     )
-    assert "Container_Audit._write_update_download" in covered_nodes
+    assert "event_log_store.EventLogOutbox.drain" in covered_nodes
     assert "direct_sync_auto_bootstrap._write_json" in covered_nodes
     assert "event_log_store._interprocess_file_lock" in covered_nodes
     assert "event_log_store._append_event_log_entry_unlocked" in covered_nodes

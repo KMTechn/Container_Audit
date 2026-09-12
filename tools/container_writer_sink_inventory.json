@@ -5,37 +5,6 @@
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
-      "covered_entrypoints": [],
-      "decorated_source": "update_download",
-      "direct_callers": [],
-      "file": "Container_Audit.py",
-      "kind": "function",
-      "line": 827,
-      "mutation_sites": [
-        {
-          "category": "filesystem",
-          "line": 838,
-          "operation": "open",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 848,
-          "operation": "os.remove",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "Container_Audit._write_update_download",
-      "reachable_entrypoints": [],
-      "reachable_from_product_entrypoint": false,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
       "covered_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -52,11 +21,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3730,
+      "line": 3696,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3734,
+          "line": 3700,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5334,7 +5303,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 127,
+    "closure_direct_mutation_function_count": 126,
     "closure_module_count": 90,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
@@ -5349,8 +5318,8 @@
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 174,
-    "total_cross_language_sink_count": 175,
+    "sink_function_count": 173,
+    "total_cross_language_sink_count": 174,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -5832,7 +5801,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "ea93ad102d2bd422f16bc9c9fbf53d0344dac06989438e26ccefa6b17ed78edf",
+  "inventory_sha256": "b36012f37fea0223fdc4bc35b8982cfc6638f19dbb953fcd9f595248fbc3e7d0",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -5921,7 +5890,6 @@
         "transfer_member_exchange",
         "transfer_seal",
         "tray_state_quarantine",
-        "update_download",
         "update_zip_extract",
         "user_relay_autostart_install",
         "user_relay_autostart_remove",
@@ -17218,7 +17186,6 @@
     "transfer_member_exchange",
     "transfer_seal",
     "tray_state_quarantine",
-    "update_download",
     "update_zip_extract",
     "user_relay_autostart_install",
     "user_relay_autostart_remove",
@@ -17480,7 +17447,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1404,
+      "line": 1370,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17488,7 +17455,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 16156,
+      "line": 16159,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17496,7 +17463,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3730,
+      "line": 3696,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17504,7 +17471,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2710,
+      "line": 2676,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17512,7 +17479,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3106,
+      "line": 3072,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -18539,14 +18506,6 @@
       "line": 808,
       "marker_kind": "decorator",
       "source": "tray_state_quarantine"
-    },
-    {
-      "direct_mutation_site_count": 2,
-      "file": "Container_Audit.py",
-      "function": "Container_Audit._write_update_download",
-      "line": 827,
-      "marker_kind": "decorator",
-      "source": "update_download"
     },
     {
       "direct_mutation_site_count": 1,

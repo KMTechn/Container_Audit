@@ -248,7 +248,6 @@ from update_service import (
     release_asset_name_from_url,
     update_candidate_from_private_manifest,
     validate_release_asset_url,
-    verify_update_checksum,
     verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
@@ -479,7 +478,6 @@ PHS_REPLACEMENT_REQUIRED_NOTICE = (
 # least one complete recovery row.  Below this logical height the sidebar
 # keeps the same work context and exposes the trees through one state switch.
 LEFT_SIDEBAR_SWITCH_LOGICAL_HEIGHT = 1030.0
-MAX_UPDATE_DOWNLOAD_BYTES = 512 * 1024 * 1024
 MAX_UPDATE_CHECKSUM_BYTES = 64 * 1024
 UPDATE_BOOTSTRAP_MANIFEST_URL = (
     "https://worker.kmtecherp.com/static/update-feed/channels/"
@@ -576,10 +574,6 @@ def _find_release_asset_urls(
     expected_version: str = "",
 ) -> tuple[Optional[str], Optional[str]]:
     return find_release_asset_urls(latest_release_data, expected_version=expected_version)
-
-def _verify_update_checksum(zip_path: str, checksum_text: str, *, expected_filename: str = "") -> None:
-    verify_update_checksum(zip_path, checksum_text, expected_filename=expected_filename)
-
 
 def _get_update_provider() -> str:
     settings = _load_update_settings()
@@ -821,34 +815,6 @@ def _safe_check_update_candidate() -> Optional[Dict[str, Any]]:
     except (requests.exceptions.RequestException, ValueError, TypeError) as e:
         print(f"업데이트 확인 중 오류 발생: {e}")
         return None
-
-
-@writer_sink("update_download")
-def _write_update_download(response: Any, zip_path: str, *, max_bytes: int = MAX_UPDATE_DOWNLOAD_BYTES) -> None:
-    content_length = str(getattr(response, "headers", {}).get("Content-Length") or "").strip()
-    if content_length:
-        try:
-            if int(content_length) > max_bytes:
-                raise ValueError("업데이트 ZIP 다운로드 크기가 허용 한도를 초과했습니다.")
-        except ValueError as exc:
-            if "허용 한도" in str(exc):
-                raise
-    bytes_written = 0
-    try:
-        with open(zip_path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                if not chunk:
-                    continue
-                bytes_written += len(chunk)
-                if bytes_written > max_bytes:
-                    raise ValueError("업데이트 ZIP 다운로드 크기가 허용 한도를 초과했습니다.")
-                f.write(chunk)
-    except Exception:
-        try:
-            os.remove(zip_path)
-        except OSError:
-            pass
-        raise
 
 
 def _read_update_checksum_response(response: Any, *, max_bytes: int = MAX_UPDATE_CHECKSUM_BYTES) -> str:

@@ -297,6 +297,8 @@ Main reply `msg_0b2fc814c41b`에 따라 원래 d440→a7 공개 Restore09와 변
 <a id="ca-o11"></a>
 ## CA-O11 2026-09-09 S05 소스 단순화
 
+- CA-F01은 제품 호출·import가 없는 main의 `_write_update_download`/`_verify_update_checksum`과 그 전용 시험만 제거했다. 실제 portable source closure84개(제품 tool3개 포함)·grep으로 소비자0을 재확인했다. 후보 checksum 판정과 `update_service.verify_update_checksum`, runtime 배포를 거부하는 `download_and_apply_update`/`_build_updater_script`는 유지하며 writer inventory에서 삭제된 sink만 정리한다.
+
 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다.
 이번 작업은 clean `f3702837c085737686f195230d36be4dbe8ca201`에서 시작한 CA 소스
 정리이며 accepted `d440b1f7` 설치본·runtime·원래 실패·실행 산출물을 변경하지 않았다.

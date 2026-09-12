@@ -1197,37 +1197,6 @@ def test_update_asset_lookup_requires_matching_sha256_asset():
     )
 
 
-def test_update_checksum_verification_rejects_mismatch(tmp_path):
-    zip_path = tmp_path / "update.zip"
-    zip_path.write_bytes(b"zip-bytes")
-    good_hash = hashlib.sha256(b"zip-bytes").hexdigest()
-    bad_hash = hashlib.sha256(b"other").hexdigest()
-
-    container_audit_module._verify_update_checksum(str(zip_path), f"{good_hash}  update.zip")
-    with pytest.raises(ValueError, match="일치하지 않습니다"):
-        container_audit_module._verify_update_checksum(str(zip_path), f"{bad_hash}  update.zip")
-
-
-def test_update_download_rejects_content_length_over_limit(tmp_path):
-    zip_path = tmp_path / "update.zip"
-    response = FakeDownloadResponse([], headers={"Content-Length": "5"})
-
-    with pytest.raises(ValueError, match="다운로드 크기"):
-        container_audit_module._write_update_download(response, str(zip_path), max_bytes=4)
-
-    assert not zip_path.exists()
-
-
-def test_update_download_removes_partial_file_when_stream_exceeds_limit(tmp_path):
-    zip_path = tmp_path / "update.zip"
-    response = FakeDownloadResponse([b"12", b"345"])
-
-    with pytest.raises(ValueError, match="다운로드 크기"):
-        container_audit_module._write_update_download(response, str(zip_path), max_bytes=4)
-
-    assert not zip_path.exists()
-
-
 def test_runtime_code_deployment_is_blocked_before_network_temp_or_process(
     tmp_path,
     monkeypatch,
