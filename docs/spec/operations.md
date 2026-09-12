@@ -10,6 +10,13 @@
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
+portable builder의 `APP_ROOT_FILES`는 기존 root Python 51개를 명시한다.
+`APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
+relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
+manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
+기존 application 파일 133개의 경로·바이트와 tool import closure를 대조한다.
+설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
+
 작업자 GUI는 [Container_Audit.main / _prepare_gui_startup](../../Container_Audit.py)의 host 모드 분기, 계약·경로 확인, 단일 인스턴스, 조건부 현재 사용자 onboarding, 품목 준비를 거쳐 시작한다. Tkinter UI와 백그라운드 조회/relay가 분리되며, 작업자 이름은 업무 귀속이고 중앙 device/scope 인증은 별도다. [host dispatch](../../container_audit_product_host.py), [worker_registry](../../worker_registry.py), [protected_admin](../../protected_admin.py).
 
 | 경계 | 현행 소스 | 확인할 결과·한계 |

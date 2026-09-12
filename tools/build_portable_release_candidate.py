@@ -41,6 +41,62 @@ RUNTIME_ROOT_FILES = (
     "vcruntime140.dll",
     "vcruntime140_1.dll",
 )
+# Preserve the existing portable root modules, including compatibility/recovery
+# consumers. Add new runtime modules here explicitly; unrelated root scripts
+# must not enter the packet or seed its tools import closure.
+APP_ROOT_FILES = (
+    "best_time_records.py",
+    "Container_Audit.py",
+    "container_audit_product_host.py",
+    "container_audit_test_harness.py",
+    "current_user_onboarding.py",
+    "direct_sync_auto_bootstrap.py",
+    "direct_sync_health.py",
+    "direct_sync_operator.py",
+    "direct_sync_push.py",
+    "direct_sync_runtime.py",
+    "event_contracts.py",
+    "event_log_store.py",
+    "event_payloads.py",
+    "event_stream_policy.py",
+    "isolated_qualification.py",
+    "item_catalog.py",
+    "item_catalog_sync.py",
+    "label_qr.py",
+    "legacy_state_migration.py",
+    "logistics_runtime_profile.py",
+    "native_audio.py",
+    "parked_tray_store.py",
+    "phs_label_workflow.py",
+    "phs_reconciliation_workflow.py",
+    "preflight_scan_hold.py",
+    "producer_runtime_client.py",
+    "product_exchange.py",
+    "product_scan.py",
+    "protected_admin.py",
+    "recovery_two_phase.py",
+    "replacement_log_lookup.py",
+    "replacement_workflow.py",
+    "responsive_layout.py",
+    "runtime_dependency_guard.py",
+    "runtime_instance.py",
+    "scan_display.py",
+    "session_history.py",
+    "storage_policy.py",
+    "storage_utils.py",
+    "style_tokens.py",
+    "terminal_operation_lease.py",
+    "tk_serial_ui_lane.py",
+    "transfer_member_exchange.py",
+    "transfer_seal.py",
+    "tray_state.py",
+    "update_service.py",
+    "user_relay.py",
+    "warning_presenter.py",
+    "work_session_state.py",
+    "worker_registry.py",
+    "writer_session_fence.py",
+)
 APP_PACKAGE_DIRS = (
     "kmtech_factory_contracts",
     "vendor",
@@ -169,7 +225,10 @@ def _imported_tool_modules(source: Path) -> set[str]:
 
 
 def _portable_application_sources(repo_root: Path) -> list[Path]:
-    sources = list(repo_root.glob("*.py"))
+    sources = [repo_root / name for name in APP_ROOT_FILES]
+    for source in sources:
+        if not source.is_file():
+            raise PortableBuildError(f"required application module is missing: {source}")
     for name in APP_PACKAGE_DIRS:
         sources.extend((repo_root / name).rglob("*.py"))
     portable_main = repo_root / "portable" / "main.py"
@@ -283,9 +342,10 @@ def _copy_third_party(site_packages: Path) -> dict[str, str]:
 
 
 def _copy_application(repo_root: Path, app_root: Path) -> list[Path]:
+    application_sources = _portable_application_sources(repo_root)
     app_root.mkdir(parents=True)
-    for source in sorted(repo_root.glob("*.py"), key=lambda item: item.name.casefold()):
-        shutil.copy2(source, app_root / source.name)
+    for name in APP_ROOT_FILES:
+        shutil.copy2(repo_root / name, app_root / name)
     for name in APP_PACKAGE_DIRS:
         _copy_tree(repo_root / name, app_root / name)
     for name in APP_DATA_DIRS:
@@ -299,7 +359,7 @@ def _copy_application(repo_root: Path, app_root: Path) -> list[Path]:
         shutil.copy2(source, target)
     tools_target = app_root / "tools"
     tools_target.mkdir()
-    tool_sources = _discover_portable_tool_sources(repo_root)
+    tool_sources = _discover_portable_tool_sources(repo_root, initial_sources=application_sources)
     for source in tool_sources:
         relative = source.relative_to(repo_root / "tools")
         target = tools_target / relative

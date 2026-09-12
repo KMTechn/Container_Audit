@@ -416,6 +416,33 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
         assert forbidden not in portable_builder.THIRD_PARTY
 
 
+def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
+    # The old builder shipped every root Python file. Keep that migration
+    # baseline independent of APP_ROOT_FILES so an omission cannot self-validate.
+    expected = {path.name: path for path in ROOT.glob("*.py")}
+    for directory in ("kmtech_factory_contracts", "vendor", "assets"):
+        for source in (ROOT / directory).rglob("*"):
+            if (source.is_file() and "__pycache__" not in source.parts
+                    and source.suffix not in {".pyc", ".pyo"}):
+                expected[source.relative_to(ROOT).as_posix()] = source
+    for name in (
+        "contract.lock.json", "config/container_audit_settings.json",
+        "config/validator_settings.json", "tools/direct_sync_relay_runner.py",
+        "tools/install_logistics_runtime_profile.py",
+        "tools/register_container_audit_worker_pc.py",
+    ):
+        expected[name] = ROOT / name
+    expected["main.py"] = ROOT / "portable" / "main.py"
+
+    app_root = tmp_path / "app"
+    portable_builder._copy_application(ROOT, app_root)
+    actual = {path.relative_to(app_root).as_posix(): path
+              for path in app_root.rglob("*") if path.is_file()}
+    assert actual.keys() == expected.keys()
+    assert all(actual[name].read_bytes() == source.read_bytes()
+               for name, source in expected.items())
+
+
 def test_portable_tool_dependency_closure_is_recursive_and_fail_closed(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
@@ -472,6 +499,14 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     second = tools_root / "second.py"
     first.write_text("from tools import second\n", encoding="utf-8")
     second.write_text("VALUE = 1\n", encoding="utf-8")
+    # An unrelated root script must neither ship nor add its tools dependency.
+    (repo_root / "developer_only.py").write_text(
+        "from tools import unshipped\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(portable_builder, "APP_ROOT_FILES", (
+        "Container_Audit.py", "container_audit_product_host.py",
+        "current_user_onboarding.py", "entrypoint.py",
+    ))
     monkeypatch.setattr(portable_builder, "APP_PACKAGE_DIRS", ())
     monkeypatch.setattr(portable_builder, "APP_DATA_DIRS", ())
     monkeypatch.setattr(portable_builder, "APP_DATA_FILES", ())
@@ -483,6 +518,7 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     assert [path.name for path in tool_sources] == ["first.py", "second.py"]
     assert (app_root / "tools" / "first.py").is_file()
     assert (app_root / "tools" / "second.py").is_file()
+    assert not (app_root / "developer_only.py").exists()
     portable_builder._assert_portable_import_closure(
         output,
         repo_root,
@@ -502,6 +538,14 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
             python_executable=Path(sys.executable),
         )
     assert list(output.rglob("__pycache__")) == []
+
+    (repo_root / "entrypoint.py").unlink()
+    with pytest.raises(
+        portable_builder.PortableBuildError,
+        match="required application module is missing: .*entrypoint.py",
+    ):
+        portable_builder._copy_application(repo_root, tmp_path / "incomplete")
+    assert not (tmp_path / "incomplete").exists()
 
 
 @pytest.mark.parametrize('exit_code', [0, 23])
