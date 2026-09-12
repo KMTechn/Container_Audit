@@ -463,6 +463,8 @@ def test_native_rebuilt_panes_ignore_stale_configure_callbacks(native_operator, 
 
 def test_native_notice_rebuild_ignores_old_label_and_wraps_live_width(native_operator, monkeypatch):
     app, center, _right = native_operator
+    app.show_status_message('입력한 제품을 확인하세요.', app.COLOR_DANGER, duration=0)
+    app.root.update()
     old_label = app.notice_message_label
     old_generation = app._center_widget_generation
     old_wrap = old_label.cget('wraplength')
@@ -487,7 +489,7 @@ def test_native_notice_rebuild_ignores_old_label_and_wraps_live_width(native_ope
 
 
 @pytest.mark.parametrize('native_operator', [{'scale': 1.4, 'viewport': (1366, 768), 'right_size': (302, 707)}], indirect=True)
-def test_native_right_cards_and_legend_restore_after_compact_round_trip(native_operator):
+def test_native_right_cards_and_details_restore_after_compact_round_trip(native_operator):
     app, _center, right = native_operator
     assert app.scale_factor == 1.4
     snapshots = []
@@ -498,7 +500,9 @@ def test_native_right_cards_and_legend_restore_after_compact_round_trip(native_o
         app.root.update()
         app._apply_right_sidebar_layout()
         app.root.update()
-        assert bool(app._legend_frame.winfo_ismapped()) == (height == 1324)
+        assert app._work_details_expanded is True
+        assert_contained(app.work_details_button, right)
+        assert app.work_details_button.cget('text') == '작업 상세 ▾'
         values = [app.info_cards[key]['value'] for key in ['status', 'direct_sync', 'stopwatch', 'avg_time', 'best_time']]
         values += [app.last_scan_value_label, app.follow_up_label]
         for widget in values:
