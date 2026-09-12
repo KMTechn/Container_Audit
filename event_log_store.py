@@ -39,18 +39,21 @@ class EventLogOutbox:
         with self._lock:
             return bool(self._unstaged)
 
-    @writer_sink("event_outbox_stage")
     def stage(self, log_file_path: str, log_entry: Dict[str, Any]) -> None:
         with self._lock:
             self._unstaged.append({"log_file_path": log_file_path, "log_entry": dict(log_entry)})
-            self._persist_unstaged()
+        # Retain before admission can fail; release the lock before waiting for
+        # admission, matching drain's admission -> outbox lock order.
+        self._persist_unstaged()
 
+    @writer_sink("event_outbox_stage")
     def _persist_unstaged(self) -> None:
-        while self._unstaged:
-            self._sequence = max(self._sequence + 1, time.time_ns())
-            path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
-            atomic_write_json(path, self._unstaged[0])
-            self._unstaged.popleft()
+        with self._lock:
+            while self._unstaged:
+                self._sequence = max(self._sequence + 1, time.time_ns())
+                path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
+                atomic_write_json(path, self._unstaged[0])
+                self._unstaged.popleft()
 
     @writer_sink("event_outbox_project")
     def drain(self) -> None:

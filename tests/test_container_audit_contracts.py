@@ -2039,17 +2039,38 @@ def test_async_event_retry_keeps_original_key_payload_and_order_after_restart(tm
     assert not list((tmp_path / "_event_outbox").glob("*.json"))
 
 
-def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure", ["atomic_write", "admission_timeout", "admission_denied"])
+def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch, failure):
+    from contextlib import contextmanager
+    import writer_session_fence as fence
+
     app = _headless_app()
     app.worker_name = "worker"
     app.log_file_path = str(tmp_path / "events.csv")
     app.log_queue = queue.Queue()
     original_write = event_log_store.atomic_write_json
-    monkeypatch.setattr(event_log_store, "atomic_write_json", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    original_admission = fence.writer_admission
 
-    assert app._log_event("SCAN_OK", {"barcode": "BC-1"}) is False
+    @contextmanager
+    def denied_admission(source, **kwargs):
+        if source in {"event_outbox_stage", "event_outbox_project"}:
+            code = "WRITER_GATE_TIMEOUT" if failure == "admission_timeout" else "ACTIVE_WRITER_FENCE"
+            raise fence.WriterFencedError(code, "synthetic writer admission failure")
+        with original_admission(source, **kwargs):
+            yield
+
+    if failure == "atomic_write":
+        monkeypatch.setattr(event_log_store, "atomic_write_json", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    else:
+        monkeypatch.setattr(fence, "writer_admission", denied_admission)
+
+    assert app._log_event("SCAN_OK", {"barcode": "BC-1"}, idempotency_key="retained-1") is False
     assert app._event_log_outbox_instance.has_unstaged
     assert "종료하지 마세요" in app._event_log_notice
+    assert app._flush_pending_event_logs() is False
+    assert "재시도 중" in app._event_log_notice
+    assert not Path(app.log_file_path).exists()
+    assert not list((tmp_path / "_event_outbox").glob("*.json"))
 
     from tests.test_tk_serial_ui_lane import FakeTkRoot
     app.root = FakeTkRoot()
@@ -2067,14 +2088,103 @@ def test_outbox_stage_failure_retains_payload_until_retry(tmp_path, monkeypatch)
     assert app._event_log_close_requested is False
 
     monkeypatch.setattr(event_log_store, "atomic_write_json", original_write)
+    monkeypatch.setattr(fence, "writer_admission", original_admission)
+    # A later event must persist the retained predecessor first, with its original identity.
+    app.worker_name = "next-worker"
+    assert app._log_event("SCAN_OK", {"barcode": "BC-2"}, idempotency_key="retained-2")
     assert app._flush_pending_event_logs()
     assert not app._event_log_outbox_instance.has_unstaged
+    assert app._event_log_notice == "로그 저장 재시도를 완료했습니다."
+    assert app._flush_pending_event_logs()
     with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
         rows = list(csv.DictReader(handle))
-    assert len(rows) == 1
-    assert json.loads(rows[0]["details"])["barcode"] == "BC-1"
+    assert [json.loads(row["details"])["barcode"] for row in rows] == ["BC-1", "BC-2"]
+    assert [json.loads(row["details"])["idempotency_key"] for row in rows] == ["retained-1", "retained-2"]
+    assert [row["worker_name"] for row in rows] == ["worker", "next-worker"]
     app._finalize_application_close()
     assert app.root.destroyed
+
+
+@pytest.mark.skipif(os.name != "nt", reason="real Windows named mutex timeout required")
+def test_real_isolated_writer_mutex_timeout_retains_event(tmp_path, monkeypatch):
+    import time
+    import writer_session_fence as fence
+
+    app = _headless_app()
+    app.worker_name = "original-worker"
+    log_path = tmp_path / "events.csv"
+    app.log_file_path = str(log_path)
+    app.log_queue = queue.Queue()
+    ready, release = threading.Event(), threading.Event()
+    errors, timeouts = [], []
+    original_acquire = fence._acquire_named_mutex
+
+    def observe_acquire(name, timeout_seconds):
+        assert name != fence.WRITER_MUTEX_NAME  # conftest owns the isolated real mutex.
+        lease = original_acquire(name, timeout_seconds)
+        if lease is None:
+            timeouts.append(timeout_seconds)
+        return lease
+
+    monkeypatch.setattr(fence, "_acquire_named_mutex", observe_acquire)
+
+    def hold_isolated_mutex():
+        try:
+            with fence.writer_admission("review_transient_contention"):
+                ready.set()
+                if not release.wait(40):
+                    raise AssertionError("isolated writer was not released")
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=hold_isolated_mutex, name="review-isolated-writer", daemon=False)
+    worker.start()
+    try:
+        assert ready.wait(10), errors
+        started = time.monotonic()
+        assert app._log_event(
+            "SCAN_OK", {"barcode": "REVIEW-MUTEX", "scan_position": 1},
+            idempotency_key="mutex-original-key", event_timestamp="2026-09-12T12:34:56",
+        ) is False
+        assert time.monotonic() - started >= 4.9
+        assert timeouts == [5.0]
+        assert app._event_log_outbox_instance.has_unstaged
+        assert "종료하지 마세요" in app._event_log_notice
+        assert not log_path.exists()
+        assert not list((tmp_path / "_event_outbox").glob("*.json"))
+    finally:
+        release.set()
+        worker.join(10)
+        assert not worker.is_alive() and not errors, errors
+
+    # Admission recovery alone is insufficient: CSV projection must also succeed.
+    def fail_append(*args, **kwargs):
+        raise OSError("synthetic interrupted append")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(event_log_store, "append_event_log_entry_idempotent", fail_append)
+        assert app._flush_pending_event_logs() is False
+    pending = list((tmp_path / "_event_outbox").glob("*.json"))
+    assert len(pending) == 1
+    original = json.loads(pending[0].read_text(encoding="utf-8"))
+    assert "재시도 중" in app._event_log_notice
+    assert not log_path.exists()
+    app.worker_name = "next-worker"
+    app.log_file_path = str(tmp_path / "next-day.csv")
+    assert app._flush_pending_event_logs()
+    assert app._event_log_notice == "로그 저장 재시도를 완료했습니다."
+    assert app._flush_pending_event_logs()
+    with log_path.open(newline="", encoding="utf-8-sig") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows == [original["log_entry"]]
+    assert rows[0]["timestamp"] == "2026-09-12T12:34:56"
+    assert rows[0]["worker_name"] == "original-worker"
+    detail = json.loads(rows[0]["details"])
+    assert (detail["barcode"], detail["scan_position"], detail["idempotency_key"]) == (
+        "REVIEW-MUTEX", 1, "mutex-original-key",
+    )
+    assert not Path(app.log_file_path).exists()
+    assert not list((tmp_path / "_event_outbox").glob("*.json"))
 
 
 def test_event_outbox_keeps_fifo_when_clock_moves_backwards_across_restart(tmp_path, monkeypatch):
