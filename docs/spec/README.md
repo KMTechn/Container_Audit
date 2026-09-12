@@ -337,6 +337,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-13"></a>
 ### CA-13 이벤트 업로드·전송 상태·분석 소비
 
+- **반복 스캔:** ACK가 끝난 source의 변경 감지와 prefix 내용 검증 주기를 분리한다. 변경이 없으면 마지막 전체 검증 후 300초 미만 동안 읽기를 생략하며, 변경·미완료 delta·검증 기한 경과는 전체 확인으로 돌아간다. 힌트는 프로세스 재시작 뒤에도 기존 cursor와 함께 유지된다. [CA-C05](contracts.md#ca-c05)
+
 - **F4 실제 추가 전송:** 복원 a7의 F4 완료 뒤 GUI 대기0·[relay29건 전부 acked](E:/KMTech/ca-install-qualification-20260908/after-f4-relay-queue.jsonl)를 확인했다. 물류 seal receipt·producer receipt·projection/API·브라우저 표시 범위는 각각 [CA-O09](operations.md#ca-o09)의 증거로 구분하며 queue ACK만으로 소비 화면 수용을 주장하지 않는다.
 
 - **시작·입력:** events CSV를 whole-file snapshot으로 spool/queue에 등록하고 사용자 relay가 HTTPS 업로드한다. [enqueue_completed_source_file](../../direct_sync_runtime.py), [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py)

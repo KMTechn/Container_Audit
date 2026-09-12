@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import sqlite3
 import sys
 import time
@@ -120,6 +121,10 @@ def _scan_state_connect(db_path: str | Path) -> sqlite3.Connection:
     }
     if "sent_prefix_sha256" not in columns:
         conn.execute("ALTER TABLE direct_sync_source_scan_state ADD COLUMN sent_prefix_sha256 TEXT NOT NULL DEFAULT ''")
+    if "verified_source_signature" not in columns:
+        conn.execute("ALTER TABLE direct_sync_source_scan_state ADD COLUMN verified_source_signature TEXT NOT NULL DEFAULT ''")
+    if "prefix_verified_at_unix" not in columns:
+        conn.execute("ALTER TABLE direct_sync_source_scan_state ADD COLUMN prefix_verified_at_unix REAL NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 
@@ -389,7 +394,9 @@ def _write_source_scan_state(
         ON CONFLICT(source_file_path) DO UPDATE SET
             sent_byte_count = excluded.sent_byte_count,
             sent_prefix_sha256 = excluded.sent_prefix_sha256,
-            updated_at_unix = excluded.updated_at_unix
+            updated_at_unix = excluded.updated_at_unix,
+            verified_source_signature = '',
+            prefix_verified_at_unix = 0
         """,
         (_source_state_key(source_file), int(sent_byte_count), sent_prefix_sha256, time.time()),
     )
@@ -506,26 +513,97 @@ def _has_active_source_writer_lock(source_file: Path) -> bool:
     return time.time() - lock_stat.st_mtime <= SOURCE_WRITER_LOCK_STALE_SECONDS
 
 
+# This is only a scheduling hint. Recheck content periodically even when stat
+# is unchanged; never use metadata to acknowledge an event or advance a cursor.
+_UNCHANGED_SOURCE_RECHECK_SECONDS = 300.0
+
+
+def _source_scan_signature(source_file: Path) -> str:
+    info = source_file.stat()
+    return json.dumps((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+
+
+def _source_prefix_recently_verified(config, source_file, signature, source_size) -> bool:
+    # The relay is a fresh child process each cycle: keep the scheduling hint
+    # beside its existing cursor. Any cursor write invalidates this hint.
+    conn = _scan_state_connect(config.db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM direct_sync_source_scan_state WHERE source_file_path = ?",
+            (_source_state_key(source_file),),
+        ).fetchone()
+        if (row is None or source_size <= 0 or row["sent_byte_count"] != source_size
+                or row["verified_source_signature"] != signature + ":" + row["sent_prefix_sha256"]
+                or not 0 <= time.time() - row["prefix_verified_at_unix"] < _UNCHANGED_SOURCE_RECHECK_SECONDS):
+            return False
+        has_queue = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='direct_sync_relay_batches'"
+        ).fetchone()
+        if has_queue:
+            # Inflight, damaged and blocked deltas must still reach the full
+            # repair/progress path. Only settled sources can skip content reads.
+            pending = conn.execute(
+                "SELECT source_file_path, relative_path FROM direct_sync_relay_batches WHERE status != 'acked'"
+            ).fetchall()
+            source_key = _source_delta_key(source_file)
+            if any(Path(str(item["source_file_path"] or "")).parent.name == source_key
+                   and _parse_delta_range(item["relative_path"], source_file) is not None
+                   for item in pending):
+                return False
+        return _source_scan_signature(source_file) == signature
+    finally:
+        conn.close()
+
+
+@writer_sink("raw_relay_storage")
+def _record_source_prefix_verification(config, source_file, signature, source_size, prefix_sha256) -> None:
+    conn = _scan_state_connect(config.db_path)
+    try:
+        conn.execute(
+            "UPDATE direct_sync_source_scan_state SET verified_source_signature = ?, prefix_verified_at_unix = ? "
+            "WHERE source_file_path = ? AND sent_byte_count = ? AND sent_prefix_sha256 = ?",
+            (signature + ":" + prefix_sha256, time.time(), _source_state_key(source_file), source_size, prefix_sha256),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @writer_sink("raw_relay_storage")
 def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path) -> tuple[Path, str, int, str] | None:
     if _has_active_source_writer_lock(source_file):
         return None
-    if not _repair_recoverable_delta_spools_before_scan(config, source_file):
-        return None
     try:
         source_stat = source_file.stat()
+        signature = _source_scan_signature(source_file)
     except OSError:
+        return None
+    if _source_prefix_recently_verified(config, source_file, signature, source_stat.st_size):
+        return None
+    if not _repair_recoverable_delta_spools_before_scan(config, source_file):
         return None
     source_size = source_stat.st_size
     source_mtime_ns = source_stat.st_mtime_ns
     sent_byte_count, sent_prefix_sha256 = _read_source_scan_state(config.db_path, source_file)
+    prefix_hash = hashlib.sha256()
     if sent_byte_count > 0:
         replaced_or_truncated = not sent_prefix_sha256 or source_size < sent_byte_count
         if not replaced_or_truncated:
-            replaced_or_truncated = _file_prefix_sha256(source_file, sent_byte_count) != sent_prefix_sha256
+            with source_file.open("rb") as handle:
+                remaining = sent_byte_count
+                while remaining:
+                    block = handle.read(min(1024 * 1024, remaining))
+                    if not block:
+                        break
+                    prefix_hash.update(block)
+                    remaining -= len(block)
+            replaced_or_truncated = bool(remaining) or prefix_hash.hexdigest() != sent_prefix_sha256
         if replaced_or_truncated:
             sent_byte_count = 0
+            prefix_hash = hashlib.sha256()
     if source_size <= sent_byte_count:
+        if _source_scan_signature(source_file) == signature:
+            _record_source_prefix_verification(config, source_file, signature, source_size, sent_prefix_sha256)
         return None
 
     with source_file.open("rb") as handle:
@@ -541,7 +619,8 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
         after_stat = source_file.stat()
     except OSError:
         return None
-    if after_stat.st_size != source_size or after_stat.st_mtime_ns != source_mtime_ns:
+    if (after_stat.st_size != source_size or after_stat.st_mtime_ns != source_mtime_ns
+            or after_stat.st_ino != source_stat.st_ino or after_stat.st_dev != source_stat.st_dev):
         return None
 
     complete_delta_body = _complete_line_prefix(delta_body)
@@ -553,17 +632,10 @@ def _build_delta_source_file(config: DirectSyncRuntimeConfig, source_file: Path)
 
     delta_content = complete_delta_body if start_byte == 0 else header + complete_delta_body
     delta_hash = hashlib.sha256(delta_content).hexdigest()
-    try:
-        with source_file.open("rb") as handle:
-            sent_prefix = handle.read(end_byte)
-        after_prefix_stat = source_file.stat()
-    except OSError:
-        return None
-    if after_prefix_stat.st_size != source_size or after_prefix_stat.st_mtime_ns != source_mtime_ns:
-        return None
-    if len(sent_prefix) != end_byte:
-        return None
-    sent_prefix_sha256 = hashlib.sha256(sent_prefix).hexdigest()
+    if start_byte == 0:
+        prefix_hash = hashlib.sha256()
+    prefix_hash.update(complete_delta_body)
+    sent_prefix_sha256 = prefix_hash.hexdigest()
     delta_source = (
         Path(config.spool_dir)
         / "_scan_delta_inputs"

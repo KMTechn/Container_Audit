@@ -798,6 +798,113 @@ def test_runner_scan_source_content_append_enqueues_new_delta(tmp_path, capsys):
     assert "BC-1" not in second_payload
 
 
+@pytest.mark.parametrize("change", ["append", "replace", "truncate", "hidden_edit", "db_rollback"])
+def test_unchanged_source_hint_rechecks_changes_and_periodic_content(tmp_path, monkeypatch, change):
+    from types import SimpleNamespace
+    source = write_container_csv(tmp_path / "sync")
+    config = SimpleNamespace(db_path=tmp_path / "relay.sqlite3", spool_dir=tmp_path / "spool")
+    original = source.read_bytes()
+    info = source.stat()
+    runner_module._record_source_sent_byte_count(
+        config.db_path, source, len(original), hashlib.sha256(original).hexdigest())
+    assert runner_module._build_delta_source_file(config, source) is None
+    real_open = Path.open
+
+    def no_source_read(path, *args, **kwargs):
+        assert path != source, "unchanged source must not be reopened"
+        return real_open(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", no_source_read)
+        assert runner_module._build_delta_source_file(config, source) is None
+    if change == "append":
+        source.write_bytes(original + original.splitlines(keepends=True)[1].replace(b"BC-1", b"BC-2"))
+    elif change == "replace":
+        replacement = tmp_path / "replacement.csv"
+        replacement.write_bytes(original.replace(b"BC-1", b"BC-2"))
+        os.utime(replacement, ns=(info.st_atime_ns, info.st_mtime_ns))
+        replacement.replace(source)
+    elif change == "truncate":
+        source.write_bytes(original.replace(b"BC-1", b"B-2"))
+    elif change == "hidden_edit":
+        source.write_bytes(original.replace(b"BC-1", b"BC-2"))
+        os.utime(source, ns=(info.st_atime_ns, info.st_mtime_ns))
+        monkeypatch.setattr(runner_module, "_UNCHANGED_SOURCE_RECHECK_SECONDS", 0)
+    else:
+        runner_module._record_source_sent_byte_count(config.db_path, source, 0, "")
+    delta = runner_module._build_delta_source_file(config, source)
+    assert delta is not None
+    path, relative, end, prefix_hash = delta
+    assert prefix_hash == hashlib.sha256(source.read_bytes()[:end]).hexdigest()
+    assert ("/bytes-0-" in relative.replace("\\", "/")) == (change != "append")
+    if change in {"append", "replace", "hidden_edit"}:
+        assert b"BC-2" in path.read_bytes()
+    elif change == "truncate":
+        assert b"B-2" in path.read_bytes()
+    else:
+        assert path.read_bytes() == original
+
+
+def test_settled_prefix_hint_survives_restart_but_inflight_recovery_is_not_skipped(tmp_path, monkeypatch, capsys):
+    import importlib
+    from types import SimpleNamespace
+    source = write_container_csv(tmp_path / "sync")
+    args = runner_args(tmp_path, scan_dir=source.parent)
+    assert main(args) == 0
+    config = SimpleNamespace(db_path=tmp_path / "relay.sqlite3", spool_dir=tmp_path / "spool")
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("UPDATE direct_sync_relay_batches SET status='acked'")
+    assert runner_module._build_delta_source_file(config, source) is None
+    assert source_scan_state(config.db_path, source)["prefix_verified_at_unix"] > 0
+    importlib.reload(runner_module)  # No process-local observation is retained.
+    original_open = Path.open
+    def no_source_read(path, *args, **kwargs):
+        assert path != source
+        return original_open(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", no_source_read)
+        assert runner_module._build_delta_source_file(config, source) is None
+    with sqlite3.connect(config.db_path) as conn:
+        conn.execute("UPDATE direct_sync_relay_batches SET status='leased'")
+    repairs = []
+    monkeypatch.setattr(runner_module, "_repair_recoverable_delta_spools_before_scan",
+                        lambda config, path: repairs.append(path) or False)
+    assert runner_module._build_delta_source_file(config, source) is None
+    assert repairs == [source]
+
+
+@pytest.mark.parametrize("race", ["append", "replace"])
+def test_delta_rechecks_identity_after_prefix_read_and_concurrent_change(tmp_path, monkeypatch, race):
+    from types import SimpleNamespace
+    source = write_container_csv(tmp_path / "sync")
+    original = source.read_bytes()
+    config = SimpleNamespace(db_path=tmp_path / "relay.sqlite3", spool_dir=tmp_path / "spool")
+    runner_module._record_source_sent_byte_count(config.db_path, source, len(original), hashlib.sha256(original).hexdigest())
+    source.write_bytes(original + original.splitlines(keepends=True)[1].replace(b"BC-1", b"BC-2"))
+    real_open, reads = Path.open, []
+    def racing_open(path, *args, **kwargs):
+        if path == source and args and args[0] == "rb":
+            reads.append(path)
+            if len(reads) == 2:
+                if race == "append":
+                    with real_open(path, "ab") as handle:
+                        handle.write(original.splitlines(keepends=True)[1].replace(b"BC-1", b"BC-3"))
+                else:
+                    info = source.stat()
+                    replacement = tmp_path / "replacement.csv"
+                    replacement.write_bytes(source.read_bytes().replace(b"BC-1", b"BC-3"))
+                    os.utime(replacement, ns=(info.st_atime_ns, info.st_mtime_ns))
+                    replacement.replace(source)
+        return real_open(path, *args, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "open", racing_open)
+        assert runner_module._build_delta_source_file(config, source) is None
+    delta = runner_module._build_delta_source_file(config, source)
+    assert delta is not None
+    assert delta[3] == hashlib.sha256(source.read_bytes()[:delta[2]]).hexdigest()
+    assert b"BC-3" in delta[0].read_bytes()
+
+
 def test_runner_scan_source_defers_trailing_partial_csv_row_until_newline(tmp_path, capsys):
     sync_dir = tmp_path / "sync"
     sync_dir.mkdir(parents=True, exist_ok=True)

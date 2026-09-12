@@ -125,6 +125,8 @@ capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transf
 - **순서·재시작:** due인 pending/retry_wait 중 `created_at, relay_id` 순서로 `BEGIN IMMEDIATE` claim을 한다. 아직 due가 아닌 앞 항목이 모든 뒤 항목을 막는 전역 strict FIFO는 아니다. stale local lease 복구와 status CAS는 물류 lease 만료 처리와 별개다. [claim_relay_batch / reset_stale_relay_leases](../../direct_sync_push.py)
 - **중복·cursor:** 이 경로는 source snapshot·수신 event identity·install/source scope를 사용한다. CA가 소비하는 일반 warehouse response cursor 계약으로 바꾸지 않는다. 서버 projection 재생과 모든 화면 갱신은 각각 확인해야 한다. [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py), [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py)
 
+- **반복 prefix 확인:** 기존 cursor에 묶인 파일 identity·size·mtime/ctime·검증 hash와 마지막 전체 검증 시각을 저장한다. 관련 delta가 모두 ACK된 source가 같은 파일이면 300초 미만 동안 내용 재읽기를 생략할 수 있지만, metadata로 ACK나 cursor를 전진시키지는 않는다. cursor 변경은 이 힌트를 무효화한다. pending/leased/blocked delta, 파일 교체·truncate·append는 기존 전체 검증/복구 경로를 유지하고, metadata까지 같은 내용 변조도 검증 기한이 지난 다음 실행에서 전체 내용을 다시 확인한다. [direct_sync_relay_runner](../../tools/direct_sync_relay_runner.py)
+
 수용 기준은 [CA-13](README.md#ca-13), 누락·지연 및 보존 요구는 [CA-G01](BACKLOG.md#ca-g01), [CA-G06](BACKLOG.md#ca-g06)이다.
 
 <a id="ca-c06"></a>

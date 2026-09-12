@@ -126,6 +126,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 | preflight hold | `_preflight_hold_store`: `max(1, TRAY_SIZE + 8)`; 별도 dispatcher queue는 `max(4, TRAY_SIZE + 12)` | 고정 60개 업무 한도가 아니다. 목표 GOOD 수와 버퍼 용량을 구분. 포화·디스크 지연 실측 미확인. [Container_Audit.py](../../Container_Audit.py) |
 | 로컬/중앙 동시 작업 | data-root mutex, 로컬 파일/DB 잠금, 중앙 version CAS·lease | 동시에 운영할 PC 수·허용 경합률/지연 미정. 서버 경합 E2E는 미입증. [runtime_instance](../../runtime_instance.py), [CA-C03~04](contracts.md#ca-c03) |
 | relay 저장 압력 | `DirectSyncRuntimeConfig`의 `min_free_bytes`, `max_active_queue_count`, `max_active_queue_age_seconds` 기본 0; 실제 배포값은 별도 | 0을 검증된 무제한 용량이나 승인된 장애 임계치로 해석하지 않음. [direct_sync_runtime](../../direct_sync_runtime.py) |
+| relay 반복 prefix | ACK 완료 source의 파일 identity·size·mtime/ctime와 cursor hash가 같으면 마지막 전체 검증 후 300초 미만 재읽기 생략; SQLite 힌트로 새 child 실행에서도 유지 | cursor 변경 시 무효화. 미완료/손상 delta는 매번 기존 복구 경로, 변경 파일은 전체 검사. 같은 metadata의 변조는 기한 후 다음 실행에서 확인하며 즉시 탐지라고 주장하지 않음. [CA-C05](contracts.md#ca-c05) |
 | lease 시간 | v1 서명 duration 60초~24시간 검증, 기존 완료의 재검증은 저장된 완료 시각 사용 | 실제 발급 기간·허용 offline 업무시간을 확정하는 값이 아님. [terminal_operation_lease](../../terminal_operation_lease.py), [TransferSealCoordinator._verified_operation_lease](../../transfer_seal.py) |
 | 수신→화면 최신성 | whole-file relay·projection·API·렌더의 분리, `pcs_completed`는 관측 완료 수량 | 허용 지연/업무일·누락 경고·복구 후 따라잡기 시간 미정, live 측정 없음. [CA-C07](contracts.md#ca-c07) |
 
