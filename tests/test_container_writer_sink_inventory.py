@@ -312,7 +312,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     raster_write = next(
         row
         for row in payload["closure_direct_mutation_functions"]
-        if row["node"] == "vendor.kmtech_zero_pe.raster.RasterImage.save_png"
+        if row["node"] == "kmtech_shared.raster.RasterImage.save_png"
     )
     assert raster_write["decorated_source"] == ""
     assert raster_write["direct_callers"] == ["phs_label_workflow._save_raster_png"]

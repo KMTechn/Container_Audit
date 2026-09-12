@@ -1926,6 +1926,59 @@
       "unsunk_paths": []
     },
     {
+      "caller_guard_reason": "byte-pinned shared method executes only beneath the exact fenced adapter",
+      "caller_guard_sources": [
+        "phs_raster_png"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [],
+      "decorated_source": "",
+      "direct_callers": [
+        "phs_label_workflow._save_raster_png"
+      ],
+      "file": "kmtech_shared/raster.py",
+      "kind": "function",
+      "line": 316,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 328,
+          "operation": "target.parent.mkdir",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 333,
+          "operation": "temporary.open",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 337,
+          "operation": "os.replace",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 340,
+          "operation": "temporary.unlink",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "filesystem",
+          "line": 344,
+          "operation": "target.write_bytes",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.raster.RasterImage.save_png",
+      "reachable_entrypoints": [],
+      "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
@@ -2065,17 +2118,17 @@
       "direct_callers": [],
       "file": "phs_label_workflow.py",
       "kind": "function",
-      "line": 150,
+      "line": 151,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 176,
+          "line": 177,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 180,
+          "line": 181,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5181,59 +5234,6 @@
       "unsunk_paths": []
     },
     {
-      "caller_guard_reason": "byte-pinned vendor method executes only beneath the exact fenced adapter",
-      "caller_guard_sources": [
-        "phs_raster_png"
-      ],
-      "coverage_status": "covered",
-      "covered_entrypoints": [],
-      "decorated_source": "",
-      "direct_callers": [
-        "phs_label_workflow._save_raster_png"
-      ],
-      "file": "vendor/kmtech_zero_pe/raster.py",
-      "kind": "function",
-      "line": 316,
-      "mutation_sites": [
-        {
-          "category": "filesystem",
-          "line": 328,
-          "operation": "target.parent.mkdir",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 333,
-          "operation": "temporary.open",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 337,
-          "operation": "os.replace",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 340,
-          "operation": "temporary.unlink",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "filesystem",
-          "line": 344,
-          "operation": "target.write_bytes",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "vendor.kmtech_zero_pe.raster.RasterImage.save_png",
-      "reachable_entrypoints": [],
-      "reachable_from_product_entrypoint": false,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
@@ -5301,6 +5301,9 @@
     "kmtech_factory_contracts/package.py",
     "kmtech_factory_contracts/python_api.py",
     "kmtech_factory_contracts/strict_server.py",
+    "kmtech_shared/__init__.py",
+    "kmtech_shared/catalog.py",
+    "kmtech_shared/raster.py",
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
@@ -5356,7 +5359,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 90,
+    "closure_module_count": 93,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 34,
@@ -5428,6 +5431,9 @@
     "kmtech_factory_contracts/package.py",
     "kmtech_factory_contracts/python_api.py",
     "kmtech_factory_contracts/strict_server.py",
+    "kmtech_shared/__init__.py",
+    "kmtech_shared/catalog.py",
+    "kmtech_shared/raster.py",
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
@@ -5669,6 +5675,9 @@
       "kmtech_factory_contracts.canonical",
       "kmtech_factory_contracts.errors"
     ],
+    "kmtech_shared": [],
+    "kmtech_shared.catalog": [],
+    "kmtech_shared.raster": [],
     "label_qr": [],
     "legacy_state_migration": [
       "storage_policy",
@@ -5686,6 +5695,7 @@
       "writer_session_fence"
     ],
     "phs_label_workflow": [
+      "kmtech_shared.raster",
       "label_qr",
       "phs_reconciliation_workflow",
       "transfer_seal",
@@ -5840,7 +5850,10 @@
     "vendor.kmtech_zero_pe.possession_key": [
       "vendor.kmtech_zero_pe.cng_p256"
     ],
-    "vendor.kmtech_zero_pe.raster": [],
+    "vendor.kmtech_zero_pe.raster": [
+      "kmtech_shared",
+      "kmtech_shared.raster"
+    ],
     "vendor.kmtech_zero_pe.release_signature": [
       "vendor.kmtech_zero_pe.cng_p256"
     ],
@@ -5853,7 +5866,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "18c411bd2abc1f2732fd63ab4aa3c79127f056531d9bbca7212986bd3808a365",
+  "inventory_sha256": "52b8481756e2802a024edb52ed2cd8be46a2998527691237cd95f75fe7a7cfb8",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17061,6 +17074,9 @@
     "kmtech_factory_contracts.package.__file_entry__",
     "kmtech_factory_contracts.python_api.__file_entry__",
     "kmtech_factory_contracts.strict_server.__file_entry__",
+    "kmtech_shared.__file_entry__",
+    "kmtech_shared.catalog.__file_entry__",
+    "kmtech_shared.raster.__file_entry__",
     "label_qr.__file_entry__",
     "legacy_state_migration.__file_entry__",
     "logistics_runtime_profile.__file_entry__",
@@ -17749,7 +17765,7 @@
       "direct_mutation_site_count": 2,
       "file": "phs_label_workflow.py",
       "function": "phs_label_workflow.PHSLabelExchangeJournal.save",
-      "line": 150,
+      "line": 151,
       "marker_kind": "decorator",
       "source": "phs_label_workflow"
     },
@@ -17757,7 +17773,7 @@
       "direct_mutation_site_count": 0,
       "file": "phs_label_workflow.py",
       "function": "phs_label_workflow.PHSLabelRenderer.render",
-      "line": 300,
+      "line": 301,
       "marker_kind": "decorator",
       "source": "phs_label_workflow"
     },
@@ -17765,7 +17781,7 @@
       "direct_mutation_site_count": 0,
       "file": "phs_label_workflow.py",
       "function": "phs_label_workflow.WindowsGDIPhysicalLabelPrinter.print_png",
-      "line": 244,
+      "line": 245,
       "marker_kind": "decorator",
       "source": "phs_label_workflow"
     },
@@ -17773,7 +17789,7 @@
       "direct_mutation_site_count": 0,
       "file": "phs_label_workflow.py",
       "function": "phs_label_workflow._save_raster_png",
-      "line": 284,
+      "line": 285,
       "marker_kind": "decorator",
       "source": "phs_raster_png"
     },

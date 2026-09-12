@@ -16,7 +16,7 @@ SNAPSHOT_RELATIVE_PATH = Path("tools/container_writer_sink_inventory.json")
 BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH,)
 SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 
-SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "vendor")
+SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
 SHIPPED_PORTABLE_ENTRYPOINTS = (Path("portable/main.py"),)
 POWERSHELL_PATHS = (
     Path("tools/bootstrap_integrity.ps1"),
@@ -129,10 +129,10 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
-    "vendor.kmtech_zero_pe.raster.RasterImage.save_png": {
+    "kmtech_shared.raster.RasterImage.save_png": {
         "callers": ("phs_label_workflow._save_raster_png",),
         "sources": ("phs_raster_png",),
-        "reason": "byte-pinned vendor method executes only beneath the exact fenced adapter",
+        "reason": "byte-pinned shared method executes only beneath the exact fenced adapter",
     }
 }
 SCHEDULED_TASK_MUTATION_COMMANDS = (

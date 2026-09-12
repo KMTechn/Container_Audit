@@ -4,12 +4,16 @@
   "source_path": "src/kmtech_zero_pe",
   "files": {
     "gdi_print.py": "48453e70a4bdd2008c2e4565bf647a852f319322458f9dc5a094a064274faece",
-    "raster.py": "107316713ca47981007dab694b03db049d2c146fc05501c8cd5c7b4c9765bc4c"
+    "raster.py": "83abc51557547c2d23e136ec91b281ce66c8ef71a19f52fb3d1d8aa6723c74c0"
   },
   "local_modifications": {
     "raster.py": {
       "upstream_sha256": "1296fc461e349cc02c1379b09096559203d2ec22cdc27c780958a05006d97c48",
-      "description": "Pack unfiltered PNG RGB/RGBA rows with lossless channel slices; preserve validation and all filtered-row decoding."
+      "description": "Compatibility image/canvas facade delegates to top-level kmtech_shared.raster 0.1.0; shared manifest/lock pin preserves the CA filter-0 core and existing caller-fenced PNG writes."
     }
+  },
+  "shared_source": {
+    "manifest": "../../kmtech_shared.manifest.json",
+    "lock": "../../kmtech_shared.lock.json"
   }
 }

@@ -144,6 +144,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g11"></a>
 ## CA-G11 승인된 S05 소스 단순화
 
+- **X04-B shared 채택:** raster facade·고정 source/manifest/lock·패키징 검증은
+  [CA-O01](operations.md#ca-o01)을 따른다. 실제 배포·GUI·프린터 수용을 확대하지 않는다.
 - **범위:** 호출되지 않는 UI·업데이트·relay helper, TEST1 transport-pin validator,
   Phase G synthetic report 및 그 보고서 전용 시험을 제거했다. 실제 업무·오류/재시도
   회귀와 runtime/shared provider·설치 consumer는 유지한다.

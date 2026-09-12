@@ -14,8 +14,24 @@ portable builder의 `APP_ROOT_FILES`는 기존 root Python 51개를 명시한다
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-기존 application 파일 133개의 경로·바이트와 tool import closure를 대조한다.
+기존 application 파일 133개에 shared package 3개와 manifest/lock 2개를 더한
+138개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
+
+`kmtech_shared` 0.1.0은 정본 code `c8098202ccb8a34650f9f8f4c40c2a943f1da2e0`의
+3개 파일을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
+결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두
+shared module과 manifest/lock을 포함한다. `tests/test_kmtech_shared.py`는 개발 정본의
+`manifest/sync_shared.py --check --root <CA> --manifest <CA>/kmtech_shared.manifest.json
+--expected-sha256 <lock 값>`을 실행하고 누락·추가·변조와 단일 runtime module identity를 검증한다.
+앱 시작/배포 runtime은 sibling 저장소나 온라인 검사를 사용하지 않는다.
+
+`vendor.kmtech_zero_pe.raster`는 shared 계산을 상속하는 CA image/canvas facade다.
+모든 image factory는 CA class를 반환하며 PNG 저장은 기존 `phs_label_workflow._save_raster_png`
+writer admission 아래의 shared `RasterImage.save_png`로 이어진다. writer inventory는 이
+정확한 호출자와 shared 파일을 포함한다. 실제 Tk 화면·장비·설치는 별도 검증 범위다.
+X04-B renderer·패키징 focused는 100 PASS·잔류 thread0이고, baseline/facade 두 QR
+payload의 픽셀·PNG bytes 일치와 해독을 확인했다. [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x04b/RESULT.md).
 
 작업자 GUI는 [Container_Audit.main / _prepare_gui_startup](../../Container_Audit.py)의 host 모드 분기, 계약·경로 확인, 단일 인스턴스, 조건부 현재 사용자 onboarding, 품목 준비를 거쳐 시작한다. Tkinter UI와 백그라운드 조회/relay가 분리되며, 작업자 이름은 업무 귀속이고 중앙 device/scope 인증은 별도다. [host dispatch](../../container_audit_product_host.py), [worker_registry](../../worker_registry.py), [protected_admin](../../protected_admin.py).
 

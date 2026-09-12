@@ -99,11 +99,14 @@ APP_ROOT_FILES = (
 )
 APP_PACKAGE_DIRS = (
     "kmtech_factory_contracts",
+    "kmtech_shared",
     "vendor",
 )
 APP_DATA_DIRS = ("assets",)
 APP_DATA_FILES = (
     "contract.lock.json",
+    "kmtech_shared.manifest.json",
+    "kmtech_shared.lock.json",
     "config/container_audit_settings.json",
     "config/validator_settings.json",
 )

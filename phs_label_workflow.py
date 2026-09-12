@@ -45,6 +45,7 @@ from vendor.kmtech_zero_pe.raster import (
     RasterError,
     RasterImage,
 )
+from kmtech_shared.raster import RasterImage as SharedRasterImage
 
 
 PHS_LABEL_EXCHANGE_JOURNAL_VERSION = "container-audit-phs-label-exchange-v1"
@@ -285,9 +286,9 @@ def _save_raster_png(
     image: RasterImage,
     path: str | os.PathLike[str],
 ) -> Mapping[str, Any]:
-    """Keep the byte-pinned raster vendor behind the common writer fence."""
+    """Keep the pinned shared PNG writer behind the existing writer fence."""
 
-    return RasterImage.save_png(image, path, dpi=(300, 300))
+    return SharedRasterImage.save_png(image, path, dpi=(300, 300))
 
 
 class PHSLabelRenderer:

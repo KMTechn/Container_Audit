@@ -66,7 +66,7 @@ def test_rendering_vendor_records_exact_local_patch_and_upstream_provenance():
         "1296fc461e349cc02c1379b09096559203d2ec22cdc27c780958a05006d97c48"
     )
     assert _sha256(VENDOR / "raster.py") == (
-        "107316713ca47981007dab694b03db049d2c146fc05501c8cd5c7b4c9765bc4c"
+        "83abc51557547c2d23e136ec91b281ce66c8ef71a19f52fb3d1d8aa6723c74c0"
     )
     assert _sha256(VENDOR / "gdi_print.py") == (
         "48453e70a4bdd2008c2e4565bf647a852f319322458f9dc5a094a064274faece"
@@ -420,13 +420,14 @@ def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
     # The old builder shipped every root Python file. Keep that migration
     # baseline independent of APP_ROOT_FILES so an omission cannot self-validate.
     expected = {path.name: path for path in ROOT.glob("*.py")}
-    for directory in ("kmtech_factory_contracts", "vendor", "assets"):
+    for directory in ("kmtech_factory_contracts", "kmtech_shared", "vendor", "assets"):
         for source in (ROOT / directory).rglob("*"):
             if (source.is_file() and "__pycache__" not in source.parts
                     and source.suffix not in {".pyc", ".pyo"}):
                 expected[source.relative_to(ROOT).as_posix()] = source
     for name in (
-        "contract.lock.json", "config/container_audit_settings.json",
+        "contract.lock.json", "kmtech_shared.manifest.json", "kmtech_shared.lock.json",
+        "config/container_audit_settings.json",
         "config/validator_settings.json", "tools/direct_sync_relay_runner.py",
         "tools/install_logistics_runtime_profile.py",
         "tools/register_container_audit_worker_pc.py",
