@@ -6939,6 +6939,23 @@ class ContainerAudit:
                 )
             parent_frame.grid_rowconfigure(6, weight=0, minsize=0)
             parent_frame.grid_rowconfigure(7, weight=0, minsize=0)
+            compact = metrics["content_sized_cards"]
+            self.style.configure(
+                'SidebarDetail.Secondary.TButton',
+                font=(self.DEFAULT_FONT, 10, 'bold'), padding=(6, 2),
+            )
+            for name in ('work_details_button', 'direct_sync_details_button'):
+                button = getattr(self, name, None)
+                if button is not None:
+                    button.configure(style=(
+                        'SidebarDetail.Secondary.TButton' if compact else 'Secondary.TButton'
+                    ))
+            work_details = getattr(self, 'work_details_button', None)
+            if work_details is not None:
+                work_details.grid_configure(pady=(0, metrics['card_gap']))
+            sync_details = getattr(self, 'direct_sync_details_button', None)
+            if sync_details is not None:
+                sync_details.pack_configure(pady=(2 if compact else 6, 0))
             for key in ("status", "direct_sync", "stopwatch"):
                 card = getattr(self, "info_cards", {}).get(key)
                 if card:
