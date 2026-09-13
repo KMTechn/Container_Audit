@@ -1009,6 +1009,13 @@ class ContainerAudit:
     COLOR_IDLE = "#F59E0B"
     COLOR_IDLE_BG = "#FFF7ED"
     COLOR_IDLE_TEXT = "#92400E"
+    # Button-only backgrounds keep white labels above 4.5:1 in enabled states.
+    COLOR_SUCCESS_BUTTON_BG = COLOR_SUCCESS_HOVER
+    COLOR_SUCCESS_BUTTON_HOVER = "#166534"
+    COLOR_SUCCESS_BUTTON_PRESSED = "#14532D"
+    COLOR_WARNING_BUTTON_BG = "#B45309"
+    COLOR_WARNING_BUTTON_HOVER = COLOR_IDLE_TEXT
+    COLOR_WARNING_BUTTON_PRESSED = "#78350F"
     COLOR_BORDER = "#D7DEE8"
     COLOR_BORDER_STRONG = "#AEB8C6"
     COLOR_VELVET = "#991B1B"
@@ -2175,10 +2182,10 @@ class ContainerAudit:
         self.style.map('Corner.TButton', background=[('!active', self.COLOR_BG), ('active', self.COLOR_SURFACE_ALT)], foreground=[('!active', self.COLOR_TEXT_SUBTLE), ('active', self.COLOR_TEXT)])
         self.style.configure('Secondary.TButton', font=(self.DEFAULT_FONT, s, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background='#64748B', foreground='white')
         self.style.map('Secondary.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#334155'), ('active', '#475569'), ('!active', '#64748B')], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
-        self.style.configure('Success.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_SUCCESS, foreground='white')
-        self.style.map('Success.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#166534'), ('active', self.COLOR_SUCCESS_HOVER), ('!active', self.COLOR_SUCCESS)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
-        self.style.configure('Warning.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_IDLE, foreground='white')
-        self.style.map('Warning.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#B45309'), ('active', '#D97706'), ('!active', self.COLOR_IDLE)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
+        self.style.configure('Success.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_SUCCESS_BUTTON_BG, foreground='white')
+        self.style.map('Success.TButton', background=[('disabled', '#CBD5E1'), ('pressed', self.COLOR_SUCCESS_BUTTON_PRESSED), ('active', self.COLOR_SUCCESS_BUTTON_HOVER), ('!active', self.COLOR_SUCCESS_BUTTON_BG)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
+        self.style.configure('Warning.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_WARNING_BUTTON_BG, foreground='white')
+        self.style.map('Warning.TButton', background=[('disabled', '#CBD5E1'), ('pressed', self.COLOR_WARNING_BUTTON_PRESSED), ('active', self.COLOR_WARNING_BUTTON_HOVER), ('!active', self.COLOR_WARNING_BUTTON_BG)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
         self.style.configure('Danger.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_DANGER, foreground='white')
         self.style.map('Danger.TButton', background=[('disabled', '#CBD5E1'), ('pressed', '#991B1B'), ('active', self.COLOR_DANGER_HOVER), ('!active', self.COLOR_DANGER)], foreground=[('disabled', '#F8FAFC'), ('!disabled', 'white')])
         self.style.configure('Review.TButton', font=(self.DEFAULT_FONT, m, 'bold'), padding=button_padding, borderwidth=0, relief='flat', background=self.COLOR_PRIMARY, foreground='white')

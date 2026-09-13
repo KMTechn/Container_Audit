@@ -21,6 +21,22 @@ SQLite completion/outbox는 [transfer_store](../../transfer_store.py), 공유 �
 [transfer_common](../../transfer_common.py)에 있다.
 기존 [transfer_seal](../../transfer_seal.py) import는 같은 객체를 재노출한다.
 
+<a id="ca-button-colors"></a>
+### 경고·성공 버튼 색 규칙 (U07)
+
+`clam`의 `Warning.TButton`·`Success.TButton`은 기존 문자와 주황/녹색 의미를 유지한다.
+흰 글자의 normal/active/pressed 대비는 앱 배율 0.7~2.5에서 **4.5:1 이상**을 적용한다.
+큰 글씨에서도 같은 기준을 유지하며 Malgun Gothic bold·크기·배치·입력 동작은 바꾸지 않는다.
+버튼 전용 배경은 `ContainerAudit.COLOR_*_BUTTON_*` 팔레트에 둔다.
+
+| 버튼 | normal | active | pressed |
+|---|---|---|---|
+| Warning | `#B45309` (5.02:1) | `#92400E` (7.09:1) | `#78350F` (9.07:1) |
+| Success | `#15803D` (5.02:1) | `#166534` (7.13:1) | `#14532D` (9.11:1) |
+
+disabled는 기존 `#F8FAFC`/`#CBD5E1` (1.42:1) 관례를 유지하며 활성 문자 기준에서 제외한다.
+대비는 sRGB 상대휘도 계산과 headless style map으로 확인한다. 실제 모니터·DPI·배율별 읽힘·현장 조명은 별도 D7 검증이며 전 앱 접근성 수용을 뜻하지 않는다.
+
 ### 2026-09-12 실제 M06 GOOD1 이적 완료
 
 현행 제품 `0ea7251`의 실제 원본 PHS2·GOOD 멤버 1개를 기존 연결 VM에서 처리했다.

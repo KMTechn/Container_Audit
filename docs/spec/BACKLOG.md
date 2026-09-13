@@ -12,6 +12,8 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+U07 경고·성공 버튼의 [색 규칙](README.md#ca-button-colors)은 normal/active/pressed의 흰 글자 대비 4.5:1 이상을 적용한다. disabled 관례·문구·위젯·바인딩·상태·저장 계약은 유지한다. 실제 모니터/DPI·앱 배율 0.7/2.5·현장 조명 및 교체 두 쌍/footer 확인은 NOT VERIFIED이며 검증 파도 D7과 독립 대비/범위 검토로 넘긴다.
+
 U06 제품 형식 오류의 [상황별 다음 행동](product-admission.md#형식-오류-안내의-다음-행동)은 문구에 반영했다. 분류·reason·redaction·수량·일반/held 입력 계약은 유지한다. 실제 경고 영역의 긴 문구 가독성과 물리 스캐너 설정 확인은 NOT VERIFIED이며 배정된 화면·장비 검증 및 독립 문구 검토가 남는다.
 
 현재 스캔 저장·held 감사·GUI 완료의 JSON/CSV 내구 작업은 직렬 worker로 이동했다.
