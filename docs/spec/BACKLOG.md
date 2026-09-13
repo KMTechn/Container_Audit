@@ -146,6 +146,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 
 - **X04-B shared 채택:** raster facade·고정 source/manifest/lock·패키징 검증은
   [CA-O01](operations.md#ca-o01)을 따른다. 실제 배포·GUI·프린터 수용을 확대하지 않는다.
+  pin 검사는 앱 QA 진입점으로 자급하며 단독 checkout 회귀를 유지한다.
+  정본 checker 갱신 시 기본 수집 밖의 명시 교차 노드로 복사된 검증 함수의 동등성을 확인한다.
   catalog는 정본 0.1.0이 제공하는 leaf만 위임하며, 상태 있는 cache I/O·복구·snapshot의
   추가 공유 여부는 후속 판단이다. 현재 CA adapter 동작은 유지한다([CA-C08](contracts.md#ca-c08)).
 - **범위:** 호출되지 않는 UI·업데이트·relay helper, TEST1 transport-pin validator,
