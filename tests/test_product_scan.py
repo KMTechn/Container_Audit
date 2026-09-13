@@ -92,22 +92,33 @@ def test_decide_product_scan_rejects_unsafe_product_barcodes_without_storing_raw
     assert "13자리보다" not in decision.format_error_message
 
 
-@pytest.mark.parametrize("reason, expected", [
-    ("barcode_too_short", "13자리보다 길어야"),
-    ("barcode_too_long", "128자 이하"),
-    ("control_character", "제어 문자"),
-    ("formula_prefix", "시작 문자"),
-    ("html_or_script_marker", "문자 형식"),
-    ("path_traversal_marker", "경로 형식"),
-    ("unknown", "제품 라벨을 확인"),
+@pytest.mark.parametrize("reason, situation, action, rescan", [
+    ("barcode_too_short", "13자리보다 길어야", "제품 라벨의 바코드를 확인", True),
+    ("barcode_too_long", "128자 이하", "제품 라벨 형식을 담당자에게 확인", False),
+    ("leading_or_trailing_whitespace", "앞뒤에 공백", "스캐너 설정을 확인", True),
+    ("control_character", "제어 문자", "스캐너 설정을 확인", True),
+    ("formula_prefix", "시작 문자", "제품 라벨과 스캐너 설정을 담당자에게 확인", False),
+    ("html_or_script_marker", "문자 형식", "제품 라벨과 스캐너 설정을 담당자에게 확인", False),
+    ("path_traversal_marker", "경로 형식", "제품 라벨과 스캐너 설정을 담당자에게 확인", False),
+    ("invalid_item_code_length", "품목코드 길이 설정", "관리자에게 문의", False),
+    ("missing_item_code", "품목 정보가 없습니다", "현품표를 확인", False),
+    ("malformed_scanned_barcodes", "스캔 기록", "관리자에게 문의", False),
+    ("invalid_tray_capacity", "목표 수량", "관리자에게 문의", False),
+    ("unknown", "형식이 올바르지 않습니다", "제품 라벨을 확인", False),
 ])
-def test_format_error_message_explains_reason_without_echoing_input(reason, expected):
+def test_format_error_message_explains_reason_without_echoing_input(reason, situation, action, rescan):
     decision = product_scan.ProductScanDecision(
         product_scan.SCAN_FORMAT_ERROR,
         event_detail={"reason": reason, "item_code_length": 13, "raw_barcode": "<unsafe>"},
     )
-    assert expected in decision.format_error_message
-    assert "<unsafe>" not in decision.format_error_message
+    message = decision.format_error_message
+    assert situation in message
+    assert action in message
+    assert ("다시 스캔하세요" in message) is rescan
+    assert message.index(action) > message.index(situation)
+    assert decision.event_detail["reason"] == reason
+    assert reason not in message
+    assert "<unsafe>" not in message
 
 
 def test_invalid_length_setting_does_not_expose_unsafe_barcode():

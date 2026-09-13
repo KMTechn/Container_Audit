@@ -67,7 +67,16 @@ def _assert_equivalent(raw, item, scanned, capacity, codes, length=13):
     assert type(actual) is product_scan.ProductScanDecision
     old = baseline.decide_product_scan(tray, raw, item_code_length=length)
     assert asdict(actual) == asdict(old)
-    assert actual.format_error_message == old.format_error_message
+    if actual.event_detail.get("reason") in {
+        "barcode_too_short", "barcode_too_long", "leading_or_trailing_whitespace",
+        "control_character", "formula_prefix", "html_or_script_marker", "path_traversal_marker",
+    }:
+        # U06 adds an action; the recorded diagnosis and all decision fields stay exact.
+        diagnosis = old.format_error_message.split(". ", 1)[0]
+        assert diagnosis in actual.format_error_message
+        assert "확인" in actual.format_error_message
+    else:
+        assert actual.format_error_message == old.format_error_message
     if actual.accepted:
         actual = product_scan.decide_catalog_product_match(item, raw, actual_codes)
         old = baseline.decide_catalog_product_match(item, raw, actual_codes)

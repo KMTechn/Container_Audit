@@ -2,6 +2,7 @@ import datetime
 from pathlib import Path
 import sqlite3
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -248,6 +249,46 @@ def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal():
     assert "|" not in app.warning_presenter.state.active_notice.message
     assert "=" not in app.warning_presenter.state.active_notice.message
     assert not any(event[0] == "record_normal_scan" for event in events)
+
+
+@pytest.mark.parametrize("barcode, reason, action", [
+    (ITEM_CODE, "barcode_too_short", "제품 라벨의 바코드를 확인"),
+    (ITEM_CODE + "x" * 116, "barcode_too_long", "담당자에게 확인"),
+    (ITEM_CODE + "\n001", "control_character", "스캐너 설정을 확인"),
+    ("=" + SECOND_BARCODE, "formula_prefix", "담당자에게 확인"),
+    (SECOND_BARCODE + "<x>", "html_or_script_marker", "담당자에게 확인"),
+    (SECOND_BARCODE + "/../x", "path_traversal_marker", "담당자에게 확인"),
+])
+def test_format_warning_renders_next_action_without_count_or_raw_payload(barcode, reason, action):
+    events, logged, rendered = [], [], {}
+    app = _scan_app(save_succeeds=True, events=events)
+    original_rows = list(app.scanned_listbox.rows)
+    app.notice_frame = SimpleNamespace(configure=lambda **kwargs: None)
+    app.notice_message_label = SimpleNamespace(configure=lambda **kwargs: rendered.update(kwargs))
+    app._render_warning_state = lambda: ContainerAudit._render_warning_state(app)
+    app._log_event = lambda event, detail=None: logged.append((event, detail)) or True
+
+    app._process_barcode_logic(barcode)
+
+    notice = app.warning_presenter.state.active_notice
+    assert notice.code == "scan.바코드_형식_오류"
+    assert notice.blocking
+    assert rendered["text"] == notice.message
+    assert action in rendered["text"]
+    assert barcode not in rendered["text"]
+    assert logged[0][0] == "SCAN_FAIL_FORMAT"
+    assert logged[0][1]["reason"] == reason
+    if reason != "barcode_too_short":
+        assert logged[0][1]["raw_barcode_length"] == len(barcode)
+        assert len(logged[0][1]["raw_barcode_sha256"]) == 64
+        assert "raw_barcode" not in logged[0][1]
+        assert barcode not in str(logged)
+    assert app.current_tray.scanned_barcodes == [FIRST_BARCODE]
+    assert app.current_tray.mismatch_error_count == 0
+    assert app.current_tray.has_error_or_reset is False
+    assert app.scanned_listbox.rows == original_rows
+    assert app.warning_presenter.state.last_normal_scan == FIRST_BARCODE
+    assert not any(event[0] in {"save_state", "record_normal_scan"} for event in events)
 
 
 def test_operator_review_preserves_active_tray_and_center_rows_without_completion_or_reset(tmp_path):

@@ -34,14 +34,14 @@ class ProductScanDecision:
         if reason == "barcode_too_short":
             length = _positive_int(self.event_detail.get("item_code_length"))
             if length is not None:
-                return f"제품 바코드는 {length}자리보다 길어야 합니다."
+                return f"제품 바코드는 {length}자리보다 길어야 합니다. 제품 라벨의 바코드를 확인하고 다시 스캔하세요."
         return {
-            "barcode_too_long": f"제품 바코드는 {MAX_PRODUCT_BARCODE_LENGTH}자 이하여야 합니다.",
-            "leading_or_trailing_whitespace": "제품 바코드 앞뒤에 공백이 있습니다. 스캐너 입력을 확인하세요.",
-            "control_character": "제품 바코드에 제어 문자가 있습니다. 스캐너 입력을 확인하세요.",
-            "formula_prefix": "제품 바코드에 허용되지 않는 시작 문자가 있습니다.",
-            "html_or_script_marker": "제품 바코드에 허용되지 않는 문자 형식이 있습니다.",
-            "path_traversal_marker": "제품 바코드에 허용되지 않는 경로 형식이 있습니다.",
+            "barcode_too_long": f"제품 바코드는 {MAX_PRODUCT_BARCODE_LENGTH}자 이하여야 합니다. 제품 라벨 형식을 담당자에게 확인하세요.",
+            "leading_or_trailing_whitespace": "제품 바코드 앞뒤에 공백이 있습니다. 스캐너 설정을 확인하고 다시 스캔하세요.",
+            "control_character": "제품 바코드에 제어 문자가 있습니다. 스캐너 설정을 확인하고 다시 스캔하세요.",
+            "formula_prefix": "제품 바코드에 허용되지 않는 시작 문자가 있습니다. 제품 라벨과 스캐너 설정을 담당자에게 확인하세요.",
+            "html_or_script_marker": "제품 바코드에 허용되지 않는 문자 형식이 있습니다. 제품 라벨과 스캐너 설정을 담당자에게 확인하세요.",
+            "path_traversal_marker": "제품 바코드에 허용되지 않는 경로 형식이 있습니다. 제품 라벨과 스캐너 설정을 담당자에게 확인하세요.",
             "invalid_item_code_length": "품목코드 길이 설정을 확인해야 합니다. 관리자에게 문의하세요.",
             "missing_item_code": "현재 트레이의 품목 정보가 없습니다. 현품표를 확인하세요.",
             "malformed_scanned_barcodes": "현재 트레이의 스캔 기록을 확인해야 합니다. 관리자에게 문의하세요.",
