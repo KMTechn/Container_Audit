@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -9,6 +10,7 @@ import pytest
 
 import writer_session_fence as fence
 from storage_policy import build_container_audit_storage_paths
+from tools import run_repository_tests as runner
 
 
 def test_default_product_paths_are_per_test_and_writable(tmp_path):
@@ -66,14 +68,20 @@ def _runner_probe(tmp_path, source, *, root_option="--task-root", extra_args=())
     (tmp_path / "conftest.py").write_text("from tests.conftest import *\n", encoding="utf-8")
     test = tmp_path / "test_probe.py"
     test.write_text(source, encoding="utf-8")
-    task_root = tmp_path / "runs"
+    # Nested runner still budgets the canonical installer receipt leaf. Avoid
+    # adding this test's own hashed directory to that independent run's prefix.
+    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT", tmp_path.parent)) / "r"
     environment = dict(os.environ, CONTAINER_AUDIT_TEST_TASK_ROOT=str(task_root),
                        PYTEST_ADDOPTS="--invalid-ambient-option",
                        CONTAINER_AUDIT_DATA_ROOT=str(tmp_path / "ambient-data"),
                        CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH=str(tmp_path / "ambient-profile.json"),
                        KM_LOGISTICS_PROFILE_PATH=str(tmp_path / "ambient-machine-profile.json"))
     command = [sys.executable, "-B", str(repository / "tools/run_repository_tests.py")]
-    if root_option:
+    if root_option == "default":
+        task_root = runner.DEFAULT_TASK_ROOT.resolve()
+        environment.pop("CONTAINER_AUDIT_TEST_TASK_ROOT", None)
+        environment.pop("KMTECH_TEST_CA_TASK_ROOT", None)
+    elif root_option:
         command += [root_option, str(task_root)]
         environment["CONTAINER_AUDIT_TEST_TASK_ROOT"] = str(tmp_path / "unused-env-root")
     result = subprocess.run(
@@ -87,12 +95,25 @@ def _runner_probe(tmp_path, source, *, root_option="--task-root", extra_args=())
     assert observation["new_ignored_artifacts"] == []
     assert not result.stderr
     assert (run / "junit.xml").is_file()
+    assert len(run.name) == 8 and int(run.name, 16) >= 0
+    assert (run / "t").is_dir()
+    record = json.loads((run / "result.json").read_text(encoding="utf-8"))
+    assert Path(record["basetemp"]) == run / "p"
+    assert record["source_before"] == record["source_after"]
+    assert record["source_stable"]
+    assert record["source_before"]["head_sha"] == subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repository, text=True).strip()
+    assert record["source_before"]["dirty"] == bool(subprocess.check_output(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"], cwd=repository))
+    assert record["source_before"]["file_sha256"]["tools/run_repository_tests.py"]
+    from datetime import datetime
+    assert datetime.fromisoformat(record["started_at_utc"]) <= datetime.fromisoformat(record["finished_at_utc"])
     isolation = json.loads((run / "isolation.json").read_text(encoding="utf-8"))
     assert isolation["remaining_threads"] == []
     return result, observation, run
 
 
-@pytest.mark.parametrize("root_option", ["--task-root", "--work-root", None])
+@pytest.mark.parametrize("root_option", ["default", "--task-root", "--work-root", None])
 def test_runner_owns_parent_child_state_and_outputs(tmp_path, root_option):
     source = '''
 import os, subprocess, sys, tempfile
@@ -119,6 +140,67 @@ def test_owned_state(tmp_path):
     assert observation["outside_write_attempts"] == 0
     assert not (tmp_path / "escaped-temp").exists()
     assert not (tmp_path / "escaped.xml").exists()
+
+
+def test_runner_rejects_long_root_before_creating_output(tmp_path):
+    task_root = tmp_path / ("long-root-" * 10)
+    result = subprocess.run(
+        [sys.executable, "-B", str(Path(runner.__file__)), "--task-root", str(task_root)],
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 2
+    assert "longest fixture path" in result.stderr
+    assert "release-" in result.stderr and "budget 240" in result.stderr
+    assert "--task-root D:\\KMTech\\t\\ca" in result.stderr
+    assert not task_root.exists()
+
+
+def test_runner_source_fingerprint_detects_edits_with_unchanged_dirty_status(tmp_path):
+    # Synthetic repository: never mutate the checkout while its tests are running.
+    source = tmp_path / "fixture.py"
+    source.write_text("VALUE = 1\n", encoding="utf-8")
+    env = dict(os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    for args in (("init",), ("add", "."),
+                 ("-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+                  "-c", "commit.gpgsign=false", "commit", "-m", "synthetic baseline")):
+        subprocess.run(["git", *args], cwd=tmp_path, env=env, capture_output=True, check=True)
+    clean = runner._source_state(tmp_path, env, runner._repository_state(tmp_path, env)[0])
+    source.write_text("VALUE = 2\n", encoding="utf-8")
+    dirty = runner._source_state(tmp_path, env, runner._repository_state(tmp_path, env)[0])
+    source.write_text("VALUE = 3\n", encoding="utf-8")
+    changed = runner._source_state(tmp_path, env, runner._repository_state(tmp_path, env)[0])
+    assert not clean["dirty"] and dirty["dirty"] and changed["dirty"]
+    assert clean["head_sha"] == dirty["head_sha"] == changed["head_sha"]
+    assert dirty["status"] == changed["status"]
+    assert clean["file_sha256"] != dirty["file_sha256"] != changed["file_sha256"]
+    assert dirty["diff_sha256"] != changed["diff_sha256"]
+
+    # Exercise the result/exit verdict with a native Git write in this synthetic
+    # checkout; the real repository and its write boundary are untouched.
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tests").mkdir()
+    shutil.copyfile(runner.__file__, tmp_path / "tools/run_repository_tests.py")
+    shutil.copyfile(Path(__file__).with_name("sitecustomize.py"), tmp_path / "tests/sitecustomize.py")
+    (tmp_path / "tests/__init__.py").write_text("", encoding="utf-8")
+    patch = "diff --git a/fixture.py b/fixture.py\n--- a/fixture.py\n+++ b/fixture.py\n@@ -1 +1 @@\n-VALUE = 3\n+VALUE = 4\n"
+    probe = tmp_path / "tests/test_change.py"
+    probe.write_text(
+        "import subprocess\ndef test_change():\n"
+        f"    subprocess.run(['git', 'apply'], input={patch!r}, text=True, check=True)\n",
+        encoding="utf-8",
+    )
+    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT", tmp_path.parent)) / "r"
+    result = subprocess.run(
+        [sys.executable, "-B", str(tmp_path / "tools/run_repository_tests.py"),
+         "--task-root", str(task_root), str(probe)], cwd=tmp_path, env=env,
+        capture_output=True, text=True, check=False, timeout=45,
+    )
+    observation = json.loads(result.stdout)
+    assert result.returncode == 1, result.stderr
+    assert observation["pytest_exit_code"] == 0
+    assert observation["evidence_status"] == "UNPROVEN"
+    assert not observation["source_stable"] and not observation["repository_unchanged"]
+    assert source.read_text(encoding="utf-8") == "VALUE = 4\n"
 
 
 @pytest.mark.parametrize("operation", ["file", "sqlite", "sqlite_uri", "child"])
@@ -169,11 +251,12 @@ def test_failure():
     assert "1 failed" in (run / "stdout.txt").read_text(encoding="utf-8")
 
 
-def test_runner_rejects_source_task_root_before_creating_output():
+@pytest.mark.parametrize("relative", [".test-runs", ".", ".."])
+def test_runner_rejects_source_task_root_before_creating_output(relative):
     repository = Path(__file__).resolve().parents[1]
     result = subprocess.run(
         [sys.executable, "-B", str(repository / "tools/run_repository_tests.py"),
-         "--task-root", str(repository / ".test-runs")],
+         "--task-root", str(repository / relative)],
         capture_output=True, text=True, timeout=10,
     )
     assert result.returncode == 2

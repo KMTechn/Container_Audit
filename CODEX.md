@@ -40,7 +40,7 @@ python -B tools/run_repository_tests.py --task-root D:\KMTech\<task>\Container_A
 
 변경된 호출 경로와 실제 소비자를 기준으로 기존 focused 검증을 선택한다. 새 SHA만으로
 Full·build·재설치·업무 replay를 반복하지 않는다. 출력·TEMP/TMP·설정·데이터는 기본
-`D:\KMTech\test-runs\Container_Audit\<UTC timestamp>`에 격리한다.
+`D:\KMTech\t\ca\<8자리 무작위 run>`에 격리한다.
 `--task-root`(기존 `--work-root` 별칭) 또는 `CONTAINER_AUDIT_TEST_TASK_ROOT`로 부모 경로를 지정한다.
 실제 GUI·설치·서버 검증은 배정된 대상과 권한이 있을 때만 수행한다.
 선택된 여섯 프로그램 qualification은 Main이 마감했으며 accepted `d440b1f7`와 원래 실패

@@ -8,12 +8,18 @@
 기준일 2026-09-07. [README의 HEAD·수정 트리·기존 증거 경계](README.md#1-기준과-증거-사용법)를 적용한다. 아래의 현재 동작은 인용 소스의 정적 확인이며 설치·장비·서버 실행 결과가 아니다. 이번 문서 작업의 실행은 **NOT TESTED**이고 과거 실행 결과는 중앙 준비도에 보존한다. 수용 항목은 현행 계약을 확인할 기준이며 미정인 운영 목표는 임의로 정하지 않는다.
 
 <a id="ca-test-runner"></a>
-## 저장소 시험 격리 (X14·E01)
+## 저장소 시험 격리 (X14·E01·W6 H0)
 
 `python -B tools/run_repository_tests.py <focused-test-node>`의 기본 run은
-`D:\KMTech\test-runs\Container_Audit\<UTC timestamp>`다.
+`D:\KMTech\t\ca\<8자리 무작위 run>`이며 basetemp는 `p`, TEMP/TMP는 `t`다.
 `--task-root <부모 경로>`가 `CONTAINER_AUDIT_TEST_TASK_ROOT` 환경변수보다 우선하며
 기존 `--work-root`도 같은 별칭이다. 소스 내부/소스를 포함하는 루트는 거부한다.
+실행 전에 선택 root부터 실제 fixture leaf(11자리 임시 이름, writer release의
+32자리 transaction/64자리 hash, bootstrap staging, standalone child pytest)까지
+계산한다. 최장 후보가 UTF-16 240자를 넘으면 경로와 짧은 `--task-root D:\KMTech\t\ca`
+사용법을 표시하고 디렉터리 생성/pytest 실행 전에 거부한다. 기본 후보는 218자다.
+240자는 운영 여유값이며 모든 Windows API·임의 사용자 fixture의 장경로 보장이 아니다.
+링크/junction·subst나 전역 extended-path 접두를 추가하지 않는다.
 부모와 자식의 TEMP/TMP·AppData/ProgramData·데이터/설정 및 pytest basetemp·JUnit·로그를
 같은 run 아래에 둔다. 테스트별 fixture는 ambient 데이터/profile override를 지우고
 격리된 LOCALAPPDATA의 기본 업무/설정 경로를 사용하며 tempfile 캐시도 갱신한다.
@@ -22,6 +28,11 @@ DI 전용 writer 환경변수는 CA에 적용하지 않는다.
 
 기존 `owned_tk_workers`가 모든 시험에서 finally로 close/drain과 leak assertion을 수행한다.
 `isolation.json`의 thread·경계 밖 쓰기 수와 `result.json`의 Git 상태 전후 비교를 확인한다.
+JUnit 옆 `result.json`에는 run ID·시작/종료 UTC·선택 명령·Python/PowerShell 버전·실제
+task/basetemp drive와 경로 길이 계산을 남긴다. 실행 전후 HEAD SHA·dirty 상태/경로,
+내용을 노출하지 않는 diff hash와 소스/runner/fixture/helper 파일 hash를 기록한다.
+실행 중 이 fingerprint가 바뀌면 pytest 성공이어도 `UNPROVEN`/exit1로 남긴다.
+마지막 runner/공용 환경 변경 뒤 영향받는 검증을 다시 실행해야 하며 기존 증거는 보존한다.
 Python audit hook은 runner·pytest·일반 Python 자식의 파일/디렉터리/SQLite 쓰기를
 거부·기록하며, 잡힌 예외나 자식 실패라도 runner는 실패를 반환한다.
 native executable·`-I` 자식의 OS 쓰기 전부를 감시하는 sandbox는 아니며 제품 종료 정책은 불변이다.

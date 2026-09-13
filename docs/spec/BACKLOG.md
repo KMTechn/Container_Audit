@@ -151,6 +151,9 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
   최종 focused·Git clean·생성물/잔류 thread 근거는
   [X14 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x14/RESULT.md)를 따른다.
   제품 shutdown 변경이나 native OS 쓰기 전부의 감시를 의미하지 않는다.
+- **W6 H0 runner:** 짧은 `D:\KMTech\t\ca` 기본·240자 후보 경로 사전 계산과
+  실행 전후 SHA/dirty/fingerprint 기록은 [시험 격리](operations.md#ca-test-runner)를 따른다.
+  검증·남은 독립 검토는 [H0 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6h0/RESULT.md)에 기록한다.
 - **X13-B 설치 leaf 채택:** shared 0.3.1/5파일·독립 manifest pin·자급 checker와 portable/PyInstaller·writer source inventory를 결속한다. 신뢰된 bootstrap 검사 뒤 동일 SHA/path 및 Manifest의 세 블록만 위임하며 runtime facade·factory lock·CA lifecycle validator binding을 유지한다. PS5.1/PS7 parity·합성 설치/제거/복원 회귀의 범위와 실제 lifecycle NOT VERIFIED는 [X13-B 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x13b/RESULT.md), [현재 구성](operations.md#ca-o01)을 따른다.
 - **X13-B 배열 거부 복원:** 정본 0.3.1 전체 5파일·manifest·독립 pin을 재채택하여 원 CA의 PS5.1 `[manifest]`·PS7 `[[manifest]]` 거부를 복원한다. 0.3.0의 두 FAIL을 보존하고 3중·빈·중첩 빈 배열 회귀 및 검토의 긴 경로 13 FAIL·8.3 조건 2 SKIP을 무수정 짧은 경로에서 재검증한다. 판정·원본·재실행 증거는 [X13-B bump 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x13bbump/RESULT.md)를 따른다.
 - **bootstrap cross-engine 후속:** culture-invariant ordinal 정렬과 기존 record 호환성을 검토한다(ko-KR PS5 NLS/PS7 ICU 순서 차이); X13-B 이전 트리 upgrade는 정본 PS5.1 PASS, 기본 PS7은 기존 bootstrap 결함으로 미입증/FAIL 보존이며 직접 PS7 child의 ACL API 지원도 별도 확인한다.

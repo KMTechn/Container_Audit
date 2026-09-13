@@ -88,7 +88,7 @@ python -B tools/run_repository_tests.py --task-root D:\KMTech\<task>\Container_A
 ```
 
 변경된 동작·호출 경로를 기존 focused 시험으로 확인한다. 기본 출력·임시 상태는
-`D:\KMTech\test-runs\Container_Audit\<UTC timestamp>`에 격리하며
+`D:\KMTech\t\ca\<8자리 무작위 run>`에 격리하며
 `CONTAINER_AUDIT_TEST_TASK_ROOT` 또는 `--task-root`로 부모 경로를 바꾼다.
 [격리 범위·C 드라이브 예외](docs/spec/operations.md#ca-test-runner)를 따른다.
 새 SHA나 문서 수정만으로 Full·build·재설치·업무 replay를 반복하지 않는다.

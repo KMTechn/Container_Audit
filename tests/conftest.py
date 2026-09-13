@@ -54,7 +54,7 @@ def pytest_sessionfinish(session, exitstatus):
 def _isolate_environment(root, patch):
     for name, directory in (
         ("LOCALAPPDATA", "local"), ("APPDATA", "roaming"),
-        ("PROGRAMDATA", "program"), ("TEMP", "temp"), ("TMP", "temp"),
+        ("PROGRAMDATA", "program"), ("TEMP", "t"), ("TMP", "t"),
     ):
         path = root / directory
         path.mkdir(parents=True, exist_ok=True)
@@ -62,7 +62,7 @@ def _isolate_environment(root, patch):
     patch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
     for name in ("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", "KM_LOGISTICS_PROFILE_PATH"):
         patch.delenv(name, raising=False)
-    patch.setattr(tempfile, "tempdir", str(root / "temp"))
+    patch.setattr(tempfile, "tempdir", str(root / "t"))
     patch.setenv("PYTHONDONTWRITEBYTECODE", "1")
     if os.name == "nt":
         modules = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/Modules"
