@@ -315,6 +315,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-10"></a>
 ### CA-10 봉인 전 제품 1~2쌍 교체
 
+[화면·명령 경계](member-exchange-view.md)는 교체 화면과 원 coordinator의 소유를 구분한다.
+
 - **시작·입력:** 중앙 `PHS/AVAILABLE` 대상의 손상 제품과 새 GOOD 제품 1~2쌍. 공여 PHS의 활성 구성원은 정확히 하나여야 한다. [정본 교체 정책](../MEMBER_EXCHANGE_POLICY.md)
 - **검증·저장·결과:** 품목/UOM·대상/공여 버전을 확인하고 한 `REPLACE_BUNDLE_MEMBERS` transaction으로 처리한다. 손상품은 `PROCESS_DAMAGE_HOLD`, 새 GOOD는 대상 PHS로 이동한다. SQLite intent와 exact receipt를 남기고 receipt 확인 뒤 로컬 목록을 한 번에 교체한다. [transfer_member_exchange](../../transfer_member_exchange.py)
 - **실패·취소·재시작:** 충돌·복수 구성원 공여·receipt 불일치는 부분 로컬 교체를 허용하지 않는다. ACK 후 로컬 적용 중 종료하면 저장된 intent와 트레이 상태를 대조한다. 원래 라벨 identity 유지 증거도 필요하다.
