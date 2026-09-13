@@ -50,7 +50,7 @@ manifest schema·source commit·정확한 package 4파일·각 hash/version을 �
 제품 패키징에는 포함하지 않는다. `tests/test_kmtech_shared.py`는 형제 없는 앱 복사본에서
 정상 pin·누락/추가/변조 거부와 기본 수집을 검증하며 lock 오류·단일 runtime identity도 확인한다.
 정본 검증 4함수는 `c067d38`의 `manifest/sync_shared.py`와 source가 같다.
-형제 정본과 함수·상수·manifest bytes/소비자 pin 교차 대조는 명시적으로
+형제 정본과의 교차 대조는 앱 manifest/lock을 먼저 검증한 뒤 `source_commit`의 package bytes와 checker를 `git show`로 읽는다. 정본의 현재 HEAD/작업 트리 변경·추가 파일은 drift 안내만 출력하며 앱 판정을 바꾸지 않는다. 명시 검사는
 `python -B -m pytest tests/integration/check_kmtech_shared_canonical.py`를 실행한다.
 이 노드는 기본 파일명 수집에서 제외되며 명시 실행 시 형제 부재를 실패로 처리한다.
 runtime SQL 7개는 기존 caller-fenced inventory에서 CA의 guarded facade와 core 내부 호출자를 정확히 결속한다. facade와 core가 같은 함수명을 쓰므로 lexical reference 집합도 별도로 고정하며, guard 제거·직접 우회 호출은 admission을 거부한다. `tests/test_shared_runtime_facade.py`는 실제 앱 ACK transaction의 외부 reader 비가시성·실패 rollback/재시도와 앱 callback·활성 writer fence 거부를 확인한다.

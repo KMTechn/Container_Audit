@@ -2,7 +2,7 @@
 
 The four validation functions below are copied unchanged from
 kmtech_shared c067d38 manifest/sync_shared.py; the explicit integration test
-checks their source against the canonical checkout. No sibling is needed here.
+checks their source at the manifest's pinned canonical commit. No sibling is needed here.
 """
 from __future__ import annotations
 
