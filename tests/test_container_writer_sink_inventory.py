@@ -488,6 +488,41 @@ def _write_minimal_inventory_fixture(root: Path, container_source: str) -> None:
         target.write_text("# no scheduled-task mutation\n", encoding="utf-8")
 
 
+@pytest.mark.parametrize("mutation", ["remove_guard", "bypass_facade"])
+def test_shared_runtime_sql_requires_exact_guarded_facade_callers(tmp_path, mutation):
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, "import producer_runtime_client\ndef main():\n    pass\n")
+    for relative in ("producer_runtime_client.py", "direct_sync_push.py", "kmtech_shared/runtime.py"):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    (tmp_path / "kmtech_shared/__init__.py").write_bytes((ROOT / "kmtech_shared/__init__.py").read_bytes())
+    before = module.derive_inventory(tmp_path)
+    runtime_rows = [row for row in before["closure_direct_mutation_functions"]
+                    if row["file"] == "kmtech_shared/runtime.py"]
+    assert len(runtime_rows) == 7
+    assert all(row["coverage_status"] == "covered" for row in runtime_rows)
+    assert not any(row["target"].startswith("kmtech_shared.runtime.")
+                   for row in before["caller_fence_reference_failures"])
+    facade = tmp_path / "producer_runtime_client.py"
+    source = facade.read_text(encoding="utf-8")
+    if mutation == "remove_guard":
+        original = '@writer_sink("producer_runtime_storage")\ndef init_runtime_schema'
+        assert original in source
+        source = source.replace(original, "def init_runtime_schema", 1)
+    else:
+        source += "\ndef bypass(conn):\n    _shared_runtime.init_runtime_schema(conn)\n"
+    facade.write_text(source, encoding="utf-8")
+    rejected = module.derive_inventory(tmp_path)
+    assert "kmtech_shared.runtime.init_runtime_schema" in {
+        row["node"] for row in rejected["uncovered_direct_mutation_functions"]
+    }
+    if mutation == "bypass_facade":
+        assert "kmtech_shared.runtime.init_runtime_schema" in {
+            row["target"] for row in rejected["caller_fence_reference_failures"]
+        }
+
+
 def test_new_shipped_powershell_helper_requires_a_registered_guard(
     tmp_path: Path,
 ) -> None:

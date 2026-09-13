@@ -31,11 +31,11 @@ def test_pinned_shared_source_passes_local_checker():
     result = _check(ROOT)
     assert result.returncode == 0, result.stdout + result.stderr
     configured = evaluate_spec(ROOT / "Container_Audit.spec")["analysis"]
-    assert {"kmtech_shared.catalog", "kmtech_shared.raster"} <= set(configured["hiddenimports"])
+    assert {"kmtech_shared.catalog", "kmtech_shared.raster", "kmtech_shared.runtime"} <= set(configured["hiddenimports"])
     assert {("kmtech_shared.manifest.json", "."), ("kmtech_shared.lock.json", ".")} <= set(configured["datas"])
 
 
-@pytest.mark.parametrize("mutation", ["missing", "extra", "changed", "manifest"])
+@pytest.mark.parametrize("mutation", ["missing", "extra", "changed", "manifest", "runtime_missing", "runtime_changed"])
 def test_local_checker_rejects_shared_source_drift(tmp_path, mutation):
     shutil.copytree(ROOT / "kmtech_shared", tmp_path / "kmtech_shared")
     for name in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json"):
@@ -47,6 +47,11 @@ def test_local_checker_rejects_shared_source_drift(tmp_path, mutation):
     elif mutation == "changed":
         with (tmp_path / "kmtech_shared/catalog.py").open("ab") as stream:
             stream.write(b"\n# unexpected drift\n")
+    elif mutation == "runtime_missing":
+        (tmp_path / "kmtech_shared/runtime.py").unlink()
+    elif mutation == "runtime_changed":
+        with (tmp_path / "kmtech_shared/runtime.py").open("ab") as stream:
+            stream.write(b"\n# unexpected runtime drift\n")
     else:
         manifest_path = tmp_path / "kmtech_shared.manifest.json"
         manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
@@ -114,7 +119,7 @@ raise SystemExit(result)
         cwd=app, capture_output=True, text=True, check=False, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "5 passed" in result.stdout
+    assert "7 passed" in result.stdout
     collected = subprocess.run(
         [*command, "--collect-only", "tests"], cwd=app,
         capture_output=True, text=True, check=False, timeout=120,
@@ -174,14 +179,15 @@ def test_portable_copy_imports_one_shared_module_identity(tmp_path):
     code = """
 import importlib, pathlib, sys
 sys.path.insert(0, sys.argv[1])
-from kmtech_shared import raster, catalog
+from kmtech_shared import raster, catalog, runtime
 from vendor.kmtech_zero_pe import raster as facade, gdi_print
-import Container_Audit, phs_label_workflow, item_catalog_sync
+import Container_Audit, phs_label_workflow, item_catalog_sync, producer_runtime_client
 assert item_catalog_sync._catalog_core is catalog
+assert producer_runtime_client._shared_runtime is runtime
 assert facade.RasterImage.__bases__ == (raster.RasterImage,)
 assert facade.RasterCanvas.__bases__ == (raster.RasterCanvas,)
 assert Container_Audit.RasterImage is phs_label_workflow.RasterImage is gdi_print.RasterImage is facade.RasterImage
-for module in (catalog, raster):
+for module in (catalog, raster, runtime):
     origin = pathlib.Path(module.__file__).resolve()
     assert origin.is_relative_to(pathlib.Path(sys.argv[1]).resolve())
     identities = [name for name, loaded in list(sys.modules.items())

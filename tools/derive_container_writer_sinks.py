@@ -129,6 +129,93 @@ POWERSHELL_NATIVE_PROCESS_APIS = (
 INVENTORY_ALL_SOURCES_SENTINEL = "__INVENTORY_ALL_SOURCES__"
 TRUSTED_CONTROL_PLANE_MUTATIONS: dict[str, str] = {}
 CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    "kmtech_shared.runtime.init_runtime_schema": {
+        "callers": (
+            "producer_runtime_client.init_runtime_schema",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "direct_sync_push.init_relay_queue_schema",
+            "producer_runtime_client._connect",
+            "producer_runtime_client.init_runtime_schema",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime._create_state": {
+        "callers": (
+            "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+            "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+            "producer_runtime_client._create_state",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+            "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+            "producer_runtime_client._create_state",
+            "producer_runtime_client.ensure_runtime_authority",
+            "producer_runtime_client.prepare_runtime_metadata",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime._replace_expired_identity": {
+        "callers": (
+            "producer_runtime_client._replace_expired_identity",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "producer_runtime_client._operator_review_or_recover_exact_clone",
+            "producer_runtime_client._replace_expired_identity",
+            "producer_runtime_client.ensure_runtime_authority",
+            "producer_runtime_client.prepare_runtime_metadata",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime.apply_runtime_receipt_in_transaction": {
+        "callers": (
+            "producer_runtime_client.apply_runtime_receipt_in_transaction",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "direct_sync_push._set_relay_status",
+            "producer_runtime_client.apply_runtime_receipt_in_transaction",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction": {
+        "callers": (
+            "kmtech_shared.runtime.release_runtime_request_in_transaction",
+            "producer_runtime_client.mark_runtime_operator_review_in_transaction",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "direct_sync_push._set_relay_status",
+            "kmtech_shared.runtime.release_runtime_request_in_transaction",
+            "producer_runtime_client.mark_runtime_operator_review_in_transaction",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime.release_runtime_request_in_transaction": {
+        "callers": (
+            "producer_runtime_client.release_runtime_request_in_transaction",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "direct_sync_push._set_relay_status",
+            "producer_runtime_client.release_runtime_request_in_transaction",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
+    "kmtech_shared.runtime.disable_runtime_authority_in_transaction": {
+        "callers": (
+            "producer_runtime_client.disable_runtime_authority_in_transaction",
+        ),
+        "sources": ("producer_runtime_storage",),
+        "reference_callers": (
+            "direct_sync_push._set_relay_status",
+            "producer_runtime_client.disable_runtime_authority_in_transaction",
+        ),
+        "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+    },
     "kmtech_shared.raster.RasterImage.save_png": {
         "callers": ("phs_label_workflow._save_raster_png",),
         "sources": ("phs_raster_png",),
@@ -1662,7 +1749,9 @@ def _caller_fence_reference_failures(
                 }
                 for site in collector.sites
             )
-        expected_callers = set(contract["callers"])
+        # Runtime core and compatibility facades intentionally share short names.
+        # Keep an exact lexical reference set in addition to resolved direct callers.
+        expected_callers = set(contract.get("reference_callers", contract["callers"]))
         actual_callers = {str(site["caller"]) for site in sites}
         if actual_callers != expected_callers:
             failures.append(

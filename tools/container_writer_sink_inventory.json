@@ -1979,6 +1979,308 @@
       "unsunk_paths": []
     },
     {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "producer_runtime_client.init_runtime_schema"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 137,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 138,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 165,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime.init_runtime_schema",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+        "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+        "producer_runtime_client._create_state"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 356,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 362,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime._create_state",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "producer_runtime_client._replace_expired_identity"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 387,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 393,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime._replace_expired_identity",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "producer_runtime_client.apply_runtime_receipt_in_transaction"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 509,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 543,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        },
+        {
+          "category": "sqlite",
+          "line": 579,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime.apply_runtime_receipt_in_transaction",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "kmtech_shared.runtime.release_runtime_request_in_transaction",
+        "producer_runtime_client.mark_runtime_operator_review_in_transaction"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 600,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 628,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "producer_runtime_client.release_runtime_request_in_transaction"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 641,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 689,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime.release_runtime_request_in_transaction",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
+      "caller_guard_sources": [
+        "producer_runtime_storage"
+      ],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "decorated_source": "",
+      "direct_callers": [
+        "producer_runtime_client.disable_runtime_authority_in_transaction"
+      ],
+      "file": "kmtech_shared/runtime.py",
+      "kind": "function",
+      "line": 707,
+      "mutation_sites": [
+        {
+          "category": "sqlite",
+          "line": 734,
+          "operation": "conn.execute",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__",
+        "tools.direct_sync_relay_runner.__file_entry__",
+        "tools.direct_sync_relay_runner.main"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
@@ -2250,52 +2552,6 @@
         "tools.direct_sync_relay_runner.__file_entry__",
         "tools.direct_sync_relay_runner.main"
       ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "direct_sync_push.init_relay_queue_schema",
-        "producer_runtime_client._connect"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 212,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 213,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 240,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client.init_runtime_schema",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
       "decorated_source": "runtime_lease_network",
       "direct_callers": [
         "producer_runtime_client.ensure_runtime_authority",
@@ -2303,11 +2559,11 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 403,
+      "line": 224,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 442,
+          "line": 263,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -2338,134 +2594,51 @@
       ],
       "decorated_source": "producer_runtime_storage",
       "direct_callers": [
-        "producer_runtime_client.disable_runtime_authority_in_transaction",
-        "producer_runtime_client.ensure_runtime_authority",
-        "producer_runtime_client.mark_runtime_operator_review_in_transaction",
-        "producer_runtime_client.prepare_runtime_metadata"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 540,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 543,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client._create_state",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "producer_runtime_client._operator_review_or_recover_exact_clone",
-        "producer_runtime_client.ensure_runtime_authority",
-        "producer_runtime_client.prepare_runtime_metadata"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 569,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 573,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client._replace_expired_identity",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
         "direct_sync_runtime.run_relay_once"
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 705,
+      "line": 449,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 747,
+          "line": 491,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 834,
+          "line": 578,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 875,
+          "line": 619,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 876,
+          "line": 620,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 891,
+          "line": 635,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 902,
+          "line": 646,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 918,
+          "line": 662,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -2500,227 +2673,64 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 962,
+      "line": 706,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1025,
+          "line": 769,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1115,
+          "line": 859,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1138,
+          "line": 882,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1166,
+          "line": 910,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1202,
+          "line": 946,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1203,
+          "line": 947,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1218,
+          "line": 962,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1229,
+          "line": 973,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1245,
+          "line": 989,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
       "node": "producer_runtime_client.prepare_runtime_metadata",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "direct_sync_push._set_relay_status"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 1330,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 1362,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 1398,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client.apply_runtime_receipt_in_transaction",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "direct_sync_push._set_relay_status",
-        "producer_runtime_client.release_runtime_request_in_transaction"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 1420,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 1447,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client.mark_runtime_operator_review_in_transaction",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "direct_sync_push._set_relay_status"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 1461,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 1505,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client.release_runtime_request_in_transaction",
-      "reachable_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "reachable_from_product_entrypoint": true,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [
-        "Container_Audit.__file_entry__",
-        "Container_Audit.main",
-        "portable.main.__file_entry__",
-        "tools.direct_sync_relay_runner.__file_entry__",
-        "tools.direct_sync_relay_runner.main"
-      ],
-      "decorated_source": "producer_runtime_storage",
-      "direct_callers": [
-        "direct_sync_push._set_relay_status"
-      ],
-      "file": "producer_runtime_client.py",
-      "kind": "function",
-      "line": 1524,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 1550,
-          "operation": "conn.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "producer_runtime_client.disable_runtime_authority_in_transaction",
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -5304,6 +5314,7 @@
     "kmtech_shared/__init__.py",
     "kmtech_shared/catalog.py",
     "kmtech_shared/raster.py",
+    "kmtech_shared/runtime.py",
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
@@ -5359,7 +5370,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 93,
+    "closure_module_count": 94,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 34,
@@ -5434,6 +5445,7 @@
     "kmtech_shared/__init__.py",
     "kmtech_shared/catalog.py",
     "kmtech_shared/raster.py",
+    "kmtech_shared/runtime.py",
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
@@ -5680,6 +5692,7 @@
     "kmtech_shared": [],
     "kmtech_shared.catalog": [],
     "kmtech_shared.raster": [],
+    "kmtech_shared.runtime": [],
     "label_qr": [],
     "legacy_state_migration": [
       "storage_policy",
@@ -5719,6 +5732,8 @@
       "writer_session_fence"
     ],
     "producer_runtime_client": [
+      "kmtech_shared",
+      "kmtech_shared.runtime",
       "vendor.kmtech_zero_pe",
       "writer_session_fence"
     ],
@@ -5868,7 +5883,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "0f142ce85dc2f6ea53c874c467ccd01a07347408317e46d116f0641b967f37ba",
+  "inventory_sha256": "1076230a19627b7c3e2803f39743220bc4a125c0b7a6baa2ee80ef3c242b6496",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6023,19 +6038,19 @@
         "event_log_store._append_event_log_entry_unlocked",
         "event_log_store._interprocess_file_lock",
         "item_catalog_sync._atomic_write",
+        "kmtech_shared.runtime._create_state",
+        "kmtech_shared.runtime._replace_expired_identity",
+        "kmtech_shared.runtime.apply_runtime_receipt_in_transaction",
+        "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+        "kmtech_shared.runtime.init_runtime_schema",
+        "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+        "kmtech_shared.runtime.release_runtime_request_in_transaction",
         "legacy_state_migration._copy_file_once",
         "legacy_state_migration.migrate_legacy_code_root_state",
         "parked_tray_store.ParkedTrayStore.delete",
-        "producer_runtime_client._create_state",
         "producer_runtime_client._post_lease_request",
-        "producer_runtime_client._replace_expired_identity",
-        "producer_runtime_client.apply_runtime_receipt_in_transaction",
-        "producer_runtime_client.disable_runtime_authority_in_transaction",
         "producer_runtime_client.ensure_runtime_authority",
-        "producer_runtime_client.init_runtime_schema",
-        "producer_runtime_client.mark_runtime_operator_review_in_transaction",
         "producer_runtime_client.prepare_runtime_metadata",
-        "producer_runtime_client.release_runtime_request_in_transaction",
         "storage_utils.atomic_write_json",
         "terminal_operation_lease.OperationLeaseStore.__init__",
         "terminal_operation_lease.OperationLeaseStore._initialize",
@@ -6152,16 +6167,16 @@
         "direct_sync_runtime._append_jsonl",
         "direct_sync_runtime._disk_pressure_report",
         "direct_sync_runtime._write_json_atomic",
-        "producer_runtime_client._create_state",
+        "kmtech_shared.runtime._create_state",
+        "kmtech_shared.runtime._replace_expired_identity",
+        "kmtech_shared.runtime.apply_runtime_receipt_in_transaction",
+        "kmtech_shared.runtime.disable_runtime_authority_in_transaction",
+        "kmtech_shared.runtime.init_runtime_schema",
+        "kmtech_shared.runtime.mark_runtime_operator_review_in_transaction",
+        "kmtech_shared.runtime.release_runtime_request_in_transaction",
         "producer_runtime_client._post_lease_request",
-        "producer_runtime_client._replace_expired_identity",
-        "producer_runtime_client.apply_runtime_receipt_in_transaction",
-        "producer_runtime_client.disable_runtime_authority_in_transaction",
         "producer_runtime_client.ensure_runtime_authority",
-        "producer_runtime_client.init_runtime_schema",
-        "producer_runtime_client.mark_runtime_operator_review_in_transaction",
         "producer_runtime_client.prepare_runtime_metadata",
-        "producer_runtime_client.release_runtime_request_in_transaction",
         "tools.direct_sync_relay_runner._build_delta_source_file",
         "tools.direct_sync_relay_runner._record_source_prefix_verification",
         "tools.direct_sync_relay_runner._scan_state_connect",
@@ -17079,6 +17094,7 @@
     "kmtech_shared.__file_entry__",
     "kmtech_shared.catalog.__file_entry__",
     "kmtech_shared.raster.__file_entry__",
+    "kmtech_shared.runtime.__file_entry__",
     "label_qr.__file_entry__",
     "legacy_state_migration.__file_entry__",
     "logistics_runtime_profile.__file_entry__",
@@ -17836,34 +17852,34 @@
       "source": "preflight_scan_hold_quarantine_restore"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._create_state",
-      "line": 540,
+      "line": 342,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._replace_expired_identity",
-      "line": 569,
+      "line": 352,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 2,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.apply_runtime_receipt_in_transaction",
-      "line": 1330,
+      "line": 1035,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.disable_runtime_authority_in_transaction",
-      "line": 1524,
+      "line": 1100,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -17871,23 +17887,23 @@
       "direct_mutation_site_count": 7,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.ensure_runtime_authority",
-      "line": 705,
+      "line": 449,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 2,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.init_runtime_schema",
-      "line": 212,
+      "line": 176,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.mark_runtime_operator_review_in_transaction",
-      "line": 1420,
+      "line": 1057,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -17895,15 +17911,15 @@
       "direct_mutation_site_count": 9,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.prepare_runtime_metadata",
-      "line": 962,
+      "line": 706,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
     {
-      "direct_mutation_site_count": 1,
+      "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.release_runtime_request_in_transaction",
-      "line": 1461,
+      "line": 1079,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18207,7 +18223,7 @@
       "direct_mutation_site_count": 1,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._post_lease_request",
-      "line": 403,
+      "line": 224,
       "marker_kind": "decorator",
       "source": "runtime_lease_network"
     },

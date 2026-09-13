@@ -36,23 +36,24 @@ portable builder의 `APP_ROOT_FILES`는 기존 root Python 51개를 명시한다
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-기존 application 파일 133개에 shared package 3개와 manifest/lock 2개를 더한
-138개의 경로·바이트와 tool import closure를 대조한다.
+기존 application 파일 133개에 shared package 4개와 manifest/lock 2개를 더한
+139개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
-`kmtech_shared` 0.1.0은 정본 code `c8098202ccb8a34650f9f8f4c40c2a943f1da2e0`의
-3개 파일을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
+`kmtech_shared` 0.2.0은 정본 code `24d234327f72c52a505d8215cb0c68b52b0f12e5`의
+4개 파일(catalog·raster·runtime·__init__)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
 결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두
 shared module과 manifest/lock을 포함한다. 앱 안의 QA 진입점
 `python -B qualification/check_kmtech_shared.py --check`는 이 lock의 hash/version으로
-manifest schema·source commit·정확한 package 3파일·각 hash/version을 읽기 전용 대조한다.
+manifest schema·source commit·정확한 package 4파일·각 hash/version을 읽기 전용 대조한다.
 `--root <CA 또는 portable app 경로>`로 다른 복사본도 검사한다. checker는 저장소 QA 도구로
 제품 패키징에는 포함하지 않는다. `tests/test_kmtech_shared.py`는 형제 없는 앱 복사본에서
 정상 pin·누락/추가/변조 거부와 기본 수집을 검증하며 lock 오류·단일 runtime identity도 확인한다.
-정본 검증 4함수는 `3c49997`의 `manifest/sync_shared.py`와 source가 같다.
+정본 검증 4함수는 `c067d38`의 `manifest/sync_shared.py`와 source가 같다.
 형제 정본과 함수·상수·manifest bytes/소비자 pin 교차 대조는 명시적으로
 `python -B -m pytest tests/integration/check_kmtech_shared_canonical.py`를 실행한다.
 이 노드는 기본 파일명 수집에서 제외되며 명시 실행 시 형제 부재를 실패로 처리한다.
+runtime SQL 7개는 기존 caller-fenced inventory에서 CA의 guarded facade와 core 내부 호출자를 정확히 결속한다. facade와 core가 같은 함수명을 쓰므로 lexical reference 집합도 별도로 고정하며, guard 제거·직접 우회 호출은 admission을 거부한다. `tests/test_shared_runtime_facade.py`는 실제 앱 ACK transaction의 외부 reader 비가시성·실패 rollback/재시도와 앱 callback·활성 writer fence 거부를 확인한다.
 shared 기본 시험·앱 시작/배포 runtime은 sibling 저장소나 온라인 검사를 사용하지 않는다.
 
 `vendor.kmtech_zero_pe.raster`는 shared 계산을 상속하는 CA image/canvas facade다.

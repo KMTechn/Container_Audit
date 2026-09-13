@@ -349,5 +349,6 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **시작·입력:** events CSV를 whole-file snapshot으로 spool/queue에 등록하고 사용자 relay가 HTTPS 업로드한다. [enqueue_completed_source_file](../../direct_sync_runtime.py), [build_source_file_plan / drain_one_relay_batch](../../direct_sync_push.py)
 - **검증·저장·결과:** 파일 identity·SHA256·바이트/행수·서명·runtime lease와 엄격한 receipt를 확인해 `acked` 처리한다. local-only/시험 사건은 [event_stream_policy](../../event_stream_policy.py)의 경계로 분리한다. 물류 봉인 command ACK와는 다른 전송이다.
 - **실패·취소·재시작:** pause·디스크 압력·stale lease·일시 오류·committed 오류를 구별한다. 재시도 상태와 spool을 보존하며 receipt 검증 전 삭제하지 않는다. 자동 retry와 운영 검토를 혼동하지 않는다.
+- **공유 runtime:** `producer_runtime_client`의 25개 leaf/binding/SQL facade가 고정 `kmtech_shared.runtime`을 호출한다. CA의 writer guard·transport·복구 결정과 ACK/token의 동일 transaction은 유지한다. [CA-C05](contracts.md#ca-c05), [pin·패키징](operations.md#ca-o01).
 - **수용 기준:** 같은 snapshot 재전송이 projection 중복을 만들지 않고, receipt의 행 합계·identity·COMPLETE와 UI 상태가 맞아야 한다. 대시보드 반영은 API/화면 readback을 별도로 확인한다.
 - **연결·남은 일:** [CA-C05](contracts.md#ca-c05), [CA-C07](contracts.md#ca-c07), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 전송 속도·화면 최신성 목표와 운영 측정은 미정이다.
