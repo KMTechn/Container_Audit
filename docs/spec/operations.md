@@ -43,13 +43,18 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
-portable builder의 `APP_ROOT_FILES`는 제품 identity 포트를 포함한 root Python 52개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트와 transfer client/common을 포함한 root Python 54개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
 기존 application 파일 133개에 shared package 5개와 manifest/lock 2개, 제품 identity 포트 1개를 더한
-141개의 경로·바이트와 tool import closure를 대조한다.
+기존 141개와 transfer client/common 2개, 총 143개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
+
+W6 CA-0의 client 이동은 기존 writer inventory 생성기 `--write/--check`와 Python fence·
+PowerShell fence·session contract의 3개 pin을 함께 갱신한다. M7의 frozen product text/binding
+목록도 이동된 client/common을 포함한다. AST·기록 벡터·headless focused 시험은 소스 근거이며
+GUI·설치·VM·서버는 이 분해에서 검증하지 않는다.
 
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
 기존 `derive_container_writer_sinks.py --write/--check`가 이 pin과 inventory를 함께 갱신/검사하며

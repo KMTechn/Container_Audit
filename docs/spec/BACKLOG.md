@@ -145,6 +145,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g11"></a>
 ## CA-G11 승인된 S05 소스 단순화
 
+- **W6 CA-0 모듈 분리:** HTTP client·`SealAttempt`·profile factory와 공유 오류/값/owner guard를 별도 모듈로 이동하고 기존 façade import를 유지한다. [모듈 계약](contracts.md#ca-c03)과 [검증 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6ca0/RESULT.md)를 따른다. Store 분리와 stored attempt·ACK/입력 순서·writer pin/packaging 소비자의 독립 검토가 후속이며 GUI·설치 수용은 포함하지 않는다.
 - **W5-S0-CA context 전달:** 기존 profile/legacy client와 runtime scope의 5개 호출을 named 인자로 바꾸고 positional/default·wire·내구 복구를 유지했다. [CA-C03/05](contracts.md#ca-c03), [검증·parity 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w5s0/RESULT.md)의 최종249 PASS·고정 입력8항목 동일·inventory check PASS를 확인했다. 다음은 coordinator diff 검토와 P0 정착 뒤 Web S0, CA+Web 수용 후 LM→DI→IW→RW 인계이며 새 Shared leaf·tenant/line·다중 scope는 포함하지 않는다.
 - **X14·E01 시험 격리:** 기존 runner의 D 기본/override·쓰기 감시와 autouse worker
   close/drain을 [시험 격리](operations.md#ca-test-runner)에 정의한다.

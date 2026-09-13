@@ -1957,6 +1957,8 @@ def test_logistics_client_uses_exact_machine_resolve_and_prepare_contract():
 
 
 def test_production_transport_has_no_test1_ack_loss_hook():
-    source = Path(transfer_seal_module.__file__).read_text(encoding="utf-8")
+    import inspect
+
+    source = Path(inspect.getfile(transfer_seal_module.LogisticsTransferClient)).read_text(encoding="utf-8")
 
     assert "KMTECH_TEST1_DROP_" not in source

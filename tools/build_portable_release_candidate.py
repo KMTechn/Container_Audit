@@ -88,6 +88,8 @@ APP_ROOT_FILES = (
     "style_tokens.py",
     "terminal_operation_lease.py",
     "tk_serial_ui_lane.py",
+    "transfer_client.py",
+    "transfer_common.py",
     "transfer_member_exchange.py",
     "transfer_seal.py",
     "tray_state.py",

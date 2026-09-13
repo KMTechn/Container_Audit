@@ -16,6 +16,10 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 child 상태/쓰기 감시·실패 후 thread 정리는
 [시험 격리](operations.md#ca-test-runner)를 따른다.
 
+물류 HTTP client·`SealAttempt`·profile factory는 [transfer_client](../../transfer_client.py),
+공유 오류·값·owner guard는 [transfer_common](../../transfer_common.py)에 있다.
+기존 [transfer_seal](../../transfer_seal.py) import는 같은 객체를 재노출한다.
+
 ### 2026-09-12 실제 M06 GOOD1 이적 완료
 
 현행 제품 `0ea7251`의 실제 원본 PHS2·GOOD 멤버 1개를 기존 연결 VM에서 처리했다.
