@@ -88,13 +88,21 @@ Assert-BootstrapRelocatedIntegrityRecord $env:CA_TREE $env:CA_ORIGINAL | Convert
             if path.is_file()} == original_files
 
 
+@pytest.mark.parametrize("legacy", (True, False), ids=("issued-v1", "ordinal"))
 @pytest.mark.parametrize("culture", CULTURES)
 @pytest.mark.parametrize("engine", ENGINES)
-def test_record_tamper_rejected_by_both_consumers(tmp_path, engine, culture):
+def test_record_tamper_rejected_by_both_consumers(tmp_path, engine, culture, legacy):
     tree = release_tree(tmp_path)
+    issuer = ROOT / "tools/bootstrap_integrity.ps1"
+    if legacy:
+        issuer = tmp_path / "issued-helper.ps1"
+        issuer.write_bytes(subprocess.check_output(
+            ["git", "show", f"{BASELINE}:tools/bootstrap_integrity.ps1"], cwd=ROOT))
     results = invoke(tmp_path, engine, culture, r'''
 $root = $env:CA_TREE
+. $env:CA_ISSUER
 [void](Write-BootstrapIntegrityRecord $root $root)
+. $env:CA_HELPER
 $recordPath = Join-Path $root 'bootstrap-integrity.json'
 $original = [IO.File]::ReadAllBytes($recordPath)
 $contentPath = Join-Path $root 'A.txt'
@@ -105,7 +113,7 @@ foreach ($case in @('duplicate', 'missing', 'case', 'hash', 'size', 'aggregate',
     switch ($case) {
         'duplicate' { $record.files[1] = $record.files[0] }
         'missing' { $record.files = @($record.files | Select-Object -Skip 1); $record.file_count -= 1 }
-        'case' { $record.files[0].path = $record.files[0].path.ToUpperInvariant() }
+        'case' { @($record.files | Where-Object { $_.path -ceq 'A.txt' })[0].path = 'a.txt' }
         'hash' { $record.files[0].sha256 = '0' * 64 }
         'size' { $record.files[0].size = [string]$record.files[0].size }
         'aggregate' { $record.aggregate_sha256 = '0' * 64 }
@@ -131,7 +139,7 @@ foreach ($case in @('duplicate', 'missing', 'case', 'hash', 'size', 'aggregate',
     if ($case -ceq 'extra') { Remove-Item -LiteralPath (Join-Path $root 'extra.txt') }
 }
 $results | ConvertTo-Json -Compress
-''', CA_TREE=tree)
+''', CA_TREE=tree, CA_ISSUER=issuer)
     assert len(results) == 18
     assert not [row for row in results if not row["rejected"]]
 

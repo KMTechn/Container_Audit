@@ -74,19 +74,19 @@ function Get-BootstrapSharedPortableLeaf([string]$Root) {
 
 function Get-CodeInventory([string]$Root) {
     $rootFull = Get-StrictFullPath $Root "code root"
-    $result = @()
-    foreach ($file in @(Get-ChildItem -LiteralPath $rootFull -File -Force -Recurse | Sort-Object FullName)) {
+    $result = [Collections.Generic.SortedDictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($file in @(Get-ChildItem -LiteralPath $rootFull -File -Force -Recurse)) {
         $relative = Get-RelativeCodePath $rootFull $file.FullName
         if ($relative.Equals($BootstrapIntegrityFileName, [StringComparison]::OrdinalIgnoreCase)) {
             continue
         }
-        $result += [pscustomobject][ordered]@{
+        $result.Add($relative, [pscustomobject][ordered]@{
             path = $relative
             size = [int64]$file.Length
             sha256 = Get-FileSha256 $file.FullName
-        }
+        })
     }
-    return $result
+    return @($result.Values)
 }
 
 function Get-InventoryAggregate([object[]]$Inventory) {
@@ -155,7 +155,7 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
     if (-not $declaredCodeRoot.Equals($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Bootstrap integrity record code root is invalid."
     }
-    $inventory = @(Get-CodeInventory $rootFull)
+    $inventory = @(Get-CodeInventoryInRecordOrder $rootFull @($record.files))
     if (
         -not (Test-BootstrapJsonInteger $record.file_count) -or
         [int64]$record.file_count -ne $inventory.Count -or
@@ -252,11 +252,11 @@ function Get-BootstrapAclIdentity([string]$Path) {
         [Security.AccessControl.AccessControlSections]::Owner -bor
         [Security.AccessControl.AccessControlSections]::Group
     )
-    $acl = if ($item.PSIsContainer) {
-        [IO.Directory]::GetAccessControl($item.FullName, $sections)
+    $acl = if ($PSVersionTable.PSEdition -ceq 'Core') {
+        [IO.FileSystemAclExtensions]::GetAccessControl($item, $sections)
     }
     else {
-        [IO.File]::GetAccessControl($item.FullName, $sections)
+        $item.GetAccessControl($sections)
     }
     $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     $sddl = $acl.GetSecurityDescriptorSddlForm($sections)
@@ -291,7 +291,7 @@ function Assert-BootstrapRelocatedIntegrityRecord(
     ) {
         throw 'Relocated bootstrap integrity identity is invalid.'
     }
-    $inventory = @(Get-CodeInventory $rootFull)
+    $inventory = @(Get-CodeInventoryInRecordOrder $rootFull @($record.files))
     $aggregate = Get-InventoryAggregate $inventory
     if (
         -not (Test-BootstrapJsonInteger $record.file_count) -or
@@ -718,4 +718,25 @@ function Assert-WriterSessionPublicContract([string]$Path, [string]$ExpectedSha2
         @($requiredTrue | Where-Object { $_ -isnot [bool] -or -not $_ }).Count -ne 0 -or
         @($requiredFalse | Where-Object { $_ -isnot [bool] -or $_ }).Count -ne 0
     ) { throw "Writer session public contract semantics differ." }
+}
+
+function Get-CodeInventoryInRecordOrder([string]$Root, [object[]]$RecordedFiles) {
+    # V1 records predate ordinal issuance. Preserve their exact order and digest;
+    # only a bijection onto the actual, case-sensitive relative paths is valid.
+    # Both consumers still check every size/hash and the original aggregate.
+    $inventory = @(Get-CodeInventory $Root)
+    if ($RecordedFiles.Count -ne $inventory.Count) {
+        throw 'Bootstrap integrity inventory differs: recorded file count.'
+    }
+    $actualByPath = [Collections.Generic.Dictionary[string,object]]::new([StringComparer]::Ordinal)
+    foreach ($item in $inventory) { $actualByPath.Add([string]$item.path, $item) }
+    $ordered = @()
+    foreach ($expected in $RecordedFiles) {
+        if ($expected.path -isnot [string] -or -not $actualByPath.ContainsKey($expected.path)) {
+            throw 'Bootstrap integrity inventory differs: missing, duplicate or changed path.'
+        }
+        $ordered += $actualByPath[$expected.path]
+        [void]$actualByPath.Remove($expected.path)
+    }
+    return $ordered
 }

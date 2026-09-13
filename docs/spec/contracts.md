@@ -200,6 +200,14 @@ source/target identity·membership·topology·version 및 action을 대조하고
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
+**bootstrap record 순서·ACL:** 새 `container-audit-bootstrap-integrity-v1` 목록은
+상대 경로를 `[StringComparer]::Ordinal`로 정렬한다. 검증은 기존 record의 순서를
+보존하되 실제 파일과 대소문자까지 같은 path의 일대일 대응, 정수 size, exact SHA256,
+원래 aggregate를 모두 요구한다. 중복·누락·추가·대소문자 변조는 거부하며 record를
+재발급하지 않는다. 일반/relocated 검증에 같은 순서 규칙을 적용하고 기존 code-root·layout
+조건은 유지한다. ACL은 양 엔진에서 Access/Owner/Group과 owner SID·보호 여부·SDDL SHA256을
+같이 대조한다. writer 계약/재고와 설치 leaf의 신뢰 pin·권한 판정 의미는 유지한다.
+
 **2026-09-08 실제 복원 관측:** frozen d440의 공개 `RestoreVerifiedReplacement`는 진짜 a79 교체 receipt와 새 controller4e를 구별한 상태로 원 owner 종료/cold boot 뒤 exact a7를 복원했다. native/task0 및 old code/record·Run·동일 user/session relay·업무9/identity3 hash 유지, 재등록/credential 복사 없음은 [CA-O09](operations.md#ca-o09)의 Restore09 원본으로 확인한다. 실제 UAC No의 취소07과 동의 미관측08은 native1/runtime 회복으로 보존한다. 원 f2 receipt의 정상 재설치 후 record drift는 이 새 receipt의 성공으로 해소하거나 덮어쓰지 않는다.
 
 **정상 진입:** [current_user_onboarding._registration_runner](../../current_user_onboarding.py)는 `--self-enroll --require-machine-credential-bundle --credential-scope current_user`로 등록 도구를 호출한다. 승인된 HTTPS origin의 `POST /api/producer-ingest/v2/enroll`을 사용하며 token은 `CONTAINER_AUDIT_ENROLLMENT_TOKEN` process 환경, 공개 CA는 `CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH`로 전달할 수 있다. TLS CA는 정상 등록 후 profile/producer 설정에 보존되는 경로이며 검증 해제나 기본 운영 origin fallback이 아니다.

@@ -67,9 +67,10 @@ source admission 뒤의 기존 bootstrap 재로드도 유지하여 lifecycle pub
 
 기존 설치 트리 적격성은 설치된 manifest와 core 파일 집합을 사용하며 새 shared leaf를
 요구하지 않는다. `adcaf86`의 0.2.0·writer 계약/재고를 가진 합성 트리가 실제 preflight와
-교체를 통과하고, leaf를 포함한 새 트리·원본 rollback을 검증하는 회귀는 PS5.1 PASS다.
-PS7은 기존 bootstrap의 NLS/ICU 파일 정렬 차이로 고정 PS5 child와 integrity record가
-호환되지 않아 미입증이다. 기본 PS7 실패는 보존하며 이 채택에서 bootstrap 정렬을 바꾸지 않는다.
+교체를 통과하고, leaf를 포함한 새 트리·원본 rollback을 검증하는 회귀를
+PS5.1/PS7의 ko-KR/en-US에서 실행한다. bootstrap 새 발급은 상대 경로의 ordinal
+순서를 사용하고, 기존 발급 record는 exact path 일대일 대응 뒤 원래 순서로
+size/hash·aggregate를 검증한다. 기존 record를 다시 쓰거나 writer inventory를 바꾸지 않는다.
 
 `test_bootstrap_cross_engine.py`는 고정 `7416378` helper·실제 writer JSON을 사용해
 기존 record byte 보존, 양 엔진·ko-KR/en-US 교차 소비, 원본 aggregate와 변조 거부를 검증한다.
@@ -80,7 +81,9 @@ PS7은 기존 bootstrap의 NLS/ICU 파일 정렬 차이로 고정 PS5 child와 i
 `test_shared_manifest_rejects_array_wrapped_json`은 이 두 벡터와 양 엔진의 3중·빈·중첩 빈 배열을
 원 앱 함수와 직접 비교한다. 0.3.0의 두 FAIL 원본과 0.3.1 재실행·짧은 경로 복구 회귀는
 [X13-B bump 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x13bbump/RESULT.md)에 보존한다.
-실제 lifecycle 및 기존 PS7 upgrade의 bootstrap 정렬 호환성은 별도 미입증 범위다.
+기존 PS7 upgrade 실패 원본과 교차 엔진 수정·재실행은
+[H-CA-PS 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6hcaps/RESULT.md)에 구분한다.
+실제 lifecycle·관리자 ACL hardening은 이 소스 회귀의 검증 범위 밖이다.
 
 `kmtech_shared` 0.3.1은 정본 code `1be471f04b40bc2feef6d5a9f1478ddbb2336050`의
 5개 파일(catalog·raster·runtime·__init__·powershell/portable.ps1)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
