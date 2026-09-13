@@ -4,7 +4,7 @@
 
 **현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 상세 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 아래 과거 시점의 판단을 보존하며 물리 장비·공장 배포는 별도 범위다. 현재 소스 단순화의 변경·검증·독립 검토는 [CA-G11](#ca-g11)에 기록한다.
 
-기준일 2026-09-07. 아래 우선순위와 담당은 정리 제안/책임 역할이며 새 개발 승인·기한·인력 배정이 아니다. P0는 기존 qualification 실패 처리, P1은 계약/운영 판단에 필요한 공백, P2는 요구 미확정 추가 제안이다. 정적 확인, 기존 실행, 이번 문서 검토의 범위는 [README](README.md#1-기준과-증거-사용법)를 따른다.
+기준일 2026-09-07. 아래 우선순위와 담당은 정리 제안/책임 역할이며 새 개발 승인·기한·인력 배정이 아니다. P0는 기존 qualification 실패 처리, P1은 계약/운영 판단에 필요한 공백, P2는 요구 미확정 추가 제안이다. 정적 확인, 기존 실행, 이번 문서 검토의 범위는 [README](README.md#ca-evidence-scope)를 따른다.
 
 **이전 validator 문서 작업 이력:** 승인된 다섯 문서의 소스 기준선과 지속 갱신 규칙은 Main 교차 검토 수용을 마쳤다. 당시 후속 작업은 기존 capture validator 통합의 적용성 대조·현재 상태 보완·단일 커밋 검토 준비였으며 제품/test 코드 변경이나 실행을 포함하지 않았다. 해당 조사만으로 별도의 **승인된 제품 기능 미구현**을 확정할 근거는 없다. 추가 아이디어와 찾지 못한 실행 증거를 구현 결함으로 세지 않는다. 대표 13개 기능 카드도 전체 기능 수나 완료율의 분모가 아니다.
 
@@ -46,7 +46,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 
 - **유형·우선순위·상태:** 확인된 문서 불일치/지원 범위 확인, P1. S05에서 CA 소유의 [CODEX](../../CODEX.md), [README](../../README.md), [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)를 현행 native audio/raster·portable·사용자 profile·LINKED/ACKED 경계로 정정했다.
 - **보존한 이력:** 과거 pygame/Pillow·공통 ProgramData profile·별도 profile EXE 안내는 현행 필수 설치 단계가 아니다. 과거 [2026-06 연구](../../../docs/program-research-20260617/container-audit-transfer.md)의 `C:/Sync`·버전은 역사 자료다.
-- **범위 확인:** 비compact/부분 제출 코드·Shift-F8 fallback·내부 시험 명령이 존재한다고 일반 운영 지원으로 승격하지 않는다. [지원 경로 표](README.md#2-사용자제품-경계와-지원-경로)와 [CA-C09](contracts.md#ca-c09)를 기준으로 실제 배포/현장 지원 여부를 정리한다.
+- **범위 확인:** 비compact/부분 제출 코드·Shift-F8 fallback·내부 시험 명령이 존재한다고 일반 운영 지원으로 승격하지 않는다. [지원 경로 표](README.md#ca-supported-entrypoints)와 [CA-C09](contracts.md#ca-c09)를 기준으로 실제 배포/현장 지원 여부를 정리한다.
 - **제품 정책 경계:** W5-B2의 [현행 순서·명시 포트](product-admission.md)는 시작13자 호환·substring/catalog 동작을 보존한다. W5-L 공용 leaf 후보 검토와 실제 정책 활성화는 소비자 동등성/샘플·key 호환 요구 확정 뒤의 별도 작업이다.
 - **완료 기준:** 해당 기존 문서 소유자가 현행 소스와 역사/호환 조건을 구분해 안내를 정합시키고, 지원 경로·설정·수용 기준·날짜를 연결한다. 새 규칙이나 과거 현장 PASS를 만들지 않는다.
 - **담당·의존·다음 행동:** CA 문서 담당+Main. CA 안내 정정은 S05에 포함하며 상위 역사 자료는 보존한다. 비compact/부분 제출 등 현장 지원 범위 재확인은 별도 요구이고 이 정리에서 삭제하거나 승격하지 않았다.
@@ -215,7 +215,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **2026-09-12 일상 정보 축소 구현:** 최종 제품 `0ea7251`은 반복 안내·현품표 교체 설명·최근 스캔/시간 통계를 조건부 안내와 작업 상세로 옮기고, 전송 대기·확인 필요·로컬 저장/중앙 완료를 구별한다. 기존 상세 버튼 글꼴을 상속하면서 짧은 우측 영역의 여백·예약 폭을 줄였다. 호스트 최종 영향104 PASS, 실제 native 최초40 PASS/6 FAIL 중 우측 잘림5는 동일 배율 사례에서 최종5 PASS다. 최초100ms 기준100.973ms 실패·정리 보완 후1 PASS, dirty-source provenance 실패와 모든 native 중간 실패를 보존했다. 실제 전체 앱 관찰은1024×768 합성 화면이며 사업 receipt/성능/1920 전체 화면 수용이 아니다. [전후 표·검증·custody](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md).
 - **남은 한정 항목:** 같은 native 실행의 확대 개별 교환 표는 두 번째 행 bbox93+91이 표 높이154를 넘었다. 교환 생성·화면 크기 제한 함수 AST는 변경 전b0e5d93과 같지만 이 사실만으로 과거 native 상태를 PASS로 추정하지 않는다. 실제1024×768/배율2.5에서 행 전체를 볼 수 있게 하는 별도 조정·검증이 남는다. Pillow 미설치로 collection이 중단된 native 구조 모듈도 미실행이며 호스트104 PASS와 구별한다. VM6fcb는06:38:34Z Saved/할당0으로 반환했고 task 루트·프로세스는 없다.
 
-- **상태·범위:** 사용자 전수 UI 점검 요청으로 [실제 UI 목록](README.md#2026-09-10-ui-전수-점검과-idle-후-작업-명령-갱신)을 추가했다. e69a0cb 기반으로 idle 후 운영 작업 버튼 갱신과 기존 종료 요청 flag guard를 두 줄 보완하고 기존 회귀에 실제 lane busy/idle·close 상태를 검사한다. 수량·membership·authorization·내구 저장 조건은 변경하지 않는다.
+- **상태·범위:** 사용자 전수 UI 점검 요청으로 [실제 UI 목록](README.md#ca-ui-audit-20260910)을 추가했다. e69a0cb 기반으로 idle 후 운영 작업 버튼 갱신과 기존 종료 요청 flag guard를 두 줄 보완하고 기존 회귀에 실제 lane busy/idle·close 상태를 검사한다. 수량·membership·authorization·내구 저장 조건은 변경하지 않는다.
 - **확인 근거:** 최초 불완전 fake coordinator의 AttributeError, 수정된 disabled/normal RED와 종료 중 재활성화 RED를 보존했다. 초기 후보 영향 검사11 PASS, native 일반 클릭으로 운영 메뉴 열림, 대표 빈 화면·긴 합성 작업자 이름·정상 종료 native0 및 최종 guard 검사를 [RESULT](D:/KMTech/optimization-implementation-20260909/Container_Audit/ui-audit-20260910/RESULT.md)에 연결한다. 종료 guard는 native 실행 뒤의 소스 변경이며 이전 후보와 일치하는 실행으로 표시하지 않는다. VM2는 process0/task Ready0/trigger0/원래 화면 모드로 Main에 반환했다. baseline native:null을 task0으로 대체하지 않는다.
 - **남은 완료 조건:** 전체0.7/2.5 배율 끝점, 채워진 표·긴 한글 품목/바코드, 교환 dialog의 wrap/가로 접근/입력·footer, F8와 오류·복구·작업 인수/전환을 다음 배정에서 확인한다. 실제 최종 저장 배율1.8, 조기 painting 흔적, helper 포커스로 실패한 교환 진입 시도를 완전한 native 증거로 승격하지 않는다. 화면 해상도를 실행 도중 낮출 때의 최소 창 크기는 초기 실행 작업 영역 맞춤과 구분한다.
 - **담당·다음 행동:** CA는 독립 소스 점검과 작은 재현 시나리오를 준비하고 Main은 같은 Claude 검토 및 후속 VM 회전을 조정한다. speculative UI 후보 때문에 다른 프로그램의 현재 slot을 막지 않으며, 기존 CA-G12 Goal3 성능 미완료·실패 자료·accepted 업무를 유지한다.

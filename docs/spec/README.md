@@ -50,6 +50,8 @@ Label 이후 연결 업무·성능 분포·다음 실제 작업·별도 큰 글�
 [결과](D:/KMTech/optimization-implementation-20260909/UI-IMPROVEMENT-20260912-1318/Container_Audit/RESULT.md),
 [CA-G13](BACKLOG.md#ca-g13), [CA-O03](operations.md#ca-o03)을 따른다.
 
+<a id="ca-ui-audit-20260910"></a>
+<a id="2026-09-10-ui-전수-점검과-idle-후-작업-명령-갱신"></a>
 ### 2026-09-10 UI 전수 점검과 idle 후 작업 명령 갱신
 
 2026-09-11 후속 소비자 점검으로 화면에 배치되지 않고 label/state 쓰기·시험 metadata에만 남은 리셋/완료 현품표 교체/개별 제품 교환의 Tk 버튼 세 개를 제거했다. 실제 명령은 기존 운영 작업 메뉴가 열릴 때 현재 상태로 구성하며, 공통 configure helper·F8/Shift-F8·수량·권한·보류/중앙 복구 진입점은 유지한다. [변경과 소비 근거](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/HIDDEN-ACTIONS-CHANGE.md)의 영향 회귀는34 PASS다. 숨은 버튼의 state/text를 가시성 근거로 소비하던 capture M7도 실제 여섯 제어와 운영 메뉴 진입으로 보정했다(기존 capture11 PASS 및 강화한 기존 사례1 PASS). 메뉴 진입 가시성만으로 교환 허용·원자 처리까지 증명하지 않는다. 수정 전 단회 진단은 숨은 교환 버튼 configure에서408.4923ms wall/15.625ms thread CPU를 관측했고 [19개 원본 회수](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/CURRENT-DIAGNOSTIC.md)를 완료했다. 이 값은 원인·반복 성능 이득을 입증하지 않는다. 새 후보의 단회 native 명령 배치 검사는 기존580px의 고정2+2 행 assertion에서1 FAIL/native1로 종료했고 원본과 process0 확인을 보존했다. 실제 요청 폭에 따른 열 수 계약에 맞춰 기존 검사만 요청 크기 확보·포함·겹침 없음·시각적 순서·문구·넓은 행·왕복 안정성으로 보정했다. [정확한7d62910 단회 native 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/NATIVE-ACTION-RESULT.md)는1 PASS/skip0/native0이고 실제580px 배치는3+1이다. 첫 실패와 새 결과28파일 원본·해시, 정상 process0·양쪽 임시 nonce 삭제를 보존했으며 실제 Claude는 제품과 보정 검사에 필수 수정 없음으로 검토했다. 성능 이득·연결 전체 흐름 수용은 여전히 미완료다.
@@ -96,6 +98,8 @@ Main 배정 VM3에서 accepted `e868837`의 140개 소스 파일을 대조하고
 
 양쪽140 Git blob과 재사용 입력, 세 실행 파일의 경로만 바꾼 delta 및 parser를 host에서 확인했다. 관측기/제품 로직 변경·guest/서명/분포 실행은 없으며 Main의 실제 방법 검토·자원 배정 후 실행한다. 원8f7의 중복/다른 품목/보류·복원·exact3 봉인 근거는 원 버전 범위로 유지한다. 최종 연결 업무는 upstream의 실제 M06 NG→Rework GOOD→별도 수신 PHS2 GOOD1을 받아 정확한1개 봉인·Label·출하까지 이어야 한다. target1을 보류 시험용3개로 늘리거나 원901–904를 재생하지 않는다. [CA-G12](BACKLOG.md#ca-g12)의 전체 지연 개선·연결 완료와 종합0/6은 여전히 미완료다.
 
+<a id="ca-evidence-scope"></a>
+<a id="1-기준과-증거-사용법"></a>
 ## 1. 기준과 증거 사용법
 
 - 조사·작성일: **2026-09-07**, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`, `main` / origin 대비 ahead 49. 당시 `tests/KNOWN-GAPS.md`, `tests/contracts/README.md`, `tests/test_capture_container_operator_ui.py`가 수정 중이고 `docs/capture_validator/`, `tests/capture_validator/`, `tools/validate_capture_bundle_v1.py`가 미추적이었다. HEAD만으로 이 작업 트리나 이전 실행 산출물을 식별할 수 없다. 시작 파일 목록·해시는 [보존 기준](E:/KMTech/spec-hub-build-20260907/Container_Audit/pre-state.json), 이번 문서 검토는 [작성 보고](E:/KMTech/spec-hub-build-20260907/Container_Audit/IMPLEMENTATION.md)에 연결한다.
@@ -176,6 +180,8 @@ Main이 배정한 별도 `c029c9d7-1061-4676-92f7-5307cf3d80de` / `KMTech-CA-Fin
 
 기존 a7 업무/lifecycle와 d440→a7 공개 Restore09는 원래 candidate·receipt·VM 범위에서 유지한다. Main은 새 VM이라는 이유만으로 같은 교체/복원 cycle을 반복하지 않도록 명시했다. 제품 소스는 변경하지 않았고 테스트·빌드는 재실행하지 않았으며, 새 실패나 관련 동작 변화가 있으면 해당 범위만 다시 판단한다. 이전 fresh 등록 실패·취소·동의 미관측·case03 custody와 F4 downstream 소유권도 그대로 보존한다.
 
+<a id="ca-supported-entrypoints"></a>
+<a id="2-사용자제품-경계와-지원-경로"></a>
 ## 2. 사용자·제품 경계와 지원 경로
 
 이적 작업자는 본인 이름을 선택하고 현품표와 제품을 스캔하며, 보류·복구·오류 인계를 수행한다. 관리자는 보호 관리자 기능과 승인된 설치·운영 조치를 담당한다. 작업자 이름 선택은 서버 인증이 아니다. 시작·인증 경계는 [ContainerAudit.start_work / _resolve_worker_login_candidate](../../Container_Audit.py), [protected_admin.py](../../protected_admin.py)에 있다.
