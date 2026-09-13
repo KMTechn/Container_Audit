@@ -27,6 +27,7 @@ Python audit hook은 runner·pytest·일반 Python 자식의 파일/디렉터리
 native executable·`-I` 자식의 OS 쓰기 전부를 감시하는 sandbox는 아니며 제품 종료 정책은 불변이다.
 D 쓰기 병목이 확인된 C 예외는 합성 입력·TEMP/TMP·basetemp만 허용하고 로그/JUnit/실패 원본은
 D에 보존한 뒤 C 임시 루트를 검증·삭제한다. runner 전체 출력을 C로 옮기는 예외는 아니다.
+C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와 D `--junitxml`/로그를 명시한다.
 
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
