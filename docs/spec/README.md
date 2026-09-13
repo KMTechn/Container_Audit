@@ -27,7 +27,7 @@ SQLite completion/outbox는 [transfer_store](../../transfer_store.py), 공유 �
 `clam`의 `Warning.TButton`·`Success.TButton`은 기존 문자와 주황/녹색 의미를 유지한다.
 흰 글자의 normal/active/pressed 대비는 앱 배율 0.7~2.5에서 **4.5:1 이상**을 적용한다.
 큰 글씨에서도 같은 기준을 유지하며 Malgun Gothic bold·크기·배치·입력 동작은 바꾸지 않는다.
-버튼 전용 배경은 `ContainerAudit.COLOR_*_BUTTON_*` 팔레트에 둔다.
+버튼 전용 배경은 `ContainerAudit.COLOR_*_BUTTON_*` 팔레트의 독립 색 리터럴로 두며 다른 용도의 상수를 참조하지 않는다.
 
 | 버튼 | normal | active | pressed |
 |---|---|---|---|
