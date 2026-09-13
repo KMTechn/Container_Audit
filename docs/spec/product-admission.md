@@ -28,3 +28,24 @@ raw 중복/초과/오류 우선순위, 한글·전각·결합문자·C0/DEL/C1�
 비교 oracle은 baseline의 두 순수 모듈을 동결한
 [시험 전용 fixture](../../tests/fixtures/product_admission_w5b2_baseline.py)이며,
 새 구현에 맞춰 기대 로직을 바꾸지 않는다. 실제 새 정책·공용 leaf·schema는 후속 요구다.
+
+현재 계산 경계는 [product_identity_port.py](../../product_identity_port.py)다.
+`product_scan.decide_product_scan`은 트레이 필드를 명시 인자로 전달하는 facade이고,
+기존 `ProductScanDecision`·status 상수·catalog 판정은 같은 공개 이름으로 재노출한다.
+포트는 설정·전역 업무 상태·파일·UI를 읽지 않고 입력을 변경하지 않는다.
+catalog view는 `ItemCatalog`가 이미 정규화한 code→row snapshot이며 새 schema가 아니다.
+
+| 단계 | 포트 함수 |
+|---|---|
+| 시작13자 / catalog exact | `is_start_item_code` / `find_catalog_item` |
+| unsafe / 길이 >13 | `unsafe_product_input_reason` / `exceeds_item_code_length` |
+| context 형식·검사 순서·동일 결과 구성 | `decide_product_admission` |
+| 현재 품목 substring / raw 중복 / capacity | `matches_current_item` / `is_raw_duplicate` / `is_at_capacity` |
+| catalog 포함 span·더 긴 코드 우선 | `matching_catalog_codes` |
+| 최종 다중/다른 match | `decide_catalog_product_match` |
+
+일반·held 호출자는 기존 `product_scan` facade와 `ItemCatalog` 경유로 같은 포트를
+소비한다. held의 동기 호출 안 catalog 판정 재사용과 실패 후 감사 재시도는 그대로다.
+향후 W5-L은 두 실제 소비자의 동일 의미가 확인된 순수 함수만 후보로 삼는다.
+새 정책 활성화는 실제 barcode 샘플·정규화/key 호환·catalog/중앙 membership 계약을
+별도 확정한 뒤 진행하며, 이 경계 추출만으로 새 형식이나 다중 tenant를 지원하지 않는다.

@@ -113,6 +113,7 @@ from phs_label_workflow import (
     PHSLabelRenderer,
     PHSLabelWorkflowError,
 )
+from product_identity_port import is_start_item_code
 from product_scan import (
     SCAN_ACCEPTED,
     SCAN_DUPLICATE,
@@ -9846,7 +9847,7 @@ class ContainerAudit:
                     )
                     return
             else:
-                if len(barcode) != self.ITEM_CODE_LENGTH:
+                if not is_start_item_code(barcode, item_code_length=self.ITEM_CODE_LENGTH):
                     self.show_fullscreen_warning("작업 시작 오류", f"잘못된 형식의 바코드입니다.\n{self.ITEM_CODE_LENGTH}자리 품목코드 또는 신규 QR을 스캔하세요.", self.COLOR_DANGER)
                     return
                 

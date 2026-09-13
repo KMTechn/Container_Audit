@@ -47,6 +47,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **유형·우선순위·상태:** 확인된 문서 불일치/지원 범위 확인, P1. S05에서 CA 소유의 [CODEX](../../CODEX.md), [README](../../README.md), [LOGISTICS_RUNTIME_PROFILE](../LOGISTICS_RUNTIME_PROFILE.md)를 현행 native audio/raster·portable·사용자 profile·LINKED/ACKED 경계로 정정했다.
 - **보존한 이력:** 과거 pygame/Pillow·공통 ProgramData profile·별도 profile EXE 안내는 현행 필수 설치 단계가 아니다. 과거 [2026-06 연구](../../../docs/program-research-20260617/container-audit-transfer.md)의 `C:/Sync`·버전은 역사 자료다.
 - **범위 확인:** 비compact/부분 제출 코드·Shift-F8 fallback·내부 시험 명령이 존재한다고 일반 운영 지원으로 승격하지 않는다. [지원 경로 표](README.md#2-사용자제품-경계와-지원-경로)와 [CA-C09](contracts.md#ca-c09)를 기준으로 실제 배포/현장 지원 여부를 정리한다.
+- **제품 정책 경계:** W5-B2의 [현행 순서·명시 포트](product-admission.md)는 시작13자 호환·substring/catalog 동작을 보존한다. W5-L 공용 leaf 후보 검토와 실제 정책 활성화는 소비자 동등성/샘플·key 호환 요구 확정 뒤의 별도 작업이다.
 - **완료 기준:** 해당 기존 문서 소유자가 현행 소스와 역사/호환 조건을 구분해 안내를 정합시키고, 지원 경로·설정·수용 기준·날짜를 연결한다. 새 규칙이나 과거 현장 PASS를 만들지 않는다.
 - **담당·의존·다음 행동:** CA 문서 담당+Main. CA 안내 정정은 S05에 포함하며 상위 역사 자료는 보존한다. 비compact/부분 제출 등 현장 지원 범위 재확인은 별도 요구이고 이 정리에서 삭제하거나 승격하지 않았다.
 

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from item_catalog import ItemCatalog
+import product_identity_port as port
 import product_scan
 from tests.fixtures import product_admission_w5b2_baseline as baseline
 
@@ -60,6 +61,10 @@ def _assert_equivalent(raw, item, scanned, capacity, codes, length=13):
     assert actual_catalog.find_in_barcode(raw) == old_catalog.find_in_barcode(raw)
     assert actual_catalog.find_by_code(item) == old_catalog.find_by_code(item)
     actual = product_scan.decide_product_scan(tray, raw, item_code_length=length)
+    assert actual == port.decide_product_admission(
+        raw, item_code=item, scanned_barcodes=scanned, capacity=capacity, item_code_length=length,
+    )
+    assert type(actual) is product_scan.ProductScanDecision
     old = baseline.decide_product_scan(tray, raw, item_code_length=length)
     assert asdict(actual) == asdict(old)
     assert actual.format_error_message == old.format_error_message
@@ -105,3 +110,18 @@ def test_generated_catalog_equivalence():
         codes += codes[:2] + ["", " "]
         raw = "-".join(rng.choices(codes, k=6))
         _assert_equivalent(raw, codes[0], [], 2, codes, length=1)
+
+
+def test_start_item_code_gate_preserves_inline_length_check():
+    # This compatibility gate receives the caller's text, without new normalization.
+    for raw in ("", ITEM[:-1], ITEM, ITEM + "1", " " + ITEM, "품" * 13, "A" * 12 + "\n"):
+        for length in (9, 13, "13", 0, True, None):
+            assert port.is_start_item_code(raw, item_code_length=length) == (len(raw) == length)
+
+
+def test_tray_facade_preserves_missing_attribute_defaults():
+    for tray in (None, SimpleNamespace(), SimpleNamespace(item_code=ITEM),
+                 SimpleNamespace(item_code=ITEM, tray_size=2)):
+        assert asdict(product_scan.decide_product_scan(tray, PRODUCT, item_code_length=13)) == asdict(
+            baseline.decide_product_scan(tray, PRODUCT, item_code_length=13)
+        )

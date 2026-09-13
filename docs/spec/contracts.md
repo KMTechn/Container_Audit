@@ -48,6 +48,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 부분 제출·13자리 호환 입력 분기는 현장 원장 표본 확인 전 제거 금지다.
 확장 축 ②(제품·바코드 양식 변경)의 정책 adapter 대상으로 보존하며,
+현행 계산은 [명시 제품 포트](../../product_identity_port.py)와 [검사 순서 표](product-admission.md)로 분리한다. raw 중복·substring/catalog·기존 결과/오류 계약은 동일하며 새 정책/schema는 없다.
 실제 원장 표본의 형식별 발생 여부와 저장 상태 이행·지원 종료를 확인한 뒤 제거를 검토한다.
 표준 compact PHS2는 중앙 GOOD 구성원 전량 확인을 유지하고 부족 수량의 부분 제출을 차단한다.
 

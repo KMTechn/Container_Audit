@@ -72,6 +72,7 @@ APP_ROOT_FILES = (
     "preflight_scan_hold.py",
     "producer_runtime_client.py",
     "product_exchange.py",
+    "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
     "recovery_two_phase.py",

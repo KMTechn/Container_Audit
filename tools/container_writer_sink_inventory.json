@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3704,
+      "line": 3705,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3708,
+          "line": 3709,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5326,6 +5326,7 @@
     "preflight_scan_hold.py",
     "producer_runtime_client.py",
     "product_exchange.py",
+    "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
     "recovery_two_phase.py",
@@ -5370,7 +5371,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 94,
+    "closure_module_count": 95,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5457,6 +5458,7 @@
     "preflight_scan_hold.py",
     "producer_runtime_client.py",
     "product_exchange.py",
+    "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
     "recovery_two_phase.py",
@@ -5521,6 +5523,7 @@
       "phs_label_workflow",
       "preflight_scan_hold",
       "product_exchange",
+      "product_identity_port",
       "product_scan",
       "protected_admin",
       "replacement_log_lookup",
@@ -5604,7 +5607,9 @@
     ],
     "event_stream_policy": [],
     "isolated_qualification": [],
-    "item_catalog": [],
+    "item_catalog": [
+      "product_identity_port"
+    ],
     "item_catalog_sync": [
       "kmtech_shared",
       "kmtech_shared.catalog",
@@ -5740,7 +5745,10 @@
     "product_exchange": [
       "event_contracts"
     ],
-    "product_scan": [],
+    "product_identity_port": [],
+    "product_scan": [
+      "product_identity_port"
+    ],
     "protected_admin": [
       "logistics_runtime_profile"
     ],
@@ -5883,7 +5891,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "4985cd768f556e9140e2cf7e8fc932f35d2a62d1c1937a4e145d850680e8f532",
+  "inventory_sha256": "7254368ce12bea821bae9ead20b4c1599cd4f029137eda37399a2ac5f5d7d626",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17282,6 +17290,7 @@
     "preflight_scan_hold.__file_entry__",
     "producer_runtime_client.__file_entry__",
     "product_exchange.__file_entry__",
+    "product_identity_port.__file_entry__",
     "product_scan.__file_entry__",
     "protected_admin.__file_entry__",
     "recovery_two_phase.__file_entry__",
@@ -17711,7 +17720,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1371,
+      "line": 1372,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17719,7 +17728,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 16240,
+      "line": 16241,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17727,7 +17736,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3704,
+      "line": 3705,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17735,7 +17744,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2684,
+      "line": 2685,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17743,7 +17752,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3080,
+      "line": 3081,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },

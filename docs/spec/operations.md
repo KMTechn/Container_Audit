@@ -32,12 +32,12 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
-portable builder의 `APP_ROOT_FILES`는 기존 root Python 51개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트를 포함한 root Python 52개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-기존 application 파일 133개에 shared package 5개와 manifest/lock 2개를 더한
-140개의 경로·바이트와 tool import closure를 대조한다.
+기존 application 파일 133개에 shared package 5개와 manifest/lock 2개, 제품 identity 포트 1개를 더한
+141개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
