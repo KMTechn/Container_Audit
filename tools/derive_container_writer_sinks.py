@@ -13,7 +13,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT_RELATIVE_PATH = Path("tools/container_writer_sink_inventory.json")
-BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH,)
+BYTE_EXACT_CHECKOUT_PATHS = (SNAPSHOT_RELATIVE_PATH, Path("tools/bootstrap_integrity.ps1"))
 SNAPSHOT_PATH = ROOT / SNAPSHOT_RELATIVE_PATH
 
 SHIPPED_PACKAGE_DIRS = ("kmtech_factory_contracts", "kmtech_shared", "vendor")
@@ -65,7 +65,7 @@ POWERSHELL_NON_PRODUCTION_FUNCTION_MODES: dict[Path, dict[str, str]] = {
 }
 POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
     Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset(
-        {"$writerFenceHelperPath", "$BootstrapIntegrityFunctions"}
+        {"$writerFenceHelperPath", "$BootstrapIntegrityFunctions", "$sharedLeaf"}
     ),
     Path("INSTALL_THIS_PC.ps1"): frozenset(
         {"$BootstrapIntegrityFunctions", "$writerFenceHelperFull", "$writerFenceHelperPath"}
@@ -2994,6 +2994,20 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(list(sys.argv[1:] if argv is None else argv))
+    installer = ROOT / "INSTALL_CANONICAL_PORTABLE.ps1"
+    source = installer.read_bytes()
+    bootstrap_sha = hashlib.sha256((ROOT / "tools/bootstrap_integrity.ps1").read_bytes()).hexdigest()
+    pinned, count = re.subn(
+        rb"(\$ExpectedBootstrapIntegritySha256 = ')[0-9a-f]{64}(')",
+        lambda match: match[1] + bootstrap_sha.encode("ascii") + match[2], source,
+    )
+    if count != 1:
+        raise SystemExit("canonical bootstrap integrity pin declaration is missing or ambiguous")
+    if pinned != source:
+        if args.write:
+            installer.write_bytes(pinned)
+        elif args.check:
+            raise SystemExit("canonical bootstrap integrity helper pin is stale")
     payload = derive_inventory(ROOT)
     encoded = _canonical_json_bytes(payload)
     if args.check:

@@ -50,12 +50,23 @@ def run_powershell(arguments, *, check=False, capture_output=True, text=True, **
     return result
 
 
+def canonical_leaf_prelude(source):
+    """Load the canonical functions' real, pinned read-only dependency."""
+    root = str(Path(source).resolve().parent).replace("'", "''")
+    return f"""
+. '{root}/tools/bootstrap_integrity.ps1'
+$contractSharedLeaf = Get-BootstrapSharedPortableLeaf '{root}'
+. $contractSharedLeaf
+"""
+
+
 def run_functions(tmp_path, source, names, script, *, values=None, engine='powershell.exe'):
     powershell = shutil.which(engine)
     if not powershell:
         pytest.skip(f'{engine} is required for executable function contracts')
     driver = tmp_path/'contract.ps1'
-    driver.write_text(r'''
+    prelude = canonical_leaf_prelude(source) if Path(source).name == 'INSTALL_CANONICAL_PORTABLE.ps1' else ''
+    driver.write_text(prelude + r'''
 $ErrorActionPreference='Stop'
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)

@@ -211,6 +211,23 @@ print('PASS: isolated portable imports and one shared identity')
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_builder_rejects_shared_pin_drift_before_runtime_or_output(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    shutil.copytree(ROOT / "kmtech_shared", source / "kmtech_shared")
+    for name in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json", "qualification/check_kmtech_shared.py"):
+        target = source / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, target)
+    with (source / "kmtech_shared/powershell/portable.ps1").open("ab") as stream:
+        stream.write(b"\nthrow 'tampered'\n")
+    monkeypatch.setattr(builder, "_assert_clean_source", lambda root: None)
+    output = tmp_path / "output"
+    with pytest.raises(builder.PortableBuildError, match="shared source pin check failed"):
+        builder.build(source, tmp_path / "unavailable-runtime", output,
+                      update_manifest_public_key_config="")
+    assert not output.exists()
+
+
 def test_pre_adoption_v2_sidecars_read_write_and_recover_unchanged(tmp_path, monkeypatch):
     import item_catalog_sync as sync
 

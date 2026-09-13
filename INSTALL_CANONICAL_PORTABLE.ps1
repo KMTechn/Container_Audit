@@ -47,13 +47,18 @@ if (-not [string]::IsNullOrEmpty($ServerBaseUrl)) {
 }
 $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServerBaseUrl } else { 'PRODUCT_DEFAULT' }
 
+$BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
+# Generated with the writer inventory: authenticate this earlier bootstrap load.
+$ExpectedBootstrapIntegritySha256 = '177901ed6e5b9ebd46c7943401772892fe00d541ea34c2eb242888e289ec2399'
+if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
+    throw 'Bootstrap integrity helper pin mismatch.'
+}
+. $BootstrapIntegrityFunctions
+$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot
+. $sharedLeaf
+
 function Full([string]$Value, [string]$Purpose) {
-    if (-not [IO.Path]::IsPathRooted($Value) -or $Value.StartsWith('\\?\')) {
-        throw "$Purpose must be an ordinary absolute path."
-    }
-    $result = [IO.Path]::GetFullPath($Value).TrimEnd('\')
-    if ($result -eq [IO.Path]::GetPathRoot($result)) { throw "$Purpose is too broad." }
-    return $result
+    return ConvertTo-KmtechFullPath $Value $Purpose
 }
 function Same([string]$Left, [string]$Right) {
     return (Full $Left 'left path').Equals((Full $Right 'right path'), 'OrdinalIgnoreCase')
@@ -90,9 +95,7 @@ function Get-CanonicalInstallSuccessStatus([bool]$IsTestMode) {
     return 'PASS'
 }
 function Sha([string]$Path) {
-    $stream = [IO.File]::OpenRead($Path); $hash = [Security.Cryptography.SHA256]::Create()
-    try { return ([BitConverter]::ToString($hash.ComputeHash($stream))).Replace('-', '').ToLowerInvariant() }
-    finally { $hash.Dispose(); $stream.Dispose() }
+    return Get-KmtechFileSha $Path
 }
 function Get-WriterContractSessionMutexName(
     [string]$SessionId,
@@ -221,7 +224,7 @@ function Command([string]$Root) {
         (Arg (Join-Path $Root 'app\main.py')))
 }
 function Manifest([string]$Root, [bool]$UnsignedOk) {
-    foreach ($relative in @(
+    Assert-KmtechPortableTree $Root @(
         'portable-manifest.json',
         'runtime\python.exe',
         'runtime\pythonw.exe',
@@ -234,19 +237,9 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         'tools\container_writer_session.ps1',
         'tools\container_writer_session_contract.json',
         'tools\container_writer_sink_inventory.json'
-    )) {
-        if (-not (Test-Path -LiteralPath (Join-Path $Root $relative) -PathType Leaf)) {
-            throw "Portable tree is missing $relative."
-        }
-    }
-    foreach ($item in @((Get-Item $Root -Force)) + @(Get-ChildItem $Root -Force -Recurse)) {
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Portable tree contains a reparse point: $($item.FullName)"
-        }
-    }
+    )
     $path = Join-Path $Root 'portable-manifest.json'
-    if ((Get-Item $path).Length -gt 65536) { throw 'Portable manifest is oversized.' }
-    $value = Get-Content $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $value = Read-KmtechPortableManifest $Root
     if ([string]$value.schema -cne 'container-audit-portable-tree-v1' -or
         [string]$value.entrypoint -cne 'runtime/pythonw.exe app/main.py' -or
         [string]$value.launcher -cne 'launch-container-audit.cmd' -or
@@ -293,13 +286,7 @@ function Manifest([string]$Root, [bool]$UnsignedOk) {
         ([string]$value.writer_session_contract_sha256).ToLowerInvariant() `
         ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant()
     [void](Assert-WriterSinkInventory (Join-Path $Root 'tools\container_writer_sink_inventory.json') ([string]$value.writer_sink_inventory_sha256).ToLowerInvariant() ([string]$value.writer_sink_inventory_contract_sha256).ToLowerInvariant())
-    if (-not $UnsignedOk) {
-        foreach ($relative in @('runtime\python.exe','runtime\pythonw.exe')) {
-            if ([string](Get-AuthenticodeSignature (Join-Path $Root $relative)).Status -cne 'Valid') {
-                throw "Signed CPython readback failed: $relative"
-            }
-        }
-    }
+    Assert-KmtechCPythonSignature $Root $UnsignedOk
     return $value
 }
 function InstalledManifest([string]$Root, [bool]$UnsignedOk) {
@@ -1291,6 +1278,7 @@ if ($PlanOnly) {
 }
 
 $winps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+# Preserve the original lifecycle validator binding after source admission.
 $BootstrapIntegrityFunctions = Join-Path $source 'tools\bootstrap_integrity.ps1'
 . $BootstrapIntegrityFunctions
 # Reject incompatible/damaged installed trees before creating a fence that can

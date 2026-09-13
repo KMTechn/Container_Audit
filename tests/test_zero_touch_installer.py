@@ -8,7 +8,7 @@ import shutil
 
 import pytest
 
-from tests.powershell_contracts import run_powershell
+from tests.powershell_contracts import canonical_leaf_prelude, run_powershell
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -138,6 +138,10 @@ def _portable_release_fixture(
     pythonw = b"signed-pythonw-test-double"
     (release / "runtime" / "pythonw.exe").write_bytes(pythonw)
     (release / "app" / "main.py").write_text(main_payload, encoding="utf-8")
+    shutil.copytree(ROOT / "kmtech_shared", release / "app/kmtech_shared",
+                    copy_function=shutil.copyfile, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for name in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json"):
+        shutil.copyfile(ROOT / name, release / "app" / name)
     launcher = b"@echo off\r\n"
     (release / "launch-container-audit.cmd").write_bytes(launcher)
     (release / "tools").mkdir()
@@ -509,7 +513,7 @@ def test_portable_installer_validates_runtime_binding_before_preimage_acceptance
 
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
-    command = r"""
+    command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r"""
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
@@ -646,7 +650,7 @@ def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
         KMTECH_TEST_RELAY_COMMAND=commands[spelling],
         KMTECH_TEST_RELAY_ACCEPTED=str(int(accepted)),
     )
-    command = r'''
+    command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r'''
 $ErrorActionPreference = 'Stop'
 $tokens = $null
 $errors = $null
@@ -688,7 +692,7 @@ elseif ($failure -cne 'CANONICAL_RELAY_BINDING_MISMATCH') {
 def test_portable_rollback_relay_guard_executes_exact_negative_rows_without_mutation():
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
-    command = r"""
+    command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r"""
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
@@ -1021,7 +1025,7 @@ def test_portable_receipt_readers_require_exact_shapes_and_json_scalar_types(tmp
             "KMTECH_TEST_RESTORE_RECEIPT_SHA256": restore_receipt_sha256,
         }
     )
-    command = r"""
+    command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r"""
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
@@ -1415,7 +1419,7 @@ def test_portable_writer_snapshot_ignores_non_exec_scheduled_task_actions(tmp_pa
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
     environment["LOCALAPPDATA"] = str(tmp_path / "local")
-    command = r"""
+    command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r"""
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(

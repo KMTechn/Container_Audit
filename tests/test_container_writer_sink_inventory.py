@@ -279,7 +279,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
         "call_operator": 22,
         "com_wmi_process_create": 1,
-        "dot_source": 8,
+        "dot_source": 10,
         "start_process": 3,
     }
     helper_calls = [
@@ -298,14 +298,18 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         and row["kind"] == "dot_source"
         and row["target"] == "$BootstrapIntegrityFunctions"
     ]
-    assert len(bootstrap_loads) == 1
-    assert bootstrap_loads[0]["guarded"] is True
-    assert bootstrap_loads[0]["guard_name"] == "byte_pinned_function_library"
+    assert len(bootstrap_loads) == 2
+    assert all(row["guarded"] is True for row in bootstrap_loads)
+    assert all(row["guard_name"] == "byte_pinned_function_library" for row in bootstrap_loads)
     installer = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8")
     assert (
-        installer.index("$sourceManifest = Manifest")
-        < installer.index("$BootstrapIntegrityFunctions = Join-Path $source 'tools\\bootstrap_integrity.ps1'")
+        installer.index("$BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\\bootstrap_integrity.ps1'")
         < installer.index(". $BootstrapIntegrityFunctions")
+        < installer.index("$sharedLeaf = Get-BootstrapSharedPortableLeaf $PSScriptRoot")
+        < installer.index(". $sharedLeaf")
+        < installer.index("$sourceManifest = Manifest")
+        < installer.index("$BootstrapIntegrityFunctions = Join-Path $source 'tools\\bootstrap_integrity.ps1'")
+        < installer.rindex(". $BootstrapIntegrityFunctions")
         < installer.index("[void](Assert-BootstrapIntegrityRecord $install)")
         < installer.index("[void](Start-ContainerWriterFence")
     )

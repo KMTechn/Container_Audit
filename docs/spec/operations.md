@@ -40,6 +40,26 @@ manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀
 140개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
+canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
+기존 `derive_container_writer_sinks.py --write/--check`가 이 pin과 inventory를 함께 갱신/검사하며
+bootstrap은 checkout EOL 변환에서 제외해 bytes를 보존한다. bootstrap의 strict path·ancestor/reparse 검사 후 고정 consumer
+manifest SHA256과 leaf SHA256을 검증하고 shared PowerShell을 dot-source한다.
+source의 `kmtech_shared/powershell/portable.ps1`와 portable의 `app/` 아래 경로를 구분한다.
+현재 입력을 다시 hash한 값을 신뢰 pin으로 사용하지 않으며 Python 준비 전 checker를 실행하지 않는다.
+`Full`·`Sha` wrapper와 `Manifest`의 required-file/reparse·bounded parse·signature 블록만 위임한다.
+CA 필수 12파일·writer 4경로·schema/coverage·9hash·typed metrics·제외 규칙과 검증 순서는 유지한다.
+`InstalledManifest`·`Get-StrictFullPath`·writer session/stop/restore/current-user 상태는 CA 소유다.
+source admission 뒤의 기존 bootstrap 재로드도 유지하여 lifecycle public-contract validator의
+함수 binding을 보존한다. 원본 함수 parity와 pin 거부는 PS5.1/PS7 합성 트리 시험이며
+서명 순서/거부 spy와 로컬 CPython 복사본의 실제 signature 조회를 구분한다.
+실제 설치/제거/복원·전체 native closure·화면 수용은 별도다.
+
+**정본 0.3.0의 알려진 결함:** `Read-KmtechPortableManifest`의 반환 시 배열 열거 때문에
+PS5.1의 `[manifest]`·PS7의 `[[manifest]]`를 원 CA는 거부하지만 shared 경로는 수용한다.
+`test_shared_manifest_rejects_array_wrapped_json`은 기존 거부를 요구하는 FAIL 회귀로 유지한다.
+vendored bytes를 임의 수정하거나 skip/xfail로 숨기지 않으며 코디네이터가 배정하는
+정본 0.3.1 bump 후속 레인에서 해소한다. 나머지 parity와 이 알려진 결함을 구별한다.
+
 `kmtech_shared` 0.3.0은 정본 code `227219c63ab4814d701d635398da80113196feea`의
 5개 파일(catalog·raster·runtime·__init__·powershell/portable.ps1)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
 결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두

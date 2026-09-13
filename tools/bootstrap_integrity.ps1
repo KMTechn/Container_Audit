@@ -36,6 +36,42 @@ function Get-RelativeCodePath([string]$Root, [string]$Path) {
     return $pathFull.Substring($rootFull.Length).Replace('\', '/')
 }
 
+function Get-BootstrapSharedPortableLeaf([string]$Root) {
+    # This bootstrap is trusted with the installer. Never use shared code to
+    # authenticate itself, or derive the expected release pin from input bytes.
+    $rootFull = Get-StrictFullPath $Root 'shared installer root'
+    Assert-BootstrapNoReparsePoint $rootFull 'shared installer root' -PathOnly
+    $appRoot = $rootFull
+    if (Test-Path -LiteralPath (Join-Path $rootFull 'app') -PathType Container) {
+        $appRoot = Join-Path $rootFull 'app'
+    }
+    $lockPath = Join-Path $appRoot 'kmtech_shared.lock.json'
+    $manifestPath = Join-Path $appRoot 'kmtech_shared.manifest.json'
+    $sharedLeaf = Join-Path $appRoot 'kmtech_shared\powershell\portable.ps1'
+    foreach ($path in @($lockPath, $manifestPath, $sharedLeaf)) {
+        Assert-BootstrapNoReparsePoint $path 'shared installer input' -PathOnly
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+            throw 'Shared installer input must be a file.'
+        }
+    }
+    $expectedManifestSha = '78383a0e962de35e03376ca2a43bbbcc94a1a801d101e8a6493174e9f804a9b2'
+    if ((Get-Item -LiteralPath $lockPath).Length -gt 65536) { throw 'Shared consumer lock is oversized.' }
+    $lock = Get-Content -LiteralPath $lockPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (@($lock.PSObject.Properties.Name).Count -ne 2 -or
+        $lock.version -cne '0.3.0' -or $lock.manifest_sha256 -cne $expectedManifestSha) {
+        throw 'Shared consumer lock pin mismatch.'
+    }
+    if ((Get-FileSha256 $manifestPath) -cne $expectedManifestSha) {
+        throw 'Shared manifest pin mismatch.'
+    }
+    $pinnedSharedManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $expectedLeafSha = $pinnedSharedManifest.files.'kmtech_shared/powershell/portable.ps1'
+    if ((Get-FileHash -LiteralPath $sharedLeaf -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expectedLeafSha) {
+        throw 'Shared PowerShell leaf pin mismatch.'
+    }
+    return $sharedLeaf
+}
+
 function Get-CodeInventory([string]$Root) {
     $rootFull = Get-StrictFullPath $Root "code root"
     $result = @()

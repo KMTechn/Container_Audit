@@ -410,11 +410,13 @@ def _assert_one_live_relay(tmp_path, env):
     launches = [json.loads(line) for line in (tmp_path / 'relay-launches.jsonl').read_text().splitlines()]
     current = json.loads((tmp_path / 'relay-observation.json').read_text())
     assert (tmp_path / 'relay.ready').exists()
-    pids = ','.join(str(row['ProcessId']) for row in launches)
     probe = tmp_path / 'live-relays.ps1'
     probe.write_text(
-        f"$live = @(Get-Process -Id @({pids}) -ErrorAction SilentlyContinue)\n"
-        f"if ($live.Count -ne 1 -or $live[0].Id -ne {current['ProcessId']}) {{ exit 1 }}\n",
+        "$live = @(Get-CimInstance Win32_Process | Where-Object {\n"
+        "    $_.CommandLine -and $_.CommandLine.Contains($env:CA_UNINSTALL_HOST) -and\n"
+        "    $_.CommandLine -match '\\srelay\\s*$'\n"
+        "})\n"
+        f"if ($live.Count -ne 1 -or $live[0].ProcessId -ne {current['ProcessId']}) {{ exit 1 }}\n",
         encoding='utf-8-sig',
     )
     result = _ps(probe, env)
@@ -422,6 +424,26 @@ def _assert_one_live_relay(tmp_path, env):
     status = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/status/container_audit_user_relay.json'
     assert json.loads(status.read_text())['persistent_retry'] is True
     return launches, current
+
+
+def test_live_relay_census_rejects_pid_reuse_as_process_identity(tmp_path):
+    env, _, _, _ = _setup(tmp_path)
+    with _launch_relay(tmp_path, env) as child:
+        status = Path(env['LOCALAPPDATA']) / 'KMTech/DirectSync/container_audit/status/container_audit_user_relay.json'
+        deadline = time.monotonic() + 10
+        while not status.exists() and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert status.exists()
+        # A retired relay PID can now belong to this unrelated pytest process.
+        # The real relay is still alive and remains the observed current PID.
+        history = tmp_path / 'relay-launches.jsonl'
+        retired = json.loads(history.read_text().splitlines()[0])
+        retired['ProcessId'] = os.getpid()
+        with history.open('a') as stream:
+            stream.write(json.dumps(retired) + '\n')
+        launches, current = _assert_one_live_relay(tmp_path, env)
+        assert len(launches) == 2
+        assert current['ProcessId'] == child.pid
 
 
 @pytest.mark.parametrize('operation', ['uninstall_then_reinstall', 'reinstall_live'])
