@@ -71,6 +71,10 @@ source admission 뒤의 기존 bootstrap 재로드도 유지하여 lifecycle pub
 PS7은 기존 bootstrap의 NLS/ICU 파일 정렬 차이로 고정 PS5 child와 integrity record가
 호환되지 않아 미입증이다. 기본 PS7 실패는 보존하며 이 채택에서 bootstrap 정렬을 바꾸지 않는다.
 
+`test_bootstrap_cross_engine.py`는 고정 `7416378` helper·실제 writer JSON을 사용해
+기존 record byte 보존, 양 엔진·ko-KR/en-US 교차 소비, 원본 aggregate와 변조 거부를 검증한다.
+파일·디렉터리 ACL identity는 Windows PowerShell의 Access/Owner/Group readback과 대조한다.
+
 **정본 0.3.1 배열 반환 보존:** `Read-KmtechPortableManifest`가 parser의 대입 형태를
 유지하여 PS5.1의 `[manifest]`·PS7의 `[[manifest]]`에 원 CA의 readback 거부를 복원한다.
 `test_shared_manifest_rejects_array_wrapped_json`은 이 두 벡터와 양 엔진의 3중·빈·중첩 빈 배열을

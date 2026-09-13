@@ -13,9 +13,10 @@ from tests import test_zero_touch_installer as fixtures
 BASELINE = "adcaf86340c90e92ce1e7b3da8f598c0e133394f"
 
 
+@pytest.mark.parametrize("culture", ("ko-KR", "en-US"))
 @pytest.mark.parametrize("engine", ("powershell.exe", "pwsh.exe"))
 def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replacement(
-    tmp_path, monkeypatch, engine,
+    tmp_path, monkeypatch, engine, culture,
 ):
     assert shutil.which(engine), f"Required upgrade engine is unavailable: {engine}"
     # Read the fixed local Git objects, not the moving sibling repository. These
@@ -55,6 +56,8 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
         "Get-WriterContractSessionMutexName", "Assert-WriterSessionPublicContract",
         "Assert-WriterSinkInventory", "Manifest", "InstalledManifest", "Get-WriterInventorySemantics",
     ], r'''
+[Threading.Thread]::CurrentThread.CurrentCulture = [Globalization.CultureInfo]::GetCultureInfo($env:CA_UPGRADE_CULTURE)
+[Threading.Thread]::CurrentThread.CurrentUICulture = [Threading.Thread]::CurrentThread.CurrentCulture
 $source=$env:CA_UPGRADE_SOURCE
 $install=$env:CA_UPGRADE_INSTALLED
 $SkipSignatureValidationForTest=$true
@@ -124,6 +127,7 @@ Copy-Item -LiteralPath (Join-Path $source 'app/kmtech_shared/powershell/portable
 ''', values={
         "CA_UPGRADE_SOURCE": str(source), "CA_UPGRADE_INSTALLED": str(installed),
         "CA_UPGRADE_BASELINE": BASELINE,
+        "CA_UPGRADE_CULTURE": culture,
         "KMTECH_FACTORY_INSTALL_TEST_MODE": "1",
     }, engine=engine)
     (tmp_path / "upgrade-stdout.txt").write_text(result.stdout, encoding="utf-8")
