@@ -149,7 +149,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
   최종 focused·Git clean·생성물/잔류 thread 근거는
   [X14 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x14/RESULT.md)를 따른다.
   제품 shutdown 변경이나 native OS 쓰기 전부의 감시를 의미하지 않는다.
-- **X05-B 고정 버전 교차 검사:** explicit canonical 검증은 앱 `source_commit`의 package/checker를 읽는다. 다른 레인의 정본 HEAD/작업 트리 확장은 안내이며 0.2.0 채택 실패로 처리하지 않는다. 기본 standalone 검사와 factory lock은 그대로다.
+- **X05-B 고정 버전 교차 검사:** explicit canonical 검증은 앱 `source_commit`의 package/checker를 읽는다. 다른 레인의 정본 HEAD/작업 트리 확장 및 현재 파일의 구문·인코딩·I/O·Git 조회 오류는 고정 대조 후 안내로 격리하며 0.2.0 채택 실패로 처리하지 않는다. pinned byte 불일치는 계속 거부하며 기본 standalone 검사와 factory lock은 그대로다. [P2 회귀·검증 범위](D:/KMTech/program-improvement-20260912/work/Container_Audit/x05bfix/RESULT.md).
 - **X05-B runtime 채택:** 0.2.0/4파일 pin·25개 CA facade와 writer inventory를 [CA-C05](contracts.md#ca-c05), [CA-O01](operations.md#ca-o01)에 정의한다. 합성 SQLite/fake transport 회귀·산출물 경로 diff와 미검증 범위는 [X05-B 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x05b/RESULT.md)를 따른다. GUI·서버·운영 설치 수용을 확대하지 않는다.
 - **X04-B shared 채택:** raster facade·고정 source/manifest/lock·패키징 검증은
   [CA-O01](operations.md#ca-o01)을 따른다. 실제 배포·GUI·프린터 수용을 확대하지 않는다.

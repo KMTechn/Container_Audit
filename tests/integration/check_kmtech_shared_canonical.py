@@ -46,18 +46,22 @@ def test_canonical_shared_source_matches_app_checker(tmp_path, capsys):
 
     # A newer/dirty canonical checkout is informational; it cannot change this
     # app's pinned release or weaken any of the comparisons above.
-    checkout_version = "unavailable"
+    notice = None
     try:
         checkout_version = local.package_version(canonical_root)
         drift = (local.inventory(canonical_root) != manifest["files"]
                  or checkout_version != manifest["version"])
-    except (OSError, ValueError):
-        drift = True
-    if drift:
-        head = subprocess.run(
-            ["git", "-C", str(canonical_root), "rev-parse", "HEAD"],
-            capture_output=True, text=True, check=False,
-        ).stdout.strip()[:12] or "unavailable"
+        if drift:
+            head = subprocess.run(
+                ["git", "-C", str(canonical_root), "rev-parse", "HEAD"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()[:12] or "unavailable"
+            notice = (f"canonical drift: pin {manifest['version']} at {pinned_commit[:12]}; "
+                      f"HEAD {head}, checkout {checkout_version}; pinned comparison PASS")
+    except Exception as exc:
+        # Only advisory reads are isolated; all pinned checks above must fail closed.
+        reason = " ".join(str(exc).split())
+        notice = f"정본 현재 파일 확인 불가: {type(exc).__name__}: {reason}"
+    if notice:
         with capsys.disabled():
-            print(f"canonical drift: pin {manifest['version']} at {pinned_commit[:12]}; "
-                  f"HEAD {head}, checkout {checkout_version}; pinned comparison PASS")
+            print(notice)
