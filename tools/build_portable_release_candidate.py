@@ -115,6 +115,7 @@ PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
+    ("kmtech_shared/powershell/portable.ps1", "app/kmtech_shared/powershell/portable.ps1"),
     ("tools/container_writer_fence.ps1", "tools/container_writer_fence.ps1"),
     ("tools/container_writer_session.ps1", "tools/container_writer_session.ps1"),
     (
@@ -563,6 +564,13 @@ def build(
     python_home = python_home.resolve()
     output = output.resolve()
     _assert_clean_source(repo_root)
+    shared_check = subprocess.run(
+        [sys.executable, "-I", "-B", str(repo_root / "qualification/check_kmtech_shared.py"),
+         "--check", "--root", str(repo_root)],
+        capture_output=True, text=True, check=False, timeout=30,
+    )
+    if shared_check.returncode:
+        raise PortableBuildError("shared source pin check failed: " + shared_check.stderr.strip())
     writer_inventory = _assert_writer_sink_inventory(repo_root)
     if output.exists():
         raise PortableBuildError(f"portable output already exists: {output}")

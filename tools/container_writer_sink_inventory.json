@@ -5395,7 +5395,7 @@
     "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
     "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
     "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
-    "PowerShell discovery derives the five shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+    "PowerShell discovery derives the six shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
     "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
     "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
     "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
@@ -5883,7 +5883,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "1076230a19627b7c3e2803f39743220bc4a125c0b7a6baa2ee80ef3c242b6496",
+  "inventory_sha256": "93c3bf32d5d5264f104ba9825af675f0001de58390bb660bf12c485cd2950402",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -7414,6 +7414,7 @@
     "asset_paths": [
       "INSTALL_CANONICAL_PORTABLE.ps1",
       "INSTALL_THIS_PC.ps1",
+      "kmtech_shared/powershell/portable.ps1",
       "tools/bootstrap_integrity.ps1",
       "tools/container_writer_fence.ps1",
       "tools/container_writer_session.ps1"
@@ -9351,6 +9352,21 @@
             "target_static": true
           }
         ]
+      },
+      {
+        "entry_guard": {
+          "guard_kind": "",
+          "guard_line": null,
+          "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
+          "required": false,
+          "valid": false,
+          "writer_source": ""
+        },
+        "file": "kmtech_shared/powershell/portable.ps1",
+        "sites": []
       },
       {
         "entry_guard": {
@@ -12827,6 +12843,7 @@
     "asset_paths": [
       "INSTALL_CANONICAL_PORTABLE.ps1",
       "INSTALL_THIS_PC.ps1",
+      "kmtech_shared/powershell/portable.ps1",
       "tools/bootstrap_integrity.ps1",
       "tools/container_writer_fence.ps1",
       "tools/container_writer_session.ps1"
@@ -14764,6 +14781,21 @@
             "target_static": true
           }
         ]
+      },
+      {
+        "entry_guard": {
+          "guard_kind": "",
+          "guard_line": null,
+          "guard_name": "",
+          "lifetime_end_line": null,
+          "release_line": null,
+          "release_name": "",
+          "required": false,
+          "valid": false,
+          "writer_source": ""
+        },
+        "file": "kmtech_shared/powershell/portable.ps1",
+        "sites": []
       },
       {
         "entry_guard": {

@@ -33,9 +33,10 @@ def test_pinned_shared_source_passes_local_checker():
     configured = evaluate_spec(ROOT / "Container_Audit.spec")["analysis"]
     assert {"kmtech_shared.catalog", "kmtech_shared.raster", "kmtech_shared.runtime"} <= set(configured["hiddenimports"])
     assert {("kmtech_shared.manifest.json", "."), ("kmtech_shared.lock.json", ".")} <= set(configured["datas"])
+    assert ("kmtech_shared/powershell/portable.ps1", "kmtech_shared/powershell") in configured["datas"]
 
 
-@pytest.mark.parametrize("mutation", ["missing", "extra", "changed", "manifest", "runtime_missing", "runtime_changed"])
+@pytest.mark.parametrize("mutation", ["missing", "extra", "changed", "manifest", "runtime_missing", "runtime_changed", "powershell_missing", "powershell_changed", "powershell_extra"])
 def test_local_checker_rejects_shared_source_drift(tmp_path, mutation):
     shutil.copytree(ROOT / "kmtech_shared", tmp_path / "kmtech_shared")
     for name in ("kmtech_shared.manifest.json", "kmtech_shared.lock.json"):
@@ -52,6 +53,13 @@ def test_local_checker_rejects_shared_source_drift(tmp_path, mutation):
     elif mutation == "runtime_changed":
         with (tmp_path / "kmtech_shared/runtime.py").open("ab") as stream:
             stream.write(b"\n# unexpected runtime drift\n")
+    elif mutation == "powershell_missing":
+        (tmp_path / "kmtech_shared/powershell/portable.ps1").unlink()
+    elif mutation == "powershell_changed":
+        with (tmp_path / "kmtech_shared/powershell/portable.ps1").open("ab") as stream:
+            stream.write(b"\nthrow 'unexpected executable drift'\n")
+    elif mutation == "powershell_extra":
+        (tmp_path / "kmtech_shared/powershell/extra.ps1").write_text("throw 'extra'", encoding="utf-8")
     else:
         manifest_path = tmp_path / "kmtech_shared.manifest.json"
         manifest_path.write_bytes(manifest_path.read_bytes() + b"\n")
@@ -119,7 +127,7 @@ raise SystemExit(result)
         cwd=app, capture_output=True, text=True, check=False, timeout=120,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "7 passed" in result.stdout
+    assert "10 passed" in result.stdout
     collected = subprocess.run(
         [*command, "--collect-only", "tests"], cwd=app,
         capture_output=True, text=True, check=False, timeout=120,

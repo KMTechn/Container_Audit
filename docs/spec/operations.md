@@ -36,20 +36,21 @@ portable builder의 `APP_ROOT_FILES`는 기존 root Python 51개를 명시한다
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-기존 application 파일 133개에 shared package 4개와 manifest/lock 2개를 더한
-139개의 경로·바이트와 tool import closure를 대조한다.
+기존 application 파일 133개에 shared package 5개와 manifest/lock 2개를 더한
+140개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
-`kmtech_shared` 0.2.0은 정본 code `24d234327f72c52a505d8215cb0c68b52b0f12e5`의
-4개 파일(catalog·raster·runtime·__init__)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
+`kmtech_shared` 0.3.0은 정본 code `227219c63ab4814d701d635398da80113196feea`의
+5개 파일(catalog·raster·runtime·__init__·powershell/portable.ps1)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
 결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두
-shared module과 manifest/lock을 포함한다. 앱 안의 QA 진입점
+shared module·PowerShell leaf와 manifest/lock을 포함한다. portable builder는 코드 배치 전에
+앱의 고정 lock을 사용하는 자급 checker를 실행하며 leaf를 `app/kmtech_shared/powershell/portable.ps1`에 포함한다. 앱 안의 QA 진입점
 `python -B qualification/check_kmtech_shared.py --check`는 이 lock의 hash/version으로
-manifest schema·source commit·정확한 package 4파일·각 hash/version을 읽기 전용 대조한다.
+manifest schema·source commit·정확한 package 5파일·각 hash/version을 읽기 전용 대조한다.
 `--root <CA 또는 portable app 경로>`로 다른 복사본도 검사한다. checker는 저장소 QA 도구로
 제품 패키징에는 포함하지 않는다. `tests/test_kmtech_shared.py`는 형제 없는 앱 복사본에서
 정상 pin·누락/추가/변조 거부와 기본 수집을 검증하며 lock 오류·단일 runtime identity도 확인한다.
-정본 검증 4함수는 `c067d38`의 `manifest/sync_shared.py`와 source가 같다.
+정본 검증 4함수는 `227219c`의 `manifest/sync_shared.py`와 source가 같다.
 형제 정본과의 교차 대조는 앱 manifest/lock을 먼저 검증한 뒤 `source_commit`의 package bytes와 checker를 `git show`로 읽는다. 이 고정 대조를 모두 통과한 뒤에만 현재 checkout을 확인한다.
 정본의 현재 HEAD/작업 트리 변경·추가 파일은 drift 안내이며 앱 판정을 바꾸지 않는다.
 현재 파일의 구문·인코딩·I/O·Git 조회 등 확인 실패는 `정본 현재 파일 확인 불가: <사유 한 줄>` 안내로 격리한다. 고정 commit 조회·byte 대조·checker 실패는 계속 FAIL이다. 명시 검사는
