@@ -203,6 +203,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g13"></a>
 ## CA-G13 전체 UI 가시성·포커스와 idle 후 명령 복귀
 
+- **CA-1 화면 경계:** [member exchange view 분리](member-exchange-view.md)는 기존 UI/command 동작을 유지하는 소스 변경이다. 실제 GUI·스캐너·설치 검증과 아래 확대 표 native 실패의 수용 상태는 별도 범위이며 [구현 근거](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6ca1/RESULT.md)에 headless 검증을 구분한다.
+
 - **2026-09-12 CA-D01 소스 교정:** 개별 교환의 입력·완료/취소는 고정하고 제목/수량/안내/표는 기존 viewport로 세로 접근한다. 실제 heading·rowheight·가로 scrollbar 요청 높이로 두 행 최소 크기를 확보하고 새 행 `see()`·긴 barcode 가로 접근·wheel/PageUp/PageDown·수량 focus 노출을 유지한다. 1024×768의 화면 cap672px 산술과 기존 headless 영향 검사를 실행한다. 0.7/2.5에서 양쪽 두 행 bbox·고정 footer를 확인하는 기존 `real_gui` 검사는 갱신했으며 이 구현 레인에서는 실행하지 않았다. 아래 과거 native 실패는 보존하고 실제 화면 수용은 별도 검증 파도에 남긴다.
 - **w1 검증 근거:** [구현 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w1/RESULT.md)의 교환 관련 headless53 PASS, 감사 focused6모듈224 PASS/정상 exit0/잔존 thread0을 확인했다. 원 targeted7노드(일반·held 분리 포함)와 이벤트 재시작·시계 역행·종료 guard를 묶은14 PASS를 별도로 기록한다. 이 결과로 미실행 native bbox/실제 화면을 PASS로 바꾸지 않는다.
 

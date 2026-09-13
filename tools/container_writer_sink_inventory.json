@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3705,
+      "line": 3694,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3709,
+          "line": 3698,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5316,6 +5316,7 @@
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
+    "member_exchange_view.py",
     "native_audio.py",
     "parked_tray_store.py",
     "phs_label_workflow.py",
@@ -5372,7 +5373,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 98,
+    "closure_module_count": 99,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5451,6 +5452,7 @@
     "label_qr.py",
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
+    "member_exchange_view.py",
     "native_audio.py",
     "parked_tray_store.py",
     "phs_label_workflow.py",
@@ -5522,6 +5524,7 @@
       "label_qr",
       "legacy_state_migration",
       "logistics_runtime_profile",
+      "member_exchange_view",
       "native_audio",
       "parked_tray_store",
       "phs_label_workflow",
@@ -5710,6 +5713,10 @@
     ],
     "logistics_runtime_profile": [
       "isolated_qualification"
+    ],
+    "member_exchange_view": [
+      "product_exchange",
+      "transfer_member_exchange"
     ],
     "native_audio": [],
     "parked_tray_store": [
@@ -5907,7 +5914,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "e71653bcbafb41691f9d95d03c1aa35ce79c44bed328cbecb29aed4ce39b9394",
+  "inventory_sha256": "d002caafb65358265c0d795048f0406e7d39be82d55233a527dd33b6e599b1fc",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17298,6 +17305,7 @@
     "label_qr.__file_entry__",
     "legacy_state_migration.__file_entry__",
     "logistics_runtime_profile.__file_entry__",
+    "member_exchange_view.__file_entry__",
     "native_audio.__file_entry__",
     "parked_tray_store.__file_entry__",
     "phs_label_workflow.__file_entry__",
@@ -17739,7 +17747,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1372,
+      "line": 1361,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17747,7 +17755,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 16241,
+      "line": 15931,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17755,7 +17763,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3705,
+      "line": 3694,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17763,7 +17771,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2685,
+      "line": 2674,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17771,7 +17779,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3081,
+      "line": 3070,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },

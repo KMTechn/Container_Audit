@@ -119,6 +119,8 @@ lease는 서명·keyring·binding·기간·membership 검증을 요구한다. �
 
 receipt는 pair·exact membership/hash·version 및 `RETAIN_IDENTITY_LABEL`, `target_label_identity_remains_valid=true`, `target_label_membership_bound=false`를 증명해야 한다. 이 조건 없이 원래 실물 라벨이 계속 유효하다고 가정하지 않는다. 중앙 ACK 뒤 로컬 적용 중 종료는 intent와 현재 트레이를 대조해 복구한다. 봉인 뒤 CA 수정은 금지하고 Label의 별도 `REPLACE_SEALED_TRANSFER_MEMBERS` 계약으로 넘긴다. 그 계약은 새 seal revision/token/QR을 만들며 Label F4의 새 전자 QR 재확인까지 CA 작업과 혼동하지 않는다. [Label package_logistics](../../../Label_Match/package_logistics.py), [CA-10](README.md#ca-10).
 
+화면 구성·목록/상태·결과 안내는 [member_exchange_view](../../member_exchange_view.py)가 기존 owner의 Tk thread에서 처리한다. admission·스캔 검증·prepare/attempt·ACK 로컬 적용·lease rotation은 원 owner/coordinator에 남는다. [상태·호출 경계](member-exchange-view.md).
+
 capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transfer_client_from_env](../../transfer_seal.py)가 대조한다. 실제 설치 서버의 활성 값과 동시 경쟁 결과는 미확인이다. [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
 
 <a id="ca-c05"></a>

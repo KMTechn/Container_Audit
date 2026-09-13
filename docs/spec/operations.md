@@ -43,11 +43,11 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
-portable builder의 `APP_ROOT_FILES`는 제품 identity 포트와 transfer client/common/store를 포함한 root Python 55개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store와 member exchange view를 포함한 root Python 56개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-제품·vendor·assets·공유 계약·설정·도구를 포함한 144개의 경로·바이트와 tool import closure를 대조한다.
+제품·vendor·assets·공유 계약·설정·도구를 포함한 145개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
 W6 CA-0의 client/store 이동은 기존 writer inventory 생성기 `--write/--check`와 Python fence·
@@ -162,6 +162,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 <a id="ca-o03"></a>
 ## CA-O03 스캐너·키보드·화면·사운드·출력
+
+개별 교환 화면은 [view 모듈](../../member_exchange_view.py)로 위임하며, 기존 owner callback·grab/focus·화면 크기 계산을 유지한다. [호출 순서와 소비자](member-exchange-view.md)를 따른다.
 
 - 개별 교환 창은 화면 높이−96px cap 안에서 입력·완료/취소를 고정한다. 설명·수량·표는 세로 scrollbar/wheel/PageUp/PageDown으로 접근하고 수량에 포커스하면 자동 노출한다. 두 행/heading/가로 scrollbar의 최소 높이를 확보하며 글자나 정보를 줄이지 않는다. 확대/축소 native bbox 검사는 `tests/test_operator_widget_transitions.py`의 기존 교환 사례를 사용한다(이 구현 레인에서는 NOT TESTED).
 

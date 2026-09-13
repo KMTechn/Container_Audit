@@ -1,12 +1,12 @@
 # 개별 제품 교체 화면 경계 (CA-1)
 
-`62e9883`의 구현을 기준으로 기록한 분리 경계다. 현행 정책은
+`62e9883`의 구현을 기준으로 기록하고 적용한 분리 경계다. 현행 정책은
 [CA-10](README.md#ca-10), [CA-C04](contracts.md#ca-c04),
 [교체 정책](../MEMBER_EXCHANGE_POLICY.md)을 따른다.
 
 ## 화면과 명령 소유
 
-| 구간 (`Container_Audit.py` 기준 행) | 책임 | 분리 계획 |
+| 구간 (`Container_Audit.py` 기준 행) | 책임 | 현재 위임 |
 | --- | --- | --- |
 | `_show_exchange_dialog_after_coordinator_admission` 14880–15082 | owner의 차단 판정 호출, 기존 창 재사용, 위젯/수량/세션 구성, grab/focus | `member_exchange_view.show_exchange_dialog(self)` |
 | `_update_exchange_display` 15180–15207 | 두 목록/행/열 폭, 마지막 행 노출, viewport idle 예약 | `member_exchange_view.update_exchange_display(self)` |
@@ -14,13 +14,13 @@
 | `_finish_central_exchange_pending` 15857–15877 | 재시도 버튼과 pending/review 안내 | `member_exchange_view.finish_central_exchange_pending(self, attempt)` |
 | `_finish_central_exchange_failure` 15879–15897 | 버튼과 준비/로컬 적용 실패 안내 | `member_exchange_view.finish_central_exchange_failure(self, attempt)` |
 | `_finish_central_exchange_success` 15899–15920 | 이미 적용된 결과 안내, 창/화면 session 초기화 | `member_exchange_view.finish_central_exchange_success(self)` |
-| `calculate_exchange_dialog_size` 293–306와 상수 288–290 | 기존 기본 크기/화면 cap 산술 | 같은 view 모듈; 기존 import 재노출 |
+| `calculate_exchange_dialog_size` 293–305와 상수 288–290 | 기존 기본 크기/화면 cap 산술 | 같은 view 모듈; 기존 import 재노출 |
 | `show_exchange_dialog`, `_schedule_exchange_dialog_admission` | preflight/review/owner/lane admission | 원 owner 유지 |
 | `_start_exchange`, `_exchange_target_quantity`, `_on_exchange_scan`, `_process_exchange_scan` | 1–2쌍 입력 검증/스캔 처리 | 원 owner 유지 |
 | `_complete_exchange`, `_cancel_exchange`, `_finish_exchange_cancel_ui` | coordinator prepare/attempt, lease, 내구 취소 기록 | 원 owner 유지 |
 | ACK 적용/복구/lease rotation | 저장과 중앙 결과 적용 | 기존 coordinator/owner 유지 |
 
-명시 owner를 받는 구체적인 모듈 함수로 이동한다. 기존 owner 메서드는 같은 이름과
+명시 owner를 받는 [member_exchange_view](../../member_exchange_view.py)의 구체적인 모듈 함수로 이동했다. 기존 owner 메서드는 같은 이름과
 signature의 얇은 위임으로 남겨 callback/monkeypatch를 보존한다. layout, font/token,
 `_large_text_pane`, tree/wrap helper와 `ProductExchangeSession` 정본을 재사용한다.
 새 presenter/controller, worker, Tk 인스턴스 또는 writer를 만들지 않는다.
