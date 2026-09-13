@@ -1725,23 +1725,23 @@
       ],
       "file": "item_catalog_sync.py",
       "kind": "function",
-      "line": 503,
+      "line": 483,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 504,
+          "line": 484,
           "operation": "path.parent.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 520,
+          "line": 500,
           "operation": "os.replace",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 524,
+          "line": 504,
           "operation": "temporary_path.unlink",
           "writer_admission_sources": []
         }
@@ -5594,6 +5594,8 @@
     "isolated_qualification": [],
     "item_catalog": [],
     "item_catalog_sync": [
+      "kmtech_shared",
+      "kmtech_shared.catalog",
       "logistics_runtime_profile",
       "writer_session_fence"
     ],
@@ -5866,7 +5868,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "52b8481756e2802a024edb52ed2cd8be46a2998527691237cd95f75fe7a7cfb8",
+  "inventory_sha256": "0f142ce85dc2f6ea53c874c467ccd01a07347408317e46d116f0641b967f37ba",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17581,7 +17583,7 @@
       "direct_mutation_site_count": 3,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync._atomic_write",
-      "line": 503,
+      "line": 483,
       "marker_kind": "decorator",
       "source": "item_catalog_atomic_write"
     },
@@ -17589,7 +17591,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync._write_authenticated_cache",
-      "line": 651,
+      "line": 635,
       "marker_kind": "decorator",
       "source": "item_catalog_cache_write"
     },
@@ -17597,7 +17599,7 @@
       "direct_mutation_site_count": 0,
       "file": "item_catalog_sync.py",
       "function": "item_catalog_sync.refresh_item_catalog",
-      "line": 860,
+      "line": 812,
       "marker_kind": "decorator",
       "source": "item_catalog_refresh"
     },

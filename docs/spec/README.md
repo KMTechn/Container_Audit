@@ -228,6 +228,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 ### CA-02 품목 기준 준비
 
 - **시작·입력:** 시작 시 중앙 `/inbound/api/item-catalog.csv`를 갱신하고 검증된 snapshot을 사용한다. [refresh_item_catalog](../../item_catalog_sync.py), [ContainerAudit.load_items](../../Container_Audit.py)
+- **공유 core:** `item_catalog_sync` facade가 고정 `kmtech_shared.catalog`의 4열 검증·sidecar 이름·canonical JSON·authority/HMAC 판정을 호출한다. CA의 경로·URL 승인·신원·진단·snapshot·내구 write/recovery 순서는 그대로 소유한다. [CA-C08](contracts.md#ca-c08), [pin·패키징](operations.md#ca-o01).
 - **검증·저장·결과:** 검증 캐시와 startup diagnostic을 보존한다. 검증 snapshot이 요구되는 경로에서 snapshot을 잃거나 파싱에 실패하면 오류이며, 무조건 패키지 `assets/Item.csv`로 성공 처리하지 않는다. legacy 파일 경로의 인코딩 fallback과 구분한다.
 - **실패·취소·재시작:** 통신·CSV·cache 오류를 진단 사유와 연결한다. 캐시 허용 여부는 `refresh_item_catalog`의 실제 분기를 따르며 임의로 낡은 품목을 정본으로 선택하지 않는다.
 - **수용 기준:** 품목 코드·명칭·규격이 검증된 동일 snapshot에서 읽히고, 갱신 실패와 파싱 실패 시 허용/중단 결과가 계약과 일치해야 한다.

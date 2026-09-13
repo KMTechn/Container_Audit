@@ -157,6 +157,13 @@ CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해
 
 **API:** `GET /inbound/api/item-catalog.csv`. CA [item_catalog_sync.refresh_item_catalog](../../item_catalog_sync.py)와 `ContainerAudit.load_items`가 요청·검증·사용하며, Web [api_item_catalog_csv / _require_item_catalog_csv_reader](../../../WorkerAnalysisGUI-web/blueprints/inbound/__init__.py)가 route와 읽기 권한을 소유한다.
 
+4열 gate·오류 문구·canonical JSON·authority record/HMAC v2·authenticated payload 판정과
+sidecar 이름은 고정 `kmtech_shared.catalog` core를 사용한다. CA facade는 program·URL
+정규화/동일 authority 판정 함수를 명시 전달한다. 기존 인증 read/write/recovery와
+snapshot dict/set, `_atomic_write` writer admission, profile/credential·HTTP·진단·시작 정책은
+CA adapter에 남긴다. recovery → CSV → authority 내구 순서와 기존 v2 sidecar bytes는 불변이며
+cache migration이나 앱 사이 cache 파일 통합은 없다. factory lock과 shared lock은 별개다.
+
 검증 cache, 실제 사용 snapshot, startup diagnostic을 구분한다. 승인된 snapshot이 사라지거나 UTF-8 parsing이 실패한 경로는 오류다. legacy assets를 읽는 경우의 `utf-8-sig/cp949/euc-kr/utf-8` fallback은 중앙 검증 실패를 무조건 허용하는 정책이 아니다. [load_items](../../Container_Audit.py). API 읽기 권한·실제 갱신 및 유효 cache 허용 기간은 대상 서버 증거가 필요하다. [CA-02](README.md#ca-02), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
 
 <a id="ca-c09"></a>

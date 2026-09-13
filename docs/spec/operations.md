@@ -32,6 +32,11 @@ writer admission 아래의 shared `RasterImage.save_png`로 이어진다. writer
 정확한 호출자와 shared 파일을 포함한다. 실제 Tk 화면·장비·설치는 별도 검증 범위다.
 X04-B renderer·패키징 focused는 100 PASS·잔류 thread0이고, baseline/facade 두 QR
 payload의 픽셀·PNG bytes 일치와 해독을 확인했다. [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x04b/RESULT.md).
+catalog leaf 위임 뒤 최종 headless 회귀는 **978 PASS·201.03초·잔류 thread0**:
+기존 W1–3 816 + update/writer 전환 92 + zero-PE 39(기존 builder 4 포함) +
+현품표 workflow 23 + shared/facade 8이다. 기존 catalog 시험 파일과 zero-PE 동작
+assertion은 유지했고 변경된 hash·추가 패키지 목록 기대값만 갱신했다. 이전 코드의 합성
+v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·writer `--check`·builder admission도 PASS다.
 
 작업자 GUI는 [Container_Audit.main / _prepare_gui_startup](../../Container_Audit.py)의 host 모드 분기, 계약·경로 확인, 단일 인스턴스, 조건부 현재 사용자 onboarding, 품목 준비를 거쳐 시작한다. Tkinter UI와 백그라운드 조회/relay가 분리되며, 작업자 이름은 업무 귀속이고 중앙 device/scope 인증은 별도다. [host dispatch](../../container_audit_product_host.py), [worker_registry](../../worker_registry.py), [protected_admin](../../protected_admin.py).
 
