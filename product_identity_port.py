@@ -34,8 +34,9 @@ class ProductScanDecision:
         if reason == "barcode_too_short":
             length = _positive_int(self.event_detail.get("item_code_length"))
             if length is not None:
-                return f"제품 바코드는 {length}자리보다 길어야 합니다. 제품 라벨의 바코드를 확인하고 다시 스캔하세요."
+                return f"제품 바코드는 {length}자리보다 길어야 합니다. 제품 라벨 확인 후 다시 스캔하세요. 같은 오류가 계속되면 담당자에게 라벨 형식을 확인하세요."
         return {
+            "barcode_too_short": "제품 바코드 형식이 올바르지 않습니다. 제품 라벨 확인 후 다시 스캔하세요. 같은 오류가 계속되면 담당자에게 라벨 형식을 확인하세요.",
             "barcode_too_long": f"제품 바코드는 {MAX_PRODUCT_BARCODE_LENGTH}자 이하여야 합니다. 제품 라벨 형식을 담당자에게 확인하세요.",
             "leading_or_trailing_whitespace": "제품 바코드 앞뒤에 공백이 있습니다. 스캐너 설정을 확인하고 다시 스캔하세요.",
             "control_character": "제품 바코드에 제어 문자가 있습니다. 스캐너 설정을 확인하고 다시 스캔하세요.",

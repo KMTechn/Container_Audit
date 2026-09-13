@@ -93,7 +93,7 @@ def test_decide_product_scan_rejects_unsafe_product_barcodes_without_storing_raw
 
 
 @pytest.mark.parametrize("reason, situation, action, rescan", [
-    ("barcode_too_short", "13자리보다 길어야", "제품 라벨의 바코드를 확인", True),
+    ("barcode_too_short", "13자리보다 길어야", "제품 라벨 확인 후", True),
     ("barcode_too_long", "128자 이하", "제품 라벨 형식을 담당자에게 확인", False),
     ("leading_or_trailing_whitespace", "앞뒤에 공백", "스캐너 설정을 확인", True),
     ("control_character", "제어 문자", "스캐너 설정을 확인", True),
@@ -119,6 +119,19 @@ def test_format_error_message_explains_reason_without_echoing_input(reason, situ
     assert decision.event_detail["reason"] == reason
     assert reason not in message
     assert "<unsafe>" not in message
+    if reason == "barcode_too_short":
+        fallback = product_scan.ProductScanDecision(
+            product_scan.SCAN_FORMAT_ERROR,
+            event_detail={"reason": reason, "raw_barcode": "<unsafe>"},
+        ).format_error_message
+        assert "형식이 올바르지 않습니다" in fallback
+        assert "<unsafe>" not in fallback
+        assert reason not in fallback
+        for copy in (message, fallback):
+            assert "제품 라벨 확인 후 다시 스캔하세요" in copy
+            assert "같은 오류가 계속되면" in copy
+            assert "담당자에게 라벨 형식을 확인" in copy
+            assert copy.index("다시 스캔") < copy.index("같은 오류가 계속되면") < copy.index("담당자")
 
 
 def test_invalid_length_setting_does_not_expose_unsafe_barcode():

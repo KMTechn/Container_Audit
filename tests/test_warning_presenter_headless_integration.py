@@ -252,7 +252,7 @@ def test_duplicate_scan_preserves_tray_rows_and_previous_last_normal():
 
 
 @pytest.mark.parametrize("barcode, reason, action", [
-    (ITEM_CODE, "barcode_too_short", "제품 라벨의 바코드를 확인"),
+    (ITEM_CODE, "barcode_too_short", "제품 라벨 확인 후"),
     (ITEM_CODE + "x" * 116, "barcode_too_long", "담당자에게 확인"),
     (ITEM_CODE + "\n001", "control_character", "스캐너 설정을 확인"),
     ("=" + SECOND_BARCODE, "formula_prefix", "담당자에게 확인"),
@@ -275,6 +275,10 @@ def test_format_warning_renders_next_action_without_count_or_raw_payload(barcode
     assert notice.blocking
     assert rendered["text"] == notice.message
     assert action in rendered["text"]
+    if reason == "barcode_too_short":
+        assert "제품 라벨 확인 후 다시 스캔하세요" in rendered["text"]
+        assert "같은 오류가 계속되면" in rendered["text"]
+        assert "담당자에게 라벨 형식을 확인" in rendered["text"]
     assert barcode not in rendered["text"]
     assert logged[0][0] == "SCAN_FAIL_FORMAT"
     assert logged[0][1]["reason"] == reason

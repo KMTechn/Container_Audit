@@ -163,7 +163,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o03"></a>
 ## CA-O03 스캐너·키보드·화면·사운드·출력
 
-제품 형식 오류는 [현장 안내](../OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md#제품-형식-오류가-나타나면)의 라벨·스캐너 설정 확인 또는 담당자 문의를 따른다. 길이 초과·위험 형식·트레이 설정 오류에 반복 스캔을 지시하지 않으며, 원문 redaction과 기존 입력 잠금/확인 동작은 유지한다. U06의 fake-Tk 문구 비교는 실제 글꼴 배치·스캐너 입력 확인을 대신하지 않는다.
+제품 형식 오류는 [현장 안내](../OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md#제품-형식-오류가-나타나면)의 라벨·스캐너 설정 확인 또는 담당자 문의를 따른다. 짧은 제품 바코드는 제품 라벨 확인 후 다시 스캔하고, 같은 오류가 계속되면 담당자에게 라벨 형식을 확인한다. 길이 초과·위험 형식·트레이 설정 오류에 반복 스캔을 지시하지 않으며, 원문 redaction과 기존 입력 잠금/확인 동작은 유지한다. U06의 fake-Tk 문구 비교는 실제 글꼴 배치·스캐너 입력 확인을 대신하지 않는다.
 
 개별 교환 화면은 [view 모듈](../../member_exchange_view.py)로 위임하며, 기존 owner callback·grab/focus·화면 크기 계산을 유지한다. [호출 순서와 소비자](member-exchange-view.md)를 따른다.
 

@@ -75,6 +75,10 @@ def _assert_equivalent(raw, item, scanned, capacity, codes, length=13):
         diagnosis = old.format_error_message.split(". ", 1)[0]
         assert diagnosis in actual.format_error_message
         assert "확인" in actual.format_error_message
+        if actual.event_detail["reason"] == "barcode_too_short":
+            assert "제품 라벨 확인 후 다시 스캔하세요" in actual.format_error_message
+            assert "같은 오류가 계속되면" in actual.format_error_message
+            assert "담당자에게 라벨 형식을 확인" in actual.format_error_message
     else:
         assert actual.format_error_message == old.format_error_message
     if actual.accepted:
