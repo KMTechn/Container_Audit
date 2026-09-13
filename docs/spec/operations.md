@@ -85,6 +85,10 @@ manifest schema·source commit·정확한 package 5파일·각 hash/version을 �
 이 노드는 기본 파일명 수집에서 제외되며 명시 실행 시 형제 부재를 실패로 처리한다.
 `tests/integration/check_kmtech_shared_canonical_regressions.py`의 명시 회귀는 정본 임시 복사본의 SyntaxError·현재 HEAD 조회 실패에서 PASS+안내, 재계산한 manifest/lock으로도 pinned byte 불일치 거부, 형제 없는 standalone PASS를 확인한다.
 runtime SQL 7개는 기존 caller-fenced inventory에서 CA의 guarded facade와 core 내부 호출자를 정확히 결속한다. facade와 core가 같은 함수명을 쓰므로 lexical reference 집합도 별도로 고정하며, guard 제거·직접 우회 호출은 admission을 거부한다. `tests/test_shared_runtime_facade.py`는 실제 앱 ACK transaction의 외부 reader 비가시성·실패 rollback/재시도와 앱 callback·활성 writer fence 거부를 확인한다.
+W5-S0-CA는 profile/legacy client 생성 2곳과 runtime scope 전달 3곳의 인자 이름을 명시한다.
+signature·기본값·profile loader·shared core·복구 정책은 유지하며 writer inventory의 행 위치와 기존 3 consumer pin만 갱신한다.
+기준 focused 248 PASS, 최종 같은 6파일과 consumer pin 1노드 249 PASS, 고정 fixture parity 8항목 동일·inventory `--check` exit0을 확인했다.
+D 격리의 경계 쓰기/잔류 thread는 최종0이며 [결과·보존 진단](D:/KMTech/program-improvement-20260912/work/Container_Audit/w5s0/RESULT.md)은 source 수용 근거다. GUI·설치·VM·서버 수용은 확대하지 않는다.
 shared 기본 시험·앱 시작/배포 runtime은 sibling 저장소나 온라인 검사를 사용하지 않는다.
 
 `vendor.kmtech_zero_pe.raster`는 shared 계산을 상속하는 CA image/canvas facade다.

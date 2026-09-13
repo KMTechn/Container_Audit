@@ -145,6 +145,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g11"></a>
 ## CA-G11 승인된 S05 소스 단순화
 
+- **W5-S0-CA context 전달:** 기존 profile/legacy client와 runtime scope의 5개 호출을 named 인자로 바꾸고 positional/default·wire·내구 복구를 유지했다. [CA-C03/05](contracts.md#ca-c03), [검증·parity 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w5s0/RESULT.md)의 최종249 PASS·고정 입력8항목 동일·inventory check PASS를 확인했다. 다음은 coordinator diff 검토와 P0 정착 뒤 Web S0, CA+Web 수용 후 LM→DI→IW→RW 인계이며 새 Shared leaf·tenant/line·다중 scope는 포함하지 않는다.
 - **X14·E01 시험 격리:** 기존 runner의 D 기본/override·쓰기 감시와 autouse worker
   close/drain을 [시험 격리](operations.md#ca-test-runner)에 정의한다.
   최종 focused·Git clean·생성물/잔류 thread 근거는

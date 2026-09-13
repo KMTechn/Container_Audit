@@ -140,7 +140,9 @@ def new_runtime_identity() -> tuple[str, Dict[str, str]]:
 
 
 def _scope_values(credentials: Any, producer_install_id: str) -> Dict[str, str]:
-    return _shared_runtime._scope_values(credentials, producer_install_id)
+    return _shared_runtime._scope_values(
+        credentials=credentials, producer_install_id=producer_install_id
+    )
 
 
 def _scope_key(values: Mapping[str, str]) -> str:
@@ -461,7 +463,10 @@ def ensure_runtime_authority(
 
     try:
         runtime_mode = client_runtime_lease_mode(credentials)
-        scope = _scope_values(credentials, str(producer_install_id or "").strip())
+        scope = _scope_values(
+            credentials=credentials,
+            producer_install_id=str(producer_install_id or "").strip(),
+        )
         _runtime_endpoint(
             scope["endpoint_url"],
             bound_qualification_origin=_bound_qualification_origin(credentials),
@@ -747,7 +752,10 @@ def prepare_runtime_metadata(
     if policy == RUNTIME_FENCING_POLICY_LEGACY_EXACT_REPLAY:
         return RuntimePreparation(metadata=dict(metadata))
     try:
-        scope = _scope_values(credentials, str(metadata.get("producer_install_id") or ""))
+        scope = _scope_values(
+            credentials=credentials,
+            producer_install_id=str(metadata.get("producer_install_id") or ""),
+        )
         _runtime_endpoint(
             scope["endpoint_url"],
             bound_qualification_origin=_bound_qualification_origin(credentials),

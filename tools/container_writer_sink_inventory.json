@@ -2559,11 +2559,11 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 224,
+      "line": 226,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 263,
+          "line": 265,
           "operation": "session.post",
           "writer_admission_sources": []
         }
@@ -2598,47 +2598,47 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 449,
+      "line": 451,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 491,
+          "line": 496,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 578,
+          "line": 583,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 619,
+          "line": 624,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 620,
+          "line": 625,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 635,
+          "line": 640,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 646,
+          "line": 651,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 662,
+          "line": 667,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -2673,59 +2673,59 @@
       ],
       "file": "producer_runtime_client.py",
       "kind": "function",
-      "line": 706,
+      "line": 711,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 769,
+          "line": 777,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 859,
+          "line": 867,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 882,
+          "line": 890,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 910,
+          "line": 918,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 946,
+          "line": 954,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 947,
+          "line": 955,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 962,
+          "line": 970,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 973,
+          "line": 981,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 989,
+          "line": 997,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
@@ -5891,7 +5891,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "7254368ce12bea821bae9ead20b4c1599cd4f029137eda37399a2ac5f5d7d626",
+  "inventory_sha256": "9c79334caf6b4566a389cc3b943a8e323395bc924fe18493c65c1a4ed85ce5e1",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18040,7 +18040,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._create_state",
-      "line": 342,
+      "line": 344,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18048,7 +18048,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._replace_expired_identity",
-      "line": 352,
+      "line": 354,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18056,7 +18056,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.apply_runtime_receipt_in_transaction",
-      "line": 1035,
+      "line": 1043,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18064,7 +18064,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.disable_runtime_authority_in_transaction",
-      "line": 1100,
+      "line": 1108,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18072,7 +18072,7 @@
       "direct_mutation_site_count": 7,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.ensure_runtime_authority",
-      "line": 449,
+      "line": 451,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18080,7 +18080,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.init_runtime_schema",
-      "line": 176,
+      "line": 178,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18088,7 +18088,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.mark_runtime_operator_review_in_transaction",
-      "line": 1057,
+      "line": 1065,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18096,7 +18096,7 @@
       "direct_mutation_site_count": 9,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.prepare_runtime_metadata",
-      "line": 706,
+      "line": 711,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18104,7 +18104,7 @@
       "direct_mutation_site_count": 0,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client.release_runtime_request_in_transaction",
-      "line": 1079,
+      "line": 1087,
       "marker_kind": "decorator",
       "source": "producer_runtime_storage"
     },
@@ -18408,7 +18408,7 @@
       "direct_mutation_site_count": 1,
       "file": "producer_runtime_client.py",
       "function": "producer_runtime_client._post_lease_request",
-      "line": 224,
+      "line": 226,
       "marker_kind": "decorator",
       "source": "runtime_lease_network"
     },

@@ -5339,9 +5339,9 @@ def logistics_transfer_client_from_env(
     )
     if profile is not None:
         client = LogisticsTransferClient(
-            profile.base_url,
-            profile.bearer_token,
-            profile.source_host_id,
+            base_url=profile.base_url,
+            token=profile.bearer_token,
+            source_host_id=profile.source_host_id,
             device_id=profile.device_id,
             timeout_seconds=profile.timeout_seconds,
             session=session,
@@ -5382,9 +5382,9 @@ def logistics_transfer_client_from_env(
         try:
             timeout = float(values.get("WORKER_ANALYSIS_LOGISTICS_TIMEOUT_SECONDS", "10"))
             client = LogisticsTransferClient(
-                legacy_fields["base_url"],
-                legacy_fields["token"],
-                legacy_fields["source_host_id"],
+                base_url=legacy_fields["base_url"],
+                token=legacy_fields["token"],
+                source_host_id=legacy_fields["source_host_id"],
                 device_id=values.get(
                     "WORKER_ANALYSIS_LOGISTICS_DEVICE_ID",
                     legacy_fields["source_host_id"],
