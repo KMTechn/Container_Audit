@@ -191,13 +191,18 @@ Write-Output ('PASS CA parity cases='+$count+' engine='+$PSVersionTable.PSVersio
 
 
 @pytest.mark.parametrize("engine", ENGINES)
-def test_shared_manifest_rejects_array_wrapped_json(tmp_path, engine):
+@pytest.mark.parametrize("shape", ("wrapped", "nested", "empty", "nested-empty"))
+def test_shared_manifest_rejects_array_wrapped_json(tmp_path, engine, shape):
     """Upstream 0.3.0 regression: the caller must retain the original rejection."""
     assert shutil.which(engine), f"Required parity engine is unavailable: {engine}"
     root = _portable_release_fixture(tmp_path)
     path = root / "portable-manifest.json"
-    depth = 1 if engine == "powershell.exe" else 2
-    path.write_bytes(b"[" * depth + path.read_bytes() + b"]" * depth)
+    if shape in ("empty", "nested-empty"):
+        contents = b"[]" if shape == "empty" else b"[[]]"
+    else:
+        depth = (1 if engine == "powershell.exe" else 2) if shape == "wrapped" else 3
+        contents = b"[" * depth + path.read_bytes() + b"]" * depth
+    path.write_bytes(contents)
     baseline = tmp_path / "before.ps1"
     shutil.copyfile(ROOT / "tests/fixtures/ca_portable_functions_before_x13b.ps1", baseline)
     names = ["Full", "Sha", "Same", "Manifest", "Test-JsonInteger", "Test-JsonTrue",

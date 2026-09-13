@@ -60,13 +60,14 @@ source admission 뒤의 기존 bootstrap 재로드도 유지하여 lifecycle pub
 PS7은 기존 bootstrap의 NLS/ICU 파일 정렬 차이로 고정 PS5 child와 integrity record가
 호환되지 않아 미입증이다. 기본 PS7 실패는 보존하며 이 채택에서 bootstrap 정렬을 바꾸지 않는다.
 
-**정본 0.3.0의 알려진 결함:** `Read-KmtechPortableManifest`의 반환 시 배열 열거 때문에
-PS5.1의 `[manifest]`·PS7의 `[[manifest]]`를 원 CA는 거부하지만 shared 경로는 수용한다.
-`test_shared_manifest_rejects_array_wrapped_json`은 기존 거부를 요구하는 FAIL 회귀로 유지한다.
-vendored bytes를 임의 수정하거나 skip/xfail로 숨기지 않으며 코디네이터가 배정하는
-정본 0.3.1 bump 후속 레인에서 해소한다. 나머지 parity와 이 알려진 결함을 구별한다.
+**정본 0.3.1 배열 반환 보존:** `Read-KmtechPortableManifest`가 parser의 대입 형태를
+유지하여 PS5.1의 `[manifest]`·PS7의 `[[manifest]]`에 원 CA의 readback 거부를 복원한다.
+`test_shared_manifest_rejects_array_wrapped_json`은 이 두 벡터와 양 엔진의 3중·빈·중첩 빈 배열을
+원 앱 함수와 직접 비교한다. 0.3.0의 두 FAIL 원본과 0.3.1 재실행·짧은 경로 복구 회귀는
+[X13-B bump 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x13bbump/RESULT.md)에 보존한다.
+실제 lifecycle 및 기존 PS7 upgrade의 bootstrap 정렬 호환성은 별도 미입증 범위다.
 
-`kmtech_shared` 0.3.0은 정본 code `227219c63ab4814d701d635398da80113196feea`의
+`kmtech_shared` 0.3.1은 정본 code `1be471f04b40bc2feef6d5a9f1478ddbb2336050`의
 5개 파일(catalog·raster·runtime·__init__·powershell/portable.ps1)을 byte 그대로 고정한다. 별도 `kmtech_shared.lock.json`이 manifest SHA256을
 결속하며 기존 factory `contract.lock.json`과 독립적이다. portable/PyInstaller 모두
 shared module·PowerShell leaf와 manifest/lock을 포함한다. portable builder는 코드 배치 전에
@@ -76,7 +77,7 @@ manifest schema·source commit·정확한 package 5파일·각 hash/version을 �
 `--root <CA 또는 portable app 경로>`로 다른 복사본도 검사한다. checker는 저장소 QA 도구로
 제품 패키징에는 포함하지 않는다. `tests/test_kmtech_shared.py`는 형제 없는 앱 복사본에서
 정상 pin·누락/추가/변조 거부와 기본 수집을 검증하며 lock 오류·단일 runtime identity도 확인한다.
-정본 검증 4함수는 `227219c`의 `manifest/sync_shared.py`와 source가 같다.
+정본 검증 4함수는 `1be471f`의 `manifest/sync_shared.py`와 source가 같다.
 형제 정본과의 교차 대조는 앱 manifest/lock을 먼저 검증한 뒤 `source_commit`의 package bytes와 checker를 `git show`로 읽는다. 이 고정 대조를 모두 통과한 뒤에만 현재 checkout을 확인한다.
 정본의 현재 HEAD/작업 트리 변경·추가 파일은 drift 안내이며 앱 판정을 바꾸지 않는다.
 현재 파일의 구문·인코딩·I/O·Git 조회 등 확인 실패는 `정본 현재 파일 확인 불가: <사유 한 줄>` 안내로 격리한다. 고정 commit 조회·byte 대조·checker 실패는 계속 FAIL이다. 명시 검사는

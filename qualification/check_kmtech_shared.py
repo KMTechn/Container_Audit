@@ -1,7 +1,7 @@
 """Read-only shared package/manifest check using this app's committed lock.
 
 The four validation functions below are copied unchanged from
-kmtech_shared 227219c manifest/sync_shared.py; the explicit integration test
+kmtech_shared 1be471f manifest/sync_shared.py; the explicit integration test
 checks their source at the manifest's pinned canonical commit. No sibling is needed here.
 """
 from __future__ import annotations

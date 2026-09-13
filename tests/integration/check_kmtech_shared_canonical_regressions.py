@@ -42,7 +42,7 @@ def test_current_checkout_syntax_error_is_advisory(copied_checkouts, tmp_path, c
     integration.test_canonical_shared_source_matches_app_checker(tmp_path, capsys)
 
     output = capsys.readouterr().out
-    assert "PASS shared 0.2.0" in output
+    assert "PASS shared 0.3.1" in output
     notices = [line for line in output.splitlines() if line.startswith("정본 현재 파일 확인 불가:")]
     assert len(notices) == 1
     assert "SyntaxError" in notices[0]
@@ -66,7 +66,7 @@ def test_current_checkout_git_failure_is_advisory(copied_checkouts, tmp_path, mo
     integration.test_canonical_shared_source_matches_app_checker(tmp_path, capsys)
 
     output = capsys.readouterr().out
-    assert "PASS shared 0.2.0" in output
+    assert "PASS shared 0.3.1" in output
     notices = [line for line in output.splitlines() if line.startswith("정본 현재 파일 확인 불가:")]
     assert len(notices) == 1
     assert "CalledProcessError" in notices[0]
@@ -111,4 +111,4 @@ def test_standalone_checker_needs_no_canonical_checkout(tmp_path):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "PASS shared 0.2.0" in result.stdout
+    assert "PASS shared 0.3.1" in result.stdout
