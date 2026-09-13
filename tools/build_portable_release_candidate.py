@@ -92,6 +92,7 @@ APP_ROOT_FILES = (
     "transfer_common.py",
     "transfer_member_exchange.py",
     "transfer_seal.py",
+    "transfer_store.py",
     "tray_state.py",
     "update_service.py",
     "user_relay.py",

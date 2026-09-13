@@ -27,7 +27,7 @@ from transfer_seal import (
 ROOT = Path(__file__).resolve().parents[1]
 
 READ_ONLY_ALLOWLIST = {
-    ("transfer_seal.py", "TransferSealStore"): {
+    ("transfer_store.py", "TransferSealStore"): {
         "preview_intent",
         "load",
         "precommand_operator_review",
@@ -756,8 +756,10 @@ def test_every_public_transfer_writer_asserts_owner_first(
             if class_name == "TransferSealCoordinator"
             else "TransferMemberExchangeStore"
         )
-        store_key = (filename, store_class_name)
-        store_methods = _public_methods(_classes(filename)[store_class_name])
+        store_key = next(
+            key for key in READ_ONLY_ALLOWLIST if key[1] == store_class_name
+        )
+        store_methods = _public_methods(_classes(store_key[0])[store_class_name])
         store_writers = set(store_methods) - READ_ONLY_ALLOWLIST[store_key] - {
             OWNER_BIND_METHOD,
             UI_THREAD_BIND_METHOD,

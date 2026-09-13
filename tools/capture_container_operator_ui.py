@@ -102,6 +102,7 @@ M7_PRODUCT_TEXT_BLOBS = (
     "transfer_seal.py",
     "transfer_client.py",
     "transfer_common.py",
+    "transfer_store.py",
     "transfer_member_exchange.py",
     "terminal_operation_lease.py",
 )

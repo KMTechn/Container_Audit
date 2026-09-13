@@ -4566,22 +4566,20 @@
       ],
       "decorated_source": "transfer_seal",
       "direct_callers": [
-        "Container_Audit.ContainerAudit.__init__",
-        "current_user_onboarding._create_ledger",
         "transfer_seal.transfer_seal_coordinator_from_env"
       ],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 1629,
+      "line": 40,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 1648,
+          "line": 59,
           "operation": "parent.mkdir",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.__init__",
+      "node": "transfer_store.TransferSealStore.__init__",
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -4603,21 +4601,21 @@
       ],
       "decorated_source": "transfer_seal",
       "direct_callers": [
-        "transfer_seal.TransferSealStore._initialize",
-        "transfer_seal.TransferSealStore.prepare"
+        "transfer_store.TransferSealStore._initialize",
+        "transfer_store.TransferSealStore.prepare"
       ],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 1729,
+      "line": 140,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1745,
+          "line": 156,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore._ensure_linked_event",
+      "node": "transfer_store.TransferSealStore._ensure_linked_event",
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -4639,74 +4637,74 @@
       ],
       "decorated_source": "transfer_seal",
       "direct_callers": [
-        "transfer_seal.TransferSealStore.__init__"
+        "transfer_store.TransferSealStore.__init__"
       ],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 1789,
+      "line": 200,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1793,
+          "line": 204,
           "operation": "conn.executescript",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1848,
+          "line": 259,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1852,
+          "line": 263,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1857,
+          "line": 268,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1862,
+          "line": 273,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1867,
+          "line": 278,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1882,
+          "line": 293,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1888,
+          "line": 299,
           "operation": "conn.executescript",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2052,
+          "line": 463,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2056,
+          "line": 467,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore._initialize",
+      "node": "transfer_store.TransferSealStore._initialize",
       "reachable_entrypoints": [
         "Container_Audit.__file_entry__",
         "Container_Audit.main",
@@ -4724,30 +4722,30 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2102,
+      "line": 513,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2138,
+          "line": 549,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2139,
+          "line": 550,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2176,
+          "line": 587,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.prepare",
+      "node": "transfer_store.TransferSealStore.prepare",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4761,24 +4759,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2238,
+      "line": 649,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2244,
+          "line": 655,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2266,
+          "line": 677,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.bind_command",
+      "node": "transfer_store.TransferSealStore.bind_command",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4792,24 +4790,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2279,
+      "line": 690,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2285,
+          "line": 696,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2294,
+          "line": 705,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.confirm_completion_checkpoint",
+      "node": "transfer_store.TransferSealStore.confirm_completion_checkpoint",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4823,26 +4821,26 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [
-        "transfer_seal.TransferSealStore.record_error"
+        "transfer_store.TransferSealStore.record_error"
       ],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2307,
+      "line": 718,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2368,
+          "line": 779,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2387,
+          "line": 798,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore._ensure_post_review_case",
+      "node": "transfer_store.TransferSealStore._ensure_post_review_case",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4856,24 +4854,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2411,
+      "line": 822,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2456,
+          "line": 867,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2461,
+          "line": 872,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.record_error",
+      "node": "transfer_store.TransferSealStore.record_error",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4887,24 +4885,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2476,
+      "line": 887,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2479,
+          "line": 890,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2480,
+          "line": 891,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.record_receipt",
+      "node": "transfer_store.TransferSealStore.record_receipt",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4918,24 +4916,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2562,
+      "line": 973,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2580,
+          "line": 991,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2608,
+          "line": 1019,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.record_post_review_projection",
+      "node": "transfer_store.TransferSealStore.record_post_review_projection",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4949,30 +4947,30 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2647,
+      "line": 1058,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2718,
+          "line": 1129,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2719,
+          "line": 1130,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2759,
+          "line": 1170,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.mark_phs_replacement_waiting",
+      "node": "transfer_store.TransferSealStore.mark_phs_replacement_waiting",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -4986,24 +4984,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2842,
+      "line": 1253,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2859,
+          "line": 1270,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2887,
+          "line": 1298,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.record_replacement_waiting_projection",
+      "node": "transfer_store.TransferSealStore.record_replacement_waiting_projection",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -5017,24 +5015,24 @@
       "covered_entrypoints": [],
       "decorated_source": "transfer_seal",
       "direct_callers": [],
-      "file": "transfer_seal.py",
+      "file": "transfer_store.py",
       "kind": "function",
-      "line": 2923,
+      "line": 1334,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2933,
+          "line": 1344,
           "operation": "conn.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2934,
+          "line": 1345,
           "operation": "conn.execute",
           "writer_admission_sources": []
         }
       ],
-      "node": "transfer_seal.TransferSealStore.record_exchange_block",
+      "node": "transfer_store.TransferSealStore.record_exchange_block",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -5355,6 +5353,7 @@
     "transfer_common.py",
     "transfer_member_exchange.py",
     "transfer_seal.py",
+    "transfer_store.py",
     "tray_state.py",
     "update_service.py",
     "user_relay.py",
@@ -5373,7 +5372,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 97,
+    "closure_module_count": 98,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5489,6 +5488,7 @@
     "transfer_common.py",
     "transfer_member_exchange.py",
     "transfer_seal.py",
+    "transfer_store.py",
     "tray_state.py",
     "update_service.py",
     "user_relay.py",
@@ -5861,6 +5861,10 @@
       "terminal_operation_lease",
       "transfer_client",
       "transfer_common",
+      "transfer_store"
+    ],
+    "transfer_store": [
+      "transfer_common",
       "writer_session_fence"
     ],
     "tray_state": [
@@ -5903,7 +5907,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "648e832f9af6ef20790a23f6cbf904bfce01cf33f42ddc45e8453e47d9fafaf6",
+  "inventory_sha256": "e71653bcbafb41691f9d95d03c1aa35ce79c44bed328cbecb29aed4ce39b9394",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6086,9 +6090,9 @@
         "tools.register_container_audit_worker_pc.main",
         "transfer_member_exchange.TransferMemberExchangeStore.__init__",
         "transfer_member_exchange.TransferMemberExchangeStore._initialize",
-        "transfer_seal.TransferSealStore.__init__",
-        "transfer_seal.TransferSealStore._ensure_linked_event",
-        "transfer_seal.TransferSealStore._initialize",
+        "transfer_store.TransferSealStore.__init__",
+        "transfer_store.TransferSealStore._ensure_linked_event",
+        "transfer_store.TransferSealStore._initialize",
         "tray_state.quarantine_tray_state_file",
         "user_relay._write_json_atomic"
       ],
@@ -17332,6 +17336,7 @@
     "transfer_common.__file_entry__",
     "transfer_member_exchange.__file_entry__",
     "transfer_seal.__file_entry__",
+    "transfer_store.__file_entry__",
     "tray_state.__file_entry__",
     "update_service.__file_entry__",
     "user_relay.__file_entry__",
@@ -18692,105 +18697,105 @@
     },
     {
       "direct_mutation_site_count": 1,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.__init__",
-      "line": 1629,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.__init__",
+      "line": 40,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 1,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore._ensure_linked_event",
-      "line": 1729,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore._ensure_linked_event",
+      "line": 140,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore._ensure_post_review_case",
-      "line": 2307,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore._ensure_post_review_case",
+      "line": 718,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 10,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore._initialize",
-      "line": 1789,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore._initialize",
+      "line": 200,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.bind_command",
-      "line": 2238,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.bind_command",
+      "line": 649,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.confirm_completion_checkpoint",
-      "line": 2279,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.confirm_completion_checkpoint",
+      "line": 690,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 3,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.mark_phs_replacement_waiting",
-      "line": 2647,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.mark_phs_replacement_waiting",
+      "line": 1058,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 3,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.prepare",
-      "line": 2102,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.prepare",
+      "line": 513,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.record_error",
-      "line": 2411,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.record_error",
+      "line": 822,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.record_exchange_block",
-      "line": 2923,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.record_exchange_block",
+      "line": 1334,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.record_post_review_projection",
-      "line": 2562,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.record_post_review_projection",
+      "line": 973,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.record_receipt",
-      "line": 2476,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.record_receipt",
+      "line": 887,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
     {
       "direct_mutation_site_count": 2,
-      "file": "transfer_seal.py",
-      "function": "transfer_seal.TransferSealStore.record_replacement_waiting_projection",
-      "line": 2842,
+      "file": "transfer_store.py",
+      "function": "transfer_store.TransferSealStore.record_replacement_waiting_projection",
+      "line": 1253,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },

@@ -218,7 +218,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert "direct_sync_auto_bootstrap._write_json" in covered_nodes
     assert "event_log_store._interprocess_file_lock" in covered_nodes
     assert "event_log_store._append_event_log_entry_unlocked" in covered_nodes
-    assert "transfer_seal.TransferSealStore._initialize" in covered_nodes
+    assert "transfer_store.TransferSealStore._initialize" in covered_nodes
     assert "kmtech_factory_contracts.active_work_probe.cli._create_new_fsynced" in covered_nodes
     assert "tools.direct_sync_relay_operator._write_json_atomic" in covered_nodes
     assert "tools.direct_sync_relay_install_pack._run_command" in covered_nodes
