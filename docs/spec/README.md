@@ -261,6 +261,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-05"></a>
 ### CA-05 제품 바코드 검사
 
+- **검사 순서 정본:** [제품 admission 표와 기록 벡터](product-admission.md). 시작13자 호환 분기와 활성 제품 substring/catalog gate를 구분한다.
 - **시작·입력:** 활성 트레이에서 제품 문자열을 스캔한다. GUI는 외곽 공백을 `strip()`하고, `decide_product_scan`은 전달값의 길이·제어문자·수식/HTML/경로 위험 형식·품목 포함·중복·용량을 검사한다. [product_scan.py](../../product_scan.py), [process_barcode / _process_barcode_logic](../../Container_Audit.py)
 - **검증·저장·결과:** 현행 `ITEM_CODE_LENGTH=13`, 제품 문자열 최대 128자이며 품목코드보다 길어야 한다. 기본 판정 통과 뒤 일반·held 입력은 `decide_catalog_product_match`의 같은 모호성/다른 긴 품목 정책과 사건 detail을 사용한다. 일반 경로의 오류 카운터·경고→사건→상태 저장과 held 경로의 경고→동기 감사→FIFO ACK는 각 호출자가 유지한다. 형식 오류는 기존처럼 사건 기록이 경고보다 먼저다. 제품 입력은 기존 직렬 lane worker에서 상태·사건을 내구 저장하고 UI 단계만 Tk에 반영한다. 정상 입력은 current JSON ACK 뒤 목록·수량·성공음을 확정하며 품목·경고·수량 표시를 같은 결과로 한 번 갱신한다. 이후 `SCAN_OK` 접수(held는 동기 감사)가 끝나야 다음 입력/held FIFO ACK와 목표 도달 완료 대조로 이어진다.
 - **실패·취소·재시작:** 형식·품목·중복·초과는 개수 증가 없이 경고·실패 사건으로 처리한다. 취소는 [CA-08](#ca-08), 상태 저장 후 복구는 [CA-09](#ca-09)를 따른다. 이 단계의 동일 품목 통과가 중앙 member임을 최종 증명하지는 않는다.
