@@ -54,6 +54,12 @@ source admission 뒤의 기존 bootstrap 재로드도 유지하여 lifecycle pub
 서명 순서/거부 spy와 로컬 CPython 복사본의 실제 signature 조회를 구분한다.
 실제 설치/제거/복원·전체 native closure·화면 수용은 별도다.
 
+기존 설치 트리 적격성은 설치된 manifest와 core 파일 집합을 사용하며 새 shared leaf를
+요구하지 않는다. `adcaf86`의 0.2.0·writer 계약/재고를 가진 합성 트리가 실제 preflight와
+교체를 통과하고, leaf를 포함한 새 트리·원본 rollback을 검증하는 회귀는 PS5.1 PASS다.
+PS7은 기존 bootstrap의 NLS/ICU 파일 정렬 차이로 고정 PS5 child와 integrity record가
+호환되지 않아 미입증이다. 기본 PS7 실패는 보존하며 이 채택에서 bootstrap 정렬을 바꾸지 않는다.
+
 **정본 0.3.0의 알려진 결함:** `Read-KmtechPortableManifest`의 반환 시 배열 열거 때문에
 PS5.1의 `[manifest]`·PS7의 `[[manifest]]`를 원 CA는 거부하지만 shared 경로는 수용한다.
 `test_shared_manifest_rejects_array_wrapped_json`은 기존 거부를 요구하는 FAIL 회귀로 유지한다.
