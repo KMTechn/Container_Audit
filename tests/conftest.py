@@ -1,8 +1,10 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import sys
 import threading
+import tempfile
 import time
 import tkinter
 from tkinter import messagebox, simpledialog
@@ -21,12 +23,32 @@ def pytest_addoption(parser):
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config):
     """Own mutable state before collection, including every child interpreter."""
+    if os.environ.get("KMTECH_TEST_CA_TASK_ROOT"):
+        from tests.sitecustomize import install_write_boundary
+        install_write_boundary()
     if config.option.basetemp:
         Path(config.option.basetemp).resolve().parent.mkdir(parents=True, exist_ok=True)
     base = config._tmp_path_factory.getbasetemp()
     patch = pytest.MonkeyPatch()
     config.add_cleanup(patch.undo)
     _isolate_environment(base / "session", patch)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    configured = os.environ.get("KMTECH_TEST_CA_TASK_ROOT")
+    if not configured:
+        return
+    root = Path(configured)
+    violations = root / "boundary-violations.jsonl"
+    count = len(violations.read_text(encoding="utf-8").splitlines()) if violations.exists() else 0
+    live = [thread.name for thread in threading.enumerate()
+            if thread is not threading.main_thread()]
+    (root / "isolation.json").write_text(
+        json.dumps({"outside_write_attempts": count, "remaining_threads": live}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    if count or live:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
 
 
 def _isolate_environment(root, patch):
@@ -38,6 +60,9 @@ def _isolate_environment(root, patch):
         path.mkdir(parents=True, exist_ok=True)
         patch.setenv(name, str(path))
     patch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
+    for name in ("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", "KM_LOGISTICS_PROFILE_PATH"):
+        patch.delenv(name, raising=False)
+    patch.setattr(tempfile, "tempdir", str(root / "temp"))
     patch.setenv("PYTHONDONTWRITEBYTECODE", "1")
     if os.name == "nt":
         modules = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/Modules"
@@ -209,7 +234,7 @@ def headless_gui_error_type():
     return HeadlessGuiInvocationError
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def owned_tk_workers(monkeypatch):
     """Drain test-owned workers even when an assertion skips the normal close."""
     from tk_serial_ui_lane import TkSerialUiLane

@@ -11,6 +11,10 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 시험으로 확인한다. 새 Full·build·설치·서버 작업을 요구하지 않는다.
 [변경·검증 범위](operations.md#ca-o11), [후속 검토](BACKLOG.md#ca-g11)를 따른다.
 
+저장소 focused 시험은 `python -B tools/run_repository_tests.py <test-node>`로 실행한다.
+기본 D 작업 루트·override·child 상태/쓰기 감시·실패 후 thread 정리는
+[시험 격리](operations.md#ca-test-runner)를 따른다.
+
 ### 2026-09-12 실제 M06 GOOD1 이적 완료
 
 현행 제품 `0ea7251`의 실제 원본 PHS2·GOOD 멤버 1개를 기존 연결 VM에서 처리했다.

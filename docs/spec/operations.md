@@ -7,6 +7,27 @@
 
 기준일 2026-09-07. [README의 HEAD·수정 트리·기존 증거 경계](README.md#1-기준과-증거-사용법)를 적용한다. 아래의 현재 동작은 인용 소스의 정적 확인이며 설치·장비·서버 실행 결과가 아니다. 이번 문서 작업의 실행은 **NOT TESTED**이고 과거 실행 결과는 중앙 준비도에 보존한다. 수용 항목은 현행 계약을 확인할 기준이며 미정인 운영 목표는 임의로 정하지 않는다.
 
+<a id="ca-test-runner"></a>
+## 저장소 시험 격리 (X14·E01)
+
+`python -B tools/run_repository_tests.py <focused-test-node>`의 기본 run은
+`D:\KMTech\test-runs\Container_Audit\<UTC timestamp>`다.
+`--task-root <부모 경로>`가 `CONTAINER_AUDIT_TEST_TASK_ROOT` 환경변수보다 우선하며
+기존 `--work-root`도 같은 별칭이다. 소스 내부/소스를 포함하는 루트는 거부한다.
+부모와 자식의 TEMP/TMP·AppData/ProgramData·데이터/설정 및 pytest basetemp·JUnit·로그를
+같은 run 아래에 둔다. 테스트별 fixture는 ambient 데이터/profile override를 지우고
+격리된 LOCALAPPDATA의 기본 업무/설정 경로를 사용하며 tempfile 캐시도 갱신한다.
+CA writer mutex는 기존 fixture/sitecustomize의 경로별 시험 이름을 사용한다.
+DI 전용 writer 환경변수는 CA에 적용하지 않는다.
+
+기존 `owned_tk_workers`가 모든 시험에서 finally로 close/drain과 leak assertion을 수행한다.
+`isolation.json`의 thread·경계 밖 쓰기 수와 `result.json`의 Git 상태 전후 비교를 확인한다.
+Python audit hook은 runner·pytest·일반 Python 자식의 파일/디렉터리/SQLite 쓰기를
+거부·기록하며, 잡힌 예외나 자식 실패라도 runner는 실패를 반환한다.
+native executable·`-I` 자식의 OS 쓰기 전부를 감시하는 sandbox는 아니며 제품 종료 정책은 불변이다.
+D 쓰기 병목이 확인된 C 예외는 합성 입력·TEMP/TMP·basetemp만 허용하고 로그/JUnit/실패 원본은
+D에 보존한 뒤 C 임시 루트를 검증·삭제한다. runner 전체 출력을 C로 옮기는 예외는 아니다.
+
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 

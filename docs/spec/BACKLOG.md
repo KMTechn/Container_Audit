@@ -144,6 +144,11 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g11"></a>
 ## CA-G11 승인된 S05 소스 단순화
 
+- **X14·E01 시험 격리:** 기존 runner의 D 기본/override·쓰기 감시와 autouse worker
+  close/drain을 [시험 격리](operations.md#ca-test-runner)에 정의한다.
+  최종 focused·Git clean·생성물/잔류 thread 근거는
+  [X14 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/x14/RESULT.md)를 따른다.
+  제품 shutdown 변경이나 native OS 쓰기 전부의 감시를 의미하지 않는다.
 - **X04-B shared 채택:** raster facade·고정 source/manifest/lock·패키징 검증은
   [CA-O01](operations.md#ca-o01)을 따른다. 실제 배포·GUI·프린터 수용을 확대하지 않는다.
   pin 검사는 앱 QA 진입점으로 자급하며 단독 checkout 회귀를 유지한다.

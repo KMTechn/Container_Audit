@@ -11,15 +11,77 @@ from __future__ import annotations
 
 import importlib.abc
 import importlib.machinery
+import json
 from pathlib import Path
 import os
 import sys
+from urllib.parse import parse_qs, unquote, urlsplit
 
 
 _ROOT_ENV = "KMTECH_TEST_CA_WRITER_ROOT"
 _MUTEX_ENV = "KMTECH_TEST_CA_WRITER_MUTEX"
 _MARKER_ENV = "KMTECH_TEST_CA_SITECUSTOMIZE_MARKER"
 _TARGET_MODULE = "writer_session_fence"
+
+
+def _resolved_path(value) -> Path:
+    path = str(Path(value).resolve())
+    # pytest uses extended Windows paths during cleanup; these name the same files.
+    if os.name == "nt" and path.startswith("\\\\?\\"):
+        path = "\\\\" + path[8:] if path.startswith("\\\\?\\UNC\\") else path[4:]
+    return Path(path)
+
+
+def install_write_boundary() -> None:
+    """Observe and deny Python filesystem mutations outside the runner's task root."""
+    configured = os.environ.get("KMTECH_TEST_CA_TASK_ROOT")
+    if not configured or getattr(sys, "_kmtech_ca_write_boundary", False):
+        return
+    root = _resolved_path(configured)
+    null_device = _resolved_path(os.devnull)
+    log = root / "boundary-violations.jsonl"
+    single_path = {"os.mkdir", "os.remove", "os.rmdir", "os.chmod", "os.utime",
+                   "os.truncate", "os.chown", "sqlite3.connect"}
+    two_paths = {"os.rename", "os.link", "os.symlink"}
+
+    def guard(event, args):
+        if event == "open":
+            path, mode, flags = args
+            if not (flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)):
+                return
+            paths = (path,)
+        elif event in single_path:
+            paths = args[:1]
+        elif event in two_paths:
+            paths = args[:2]
+        else:
+            return
+        for path in paths:
+            if isinstance(path, int) or path is None:
+                continue
+            value = os.fsdecode(path)
+            if event == "sqlite3.connect" and value.startswith("file:"):
+                uri = urlsplit(value)
+                if parse_qs(uri.query).get("mode") == ["memory"]:
+                    continue
+                value = unquote(uri.path)
+                if uri.netloc and uri.netloc != "localhost":
+                    value = f"//{uri.netloc}{value}"
+                elif os.name == "nt" and len(value) > 2 and value[0] == "/" and value[2] == ":":
+                    value = value[1:]
+            if value == ":memory:" and event == "sqlite3.connect":
+                continue
+            if os.path.normcase(value) == os.path.normcase(os.devnull):
+                continue
+            resolved = _resolved_path(value)
+            if resolved == null_device or resolved.is_relative_to(root):
+                continue
+            with log.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"event": event, "path": str(resolved), "pid": os.getpid()}) + "\n")
+            raise AssertionError(f"test write outside task root: {event}: {resolved}")
+
+    sys.addaudithook(guard)
+    sys._kmtech_ca_write_boundary = True
 
 
 def _write_marker() -> None:
@@ -84,6 +146,8 @@ class _WriterFenceFinder(importlib.abc.MetaPathFinder):
         spec.loader = _WriterFenceLoader(spec.loader)
         return spec
 
+
+install_write_boundary()
 
 if os.environ.get(_ROOT_ENV, "").strip() and os.environ.get(_MUTEX_ENV, "").strip():
     _write_marker()

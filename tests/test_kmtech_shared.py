@@ -76,7 +76,7 @@ def test_local_checker_rejects_invalid_lock(tmp_path, mutation):
 def test_local_checker_tests_pass_without_sibling_checkout(tmp_path):
     app = tmp_path / "app"
     builder._copy_application(ROOT, app)
-    for name in ("pytest.ini", "Container_Audit.spec", "tests/__init__.py", "tests/conftest.py",
+    for name in ("pytest.ini", "Container_Audit.spec", "tests/__init__.py", "tests/conftest.py", "tests/sitecustomize.py",
                  "tests/native_widgets.py", "tests/spec_contracts.py", "tests/test_kmtech_shared.py",
                  "tests/integration/check_kmtech_shared_canonical.py", "qualification/check_kmtech_shared.py",
                  "tools/build_portable_release_candidate.py", "tools/derive_container_writer_sinks.py"):

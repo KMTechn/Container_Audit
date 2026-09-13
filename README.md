@@ -82,11 +82,16 @@ tkinter    # GUI 프레임워크 (Python 내장)
 python Container_Audit.py
 
 # 변경 영역 quick-check
-python -B tools/run_repository_tests.py --work-root E:\KMTech\<task>\Container_Audit <changed-test-node>
+python -B tools/run_repository_tests.py <changed-test-node>
+# 작업별 출력 부모 경로 지정 (--work-root도 같은 인자로 지원)
+python -B tools/run_repository_tests.py --task-root D:\KMTech\<task>\Container_Audit <changed-test-node>
 ```
 
-변경된 동작·호출 경로를 기존 focused 시험으로 확인하고, 출력과 임시 상태는 해당 E 작업
-루트에 격리한다. 새 SHA나 문서 수정만으로 Full·build·재설치·업무 replay를 반복하지 않는다.
+변경된 동작·호출 경로를 기존 focused 시험으로 확인한다. 기본 출력·임시 상태는
+`D:\KMTech\test-runs\Container_Audit\<UTC timestamp>`에 격리하며
+`CONTAINER_AUDIT_TEST_TASK_ROOT` 또는 `--task-root`로 부모 경로를 바꾼다.
+[격리 범위·C 드라이브 예외](docs/spec/operations.md#ca-test-runner)를 따른다.
+새 SHA나 문서 수정만으로 Full·build·재설치·업무 replay를 반복하지 않는다.
 기존 검증의 적용 범위와 실제 변경·실패·미해결 위험을 비교해 필요한 검증만 추가한다.
 선택된 여섯 프로그램 qualification은 Main이 마감했으며 accepted `d440b1f7` 설치 산출물과
 원래 실패 증거는 보존한다. 실제 새 배포에는 해당 배포 권한과 artifact 검증을 적용한다.
