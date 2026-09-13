@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 3694,
+      "line": 3695,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 3698,
+          "line": 3699,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5355,6 +5355,7 @@
     "transfer_member_exchange.py",
     "transfer_seal.py",
     "transfer_store.py",
+    "tray_completion.py",
     "tray_state.py",
     "update_service.py",
     "user_relay.py",
@@ -5373,7 +5374,7 @@
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
     "closure_direct_mutation_function_count": 127,
-    "closure_module_count": 99,
+    "closure_module_count": 100,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5491,6 +5492,7 @@
     "transfer_member_exchange.py",
     "transfer_seal.py",
     "transfer_store.py",
+    "tray_completion.py",
     "tray_state.py",
     "update_service.py",
     "user_relay.py",
@@ -5547,6 +5549,7 @@
       "tk_serial_ui_lane",
       "transfer_member_exchange",
       "transfer_seal",
+      "tray_completion",
       "tray_state",
       "update_service",
       "vendor.kmtech_zero_pe.raster",
@@ -5874,6 +5877,13 @@
       "transfer_common",
       "writer_session_fence"
     ],
+    "tray_completion": [
+      "event_payloads",
+      "protected_admin",
+      "tk_serial_ui_lane",
+      "transfer_seal",
+      "warning_presenter"
+    ],
     "tray_state": [
       "label_qr",
       "protected_admin",
@@ -5914,7 +5924,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "d002caafb65358265c0d795048f0406e7d39be82d55233a527dd33b6e599b1fc",
+  "inventory_sha256": "3ecdeee2cb9139eec7b5555a950196d37429f8a8563e32aa6c445cd6e2d2360f",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17345,6 +17355,7 @@
     "transfer_member_exchange.__file_entry__",
     "transfer_seal.__file_entry__",
     "transfer_store.__file_entry__",
+    "tray_completion.__file_entry__",
     "tray_state.__file_entry__",
     "update_service.__file_entry__",
     "user_relay.__file_entry__",
@@ -17747,7 +17758,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1361,
+      "line": 1362,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17755,7 +17766,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 15931,
+      "line": 15241,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17763,7 +17774,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 3694,
+      "line": 3695,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17771,7 +17782,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2674,
+      "line": 2675,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17779,7 +17790,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3070,
+      "line": 3071,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },

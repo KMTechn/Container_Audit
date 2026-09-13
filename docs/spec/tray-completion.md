@@ -6,7 +6,7 @@
 
 | 순서 / 기존 위치 | 소유·저장 결과 적용 | 표시·notice 및 다음 단계 |
 | --- | --- | --- |
-| scanner / held: `_finish_product_scan`, `_drain_preflight_hold_head` | current JSON ACK 뒤 스캔 목록·수량 반영; held 동기 CSV 감사 ACK 뒤 FIFO head 제거 | 최종 held ACK·lane idle 후에만 완료 요청; 입력 epoch와 순서는 기존 owner |
+| scanner / held: `_process_barcode_logic`, `_drain_preflight_hold_head` | current JSON ACK 뒤 스캔 목록·수량 반영; held 동기 CSV 감사 ACK 뒤 FIFO head 제거 | 최종 held ACK·lane idle 후에만 완료 요청; 입력 epoch와 순서는 기존 owner |
 | `request_complete_tray` :10240–10456 | preflight/review/교체/PHS2 전량 guard; 원 시각·worker·projection path·목록·lease snapshot | busy 표시 후 기존 `LaneTask` 접수, stale/idle·callback 유지 |
 | `_prepare_and_attempt_transfer_seal_snapshot` :12981 | preview → prepare → `on_prepared` → checkpoint 확인 → `drain_pending_through`/attempt | stored attempt를 그대로 완료 단계에 넘김; 중앙 retry·FIFO owner는 기존 coordinator |
 | `_prepared_completion_contract_steps` :10179–10238 | intent 일치 확인 → pending contract → yield current JSON 저장 | 실패는 저장을 포함한 `_completion_outcome_steps` 후 기존 오류; 안내 전 내구 경계 유지 |
@@ -27,6 +27,7 @@ checkpoint 뒤, 완료 CSV/표시 전에 실행된다. `LINKED`가 있으면 중
 본문 732행을 이동한다. 원 메서드 signature·generator 성격을 유지하는 얇은 위임을 남기고
 `complete_tray`의 signature·본문·`_prepared_transfer_attempt` keyword는 그대로 둔다.
 새 모듈의 session factory는 owner의 `TraySession`을 명시 전달해 역방향 import를 피한다.
+`clock`도 owner의 `datetime` namespace를 명시 전달하므로 lease fixture의 전체 namespace 교체를 유지한다.
 
 동기 완료 소비자는 자동 스캔/legacy 부분 제출/관리자 재시도/복구·합성 시험이고,
 foreground 요청 소비자는 live scanner/held 완료/제출/관리자 재시도다.
@@ -36,7 +37,7 @@ foreground 요청 소비자는 live scanner/held 완료/제출/관리자 재시�
 기존 monkeypatch는 owner의 `_prepare_and_attempt_transfer_seal[_snapshot]`, `_log_event`,
 `_save_tray_state_snapshot`, `_delete_current_tray_state`, `_complete_tray_steps`,
 `request_complete_tray`, `append_event_log_entry[_idempotent]`, `atomic_write_json`와
-공유 `datetime.datetime`/Tk 객체를 소비한다. 이동 함수는 owner 메서드를 계속 호출한다.
+공유 `datetime.datetime`/Tk 객체와 lease fixture의 전체 `Container_Audit.datetime` 교체를 소비한다. 이동 함수는 owner 메서드를 계속 호출한다.
 `TraySession`도 owner가 전달하며 기존 test·runner·conftest를 바꾸지 않는다.
 
 writer sink는 기존 `_save_tray_state_snapshot` (`gui_tray_state_save`),

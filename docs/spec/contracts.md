@@ -97,6 +97,11 @@ lease는 서명·keyring·binding·기간·membership 검증을 요구한다. �
 <a id="ca-c03"></a>
 ## CA-C03 CA → Web 이적 봉인·receipt
 
+완료 orchestration은 [tray_completion](../../tray_completion.py)의 명시 owner 함수로 위임한다.
+기존 완료 signature·prepared attempt 객체·generator yield 순서를 유지하고, 최종 state 적용과
+notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator transaction은 원 소유다.
+[경계와 소비자](tray-completion.md)를 따른다.
+
 **API:** `POST /logistics/api/v1/transfers/seal`, 명령 `SEAL_TRANSFER_BUNDLE`; 재확인은 `GET /logistics/api/v1/receipts/{scope}/{key}`. 클라이언트 [seal_transfer / get_receipt / TransferSealCoordinator](../../transfer_seal.py), 수신 [Web API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py), 원장 [seal service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py), 멱등 [replay_or_conflict](../../../WorkerAnalysisGUI-web/logistics_ledger/idempotency.py).
 
 - **모듈 경계:** [transfer_client](../../transfer_client.py)는 `LogisticsTransferClient`·`SealAttempt`·`logistics_transfer_client_from_env`, [transfer_store](../../transfer_store.py)는 `TransferSealStore`, [transfer_common](../../transfer_common.py)은 기존 오류·값·owner guard를 소유한다. 기존 `transfer_seal` façade가 같은 객체와 signature를 재노출하며 역방향 import는 없다. coordinator와 그 env factory는 façade에 남고 GUI·member exchange의 기존 import를 유지한다. 저장된 attempt·schema SQL·prepared key/readback·local/central ACK 순서와 HTTP/SQLite transaction 소유는 불변이다.

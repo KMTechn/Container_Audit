@@ -43,16 +43,16 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
-portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store와 member exchange view를 포함한 root Python 56개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion을 포함한 root Python 57개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-제품·vendor·assets·공유 계약·설정·도구를 포함한 145개의 경로·바이트와 tool import closure를 대조한다.
+제품·vendor·assets·공유 계약·설정·도구를 포함한 146개의 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
 
-W6 CA-0의 client/store 이동은 기존 writer inventory 생성기 `--write/--check`와 Python fence·
+W6 CA-0/1/2의 client/store·view·완료 orchestration 이동은 기존 writer inventory 생성기 `--write/--check`와 Python fence·
 PowerShell fence·session contract의 3개 pin을 함께 갱신한다. M7의 frozen product text/binding
-목록도 이동된 client/common/store를 포함한다. AST·기록 벡터·headless focused 시험은 소스 근거이며
+목록도 이동된 client/common/store·member exchange view·tray completion을 포함한다. AST·기록 벡터·headless focused 시험은 소스 근거이며
 GUI·설치·VM·서버는 이 분해에서 검증하지 않는다.
 
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
@@ -193,6 +193,10 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 
 <a id="ca-o04"></a>
 ## CA-O04 장애·오프라인·취소·재시작 인계
+
+완료의 [저장 결과 적용·notice](tray-completion.md)는 기존 내구 generator 순서를 유지한다.
+prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → state 적용/표시와,
+최종 held 감사 ACK 뒤 완료 접수·동일 command 재시작/중앙 retry를 각각 보존한다.
 
 - W2 B03 headless 검증 묶음은 기존 803개에 [경고·완료 표시 통합시험](../../tests/test_warning_presenter_headless_integration.py) 13개를 포함한다(총 816개). 저장 실패·감사 순서·표시/목록 보존 assertion을 유지하며 실제 GUI 검증과 구분한다.
 

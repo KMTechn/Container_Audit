@@ -292,7 +292,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-07"></a>
 ### CA-07 전량·exact 구성원 완료 조건
 
-- **시작·입력:** 마지막 제품 또는 완료 요청에서 중앙 목표·스캔 목록·operation lease·버전 문맥을 검증한다. [request_complete_tray / complete_tray](../../Container_Audit.py)
+- **시작·입력:** 마지막 제품 또는 완료 요청에서 중앙 목표·스캔 목록·operation lease·버전 문맥을 검증한다. [request_complete_tray / complete_tray](../../Container_Audit.py). [완료 orchestration 경계](tray-completion.md)는 generator·저장 결과 적용·notice와 원 owner의 책임을 구분한다
 - **검증·저장·결과:** `_map_scans`는 barcode를 unit으로 매핑하고 lease member 집합과 정확히 맞춘다. lease 없는 PHS2, 부족 수량, 비멤버·집합 불일치를 완료 명령으로 넘기지 않는다. [TransferSealCoordinator._verified_operation_lease / _map_scans](../../transfer_seal.py)
 - **실패·취소·재시작:** 전량 불일치면 현재 트레이를 유지하고 실물/중앙 구성원을 대조한다. 표준 PHS2 부분 제출은 차단한다. 교체·보류·복구를 통해 허용 조건을 다시 만족시켜야 한다.
 - **수용 기준:** 개수만 같은 다른 구성원, 중복 unit, 신규 완료 시 만료/다른 context lease가 거짓 완료를 만들지 않아야 하며, 유효한 exact 집합만 [CA-12](#ca-12)로 이어져야 한다. 이미 기록된 로컬 완료를 복구할 때는 저장된 완료 시각으로 lease를 재검증하는 분기를 구분한다.

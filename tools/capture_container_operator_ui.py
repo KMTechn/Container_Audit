@@ -99,6 +99,7 @@ M7_PRODUCT_TEXT_BLOBS = (
     "Container_Audit.py",
     "warning_presenter.py",
     "member_exchange_view.py",
+    "tray_completion.py",
     "direct_sync_health.py",
     "transfer_seal.py",
     "transfer_client.py",
