@@ -217,6 +217,12 @@ def show_exchange_dialog(self) -> None:
     self._update_action_button_states()
     exchange_dialog.protocol("WM_DELETE_WINDOW", self._cancel_exchange)
 
+    def return_scan_focus(event):
+        if event.widget is exchange_dialog:
+            self._schedule_focus_return()
+
+    exchange_dialog.bind("<Destroy>", return_scan_focus, add="+")
+
     # Windows display scaling can make the natural content taller than the
     # old fixed 800x600 client area.  Size after layout so the scan input
     # and action buttons remain visible without changing exchange logic.

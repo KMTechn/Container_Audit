@@ -166,6 +166,7 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 제품 형식 오류는 [현장 안내](../OUTLINE_CONTAINER_AUDIT_USER_MANUAL_20260627.md#제품-형식-오류가-나타나면)의 라벨·스캐너 설정 확인 또는 담당자 문의를 따른다. 짧은 제품 바코드는 제품 라벨 확인 후 다시 스캔하고, 같은 오류가 계속되면 담당자에게 라벨 형식을 확인한다. 길이 초과·위험 형식·트레이 설정 오류에 반복 스캔을 지시하지 않으며, 원문 redaction과 기존 입력 잠금/확인 동작은 유지한다. U06의 fake-Tk 문구 비교는 실제 글꼴 배치·스캐너 입력 확인을 대신하지 않는다.
 
 개별 교환 화면은 [view 모듈](../../member_exchange_view.py)로 위임하며, 기존 owner callback·grab/focus·화면 크기 계산을 유지한다. [호출 순서와 소비자](member-exchange-view.md)를 따른다.
+취소 버튼·창 닫기·정상 완료로 개별 교환 창이 닫히면 기존 `_schedule_focus_return`으로 스캔 입력 포커스를 복귀하며, 차단 경고가 있으면 기존 helper가 복귀를 보류한다.
 
 - 개별 교환 창은 화면 높이−96px cap 안에서 입력·완료/취소를 고정한다. 설명·수량·표는 세로 scrollbar/wheel/PageUp/PageDown으로 접근하고 수량에 포커스하면 자동 노출한다. 두 행/heading/가로 scrollbar의 최소 높이를 확보하며 글자나 정보를 줄이지 않는다. 확대/축소 native bbox 검사는 `tests/test_operator_widget_transitions.py`의 기존 교환 사례를 사용한다(이 구현 레인에서는 NOT TESTED).
 
