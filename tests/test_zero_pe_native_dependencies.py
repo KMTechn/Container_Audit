@@ -137,7 +137,7 @@ def test_raster_png_decodes_exact_colors_alpha_and_previous_row(color_type, chan
 
 @pytest.mark.parametrize("name,width,height,expected", [
     ("HMC_LHD_RHD.png", 174, 64, "15318da1832bee28c679a08d257c5f622737b04f65afd84dc1312b8636807be5"),
-    ("KMC_LHD.png", 792, 291, "ba43d304b8b5960f01aabe10f4a183a8a17ecfbafd05c8228d8ce2e1f7e43e95"),
+    ("KMC_LHD.png", 2069, 760, "7cc247c87d08bfbd7200130164fd96abf1bf03dff4af1f62111b48076bbbeb10"),
     ("KMC_RHD.png", 174, 64, "975a1fc9b96ec4335c132cb8fc5a6e1d4894dd48c9070068d64d9bc8faedd525"),
     ("logo.png", 1024, 720, "ff90839d31c021d0180720fea2793af42f1eff4b54685b6d1903f20534f5ed23"),
 ])

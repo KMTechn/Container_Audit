@@ -3733,6 +3733,7 @@ class ContainerAudit:
             self._sync_last_normal_scan_from_active_tray()
             self._update_center_display()
             self._start_stopwatch(resume=True)
+            self.root.after_idle(self._update_tray_image_display)
         else:
             self._reset_ui_to_waiting_state()
         self.scan_entry.focus()
@@ -6771,6 +6772,9 @@ class ContainerAudit:
                 self.current_work_detail_label.configure(
                     font=(self.DEFAULT_FONT, max(12, int(10 * scale)))
                 )
+                self.current_work_spec_label.configure(
+                    font=(self.DEFAULT_FONT, max(12, int(10 * scale)))
+                )
                 switch_frame.grid(row=2, column=0, sticky="ew", pady=(0, 8))
                 summary_title.grid_remove()
                 parked_title.grid_remove()
@@ -6817,6 +6821,9 @@ class ContainerAudit:
                 )
                 self.current_work_name_label.grid_configure(pady=(3, 2))
                 self.current_work_detail_label.configure(
+                    font=(self.DEFAULT_FONT, roomy_detail_font)
+                )
+                self.current_work_spec_label.configure(
                     font=(self.DEFAULT_FONT, roomy_detail_font)
                 )
                 switch_frame.grid_remove()
@@ -7356,15 +7363,25 @@ class ContainerAudit:
             justify='left',
         )
         self.current_work_name_label.grid(row=1, column=0, sticky='ew', pady=(3, 2))
-        self.current_work_detail_label = ttk.Label(
+        self.current_work_spec_label = ttk.Label(
             current_work_frame,
-            text="품목 코드 - · 목표 -",
+            text="",
             style='Card.Subtle.TLabel',
             anchor='w',
             justify='left',
         )
-        self.current_work_detail_label.grid(row=2, column=0, sticky='ew')
+        self.current_work_spec_label.grid(row=2, column=0, sticky='ew', pady=(0, 2))
+        self.current_work_spec_label.grid_remove()
+        self.current_work_detail_label = ttk.Label(
+            current_work_frame,
+            text="품목 코드 -\n목표 -",
+            style='Card.Subtle.TLabel',
+            anchor='w',
+            justify='left',
+        )
+        self.current_work_detail_label.grid(row=3, column=0, sticky='ew')
         self._bind_label_to_container_width(self.current_work_name_label, current_work_frame, padding=24)
+        self._bind_label_to_container_width(self.current_work_spec_label, current_work_frame, padding=24)
         self._bind_label_to_container_width(self.current_work_detail_label, current_work_frame, padding=24)
         switch_frame = ttk.Frame(top_frame, style='Sidebar.TFrame')
         self._left_view_switch_frame = switch_frame
@@ -8025,33 +8042,32 @@ class ContainerAudit:
 
     def _update_operator_context(self) -> None:
         name_label = getattr(self, "current_work_name_label", None)
+        spec_label = getattr(self, "current_work_spec_label", None)
         detail_label = getattr(self, "current_work_detail_label", None)
         if name_label is None or detail_label is None:
             return
         tray = getattr(self, "current_tray", None)
         active_tray = bool(getattr(tray, "master_label_code", ""))
-        compact_sidebar = bool(getattr(self, "_left_sidebar_compact", False))
         try:
             if active_tray:
                 item_name = str(getattr(tray, "item_name", "") or "이름 미등록")
                 item_spec = str(getattr(tray, "item_spec", "") or "").strip()
-                display_name = f"{item_name} · {item_spec}" if item_spec else item_name
                 item_code = str(getattr(tray, "item_code", "") or "-")
                 target = max(0, int(getattr(tray, "tray_size", 0) or 0))
-                count = len(getattr(tray, "scanned_barcodes", []) or [])
-                name_label.configure(text=display_name)
-                detail_label.configure(
-                    text=(
-                        f"{item_code} · 목표 {target}"
-                        if compact_sidebar
-                        else f"품목 코드 {item_code} · 목표 {target}"
-                    )
-                )
+                name_label.configure(text=item_name)
+                if spec_label is not None:
+                    spec_label.configure(text=item_spec)
+                    if item_spec:
+                        spec_label.grid()
+                    else:
+                        spec_label.grid_remove()
+                detail_label.configure(text=f"품목 코드 {item_code}\n목표 {target}개")
             else:
                 name_label.configure(text="현품표 대기")
-                detail_label.configure(
-                    text="- · 목표 -" if compact_sidebar else "품목 코드 - · 목표 -"
-                )
+                if spec_label is not None:
+                    spec_label.configure(text="")
+                    spec_label.grid_remove()
+                detail_label.configure(text="품목 코드 -\n목표 -")
         except (tk.TclError, AttributeError, TypeError, ValueError):
             return
 

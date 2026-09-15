@@ -759,3 +759,73 @@ def test_native_left_view_survives_rebuild_and_rows_survive_resize(native_tk_roo
     root.update()
     assert app.parked_tree.winfo_ismapped() and not app.summary_tree.winfo_ismapped()
     assert app.left_context_switch_button.cget('text') == '현재·기록 보기'
+
+
+
+def test_native_current_work_and_checked_tray_image_survive_screen_rebuild(native_tk_root, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from vendor.kmtech_zero_pe.raster import RasterImage
+
+    root = native_tk_root
+    resize_root(root, 2560, 1369)
+    app, center = build_center(root)
+    center.destroy()
+    app.worker_name = '화면 확인 작업자'
+    app.current_tray.item_name = '현재 작업 품목'
+    app.current_tray.item_spec = '중앙 확정 GOOD 3개'
+    app.current_tray.scanned_barcodes = ['PRODUCT-1', 'PRODUCT-2']
+    app.show_tray_image_var = tk.BooleanVar(master=root, value=True)
+    image_path = tmp_path / 'tray.png'
+    image_path.write_bytes(RasterImage.solid(80, 40, (0, 80, 160)).to_png_bytes())
+    monkeypatch.setattr(app, '_item_catalog', lambda: SimpleNamespace(
+        find_by_code=lambda code: {'Tray Image': str(image_path)}))
+    # Isolate timers, storage and central recovery; exercise the actual screen
+    # reconstruction, sidebar widgets and raster-to-Tk rendering.
+    for name in (
+        '_clear_main_frames', '_set_initial_sash_positions', '_start_clock',
+        '_start_idle_checker', '_update_all_summaries', '_update_parked_trays_list',
+        '_reconcile_pending_local_member_exchanges', '_start_stopwatch',
+        '_update_center_display', '_schedule_focus_return',
+        '_schedule_phs_label_exchange_recovery',
+    ):
+        monkeypatch.setattr(app, name, lambda *args, **kwargs: None)
+    app.paned_window = ttk.Panedwindow(root, orient=tk.HORIZONTAL)
+    for name in ('left_pane', 'center_pane', 'right_pane'):
+        pane = ttk.Frame(app.paned_window, style='Sidebar.TFrame')
+        setattr(app, name, pane)
+        app.paned_window.add(pane, weight=1)
+
+    for _ in range(2):
+        app.show_validation_screen()
+        root.update()
+        assert app.show_tray_image_var.get()
+        assert app.tray_image_label.image is not None
+        assert app.tray_image_label.cget('text') == ''
+        assert_contained(app.tray_image_label, app.left_pane)
+        assert app.current_work_name_label.cget('text') == '현재 작업 품목'
+        assert app.current_work_spec_label.cget('text') == '중앙 확정 GOOD 3개'
+        assert app.current_work_detail_label.cget('text').splitlines() == [
+            '품목 코드 AAA2270730200', '목표 3개',
+        ]
+        for label in (app.current_work_name_label, app.current_work_spec_label, app.current_work_detail_label):
+            assert_contained(label, app._current_work_frame)
+            assert label.winfo_height() >= label.winfo_reqheight()
+        assert app.current_tray.scanned_barcodes == ['PRODUCT-1', 'PRODUCT-2']
+        assert app.current_tray.tray_size == 3
+
+    app.tray_image_checkbox.invoke()
+    root.update()
+    assert not app.show_tray_image_var.get()
+    assert app.tray_image_label.image is None
+    app.tray_image_checkbox.invoke()
+    root.update()
+    assert app.tray_image_label.image is not None
+    app.current_tray.item_spec = ''
+    app._update_operator_context()
+    root.update()
+    assert not app.current_work_spec_label.winfo_ismapped()
+    app.current_tray = TraySession()
+    app._update_operator_context()
+    root.update()
+    assert app.current_work_name_label.cget('text') == '현품표 대기'
+    assert app.current_work_detail_label.cget('text') == '품목 코드 -\n목표 -'

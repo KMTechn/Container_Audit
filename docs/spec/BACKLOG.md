@@ -211,6 +211,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g13"></a>
 ## CA-G13 전체 UI 가시성·포커스와 idle 후 명령 복귀
 
+- **2026-09-15 사용자 화면 후속 수용:** 현재 작업의 품목명/규격·상세/품목 코드/목표 수량을 별도 줄로 나누고 품목명만 강조한다. 체크된 사진 미표시는 pcwalk 합성 어댑터의 갱신 누락과 제품 `show_validation_screen` 재구성 누락을 구별하여 수정했다. 기준 `730ffa19`+개발후보 SHA2563483f897…, Windows/Python3.12.10 비GUI2+투명·화면밖 native4=6 PASS; 독립 diff 검토 차단사항0, 개발 VM2560×1440/배율1.0에서 줄분리·사진표시·재구성/체크토글 복원·동일2/3 직접 관측 PROVEN([결과](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/ui-fix/RESULT.md), [독립 검토](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/ui-fix/REVIEW-RESULT.md)). guest pytest/원본 신규회귀RED는 NOT TESTED, 원본·native recovery 실패는 보존한다. 이어 사용자 요청으로 KMC_LHD 사진의 앞면 손글씨/오염을 이미지 생성기로 정리하고 검은 원형 식별 스티커·흰 인쇄를 유지했다([원본·편집·적용](D:/KMTech/program-improvement-20260912/work/crosscut/pcwalk/CA/tray-image-edit/RESULT.md)); LHD 편집본은 사용자 수용·개발 VM 반영 PROVEN, 독립 Pillow pixel golden 대조와 PNG4건 PASS([JUnit](D:/KMTech/t/cau915/31afaf83/junit.xml)). 다른 트레이/품목 매핑 변경0, RHD/HMC 개선안은 미리보기만 제공한다. 운영 배포·실업무 수용으로 확대하지 않는다.
+
 - **CA-F1 Escape UX 후보:** 개별 교환 창에는 Escape 닫기가 바인딩되어 있지 않다. 취소 의미와 현장 절차를 확정한 뒤 별도 검토하며, 취소 버튼·창 닫기·정상 완료 후 포커스 복귀 수정에서는 바인딩을 추가하지 않는다. 실제 키 입력 복귀는 검증 파도 CA1-focus에서 확인한다.
 
 - **CA-1 화면 경계:** [member exchange view 분리](member-exchange-view.md)는 기존 UI/command 동작을 유지하는 소스 변경이다. 실제 GUI·스캐너·설치 검증과 아래 확대 표 native 실패의 수용 상태는 별도 범위이며 [구현 근거](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6ca1/RESULT.md)에 headless 검증을 구분한다.
