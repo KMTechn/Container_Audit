@@ -79,8 +79,10 @@ function Export-ScheduledTask { [CmdletBinding()] param($TaskName, $TaskPath); r
 
 
 def _snapshot(tmp_path, script, *, trigger='valid', values=None):
+    inventory = str(ROOT / 'tools/container_writer_sink_inventory.json').replace("'", "''")
     return run_functions(tmp_path, INSTALLER, SNAPSHOT_FUNCTIONS,
-                         TASK_INPUTS + script,
+                         f"$sourceWriterInventory=Get-Content -LiteralPath '{inventory}' -Raw | ConvertFrom-Json\n"
+                         + TASK_INPUTS + script,
                          values={'CA_TRIGGER': trigger, **(values or {})})
 
 
@@ -142,6 +144,33 @@ catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
         assert [task['task_name'] for task in observed['noncanonical_disabled']] == ['RenamedLegacyRelay']
 
 
+@pytest.mark.parametrize('case', ['unbuffered', 'no_bytecode', 'editor'])
+def test_review_python_options_and_source_editor(tmp_path, case):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='RenamedLegacyRelay'
+$task.Actions[0].Execute='C:\Python312\python.exe'
+$task.Actions[0].Arguments='"C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py" --db-path "C:\fixture\queue.sqlite3" --spool-dir "C:\fixture\spool" --producer-manifest-path "C:\fixture\manifest.json" --credential-path "C:\fixture\credential.json" --upload-status-dir "C:\fixture\uploads" --runtime-status-path "C:\fixture\status.json" --log-path "C:\fixture\relay.jsonl"'
+switch ($env:CA_CASE) {
+    'unbuffered' { $task.Actions[0].Arguments='-u ' + $task.Actions[0].Arguments }
+    'no_bytecode' { $task.Actions[0].Arguments='-B ' + $task.Actions[0].Arguments }
+    'editor' {
+        $task.TaskName='DisplaySource'
+        $task.Actions[0].Execute='C:\Windows\System32\notepad.exe'
+        $task.Actions[0].Arguments='"C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py"'
+    }
+}
+try { Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress }
+catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
+''', values={'CA_CASE': case})
+    assert result.returncode == 0, result.stderr or result.stdout
+    observed = json.loads(result.stdout)
+    if case == 'editor':
+        assert observed.get('present') is False
+        assert observed['noncanonical_disabled'] == []
+    else:
+        assert observed == {'error': 'NONCANONICAL_WRITER_ENABLED'}
+
+
 @pytest.mark.parametrize('trigger', [
     'null', 'empty',
 ])
@@ -161,6 +190,71 @@ Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress
     observed = json.loads(result.stdout)
     assert observed['present'] is False
     assert observed['noncanonical_disabled'] == []
+
+
+@pytest.mark.parametrize('execute,arguments,writer', [
+    ('python.exe', r'-uB -X dev -W ignore "C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py"', True),
+    ('python.exe', r'-uWignore -Xutf8 tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'--check-hash-based-pycs always tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'-I -- tools/direct_sync_relay_runner.py --help', True),
+    (r'"C:\Company Apps\venv\Scripts\pythonw.exe"', r'-B tools/direct_sync_relay_runner.py', True),
+    (r'C:\venv\Scripts\python3.12.exe', r'-u tools/direct_sync_relay_runner.py', True),
+    ('py.exe', r'-3.12-64 -u tools/direct_sync_relay_runner.py', True),
+    ('py.exe', r'-V:PythonCore/3.12 -B tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'-B "C:\Company Apps\Container_Audit\tools"\DIRECT_SYNC_RELAY_RUNNER.PY', True),
+    ('python.exe', r'-u "C:/Company Apps/Container_Audit/tools/../tools/direct_sync_relay_runner.py"', True),
+    ('python.exe', r'-X "test=escaped\"quote" tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'-W "ignore:ends in slash\\" tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'-X "test=double""quote" tools/direct_sync_relay_runner.py', True),
+    ('python.exe', r'-u user_relay.py', True),
+    ('python.exe', r'-u Container_Audit.py', True),
+    ('notepad.exe', r'"C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py"', False),
+    (r'C:\Windows\explorer.exe', r'"C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py"', False),
+    ('other.exe', r'-u tools/direct_sync_relay_runner.py', False),
+    ('python.exe.backup', r'tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-u -c "print(1)" tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-Bm other_module tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'- tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'--help tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-V tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-W tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-X tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'"" tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-u wrapper.py tools/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-B tools/../other/direct_sync_relay_runner.py', False),
+    ('python.exe', r'-u tools/direct_sync_relay_runner.py.backup', False),
+])
+def test_census_parses_python_script_invocation(tmp_path, execute, arguments, writer):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='CommandLineWriter'
+$task.Actions[0].Execute=$env:CA_EXECUTE
+$task.Actions[0].Arguments=$env:CA_ARGUMENTS
+try { Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress }
+catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
+''', values={'CA_EXECUTE': execute, 'CA_ARGUMENTS': arguments})
+    assert result.returncode == 0, result.stderr or result.stdout
+    observed = json.loads(result.stdout)
+    if writer:
+        assert observed == {'error': 'NONCANONICAL_WRITER_ENABLED'}
+    else:
+        assert observed.get('present') is False
+        assert observed['noncanonical_disabled'] == []
+
+
+@pytest.mark.parametrize('trigger', ['null', 'empty', 'other_cim'])
+def test_disabled_python_writer_with_options_is_reported(tmp_path, trigger):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='DisabledPythonWriter'
+$task.Settings.Enabled=$false
+$task.Actions[0].Arguments='-B -u direct_sync_relay_runner.py'
+$task.Actions[0].WorkingDirectory='C:\Company Apps\Container_Audit\tools'
+$task.Actions=@([pscustomobject]@{Execute='notepad.exe'; Arguments='tools/direct_sync_relay_runner.py'}, $task.Actions[0])
+Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress
+''', trigger=trigger)
+    assert result.returncode == 0, result.stderr or result.stdout
+    observed = json.loads(result.stdout)
+    assert observed['present'] is False
+    assert [task['task_name'] for task in observed['noncanonical_disabled']] == ['DisabledPythonWriter']
 
 
 @pytest.mark.parametrize('action', ['relative', 'second_action', 'execute'])

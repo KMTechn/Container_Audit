@@ -208,7 +208,7 @@ source/target identity·membership·topology·version 및 action을 대조하고
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
-**예약 writer 식별:** 정식 작업 `direct-sync-relay-container-audit`/`\`만 기존 실행·현재 사용자·1분 TimeTrigger·설정 계약을 만족할 때 canonical이다. qualification 이름과 다른 이름으로 실행하는 명시적 direct-sync/user-relay, hosted flag 없이 `tools/direct_sync_relay_runner.py`를 직접 호출하는 action도 검사 대상이며 활성 비정식 writer는 설치를 차단한다. 다중 action 중 하나라도 해당하면 검사하며, 무관한 작업의 앱/runner 경로 인자 문자열만으로는 writer로 판정하지 않는다. null/빈 trigger·없는 CIM 필드는 예외 대신 비정식 판정/명시적 shape 거부로 처리하고 정상 작업의 normalized binding bytes와 복원 hash 검증은 유지한다. [설치 경계](operations.md#ca-o05)
+**예약 writer 식별:** 정식 작업 `direct-sync-relay-container-audit`/`\`만 기존 실행·현재 사용자·1분 TimeTrigger·설정 계약을 만족할 때 canonical이다. qualification 이름과 다른 이름으로 실행하는 명시적 direct-sync/user-relay, hosted flag 없이 `tools/direct_sync_relay_runner.py`를 직접 호출하는 action도 검사 대상이며 활성 비정식 writer는 설치를 차단한다. 다중 action 중 하나라도 해당하면 검사한다. 직접 script Execute 또는 Python(`python*.exe`/`py.exe`, venv 포함)의 인수를 Windows quoting 규칙으로 나눈 뒤 옵션·옵션 값을 건너뛴 첫 script 경로를 정규화하고, 검증된 writer inventory의 Python `.main` route와 대조한다. `-c`/`-m`/stdin 및 도움말·버전 모드는 후속 인자를 script로 보지 않으며, Notepad·탐색기·다른 실행 파일이 같은 경로를 여는 경우도 제외한다. null/빈 trigger·없는 CIM 필드는 예외 대신 비정식 판정/명시적 shape 거부로 처리하고 정상 작업의 normalized binding bytes와 복원 hash 검증은 유지한다. [설치 경계](operations.md#ca-o05)
 
 **bootstrap record 순서·ACL:** 새 `container-audit-bootstrap-integrity-v1` 목록은
 상대 경로를 `[StringComparer]::Ordinal`로 정렬한다. 검증은 기존 record의 순서를

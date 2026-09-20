@@ -993,18 +993,92 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
             [string]$candidate.TaskName -ieq $CanonicalWriterTaskName -or
             [string]$candidate.TaskName -ieq $NoncanonicalQualificationTaskName -or
             @($actions | Where-Object {
-                ([string](Get-CanonicalTaskProperty $_ 'Arguments' '')) -match
-                    '(?:^|\s)["'']?--container-audit-(?:direct-sync-relay|user-relay)["'']?(?:\s|$)' -or
-                ([string](Get-CanonicalTaskProperty $_ 'Arguments' '')) -match
-                    '^\s*(?:"(?:[^"]*[\\/])?direct_sync_relay_runner\.py"|(?:[^"\s]*[\\/])?direct_sync_relay_runner\.py)(?:\s|$)' -or
-                ([string](Get-CanonicalTaskProperty $_ 'Execute' '')) -match
-                    '(?:^|[\\/])direct_sync_relay_runner\.py$'
+                $actionArguments = [string](Get-CanonicalTaskProperty $_ 'Arguments' '')
+                if ($actionArguments -match '(?:^|\s)["'']?--container-audit-(?:direct-sync-relay|user-relay)["'']?(?:\s|$)') {
+                    return $true
+                }
+                # Execute is a path, not a shell command. Only Python consumes a
+                # script from Arguments; a direct script Execute remains owned.
+                $actionExecute = ([string](Get-CanonicalTaskProperty $_ 'Execute' '')).Trim().Trim('"')
+                $python = [IO.Path]::GetFileName($actionExecute) -imatch '^(?:python[^\\/]*|py)\.exe$'
+                $scriptPath = $actionExecute
+                if ($python) {
+                    # Windows argv quoting: whitespace splits outside quotes;
+                    # backslashes are escapes only immediately before a quote.
+                    $words = @()
+                    $word = ''; $quoted = $false; $started = $false; $slashes = 0
+                    for ($i = 0; $i -lt $actionArguments.Length; $i++) {
+                        $ch = $actionArguments[$i]
+                        if ($ch -ceq '\') { $slashes++; $started = $true; continue }
+                        if ($ch -ceq '"') {
+                            $word += '\' * [int][Math]::Floor($slashes / 2)
+                            if ($slashes % 2) { $word += '"' }
+                            elseif ($quoted -and $i + 1 -lt $actionArguments.Length -and $actionArguments[$i + 1] -ceq '"') {
+                                $word += '"'; $i++
+                            }
+                            else { $quoted = -not $quoted }
+                            $started = $true
+                        }
+                        else {
+                            $word += '\' * $slashes
+                            if (-not $quoted -and [char]::IsWhiteSpace($ch)) {
+                                if ($started) { $words += $word; $word = ''; $started = $false }
+                            }
+                            else { $word += $ch; $started = $true }
+                        }
+                        $slashes = 0
+                    }
+                    $word += '\' * $slashes
+                    if ($started) { $words += $word }
+                    $index = 0
+                    while ($index -lt $words.Count -and $words[$index].StartsWith('-')) {
+                        $option = $words[$index]
+                        $index++
+                        if ($option -ceq '--') { break }
+                        if ($option -cmatch '^-[bBdEiIOPqRsSuvx]+$') { continue }
+                        if ($option -cmatch '^-[bBdEiIOPqRsSuvx]*[WX](.*)$') {
+                            if ($Matches[1] -ceq '') { $index++ }
+                            continue
+                        }
+                        if ($option -ceq '--check-hash-based-pycs') { $index++; continue }
+                        if ([IO.Path]::GetFileName($actionExecute) -ieq 'py.exe' -and
+                            $option -cmatch '^-(?:[23](?:\.\d+)?(?:-(?:32|64))?|V:.+)$') { continue }
+                        # -c/-m/stdin, help/version and invalid options do not
+                        # execute a following token as a source script.
+                        return $false
+                    }
+                    if ($index -ge $words.Count) { return $false }
+                    $scriptPath = $words[$index]
+                }
+                if ([string]::IsNullOrWhiteSpace($scriptPath) -or [IO.Path]::GetExtension($scriptPath) -ine '.py') {
+                    return $false
+                }
+                try {
+                    $workingDirectory = [string](Get-CanonicalTaskProperty $_ 'WorkingDirectory' '')
+                    if (-not [IO.Path]::IsPathRooted($scriptPath) -and $workingDirectory) {
+                        $scriptPath = Join-Path $workingDirectory $scriptPath
+                    }
+                    $scriptPath = [IO.Path]::GetFullPath($scriptPath).Replace('/', '\')
+                }
+                catch { return $false }
+                # Reuse the authenticated inventory's executable Python routes;
+                # method-level routes are not standalone script entrypoints.
+                foreach ($route in $sourceWriterInventory.known_route_coverage) {
+                    if ($route.kind -ceq 'python' -and $route.start -cmatch '^([^.]+(?:\.[^.]+)*)\.main$') {
+                        $relativeScript = $Matches[1].Replace('.', '\') + '.py'
+                        if ($scriptPath.EndsWith(('\' + $relativeScript), [StringComparison]::OrdinalIgnoreCase)) {
+                            return $true
+                        }
+                    }
+                }
+                return $false
             }).Count -gt 0
         )
         if (-not $owned) { continue }
         $binding = Get-CanonicalWriterBinding $candidate
         $triggers = @($binding.value.triggers)
         $executeExact = (
+            $execute.IndexOfAny([IO.Path]::GetInvalidPathChars()) -lt 0 -and
             [IO.Path]::IsPathRooted($execute) -and
             (Same $execute $expectedExecute)
         )
