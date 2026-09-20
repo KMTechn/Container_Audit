@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -994,7 +994,11 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
             [string]$candidate.TaskName -ieq $NoncanonicalQualificationTaskName -or
             @($actions | Where-Object {
                 ([string](Get-CanonicalTaskProperty $_ 'Arguments' '')) -match
-                    '(?:^|\s)["'']?--container-audit-(?:direct-sync-relay|user-relay)["'']?(?:\s|$)'
+                    '(?:^|\s)["'']?--container-audit-(?:direct-sync-relay|user-relay)["'']?(?:\s|$)' -or
+                ([string](Get-CanonicalTaskProperty $_ 'Arguments' '')) -match
+                    '^\s*(?:"(?:[^"]*[\\/])?direct_sync_relay_runner\.py"|(?:[^"\s]*[\\/])?direct_sync_relay_runner\.py)(?:\s|$)' -or
+                ([string](Get-CanonicalTaskProperty $_ 'Execute' '')) -match
+                    '(?:^|[\\/])direct_sync_relay_runner\.py$'
             }).Count -gt 0
         )
         if (-not $owned) { continue }

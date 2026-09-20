@@ -238,7 +238,7 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 <a id="ca-o05"></a>
 ## CA-O05 설치·교체·재설치·롤백·백업
 
-예약 작업 census는 정식/qualification 작업 이름 또는 명시된 direct-sync/user-relay 실행 모드로 writer 후보를 식별한다. 앱 이름이 경로·인자에 포함된 일반 Display/캡처 작업은 제외한다. null/빈 trigger 및 CIM 속성 부재는 안전하게 정규화하며, 잘못된 writer가 활성 상태이면 `NONCANONICAL_WRITER_ENABLED`로 계속 차단한다. 정식 writer의 이름·루트 TaskPath·실행/사용자/trigger 계약과 기존 binding SHA256을 유지한다. PS5.1 모의 목록과 설치기 회귀는 [분류 시험](../../tests/test_scheduled_writer_classification.py)으로 고정하며 실제 guest 재설치는 별도 수용이다.
+예약 작업 census는 정식/qualification 작업 이름, 명시된 direct-sync/user-relay 실행 모드 또는 `tools/direct_sync_relay_runner.py` 직접 호출 action으로 writer 후보를 식별한다. 직접 호출은 실행 파일 또는 Python의 첫 script 인자로 확인하며 다중 action도 검사한다. 앱/runner 경로가 다른 명령의 인자에만 포함된 일반 Display/캡처 작업은 제외한다. null/빈 trigger 및 CIM 속성 부재는 안전하게 정규화하며, 잘못된 writer가 활성 상태이면 `NONCANONICAL_WRITER_ENABLED`로 계속 차단한다. 정식 writer의 이름·루트 TaskPath·실행/사용자/trigger 계약과 기존 binding SHA256을 유지한다. PS5.1 모의 목록과 설치기 회귀는 [분류 시험](../../tests/test_scheduled_writer_classification.py)으로 고정하며 실제 guest 재설치는 별도 수용이다.
 
 배포 상태를 바꾸는 절차는 [INSTALL_THIS_PC.ps1](../../INSTALL_THIS_PC.ps1)이 소유한다. 기본 경로 검증, 코드 inventory/manifest hash, writer quiesce/fence, 검증된 기존 portable 교체·복원, uninstall의 복구 사본 처리 분기가 있다. `ReplaceExistingVerifiedPortable`, `ProbeVerifiedReplacementRestore`, `RestoreVerifiedReplacement`, `Uninstall`은 서로 다른 모드다. 이 문서는 명령 실행 지시나 빈 인자로 사용할 예시를 만들지 않는다. 실제 대상·receipt·원본 hash와 기존 실행 권한을 연결한 작업에서만 해당 모드를 선택한다.
 

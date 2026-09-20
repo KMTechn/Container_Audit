@@ -121,6 +121,66 @@ catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
 
 
 @pytest.mark.parametrize('trigger', [
+    'valid', 'null', 'empty',
+])
+@pytest.mark.parametrize('enabled', [True, False])
+def test_renamed_direct_source_relay_is_classified(tmp_path, trigger, enabled):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='RenamedLegacyRelay'
+$task.Settings.Enabled=($env:CA_ENABLED -ceq 'True')
+$task.Actions[0].Execute='C:\Python312\python.exe'
+$task.Actions[0].Arguments='"C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py" --db-path "C:\fixture\queue.sqlite3" --spool-dir "C:\fixture\spool" --producer-manifest-path "C:\fixture\manifest.json" --credential-path "C:\fixture\credential.json" --upload-status-dir "C:\fixture\uploads" --runtime-status-path "C:\fixture\status.json" --log-path "C:\fixture\relay.jsonl"'
+try { Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress }
+catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
+''', trigger=trigger, values={'CA_ENABLED': str(enabled)})
+    assert result.returncode == 0, result.stderr or result.stdout
+    observed = json.loads(result.stdout)
+    if enabled:
+        assert observed == {'error': 'NONCANONICAL_WRITER_ENABLED'}
+    else:
+        assert observed['present'] is False
+        assert [task['task_name'] for task in observed['noncanonical_disabled']] == ['RenamedLegacyRelay']
+
+
+@pytest.mark.parametrize('trigger', [
+    'null', 'empty',
+])
+@pytest.mark.parametrize('arguments', [
+    r'"C:\capture\wrapper.ps1" -Title "C:\Container_Audit\tools\direct_sync_relay_runner.py"',
+    r'"C:\Container_Audit\tools\direct_sync_relay_runner.py.backup"',
+    r'"C:\Container_Audit\tools\other_direct_sync_relay_runner.py"',
+])
+def test_census_ignores_runner_mentions_that_are_not_entrypoints(tmp_path, trigger, arguments):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='DisplayCapture'
+$task.Actions[0].Execute='powershell.exe'
+$task.Actions[0].Arguments=$env:CA_ARGUMENTS
+Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress
+''', trigger=trigger, values={'CA_ARGUMENTS': arguments})
+    assert result.returncode == 0, result.stderr or result.stdout
+    observed = json.loads(result.stdout)
+    assert observed['present'] is False
+    assert observed['noncanonical_disabled'] == []
+
+
+@pytest.mark.parametrize('action', ['relative', 'second_action', 'execute'])
+def test_direct_source_relay_action_variants_still_block_installation(tmp_path, action):
+    result = _snapshot(tmp_path, r'''
+$task.TaskName='RenamedLegacyRelay'
+$task.Actions[0].Execute='C:\Python312\pythonw.exe'
+$task.Actions[0].Arguments='tools/DIRECT_SYNC_RELAY_RUNNER.PY --db-path C:\fixture\queue.sqlite3'
+switch ($env:CA_ACTION) {
+    'second_action' { $task.Actions=@([pscustomobject]@{Execute='other.exe'; Arguments=''}, $task.Actions[0]) }
+    'execute' { $task.Actions[0].Execute='C:\Company Apps\Container_Audit\tools\direct_sync_relay_runner.py'; $task.Actions[0].Arguments='' }
+}
+try { Get-CanonicalWriterSnapshot $root | ConvertTo-Json -Depth 10 -Compress }
+catch { @{error=$_.Exception.Message} | ConvertTo-Json -Compress }
+''', values={'CA_ACTION': action})
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert json.loads(result.stdout) == {'error': 'NONCANONICAL_WRITER_ENABLED'}
+
+
+@pytest.mark.parametrize('trigger', [
     'null', 'empty', 'missing', 'no_class', 'null_class', 'other_cim', 'mixed', 'mixed_null',
     'no_repetition', 'wrong_interval',
 ])

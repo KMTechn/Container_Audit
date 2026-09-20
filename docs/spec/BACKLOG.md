@@ -60,7 +60,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g04"></a>
 ## CA-G04 정상·장애·장비·설치 수용 근거 연결
 
-- **w9cainstallfix:** trigger가 없는 Display/캡처 작업을 writer로 오인하는 설치 전 census와 누락 CIM 속성 처리를 수정했다. PS5.1 모의 목록·정상 binding hash·기존 설치 회귀 및 stock packet/PlanOnly의 범위는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cainstallfix/RESULT.md)에 기록한다. 실제 guest 정식 재설치·UAC·화면 캡처 수용은 후속 캡처 레인에서 확인한다.
+- **w9cainstallfix / w9cainstallfix2:** trigger가 없는 Display/캡처 제외·누락 CIM 속성 안전 처리를 유지하면서, hosted flag 없이 지원 relay runner를 직접 실행하는 이름 변경 작업도 census에 포함한다. 활성 비정식 writer 차단과 정상 binding hash를 보존한다. PS5.1 RED/GREEN·기존 설치 회귀 및 stock packet/PlanOnly 범위는 [후속 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cainstallfix2/RESULT.md)에 기록한다. 실제 guest 정식 재설치·UAC·화면 캡처 수용은 후속 캡처 레인에서 확인한다.
 
 - **2026-09-10 일반 복원 창 후속:** accepted `8f7cd08`의 exact 원본 901/902/903은 정상 seal/ACK·보류/닫기/재실행/복원 근거로 수용됐지만, 복원 창 `1944x1182`의 하단 명령 줄 clipping은 별도 실제 관측이다. [고정 수용 기준과 수정 범위](D:/KMTech/optimization-implementation-20260909/Container_Audit/viewport-fix/ACCEPTANCE-BEFORE-EDIT.md)에 따라 일반 복원 rectangle/최소 크기만 실제 monitor 작업 영역에 맞춘다. 기존 startup tests에서 작은 영역·frame·음수 원점의 RED4를 보존했고 영향 검사67 PASS다. 후속 `a97da63`의 일반 복원/최대화 빈 화면은 [실제 GUI 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/vm-candidate-a97da63/GUI-RESULT.md)로 Main 수용을 받았다. 그 범위를 넘어선 전체 UI와 Goal3 전후 사용자 결과 비교는 아직 UNPROVEN이며 Main이 후속 slot을 배정한다. 완료된 업무를 새 SHA 때문에 반복하지 않는다.
 
