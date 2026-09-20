@@ -55,6 +55,13 @@ PowerShell fence·session contract의 3개 pin을 함께 갱신한다. M7의 fro
 목록도 이동된 client/common/store·member exchange view·tray completion을 포함한다. AST·기록 벡터·headless focused 시험은 소스 근거이며
 GUI·설치·VM·서버는 이 분해에서 검증하지 않는다.
 
+writer inventory는 sink의 소스 행 번호도 포함한다. UI 등 앞선 코드의 행 수만 바뀌어도
+`python -B tools/derive_container_writer_sinks.py --write`로 재생성하고, 출력 hash를
+`writer_session_fence.py`·`tools/container_writer_fence.ps1`·`tools/container_writer_session_contract.json`의
+기존 pin 세 곳에 함께 반영한다. `--check`와 snapshot/consumer pin 시험을 통과한 뒤
+깨끗한 커밋에서 stock portable builder를 실행한다. builder의 파생 객체·canonical JSON byte
+일치 검사는 유지하며, 행 번호 차이를 무시하거나 설치 시 pin을 다시 계산하지 않는다.
+
 canonical installer는 초기에 로드하는 bootstrap 자체의 고정 SHA256부터 검증한다.
 기존 `derive_container_writer_sinks.py --write/--check`가 이 pin과 inventory를 함께 갱신/검사하며
 bootstrap은 checkout EOL 변환에서 제외해 bytes를 보존한다. bootstrap의 strict path·ancestor/reparse 검사 후 고정 consumer
