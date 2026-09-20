@@ -208,6 +208,8 @@ source/target identity·membership·topology·version 및 action을 대조하고
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
+**예약 writer 식별:** 정식 작업 `direct-sync-relay-container-audit`/`\`만 기존 실행·현재 사용자·1분 TimeTrigger·설정 계약을 만족할 때 canonical이다. qualification 이름과 다른 이름으로 실행하는 명시적 direct-sync/user-relay도 검사 대상이며 활성 비정식 writer는 설치를 차단한다. 무관한 작업의 앱 경로 문자열은 writer 소유 증명이 아니다. null/빈 trigger·없는 CIM 필드는 예외 대신 비정식 판정/명시적 shape 거부로 처리하고 정상 작업의 normalized binding bytes와 복원 hash 검증은 유지한다. [설치 경계](operations.md#ca-o05)
+
 **bootstrap record 순서·ACL:** 새 `container-audit-bootstrap-integrity-v1` 목록은
 상대 경로를 `[StringComparer]::Ordinal`로 정렬한다. 검증은 기존 record의 순서를
 보존하되 실제 파일과 대소문자까지 같은 path의 일대일 대응, 정수 size, exact SHA256,

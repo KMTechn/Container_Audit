@@ -920,17 +920,23 @@ function Get-PrincipalSid([string]$UserId) {
     }
     catch { return '' }
 }
+function Get-CanonicalTaskProperty($Value, [string]$Name, $Default = $null) {
+    if ($null -eq $Value) { return $Default }
+    $property = $Value.PSObject.Properties[$Name]
+    if ($null -eq $property) { return $Default }
+    return $property.Value
+}
 function Get-CanonicalWriterBinding($Task) {
     $actions = @($Task.Actions)
-    $triggers = @($Task.Triggers)
+    $triggers = @(Get-CanonicalTaskProperty $Task 'Triggers')
     $normalized = [ordered]@{
         task_name=[string]$Task.TaskName
         task_path=[string]$Task.TaskPath
         actions=@($actions | ForEach-Object {
             [ordered]@{
-                execute=[string]$_.Execute
-                arguments=[string]$_.Arguments
-                working_directory=[string]$_.WorkingDirectory
+                execute=[string](Get-CanonicalTaskProperty $_ 'Execute' '')
+                arguments=[string](Get-CanonicalTaskProperty $_ 'Arguments' '')
+                working_directory=[string](Get-CanonicalTaskProperty $_ 'WorkingDirectory' '')
             }
         })
         principal=[ordered]@{
@@ -939,13 +945,15 @@ function Get-CanonicalWriterBinding($Task) {
             run_level=[string]$Task.Principal.RunLevel
         }
         triggers=@($triggers | ForEach-Object {
+            $class = Get-CanonicalTaskProperty $_ 'CimClass'
+            $repetition = Get-CanonicalTaskProperty $_ 'Repetition'
             [ordered]@{
-                type=[string]$_.CimClass.CimClassName
-                enabled=[bool]$_.Enabled
-                start_boundary=[string]$_.StartBoundary
-                repetition_interval=[string]$_.Repetition.Interval
-                repetition_duration=[string]$_.Repetition.Duration
-                stop_at_duration_end=[bool]$_.Repetition.StopAtDurationEnd
+                type=[string](Get-CanonicalTaskProperty $class 'CimClassName' '')
+                enabled=[bool](Get-CanonicalTaskProperty $_ 'Enabled' $false)
+                start_boundary=[string](Get-CanonicalTaskProperty $_ 'StartBoundary' '')
+                repetition_interval=[string](Get-CanonicalTaskProperty $repetition 'Interval' '')
+                repetition_duration=[string](Get-CanonicalTaskProperty $repetition 'Duration' '')
+                stop_at_duration_end=[bool](Get-CanonicalTaskProperty $repetition 'StopAtDurationEnd' $false)
             }
         })
         settings=[ordered]@{
@@ -972,28 +980,33 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
     foreach ($candidate in $allTasks) {
         $actions = @($candidate.Actions)
         $arguments = if (
-            $actions.Count -eq 1 -and
+            $actions.Count -eq 1 -and $null -ne $actions[0] -and
             $null -ne $actions[0].PSObject.Properties['Arguments']
         ) { [string]$actions[0].Arguments } else { '' }
         $execute = if (
-            $actions.Count -eq 1 -and
+            $actions.Count -eq 1 -and $null -ne $actions[0] -and
             $null -ne $actions[0].PSObject.Properties['Execute']
         ) { [string]$actions[0].Execute } else { '' }
+        # A display/capture command can mention the app without running a writer.
+        # Retain all named writers and relay actions, including malformed ones.
         $owned = (
-            [string]$candidate.TaskName -ceq $CanonicalWriterTaskName -or
-            [string]$candidate.TaskName -ceq $NoncanonicalQualificationTaskName -or
-            $arguments.IndexOf('--container-audit', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-            $arguments.IndexOf('Container_Audit', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-            $arguments.IndexOf('ContainerAudit', [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
-            $execute.IndexOf('Container_Audit', [StringComparison]::OrdinalIgnoreCase) -ge 0
+            [string]$candidate.TaskName -ieq $CanonicalWriterTaskName -or
+            [string]$candidate.TaskName -ieq $NoncanonicalQualificationTaskName -or
+            @($actions | Where-Object {
+                ([string](Get-CanonicalTaskProperty $_ 'Arguments' '')) -match
+                    '(?:^|\s)["'']?--container-audit-(?:direct-sync-relay|user-relay)["'']?(?:\s|$)'
+            }).Count -gt 0
         )
         if (-not $owned) { continue }
-        $triggers = @($candidate.Triggers)
+        $binding = Get-CanonicalWriterBinding $candidate
+        $triggers = @($binding.value.triggers)
         $executeExact = (
             [IO.Path]::IsPathRooted($execute) -and
             (Same $execute $expectedExecute)
         )
         $actionExact = (
+            [string]$candidate.TaskName -ieq $CanonicalWriterTaskName -and
+            [string]$candidate.TaskPath -ceq '\' -and
             $actions.Count -eq 1 -and $executeExact -and
             $arguments.IndexOf($expectedMain, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
             $arguments.IndexOf('--container-audit-direct-sync-relay', [StringComparison]::Ordinal) -ge 0 -and
@@ -1009,14 +1022,13 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
         )
         $triggerExact = (
             $triggers.Count -eq 1 -and
-            [string]$triggers[0].CimClass.CimClassName -ceq 'MSFT_TaskTimeTrigger' -and
-            [bool]$triggers[0].Enabled -and
-            [string]$triggers[0].Repetition.Interval -ceq 'PT1M' -and
+            [string]$triggers[0].type -ceq 'MSFT_TaskTimeTrigger' -and
+            [bool]$triggers[0].enabled -and
+            [string]$triggers[0].repetition_interval -ceq 'PT1M' -and
             [bool]$candidate.Settings.StartWhenAvailable -and
             [string]$candidate.Settings.MultipleInstances -ceq 'IgnoreNew' -and
             [string]$candidate.Settings.ExecutionTimeLimit -ceq 'PT2M'
         )
-        $binding = Get-CanonicalWriterBinding $candidate
         if ($actionExact -and $principalExact -and $triggerExact) {
             $canonical += $candidate
             continue
@@ -1041,7 +1053,7 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
     $info = Get-ScheduledTaskInfo -TaskName ([string]$task.TaskName) -TaskPath ([string]$task.TaskPath) -ErrorAction Stop
     $binding = Get-CanonicalWriterBinding $task
     $actions = @($task.Actions)
-    $triggers = @($task.Triggers)
+    $triggers = @($binding.value.triggers)
     $enabled = [bool]$task.Settings.Enabled
     $processes = @(Get-CanonicalWriterProcesses $InstallRootValue)
     return [ordered]@{
@@ -1057,8 +1069,8 @@ function Get-CanonicalWriterSnapshot([string]$InstallRootValue) {
         principal_sid=Get-PrincipalSid ([string]$task.Principal.UserId)
         logon_type=[string]$task.Principal.LogonType
         run_level=[string]$task.Principal.RunLevel
-        trigger_type=if ($triggers.Count -eq 1) { [string]$triggers[0].CimClass.CimClassName } else { '' }
-        trigger_interval=if ($triggers.Count -eq 1) { [string]$triggers[0].Repetition.Interval } else { '' }
+        trigger_type=if ($triggers.Count -eq 1) { [string]$triggers[0].type } else { '' }
+        trigger_interval=if ($triggers.Count -eq 1) { [string]$triggers[0].repetition_interval } else { '' }
         start_when_available=[bool]$task.Settings.StartWhenAvailable
         multiple_instances=[string]$task.Settings.MultipleInstances
         enabled=$enabled

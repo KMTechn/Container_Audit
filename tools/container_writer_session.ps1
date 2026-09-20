@@ -724,12 +724,12 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
     $task = $matches[0]
     $info = Get-ScheduledTaskInfo -TaskName $Script:TaskName -TaskPath $Script:TaskPath -ErrorAction Stop
     $actions = @($task.Actions)
-    $triggers = @($task.Triggers)
-    if ($actions.Count -ne 1 -or $triggers.Count -ne 1) {
+    $triggers = @(Get-ObjectPropertyValue $task 'Triggers')
+    if ($actions.Count -ne 1 -or $triggers.Count -ne 1 -or
+        $null -eq $actions[0] -or $null -eq $triggers[0]) {
         throw 'Container writer action/trigger shape is not exact.'
     }
     $action = $actions[0]
-    $trigger = $triggers[0]
     $arguments = [string]$action.Arguments
     $argumentsSha = Get-StringSha256 $arguments
     $expectedExecutable = Join-Path $root 'runtime\python.exe'
@@ -756,13 +756,15 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
             run_level = [string]$task.Principal.RunLevel
         }
         triggers = @($triggers | ForEach-Object {
+            $class = Get-ObjectPropertyValue $_ 'CimClass'
+            $repetition = Get-ObjectPropertyValue $_ 'Repetition'
             [ordered]@{
-                type = [string]$_.CimClass.CimClassName
-                enabled = [bool]$_.Enabled
-                start_boundary = [string]$_.StartBoundary
-                repetition_interval = [string]$_.Repetition.Interval
-                repetition_duration = [string]$_.Repetition.Duration
-                stop_at_duration_end = [bool]$_.Repetition.StopAtDurationEnd
+                type = [string](Get-ObjectPropertyValue $class 'CimClassName' '')
+                enabled = [bool](Get-ObjectPropertyValue $_ 'Enabled' $false)
+                start_boundary = [string](Get-ObjectPropertyValue $_ 'StartBoundary' '')
+                repetition_interval = [string](Get-ObjectPropertyValue $repetition 'Interval' '')
+                repetition_duration = [string](Get-ObjectPropertyValue $repetition 'Duration' '')
+                stop_at_duration_end = [bool](Get-ObjectPropertyValue $repetition 'StopAtDurationEnd' $false)
             }
         })
         settings = [ordered]@{
@@ -774,6 +776,7 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
         }
     }
     $bindingJson = $bindingValue | ConvertTo-Json -Depth 8 -Compress
+    $trigger = $bindingValue.triggers[0]
     $identityExact = (
         (Test-BootstrapSamePath ([string]$action.Execute) $expectedExecutable) -and
         (Test-BootstrapSamePath ([string]$action.WorkingDirectory) $expectedWorkingDirectory) -and
@@ -782,9 +785,9 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
         (Test-PrincipalIsCurrentUser $principal) -and
         [string]$task.Principal.LogonType -ceq 'Interactive' -and
         [string]$task.Principal.RunLevel -ceq 'Limited' -and
-        [string]$trigger.CimClass.CimClassName -ceq 'MSFT_TaskTimeTrigger' -and
-        [bool]$trigger.Enabled -and
-        [string]$trigger.Repetition.Interval -ceq 'PT1M' -and
+        [string]$trigger.type -ceq 'MSFT_TaskTimeTrigger' -and
+        [bool]$trigger.enabled -and
+        [string]$trigger.repetition_interval -ceq 'PT1M' -and
         [bool]$task.Settings.StartWhenAvailable -and
         [string]$task.Settings.MultipleInstances -ceq 'IgnoreNew'
     )
@@ -810,9 +813,9 @@ function Get-ContainerWriterReadback([string]$CanonicalInstallRoot) {
             principal_sid = $principalSid
             logon_type = [string]$task.Principal.LogonType
             run_level = [string]$task.Principal.RunLevel
-            trigger_type = [string]$trigger.CimClass.CimClassName
-            trigger_start_boundary = [string]$trigger.StartBoundary
-            trigger_repetition_interval = [string]$trigger.Repetition.Interval
+            trigger_type = [string]$trigger.type
+            trigger_start_boundary = [string]$trigger.start_boundary
+            trigger_repetition_interval = [string]$trigger.repetition_interval
             start_when_available = [bool]$task.Settings.StartWhenAvailable
             multiple_instances = [string]$task.Settings.MultipleInstances
             definition_sha256 = Get-StringSha256 ([string]$definition)

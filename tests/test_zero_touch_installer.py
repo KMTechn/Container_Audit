@@ -1431,11 +1431,11 @@ if ($errors.Count -ne 0) { exit 10 }
 $functions = @($ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-        $node.Name -in @('Full','Get-CanonicalWriterSnapshot')
+        $node.Name -in @('Full','Get-CanonicalTaskProperty','Get-CanonicalWriterSnapshot')
 }, $true))
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-if ($functions.Count -ne 2) { exit 11 }
+if ($functions.Count -ne 3) { exit 11 }
 foreach ($function in $functions) { Invoke-Expression $function.Extent.Text }
 $script:CanonicalWriterTaskName = 'ContainerAuditDirectSync'
 $script:NoncanonicalQualificationTaskName = 'ContainerAuditQualification'
