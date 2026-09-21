@@ -890,6 +890,7 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
         def run(self):
             calls.append("run")
 
+    (tmp_path / "state").mkdir()
     monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(container_audit_module, "_first_run_onboarding_enabled", lambda: True)
     monkeypatch.setattr(
