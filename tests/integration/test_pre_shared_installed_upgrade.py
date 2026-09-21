@@ -1,4 +1,4 @@
-"""Keep a real pre-X13-B installed contract eligible for the new installer."""
+"""Separate pre-shared layout compatibility from the writer-semantics gate."""
 import json
 from pathlib import Path
 import shutil
@@ -45,7 +45,16 @@ def test_pre_shared_installed_tree_passes_current_preflight_and_verified_replace
         installed = fixtures._portable_release_fixture(
             tmp_path, directory="owned/current", source_commit=BASELINE,
         )
-    source = fixtures._portable_release_fixture(tmp_path, directory="packet")
+    current_source = fixtures._portable_release_fixture(tmp_path, directory="current-packet")
+    # Layout compatibility does not authorize changing the declared writers.
+    # Keep the historical writer contract in a synthetic shared-leaf upgrade;
+    # the unmodified current packet must still reject this old writer set.
+    with monkeypatch.context() as compatible:
+        for name in bindings[3:]:
+            compatible.setattr(
+                fixtures, name, old_repo / getattr(fixtures, name).relative_to(fixtures.ROOT),
+            )
+        source = fixtures._portable_release_fixture(tmp_path, directory="packet")
     leaf = "app/kmtech_shared/powershell/portable.ps1"
     assert not (installed / leaf).exists()
     assert json.loads((installed / "app/kmtech_shared.lock.json").read_bytes())["version"] == "0.2.0"
@@ -78,6 +87,19 @@ $preflight=@($ast.EndBlock.Statements | Where-Object {
     $_.Extent.Text.Contains('$preflightCandidate = InstalledManifest')
 })
 if ($preflight.Count -ne 1) { throw 'expected the actual installed-tree preflight' }
+$compatibleInventory=$sourceWriterInventory
+$currentManifest=Manifest $env:CA_UPGRADE_CURRENT_SOURCE $true
+$sourceWriterInventory=Assert-WriterSinkInventory `
+    (Join-Path $env:CA_UPGRADE_CURRENT_SOURCE 'tools/container_writer_sink_inventory.json') `
+    $currentManifest.writer_sink_inventory_sha256 $currentManifest.writer_sink_inventory_contract_sha256
+if ((Get-WriterInventorySemantics $sourceWriterInventory) -ceq (Get-WriterInventorySemantics $compatibleInventory)) {
+    throw 'expected distinct historical and current writer semantics'
+}
+$incompatible=''
+try { Invoke-Expression $preflight[0].Extent.Text } catch { $incompatible=$_.Exception.Message }
+if ($incompatible -cne 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER') { throw ('writer change was not rejected: '+$incompatible) }
+if ((Assert-BootstrapIntegrityRecord $install).aggregate_sha256 -cne $originalAggregate) { throw 'rejected upgrade mutated old tree' }
+$sourceWriterInventory=$compatibleInventory
 Invoke-Expression $preflight[0].Extent.Text
 if ([string]$preflightCandidate.source_commit -cne $env:CA_UPGRADE_BASELINE) { throw 'old manifest identity changed' }
 if ((Assert-BootstrapIntegrityRecord $install).aggregate_sha256 -cne $originalAggregate) { throw 'preflight mutated old tree' }
@@ -126,6 +148,7 @@ Copy-Item -LiteralPath (Join-Path $source 'app/kmtech_shared/powershell/portable
 'PRE_SHARED_UPGRADE_PASS'
 ''', values={
         "CA_UPGRADE_SOURCE": str(source), "CA_UPGRADE_INSTALLED": str(installed),
+        "CA_UPGRADE_CURRENT_SOURCE": str(current_source),
         "CA_UPGRADE_BASELINE": BASELINE,
         "CA_UPGRADE_CULTURE": culture,
         "KMTECH_FACTORY_INSTALL_TEST_MODE": "1",

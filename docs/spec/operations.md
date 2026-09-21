@@ -39,6 +39,11 @@ native executable·`-I` 자식의 OS 쓰기 전부를 감시하는 sandbox는 �
 D 쓰기 병목이 확인된 C 예외는 합성 입력·TEMP/TMP·basetemp만 허용하고 로그/JUnit/실패 원본은
 D에 보존한 뒤 C 임시 루트를 검증·삭제한다. runner 전체 출력을 C로 옮기는 예외는 아니다.
 C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와 D `--junitxml`/로그를 명시한다.
+직접 pytest의 runner probe는 외부 basetemp 대신 `CONTAINER_AUDIT_TEST_TASK_ROOT` 또는
+기본 runner 루트 아래에 자기 run을 만든다. 상위 runner의 쓰기 경계가 있으면 그 경계를
+우선한다. 긴 외부 basetemp를 짧은 probe 루트와 분리해도 240자 사전 guard는 그대로다.
+구버전 shared leaf 부재의 설치 호환 시험은 동일 writer 의미의 합성 후보를 사용하며,
+현재 후보와 구버전 writer 의미가 다르면 변경 전 거부하는 계약도 함께 검증한다.
 
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한

@@ -117,6 +117,9 @@ notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator tran
 - **수용·잔여:** [CA-12](README.md#ca-12)의 local/central 각각 한 번·원 key 유지·중단 복구와 [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). 중앙 ACK 후 포장 소비는 다음 계약의 별도 결과다.
 - **실제 후속 범위:** installed `a7d714f6`의 정상 관리자 재시도와 backend `c0c0d51`에서 원 case02는 원 완료 시각07:46:27Z·lease fence1·명령을 유지한 채09:21:22Z receipt1/ACKED가 됐다. [독립 중앙 조회](E:/KMTech/web-integration-20260908/ca-original-retry-central-readback.json)와 [로컬 불변 비교](E:/KMTech/ca-install-qualification-20260908/review03-integrity-after-retry.json)가 이를 입증한다. 같은 시각 새 발급 grant는 기존 적시 완료의 finalization 권한을 대체하지 않으며, 원 완료 시각이 없는 만료 case03의 새 스캔을 허용하는 근거도 아니다.
 
+관리자 재시도에서 lease 검증 등이 실패하면 UI는 관리자 인증·저장 기록 확인을 안내한다.
+내부 예외 문구를 그대로 표시하지 않으며 원 예외·완료 기록·검토 상태와 재전송 조건을 유지한다.
+
 <a id="ca-c04"></a>
 ## CA-C04 CA → Web 봉인 전 제품 교체
 

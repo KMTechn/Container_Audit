@@ -68,9 +68,12 @@ def _runner_probe(tmp_path, source, *, root_option="--task-root", extra_args=())
     (tmp_path / "conftest.py").write_text("from tests.conftest import *\n", encoding="utf-8")
     test = tmp_path / "test_probe.py"
     test.write_text(source, encoding="utf-8")
-    # Nested runner still budgets the canonical installer receipt leaf. Avoid
-    # adding this test's own hashed directory to that independent run's prefix.
-    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT", tmp_path.parent)) / "r"
+    # The runner budgets installer receipt leaves even for this small probe.
+    # Own a short runner root independently of the outer pytest basetemp; an
+    # enclosing runner's write boundary still takes precedence when present.
+    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT") or
+                     os.environ.get("CONTAINER_AUDIT_TEST_TASK_ROOT") or
+                     runner.DEFAULT_TASK_ROOT) / "r"
     environment = dict(os.environ, CONTAINER_AUDIT_TEST_TASK_ROOT=str(task_root),
                        PYTEST_ADDOPTS="--invalid-ambient-option",
                        CONTAINER_AUDIT_DATA_ROOT=str(tmp_path / "ambient-data"),
@@ -88,6 +91,7 @@ def _runner_probe(tmp_path, source, *, root_option="--task-root", extra_args=())
         [*command, str(test), *extra_args], cwd=repository, env=environment,
         capture_output=True, text=True, check=False, timeout=45,
     )
+    assert result.stdout, result.stderr
     observation = json.loads(result.stdout)
     run = Path(observation["evidence_path"])
     assert run.parent == task_root
@@ -189,12 +193,15 @@ def test_runner_source_fingerprint_detects_edits_with_unchanged_dirty_status(tmp
         f"    subprocess.run(['git', 'apply'], input={patch!r}, text=True, check=True)\n",
         encoding="utf-8",
     )
-    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT", tmp_path.parent)) / "r"
+    task_root = Path(os.environ.get("KMTECH_TEST_CA_TASK_ROOT") or
+                     os.environ.get("CONTAINER_AUDIT_TEST_TASK_ROOT") or
+                     runner.DEFAULT_TASK_ROOT) / "r"
     result = subprocess.run(
         [sys.executable, "-B", str(tmp_path / "tools/run_repository_tests.py"),
          "--task-root", str(task_root), str(probe)], cwd=tmp_path, env=env,
         capture_output=True, text=True, check=False, timeout=45,
     )
+    assert result.stdout, result.stderr
     observation = json.loads(result.stdout)
     assert result.returncode == 1, result.stderr
     assert observation["pytest_exit_code"] == 0

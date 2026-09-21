@@ -4,6 +4,7 @@ import pytest
 
 import Container_Audit as container_module
 from Container_Audit import ContainerAudit, TraySession
+from terminal_operation_lease import OperationLeaseError
 from tests.operation_lease_fixtures import fixed_operation_lease_clock
 from tests.test_terminal_operation_lease import _rejected_review
 from transfer_seal import TransferSealError
@@ -62,6 +63,32 @@ def test_normal_supervisor_action_audits_before_same_command_retry(tmp_path, mon
     assert audit[0][1]["worker_name_override"] == "review-supervisor"
     assert audit[0][1]["detail"]["transfer_intent_id"] == intent_id
     assert messages[-1][0] == "중앙 반영 확인"
+
+
+def test_review_lease_failure_keeps_internal_diagnostics_out_of_dialog(tmp_path, monkeypatch):
+    app, lane, audit, posted, coordinator, intent_id, messages = _review_ui(tmp_path, monkeypatch)
+    original = dict(coordinator.store.load(intent_id))
+
+    def reject_lease(*_args, **_kwargs):
+        raise OperationLeaseError(
+            "OPERATION_LEASE_MEMBERSHIP_MISMATCH",
+            "scanned membership differs from the signed lease",
+        )
+
+    monkeypatch.setattr(coordinator.operation_lease_manager, "verify_stored", reject_lease)
+    assert app._retry_transfer_post_review() is True
+    task = lane.tasks[0]
+    with pytest.raises(TransferSealError) as failure:
+        task.work()
+    task.fail(failure.value)
+
+    assert messages[-1][0] == "완료 작업 확인 필요"
+    assert "membership" not in messages[-1][1]
+    assert "lease" not in messages[-1][1]
+    assert "확인" in messages[-1][1]
+    assert str(failure.value) == "scanned membership differs from the signed lease"
+    assert dict(coordinator.store.load(intent_id)) == original
+    assert len(posted) == 1 and audit == []
 
 
 @pytest.mark.parametrize("blocked", ["worker", "cancelled", "active_tray", "worker_changed", "audit_failed"])

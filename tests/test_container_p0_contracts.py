@@ -1674,6 +1674,9 @@ def test_show_validation_screen_defers_automatic_phs_recovery_during_active_hold
             _delay, callback, args = self.jobs.pop(index)
             callback(*args)
 
+        def after_idle(self, callback, *args):
+            return self.after("idle", callback, *args)
+
     class EmptyPane:
         @staticmethod
         def winfo_children():
@@ -1739,6 +1742,7 @@ def test_show_validation_screen_defers_automatic_phs_recovery_during_active_hold
     monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
 
     app.show_validation_screen()
+    assert ("idle", app._update_tray_image_display, ()) in root.jobs
     root.run_delay(100)
 
     assert not any(call[0] == "recover" for call in calls)

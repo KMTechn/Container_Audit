@@ -15,6 +15,8 @@ S05는 호출되지 않는 helper와 소비자가 없는 과거 검증 도구를
 짧은 기본 `D:\KMTech\t\ca`·경로 길이 사전 계산·override·실행 전후 SHA/dirty 기록과
 child 상태/쓰기 감시·실패 후 thread 정리는
 [시험 격리](operations.md#ca-test-runner)를 따른다.
+headless 전수 감사의 실패 분류·수정과 동일 커밋 반복 결과는
+[CA-G11](BACKLOG.md#ca-g11)의 W9 시험 감사 근거를 따른다.
 
 물류 HTTP client·`SealAttempt`·profile factory는 [transfer_client](../../transfer_client.py),
 SQLite completion/outbox는 [transfer_store](../../transfer_store.py), 공유 오류·값·owner guard는

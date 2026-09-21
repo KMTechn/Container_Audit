@@ -156,6 +156,11 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g11"></a>
 ## CA-G11 승인된 S05 소스 단순화
 
+- **W9 시험 감사:** headless 기준선의 실패는 불완전한 idle callback 대역, 외부 basetemp에
+  종속된 runner probe, writer 의미 변경을 무시한 구버전 설치 fixture, 관리자 재시도 UI의
+  내부 진단 표시로 구분한다. guard·원 assertion을 유지한 수정과 동일 커밋 전체 반복의
+  수치·제외 범위는 [감사 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9catestaudit/RESULT.md)에 기록한다.
+
 - **W6 CA-2 완료 orchestration:** [경계](tray-completion.md)에 따라 732행을 명시 owner 함수로 이동하고 최종 state 적용과 notice를 분리했다. 기존 signature·prepared attempt·local ACK·held FIFO·중앙 retry 순서는 유지한다. [구현 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6ca2/RESULT.md)에 AST/순서 벡터·기존 focused·packaging/inventory 근거를 기록한다. stored attempt·ACK/입력 순서·writer pin/packaging은 독립 검토 후 수용하며 실제 GUI·스캐너·설치는 별도 범위다.
 
 - **W6 CA-0 모듈 분리:** HTTP client·`SealAttempt`·profile factory, SQLite Store와 공유 오류/값/owner guard를 별도 모듈로 이동하고 기존 façade import를 유지한다. [모듈 계약](contracts.md#ca-c03)과 [검증 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w6ca0/RESULT.md)를 따른다. stored attempt·ACK/입력 순서·writer pin/packaging 소비자의 독립 검토가 후속이며 GUI·설치 수용은 포함하지 않는다. CA-1/CA-2의 후속 구현 근거는 각 경계 문서와 결과를 따른다.

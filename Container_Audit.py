@@ -12651,7 +12651,7 @@ class ContainerAudit:
             self._update_action_button_states()
             messagebox.showwarning(
                 "완료 작업 확인 필요",
-                str(exc) if isinstance(exc, TransferSealError) else "요청을 처리하지 못했습니다. 저장 기록을 확인해 주세요.",
+                "요청을 처리하지 못했습니다. 관리자 인증과 저장 기록을 확인해 주세요.",
                 parent=self.root,
             )
 

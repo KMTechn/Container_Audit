@@ -4070,6 +4070,14 @@ def test_current_tray_state_save_includes_active_idle_duration(tmp_path):
 
 
 def test_show_validation_screen_enables_undo_for_restored_scans():
+    class ValidationRoot(DummyRoot):
+        def __init__(self):
+            self.idle_jobs = []
+
+        def after_idle(self, callback):
+            self.idle_jobs.append(callback)
+            return "idle-id"
+
     app = _headless_app()
     barcodes = ["AAA2270730100-001", "AAA2270730100-002"]
     app.current_tray = TraySession(
@@ -4092,7 +4100,7 @@ def test_show_validation_screen_enables_undo_for_restored_scans():
     app.left_pane = type("DummyPane", (), {"winfo_children": lambda self: []})()
     app.center_pane = type("DummyPane", (), {"winfo_children": lambda self: []})()
     app.right_pane = type("DummyPane", (), {"winfo_children": lambda self: []})()
-    app.root = DummyRoot()
+    app.root = ValidationRoot()
     app.scanned_listbox = CapturingListbox()
     app.scan_entry = type("DummyEntry", (), {"focus": lambda self: None})()
     app._clear_main_frames = lambda: None
@@ -4116,6 +4124,7 @@ def test_show_validation_screen_enables_undo_for_restored_scans():
         app._format_scanned_list_row(1, barcodes[0]),
     ]
     assert all(" · " in row for row in app.scanned_listbox.rows)
+    assert app.root.idle_jobs == [app._update_tray_image_display]
 
 
 def test_start_clock_cancels_existing_clock_job_before_rescheduling():
