@@ -2872,7 +2872,7 @@
         "user_relay.__file_entry__",
         "user_relay.main"
       ],
-      "decorated_source": "data_root_access_probe",
+      "decorated_source": "persistent_relay_status",
       "direct_callers": [
         "Container_Audit._prepare_gui_startup",
         "user_relay.main"
@@ -5972,7 +5972,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "dab31aeaee9e3d935b2db30bab0f7bbbe7c436dbeba53bf5c1bf6d17cc9a7011",
+  "inventory_sha256": "3ca2594651cbc83ab4b6bab70d9ab652f1bd1e5234985a3ea4450f326756d666",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -5988,7 +5988,6 @@
         "current_user_onboarding",
         "current_user_onboarding_storage",
         "current_user_setup_removal",
-        "data_root_access_probe",
         "direct_sync_enqueue",
         "direct_sync_install_pack",
         "direct_sync_relay_cycle",
@@ -6169,7 +6168,6 @@
         "current_user_onboarding",
         "current_user_onboarding_storage",
         "current_user_setup_removal",
-        "data_root_access_probe",
         "direct_sync_enqueue",
         "direct_sync_relay_cycle",
         "direct_sync_scan_drain",
@@ -6231,7 +6229,6 @@
         "user_relay._write_json_atomic"
       ],
       "reachable_sources": [
-        "data_root_access_probe",
         "persistent_relay_status",
         "session_direct_sync_process"
       ],
@@ -17477,7 +17474,6 @@
     "current_user_onboarding",
     "current_user_onboarding_storage",
     "current_user_setup_removal",
-    "data_root_access_probe",
     "direct_sync_enqueue",
     "direct_sync_install_pack",
     "direct_sync_relay_cycle",
@@ -17647,14 +17643,6 @@
       "line": 1413,
       "marker_kind": "writer_admission",
       "source": "current_user_setup_removal"
-    },
-    {
-      "direct_mutation_site_count": 2,
-      "file": "storage_policy.py",
-      "function": "storage_policy.validate_existing_data_root",
-      "line": 162,
-      "marker_kind": "decorator",
-      "source": "data_root_access_probe"
     },
     {
       "direct_mutation_site_count": 0,
@@ -18047,6 +18035,14 @@
       "line": 121,
       "marker_kind": "decorator",
       "source": "persistent_relay_registry"
+    },
+    {
+      "direct_mutation_site_count": 2,
+      "file": "storage_policy.py",
+      "function": "storage_policy.validate_existing_data_root",
+      "line": 162,
+      "marker_kind": "decorator",
+      "source": "persistent_relay_status"
     },
     {
       "direct_mutation_site_count": 4,

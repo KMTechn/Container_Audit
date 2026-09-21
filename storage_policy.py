@@ -158,7 +158,7 @@ def notify_data_root_error() -> None:
         messagebox.showerror("이적 검사 데이터 폴더 오류", DATA_ROOT_ERROR_MESSAGE)
 
 
-@writer_sink("data_root_access_probe")
+@writer_sink("persistent_relay_status")
 def validate_existing_data_root(root: Path) -> None:
     """Never recreate a lost dataset; prove read/write access before startup."""
     try:

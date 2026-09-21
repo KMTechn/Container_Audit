@@ -6,6 +6,7 @@ import runpy
 import shutil
 import subprocess
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -20,6 +21,7 @@ from tests.test_current_user_onboarding import (
     existing_possession_key_contract, _ready_state, _profile_loader,
     _credential_loader, _ledger_factory,
 )
+from tests.test_writer_session_fence import _active_payload, _write_active
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -254,3 +256,42 @@ def test_default_registration_retains_separate_default_roots(registered_root):
     assert paths.data_root == home / "KMTech/ContainerAudit"
     assert paths.direct_sync_root == home / "KMTech/DirectSync/container_audit"
     assert not paths.custom_data_root
+
+
+def test_root_probe_preserves_existing_relay_delegation(tmp_path):
+    """Moving the relay probe must not require a new deployment permission."""
+    fence = writer_session_fence
+    root = tmp_path / "data"
+    root.mkdir()
+    control = tmp_path / "control"
+    token = "synthetic-delegation-token" * 3
+    payload = _active_payload(token=token, sources=["persistent_relay_status"])
+    active = _write_active(control, payload)
+    original = active.read_bytes()
+    ready, release = threading.Event(), threading.Event()
+    def hold_authority():
+        lease = fence._acquire_named_mutex(payload["session_authority_mutex_name"], 1.0)
+        assert lease is not None and not lease.abandoned
+        ready.set()
+        release.wait(10)
+        lease.release()
+    thread = threading.Thread(target=hold_authority, daemon=True)
+    thread.start()
+    environment = {
+        fence.DELEGATION_TOKEN_ENV: token,
+        fence.DELEGATION_SESSION_ENV: payload["session_id"],
+        fence.DELEGATION_ATTEMPT_ENV: payload["attempt_id"],
+        fence.DELEGATION_TRANSACTION_ENV: payload["replacement_transaction_id"],
+    }
+    try:
+        assert ready.wait(5)
+        with pytest.raises(fence.WriterFencedError):
+            with fence.writer_admission("persistent_relay_status", control_root=control, environ={}):
+                storage_policy.validate_existing_data_root(root)
+        with fence.writer_admission("persistent_relay_status", control_root=control, environ=environment):
+            storage_policy.validate_existing_data_root(root)
+        assert list(root.iterdir()) == []
+        assert active.read_bytes() == original
+    finally:
+        release.set()
+        thread.join(5)
