@@ -1388,7 +1388,7 @@ class ContainerAudit:
         except Exception as e:
             print(f"설정 저장 오류: {e}")
 
-    def load_items(self) -> List[Dict[str, str]]:
+    def load_items(self, *, show_errors: bool = True) -> List[Dict[str, str]]:
         item_path = os.environ.get(ACTIVE_PATH_ENV) or resource_path(os.path.join('assets', 'Item.csv'))
         verified_payload = get_verified_catalog_snapshot(item_path)
         if requires_verified_catalog_snapshot(item_path):
@@ -1421,6 +1421,8 @@ class ContainerAudit:
             except UnicodeDecodeError:
                 continue
             except FileNotFoundError:
+                if not show_errors:
+                    raise
                 print(f"필수 품목 파일 없음: {item_path}")
                 messagebox.showerror(
                     "필수 파일 없음",
@@ -1430,6 +1432,8 @@ class ContainerAudit:
                 self.root.destroy()
                 return []
             except Exception as e:
+                if not show_errors:
+                    raise
                 print(f"품목 파일 읽기 실패: {item_path}: {e.__class__.__name__}: {e}")
                 messagebox.showerror(
                     "파일 읽기 오류",
@@ -1438,6 +1442,8 @@ class ContainerAudit:
                 )
                 self.root.destroy()
                 return []
+        if not show_errors:
+            raise UnicodeError("item catalog encoding is unsupported")
         messagebox.showerror("인코딩 감지 실패", f"'{os.path.basename(item_path)}' 파일의 인코딩 형식을 알 수 없습니다.")
         self.root.destroy()
         return []
@@ -1449,6 +1455,79 @@ class ContainerAudit:
             catalog = ItemCatalog(items_data)
             self.item_catalog = catalog
         return catalog
+
+    def _refresh_item_catalog(self) -> bool:
+        """Reload through startup's catalog path only between work sessions."""
+        if (
+            getattr(getattr(self, "current_tray", None), "master_label_code", "")
+            or getattr(self, "_completion_lane_busy", False)
+            or self._active_blocking_completion_snapshot() is not None
+            or getattr(self, "master_label_replace_state", None)
+            or self._widget_exists(getattr(self, "exchange_dialog", None))
+            or self._scan_entry_admission_block_reason()
+        ):
+            messagebox.showinfo(
+                "품목 목록 새로 고침 대기",
+                "진행 중인 작업을 먼저 완료하거나 보류해 주세요. "
+                "조회·제출 처리가 끝난 뒤 다시 눌러 주세요.",
+                parent=self.root,
+            )
+            return False
+
+        previous_path = os.environ.get(ACTIVE_PATH_ENV)
+
+        def fail(_exc: Optional[BaseException] = None) -> None:
+            if previous_path is None:
+                os.environ.pop(ACTIVE_PATH_ENV, None)
+            else:
+                os.environ[ACTIVE_PATH_ENV] = previous_path
+            messagebox.showwarning(
+                "품목 목록 새로 고침 실패",
+                "최신 품목 목록을 받지 못했습니다. "
+                f"기존 품목 목록 {len(self.items_data)}건을 그대로 사용합니다.\n\n"
+                "네트워크 연결을 확인한 뒤 다시 눌러 주세요. "
+                "계속 실패하면 담당자에게 이 PC의 중앙 연결 설정 확인을 요청하세요.",
+                parent=self.root,
+            )
+
+        def work() -> Mapping[str, object]:
+            prepare_startup_item_catalog()
+            return get_catalog_attempt_context()
+
+        def finish(context: Mapping[str, object]) -> None:
+            if context.get("catalog_source") != "CENTRAL_REFRESH":
+                fail()
+                return
+            try:
+                items = self.load_items(show_errors=False)
+                catalog = ItemCatalog(items)
+            except Exception as exc:
+                fail(exc)
+                return
+            self.items_data, self.item_catalog = items, catalog
+            messagebox.showinfo(
+                "품목 목록 새로 고침 완료",
+                f"품목 목록을 새로 받았습니다. 현재 {len(items)}건입니다.",
+                parent=self.root,
+            )
+
+        def idle() -> None:
+            self._update_action_button_states()
+            self._schedule_focus_return()
+            self._schedule_pending_transfer_coordinator_work()
+
+        admission = self._ui_task_lane().submit(LaneTask(
+            name="item-catalog-refresh",
+            generation=int(getattr(self, "_scan_callback_epoch", 0) or 0),
+            work=work, finish=finish, fail=fail, on_stale=fail, on_idle=idle,
+        ))
+        if admission.accepted:
+            self.show_status_message(
+                "품목 목록을 확인하고 있습니다. 잠시 기다려 주세요.",
+                self.COLOR_PRIMARY,
+            )
+            self._update_action_button_states()
+        return bool(admission.accepted)
 
     def _parked_store(self) -> ParkedTrayStore:
         store = getattr(self, "parked_tray_store", None)
@@ -6550,6 +6629,10 @@ class ContainerAudit:
         menu.add_command(
             label="전송 상태 상세",
             command=self._show_direct_sync_status_details,
+        )
+        menu.add_command(
+            label="품목 목록 새로 고침",
+            command=self._refresh_item_catalog,
         )
         menu.add_command(
             label="현품표 교체 (F8)",
