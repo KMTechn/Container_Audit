@@ -150,6 +150,15 @@ class _WriterFenceFinder(importlib.abc.MetaPathFinder):
 install_write_boundary()
 
 if os.environ.get(_ROOT_ENV, "").strip() and os.environ.get(_MUTEX_ENV, "").strip():
+    if os.name == "nt":
+        import winreg
+
+        _open_key = winreg.OpenKey
+        def _isolated_key(hive, name, *args, **kwargs):
+            if hive == winreg.HKEY_CURRENT_USER and name == r"Software\Microsoft\Windows\CurrentVersion\Run":
+                raise FileNotFoundError("test child has no ambient relay registration")
+            return _open_key(hive, name, *args, **kwargs)
+        winreg.OpenKey = _isolated_key
     _write_marker()
     loaded = sys.modules.get(_TARGET_MODULE)
     if loaded is not None:

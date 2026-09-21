@@ -21,6 +21,8 @@ from storage_policy import (
     DATA_ROOT_ENV,
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
+    notify_data_root_error as _notify_data_root_error,
+    validate_existing_data_root,
 )
 from writer_session_fence import writer_admission, writer_sink
 
@@ -79,12 +81,10 @@ def relay_data_root_arguments(
     app_root: str | os.PathLike[str], *, environ: Mapping[str, str] | None = None,
 ) -> list[str]:
     values = os.environ if environ is None else environ
-    if not str(values.get(DATA_ROOT_ENV) or "").strip():
-        return []
     storage = build_container_audit_storage_paths(
         application_path=str(app_root), environ=values,
     )
-    return ["--data-root", str(storage.data_root)]
+    return ["--data-root", str(storage.data_root)] if storage.custom_data_root else []
 
 
 def build_user_relay_command(
@@ -403,20 +403,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _notify_data_root_error() -> None:
-    message = (
-        "지정한 데이터 폴더가 없거나 읽기/쓰기 권한이 없어 자동 전송을 중단했습니다. "
-        "기본 데이터 폴더로 전환하지 않았습니다. 담당자는 기존 데이터 폴더의 "
-        "연결과 권한을 복구한 뒤 같은 데이터 루트로 다시 시작하세요."
-    )
-    if sys.stderr is not None:
-        print("CONTAINER_AUDIT_DATA_ROOT_UNAVAILABLE: " + message, file=sys.stderr)
-    if os.name == "nt":
-        from tkinter import messagebox
-
-        messagebox.showerror("이적 검사 데이터 폴더 오류", message)
-
-
 @writer_sink("persistent_relay_status", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
@@ -428,27 +414,18 @@ def main(argv: list[str] | None = None) -> int:
             else Path(__file__).resolve().parent
         )
     ).expanduser().resolve()
-    custom_root = args.data_root or str(os.environ.get(DATA_ROOT_ENV) or "").strip()
     try:
         storage = build_container_audit_storage_paths(
             application_path=str(app_root), data_root=args.data_root or None,
         )
     except (OSError, ValueError):
-        if not custom_root:
-            raise
         _notify_data_root_error()
         return 1
+    custom_root = storage.custom_data_root
     try:
         with writer_admission("persistent_relay_status"):
             if custom_root:
-                # A relay resumes an onboarded dataset; it must never recreate
-                # a lost root as an empty dataset during logon.
-                with os.scandir(storage.data_root) as entries:
-                    next(entries, None)
-                probe = storage.data_root / f".relay-access-{uuid.uuid4().hex}.tmp"
-                with probe.open("xb"):
-                    pass
-                probe.unlink()
+                validate_existing_data_root(storage.data_root)
             ensure_container_audit_storage_dirs(storage)
             direct_sync_root = (
                 Path(args.direct_sync_root).expanduser().resolve()
@@ -467,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             direct_sync_root.mkdir(parents=True, exist_ok=True)
             scan_source_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
+    except (OSError, ValueError):
         if not custom_root:
             raise
         _notify_data_root_error()

@@ -52,6 +52,16 @@ def pytest_sessionfinish(session, exitstatus):
 
 
 def _isolate_environment(root, patch):
+    if os.name == "nt":
+        import winreg
+
+        open_key = winreg.OpenKey
+        def isolated_key(hive, name, *args, **kwargs):
+            if hive == winreg.HKEY_CURRENT_USER and name == r"Software\Microsoft\Windows\CurrentVersion\Run":
+                raise FileNotFoundError("test has no ambient relay registration")
+            return open_key(hive, name, *args, **kwargs)
+        # Ambient HKCU autostart belongs to the operator, never a test dataset.
+        patch.setattr(winreg, "OpenKey", isolated_key)
     for name, directory in (
         ("LOCALAPPDATA", "local"), ("APPDATA", "roaming"),
         ("PROGRAMDATA", "program"), ("TEMP", "t"), ("TMP", "t"),

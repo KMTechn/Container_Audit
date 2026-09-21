@@ -160,9 +160,9 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 `storage_policy`는 명시 `data_root` 인자 → `CONTAINER_AUDIT_DATA_ROOT` → 현재 사용자 기본값 순으로 선택한다. 현재 사용자 home은 우선 `LOCALAPPDATA`, 다음 `USERPROFILE/AppData/Local` 등을 확인한다. 상대/볼륨 루트·Syncthing 경로 및 코드와 같거나 포함 관계인 업무 경로는 허용하지 않는다. 기본 business root와 relay root가 분리되어 있으므로 업무 폴더 한 개만 복사한 상태를 전체 백업으로 보지 않는다.
 
 <a id="ca-custom-root-autostart"></a>
-### custom 데이터 루트의 자동시작·재시작
+### custom 데이터 루트의 일반 GUI 실행·자동시작·재시작
 
-현재 사용자 onboarding은 custom 루트를 정규화해 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`의 `KMTech.ContainerAudit.Relay` 명령 끝에 `--data-root "선택한 절대 경로"`를 저장하고 exact readback한다. 즉시 relay 시작·검증된 교체 복원·설치기 fence 해제 후 재시작도 같은 인자를 사용한다. 다음 로그온에 process/user 환경 변수가 없어도 인자가 우선하며, 토큰·credential·profile 내용은 명령에 넣지 않는다. override가 없는 기본 설치의 명령과 business/relay 분리 경로는 그대로다. 기본 business 경로를 명시 override로 지정한 경우에도 기존 override 의미(`direct_sync` 하위 폴더)를 유지한다.
+현재 사용자 onboarding은 custom 루트를 정규화해 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`의 `KMTech.ContainerAudit.Relay` 명령 끝에 `--data-root "선택한 절대 경로"`를 저장하고 exact readback한다. 이 기존 등록이 영속 루트 설정이며 구버전 `f5cf3c4`의 등록도 그대로 읽는다. `launch-container-audit.cmd` → `app/main.py` → GUI와 사용자 relay의 선택 순서는 **명시 `--data-root` > process `CONTAINER_AUDIT_DATA_ROOT` > 영속 Run 설정 > 기본값**이다. 즉시 relay 시작·검증된 교체 복원도 같은 루트를 명령에 담는다. GUI는 선택한 루트를 현재 프로세스와 자식에 전달하고 user 환경 변수를 영구 변경하지 않는다. 토큰·credential·profile 내용은 Run 명령에 넣지 않는다. 등록이 없거나 정상 기본 등록이면 기존 인자 없는 명령과 business/relay 분리 경로를 유지한다. 기본 business 경로를 명시 override로 지정한 경우에도 기존 override 의미(`direct_sync` 하위 폴더)를 유지한다.
 
 같은 일반 사용자 PowerShell에서 아래 값을 확인한다. Run 값에 실제 채택한 루트가 있고, 그 루트의 `direct_sync\status\current_user_onboarding.json`의 `data_root` 및 `relay_autostart.command`와 일치해야 한다. 보고 파일은 상태 관측용이며 경로를 자동 선택하는 설정 파일이 아니다.
 
@@ -170,9 +170,11 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 (Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').'KMTech.ContainerAudit.Relay'
 ```
 
-GUI 수동 시작·onboarding 재실행·canonical 설치/제거/검증된 복원은 **해당 실행의** `CONTAINER_AUDIT_DATA_ROOT`를 채택한 기존 절대 경로로 설정한 뒤 같은 PowerShell에서 수행한다. GUI가 Run 값에서 경로를 자동 발견하거나 user 환경을 영구 변경하지는 않는다. 기존 루트의 존재·원본 상태를 먼저 확인하며, 새 경로 채택은 빈 폴더를 만들어 오류를 숨기는 복구 방법이 아니다. canonical controller는 활성 환경과 Run 명령이 다르면 기존 exact preimage 검증으로 중단한다. 구버전의 인자 없는 Run에서 전환할 때는 구버전과 일치하는 환경으로 코드 설치를 마친 뒤 기존 환경의 `--remove-current-user-setup`으로 이전 relay/Run을 정상 해제하고(업무·등록 자료 보존), custom 루트로 onboarding을 재실행해 Run readback을 확인한다. 두 루트의 relay를 동시에 실행하지 않는다.
+일상 GUI는 별도 환경 설정 없이 바탕화면·시작 메뉴 또는 런처로 시작한다. 같은 사용자의 Run 명령에 채택 루트가 있는지 확인한 뒤 환경 변수를 제거한 shell에서 런처를 두 번 정상 실행/종료하고, 같은 작업자·현재/보류 상태와 해당 루트의 onboarding 보고·relay status를 대조한다. 다음 로그온에서도 같은 값을 확인한다. 명시 override는 담당자가 기존 루트·원본을 확인한 뒤 사용하며 새 폴더 생성은 복구 방법이 아니다.
 
-루트 연결 해제·삭제·읽기/쓰기 권한 오류 시 custom relay는 `이적 검사 데이터 폴더 오류`를 알리고 exit 1로 멈춘다. 기본 루트로 되돌아가거나 사라진 custom 루트를 빈 데이터셋으로 생성하지 않는다. 화면에 이전 작업자/보류 내역이 나타나거나 전송이 멈추면 작업을 중단하고 Run·실행 명령·onboarding 경로를 대조한다. 원본 데이터/큐를 보존한 채 드라이브·경로·같은 사용자 권한을 복구하고, 정확한 루트로 GUI/onboarding을 시작해 Run을 갱신한다. 기존 relay를 정상 종료한 뒤 같은 Run 명령 재시작 또는 재로그온으로 root/status를 다시 확인한다. credential·DB를 기본 루트에 복사하거나 재등록으로 우회하지 않는다.
+canonical 설치/제거/검증된 복원 controller는 기존 exact preimage 계약을 유지하므로 **해당 실행의** `CONTAINER_AUDIT_DATA_ROOT`를 채택한 기존 절대 경로로 지정한다. controller 환경과 Run 명령이 다르면 중단한다. 구버전의 인자 없는 Run에서 custom으로 전환할 때는 구버전과 일치하는 환경으로 코드 설치를 마친 뒤 기존 환경의 `--remove-current-user-setup`으로 이전 relay/Run을 정상 해제하고(업무·등록 자료 보존), custom 루트로 onboarding을 재실행해 Run readback을 확인한다. 이 제거 명령은 영속 루트 선택도 해제하므로 재설정 전 환경 없는 GUI를 열지 않는다. 두 루트의 relay를 동시에 실행하지 않는다.
+
+루트 연결 해제·삭제·읽기/쓰기 권한 오류, 등록의 손상·읽기 거부 시 GUI와 relay는 writer 잠금을 해제한 뒤 `이적 검사 데이터 폴더 오류`로 복구 방법을 알리고 exit 1로 멈춘다. 기본 루트로 되돌아가거나 사라진 custom 루트를 빈 데이터셋으로 생성하지 않는다. 화면에 이전 작업자/보류 내역이 나타나거나 전송이 멈추면 작업을 중단하고 Run·실행 명령·onboarding 경로를 대조한다. 원본 데이터/큐를 보존한 채 드라이브·경로·같은 사용자 권한을 복구하고 기존 등록으로 다시 시작한다. 등록 자체가 손상됐다면 담당자가 보존된 onboarding 보고와 원본을 대조한 후 정확한 루트를 명시해 복구한다. 기존 relay를 정상 종료한 뒤 같은 Run 명령 재시작 또는 재로그온으로 root/status를 다시 확인한다. credential·DB를 기본 루트에 복사하거나 재등록으로 우회하지 않는다.
 
 GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼저 읽고 사용자 config의 UI 설정을 덮어쓴다. 사용자 `update_settings`는 제거하여 배포 업데이트 권한/provider 정책을 바꾸지 못하게 한다. frozen에서는 내부 시험 설정도 제거한다. 저장은 사용자 config로 한다. [load_app_settings / save_settings / _drop_release_disabled_settings](../../Container_Audit.py), [기본 템플릿](../../config/container_audit_settings.json).
 

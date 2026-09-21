@@ -13,6 +13,7 @@
 ## 문서 작성 진행과 제품 준비도
 
 - **w9caautostartroot:** custom 데이터 루트의 HKCU 자동시작·즉시 시작·검증된 교체/설치기 재시작 명령을 같은 루트로 고정하고, custom relay의 루트 소실·접근 오류를 안내 후 중단하도록 수정했다. 기본 명령은 유지한다. [운영 확인·복구](operations.md#ca-custom-root-autostart)를 따른다. 실제 guest 재로그온·오류 대화상자·채택한 데이터셋의 복구/전송 확인은 후속 촬영 레인의 수용 항목이며 이 소스 작업에서 실행하지 않는다.
+- **w9cadatarootgui:** 일반 GUI도 기존 HKCU Run의 영속 루트를 읽으며 명시 인자·환경 override·영속 설정·기본값의 우선순위를 공유한다. 환경 없는 launcher/재시작·relay·onboarding 경로와 기본 루트, 루트 소실·권한/설정 오류를 headless 시험으로 검증한다. 실제 guest 바탕화면/시작 메뉴·재로그온·오류창·원본 tail/hold/신원 보존 확인은 미검증이며 [운영 절차](operations.md#ca-custom-root-autostart)를 따른다.
 
 U07 경고·성공 버튼의 [색 규칙](README.md#ca-button-colors)은 normal/active/pressed의 흰 글자 대비 4.5:1 이상을 적용한다. disabled 관례·문구·위젯·바인딩·상태·저장 계약은 유지한다. 실제 모니터/DPI·앱 배율 0.7/2.5·현장 조명 및 교체 두 쌍/footer 확인은 NOT VERIFIED이며 검증 파도 D7과 독립 대비/범위 검토로 넘긴다.
 

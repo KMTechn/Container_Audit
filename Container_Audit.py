@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from tkinter import font as tkfont
 import copy
+import argparse
 import csv
 import datetime
 import hashlib
@@ -171,7 +172,14 @@ from responsive_layout import (
 from runtime_instance import acquire_runtime_instance
 from session_history import load_session_history
 from style_tokens import StyleProfile, build_style_tokens
-from storage_policy import build_container_audit_storage_paths, ensure_container_audit_storage_dirs
+from storage_policy import (
+    DATA_ROOT_ENV,
+    DataRootUnavailableError,
+    build_container_audit_storage_paths,
+    ensure_container_audit_storage_dirs,
+    notify_data_root_error,
+    validate_existing_data_root,
+)
 from storage_utils import atomic_write_json
 from tk_serial_ui_lane import (
     DRAIN_TO_DURABLE_HANDOFF,
@@ -15247,7 +15255,15 @@ def main(argv: list[str] | None = None):
     if hosted_result is not None:
         return hosted_result
 
-    startup = _prepare_gui_startup()
+    parser = argparse.ArgumentParser(description="Container_Audit")
+    parser.add_argument("--data-root", default=None)
+    options, _ = parser.parse_known_args(arguments)
+    try:
+        startup = _prepare_gui_startup(data_root=options.data_root)
+    except DataRootUnavailableError:
+        # Display the recovery action after releasing writer admission.
+        notify_data_root_error()
+        return 1
     if not isinstance(startup, tuple):
         return startup
     app, instance_lease = startup
@@ -15261,7 +15277,7 @@ def main(argv: list[str] | None = None):
 
 
 @writer_sink("gui_startup")
-def _prepare_gui_startup():
+def _prepare_gui_startup(*, data_root=None):
     """Guard initialization without holding admission for a resident mode."""
 
     verify_factory_contract_startup()
@@ -15269,9 +15285,17 @@ def _prepare_gui_startup():
         application_path = os.path.dirname(sys.executable)
     else:
         application_path = os.path.dirname(os.path.abspath(__file__))
-    storage_paths = build_container_audit_storage_paths(
-        application_path=application_path
-    )
+    try:
+        storage_paths = build_container_audit_storage_paths(
+            application_path=application_path, data_root=data_root,
+        )
+        if storage_paths.custom_data_root:
+            validate_existing_data_root(storage_paths.data_root)
+    except (OSError, ValueError) as exc:
+        raise DataRootUnavailableError("GUI data root is unavailable") from exc
+    if storage_paths.custom_data_root:
+        # Keep onboarding, GUI constructors and subprocesses on this selection.
+        os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
     try:
         instance_lease = acquire_runtime_instance(storage_paths.data_root)
     except OSError:

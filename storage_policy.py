@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
+import sys
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
+
+from writer_session_fence import writer_sink
 
 
 DATA_ROOT_ENV = "CONTAINER_AUDIT_DATA_ROOT"
@@ -20,6 +25,16 @@ SETTINGS_FILE_NAME = "container_audit_settings.json"
 WORKER_REGISTRY_FILE_NAME = "worker_registry.json"
 BEST_TIME_RECORDS_FILE_NAME = "best_time_records.json"
 LEGACY_SYNCTHING_ROOT = Path("C:/Sync")
+DATA_ROOT_ERROR_MESSAGE = (
+    "저장된 데이터 폴더 설정을 확인할 수 없거나 기존 데이터 폴더에 접근할 수 없어 "
+    "이적 검사 시작과 자동 전송을 중단했습니다. 기본 데이터 폴더로 전환하지 않았습니다. "
+    "담당자는 같은 사용자의 자동 시작 등록과 기존 데이터 폴더의 연결·권한을 확인하고 "
+    "복구한 뒤 다시 시작하세요. 빈 폴더 생성이나 재등록으로 우회하지 마세요."
+)
+
+
+class DataRootUnavailableError(ValueError):
+    """The selected dataset cannot be safely reopened."""
 
 
 @dataclass(frozen=True)
@@ -43,6 +58,7 @@ class ContainerAuditStoragePaths:
     operator_pause_path: Path
     status_path: Path
     item_catalog_diagnostic_path: Path
+    custom_data_root: bool
 
 
 def _resolve_path(path: Path) -> Path:
@@ -103,12 +119,57 @@ def current_user_data_home(environ: Mapping[str, str] | None = None) -> Path:
     return _resolve_path(home / suffix)
 
 
-def _default_data_root(environ: Mapping[str, str]) -> Path:
-    env_root = str(environ.get(DATA_ROOT_ENV) or "").strip()
-    if env_root:
-        return _absolute_environment_path(env_root, DATA_ROOT_ENV)
+def _persisted_data_root() -> str | None:
+    """Read the existing onboarding setting, including pre-upgrade registrations.
 
-    return current_user_data_home(environ) / DEFAULT_VENDOR_DIR / DEFAULT_APP_DIR
+    The Run value is only parsed, never executed. Its generated mode/argument
+    suffix is deliberately strict so damaged settings cannot select defaults.
+    """
+    if os.name != "nt":
+        return None
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Run",
+            0, winreg.KEY_QUERY_VALUE,
+        ) as key:
+            command, kind = winreg.QueryValueEx(key, "KMTech.ContainerAudit.Relay")
+    except FileNotFoundError:
+        return None
+    if kind != winreg.REG_SZ or not isinstance(command, str) or len(command) > 32768:
+        raise DataRootUnavailableError("invalid current-user relay registration")
+    match = re.search(
+        r'(?:^|\s)--container-audit-user-relay(?:\s+--data-root\s+(?:"([^"\r\n]+)"|([^\s"]+)))?\s*$',
+        command,
+    )
+    if match is None:
+        raise DataRootUnavailableError("invalid current-user relay data root setting")
+    return match.group(1) or match.group(2)
+
+
+def notify_data_root_error() -> None:
+    if sys.stderr is not None:
+        print("CONTAINER_AUDIT_DATA_ROOT_UNAVAILABLE: " + DATA_ROOT_ERROR_MESSAGE, file=sys.stderr)
+    if os.name == "nt":
+        from tkinter import messagebox
+
+        messagebox.showerror("이적 검사 데이터 폴더 오류", DATA_ROOT_ERROR_MESSAGE)
+
+
+@writer_sink("data_root_access_probe")
+def validate_existing_data_root(root: Path) -> None:
+    """Never recreate a lost dataset; prove read/write access before startup."""
+    try:
+        with os.scandir(root) as entries:
+            next(entries, None)
+        probe = root / f".data-root-access-{uuid.uuid4().hex}.tmp"
+        with probe.open("xb"):
+            pass
+        probe.unlink()
+    except OSError as exc:
+        raise DataRootUnavailableError("selected data root is unavailable") from exc
 
 
 def _default_direct_sync_root(
@@ -134,7 +195,15 @@ def build_container_audit_storage_paths(
     environ: Mapping[str, str] | None = None,
 ) -> ContainerAuditStoragePaths:
     values = os.environ if environ is None else environ
-    explicit_data_root = data_root is not None or bool(str(values.get(DATA_ROOT_ENV) or "").strip())
+    selected_root = data_root if data_root is not None else str(values.get(DATA_ROOT_ENV) or "").strip()
+    persisted = False
+    if not selected_root and data_root is None:
+        try:
+            selected_root = _persisted_data_root()
+        except OSError as exc:
+            raise DataRootUnavailableError("cannot read current-user relay registration") from exc
+        persisted = bool(selected_root)
+    explicit_data_root = data_root is not None or bool(selected_root)
     if data_root is not None:
         selected = Path(data_root).expanduser()
         if not selected.is_absolute():
@@ -142,8 +211,10 @@ def build_container_audit_storage_paths(
         root = _resolve_path(selected)
         if root == Path(root.anchor):
             raise ValueError("data_root must not be a filesystem root")
+    elif selected_root:
+        root = _absolute_environment_path(selected_root, DATA_ROOT_ENV)
     else:
-        root = _default_data_root(values)
+        root = current_user_data_home(values) / DEFAULT_VENDOR_DIR / DEFAULT_APP_DIR
     if is_legacy_syncthing_path(root):
         raise ValueError(
             f"{DATA_ROOT_ENV} must not point at the legacy Syncthing folder "
@@ -184,6 +255,13 @@ def build_container_audit_storage_paths(
             )
     status_dir = direct_sync_root / "status"
 
+    if persisted:
+        try:
+            with os.scandir(root) as entries:
+                next(entries, None)
+        except OSError as exc:
+            raise DataRootUnavailableError("saved data root is unavailable") from exc
+
     return ContainerAuditStoragePaths(
         data_root=root,
         events_dir=events_dir,
@@ -204,6 +282,7 @@ def build_container_audit_storage_paths(
         operator_pause_path=direct_sync_root / "operator_pause.json",
         status_path=status_dir / "status.json",
         item_catalog_diagnostic_path=status_dir / ITEM_CATALOG_DIAGNOSTIC_FILENAME,
+        custom_data_root=explicit_data_root,
     )
 
 

@@ -154,12 +154,12 @@ def resolve_current_user_onboarding_paths(
 ) -> CurrentUserOnboardingPaths:
     values = os.environ if environ is None else environ
     selected_app_root = _resolved(app_root)
-    explicit_data_root = str(values.get(DATA_ROOT_ENV) or "").strip()
     try:
         storage_paths = build_container_audit_storage_paths(
             application_path=str(selected_app_root),
             environ=values,
         )
+        explicit_data_root = storage_paths.custom_data_root
         user_root = (
             storage_paths.data_root
             if explicit_data_root
