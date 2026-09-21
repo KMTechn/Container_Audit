@@ -1401,10 +1401,17 @@ function Test-ContainerLifecycleMutationEvidence($Receipt, [string]$ExpectedCode
         $root = Get-StrictFullPath $ExpectedCodeRoot 'Container install root'
         $runtime = Join-Path $root 'runtime\pythonw.exe'
         $entry = Join-Path $root 'app\main.py'
+        $dataRootArgument = ''
+        if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
+            $dataRoot = Get-StrictFullPath $env:CONTAINER_AUDIT_DATA_ROOT 'Container data root'
+            if ($dataRoot.Contains('"')) { return $false }
+            if ($dataRoot -match '\s') { $dataRoot = '"' + $dataRoot + '"' }
+            $dataRootArgument = ' --data-root ' + $dataRoot
+        }
         $commands = @()
         foreach ($runtimeToken in @($runtime, ('"' + $runtime + '"'))) {
             foreach ($entryToken in @($entry, ('"' + $entry + '"'))) {
-                $commands += "$runtimeToken -I -B $entryToken $($Script:UserRelayMode)"
+                $commands += "$runtimeToken -I -B $entryToken $($Script:UserRelayMode)$dataRootArgument"
             }
         }
         $relayPid = $Receipt.relay_start.process_id

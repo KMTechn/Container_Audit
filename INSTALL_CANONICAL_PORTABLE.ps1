@@ -219,9 +219,25 @@ function Arg([string]$Value) {
     return $Value
 }
 function Command([string]$Root) {
-    return ('{0} -I -B {1} --container-audit-user-relay' -f
+    $command = ('{0} -I -B {1} --container-audit-user-relay' -f
         (Arg (Join-Path $Root 'runtime\pythonw.exe')),
         (Arg (Join-Path $Root 'app\main.py')))
+    if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
+        $dataRoot = Full $env:CONTAINER_AUDIT_DATA_ROOT 'data root'
+        $codeRoot = Full $Root 'code root'
+        if (
+            $dataRoot.Equals($codeRoot, 'OrdinalIgnoreCase') -or
+            $dataRoot.StartsWith($codeRoot + '\', 'OrdinalIgnoreCase') -or
+            $codeRoot.StartsWith($dataRoot + '\', 'OrdinalIgnoreCase') -or
+            $dataRoot.Equals('C:\Sync', 'OrdinalIgnoreCase') -or
+            $dataRoot.StartsWith('C:\Sync\', 'OrdinalIgnoreCase')
+        ) { throw 'Custom data root must be outside application code and legacy Syncthing paths.' }
+        if (-not (Test-Path -LiteralPath $dataRoot -PathType Container)) {
+            throw 'Custom data root is unavailable; restore the existing dataset before installation.'
+        }
+        $command += ' --data-root ' + (Arg $dataRoot)
+    }
+    return $command
 }
 function Manifest([string]$Root, [bool]$UnsignedOk) {
     Assert-KmtechPortableTree $Root @(
@@ -1417,13 +1433,19 @@ if ($Uninstall) {
         throw 'Uninstall installed/source identity differs; use the exact installed packet.'
     }
 }
-$statusRoot = Join-Path $lad 'KMTech\DirectSync\container_audit\status'
-$stop = Join-Path $lad 'KMTech\DirectSync\container_audit\control\container_audit_user_relay.stop.json'
+$activeDataRoot = Join-Path $lad 'KMTech\ContainerAudit'
+$activeRelayRoot = Join-Path $lad 'KMTech\DirectSync\container_audit'
+if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
+    $activeDataRoot = Full $env:CONTAINER_AUDIT_DATA_ROOT 'data root'
+    $activeRelayRoot = Join-Path $activeDataRoot 'direct_sync'
+}
+$statusRoot = Join-Path $activeRelayRoot 'status'
+$stop = Join-Path $activeRelayRoot 'control\container_audit_user_relay.stop.json'
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
-$auditRoot = Join-Path $lad 'KMTech\ContainerAudit\install-audit'
+$auditRoot = Join-Path $activeDataRoot 'install-audit'
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
 $canonicalWriterFencePreparedPath = Join-Path $auditRoot "canonical-portable-$runId-writer-prepared.json"
 $elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"

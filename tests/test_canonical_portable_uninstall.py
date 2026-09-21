@@ -124,16 +124,16 @@ else:
                 child.terminate()
                 child.wait(timeout=5)
             raise
-    def relay_launcher(selected_app):
-        result = user_relay.start_user_relay_process(selected_app, launcher=launch)
+    def relay_launcher(selected_app, *, environ=None):
+        result = user_relay.start_user_relay_process(selected_app, environ=environ, launcher=launch)
         result['process_id'] = result.pop('launcher_result')
         return result
     defaults = onboarding.onboard_current_user.__wrapped__.__kwdefaults__
     defaults.update(
         registration_runner=register, profile_loader=_profile_loader,
         credential_loader=_credential_loader,
-        autostart_installer=lambda selected_app: user_relay.install_user_relay_autostart(
-            selected_app, setter=setter, getter=lambda: json.loads(registry.read_text())['data'],
+        autostart_installer=lambda selected_app, **kwargs: user_relay.install_user_relay_autostart(
+            selected_app, **kwargs, setter=setter, getter=lambda: json.loads(registry.read_text())['data'],
         ),
         relay_launcher=relay_launcher,
     )

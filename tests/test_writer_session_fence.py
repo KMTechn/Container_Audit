@@ -470,6 +470,7 @@ def test_product_entrypoint_releases_admission_before_resident_loop(
     from types import SimpleNamespace
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    (tmp_path / "state").mkdir()
     monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "state"))
     mutex = fence.WRITER_MUTEX_NAME + ".resident-test." + hashlib.sha256(
         str(tmp_path).encode()

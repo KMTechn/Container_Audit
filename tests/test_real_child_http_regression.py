@@ -590,6 +590,7 @@ def test_start_user_relay_process_spawns_real_child(
         events = tmp_path / "events"
         _write_csv(events / CSV_NAME)
         data_root = tmp_path / "data-root"
+        data_root.mkdir()
         monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(data_root))
         launched = user_relay.start_user_relay_process(ROOT)
         process_id = int(launched["process_id"])

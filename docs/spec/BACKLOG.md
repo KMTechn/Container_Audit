@@ -12,6 +12,8 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9caautostartroot:** custom 데이터 루트의 HKCU 자동시작·즉시 시작·검증된 교체/설치기 재시작 명령을 같은 루트로 고정하고, custom relay의 루트 소실·접근 오류를 안내 후 중단하도록 수정했다. 기본 명령은 유지한다. [운영 확인·복구](operations.md#ca-custom-root-autostart)를 따른다. 실제 guest 재로그온·오류 대화상자·채택한 데이터셋의 복구/전송 확인은 후속 촬영 레인의 수용 항목이며 이 소스 작업에서 실행하지 않는다.
+
 U07 경고·성공 버튼의 [색 규칙](README.md#ca-button-colors)은 normal/active/pressed의 흰 글자 대비 4.5:1 이상을 적용한다. disabled 관례·문구·위젯·바인딩·상태·저장 계약은 유지한다. 실제 모니터/DPI·앱 배율 0.7/2.5·현장 조명 및 교체 두 쌍/footer 확인은 NOT VERIFIED이며 검증 파도 D7과 독립 대비/범위 검토로 넘긴다.
 
 - **U07 검토 중 fake-Tk timeout 관측 — 미해결, 담당 CA:** `316b560`의 `tests/test_scan_persistence_lane.py:318`에서 대기 10초 초과 1건을 관측했고 동일 소스의 해당 두 사례 재실행은 2 PASS였다. 원인은 미확정이며 [실패 원본](D:/KMTech/program-improvement-20260912/work/Container_Audit/w7ca-display/review-tmp/focused/stdout.txt)·[재실행](D:/KMTech/program-improvement-20260912/work/Container_Audit/w7ca-display/review-tmp/focused-retry/stdout.txt)을 보존한다. 해제 조건은 CA가 원인과 재현 조건을 확인하고 기존 assertion·timeout을 유지한 focused pack 및 해당 두 사례 검증으로 해소 근거를 남기는 것이다. 단순 재실행 PASS만으로 해제하지 않으며 이번 수정은 시험을 변경하지 않는다.

@@ -30,8 +30,9 @@ from tests.test_real_child_http_regression import (
 from tests.test_writer_session_fence import _active_payload, _write_active
 
 
+@pytest.mark.parametrize("root_selection", ["environment", "logon_argument"])
 def test_resident_relay_main_runs_a_real_child_to_completion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, root_selection: str
 ) -> None:
     """The resident relay must not hold writer admission across the spawn.
 
@@ -40,20 +41,23 @@ def test_resident_relay_main_runs_a_real_child_to_completion(
     """
 
     with _loopback_https(tmp_path, monkeypatch) as bundle:
-        events = tmp_path / "events"
+        data_root = tmp_path / "data-root"
+        events = data_root / "events"
         csv_bytes = _write_csv(events / CSV_NAME)
-        direct_sync_root = tmp_path / "direct-sync"
+        direct_sync_root = data_root / "direct_sync"
         _write_child_runtime(direct_sync_root, bundle)
-        monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(tmp_path / "data-root"))
+        root_arguments = []
+        if root_selection == "environment":
+            monkeypatch.setenv("CONTAINER_AUDIT_DATA_ROOT", str(data_root))
+        else:
+            monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
+            root_arguments = ["--data-root", str(data_root)]
 
         exit_code = user_relay.main(
             [
                 "--app-root",
                 str(ROOT),
-                "--direct-sync-root",
-                str(direct_sync_root),
-                "--scan-source-dir",
-                str(events),
+                *root_arguments,
                 "--once",
             ]
         )

@@ -99,12 +99,16 @@ def _record_hosted_relay_failure(arguments: Sequence[str], error: Exception) -> 
                 if getattr(sys, "frozen", False)
                 else Path(__file__).resolve().parent
             )
-            status_path = str(
-                build_container_audit_storage_paths(
-                    application_path=str(app_root)
-                ).status_dir
-                / "container_audit_user_relay.json"
+            storage = build_container_audit_storage_paths(
+                application_path=str(app_root),
+                data_root=_option_value(arguments, "--data-root") or None,
             )
+            if (
+                _option_value(arguments, "--data-root")
+                or os.environ.get("CONTAINER_AUDIT_DATA_ROOT")
+            ) and not storage.data_root.is_dir():
+                return
+            status_path = str(storage.status_dir / "container_audit_user_relay.json")
         except Exception:
             status_path = ""
     if status_path:

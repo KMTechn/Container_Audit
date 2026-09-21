@@ -37,6 +37,7 @@ from user_relay import (
     USER_RELAY_RUN_VALUE,
     USER_RELAY_MODE,
     install_user_relay_autostart,
+    relay_data_root_arguments,
     remove_user_relay_autostart,
     request_user_relay_stop,
     start_user_relay_process,
@@ -791,7 +792,9 @@ def _owner_artifact_fingerprints(
     return fingerprints
 
 
-def _replacement_user_relay_command(app_root: Path) -> list[str]:
+def _replacement_user_relay_command(
+    app_root: Path, *, environ: Mapping[str, str] | None = None,
+) -> list[str]:
     selected = _resolved(app_root)
     pythonw = selected.parent / "runtime" / "pythonw.exe"
     entrypoint = selected / "main.py"
@@ -803,17 +806,22 @@ def _replacement_user_relay_command(app_root: Path) -> list[str]:
         entrypoint,
         "replacement lifecycle canonical relay entrypoint",
     )
-    return [str(pythonw), "-I", "-B", str(entrypoint), USER_RELAY_MODE]
+    return [str(pythonw), "-I", "-B", str(entrypoint), USER_RELAY_MODE,
+            *relay_data_root_arguments(selected, environ=environ)]
 
 
-def _replacement_user_relay_command_line(app_root: Path) -> str:
-    return subprocess.list2cmdline(_replacement_user_relay_command(app_root))
+def _replacement_user_relay_command_line(
+    app_root: Path, *, environ: Mapping[str, str] | None = None,
+) -> str:
+    return subprocess.list2cmdline(_replacement_user_relay_command(app_root, environ=environ))
 
 
 @writer_sink("current_user_lifecycle_restore")
-def _start_replacement_user_relay_process(app_root: Path) -> dict[str, Any]:
+def _start_replacement_user_relay_process(
+    app_root: Path, *, environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     selected = _resolved(app_root)
-    command = _replacement_user_relay_command(selected)
+    command = _replacement_user_relay_command(selected, environ=environ)
     creation_flags = (
         getattr(subprocess, "CREATE_NO_WINDOW", 0)
         | getattr(subprocess, "DETACHED_PROCESS", 0)
@@ -937,12 +945,14 @@ def _inspect_current_process_execution_context() -> dict[str, Any]:
 
 
 @writer_sink("current_user_onboarding_storage")
-def _install_replacement_user_relay_autostart(app_root: Path) -> dict[str, Any]:
+def _install_replacement_user_relay_autostart(
+    app_root: Path, *, environ: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     if os.name != "nt":
         raise ValueError("replacement lifecycle HKCU relay requires Windows")
     import winreg
 
-    command = _replacement_user_relay_command_line(app_root)
+    command = _replacement_user_relay_command_line(app_root, environ=environ)
     with winreg.CreateKeyEx(
         winreg.HKEY_CURRENT_USER,
         USER_RELAY_RUN_KEY,
@@ -1226,12 +1236,8 @@ def onboard_current_user(
     profile_loader: Callable[[Path], Any] = _default_profile_loader,
     credential_loader: Callable[[Path], Any] = load_credentials_from_json,
     ledger_factory: Callable[[Path], None] = _create_ledger,
-    autostart_installer: Callable[
-        [str | os.PathLike[str]], Mapping[str, Any]
-    ] = install_user_relay_autostart,
-    relay_launcher: Callable[
-        [str | os.PathLike[str]], Mapping[str, Any]
-    ] = start_user_relay_process,
+    autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
+    relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
@@ -1349,7 +1355,7 @@ def onboard_current_user(
             raise ValueError("current-user business ledger readback failed")
         stop_path = user_relay_stop_path(paths.direct_sync_root)
         stop_path.unlink(missing_ok=True)
-        report["relay_autostart"] = dict(autostart_installer(paths.app_root))
+        report["relay_autostart"] = dict(autostart_installer(paths.app_root, environ=environ))
         autostart_status = str(report["relay_autostart"].get("status") or "")
         if autostart_status in {"", "UNKNOWN"}:
             raise CurrentUserOnboardingError(
@@ -1359,7 +1365,7 @@ def onboard_current_user(
             )
         if autostart_status != "PASS":
             raise ValueError("current-user relay autostart was not proven")
-        report["relay_start"] = dict(relay_launcher(paths.app_root))
+        report["relay_start"] = dict(relay_launcher(paths.app_root, environ=environ))
         relay_start_status = str(report["relay_start"].get("status") or "")
         if relay_start_status in {"", "UNKNOWN"}:
             raise CurrentUserOnboardingError(
@@ -1498,13 +1504,9 @@ def restore_current_user_lifecycle_after_replacement(
     profile_loader: Callable[[Path], Any] = _default_profile_loader,
     credential_loader: Callable[[Path], Any] = load_credentials_from_json,
     code_identity_reader: Callable[[Path, Path], Mapping[str, Any]] | None = None,
-    autostart_installer: Callable[
-        [str | os.PathLike[str]], Mapping[str, Any]
-    ] = _install_replacement_user_relay_autostart,
+    autostart_installer: Callable[..., Mapping[str, Any]] = _install_replacement_user_relay_autostart,
     autostart_remover: Callable[[], Mapping[str, Any]] = remove_user_relay_autostart,
-    relay_launcher: Callable[
-        [str | os.PathLike[str]], Mapping[str, Any]
-    ] = _start_replacement_user_relay_process,
+    relay_launcher: Callable[..., Mapping[str, Any]] = _start_replacement_user_relay_process,
     relay_stopper: Callable[
         [str | os.PathLike[str]], Mapping[str, Any]
     ] = request_user_relay_stop,
@@ -1782,14 +1784,14 @@ def restore_current_user_lifecycle_after_replacement(
         lifecycle_mutated = True
 
         failure_stage = "RUN_RESTORE"
-        autostart = dict(autostart_installer(paths.app_root))
+        autostart = dict(autostart_installer(paths.app_root, environ=environ))
         expected_autostart = {
             "status": "PASS",
             "principal": "current_user",
             "registry_hive": "HKEY_CURRENT_USER",
             "registry_key": USER_RELAY_RUN_KEY,
             "registry_value": USER_RELAY_RUN_VALUE,
-            "command": _replacement_user_relay_command_line(paths.app_root),
+            "command": _replacement_user_relay_command_line(paths.app_root, environ=environ),
         }
         if autostart != expected_autostart:
             raise ValueError(
@@ -1797,7 +1799,7 @@ def restore_current_user_lifecycle_after_replacement(
             )
 
         failure_stage = "RELAY_START"
-        relay_start = dict(relay_launcher(paths.app_root))
+        relay_start = dict(relay_launcher(paths.app_root, environ=environ))
         if (
             set(relay_start) != {"status", "process_id"}
             or str(relay_start.get("status") or "") != "START_REQUESTED"

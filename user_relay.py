@@ -18,6 +18,7 @@ from direct_sync_auto_bootstrap import run_session_direct_sync_once
 from direct_sync_auto_bootstrap import assert_runtime_state_outside_code_root
 from runtime_instance import acquire_runtime_instance
 from storage_policy import (
+    DATA_ROOT_ENV,
     build_container_audit_storage_paths,
     ensure_container_audit_storage_dirs,
 )
@@ -74,11 +75,26 @@ def user_relay_stop_path(direct_sync_root: str | os.PathLike[str]) -> Path:
     return Path(direct_sync_root).expanduser().resolve() / "control" / USER_RELAY_STOP_NAME
 
 
-def build_user_relay_command(app_root: str | os.PathLike[str]) -> list[str]:
+def relay_data_root_arguments(
+    app_root: str | os.PathLike[str], *, environ: Mapping[str, str] | None = None,
+) -> list[str]:
+    values = os.environ if environ is None else environ
+    if not str(values.get(DATA_ROOT_ENV) or "").strip():
+        return []
+    storage = build_container_audit_storage_paths(
+        application_path=str(app_root), environ=values,
+    )
+    return ["--data-root", str(storage.data_root)]
+
+
+def build_user_relay_command(
+    app_root: str | os.PathLike[str], *, environ: Mapping[str, str] | None = None,
+) -> list[str]:
     root = Path(app_root).expanduser().resolve()
+    root_arguments = relay_data_root_arguments(root, environ=environ)
     application_exe = root / "Container_Audit.exe"
     if application_exe.is_file():
-        return [str(application_exe), USER_RELAY_MODE]
+        return [str(application_exe), USER_RELAY_MODE, *root_arguments]
     portable_entrypoint = root / "main.py"
     if portable_entrypoint.is_file() and not getattr(sys, "frozen", False):
         return [
@@ -87,15 +103,18 @@ def build_user_relay_command(app_root: str | os.PathLike[str]) -> list[str]:
             "-B",
             str(portable_entrypoint),
             USER_RELAY_MODE,
+            *root_arguments,
         ]
     source_entrypoint = root / "Container_Audit.py"
     if source_entrypoint.is_file() and not getattr(sys, "frozen", False):
-        return [sys.executable, str(source_entrypoint), USER_RELAY_MODE]
+        return [sys.executable, str(source_entrypoint), USER_RELAY_MODE, *root_arguments]
     raise UserRelayError("the hardened Container_Audit relay host is unavailable")
 
 
-def user_relay_command_line(app_root: str | os.PathLike[str]) -> str:
-    return subprocess.list2cmdline(build_user_relay_command(app_root))
+def user_relay_command_line(
+    app_root: str | os.PathLike[str], *, environ: Mapping[str, str] | None = None,
+) -> str:
+    return subprocess.list2cmdline(build_user_relay_command(app_root, environ=environ))
 
 
 @writer_sink("persistent_relay_registry")
@@ -155,10 +174,11 @@ def _registry_delete() -> None:
 def install_user_relay_autostart(
     app_root: str | os.PathLike[str],
     *,
+    environ: Mapping[str, str] | None = None,
     setter: Callable[[str], None] | None = None,
     getter: Callable[[], str] | None = None,
 ) -> dict[str, Any]:
-    command_line = user_relay_command_line(app_root)
+    command_line = user_relay_command_line(app_root, environ=environ)
     (setter or _registry_set)(command_line)
     readback = (getter or _registry_get)()
     if readback != command_line:
@@ -195,9 +215,10 @@ def remove_user_relay_autostart(
 def start_user_relay_process(
     app_root: str | os.PathLike[str],
     *,
+    environ: Mapping[str, str] | None = None,
     launcher: Callable[[Sequence[str]], Any] | None = None,
 ) -> dict[str, Any]:
-    command = build_user_relay_command(app_root)
+    command = build_user_relay_command(app_root, environ=environ)
     if launcher is not None:
         launched = launcher(command)
         return {"status": "START_REQUESTED", "launcher_result": launched}
@@ -370,6 +391,7 @@ def request_user_relay_stop(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Container_Audit current-user persistent relay")
     parser.add_argument("--app-root", default="")
+    parser.add_argument("--data-root", default="")
     parser.add_argument("--direct-sync-root", default="")
     parser.add_argument("--scan-source-dir", default="")
     parser.add_argument(
@@ -379,6 +401,20 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--once", action="store_true")
     return parser
+
+
+def _notify_data_root_error() -> None:
+    message = (
+        "지정한 데이터 폴더가 없거나 읽기/쓰기 권한이 없어 자동 전송을 중단했습니다. "
+        "기본 데이터 폴더로 전환하지 않았습니다. 담당자는 기존 데이터 폴더의 "
+        "연결과 권한을 복구한 뒤 같은 데이터 루트로 다시 시작하세요."
+    )
+    if sys.stderr is not None:
+        print("CONTAINER_AUDIT_DATA_ROOT_UNAVAILABLE: " + message, file=sys.stderr)
+    if os.name == "nt":
+        from tkinter import messagebox
+
+        messagebox.showerror("이적 검사 데이터 폴더 오류", message)
 
 
 @writer_sink("persistent_relay_status", probe_only=True)
@@ -392,26 +428,50 @@ def main(argv: list[str] | None = None) -> int:
             else Path(__file__).resolve().parent
         )
     ).expanduser().resolve()
-    storage = build_container_audit_storage_paths(application_path=str(app_root))
-    with writer_admission("persistent_relay_status"):
-        ensure_container_audit_storage_dirs(storage)
-        direct_sync_root = (
-            Path(args.direct_sync_root).expanduser().resolve()
-            if args.direct_sync_root
-            else storage.direct_sync_root
+    custom_root = args.data_root or str(os.environ.get(DATA_ROOT_ENV) or "").strip()
+    try:
+        storage = build_container_audit_storage_paths(
+            application_path=str(app_root), data_root=args.data_root or None,
         )
-        scan_source_dir = (
-            Path(args.scan_source_dir).expanduser().resolve()
-            if args.scan_source_dir
-            else storage.events_dir
-        )
-        assert_runtime_state_outside_code_root(
-            app_root=app_root,
-            direct_sync_root=direct_sync_root,
-            scan_source_dir=scan_source_dir,
-        )
-        direct_sync_root.mkdir(parents=True, exist_ok=True)
-        scan_source_dir.mkdir(parents=True, exist_ok=True)
+    except (OSError, ValueError):
+        if not custom_root:
+            raise
+        _notify_data_root_error()
+        return 1
+    try:
+        with writer_admission("persistent_relay_status"):
+            if custom_root:
+                # A relay resumes an onboarded dataset; it must never recreate
+                # a lost root as an empty dataset during logon.
+                with os.scandir(storage.data_root) as entries:
+                    next(entries, None)
+                probe = storage.data_root / f".relay-access-{uuid.uuid4().hex}.tmp"
+                with probe.open("xb"):
+                    pass
+                probe.unlink()
+            ensure_container_audit_storage_dirs(storage)
+            direct_sync_root = (
+                Path(args.direct_sync_root).expanduser().resolve()
+                if args.direct_sync_root
+                else storage.direct_sync_root
+            )
+            scan_source_dir = (
+                Path(args.scan_source_dir).expanduser().resolve()
+                if args.scan_source_dir
+                else storage.events_dir
+            )
+            assert_runtime_state_outside_code_root(
+                app_root=app_root,
+                direct_sync_root=direct_sync_root,
+                scan_source_dir=scan_source_dir,
+            )
+            direct_sync_root.mkdir(parents=True, exist_ok=True)
+            scan_source_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        if not custom_root:
+            raise
+        _notify_data_root_error()
+        return 1
     stop_path = user_relay_stop_path(direct_sync_root)
     if stop_path.exists():
         return 0

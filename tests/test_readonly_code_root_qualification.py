@@ -267,11 +267,11 @@ def test_runtime_operates_with_code_root_denied_write_and_preserves_inventory(
                 path.parent.mkdir(parents=True, exist_ok=True),
                 path.write_bytes(b"SQLite format 3\x00"),
             ),
-            "autostart_installer": lambda _root: {
+            "autostart_installer": lambda _root, **_kwargs: {
                 "status": "PASS",
                 "principal": "current_user",
             },
-            "relay_launcher": lambda _root: {
+            "relay_launcher": lambda _root, **_kwargs: {
                 "status": "START_REQUESTED",
                 "process_id": 123,
             },

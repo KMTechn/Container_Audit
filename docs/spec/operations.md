@@ -159,6 +159,21 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 
 `storage_policy`는 명시 `data_root` 인자 → `CONTAINER_AUDIT_DATA_ROOT` → 현재 사용자 기본값 순으로 선택한다. 현재 사용자 home은 우선 `LOCALAPPDATA`, 다음 `USERPROFILE/AppData/Local` 등을 확인한다. 상대/볼륨 루트·Syncthing 경로 및 코드와 같거나 포함 관계인 업무 경로는 허용하지 않는다. 기본 business root와 relay root가 분리되어 있으므로 업무 폴더 한 개만 복사한 상태를 전체 백업으로 보지 않는다.
 
+<a id="ca-custom-root-autostart"></a>
+### custom 데이터 루트의 자동시작·재시작
+
+현재 사용자 onboarding은 custom 루트를 정규화해 HKCU `Software\Microsoft\Windows\CurrentVersion\Run`의 `KMTech.ContainerAudit.Relay` 명령 끝에 `--data-root "선택한 절대 경로"`를 저장하고 exact readback한다. 즉시 relay 시작·검증된 교체 복원·설치기 fence 해제 후 재시작도 같은 인자를 사용한다. 다음 로그온에 process/user 환경 변수가 없어도 인자가 우선하며, 토큰·credential·profile 내용은 명령에 넣지 않는다. override가 없는 기본 설치의 명령과 business/relay 분리 경로는 그대로다. 기본 business 경로를 명시 override로 지정한 경우에도 기존 override 의미(`direct_sync` 하위 폴더)를 유지한다.
+
+같은 일반 사용자 PowerShell에서 아래 값을 확인한다. Run 값에 실제 채택한 루트가 있고, 그 루트의 `direct_sync\status\current_user_onboarding.json`의 `data_root` 및 `relay_autostart.command`와 일치해야 한다. 보고 파일은 상태 관측용이며 경로를 자동 선택하는 설정 파일이 아니다.
+
+```powershell
+(Get-ItemProperty -LiteralPath 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run').'KMTech.ContainerAudit.Relay'
+```
+
+GUI 수동 시작·onboarding 재실행·canonical 설치/제거/검증된 복원은 **해당 실행의** `CONTAINER_AUDIT_DATA_ROOT`를 채택한 기존 절대 경로로 설정한 뒤 같은 PowerShell에서 수행한다. GUI가 Run 값에서 경로를 자동 발견하거나 user 환경을 영구 변경하지는 않는다. 기존 루트의 존재·원본 상태를 먼저 확인하며, 새 경로 채택은 빈 폴더를 만들어 오류를 숨기는 복구 방법이 아니다. canonical controller는 활성 환경과 Run 명령이 다르면 기존 exact preimage 검증으로 중단한다. 구버전의 인자 없는 Run에서 전환할 때는 구버전과 일치하는 환경으로 코드 설치를 마친 뒤 기존 환경의 `--remove-current-user-setup`으로 이전 relay/Run을 정상 해제하고(업무·등록 자료 보존), custom 루트로 onboarding을 재실행해 Run readback을 확인한다. 두 루트의 relay를 동시에 실행하지 않는다.
+
+루트 연결 해제·삭제·읽기/쓰기 권한 오류 시 custom relay는 `이적 검사 데이터 폴더 오류`를 알리고 exit 1로 멈춘다. 기본 루트로 되돌아가거나 사라진 custom 루트를 빈 데이터셋으로 생성하지 않는다. 화면에 이전 작업자/보류 내역이 나타나거나 전송이 멈추면 작업을 중단하고 Run·실행 명령·onboarding 경로를 대조한다. 원본 데이터/큐를 보존한 채 드라이브·경로·같은 사용자 권한을 복구하고, 정확한 루트로 GUI/onboarding을 시작해 Run을 갱신한다. 기존 relay를 정상 종료한 뒤 같은 Run 명령 재시작 또는 재로그온으로 root/status를 다시 확인한다. credential·DB를 기본 루트에 복사하거나 재등록으로 우회하지 않는다.
+
 GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼저 읽고 사용자 config의 UI 설정을 덮어쓴다. 사용자 `update_settings`는 제거하여 배포 업데이트 권한/provider 정책을 바꾸지 못하게 한다. frozen에서는 내부 시험 설정도 제거한다. 저장은 사용자 config로 한다. [load_app_settings / save_settings / _drop_release_disabled_settings](../../Container_Audit.py), [기본 템플릿](../../config/container_audit_settings.json).
 
 물류 설정에는 선택 경로가 있다. 메인 앱은 명시 `CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH` 또는 발견한 현재 사용자 profile을 복사한 환경과 사용자 DPAPI decryptor로 전달한다. 사용자 profile이 선택되지 않은 경로는 [logistics_runtime_profile._runtime_environment](../../logistics_runtime_profile.py)의 app-scoped machine profile·Machine 환경 그룹·process fallback 규칙을 따른다. Machine 값 한쪽을 process 값으로 메우지 않는다. profile이 없는 허용 호환 경로에서만 [logistics_transfer_client_from_env](../../transfer_seal.py)의 `WORKER_ANALYSIS_LOGISTICS_*` 설정을 사용한다. TEST1의 엄격한 격리 예외는 일반 운영 설정 우회법이 아니다. 비밀 값이나 DPAPI 내용을 명세·진단 출력에 넣지 않는다.

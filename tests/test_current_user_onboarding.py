@@ -199,11 +199,11 @@ def _ledger_factory(path: Path) -> None:
     path.write_bytes(b"SQLite format 3\x00")
 
 
-def _autostart(_app_root):
+def _autostart(_app_root, **_kwargs):
     return {"status": "PASS", "principal": "current_user"}
 
 
-def _replacement_autostart(app_root):
+def _replacement_autostart(app_root, *, environ=None):
     return {
         "status": "PASS",
         "principal": "current_user",
@@ -211,12 +211,12 @@ def _replacement_autostart(app_root):
         "registry_key": onboarding_module.USER_RELAY_RUN_KEY,
         "registry_value": onboarding_module.USER_RELAY_RUN_VALUE,
         "command": onboarding_module._replacement_user_relay_command_line(
-            Path(app_root)
+            Path(app_root), environ=environ
         ),
     }
 
 
-def _relay_start(_app_root):
+def _relay_start(_app_root, **_kwargs):
     return {"status": "START_REQUESTED", "process_id": 123}
 
 
@@ -423,12 +423,12 @@ def test_replacement_lifecycle_restores_only_bound_actions_and_preserves_owner_s
         profile_loader=_profile_loader,
         credential_loader=_credential_loader,
         code_identity_reader=fixture.identity_reader,
-        autostart_installer=lambda root: calls.append(("autostart", Path(root)))
-        or _replacement_autostart(root),
+        autostart_installer=lambda root, **kwargs: calls.append(("autostart", Path(root)))
+        or _replacement_autostart(root, **kwargs),
         autostart_remover=lambda: (_ for _ in ()).throw(
             AssertionError("success must not run containment")
         ),
-        relay_launcher=lambda root: calls.append(("relay", Path(root)))
+        relay_launcher=lambda root, **kwargs: calls.append(("relay", Path(root)))
         or owned_relay.start(fixture.paths.direct_sync_root, wait_for_running=False),
         relay_stopper=lambda _root: (_ for _ in ()).throw(
             AssertionError("success must not run containment")
@@ -518,8 +518,8 @@ def test_replacement_lifecycle_rejects_protected_report_path_before_mutation(
             writer_contract_sha256=fixture.writer_sha256,
             environ=fixture.environment,
             execution_context_inspector=_limited_execution_context,
-            autostart_installer=lambda _root: actions.append("autostart") or {},
-            relay_launcher=lambda _root: actions.append("relay") or {},
+            autostart_installer=lambda _root, **kwargs: actions.append("autostart") or {},
+            relay_launcher=lambda _root, **kwargs: actions.append("relay") or {},
         )
 
     assert actions == []
@@ -550,8 +550,8 @@ def test_replacement_lifecycle_rejects_existing_report_before_mutation(tmp_path)
             writer_contract_sha256=fixture.writer_sha256,
             environ=fixture.environment,
             execution_context_inspector=_limited_execution_context,
-            autostart_installer=lambda _root: actions.append("autostart") or {},
-            relay_launcher=lambda _root: actions.append("relay") or {},
+            autostart_installer=lambda _root, **kwargs: actions.append("autostart") or {},
+            relay_launcher=lambda _root, **kwargs: actions.append("relay") or {},
         )
 
     assert actions == []
@@ -586,8 +586,8 @@ def test_replacement_lifecycle_rejects_elevated_execution_context_before_mutatio
                 "token_elevated": True,
                 "integrity_level": "HIGH",
             },
-            autostart_installer=lambda _root: actions.append("autostart") or {},
-            relay_launcher=lambda _root: actions.append("relay") or {},
+            autostart_installer=lambda _root, **kwargs: actions.append("autostart") or {},
+            relay_launcher=lambda _root, **kwargs: actions.append("relay") or {},
         )
 
     report = json.loads(caught.value.report_path.read_text(encoding="utf-8"))
@@ -608,7 +608,7 @@ def test_replacement_lifecycle_late_report_collision_is_not_overwritten_and_cont
     owner_before = _owner_bytes(fixture.paths)
     calls = []
 
-    def collide_then_start(root):
+    def collide_then_start(root, **_kwargs):
         calls.append(("relay", Path(root)))
         report_path.write_text("collision-sentinel\n", encoding="utf-8")
         return {"status": "START_REQUESTED", "process_id": 123}
@@ -684,9 +684,9 @@ def test_replacement_lifecycle_requires_exact_ready_before_mutation(
             execution_context_inspector=_limited_execution_context,
             state_inspector=lambda *_args, **_kwargs: {"status": state_status},
             code_identity_reader=fixture.identity_reader,
-            autostart_installer=lambda _root: actions.append("autostart")
+            autostart_installer=lambda _root, **kwargs: actions.append("autostart")
             or {"status": "PASS"},
-            relay_launcher=lambda _root: actions.append("relay")
+            relay_launcher=lambda _root, **kwargs: actions.append("relay")
             or {"status": "START_REQUESTED"},
         )
 
@@ -748,9 +748,9 @@ def test_replacement_lifecycle_rejects_inexact_transaction_or_code_before_mutati
             profile_loader=_profile_loader,
             credential_loader=_credential_loader,
             code_identity_reader=identity_reader,
-            autostart_installer=lambda _root: actions.append("autostart")
+            autostart_installer=lambda _root, **kwargs: actions.append("autostart")
             or {"status": "PASS"},
-            relay_launcher=lambda _root: actions.append("relay")
+            relay_launcher=lambda _root, **kwargs: actions.append("relay")
             or {"status": "START_REQUESTED"},
         )
 
@@ -772,7 +772,7 @@ def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path
         calls.append(("stop", Path(root)))
         return owned_relay.stop(root)
 
-    def launch_then_fail(_root):
+    def launch_then_fail(_root, **_kwargs):
         owned_relay.start(fixture.paths.direct_sync_root, wait_for_running=False)
         assert owned_relay.children[0][1].poll() is None
         raise RuntimeError('launch result lost after the real child started')
@@ -795,8 +795,8 @@ def test_replacement_lifecycle_action_failure_is_contained_and_reported(tmp_path
             profile_loader=_profile_loader,
             credential_loader=_credential_loader,
             code_identity_reader=fixture.identity_reader,
-            autostart_installer=lambda root: calls.append(("autostart", Path(root)))
-            or _replacement_autostart(root),
+            autostart_installer=lambda root, **kwargs: calls.append(("autostart", Path(root)))
+            or _replacement_autostart(root, **kwargs),
             autostart_remover=lambda: calls.append(("remove", None))
             or {"status": "ABSENT"},
             relay_launcher=launch_then_fail,
