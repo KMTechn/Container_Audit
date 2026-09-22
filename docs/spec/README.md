@@ -269,6 +269,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 
 - **시작·입력:** 소스/패키지 진입 후 등록된 작업자 이름 또는 보호 관리자 로그인. `main`의 계약 확인·단일 인스턴스·onboarding 준비와 `start_work`가 경계다. [Container_Audit.py](../../Container_Audit.py), [runtime_instance.py](../../runtime_instance.py)
 - **검증·저장·결과:** 이름 등록과 보호 관리자 인증을 구분하고 사용자 상태 경로를 준비한다. 복구 대상이 있으면 현재 트레이 복구 흐름으로 진입한다. 작업자 선택만으로 서버 권한을 만들지 않는다. [worker_registry](../../worker_registry.py), [current_user_onboarding](../../current_user_onboarding.py)
+- **금일 작업 현황:** 로그 행·파일 또는 저장 폴더 읽기에 오류가 있으면 읽은 자료는 유지하고 `작업 현황 확인 필요` 경고창에 오류 건수·수량 누락 가능성·관리자 확인 요청을 표시한다. 확인 후 작업 시작을 계속하며 성공 문구는 표시하지 않는다. 정상 빈 표와 오류 없는 기존 성공 문구는 유지한다. [안내·대응](operations.md#ca-history-load-warning)
 - **실패·취소·재시작:** 중복 실행, 부분 onboarding, 읽기 불가능한 보호 상태는 오류를 보존해 진입을 중단한다. 임의 초기화 대신 동일 사용자·원본 상태의 복구 가능성을 확인한다.
 - **수용 기준:** 정상 사용자로 준비된 상태를 재사용하고, 불완전 준비·중복 실행을 성공 화면으로 넘기지 않으며, 재시작 후 작업자와 트레이 소유권을 잘못 연결하지 않는다.
 - **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [운영 진입](operations.md#ca-o01), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). [CA-O09](operations.md#ca-o09)는 frozen source68dd의 실제 ordinary 사용자 시작·작업자 등록·QA 보호 관리자 인증 및 WORKER로 복귀를 증명한다. 다른 설치본/사용자 환경에 자동 승계하지 않는다.

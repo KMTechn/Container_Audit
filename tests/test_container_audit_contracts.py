@@ -3666,7 +3666,127 @@ def test_app_load_session_state_applies_session_history(tmp_path):
     assert app.total_tray_count == 1
     assert app.work_summary["AAA2270730100"]["count"] == 1
     assert app._is_completed_master_label("QT=60|CLC=AAA2270730100|PHS=1") is True
-    assert app.status_messages
+    assert app.status_messages == [
+        (("금일 작업 현황을 불러왔습니다. (총 1 파렛트)", "primary"), {})
+    ]
+
+
+@pytest.mark.parametrize("valid_count", [0, 1])
+@pytest.mark.parametrize("error_kind", ["json", "invalid_count", "file_access"])
+def test_app_load_session_state_warns_and_keeps_readable_records(
+    tmp_path, monkeypatch, capsys, valid_count, error_kind,
+):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.save_folder = str(tmp_path)
+    app.root = object()
+    app.status_messages = []
+    app.show_status_message = lambda *args, **kwargs: app.status_messages.append((args, kwargs))
+    warnings = []
+    monkeypatch.setattr(
+        container_audit_module.messagebox, "showwarning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+    today = datetime.date.today()
+    bad_path = tmp_path / f"이적작업이벤트로그_홍길동_{today:%Y%m%d}.csv"
+    _write_session_history_row(
+        bad_path,
+        timestamp=datetime.datetime.combine(today, datetime.time(8)),
+        master_label="PHS=1|CLC=BAD2270730100|QT=60",
+        item_code="BAD2270730100",
+        scan_count=-1,
+    )
+    if error_kind == "json":
+        with bad_path.open("w", newline="", encoding="utf-8-sig") as stream:
+            writer = csv.writer(stream)
+            writer.writerow(["timestamp", "worker_name", "event", "details"])
+            writer.writerow([today.isoformat(), "홍길동", "TRAY_COMPLETE", "{broken"])
+    elif error_kind == "file_access":
+        yesterday = today - datetime.timedelta(days=1)
+        bad_path = bad_path.rename(
+            tmp_path / f"이적작업이벤트로그_홍길동_{yesterday:%Y%m%d}.csv"
+        )
+        original_open = Path.open
+
+        def unreadable(path, *args, **kwargs):
+            if path == bad_path:
+                raise PermissionError("internal read diagnostic")
+            return original_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", unreadable)
+    if valid_count:
+        _write_session_history_row(
+            tmp_path / f"이적작업이벤트로그_홍길동_{today:%Y%m%d}.csv",
+            timestamp=datetime.datetime.combine(today, datetime.time(9)),
+            master_label="PHS=1|CLC=AAA2270730100|QT=60",
+            item_code="AAA2270730100",
+        )
+
+    app._load_session_state()
+
+    assert app.total_tray_count == valid_count
+    assert len(app.work_summary) == valid_count
+    assert app.completed_tray_times == ([360.0] if valid_count else [])
+    if valid_count:
+        assert app.work_summary["AAA2270730100"]["count"] == 1
+        assert app._is_completed_master_label("QT=60|CLC=AAA2270730100|PHS=1")
+    assert not app._is_completed_master_label("QT=60|CLC=BAD2270730100|PHS=1")
+    assert app.status_messages == [], "읽기 오류에 성공 문구를 표시하면 안 됩니다."
+    assert warnings == [(
+        ("작업 현황 확인 필요",
+         "금일 작업 현황을 모두 확인하지 못했습니다.\n"
+         "작업 기록 읽기 오류: 1건\n"
+         "표시된 수량에 누락이 있을 수 있습니다.\n"
+         "관리자에게 작업 기록 확인을 요청해 주세요."),
+        {"parent": app.root},
+    )]
+    assert str(bad_path) in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("folder_state", ["empty", "missing", "unreadable"])
+def test_app_load_session_state_distinguishes_empty_from_folder_error(
+    tmp_path, monkeypatch, capsys, folder_state,
+):
+    app = _headless_app()
+    app.worker_name = "홍길동"
+    app.root = object()
+    folder = tmp_path / "events"
+    if folder_state != "missing":
+        folder.mkdir()
+    if folder_state == "unreadable":
+        original_iterdir = Path.iterdir
+
+        def unreadable(path):
+            if path == folder:
+                raise PermissionError("internal directory diagnostic")
+            return original_iterdir(path)
+
+        monkeypatch.setattr(Path, "iterdir", unreadable)
+    app.save_folder = str(folder)
+    app.status_messages = []
+    app.show_status_message = lambda *args, **kwargs: app.status_messages.append((args, kwargs))
+    warnings = []
+    monkeypatch.setattr(
+        container_audit_module.messagebox, "showwarning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+
+    app._load_session_state()
+
+    assert app.total_tray_count == 0
+    assert app.work_summary == {}
+    assert app.completed_master_labels == set()
+    assert app.completed_tray_times == []
+    assert app.status_messages == []
+    if folder_state == "empty":
+        assert warnings == []
+        assert capsys.readouterr().out == ""
+    else:
+        assert len(warnings) == 1
+        assert "작업 기록 읽기 오류: 1건" in warnings[0][0][1]
+        assert str(folder) not in warnings[0][0][1]
+        assert "internal" not in warnings[0][0][1]
+        assert str(folder) in capsys.readouterr().out
 
 
 def test_item_catalog_finds_exact_code_and_code_inside_product_barcode():

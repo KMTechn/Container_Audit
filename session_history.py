@@ -251,8 +251,8 @@ def load_session_history(
                     and matched_worker == sanitized_name
                 )
                 all_log_files.append((path, include_for_summary))
-    except FileNotFoundError:
-        return history
+    except OSError as exc:
+        history.load_errors.append(f"로그 폴더 '{save_folder}' 읽기 중 오류: {exc}")
 
     completed_sessions: List[Dict[str, Any]] = []
     seen_current_worker_completion_identities: Set[str] = set()

@@ -12,6 +12,8 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9caloaderr:** 금일 작업 현황의 읽기 오류를 오류 건수·수량 누락 가능성·관리자 확인 요청 경고로 표시한다. 정상 자료와 정상 0건/성공 문구는 유지하며 폴더 읽기 오류도 구별한다. [RED/GREEN·회귀 근거](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caloaderr/RESULT.md)를 따른다. 실제 GUI 가독성·guest 적용·촬영은 증거 없음이다.
+
 - **w9caretire:** 관리 패키지의 `CompleteRetiredRemoval`이 exact old helper를 호출하여
   기본 루트의 은퇴 marker/receipt·업무·identity를 보존하고 old 코드를 제거한다.
   원 기록에 결속된 중단 재개는 원 owner/authority 종료 후 새 authority를 요구한다.

@@ -2744,7 +2744,16 @@ class ContainerAudit:
         self.tray_last_end_time = None
         for error in history.load_errors:
             print(error)
-        if any(self.work_summary):
+        if history.load_errors:
+            messagebox.showwarning(
+                "작업 현황 확인 필요",
+                "금일 작업 현황을 모두 확인하지 못했습니다.\n"
+                f"작업 기록 읽기 오류: {len(history.load_errors)}건\n"
+                "표시된 수량에 누락이 있을 수 있습니다.\n"
+                "관리자에게 작업 기록 확인을 요청해 주세요.",
+                parent=self.root,
+            )
+        elif any(self.work_summary):
             self.show_status_message(f"금일 작업 현황을 불러왔습니다. (총 {self.total_tray_count} 파렛트)", self.COLOR_PRIMARY)
 
     def _save_current_tray_state(self) -> bool:

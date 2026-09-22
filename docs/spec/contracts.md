@@ -54,6 +54,12 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 ## 3. 완료 상태와 관측 지점
 
+작업 시작 시 금일 집계는 `session_history.load_session_history`에서 읽은 로컬 기록이다.
+읽지 못한 행·파일은 건너뛰고 정상 자료를 유지하며, 폴더 소실·목록 읽기 오류도
+`load_errors`에 기록한다. 오류가 있으면 집계가 0건이어도 GUI 경고로 구별하며
+완전한 조회 성공으로 표시하지 않는다. 상세 경로·원인은 기존 진단 출력에만 남긴다.
+오류 건수는 읽기/처리 오류 수이며 누락 트레이 수나 중앙 ACK 수가 아니다.
+
 | 관측 지점 | 완료로 확인할 조건 | 그 조건만으로 알 수 없는 것 |
 |---|---|---|
 | 로컬 입력 보존 | current/hold/parked snapshot 또는 해당 내구 기록 성공 | 중앙 membership·seal 승인 |
