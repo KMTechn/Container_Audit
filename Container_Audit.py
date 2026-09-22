@@ -1615,37 +1615,6 @@ class ContainerAudit:
             or getattr(self, "_authenticated_protected_admin", False)
         )
 
-    def _authorize_blocked_work_supervisor(self) -> bool:
-        if self._is_preflight_hold_supervisor():
-            return True
-        code = simpledialog.askstring(
-            "관리자 확인", "보류 작업을 처리할 관리자 코드를 입력하세요.",
-            parent=getattr(self, "root", None), show="●",
-        )
-        try:
-            authorized = bool(code and is_protected_admin_code(code))
-        except Exception:
-            authorized = False
-        if not authorized:
-            messagebox.showwarning(
-                "관리자 인증 필요",
-                "관리자 인증을 확인하지 못했습니다. 원래 작업과 기록은 유지합니다.",
-                parent=getattr(self, "root", None),
-            )
-        return authorized
-
-    def _quarantine_preflight_hold_from_operations(self) -> bool:
-        if not self._authorize_blocked_work_supervisor():
-            return False
-        previous = bool(getattr(self, "_authenticated_protected_admin", False))
-        self._authenticated_protected_admin = True
-        try:
-            return self._quarantine_preflight_hold_for_supervisor(
-                reason="supervisor_new_work_required",
-            )
-        finally:
-            self._authenticated_protected_admin = previous
-
     def _is_preflight_hold_quarantine_path(self, filepath: str) -> bool:
         try:
             quarantine_root = self._preflight_hold_quarantine_directory().resolve()
@@ -6804,6 +6773,37 @@ class ContainerAudit:
                 menu.grab_release()
             except tk.TclError:
                 pass
+
+    def _authorize_blocked_work_supervisor(self) -> bool:
+        if self._is_preflight_hold_supervisor():
+            return True
+        code = simpledialog.askstring(
+            "관리자 확인", "보류 작업을 처리할 관리자 코드를 입력하세요.",
+            parent=getattr(self, "root", None), show="●",
+        )
+        try:
+            authorized = bool(code and is_protected_admin_code(code))
+        except Exception:
+            authorized = False
+        if not authorized:
+            messagebox.showwarning(
+                "관리자 인증 필요",
+                "관리자 인증을 확인하지 못했습니다. 원래 작업과 기록은 유지합니다.",
+                parent=getattr(self, "root", None),
+            )
+        return authorized
+
+    def _quarantine_preflight_hold_from_operations(self) -> bool:
+        if not self._authorize_blocked_work_supervisor():
+            return False
+        previous = bool(getattr(self, "_authenticated_protected_admin", False))
+        self._authenticated_protected_admin = True
+        try:
+            return self._quarantine_preflight_hold_for_supervisor(
+                reason="supervisor_new_work_required",
+            )
+        finally:
+            self._authenticated_protected_admin = previous
 
     def _show_blocked_work_handoff(self) -> None:
         tray = getattr(self, "current_tray", None)
