@@ -1,5 +1,10 @@
 # Container_Audit 기술 명세
 
+기본 루트 제거 후 custom 루트를 채택한 설치의 은퇴 마감은
+[`CompleteRetiredRemoval`](operations.md#ca-retired-removal)을 사용한다.
+검증한 관리 패키지와 exact old 패키지를 구별하며 은퇴 marker·업무·신원은 보존한다.
+소스·격리 시험 범위이고 실제 guest 적용은 미검증이다.
+
 이 문서는 **원본 PHS2의 중앙 GOOD 구성원을 전량 확인하고 이적 결과를 내구 저장하는 Windows 작업자 앱**의 소스 기준선이다. 로컬 완료, 중앙 물류 확정, 분석 전송, 화면 반영을 각각 추적한다. 기능 변경 시 함께 갱신할 규칙은 [AGENTS.md](../../AGENTS.md)에 있다.
 
 [계약·데이터](contracts.md) · [운영·복구](operations.md) · [남은 작업](BACKLOG.md) · [전체 허브](../../../Program_Spec_Hub/README.md) · [통합 관계](../../../Program_Spec_Hub/INTEGRATIONS.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)

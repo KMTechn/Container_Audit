@@ -6,6 +6,12 @@ param(
     [string]$ServerBaseUrl = "",
     [switch]$PlanOnly,
     [switch]$Uninstall,
+    [switch]$CompleteRetiredRemoval,
+    [string]$OldSourceRoot = "",
+    [string]$RetiredRemovalReceiptSha256 = "",
+    [string]$RetiredStopMarkerSha256 = "",
+    [string]$ResumeRetirementReceiptPath = "",
+    [string]$ResumeRetirementReceiptSha256 = "",
     [switch]$RestoreVerifiedReplacement,
     [string]$RestoreReceiptPath = "",
     [string]$RestoreReceiptSha256 = "",
@@ -439,7 +445,14 @@ function Restore($Before) {
 function Save([string]$Path, $Value) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temp = "$Path.tmp.$PID"
-    [IO.File]::WriteAllText($temp,($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine,(New-Object Text.UTF8Encoding($false)))
+    $json = ($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine
+    if (Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) {
+        $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
+        $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+        try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) }
+        finally { $stream.Dispose() }
+    }
+    else { [IO.File]::WriteAllText($temp,$json,(New-Object Text.UTF8Encoding($false))) }
     Move-Item $temp $Path -Force
 }
 function New-CanonicalWriterFencePreparedReceipt(
@@ -726,6 +739,226 @@ function Product([string]$Root,[string]$Mode) {
     # Start-Process -Wait includes the persistent relay child; this waits only for the host.
     $process.WaitForExit()
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
+}
+function Read-CanonicalRetiredRemoval {
+    # These are observations, never authority. The caller still acquires the
+    # live all-writer fence and the exact old helper rechecks code/quiescence.
+    $retiredData = Join-Path $lad 'KMTech\ContainerAudit'
+    $retiredRelay = Join-Path $lad 'KMTech\DirectSync\container_audit'
+    if ([string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT) -or
+        (Same $activeDataRoot $retiredData) -or
+        (Same $activeRelayRoot $retiredRelay)) {
+        throw 'RETIREMENT_DISTINCT_ADOPTED_ROOT_REQUIRED'
+    }
+    foreach ($root in @($retiredData, $retiredRelay, $activeDataRoot)) {
+        Assert-ContainerWriterFenceNoReparse $root
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+            throw 'RETIREMENT_EXISTING_ROOT_REQUIRED'
+        }
+    }
+    foreach ($retired in @($retiredData, $retiredRelay)) {
+        if ($activeDataRoot.StartsWith($retired + '\', [StringComparison]::OrdinalIgnoreCase) -or
+            $retired.StartsWith($activeDataRoot + '\', [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'RETIREMENT_ROOTS_OVERLAP'
+        }
+    }
+    foreach ($data in @($retiredData, $retiredRelay, $activeDataRoot)) {
+        foreach ($code in @($source, $lifecycleSource, $install)) {
+            if ((Same $data $code) -or $data.StartsWith($code + '\', [StringComparison]::OrdinalIgnoreCase) -or
+                $code.StartsWith($data + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'RETIREMENT_SOURCE_DATA_OVERLAP'
+            }
+        }
+    }
+    foreach ($path in @($activeRelayRoot, (Join-Path $activeRelayRoot 'status'),
+        (Join-Path $activeRelayRoot 'control'), (Join-Path $activeDataRoot 'install-audit'))) {
+        Assert-ContainerWriterFenceNoReparse $path
+    }
+    if ($EvidencePath) {
+        $output = Full $EvidencePath 'EvidencePath'
+        Assert-ContainerWriterFenceNoReparse $output
+        foreach ($protected in @($retiredData, $retiredRelay, $activeDataRoot, $source, $lifecycleSource, $install)) {
+            if ((Same $output $protected) -or $output.StartsWith($protected + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'RETIREMENT_EVIDENCE_OVERLAPS_PRESERVED_INPUT'
+            }
+        }
+    }
+    $receiptPath = Join-Path $retiredRelay 'status\current_user_removal.json'
+    $markerPath = Join-Path $retiredRelay 'control\container_audit_user_relay.stop.json'
+    if ((Get-ContainerWriterFenceFileSha256 $receiptPath 65536) -cne $RetiredRemovalReceiptSha256 -or
+        (Get-ContainerWriterFenceFileSha256 $markerPath 4096) -cne $RetiredStopMarkerSha256) {
+        throw 'RETIREMENT_OBSERVATION_HASH_MISMATCH'
+    }
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $marker = Get-Content -LiteralPath $markerPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not (Test-ExactPropertySet $marker @('schema_version','request_id','requested_at')) -or
+        [string]$marker.schema_version -cne 'container-audit-user-relay-stop-v1' -or
+        [string]$marker.request_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$receipt.status -cne 'PASS_DATA_PRESERVED' -or
+        [string]$receipt.state_scope -cne 'current_user' -or
+        -not (Test-JsonTrue $receipt.data_preserved) -or
+        [string]$receipt.relay_autostart.status -cne 'ABSENT' -or
+        [string]$receipt.relay_process.status -cne 'ABSENT' -or
+        [string]$receipt.relay_process.request_id -cne [string]$marker.request_id -or
+        -not (Same ([string]$receipt.relay_process.stop_request_path) $markerPath) -or
+        -not (Same ([string]$receipt.machine_code_root) (Join-Path $install 'app')) -or
+        @($receipt.preserved_paths).Count -ne 3 -or
+        -not (Same ([string]$receipt.preserved_paths[0]) $retiredData) -or
+        -not (Same ([string]$receipt.preserved_paths[1]) $retiredRelay)) {
+        throw 'RETIREMENT_REQUEST_BINDING_MISMATCH'
+    }
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$marker.requested_at))
+    if ((Get-ContainerWriterFenceFileSha256 $receiptPath 65536) -cne $RetiredRemovalReceiptSha256 -or
+        (Get-ContainerWriterFenceFileSha256 $markerPath 4096) -cne $RetiredStopMarkerSha256) {
+        throw 'RETIREMENT_OBSERVATION_CHANGED_DURING_READBACK'
+    }
+    return [ordered]@{
+        status='BOUND_OBSERVATION_NOT_QUIESCENCE'
+        current_user_sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+        retired_data_root=$retiredData
+        retired_relay_root=$retiredRelay
+        adopted_data_root=$activeDataRoot
+        removal_receipt_path=$receiptPath
+        removal_receipt_sha256=$RetiredRemovalReceiptSha256
+        stop_marker_path=$markerPath
+        stop_marker_sha256=$RetiredStopMarkerSha256
+        request_id=[string]$marker.request_id
+        old_source_root=$lifecycleSource
+        old_manifest_sha256=$lifecycleManifestSha256
+        old_aggregate_sha256=$uninstallAggregate
+        stop_marker_preserved=$true
+    }
+}
+function Assert-RetirementOwnerExited($Retirement) {
+    if (-not (Test-JsonPositiveInt32 $Retirement.owner_process_id)) {
+        throw 'RETIREMENT_OWNER_IDENTITY_INVALID'
+    }
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$Retirement.owner_started_at_utc))
+    $owners = @(Get-Process -ErrorAction Stop | Where-Object { $_.Id -eq [int]$Retirement.owner_process_id })
+    foreach ($owner in $owners) {
+        if ($owner.StartTime.ToUniversalTime().ToString('o') -ceq [string]$Retirement.owner_started_at_utc) {
+            throw 'RETIREMENT_ORIGINAL_OWNER_STILL_LIVE'
+        }
+        throw 'RETIREMENT_ORIGINAL_PID_REUSED'
+    }
+    # Process exit is observed independently of mutex absence. An inaccessible
+    # or live authority is not permission to take over its journal.
+    $mutex = $null
+    try {
+        try { $mutex = [Threading.Mutex]::OpenExisting([string]$Retirement.authority_mutex_name) }
+        catch [Threading.WaitHandleCannotBeOpenedException] { return }
+        try { $acquired = $mutex.WaitOne(0) }
+        catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'RETIREMENT_ORIGINAL_AUTHORITY_STILL_LIVE' }
+        $mutex.ReleaseMutex()
+    }
+    finally { if ($null -ne $mutex) { $mutex.Dispose() } }
+}
+function Enter-RetirementResumeClaim($Prior) {
+    $identity = (Get-ContainerWriterFenceControlRoot).ToLowerInvariant() + '|' + [string]$Prior.code_replacement.transaction_id
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    try { $digest = ([BitConverter]::ToString($algorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity)))).Replace('-', '').ToLowerInvariant() }
+    finally { $algorithm.Dispose() }
+    $created = $false
+    $mutex = New-Object Threading.Mutex($true, ('Local\KMTech.ContainerAudit.RetirementResume.' + $digest), [ref]$created)
+    if (-not $created) {
+        $mutex.Dispose()
+        throw 'RETIREMENT_RESUME_AUTHORITY_ALREADY_EXISTS'
+    }
+    return $mutex
+}
+function Exit-RetirementResumeClaim($Claim) {
+    if ($null -ne $Claim) {
+        try { $Claim.ReleaseMutex() }
+        finally { $Claim.Dispose() }
+    }
+}
+function Assert-RetirementWriterQuiescence {
+    # A stop marker covers the persistent relay only. Include GUI, hosted
+    # children, and tools launched from either admitted packet or the install.
+    foreach ($process in @(Get-CimInstance Win32_Process -ErrorAction Stop)) {
+        if ([int]$process.ProcessId -eq $PID) { continue }
+        $executable = [string]$process.ExecutablePath
+        if ([IO.Path]::GetFileName($executable) -notmatch '^(?i:python(?:w|[0-9.]*)?|py|Container_Audit)\.exe$') { continue }
+        $command = ([string]$process.CommandLine).Replace('/', '\')
+        $bound = $false
+        foreach ($root in @($source, $lifecycleSource, $install)) {
+            $prefix = $root.TrimEnd('\') + '\'
+            if ($executable.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) -or
+                $command.IndexOf($prefix, [StringComparison]::OrdinalIgnoreCase) -ge 0) { $bound = $true }
+        }
+        foreach ($data in @($activeDataRoot, (Join-Path $lad 'KMTech\ContainerAudit'),
+            (Join-Path $lad 'KMTech\DirectSync\container_audit'))) {
+            if ($command -match ('(?i)(?:^|\s|")' + [regex]::Escape($data) + '(?:[\\"]|\s|$)')) { $bound = $true }
+        }
+        if ($bound) { throw 'RETIREMENT_CODE_WRITER_STILL_ACTIVE' }
+    }
+}
+function Read-CanonicalRetirementResume {
+    $path = Full $ResumeRetirementReceiptPath 'retirement resume receipt'
+    if ((Get-ContainerWriterFenceFileSha256 $path 65536) -cne $ResumeRetirementReceiptSha256) {
+        throw 'RETIREMENT_RESUME_RECEIPT_HASH_MISMATCH'
+    }
+    $prior = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $r = $prior.retirement
+    $expectedData = Full $env:CONTAINER_AUDIT_DATA_ROOT 'adopted data root'
+    $expectedAudit = Join-Path (Join-Path $expectedData 'install-audit') ('canonical-portable-' + [string]$prior.run_id + '.json')
+    if ([string]$prior.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$prior.operation -cne 'COMPLETE_RETIRED_REMOVAL' -or
+        [string]$prior.status -cnotin @('PREIMAGE_SAVED','UNINSTALL_RUNTIME_QUIESCED','UNINSTALL_AWAITING_FENCE_RELEASE','PASS_RETIRED_REMOVAL_DATA_PRESERVED') -or
+        [string]$prior.run_id -cnotmatch '^\d{8}T\d{9}Z-[0-9a-f]{32}$' -or
+        -not (Same $path $expectedAudit) -or
+        -not (Same ([string]$prior.install_root) $install) -or
+        [string]$prior.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$r.current_user_sid -cne [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -or
+        -not (Same ([string]$r.adopted_data_root) $expectedData) -or
+        -not (Same ([string]$r.old_source_root) $lifecycleSource) -or
+        [string]$r.old_manifest_sha256 -cne $lifecycleManifestSha256 -or
+        [string]$r.old_aggregate_sha256 -cne (Get-InventoryAggregate @(Get-CodeInventory $lifecycleSource)) -or
+        [string]$r.removal_receipt_sha256 -cne $RetiredRemovalReceiptSha256 -or
+        [string]$r.stop_marker_sha256 -cne $RetiredStopMarkerSha256 -or
+        [string]$r.orchestrator_sha256 -cne (Sha $PSCommandPath) -or
+        [string]$r.session_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$r.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$prior.code_replacement.transaction_id -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'RETIREMENT_RESUME_BINDING_MISMATCH'
+    }
+    $expectedAuthority = Get-ContainerWriterSessionAuthorityMutexName `
+        ([string]$r.session_id) ([string]$r.attempt_id) ([string]$r.orchestrator_sha256) `
+        ([string]$prior.code_replacement.transaction_id) ([string]$lifecycleManifest.writer_session_contract_sha256)
+    if ([string]$r.authority_mutex_name -cne $expectedAuthority) { throw 'RETIREMENT_RESUME_AUTHORITY_BINDING_MISMATCH' }
+    Assert-RetirementOwnerExited $r
+    $preparedPath = Join-Path (Split-Path -Parent $path) ('canonical-portable-' + [string]$prior.run_id + '-writer-prepared.json')
+    if (-not (Same ([string]$r.prepared_receipt_path) $preparedPath) -or
+        (Get-ContainerWriterFenceFileSha256 $preparedPath 65536) -cne [string]$r.prepared_receipt_sha256) {
+        throw 'RETIREMENT_RESUME_PREPARED_RECEIPT_MISMATCH'
+    }
+    $prepared = Get-Content -LiteralPath $preparedPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$prepared.session_id -cne [string]$r.session_id -or
+        [string]$prepared.attempt_id -cne [string]$r.attempt_id -or
+        [string]$prepared.replacement_transaction_id -cne [string]$prior.code_replacement.transaction_id -or
+        [string]$prepared.orchestrator_sha256 -cne [string]$r.orchestrator_sha256 -or
+        [string]$prepared.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$prepared.writer_contract_sha256 -cne [string]$lifecycleManifest.writer_session_contract_sha256) {
+        throw 'RETIREMENT_RESUME_PREPARED_OWNER_MISMATCH'
+    }
+    if ([string]$prior.status -ceq 'PREIMAGE_SAVED') {
+        if ((Get-ContainerWriterFenceFileSha256 (Join-Path $install 'bootstrap-integrity.json')) -cne [string]$r.old_record_sha256) {
+            throw 'RETIREMENT_RESUME_CODE_PREIMAGE_MISMATCH'
+        }
+    }
+    else {
+        $recordPath = Join-Path (Split-Path -Parent $path) ('canonical-portable-' + [string]$prior.run_id + '-integrity-preimage.json')
+        if (-not (Same ([string]$prior.code_integrity_preimage_path) $recordPath) -or
+            (Get-ContainerWriterFenceFileSha256 $recordPath) -cne [string]$prior.code_integrity_preimage_sha256 -or
+            [string]$prior.code_integrity_preimage_sha256 -cne [string]$r.old_record_sha256) {
+            throw 'RETIREMENT_RESUME_CODE_PREIMAGE_MISMATCH'
+        }
+    }
+    if ((Get-ContainerWriterFenceFileSha256 $path 65536) -cne $ResumeRetirementReceiptSha256) {
+        throw 'RETIREMENT_RESUME_RECEIPT_CHANGED'
+    }
+    return $prior
 }
 function StartRaw([string]$Line) {
     $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$Line}
@@ -1341,6 +1574,22 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
 }
 
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
+if ($CompleteRetiredRemoval) {
+    if ($Uninstall -or $RestoreVerifiedReplacement -or $ServerBaseUrl -or -not $OldSourceRoot -or
+        $RetiredRemovalReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
+        $RetiredStopMarkerSha256 -cnotmatch '^[0-9a-f]{64}$') {
+        throw 'RETIREMENT_EXACT_OLD_SOURCE_AND_OBSERVATION_PINS_REQUIRED'
+    }
+    $Uninstall = $true
+    if (($ResumeRetirementReceiptPath -and $ResumeRetirementReceiptSha256 -cnotmatch '^[0-9a-f]{64}$') -or
+        ($ResumeRetirementReceiptSha256 -and -not $ResumeRetirementReceiptPath)) {
+        throw 'RETIREMENT_RESUME_EXACT_RECEIPT_REQUIRED'
+    }
+}
+elseif ($OldSourceRoot -or $RetiredRemovalReceiptSha256 -or $RetiredStopMarkerSha256 -or
+    $ResumeRetirementReceiptPath -or $ResumeRetirementReceiptSha256) {
+    throw 'RETIREMENT_ARGUMENTS_REQUIRE_COMPLETE_RETIRED_REMOVAL'
+}
 if ($RestoreVerifiedReplacement) {
     if ($Uninstall -or $ServerBaseUrl -or -not $RestoreReceiptPath -or
         $RestoreReceiptSha256 -cnotmatch '^[0-9a-f]{64}$') {
@@ -1361,7 +1610,26 @@ $sourceWriterInventory = Assert-WriterSinkInventory `
     (Join-Path $source 'tools\container_writer_sink_inventory.json') `
     ([string]$sourceManifest.writer_sink_inventory_sha256).ToLowerInvariant() `
     ([string]$sourceManifest.writer_sink_inventory_contract_sha256).ToLowerInvariant()
-$writerFenceHelperPath = Join-Path $source 'tools\container_writer_fence.ps1'
+$lifecycleSource = $source
+$lifecycleManifest = $sourceManifest
+$lifecycleWriterInventory = $sourceWriterInventory
+if ($CompleteRetiredRemoval) {
+    # Admit management and the immutable old packet independently. This mode
+    # deploys no management code; installed semantics must match the old packet.
+    $lifecycleSource = Full $OldSourceRoot 'OldSourceRoot'
+    if ((Same $lifecycleSource $source) -or
+        $lifecycleSource.StartsWith($source + '\', [StringComparison]::OrdinalIgnoreCase) -or
+        $source.StartsWith($lifecycleSource + '\', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'RETIREMENT_SEPARATE_MANAGEMENT_SOURCE_REQUIRED'
+    }
+    $lifecycleManifest = Manifest $lifecycleSource $SkipSignatureValidationForTest
+    $lifecycleWriterInventory = Assert-WriterSinkInventory `
+        (Join-Path $lifecycleSource 'tools\container_writer_sink_inventory.json') `
+        ([string]$lifecycleManifest.writer_sink_inventory_sha256) `
+        ([string]$lifecycleManifest.writer_sink_inventory_contract_sha256)
+}
+$lifecycleManifestSha256 = Sha (Join-Path $lifecycleSource 'portable-manifest.json')
+$writerFenceHelperPath = Join-Path $lifecycleSource 'tools\container_writer_fence.ps1'
 if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
     throw 'Portable tree is missing the all-writer fence helper.'
 }
@@ -1372,7 +1640,8 @@ $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity
 $wanted = Command $install
 if ($PlanOnly) {
     "install_status=PLAN_ONLY"
-    if ($Uninstall) { 'operation=UNINSTALL'; 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' }
+    if ($CompleteRetiredRemoval) { 'operation=COMPLETE_RETIRED_REMOVAL'; 'retirement_identity_status=NOT_CHECKED_PLAN_ONLY' }
+    elseif ($Uninstall) { 'operation=UNINSTALL'; 'uninstall_identity_status=NOT_CHECKED_PLAN_ONLY' }
     if ($RestoreVerifiedReplacement) { 'operation=RESTORE_VERIFIED_REPLACEMENT'; 'restore_identity_status=NOT_CHECKED_PLAN_ONLY' }
     "install_root=$install"
     "autostart_command=$wanted"
@@ -1396,11 +1665,13 @@ if (Test-Path -LiteralPath $install -PathType Container) {
         (Join-Path $install 'tools\container_writer_sink_inventory.json') `
         ([string]$preflightCandidate.writer_sink_inventory_sha256) `
         ([string]$preflightCandidate.writer_sink_inventory_contract_sha256)
-    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
         throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
     }
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
+$retirementResume = if ($ResumeRetirementReceiptPath) { Read-CanonicalRetirementResume } else { $null }
+$retirementResumeBeforeRemoval = $retirementResume -and [string]$retirementResume.status -ceq 'PREIMAGE_SAVED'
 if ($RestoreVerifiedReplacement) {
     $codeParent = Split-Path -Parent $install
     $restoreReceiptFull = Full $RestoreReceiptPath 'RestoreReceiptPath'
@@ -1415,22 +1686,31 @@ if ($RestoreVerifiedReplacement) {
     $publicRestore = Read-CanonicalReplacementRestore
 }
 if ($Uninstall) {
-    foreach ($pair in @(@($source, $install), @($lad, $install), @($source, $lad))) {
+    foreach ($pair in @(@($source, $install), @($lad, $install), @($source, $lad),
+        @($lifecycleSource, $install), @($lifecycleSource, $lad))) {
         if ((Same $pair[0] $pair[1]) -or
             $pair[0].StartsWith($pair[1] + '\', [StringComparison]::OrdinalIgnoreCase) -or
             $pair[1].StartsWith($pair[0] + '\', [StringComparison]::OrdinalIgnoreCase)) {
             throw 'Uninstall requires separate source, code and current-user data roots.'
         }
     }
-    if (-not (Test-Path -LiteralPath $install -PathType Container)) {
+    if (-not $retirementResume -and -not (Test-Path -LiteralPath $install -PathType Container)) {
         throw 'Uninstall requires the exact installed tree and its integrity record.'
     }
-    $uninstallIntegrity = Assert-BootstrapIntegrityRecord $install
-    $uninstallAggregate = Get-InventoryAggregate @(Get-CodeInventory $source)
-    $uninstallRecordSha256 = Sha (Join-Path $install 'bootstrap-integrity.json')
-    if ((Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256 -or
-        [string]$uninstallIntegrity.aggregate_sha256 -cne $uninstallAggregate) {
-        throw 'Uninstall installed/source identity differs; use the exact installed packet.'
+    $uninstallAggregate = Get-InventoryAggregate @(Get-CodeInventory $lifecycleSource)
+    if (Test-Path -LiteralPath $install -PathType Container) {
+        $uninstallIntegrity = Assert-BootstrapIntegrityRecord $install
+        $uninstallRecordSha256 = Sha (Join-Path $install 'bootstrap-integrity.json')
+        if ((Sha (Join-Path $install 'portable-manifest.json')) -cne $lifecycleManifestSha256 -or
+            [string]$uninstallIntegrity.aggregate_sha256 -cne $uninstallAggregate) {
+            throw 'Uninstall installed/source identity differs; use the exact installed packet.'
+        }
+        if ($retirementResume -and $uninstallRecordSha256 -cne [string]$retirementResume.retirement.old_record_sha256) {
+            throw 'RETIREMENT_RESUME_INSTALLED_RECORD_CHANGED'
+        }
+    }
+    else {
+        $uninstallRecordSha256 = [string]$retirementResume.code_integrity_preimage_sha256
     }
 }
 $activeDataRoot = Join-Path $lad 'KMTech\ContainerAudit'
@@ -1444,6 +1724,7 @@ $stop = Join-Path $activeRelayRoot 'control\container_audit_user_relay.stop.json
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
+$retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else { $null }
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
@@ -1462,7 +1743,7 @@ $Script:CanonicalWriterFenceAttemptId = [Guid]::NewGuid().ToString('N')
 $Script:CanonicalWriterFenceTransactionId = $replacementTransactionId
 $canonicalWriterFenceStartedAtUtc = [DateTime]::UtcNow.ToString('o')
 $canonicalWriterFenceOrchestratorSha256 = Sha $PSCommandPath
-$canonicalWriterFenceContractSha256 = ([string]$sourceManifest.writer_session_contract_sha256).ToLowerInvariant()
+$canonicalWriterFenceContractSha256 = ([string]$lifecycleManifest.writer_session_contract_sha256).ToLowerInvariant()
 $Script:CanonicalWriterFenceDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
 $canonicalWriterFenceEnvironmentNames = @(
     'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
@@ -1481,14 +1762,101 @@ $canonicalWriterFenceLastReleaseAuthorizationSha256 = ''
 $canonicalWriterFencePreparedReceipt = $null
 $enteredPlacementTry = $false
 $canonicalWriterFenceDelegatedSources = [Object[]]@($sourceWriterInventory.writer_sink_sources)
+if ($CompleteRetiredRemoval) {
+    $canonicalWriterFenceDelegatedSources = [Object[]]@($lifecycleWriterInventory.writer_sink_sources)
+}
 $before = Snapshot
 $old = @(Relays)
-$runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
-    -Before $before `
-    -Processes $old `
-    -ExpectedCommand $wanted `
-    -ExpectedRoot $install `
-    -StopMarkerExists (Test-Path -LiteralPath $stop)
+if ($retirementResume) {
+    if ($retirementResumeBeforeRemoval) {
+        if ([bool]$before.exists -ne [bool]$retirementResume.preimage.exists -or
+            [string]$before.kind -cne [string]$retirementResume.preimage.kind -or
+            [string]$before.data -cne [string]$retirementResume.preimage.data -or
+            (Test-Path -LiteralPath $stop)) {
+            throw 'RETIREMENT_RESUME_PREMUTATION_STATE_UNKNOWN'
+        }
+        [void](Assert-CanonicalRuntimePreimage -Before $before -Processes $old -ExpectedCommand $wanted `
+            -ExpectedRoot $install -StopMarkerExists (Test-Path -LiteralPath $stop))
+    }
+    elseif ([bool]$before.exists -or $old.Count -ne 0 -or [string]$before.kind -cne '' -or [string]$before.data -cne '') {
+        throw 'RETIREMENT_RESUME_RUNTIME_NOT_QUIESCENT'
+    }
+    $resumeMarkerExists = Test-Path -LiteralPath $stop
+    if (-not $retirementResumeBeforeRemoval -and
+        (Get-ContainerWriterFenceFileSha256 $removalPath 65536) -cne [string]$retirementResume.retirement.active_removal_receipt_sha256) {
+        throw 'RETIREMENT_RESUME_ACTIVE_REQUEST_CHANGED'
+    }
+    if ($resumeMarkerExists) {
+        if ((Get-ContainerWriterFenceFileSha256 $stop 4096) -cne [string]$retirementResume.retirement.active_stop_sha256 -or
+            (Get-ContainerWriterFenceFileSha256 $removalPath 65536) -cne [string]$retirementResume.retirement.active_removal_receipt_sha256) {
+            throw 'RETIREMENT_RESUME_ACTIVE_REQUEST_CHANGED'
+        }
+    }
+    elseif ([string]$retirementResume.status -ceq 'UNINSTALL_RUNTIME_QUIESCED') {
+        throw 'RETIREMENT_RESUME_STOP_REQUEST_UNKNOWN'
+    }
+    if (-not $retirementResumeBeforeRemoval -and -not $resumeMarkerExists -and (Test-Path -LiteralPath $install)) {
+        throw 'RETIREMENT_RESUME_CODE_ABSENCE_NOT_PROVEN'
+    }
+    $priorFence = Read-ContainerWriterFence -AllowAbsent
+    if ($null -eq $priorFence) {
+        $releasePath = Join-Path (Split-Path -Parent $ResumeRetirementReceiptPath) ('canonical-portable-' + [string]$retirementResume.run_id + '-product-complete-release.json')
+        $releaseSha = Get-ContainerWriterFenceFileSha256 $releasePath
+        $releaseReceipt = Join-Path (Get-ContainerWriterFenceControlRoot) ('release-' + [string]$retirementResume.code_replacement.transaction_id + '-' + $releaseSha + '.json')
+        [void](Assert-ContainerWriterFenceReleaseReceiptMatches `
+            -Receipt (Read-ContainerWriterFenceReleaseReceipt $releaseReceipt) `
+            -SessionId ([string]$retirementResume.retirement.session_id) `
+            -AttemptId ([string]$retirementResume.retirement.attempt_id) `
+            -ReplacementTransactionId ([string]$retirementResume.code_replacement.transaction_id) `
+            -ReleaseAuthorizationPath $releasePath -ReleaseAuthorizationSha256 $releaseSha)
+        if ((Test-Path -LiteralPath $install) -or $resumeMarkerExists) { throw 'RETIREMENT_RESUME_RELEASE_STATE_DIFFERS' }
+        'uninstall_status=PASS_RETIRED_REMOVAL_DATA_PRESERVED'
+        'retirement_resume_status=ALREADY_COMPLETED_VERIFIED'
+        return
+    }
+    if ([string]$priorFence.session_id -cne [string]$retirementResume.retirement.session_id -or
+        [string]$priorFence.attempt_id -cne [string]$retirementResume.retirement.attempt_id -or
+        [string]$priorFence.orchestrator_sha256 -cne [string]$retirementResume.retirement.orchestrator_sha256 -or
+        [string]$priorFence.writer_contract_sha256 -cne [string]$lifecycleManifest.writer_session_contract_sha256 -or
+        [string]$priorFence.replacement_transaction_id -cne [string]$retirementResume.code_replacement.transaction_id) {
+        throw 'RETIREMENT_RESUME_FOREIGN_FENCE'
+    }
+    if (Same ([string]$priorFence.prepared_receipt_path) ([string]$retirementResume.retirement.prepared_receipt_path)) {
+        if ([string]$priorFence.prepared_receipt_sha256 -cne [string]$retirementResume.retirement.prepared_receipt_sha256) {
+            throw 'RETIREMENT_RESUME_FENCE_PREPARED_BINDING_DIFFERS'
+        }
+    }
+    else {
+        $releasePath = Join-Path (Split-Path -Parent $ResumeRetirementReceiptPath) ('canonical-portable-' + [string]$retirementResume.run_id + '-product-complete-release.json')
+        if ([string]$retirementResume.status -cne 'UNINSTALL_AWAITING_FENCE_RELEASE' -or
+            -not (Same ([string]$priorFence.prepared_receipt_path) $releasePath) -or
+            (Get-ContainerWriterFenceFileSha256 $releasePath 65536) -cne [string]$priorFence.prepared_receipt_sha256) {
+            throw 'RETIREMENT_RESUME_FENCE_RELEASE_BINDING_DIFFERS'
+        }
+        $release = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$release.install_audit_sha256 -cne $ResumeRetirementReceiptSha256 -or
+            -not (Same ([string]$release.install_audit_path) $ResumeRetirementReceiptPath)) {
+            throw 'RETIREMENT_RESUME_FENCE_RELEASE_AUDIT_DIFFERS'
+        }
+    }
+    $priorFenceSha256 = Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)
+    $before = $retirementResume.preimage
+    $old = @($retirementResume.retirement.original_relays)
+}
+if ($retirementResume) {
+    # Validate the recorded original runtime separately from the current,
+    # receipt-bound stop request checked above. Normal admission is unchanged.
+    $runtimePreimageBinding = Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
+        -ExpectedCommand $wanted -ExpectedRoot $install -StopMarkerExists $false
+}
+else {
+    $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
+        -Before $before `
+        -Processes $old `
+        -ExpectedCommand $wanted `
+        -ExpectedRoot $install `
+        -StopMarkerExists (Test-Path -LiteralPath $stop)
+}
 $writerBefore = if ($testMode) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
@@ -1497,8 +1865,11 @@ if (($Uninstall -or $RestoreVerifiedReplacement) -and [bool]$writerBefore.presen
     throw 'Uninstall/restore requires the current-user layout without legacy scheduled writers.'
 }
 $uninstallCodeStarted = $false
+$uninstallStopSha256 = ''
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
+$retirementResumeClaim = $null
 try {
+if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
 $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -SessionId $Script:CanonicalWriterFenceSessionId `
     -AttemptId $Script:CanonicalWriterFenceAttemptId `
@@ -1514,6 +1885,43 @@ $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -WriterContractSha256 $canonicalWriterFenceContractSha256 `
     -SourceManifestSha256 $sourceManifestSha256
+if ($retirementResume) {
+    $resumeAdmission = Enter-ContainerWriterAdmission
+    try {
+        Assert-RetirementOwnerExited $retirementResume.retirement
+        [void](Read-CanonicalRetirementResume)
+        [void](Read-CanonicalRetiredRemoval)
+        if (-not $retirementResumeBeforeRemoval -and
+            (Get-ContainerWriterFenceFileSha256 $removalPath 65536) -cne [string]$retirementResume.retirement.active_removal_receipt_sha256) {
+            throw 'RETIREMENT_RESUME_ACTIVE_REQUEST_CHANGED'
+        }
+        if ((Test-Path -LiteralPath $stop) -ne $resumeMarkerExists -or
+            ($resumeMarkerExists -and (
+                (Get-ContainerWriterFenceFileSha256 $stop 4096) -cne [string]$retirementResume.retirement.active_stop_sha256 -or
+                (Get-ContainerWriterFenceFileSha256 $removalPath 65536) -cne [string]$retirementResume.retirement.active_removal_receipt_sha256))) {
+            throw 'RETIREMENT_RESUME_ACTIVE_REQUEST_CHANGED'
+        }
+        if ((Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)) -cne $priorFenceSha256) {
+            throw 'RETIREMENT_RESUME_FENCE_CHANGED'
+        }
+        $resumedFence = New-ContainerWriterFencePayload `
+            -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
+            -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+            -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+            -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+            -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) `
+            -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -DelegatedSources $canonicalWriterFenceDelegatedSources `
+            -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o'))
+        Assert-ContainerWriterSessionAuthority $resumedFence $canonicalWriterFenceAuthority
+        [void](Write-ContainerWriterFenceAtomic '' $resumedFence)
+    }
+    finally { Exit-ContainerWriterAdmission $resumeAdmission }
+}
+else {
 [void](Start-ContainerWriterFence `
     -Status 'INSTALLING' `
     -OwnerKind 'canonical_installer' `
@@ -1529,6 +1937,7 @@ $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -DelegatedSources $canonicalWriterFenceDelegatedSources `
     -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o')) `
     -AuthorityLease $canonicalWriterFenceAuthority)
+}
 $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN', $Script:CanonicalWriterFenceDelegationToken, 'Process')
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $Script:CanonicalWriterFenceSessionId, 'Process')
@@ -1536,7 +1945,7 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
 $audit = [ordered]@{
     schema='container-audit-canonical-portable-install-v2'
-    operation=if ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
+    operation=if ($CompleteRetiredRemoval) { 'COMPLETE_RETIRED_REMOVAL' } elseif ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
     status='PREIMAGE_SAVED'
     run_id=$runId
     captured_at=(Get-Date).ToUniversalTime().ToString('o')
@@ -1579,6 +1988,23 @@ $audit = [ordered]@{
         scheduled_writer_restored=(-not [bool]$writerBefore.restore_required)
     }
 }
+if ($CompleteRetiredRemoval) {
+    $audit.retirement=$retirement
+    $retirement.owner_process_id=$PID
+    $retirement.owner_started_at_utc=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+    $retirement.session_id=$Script:CanonicalWriterFenceSessionId
+    $retirement.attempt_id=$Script:CanonicalWriterFenceAttemptId
+    $retirement.orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
+    $retirement.authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
+    $retirement.prepared_receipt_path=[string]$canonicalWriterFencePreparedReceipt.path
+    $retirement.prepared_receipt_sha256=[string]$canonicalWriterFencePreparedReceipt.sha256
+    $retirement.old_record_sha256=$uninstallRecordSha256
+    $retirement.original_relays=[Object[]]@($old | ForEach-Object {
+        [ordered]@{ ProcessId=[int]$_.ProcessId; ExecutablePath=[string]$_.ExecutablePath; CommandLine=[string]$_.CommandLine }
+    })
+    $retirement.resume_receipt_path=$ResumeRetirementReceiptPath
+    $retirement.resume_receipt_sha256=$ResumeRetirementReceiptSha256
+}
 Save $auditPath $audit
 if ($evidenceFull) { Save $evidenceFull $audit }
 
@@ -1607,7 +2033,7 @@ $enteredPlacementTry = $true
                 (Join-Path $install 'tools\container_writer_sink_inventory.json') `
                 ([string]$candidate.writer_sink_inventory_sha256) `
                 ([string]$candidate.writer_sink_inventory_contract_sha256)
-            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
                 throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
             }
             $installedInventorySha256 = [string]$candidate.writer_sink_inventory_contract_sha256
@@ -1618,9 +2044,9 @@ $enteredPlacementTry = $true
             $existingVerified = $true
             $audit.code_replacement.prestate='VERIFIED_REPLACE'
             if (
-                [string]$candidate.source_commit -ceq [string]$sourceManifest.source_commit -and
-                [string]$candidate.source_tree -ceq [string]$sourceManifest.source_tree -and
-                (Sha (Join-Path $install 'runtime\pythonw.exe')) -ceq (Sha (Join-Path $source 'runtime\pythonw.exe'))
+                [string]$candidate.source_commit -ceq [string]$lifecycleManifest.source_commit -and
+                [string]$candidate.source_tree -ceq [string]$lifecycleManifest.source_tree -and
+                (Sha (Join-Path $install 'runtime\pythonw.exe')) -ceq (Sha (Join-Path $lifecycleSource 'runtime\pythonw.exe'))
             ) { $placement = 'REUSED_VERIFIED' }
         }
         catch {
@@ -1729,13 +2155,15 @@ $enteredPlacementTry = $true
         return
     }
     if ($Uninstall) {
-        if (-not $existingVerified -or $placement -cne 'REUSED_VERIFIED' -or
-            (Sha (Join-Path $install 'portable-manifest.json')) -cne $sourceManifestSha256 -or
+        $resumeCodeAbsent = $retirementResume -and -not (Test-Path -LiteralPath $install)
+        if (-not $resumeCodeAbsent -and (-not $existingVerified -or $placement -cne 'REUSED_VERIFIED' -or
+            (Sha (Join-Path $install 'portable-manifest.json')) -cne $lifecycleManifestSha256 -or
             (Sha (Join-Path $install 'bootstrap-integrity.json')) -cne $uninstallRecordSha256 -or
-            (Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate) {
+            (Get-InventoryAggregate @(Get-CodeInventory $install)) -cne $uninstallAggregate)) {
             throw 'Uninstall installed/source identity changed before mutation.'
         }
-        Copy-Item -LiteralPath (Join-Path $install 'bootstrap-integrity.json') -Destination $uninstallRecordPreimagePath
+        $integrityPreimageSource = if ($retirementResume -and -not $retirementResumeBeforeRemoval) { [string]$retirementResume.code_integrity_preimage_path } else { Join-Path $install 'bootstrap-integrity.json' }
+        Copy-Item -LiteralPath $integrityPreimageSource -Destination $uninstallRecordPreimagePath
         if ((Sha $uninstallRecordPreimagePath) -cne $uninstallRecordSha256) {
             throw 'Uninstall integrity preimage copy readback failed.'
         }
@@ -1743,26 +2171,35 @@ $enteredPlacementTry = $true
         $audit.code_integrity_preimage_sha256 = $uninstallRecordSha256
         $audit.code_recovery_path = Join-Path (Split-Path -Parent $install) ('.current.uninstall.' + $Script:CanonicalWriterFenceAttemptId)
         $mutated = $true
-        Product $install '--remove-current-user-setup'
+        if ($CompleteRetiredRemoval) { [void](Read-CanonicalRetiredRemoval) }
+        if (-not $retirementResume -or $retirementResumeBeforeRemoval) { Product $install '--remove-current-user-setup' }
         $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
         if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
             [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) {
             throw 'Uninstall current-user removal readback failed.'
         }
-        $uninstallStopSha256 = Sha $stop
+        $uninstallStopSha256 = if ($retirementResume -and -not $retirementResumeBeforeRemoval -and -not $resumeMarkerExists) { '' } else { Sha $stop }
+        $quiescePath = $removalPath
+        if ($CompleteRetiredRemoval) {
+            [void](Read-CanonicalRetiredRemoval)
+            Assert-RetirementWriterQuiescence
+            $quiescePath = [string]$retirement.removal_receipt_path
+            $retirement.active_stop_sha256=$uninstallStopSha256
+            $retirement.active_removal_receipt_sha256=Sha $removalPath
+        }
         $audit.status = 'UNINSTALL_RUNTIME_QUIESCED'
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
         $uninstallArguments = @(
             '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
-            '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'), '-Uninstall',
-            '-SourceRoot',$source, '-InstallRoot',$install,
+            '-File',(Join-Path $lifecycleSource 'INSTALL_THIS_PC.ps1'), '-Uninstall',
+            '-SourceRoot',$lifecycleSource, '-InstallRoot',$install,
             '-OperatorLocalAppDataRoot',$lad, '-ElevationLogPath',$elevationLogPath,
-            '-ExpectedInstalledManifestSha256',$sourceManifestSha256,
+            '-ExpectedInstalledManifestSha256',$lifecycleManifestSha256,
             '-ExpectedInstalledAggregateSha256',$uninstallAggregate,
-            '-QuiesceReceiptPath',$removalPath, '-ExpectedQuiesceReceiptSha256',(Sha $removalPath),
+            '-QuiesceReceiptPath',$quiescePath, '-ExpectedQuiesceReceiptSha256',(Sha $quiescePath),
             '-WriterFenceHelperPath',$writerFenceHelperPath,
-            '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+            '-ExpectedWriterFenceHelperSha256',([string]$lifecycleManifest.writer_fence_helper_sha256),
             '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
             '-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
             '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
@@ -1770,13 +2207,19 @@ $enteredPlacementTry = $true
         )
         if ($testMode) { $uninstallArguments += '-AllowNoncanonicalLayoutForTest' }
         $uninstallCodeStarted = $true
-        & $winps @uninstallArguments
-        if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }
+        if (-not $resumeCodeAbsent) {
+            & $winps @uninstallArguments
+            if ($LASTEXITCODE -ne 0) { throw "Code removal failed: $LASTEXITCODE" }
+        }
         if ((Test-Path -LiteralPath $install) -or (Snapshot).exists -or @(Relays).Count -ne 0) {
             throw 'Uninstall independent code/runtime absence readback failed.'
         }
-        if ((Sha $stop) -cne $uninstallStopSha256) { throw 'Uninstall stop marker changed.' }
-        Remove-Item -LiteralPath $stop -Force
+        if ($uninstallStopSha256 -and (Sha $stop) -cne $uninstallStopSha256) { throw 'Uninstall stop marker changed.' }
+        if ($CompleteRetiredRemoval) {
+            [void](Read-CanonicalRetiredRemoval)
+            Assert-RetirementWriterQuiescence
+        }
+        if ($uninstallStopSha256) { Remove-Item -LiteralPath $stop -Force }
         if (Test-Path -LiteralPath $stop) { throw 'Uninstall stop-marker cleanup failed.' }
         $audit.status = 'UNINSTALL_AWAITING_FENCE_RELEASE'
         $audit.code_placement = 'REMOVED'
@@ -1790,11 +2233,11 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
-        $audit.status = 'PASS_UNINSTALLED_DATA_PRESERVED'
+        $audit.status = if ($CompleteRetiredRemoval) { 'PASS_RETIRED_REMOVAL_DATA_PRESERVED' } else { 'PASS_UNINSTALLED_DATA_PRESERVED' }
         $audit.completed_at = [DateTime]::UtcNow.ToString('o')
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
-        'uninstall_status=PASS_UNINSTALLED_DATA_PRESERVED'
+        "uninstall_status=$($audit.status)"
         'application_root_status=ABSENT'
         'current_user_relay_status=ABSENT'
         'user_state_preserved=true'
@@ -2004,6 +2447,9 @@ $enteredPlacementTry = $true
 catch {
     $original=$_
     if (-not $enteredPlacementTry) {
+        if ($retirementResume -and $canonicalWriterFenceActive) {
+            throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
+        }
         $earlyFenceMatches = $false
         try {
             $earlyFence = Read-ContainerWriterFence -AllowAbsent
@@ -2104,6 +2550,7 @@ catch {
             throw 'Uninstall exact code recovery not proven; runtime remains fenced.'
         }
         if ($uninstallCodeStarted) { $audit.code_placement = 'RESTORED_EXACT_PREIMAGE' }
+        if ($CompleteRetiredRemoval) { [void](Read-CanonicalRetiredRemoval) }
         # A refusing original relay is never killed or duplicated. Restore its
         # persistence/stop preimage and release only this attempt's live fence.
         $remaining = @(Relays)
@@ -2113,6 +2560,10 @@ catch {
                 (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) }).Count -ne 1) {
                 throw 'Uninstall recovery relay identity changed.'
             }
+        }
+        if ($CompleteRetiredRemoval -and (Test-Path -LiteralPath $stop) -and
+            (-not $uninstallStopSha256 -or (Sha $stop) -cne $uninstallStopSha256)) {
+            throw 'RETIREMENT_ACTIVE_STOP_OWNERSHIP_UNKNOWN_RUNTIME_REMAINS_FENCED'
         }
         Restore $before
         if (Test-Path -LiteralPath $stop) { Remove-Item -LiteralPath $stop -Force }
@@ -2369,4 +2820,5 @@ finally {
     if ($null -ne $canonicalWriterFenceAuthority) {
         Exit-ContainerWriterSessionAuthority $canonicalWriterFenceAuthority
     }
+    Exit-RetirementResumeClaim $retirementResumeClaim
 }

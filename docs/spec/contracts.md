@@ -215,6 +215,24 @@ source/target identity·membership·topology·version 및 action을 대조하고
 <a id="ca-c10"></a>
 ## CA-C10 현재 사용자 등록·설치 식별자·소유 증명
 
+**은퇴 제거 마감:** canonical의 `CompleteRetiredRemoval`은 관리 `SourceRoot`를 자기결속 검증한 뒤,
+별도 `OldSourceRoot`의 manifest·helper/guard pin·writer 계약을 검증한다. 배치할 새 코드가 없는 제거
+연산이며 installed의 의미·manifest·aggregate·원 integrity record는 exact old 패키지와 대조한다.
+일반 설치/교체의 source↔installed 의미 비교는 유지한다. 기본 은퇴 루트의 removal receipt SHA와
+stop marker SHA·request ID·경로·현재 사용자 및 채택 루트를 결속하고 원 marker를 삭제/덮어쓰기하지 않는다.
+JSON이나 marker는 정지·승인 증명이 아니다. 현재 Run/relay exact binding, legacy writer 거부,
+살아 있는 session authority/delegation, 하위 old helper의 승격·전체 코드 writer 정지 검사를 모두 요구한다.
+새 stop 요청은 선행 marker가 없는 채택 루트에만 생성하며 실패 시 exact code/Run과 원 은퇴 정지를 복구한다.
+
+**은퇴 마감의 중단 재개:** `ResumeRetirementReceiptPath/Sha256`은 같은 관리 패키지와 exact old 입력,
+현재 사용자·두 루트·원 기록·귀속된 active marker/receipt, 원 owner의 PID/시작 시각과 authority 종료를
+검증하는 별도 경로다. 새 session/attempt/authority 아래 진행하며 일반 canonical의 선행 marker 거부를
+해제하지 않는다. 불명 상태·다른 owner/attempt·바뀐 marker/receipt·부분 코드 손상은 보존하고 거부한다.
+원 PID를 다른 프로세스가 재사용한 경우에도 거부하며, 같은 원 transaction의 동시 재개는 원자 mutex
+claim으로 한 개만 받는다. writer admission 안에서 journal·두 marker/receipt·fence SHA를 다시 확인한다.
+완료 재확인은 코드/Run/relay/active marker 부재와 원 fence release receipt까지 대조한다.
+중앙 identity의 은퇴/재발급이나 원 은퇴 루트 재활성화는 없다. [운영·검증 한계](operations.md#ca-retired-removal).
+
 **예약 writer 식별:** 정식 작업 `direct-sync-relay-container-audit`/`\`만 기존 실행·현재 사용자·1분 TimeTrigger·설정 계약을 만족할 때 canonical이다. qualification 이름과 다른 이름으로 실행하는 명시적 direct-sync/user-relay, hosted flag 없이 `tools/direct_sync_relay_runner.py`를 직접 호출하는 action도 검사 대상이며 활성 비정식 writer는 설치를 차단한다. 다중 action 중 하나라도 해당하면 검사한다. 직접 script Execute 또는 Python(`python*.exe`/`py.exe`, venv 포함)의 인수를 Windows quoting 규칙으로 나눈 뒤 옵션·옵션 값을 건너뛴 첫 script 경로를 정규화하고, 검증된 writer inventory의 Python `.main` route와 대조한다. `-c`/`-m`/stdin 및 도움말·버전 모드는 후속 인자를 script로 보지 않으며, Notepad·탐색기·다른 실행 파일이 같은 경로를 여는 경우도 제외한다. null/빈 trigger·없는 CIM 필드는 예외 대신 비정식 판정/명시적 shape 거부로 처리하고 정상 작업의 normalized binding bytes와 복원 hash 검증은 유지한다. [설치 경계](operations.md#ca-o05)
 
 **bootstrap record 순서·ACL:** 새 `container-audit-bootstrap-integrity-v1` 목록은

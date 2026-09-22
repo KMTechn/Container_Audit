@@ -43,7 +43,7 @@ _WRITER_LOCAL = threading.local()
 
 # This pin is generated and checked by tools/derive_container_writer_sinks.py.
 # It is updated together with the inventory after all sink markers are placed.
-WRITER_INVENTORY_SHA256 = "8cbed8b47df29c3f15dc701b640682137bf246b260f82768f682e0d8c69bc8a6"
+WRITER_INVENTORY_SHA256 = "b0f4da14ee84a4120cf5626008d80548191f5305c871a9bf9d2bb4760d84a447"
 
 DELEGATION_TOKEN_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN"
 DELEGATION_SESSION_ENV = "CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID"

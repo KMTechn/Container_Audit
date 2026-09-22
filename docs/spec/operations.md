@@ -179,6 +179,39 @@ v2 sidecar를 그대로 읽기·쓰기·복구하는 회귀, 정본 checker·wri
 
 `storage_policy`는 명시 `data_root` 인자 → `CONTAINER_AUDIT_DATA_ROOT` → 현재 사용자 기본값 순으로 선택한다. 현재 사용자 home은 우선 `LOCALAPPDATA`, 다음 `USERPROFILE/AppData/Local` 등을 확인한다. 상대/볼륨 루트·Syncthing 경로 및 코드와 같거나 포함 관계인 업무 경로는 허용하지 않는다. 기본 business root와 relay root가 분리되어 있으므로 업무 폴더 한 개만 복사한 상태를 전체 백업으로 보지 않는다.
 
+<a id="ca-retired-removal"></a>
+### 기본 루트의 은퇴 제거 마감
+
+기본 루트에서 정상 `--remove-current-user-setup`을 실행한 뒤 다른 기존 custom 루트를 채택하면
+기본 relay 루트에 의도된 stop marker와 removal receipt가 남는다. 이를 삭제하거나 기본 루트를 다시
+onboarding하지 않는다. 검증된 관리 패키지의 `INSTALL_CANONICAL_PORTABLE.ps1 -CompleteRetiredRemoval`
+명령은 별도 exact old 패키지의 하위 제거기를 소비하며, 그 제거기의 legacy receipt 위치/hash 검사를
+유지한 채 old 코드만 제거한다. 현재 사용자 자료·신원·은퇴 marker/receipt는 보존한다.
+
+같은 일반 사용자의 기존 HKCU Run에 결속된 채택 데이터 루트를 `CONTAINER_AUDIT_DATA_ROOT`로 지정한다.
+관리 패키지 `-SourceRoot`와 old packet `-OldSourceRoot`는 서로 분리된 원본이며 installed old 코드와
+old packet의 manifest/aggregate/integrity가 정확히 같아야 한다. 기존 GUI 등 코드 writer는 정상 종료해야
+하며, 남아 있는 writer/legacy 작업이나 불명 process 상태를 stop marker만으로 통과시키지 않는다.
+필수 입력 `-RetiredRemovalReceiptSha256`은 현재 사용자의
+`KMTech\DirectSync\container_audit\status\current_user_removal.json`,
+`-RetiredStopMarkerSha256`은 같은 relay 루트의 `control\container_audit_user_relay.stop.json` SHA256이다.
+관리자는 보존한 원본을 대조한 뒤 이 값과 exact old packet을 선택한다. hash를 새 승인 증명으로 해석하지 않는다.
+
+정상 결과는 `PASS_RETIRED_REMOVAL_DATA_PRESERVED`이며 코드/Run/relay는 부재, 기본 은퇴 marker는 동일하다.
+이후 새 패키지의 일반 canonical 설치를 **같은 채택 루트**로 진행하고 onboarding `REUSED`와 원 identity를
+대조한다. 명령이 실패하면 원 code/record·Run 명령과 은퇴 marker를 검증한 exact rollback 여부를 확인한다.
+다른 request로 바뀐 marker를 정리하지 않으며 불명 상태는 fence와 원본을 보존한다.
+
+중단된 명령은 자동 성공으로 세지 않는다. 원 `audit_path`의 journal과 SHA256을 보존하고 원 owner 종료를
+확인한 뒤, 동일 관리/old 패키지·두 은퇴 pin에 `-ResumeRetirementReceiptPath`와
+`-ResumeRetirementReceiptSha256`을 함께 전달한다. 이 경로는 귀속·정지와 원 owner/authority 종료를 다시
+검증한 후 새 authority를 만든다. 아직 살아 있는 owner, 변조된 기록, 부분 삭제되어 exact 확인이 불가능한
+코드, 내구 기록 전 중단은 거부하며 임의 marker 삭제나 빈 integrity record 생성으로 복구하지 않는다.
+
+검증 범위는 [w9caretire 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caretire/RESULT.md)의
+소스·격리 lifecycle 시험과 stock builder다. **실제 guest 적용·UAC·실제 등록/서버 결과는 미검증**이며
+현장 적용은 별도 판단을 따른다.
+
 <a id="ca-custom-root-autostart"></a>
 ### custom 데이터 루트의 일반 GUI 실행·자동시작·재시작
 
