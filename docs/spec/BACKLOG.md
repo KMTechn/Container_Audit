@@ -12,6 +12,15 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9caclipack:** 기존 relay operator를 portable 외부 도구로 등록한다. 목적지는
+  `app/tools/direct_sync_relay_operator.py`이며 묶인 Python·`app/site-packages`와 같은 사용자
+  control root의 실행법은 [CA-O01](operations.md#ca-o01) 및
+  [operator runbook](../FIELD_UI_HTTPS_CUTOVER_RUNBOOK.md#portable-relay-operator)을 따른다.
+  독립 경로/bytes·import 누락 거부·기존 inventory/canonical 의미 보존의
+  [검증 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caclipack/RESULT.md)는 소스·packet 범위다.
+  실제 설치는 NOT TESTED이며 구 d69→현재 의미 불일치, 은퇴 root의 stop marker 수명주기와
+  지원 갱신 경로는 남는다. relay pause만으로 GUI·복구·진행 요청까지 멈췄다고 판정하지 않으며 배포 보류를 해제하지 않는다.
+
 - **w9cacatalogrefresh:** 실행 중 `운영 작업 ▾ → 품목 목록 새로 고침`을 추가했다. 시작과 같은 로딩 경로·기존 직렬 lane/작업 guard를 사용하며 성공 건수, 실패 시 기존 목록 유지·재시도 안내를 제공한다. RED/GREEN·동일 최종 커밋 전체 3회와 목록/skip 대조는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cacatalogrefresh/RESULT.md)에 기록한다. 실제 화면·중앙 신규 품목 확인은 미검증이며 [촬영 조작 순서](operations.md#ca-catalog-refresh)를 따른다.
 - **w9caautostartroot:** custom 데이터 루트의 HKCU 자동시작·즉시 시작·검증된 교체/설치기 재시작 명령을 같은 루트로 고정하고, custom relay의 루트 소실·접근 오류를 안내 후 중단하도록 수정했다. 기본 명령은 유지한다. [운영 확인·복구](operations.md#ca-custom-root-autostart)를 따른다. 실제 guest 재로그온·오류 대화상자·채택한 데이터셋의 복구/전송 확인은 후속 촬영 레인의 수용 항목이며 이 소스 작업에서 실행하지 않는다.
 - **w9cadatarootgui:** 일반 GUI도 기존 HKCU Run의 영속 루트를 읽으며 명시 인자·환경 override·영속 설정·기본값의 우선순위를 공유한다. 환경 없는 launcher/재시작·relay·onboarding 경로와 기본 루트, 루트 소실·권한/설정 오류를 headless 시험으로 검증한다. 실제 guest 바탕화면/시작 메뉴·재로그온·오류창·원본 tail/hold/신원 보존 확인은 미검증이며 [운영 절차](operations.md#ca-custom-root-autostart)를 따른다.

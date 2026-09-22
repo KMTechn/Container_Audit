@@ -48,9 +48,46 @@
 
 1. 각 PC에서 앱 버전, PC hostname, 자동 생성된 source_host_id, producer_install_id, 작업자 이름을 기록한다.
 2. 각 PC의 local data root, events 폴더, runtime status 파일 경로와 operator pause 파일 경로를 확인한다.
-3. `direct_sync_relay_operator.py status --runtime-status-path <status.json>` 보고서를 저장한다.
+3. [portable relay operator](#portable-relay-operator)의 `status` 명령으로 같은 사용자의 queue·pause·runtime status 보고서를 저장한다.
 4. relay가 pause 상태이면 사유와 operator id를 기록하고, 테스트 승인 전 resume하지 않는다.
 5. self-enroll 응답 secret은 WinCred에만 저장되어야 하며 raw secret을 화면 공유, manifest, credential JSON, report 로그에 노출하지 않는다.
+
+<a id="portable-relay-operator"></a>
+## Portable relay operator
+
+`app/tools/direct_sync_relay_operator.py`가 포함된 검증된 packet에서 relay와 동일한 Windows 사용자로 실행한다.
+CLI가 없는 구 설치본에 파일을 사후 복사하지 않는다. `runtime/python.exe`와 같은 packet의
+`app`·`app/site-packages`만 사용하며 전역 Python이나 소스 checkout에 의존하지 않는다.
+아래 `$packet`은 실제 승인된 설치/packet 루트, `$operatorId`는 승인된 운영 식별자로 바꾼다.
+
+```powershell
+$packet = 'C:\KMTech\Apps\Container_Audit\current'
+$app = Join-Path $packet 'app'
+$python = Join-Path $packet 'runtime/python.exe'
+$entry = "import os,runpy,sys; app=sys.argv.pop(1); sys.path[:0]=[app,os.path.join(app,'site-packages')]; runpy.run_path(os.path.join(app,'tools','direct_sync_relay_operator.py'),run_name='__main__')"
+$relay = Join-Path $env:LOCALAPPDATA 'KMTech/DirectSync/container_audit'
+$pause = Join-Path $relay 'control/pause.json'
+$db = Join-Path $relay 'queue/direct_sync_relay.sqlite3'
+$runtimeStatus = Join-Path $relay 'status/direct_sync_relay_status.json'
+$operatorId = '<approved-operator-id>'
+& $python -I -B -c $entry $app --help
+& $python -I -B -c $entry $app status --db-path $db --operator-pause-path $pause --runtime-status-path $runtimeStatus --report-path (Join-Path $relay 'reports/operator-status.json')
+& $python -I -B -c $entry $app pause --operator-pause-path $pause --operator-id $operatorId --reason 'approved maintenance' --report-path (Join-Path $relay 'reports/operator-pause.json')
+# 정지 상태를 status로 재확인하고 승인된 작업이 끝난 뒤 같은 root를 resume한다.
+& $python -I -B -c $entry $app resume --operator-pause-path $pause --operator-id $operatorId --reason 'maintenance complete' --report-path (Join-Path $relay 'reports/operator-resume.json')
+```
+
+각 명령 직후 `$LASTEXITCODE`와 report를 확인한다(0=PASS, 2=BLOCKED, 1=실패).
+CLI의 writer admission은 현재 사용자의 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit\control\writer-session`을 사용한다.
+marker 인자나 business data root만 다른 사용자 경로로 바꾸어 그 사용자의 relay를 제어하지 않는다.
+위 명령은 기본 relay 루트 예시다. custom data root를 쓰는 relay는 `$relay`를 실제 데이터 루트의
+`direct_sync` 경로로 바꾸고 같은 상대 queue/status/pause 경로를 사용한다. writer admission 루트는
+계속 현재 사용자의 위 `control/writer-session` 경로다. `pause`는 enqueue/drain을 막지만 이미 진행 중인 요청의
+종료 barrier나 GUI·복구 writer 전체 정지는 아니다. 전체 정지 확인 없이 backend의 `--clients-paused`를 선언하지 않는다.
+
+[w9caclipack 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caclipack/RESULT.md)의
+소스·합성 control root·후보 packet 검증과 실제 설치 수용은 구분한다. 이 레인의 실제 설치·현장 사용자 검증은
+NOT TESTED이며 구 d69 packet 의미 불일치와 `CANONICAL_STOP_MARKER_PREEXISTS`를 해소하지 않는다.
 
 ## Human UI Scenarios
 

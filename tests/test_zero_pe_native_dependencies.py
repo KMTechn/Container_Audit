@@ -390,9 +390,10 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
     assert portable_builder.ALLOWED_APP_NATIVE_NAMES == set()
     assert "config" not in portable_builder.APP_DATA_DIRS
     assert "config/container_audit_settings.json" in portable_builder.APP_DATA_FILES
-    assert portable_builder.EXTERNAL_TOOL_MODULES == ()
+    assert portable_builder.EXTERNAL_TOOL_MODULES == ("tools.direct_sync_relay_operator",)
     tool_sources = portable_builder._discover_portable_tool_sources(ROOT)
     assert {path.relative_to(ROOT).as_posix() for path in tool_sources} == {
+        "tools/direct_sync_relay_operator.py",
         "tools/direct_sync_relay_runner.py",
         "tools/install_logistics_runtime_profile.py",
         "tools/register_container_audit_worker_pc.py",
@@ -430,6 +431,7 @@ def test_portable_manifest_preserves_existing_application_file_set(tmp_path):
         "contract.lock.json", "kmtech_shared.manifest.json", "kmtech_shared.lock.json",
         "config/container_audit_settings.json",
         "config/validator_settings.json", "tools/direct_sync_relay_runner.py",
+        "tools/direct_sync_relay_operator.py",
         "tools/install_logistics_runtime_profile.py",
         "tools/register_container_audit_worker_pc.py",
     ):
@@ -474,9 +476,11 @@ def test_portable_tool_dependency_closure_is_recursive_and_fail_closed(tmp_path)
         )
 
 
+@pytest.mark.parametrize("missing_tool", ["second.py", "direct_sync_relay_operator.py"])
 def test_portable_packet_copies_and_imports_derived_tool_closure(
     monkeypatch,
     tmp_path,
+    missing_tool,
 ):
     repo_root = tmp_path / "source"
     tools_root = repo_root / "tools"
@@ -501,6 +505,9 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     second = tools_root / "second.py"
     first.write_text("from tools import second\n", encoding="utf-8")
     second.write_text("VALUE = 1\n", encoding="utf-8")
+    (tools_root / "direct_sync_relay_operator.py").write_text(
+        "VALUE = 1\n", encoding="utf-8",
+    )
     # An unrelated root script must neither ship nor add its tools dependency.
     (repo_root / "developer_only.py").write_text(
         "from tools import unshipped\n", encoding="utf-8",
@@ -517,7 +524,10 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
     app_root = output / "app"
     tool_sources = portable_builder._copy_application(repo_root, app_root)
 
-    assert [path.name for path in tool_sources] == ["first.py", "second.py"]
+    assert [path.name for path in tool_sources] == [
+        "direct_sync_relay_operator.py", "first.py", "second.py",
+    ]
+    assert (app_root / "tools" / "direct_sync_relay_operator.py").is_file()
     assert (app_root / "tools" / "first.py").is_file()
     assert (app_root / "tools" / "second.py").is_file()
     assert not (app_root / "developer_only.py").exists()
@@ -528,7 +538,7 @@ def test_portable_packet_copies_and_imports_derived_tool_closure(
         python_executable=Path(sys.executable),
     )
 
-    (app_root / "tools" / "second.py").unlink()
+    (app_root / "tools" / missing_tool).unlink()
     with pytest.raises(
         portable_builder.PortableBuildError,
         match="portable runtime import closure failed",

@@ -116,7 +116,7 @@ APP_DATA_FILES = (
     "config/container_audit_settings.json",
     "config/validator_settings.json",
 )
-EXTERNAL_TOOL_MODULES: tuple[str, ...] = ()
+EXTERNAL_TOOL_MODULES: tuple[str, ...] = ("tools.direct_sync_relay_operator",)
 PORTABLE_INSTALL_ASSETS = (
     ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),

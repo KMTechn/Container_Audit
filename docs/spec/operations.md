@@ -50,10 +50,25 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 
 portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion을 포함한 root Python 57개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
-relay/등록/profile 도구 3개를 함께 탑재한다. 새 root 스크립트는 자동 탑재하지 않으며,
+relay/등록/profile 도구 3개와 외부 운영 CLI `tools.direct_sync_relay_operator`를 함께 탑재한다.
+CLI의 목적지는 `app/tools/direct_sync_relay_operator.py`다. 새 root 스크립트는 자동 탑재하지 않으며,
 manifest의 필수 모듈이 없으면 빌드를 거부한다. [패키지 회귀](../../tests/test_zero_pe_native_dependencies.py)는
-제품·vendor·assets·공유 계약·설정·도구를 포함한 146개의 경로·바이트와 tool import closure를 대조한다.
+제품·vendor·assets·공유 계약·설정·도구의 독립 기대 경로·바이트와 tool import closure를 대조한다.
 설치·복구·update preservation용 기존 파일의 제외는 없으며 writer admission은 유지한다.
+
+portable operator CLI는 같은 packet의 `runtime/python.exe -I -B`로 실행하고,
+`app`과 `app/site-packages`를 명시적으로 import 경로에 넣는다. 실행 명령은
+[운영 runbook](../FIELD_UI_HTTPS_CUTOVER_RUNBOOK.md#portable-relay-operator)을 따른다.
+기본 relay는 동일 Windows 사용자의 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`에서
+`control/pause.json`, `queue/direct_sync_relay.sqlite3`, `status/direct_sync_relay_status.json`을 사용한다.
+custom data root에서는 해당 데이터 루트의 `direct_sync` 아래 같은 상대 경로를 사용하므로 실제 relay 설정을 먼저 확인한다.
+writer admission도 현재 사용자의 같은 `control/writer-session` 루트를 해석하므로 다른 사용자의 marker 경로나
+`CONTAINER_AUDIT_DATA_ROOT`만 지정해서 그 사용자의 relay/fence를 제어할 수 없다.
+CLI는 frozen-required 목록에 이미 들어 있으므로 외부 도구 등록은 기존 writer inventory와
+canonical writer 의미를 바꾸지 않는다. 구 d69 packet과 현재 의미의 차이 및
+`CANONICAL_STOP_MARKER_PREEXISTS`는 별개 미해결 항목이며 installer의 두 의미 불일치 거부를 유지한다.
+[w9caclipack 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caclipack/RESULT.md)는
+소스·후보 packet 검증 근거이며 실제 설치·실제 사용자 pause/resume·전체 client 정지 수용은 아니다.
 
 W6 CA-0/1/2의 client/store·view·완료 orchestration 이동은 기존 writer inventory 생성기 `--write/--check`와 Python fence·
 PowerShell fence·session contract의 3개 pin을 함께 갱신한다. M7의 frozen product text/binding
