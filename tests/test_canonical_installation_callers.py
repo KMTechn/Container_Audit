@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import shutil
+import ctypes
 
 import pytest
+from tests.powershell_contracts import run_functions
 
 from tests.canonical_scheduler_fixture import (
     DURABLE_AUDIT_OBSERVER, PREPLACEMENT_OBSERVER, SCHEDULER_OS,
@@ -43,12 +45,23 @@ def _distinct_replacement(source):
     # this owned canonical session, preserving the real validator and arguments.
     # Elevation and ACL changes remain disabled by the original layout switch.
     text = text.replace(bypass, 'if (-not $DryRun.IsPresent) {')
-    entered = '    $placementWriterFenceLease = Enter-ContainerPlacementWriterFence'
+    entered = '    . $WriterFenceHelperPath'
     assert text.count(entered) == 1
-    text = text.replace(entered, entered + r'''
+    helper_loaded = '    . $writerFenceHelperFull'
+    assert text.count(helper_loaded) == 1
+    text = text.replace(helper_loaded, helper_loaded + r'''
+    if ($testOverride) {
+        function Get-ContainerWriterFenceProfileLocalAppDataRoot {
+            param([string]$OperatorSid)
+            return $env:LOCALAPPDATA
+        }
+        $Script:ContainerWriterFenceAdmissionMutexName = $env:KMTECH_TEST_CA_WRITER_MUTEX
+    }
+''')
+    text = text.replace(entered, r'''
     $admission = @{ restore=$RestoreVerifiedReplacement.IsPresent; transaction_id=$WriterFenceReplacementTransactionId }
     [IO.File]::AppendAllText((Join-Path $env:CA_UNINSTALL_ROOT 'placement-admissions.jsonl'), (($admission | ConvertTo-Json -Compress) + [Environment]::NewLine))
-''')
+''' + entered + '\n    $Script:ContainerWriterFenceAdmissionMutexName = $env:KMTECH_TEST_CA_WRITER_MUTEX')
     helper.write_text(text, encoding='utf-8-sig')
     path = source / 'portable-manifest.json'
     manifest = json.loads(path.read_text())
@@ -69,6 +82,55 @@ def _public_restore(tmp_path, env, source, install, receipt, digest, label='rest
     (tmp_path / f'{label}-stdout.log').write_text(result.stdout, encoding='utf-8')
     (tmp_path / f'{label}-stderr.log').write_text(result.stderr, encoding='utf-8')
     return result
+
+
+def test_operator_profile_mismatch_stops_before_code_and_explains_retry(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    _distinct_replacement(source)
+    installer = source / 'INSTALL_CANONICAL_PORTABLE.ps1'
+    text = installer.read_text(encoding='utf-8-sig')
+    original = "'-OperatorLocalAppDataRoot',$lad,\n            '-OperatorSid',$operatorSid,"
+    assert text.count(original) == 1
+    installer.write_text(text.replace(original, "'-OperatorLocalAppDataRoot',(Join-Path $lad 'wrong-profile'),\n            '-OperatorSid',$operatorSid,"), encoding='utf-8-sig')
+    _bind_packet(source)
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        result = _install(tmp_path, env, source, install)
+        assert result.returncode != 0
+        assert '설치 코드 배치 전 중단' in result.stderr
+        assert 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH' in result.stderr
+        assert '문의 코드 CA-' in result.stderr
+        assert '다시 확인' in result.stderr and '기존 설치본과 기록' in result.stderr
+        audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+        assert audit['code_placement'] == 'NOT_STARTED'
+        assert _tree(install) == before['code']
+
+
+def test_elevation_failure_readback_reaches_canonical_parent_without_real_uac(tmp_path):
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        pytest.skip('parent forwarding path requires a non-elevated token')
+    log = tmp_path / 'elevated.jsonl'
+    code = 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH'
+    log.write_text(json.dumps({
+        'captured_at': '2026-09-23T00:00:00Z', 'process_id': 4242,
+        'elevated': True, 'status': 'PREFLIGHT_FAILED', 'message': code,
+    }) + '\n', encoding='utf-8')
+    result = run_functions(tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_THIS_PC.ps1',
+                           ['ConvertTo-ProcessArgument', 'Invoke-SelfElevated'], r'''
+$BootstrapScriptPath='C:\packet\INSTALL_THIS_PC.ps1'
+$BootstrapBoundParameters=@{}
+$ElevationLogPath=$env:CA_FAKE_ELEVATION_LOG
+function Get-StrictFullPath([string]$Value,[string]$Purpose) { return [IO.Path]::GetFullPath($Value) }
+function Assert-NoReparsePoint([string]$Value,[string]$Purpose) { }
+function Start-Process {
+    param($FilePath,$Verb,$ArgumentList,[switch]$Wait,[switch]$PassThru)
+    if ($Verb -cne 'RunAs') { throw 'elevation invocation changed' }
+    return [pscustomobject]@{ Id=4242; ExitCode=1 }
+}
+Invoke-SelfElevated
+''', values={'CA_FAKE_ELEVATION_LOG': str(log)})
+    assert result.returncode == 1
+    assert f'code_placement_preflight_failure={code}' in result.stdout
 
 
 def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatable(tmp_path):

@@ -134,6 +134,135 @@ def test_noncanonical_admission_mutex_derivation_matches_winps_for_unicode_roots
     assert expected[1] == expected[2]
 
 
+@pytest.mark.skipif(not WINPS.exists(), reason="Windows PowerShell 5.1 is required")
+@pytest.mark.parametrize("different_elevation_account", (False, True))
+def test_canonical_operator_root_survives_elevation_and_rejects_wrong_binding(
+    tmp_path: Path, different_elevation_account: bool,
+) -> None:
+    operator_sid = "S-1-5-21-100-200-300-1001"
+    other_sid = "S-1-5-21-100-200-300-1002"
+    local = tmp_path / "worker" / "AppData" / "Local"
+    admin_local = tmp_path / "admin" / "AppData" / "Local"
+    root = local / "KMTech" / "DirectSync" / "container_audit" / "control" / "writer-session"
+    production_mutex = os.environ["KMTECH_TEST_CA_WRITER_MUTEX"]
+    root.mkdir(parents=True)
+    admin_local.mkdir(parents=True)
+    token = "a" * 64
+    payload = _active_payload(token=token, sources=["canonical_code_placement"])
+    payload["status"] = "INSTALLING"
+    payload["owner_kind"] = "canonical_installer"
+    prepared = tmp_path / "prepared.json"
+    prepared.write_text(json.dumps({
+        "schema": "container-audit-canonical-writer-prepared-v1",
+        "status": "PREPARED", "app_id": "container_audit",
+        "session_id": payload["session_id"], "attempt_id": payload["attempt_id"],
+        "replacement_transaction_id": payload["replacement_transaction_id"],
+        "session_started_at_utc": payload["session_started_at_utc"],
+        "orchestrator_sha256": payload["orchestrator_sha256"],
+        "writer_contract_sha256": payload["writer_contract_sha256"],
+        "writer_inventory_sha256": payload["writer_inventory_sha256"],
+        "source_manifest_sha256": "5" * 64,
+        "operator_sid": operator_sid, "operator_local_appdata_root": str(local),
+        "created_at_utc": _utc(), "secret_values_recorded": False,
+    }) + "\n", encoding="utf-8")
+    digest = hashlib.sha256(prepared.read_bytes()).hexdigest()
+    payload["prepared_receipt_path"] = str(prepared)
+    payload["prepared_receipt_sha256"] = digest
+    (root / fence.ACTIVE_FILENAME).write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    ready = threading.Event()
+    release = threading.Event()
+
+    def hold_authority() -> None:
+        lease = fence._acquire_named_mutex(payload["session_authority_mutex_name"], 1.0)
+        assert lease is not None and not lease.abandoned
+        ready.set()
+        release.wait(15)
+        lease.release()
+
+    thread = threading.Thread(target=hold_authority, daemon=True)
+    thread.start()
+    assert ready.wait(5)
+
+    def ps(value: str) -> str:
+        return "'" + value.replace("'", "''") + "'"
+
+    common = (
+        f". {ps(str(PS_HELPER))}; "
+        "function Get-ContainerWriterFenceProfileLocalAppDataRoot([string]$Sid) { "
+        f"if ($Sid -ceq {ps(operator_sid)}) {{ return {ps(str(local))} }} "
+        "throw 'CONTAINER_OPERATOR_PROFILE_UNAVAILABLE' }; "
+        f"$env:LOCALAPPDATA={ps(str(admin_local if different_elevation_account else local))}; "
+        f"$binding=Assert-ContainerWriterFenceOperatorRoot -PreparedReceiptPath {ps(str(prepared))} "
+        f"-PreparedReceiptSha256 {ps(digest)} -OperatorLocalAppDataRoot {ps(str(local))} "
+        f"-OperatorSid {ps(operator_sid)} -SessionId {ps(str(payload['session_id']))} "
+        f"-AttemptId {ps(str(payload['attempt_id']))} "
+        f"-ReplacementTransactionId {ps(str(payload['replacement_transaction_id']))}; "
+        "$Script:ContainerWriterFenceAdmissionProductionRoot=$binding.control_root; "
+        "$legacyName=Get-ContainerWriterAdmissionMutexName -ControlRoot $binding.control_root; "
+        "$Script:ContainerWriterFenceAdmissionMutexName=$env:KMTECH_TEST_CA_WRITER_MUTEX; "
+    )
+
+    def invoke(script: str) -> subprocess.CompletedProcess[str]:
+        return run_powershell(
+            [str(WINPS), "-NoProfile", "-NonInteractive", "-Command", script],
+            text=True, capture_output=True, timeout=30, check=False,
+        )
+
+    delegated = (
+        "Enter-ContainerWriterDelegatedOperation -ControlRoot $binding.control_root "
+        f"-SessionId {ps(str(payload['session_id']))} -AttemptId {ps(str(payload['attempt_id']))} "
+        f"-ReplacementTransactionId {ps(str(payload['replacement_transaction_id']))} "
+        f"-DelegationToken {ps(token)} -Source 'canonical_code_placement' -TimeoutMilliseconds 2000"
+    )
+    try:
+        good = invoke(common + f"$lease={delegated}; "
+                      "try { 'LEGACY='+$legacyName; Get-ContainerWriterAdmissionMutexName -ControlRoot $binding.control_root; 'ADMITTED' } "
+                      "finally { Exit-ContainerWriterAdmission $lease }")
+        assert good.returncode == 0, good.stdout + good.stderr
+        assert production_mutex in good.stdout
+        assert "LEGACY=" + fence.WRITER_MUTEX_NAME in good.stdout
+        assert "ADMITTED" in good.stdout
+
+        wrong_sid = invoke(common.replace(f"-OperatorSid {ps(operator_sid)}", f"-OperatorSid {ps(other_sid)}") + "'UNEXPECTED'")
+        assert wrong_sid.returncode != 0
+        assert "CONTAINER_OPERATOR_PREPARED_BINDING_MISMATCH" in wrong_sid.stderr
+
+        wrong_root = invoke(common.replace(f"-OperatorLocalAppDataRoot {ps(str(local))}",
+                                           f"-OperatorLocalAppDataRoot {ps(str(admin_local))}") + "'UNEXPECTED'")
+        assert wrong_root.returncode != 0
+        assert "CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH" in wrong_root.stderr
+
+        stale = invoke(common.replace(f"-AttemptId {ps(str(payload['attempt_id']))}",
+                                      f"-AttemptId {ps('9' * 32)}") + "'UNEXPECTED'")
+        assert stale.returncode != 0
+        assert "CONTAINER_OPERATOR_PREPARED_BINDING_MISMATCH" in stale.stderr
+
+        mutex_ready = threading.Event()
+        mutex_release = threading.Event()
+
+        def hold_admission() -> None:
+            lease = fence._acquire_named_mutex(production_mutex, 1.0)
+            assert lease is not None and not lease.abandoned
+            mutex_ready.set()
+            mutex_release.wait(10)
+            lease.release()
+
+        mutex_thread = threading.Thread(target=hold_admission, daemon=True)
+        mutex_thread.start()
+        assert mutex_ready.wait(5)
+        try:
+            busy = invoke(common + delegated.replace("-TimeoutMilliseconds 2000", "-TimeoutMilliseconds 100"))
+            assert busy.returncode != 0
+            assert "CONTAINER_WRITER_ADMISSION_MUTEX_TIMEOUT" in busy.stderr
+        finally:
+            mutex_release.set()
+            mutex_thread.join(5)
+    finally:
+        release.set()
+        thread.join(5)
+
+
 def test_code_derived_inventory_pin_is_exact_across_all_fence_consumers() -> None:
     contract = json.loads(
         (ROOT / "tools" / "container_writer_session_contract.json").read_text(

@@ -92,6 +92,7 @@ $currentManifest=Manifest $env:CA_UPGRADE_CURRENT_SOURCE $true
 $sourceWriterInventory=Assert-WriterSinkInventory `
     (Join-Path $env:CA_UPGRADE_CURRENT_SOURCE 'tools/container_writer_sink_inventory.json') `
     $currentManifest.writer_sink_inventory_sha256 $currentManifest.writer_sink_inventory_contract_sha256
+$lifecycleWriterInventory=$sourceWriterInventory
 if ((Get-WriterInventorySemantics $sourceWriterInventory) -ceq (Get-WriterInventorySemantics $compatibleInventory)) {
     throw 'expected distinct historical and current writer semantics'
 }
@@ -99,7 +100,7 @@ $incompatible=''
 try { Invoke-Expression $preflight[0].Extent.Text } catch { $incompatible=$_.Exception.Message }
 if ($incompatible -cne 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER') { throw ('writer change was not rejected: '+$incompatible) }
 if ((Assert-BootstrapIntegrityRecord $install).aggregate_sha256 -cne $originalAggregate) { throw 'rejected upgrade mutated old tree' }
-$sourceWriterInventory=$compatibleInventory
+$lifecycleWriterInventory=$compatibleInventory
 Invoke-Expression $preflight[0].Extent.Text
 if ([string]$preflightCandidate.source_commit -cne $env:CA_UPGRADE_BASELINE) { throw 'old manifest identity changed' }
 if ((Assert-BootstrapIntegrityRecord $install).aggregate_sha256 -cne $originalAggregate) { throw 'preflight mutated old tree' }

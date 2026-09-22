@@ -100,6 +100,8 @@ python -B tools/run_repository_tests.py --task-root D:\KMTech\<task>\Container_A
 
 보존한 정확한 portable packet에서 일반 작업자 계정으로 canonical 설치를
 실행한다. 내부 helper는 관리자 쓰기 전용 경로에 코드와 무결성 기록을 배치한다.
+작업자가 표준 사용자이고 UAC에서 별도 관리자 계정으로 상승하는 경우도 지원한다.
+설치와 첫 실행은 계속 작업자 계정에서 시작하고, 관리자 승격은 코드 배치에만 사용한다.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\INSTALL_CANONICAL_PORTABLE.ps1

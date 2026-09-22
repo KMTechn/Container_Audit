@@ -6,7 +6,8 @@ $Script:ContainerWriterFenceAppId = 'container_audit'
 $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-authority-v1'
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
-$Script:ContainerWriterFenceInventorySha256 = '1cea25798d77ab0038e0245f5d3f721b4a9e153054feb9ffb69720e226f9b2a6'
+$Script:ContainerWriterFenceAdmissionProductionRoot = ''
+$Script:ContainerWriterFenceInventorySha256 = 'db9628a12e51c0efd84b813f849d8b71cb932823b8c9703b5b892382e8718bf6'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
@@ -102,11 +103,80 @@ function Get-ContainerWriterAdmissionMutexName {
     param([string]$ControlRoot = '')
     $selected = Get-ContainerWriterFenceNormalizedRoot (Get-ContainerWriterFenceControlRoot $ControlRoot)
     $production = ''
-    try { $production = Get-ContainerWriterFenceNormalizedRoot (Get-ContainerWriterFenceControlRoot) } catch { }
+    try {
+        $productionRoot = if ([string]::IsNullOrEmpty($Script:ContainerWriterFenceAdmissionProductionRoot)) {
+            Get-ContainerWriterFenceControlRoot
+        } else { $Script:ContainerWriterFenceAdmissionProductionRoot }
+        $production = Get-ContainerWriterFenceNormalizedRoot $productionRoot
+    } catch { }
     if (-not [string]::IsNullOrWhiteSpace($production) -and $selected -ceq $production) {
         return $Script:ContainerWriterFenceAdmissionMutexName
     }
     return $Script:ContainerWriterFenceAdmissionMutexName + '.' + (Get-ContainerWriterFenceStringSha256 $selected).Substring(0, 16)
+}
+
+function Get-ContainerWriterFenceProfileLocalAppDataRoot([string]$OperatorSid) {
+    if ($OperatorSid -cnotmatch '^S-\d+(?:-\d+)+$') {
+        throw 'CONTAINER_OPERATOR_SID_INVALID'
+    }
+    $profileKey = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $OperatorSid
+    try { $profile = Get-ItemProperty -LiteralPath $profileKey -Name ProfileImagePath -ErrorAction Stop }
+    catch { throw 'CONTAINER_OPERATOR_PROFILE_UNAVAILABLE' }
+    return Join-Path ([IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables([string]$profile.ProfileImagePath))) 'AppData\Local'
+}
+
+function Assert-ContainerWriterFenceOperatorRoot {
+    param(
+        [string]$PreparedReceiptPath,
+        [string]$PreparedReceiptSha256,
+        [string]$OperatorLocalAppDataRoot,
+        [string]$OperatorSid,
+        [string]$ProfileLocalAppDataRootForTest = '',
+        [string]$SessionId,
+        [string]$AttemptId,
+        [string]$ReplacementTransactionId
+    )
+    if (-not (Test-ContainerWriterFenceHex $PreparedReceiptSha256 64)) {
+        throw 'CONTAINER_OPERATOR_PREPARED_RECEIPT_INVALID'
+    }
+    $prepared = [IO.Path]::GetFullPath($PreparedReceiptPath)
+    if ((Get-ContainerWriterFenceFileSha256 $prepared 65536) -cne $PreparedReceiptSha256) {
+        throw 'CONTAINER_OPERATOR_PREPARED_RECEIPT_MISMATCH'
+    }
+    try { $receipt = Get-Content -LiteralPath $prepared -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw 'CONTAINER_OPERATOR_PREPARED_RECEIPT_INVALID' }
+    if (
+        -not (Test-ContainerWriterFenceExactPropertySet $receipt @(
+            'schema','status','app_id','session_id','attempt_id','replacement_transaction_id',
+            'session_started_at_utc','orchestrator_sha256','writer_contract_sha256',
+            'writer_inventory_sha256','source_manifest_sha256','operator_sid',
+            'operator_local_appdata_root','created_at_utc','secret_values_recorded'
+        )) -or
+        [string]$receipt.schema -cne 'container-audit-canonical-writer-prepared-v1' -or
+        [string]$receipt.status -cne 'PREPARED' -or
+        [string]$receipt.app_id -cne 'container_audit' -or
+        [string]$receipt.session_id -cne $SessionId -or
+        [string]$receipt.attempt_id -cne $AttemptId -or
+        [string]$receipt.replacement_transaction_id -cne $ReplacementTransactionId -or
+        [string]$receipt.operator_sid -cne $OperatorSid -or
+        $receipt.secret_values_recorded -isnot [bool] -or [bool]$receipt.secret_values_recorded
+    ) { throw 'CONTAINER_OPERATOR_PREPARED_BINDING_MISMATCH' }
+    if ([string]::IsNullOrWhiteSpace($ProfileLocalAppDataRootForTest)) {
+        $profileRoot = Get-ContainerWriterFenceProfileLocalAppDataRoot $OperatorSid
+    } else {
+        if ([string]$env:KMTECH_FACTORY_INSTALL_TEST_MODE -cne '1') {
+            throw 'CONTAINER_OPERATOR_TEST_PROFILE_OVERRIDE_REJECTED'
+        }
+        $profileRoot = [IO.Path]::GetFullPath($ProfileLocalAppDataRootForTest)
+    }
+    $expected = Get-ContainerWriterFenceNormalizedRoot $profileRoot
+    if (
+        (Get-ContainerWriterFenceNormalizedRoot $OperatorLocalAppDataRoot) -cne $expected -or
+        (Get-ContainerWriterFenceNormalizedRoot ([string]$receipt.operator_local_appdata_root)) -cne $expected
+    ) { throw 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH' }
+    $root = Join-Path $profileRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    Assert-ContainerWriterFenceNoReparse $root
+    return [pscustomobject][ordered]@{ control_root=$root; receipt_path=$prepared; receipt_sha256=$PreparedReceiptSha256 }
 }
 
 function Test-ContainerWriterFenceExactPropertySet($Value, [string[]]$Expected) {

@@ -1,5 +1,9 @@
 # Container_Audit 기술 명세
 
+표준 작업자 계정에서 시작한 canonical 설치는 별도 관리자 계정으로 코드 배치를
+승격할 수 있다. 작업자 SID·프로필 루트·이번 prepared receipt·fence를 결속하며
+교차 계정 guest 실물 설치는 [CA-G15](BACKLOG.md#ca-g15)의 미검증 항목이다.
+
 기본 루트 제거 후 custom 루트를 채택한 설치의 은퇴 마감은
 [`CompleteRetiredRemoval`](operations.md#ca-retired-removal)을 사용한다.
 검증한 관리 패키지와 exact old 패키지를 구별하며 은퇴 marker·업무·신원은 보존한다.

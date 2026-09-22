@@ -6,6 +6,7 @@ param(
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$TlsCaBundlePath = "",
     [string]$OperatorLocalAppDataRoot = "",
+    [string]$OperatorSid = "",
     [string]$ElevationLogPath = "",
     [switch]$ReplaceExistingVerifiedPortable,
     [string]$ReplacementTransactionId = "",
@@ -22,6 +23,8 @@ param(
     [string]$ExpectedUninstallRecordSha256 = "",
     [string]$WriterFenceHelperPath = "",
     [string]$ExpectedWriterFenceHelperSha256 = "",
+    [string]$WriterFencePreparedReceiptPath = "",
+    [string]$WriterFencePreparedReceiptSha256 = "",
     [string]$WriterFenceSessionId = "",
     [string]$WriterFenceAttemptId = "",
     [string]$WriterFenceReplacementTransactionId = "",
@@ -101,12 +104,31 @@ function Invoke-SelfElevated {
     $argumentLine = ($arguments | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join ' '
     $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
+    if ($process.ExitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($ElevationLogPath)) {
+        try {
+            $logFull = Get-StrictFullPath $ElevationLogPath 'ElevationLogPath'
+            Assert-NoReparsePoint $logFull 'elevation log'
+            if ((Test-Path -LiteralPath $logFull -PathType Leaf) -and
+                (Get-Item -LiteralPath $logFull).Length -le 65536) {
+                $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 | ConvertFrom-Json
+                if ([int]$lastEntry.process_id -eq [int]$process.Id -and
+                    [string]$lastEntry.status -ceq 'PREFLIGHT_FAILED' -and
+                    [string]$lastEntry.message -cmatch '^CONTAINER_(?:OPERATOR|WRITER)_[A-Z_]+$') {
+                    Write-Output "code_placement_preflight_failure=$([string]$lastEntry.message)"
+                }
+            }
+        } catch { }
+    }
     exit $process.ExitCode
 }
 
 function Enter-ContainerPlacementWriterFence {
     if (
         [string]::IsNullOrWhiteSpace($WriterFenceHelperPath) -or
+        [string]::IsNullOrWhiteSpace($OperatorLocalAppDataRoot) -or
+        [string]::IsNullOrWhiteSpace($OperatorSid) -or
+        [string]::IsNullOrWhiteSpace($WriterFencePreparedReceiptPath) -or
+        [string]$WriterFencePreparedReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         [string]$ExpectedWriterFenceHelperSha256 -cnotmatch '^[0-9a-f]{64}$' -or
         [string]$WriterFenceSessionId -cnotmatch '^[0-9a-f]{32}$' -or
         [string]$WriterFenceAttemptId -cnotmatch '^[0-9a-f]{32}$' -or
@@ -129,16 +151,45 @@ function Enter-ContainerPlacementWriterFence {
         throw 'Production placement writer fence helper byte pin differs.'
     }
     . $writerFenceHelperFull
+    $operatorBinding = Assert-ContainerWriterFenceOperatorRoot `
+        -PreparedReceiptPath $WriterFencePreparedReceiptPath `
+        -PreparedReceiptSha256 $WriterFencePreparedReceiptSha256 `
+        -OperatorLocalAppDataRoot $OperatorLocalAppDataRoot `
+        -OperatorSid $OperatorSid `
+        -ProfileLocalAppDataRootForTest $(if ($testOverride) { $OperatorLocalAppDataRoot } else { '' }) `
+        -SessionId $WriterFenceSessionId `
+        -AttemptId $WriterFenceAttemptId `
+        -ReplacementTransactionId $WriterFenceReplacementTransactionId
+    $controlRoot = [string]$operatorBinding.control_root
+    $Script:ContainerWriterFenceAdmissionProductionRoot = $controlRoot
     $preflightLease = Enter-ContainerWriterDelegatedOperation `
+        -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId `
         -DelegationToken $WriterFenceDelegationToken `
         -Source $PlacementWriterSource `
         -TimeoutMilliseconds 15000
-    Exit-ContainerWriterAdmission $preflightLease
+    try {
+        $active = Read-ContainerWriterFence -ControlRoot $controlRoot
+        $preparedMatches = (
+            (Test-SamePath ([string]$active.prepared_receipt_path) ([string]$operatorBinding.receipt_path)) -and
+            [string]$active.prepared_receipt_sha256 -ceq [string]$operatorBinding.receipt_sha256
+        )
+        $uninstallRecovery = (
+            -not [string]::IsNullOrWhiteSpace($RestoreUninstallRecordPath) -and
+            [string]$ExpectedUninstallRecordSha256 -cmatch '^[0-9a-f]{64}$' -and
+            [string]$active.status -ceq 'RESTORING'
+        )
+        if (
+            [string]$active.owner_kind -cne 'canonical_installer' -or
+            -not ($preparedMatches -or $uninstallRecovery)
+        ) { throw 'CONTAINER_OPERATOR_PREPARED_BINDING_MISMATCH' }
+    }
+    finally { Exit-ContainerWriterAdmission $preflightLease }
     if (-not $testOverride) { Invoke-SelfElevated }
     return Enter-ContainerWriterDelegatedOperation `
+        -ControlRoot $controlRoot `
         -SessionId $WriterFenceSessionId `
         -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId `
@@ -569,8 +620,21 @@ if (
 }
 $placementWriterFenceLease = $null
 if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
-    $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
+    try { $placementWriterFenceLease = Enter-ContainerPlacementWriterFence }
+    catch {
+        $failureCode = [string]$_.Exception.Message
+        if ($failureCode -cmatch '^CONTAINER_(?:OPERATOR|WRITER)_[A-Z_]+$') {
+            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+            if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+                try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode } catch { }
+            }
+            Write-Output "code_placement_preflight_failure=$failureCode"
+        }
+        throw
+    }
     . $WriterFenceHelperPath
+    $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
 }
 try {
 if ($RestoreVerifiedReplacement.IsPresent) {

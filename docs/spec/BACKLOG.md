@@ -291,6 +291,12 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **C06 저장 공간/내구 쓰기:** 용량 부족·권한·outbox 실패는 보존된 current와 원 사건을 쓴 뒤에만 작업을 계속할 수 있다. 현장 관리자의 저장 공간/쓰기 상태 확인·같은 요청 재시도 UI와 정량 경고/보존 요구를 별도 과제로 둔다. 쓰기 실패를 성공으로 표시하거나 로컬 유일본을 지우지 않는다. [CA-G06](#ca-g06).
 - **C09 설치·등록 및 C10 품목 시작:** 기존 신원과 검증 cache가 없을 때 자동 새 신원·임의 품목으로 업무를 시작할 근거가 없다. C09는 배포 파도에서 지원 등록/원상태 대조와 관리자 원인별 복구 화면을 다룬다. C10은 정상 네트워크 회복 시 같은 시작 화면에서 중앙 품목 재시도·검증 cache 상태 안내를 별도 설계한다. 두 항목 모두 이번 소스/격리 시험 범위의 운영 PC 접근 대상이 아니다.
 
+<a id="ca-g15"></a>
+## CA-G15 별도 관리자 UAC 설치의 현장 확인 (w9cafence)
+
+- **소스·격리 시험 PROVEN:** 작업자 prepared receipt의 SID·LOCALAPPDATA·session/attempt/transaction과 token을 상승 helper가 대조한다. 기본 root의 기존 admission mutex 이름을 계정과 무관하게 사용하며, 잘못된 SID/root·오래된 시도·경쟁 writer를 거부한다. [설치 계약](operations.md#ca-o05)과 [구현 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cafence/RESULT.md)를 따른다.
+- **guest 실물 NOT TESTED:** 정확한 새 packet으로 표준 작업자+별도 관리자 UAC 신규 설치, 같은 관리자 계정 상승, ACL/mutex 교차 계정 접근, 첫 실행의 작업자 HKCU·DPAPI·ledger·relay 소유권을 확인한다. 기존 설치본/기록 보존과 화면 문의 코드도 대조한다. 운영 PC·서버 배포는 별도 권한 범위다.
+
 ## 갱신 기준
 
 요구 확정·소스 변경·실행 결과가 생긴 담당자는 연결된 기능/계약/운영 항목과 이 문서의 상태·다음 행동을 같은 작업에서 갱신한다. Main에 중앙 INT-02/03/04/09/10, I02/I04 및 Q01/Q07에 미치는 차이를 알린다. 과거 실패·미실행을 삭제하지 않고 새 버전·환경의 근거를 연결한다. [AGENTS의 지속 관리 규칙](../../AGENTS.md)을 적용한다.

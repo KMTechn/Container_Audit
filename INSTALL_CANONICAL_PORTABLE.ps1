@@ -463,7 +463,9 @@ function New-CanonicalWriterFencePreparedReceipt(
     [string]$SessionStartedAtUtc,
     [string]$OrchestratorSha256,
     [string]$WriterContractSha256,
-    [string]$SourceManifestSha256
+    [string]$SourceManifestSha256,
+    [string]$OperatorSid,
+    [string]$OperatorLocalAppDataRoot
 ) {
     if (Test-Path -LiteralPath $Path) {
         throw 'CANONICAL_WRITER_PREPARED_RECEIPT_ALREADY_EXISTS'
@@ -480,6 +482,8 @@ function New-CanonicalWriterFencePreparedReceipt(
         writer_contract_sha256=$WriterContractSha256
         writer_inventory_sha256=$Script:ContainerWriterFenceInventorySha256
         source_manifest_sha256=$SourceManifestSha256
+        operator_sid=$OperatorSid
+        operator_local_appdata_root=$OperatorLocalAppDataRoot
         created_at_utc=[DateTime]::UtcNow.ToString('o')
         secret_values_recorded=$false
     }
@@ -499,7 +503,7 @@ function New-CanonicalWriterFencePreparedReceipt(
             'schema','status','app_id','session_id','attempt_id',
             'replacement_transaction_id','session_started_at_utc','orchestrator_sha256',
             'writer_contract_sha256','writer_inventory_sha256','source_manifest_sha256',
-            'created_at_utc','secret_values_recorded'
+            'operator_sid','operator_local_appdata_root','created_at_utc','secret_values_recorded'
         )) -or
         [string]$actual.schema -cne 'container-audit-canonical-writer-prepared-v1' -or
         [string]$actual.status -cne 'PREPARED' -or
@@ -512,6 +516,8 @@ function New-CanonicalWriterFencePreparedReceipt(
         [string]$actual.writer_contract_sha256 -cne $WriterContractSha256 -or
         [string]$actual.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
         [string]$actual.source_manifest_sha256 -cne $SourceManifestSha256 -or
+        [string]$actual.operator_sid -cne $OperatorSid -or
+        [string]$actual.operator_local_appdata_root -cne $OperatorLocalAppDataRoot -or
         $actual.secret_values_recorded -isnot [bool] -or [bool]$actual.secret_values_recorded
     ) { throw 'CANONICAL_WRITER_PREPARED_RECEIPT_READBACK_FAILED' }
     return [pscustomobject][ordered]@{
@@ -1670,6 +1676,7 @@ if (Test-Path -LiteralPath $install -PathType Container) {
     }
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
+$operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $retirementResume = if ($ResumeRetirementReceiptPath) { Read-CanonicalRetirementResume } else { $null }
 $retirementResumeBeforeRemoval = $retirementResume -and [string]$retirementResume.status -ceq 'PREIMAGE_SAVED'
 if ($RestoreVerifiedReplacement) {
@@ -1884,7 +1891,9 @@ $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -WriterContractSha256 $canonicalWriterFenceContractSha256 `
-    -SourceManifestSha256 $sourceManifestSha256
+    -SourceManifestSha256 $sourceManifestSha256 `
+    -OperatorSid $operatorSid `
+    -OperatorLocalAppDataRoot $lad
 if ($retirementResume) {
     $resumeAdmission = Enter-ContainerWriterAdmission
     try {
@@ -2090,6 +2099,9 @@ $enteredPlacementTry = $true
             '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-InstallRoot',$install, '-ElevationLogPath',$elevationLogPath,
+            '-OperatorLocalAppDataRoot',$lad, '-OperatorSid',$operatorSid,
+            '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+            '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
             '-RestoreVerifiedReplacement', '-ReplacementTransactionId',$selectedTransactionId,
             '-ReplacementReceiptPath',$restoreReceiptFull, '-ReplacementReceiptSha256',$RestoreReceiptSha256,
             '-RestoreEvidencePath',$replacementRestoreEvidencePath,
@@ -2205,6 +2217,25 @@ $enteredPlacementTry = $true
             '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
             '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
         )
+        $retiredHelperSupportsOperatorBinding = $true
+        if ($CompleteRetiredRemoval) {
+            $helperTokens = $null; $helperErrors = $null
+            $helperAst = [Management.Automation.Language.Parser]::ParseFile(
+                (Join-Path $lifecycleSource 'INSTALL_THIS_PC.ps1'), [ref]$helperTokens, [ref]$helperErrors)
+            if ($helperErrors.Count -ne 0) { throw 'Retired helper syntax is invalid.' }
+            $helperParameterNames = @($helperAst.ParamBlock.Parameters | ForEach-Object { $_.Name.VariablePath.UserPath })
+            $operatorParameterNames = @('OperatorSid','WriterFencePreparedReceiptPath','WriterFencePreparedReceiptSha256')
+            $supportedCount = @($operatorParameterNames | Where-Object { $_ -in $helperParameterNames }).Count
+            if ($supportedCount -notin @(0,3)) { throw 'Retired helper operator binding is incomplete.' }
+            $retiredHelperSupportsOperatorBinding = ($supportedCount -eq 3)
+        }
+        if ($retiredHelperSupportsOperatorBinding) {
+            $uninstallArguments += @(
+                '-OperatorSid',$operatorSid,
+                '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+                '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256)
+            )
+        }
         if ($testMode) { $uninstallArguments += '-AllowNoncanonicalLayoutForTest' }
         $uninstallCodeStarted = $true
         if (-not $resumeCodeAbsent) {
@@ -2279,7 +2310,11 @@ $enteredPlacementTry = $true
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
             '-SourceRoot',$source,
             '-InstallRoot',$install,
+            '-OperatorLocalAppDataRoot',$lad,
+            '-OperatorSid',$operatorSid,
             '-ElevationLogPath',$elevationLogPath,
+            '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+            '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
             '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
             '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
             '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,
@@ -2297,7 +2332,24 @@ $enteredPlacementTry = $true
         if ($testMode) { $bootstrap += '-AllowNoncanonicalLayoutForTest' }
         $bootstrapOutput = @(& $winps @bootstrap)
         $bootstrapExitCode = $LASTEXITCODE
-        if ($bootstrapExitCode -ne 0) { throw "Code placement failed: $bootstrapExitCode" }
+        if ($bootstrapExitCode -ne 0) {
+            $preflightFailure = @($bootstrapOutput | Where-Object {
+                [string]$_ -cmatch '^code_placement_preflight_failure=CONTAINER_[A-Z_]+$'
+            } | Select-Object -Last 1)
+            if ($preflightFailure.Count -eq 1) {
+                $failureCode = ([string]$preflightFailure[0]).Split('=')[1]
+                $reason = if ($failureCode -cmatch 'MUTEX_TIMEOUT$') {
+                    '다른 설치 또는 기록 작업이 진행 중입니다.'
+                } elseif ($failureCode -cmatch 'DELEGATED_OPERATION_MISMATCH$') {
+                    '이번 설치 준비가 만료되었거나 다른 시도와 섞였습니다.'
+                } else {
+                    '작업자 계정의 준비 폴더와 권한 상승 요청이 일치하지 않습니다.'
+                }
+                $inquiryCode = 'CA-' + (Get-ContainerWriterFenceStringSha256 ($operatorSid + '|' + $env:COMPUTERNAME + '|' + $Script:CanonicalWriterFenceAttemptId)).Substring(0, 12).ToUpperInvariant()
+                throw "설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다."
+            }
+            throw "Code placement failed: $bootstrapExitCode"
+        }
         $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
         if ($replaceExisting) {
             $replacementReceiptSha256 = Sha $replacementReceiptPath
@@ -2627,7 +2679,11 @@ catch {
                 '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
                 '-File',(Join-Path $install 'INSTALL_THIS_PC.ps1'),
                 '-InstallRoot',$install,
+                '-OperatorLocalAppDataRoot',$lad,
+                '-OperatorSid',$operatorSid,
                 '-ElevationLogPath',$elevationLogPath,
+                '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+                '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
                 '-RestoreVerifiedReplacement',
                 '-ReplacementTransactionId',$replacementTransactionId,
                 '-ReplacementReceiptPath',$replacementReceiptPath,
