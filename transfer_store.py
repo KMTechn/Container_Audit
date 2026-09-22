@@ -645,6 +645,23 @@ class TransferSealStore:
             ).fetchall()
         return rows[0] if len(rows) == 1 else None
 
+    def bound_operator_review_for_tray(
+        self, *, master_label: str, scanned_barcodes: Iterable[str],
+    ) -> sqlite3.Row | None:
+        """Select one original command, including ACK after a UI save failure."""
+        self._assert_not_ui_thread_read()
+        barcodes = [_normalize_identifier(value, "scanned_barcode") for value in scanned_barcodes]
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT * FROM transfer_seal_intents
+                    WHERE status IN ('OPERATOR_REVIEW','ACKED') AND master_label=?
+                      AND scanned_barcodes_json=? AND command_json IS NOT NULL
+                      AND completion_checkpoint_confirmed=1
+                    ORDER BY updated_at DESC LIMIT 2""",
+                (_normalize_identifier(master_label, "master_label"), _canonical_json(barcodes)),
+            ).fetchall()
+        return rows[0] if len(rows) == 1 else None
+
     @writer_sink("transfer_seal")
     def bind_command(self, intent_id: str, context: Mapping[str, Any]) -> sqlite3.Row:
         self._assert_coordinator_owner()

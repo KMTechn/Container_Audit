@@ -361,6 +361,202 @@ def test_recovery_decline_audit_failure_keeps_current_and_parked_copies(tmp_path
     assert app.current_tray.master_label_code == "STALE"
 
 
+def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_audit(
+    tmp_path, monkeypatch,
+):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "홍길동"
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    app.computer_id = "host-01"
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.current_tray = TraySession(master_label_code=_saved_tray_state()["master_label_code"])
+    state = _saved_tray_state()
+    state[container_module.OPERATOR_REVIEW_STATE_KEY] = {
+        "schema_version": container_module.OPERATOR_REVIEW_STATE_SCHEMA_VERSION,
+        "outcome": "OPERATOR_REVIEW", "item_name": state["item_name"],
+        "master_label": state["master_label_code"],
+        "scan_count": len(state["scanned_barcodes"]), "target_count": state["tray_size"],
+        "message": "중앙 확인 필요", "receipt_id": "", "error_code": "SERVER_REJECTED",
+    }
+    atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
+    app._current_tray_state_snapshot = lambda: dict(state)
+    review = container_module.CompletionOutcomeSnapshot(
+        outcome=container_module.CompletionOutcome.OPERATOR_REVIEW,
+        item_name=state["item_name"], master_label=state["master_label_code"],
+        scan_count=len(state["scanned_barcodes"]), target_count=state["tray_size"],
+        message="중앙 확인 필요", error_code="SERVER_REJECTED",
+    )
+    app._pending_operator_review_snapshot = review
+    app.warning_presenter = container_module.WarningPresenter()
+    app.warning_presenter.present_completion(review)
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._preflight_context_blocks_mutation = lambda: False
+    app._ui_lane = None
+    app._log_event = lambda *_args, **_kwargs: True
+    app._invalidate_pending_scan_callbacks = lambda: None
+    app._stop_warning_beep = lambda: None
+    app._reset_ui_to_waiting_state = lambda: None
+    app._update_all_summaries = lambda: None
+    app._update_parked_trays_list = lambda: None
+    app._show_left_sidebar_view = lambda *_args: None
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
+    app._pending_completion_event_contract = None
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
+    parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
+    assert len(parked) == 1
+    assert ParkedTrayStore.load(parked[0])[container_module.OPERATOR_REVIEW_STATE_KEY] == state[container_module.OPERATOR_REVIEW_STATE_KEY]
+    assert not (tmp_path / "current.json").exists()
+    assert app.current_tray.master_label_code == ""
+    assert app._active_blocking_completion_snapshot() is None
+
+
+def test_supervisor_defer_denies_worker_and_audit_failure_keeps_active_owner(
+    tmp_path, monkeypatch,
+):
+    app = ContainerAudit.__new__(ContainerAudit)
+    app.worker_name = "홍길동"
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    app.computer_id = "host-01"
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    state = _saved_tray_state()
+    app.current_tray = TraySession(master_label_code=state["master_label_code"])
+    app._current_tray_state_snapshot = lambda: dict(state)
+    app._active_blocking_completion_snapshot = lambda: object()
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._preflight_context_blocks_mutation = lambda: False
+    app._ui_lane = None
+    atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: "bad")
+    monkeypatch.setattr("Container_Audit.messagebox.showwarning", lambda *_a, **_k: None)
+
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is False
+    assert (tmp_path / "current.json").exists()
+    assert not list((tmp_path / "parked").glob("parked_recovery_*.json"))
+
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    app._log_event = lambda *_args, **_kwargs: False
+    monkeypatch.setattr("Container_Audit.messagebox.showerror", lambda *_a, **_k: None)
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is False
+    assert (tmp_path / "current.json").exists()
+    assert app.current_tray.master_label_code == state["master_label_code"]
+
+
+def test_supervisor_defers_reviewed_member_exchange_without_changing_original_intent(
+    tmp_path,
+):
+    app = ContainerAudit.__new__(ContainerAudit)
+    state = _saved_tray_state()
+    app.worker_name = "홍길동"
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    app.computer_id = "host-01"
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.current_tray = TraySession(master_label_code=state["master_label_code"])
+    app._current_tray_state_snapshot = lambda: dict(state)
+    app._active_blocking_completion_snapshot = lambda: None
+    original = SimpleNamespace(
+        status="OPERATOR_REVIEW", local_apply_status="PENDING", intent_id="original-intent",
+    )
+    app._current_transfer_member_exchange_attempt = lambda: (
+        original if app.current_tray.master_label_code else None
+    )
+    app._preflight_context_blocks_mutation = lambda: False
+    app._ui_lane = None
+    app._log_event = lambda *_args, **_kwargs: True
+    app.warning_presenter = container_module.WarningPresenter()
+    app._invalidate_pending_scan_callbacks = lambda: None
+    app._stop_warning_beep = lambda: None
+    app._reset_ui_to_waiting_state = lambda: None
+    app._update_all_summaries = lambda: None
+    app._update_parked_trays_list = lambda: None
+    app._show_left_sidebar_view = lambda *_args: None
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
+    atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
+
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
+    parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
+    assert len(parked) == 1
+    assert ParkedTrayStore.load(parked[0]) == state
+    assert original.intent_id == "original-intent"
+    assert app._current_transfer_member_exchange_attempt() is None
+
+
+def test_review_receipt_recheck_waits_for_idle_lane_before_completing_tray():
+    app = ContainerAudit.__new__(ContainerAudit)
+    review = container_module.CompletionOutcomeSnapshot(
+        outcome=container_module.CompletionOutcome.OPERATOR_REVIEW,
+        item_name="item", master_label="MASTER", scan_count=1, target_count=1,
+        message="central review", error_code="SERVER_REJECTED",
+    )
+    app.current_tray = TraySession(
+        master_label_code="MASTER", scanned_barcodes=["SCAN"],
+    )
+    app._pending_operator_review_snapshot = review
+    app.warning_presenter = container_module.WarningPresenter()
+    app.warning_presenter.present_completion(review)
+    app._preflight_context_blocks_mutation = lambda: False
+    app._precommand_operator_review_retry_context = lambda: None
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._transfer_seal_runtime = lambda: SimpleNamespace(
+        store=SimpleNamespace(bound_operator_review_for_tray=lambda **_kwargs: {
+            "intent_id": "original-intent",
+        }),
+        recheck_operator_review_receipt=lambda _intent_id: SimpleNamespace(status="ACKED"),
+    )
+    app._scan_callback_epoch = 0
+    app._save_current_tray_state = lambda: True
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app._schedule_pending_transfer_coordinator_work = lambda: None
+    queued = []
+    app.root = SimpleNamespace(after=lambda _ms, callback: queued.append(callback))
+
+    class BusyUntilIdleLane:
+        active = None
+
+        def is_busy(self):
+            return self.active is not None
+
+        def submit(self, task):
+            self.active = task
+            return SimpleNamespace(accepted=True)
+
+    lane = BusyUntilIdleLane()
+    app._ui_task_lane = lambda: lane
+    completed = []
+    app.request_complete_tray = lambda: completed.append(lane.is_busy())
+
+    assert app._recheck_unsettled_current_work() is True
+    task = lane.active
+    task.finish(task.work())
+    assert completed == []
+    assert app._active_blocking_completion_snapshot() == review
+    lane.active = None
+    task.on_idle()
+    assert completed == []
+    assert len(queued) == 1
+    queued.pop()()
+    assert completed == [False]
+    assert app._active_blocking_completion_snapshot() is None
+
+
 def _hold_symbols():
     module = importlib.import_module("preflight_scan_hold")
     return module, module.PreflightScanHoldStore
@@ -1193,6 +1389,33 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
     assert quarantined[0].path.exists() is False
     assert audits[1][0] == "PHS2_PREFLIGHT_HOLD_RESTORED"
+
+
+def test_unverified_worker_cannot_quarantine_hold_from_operations(tmp_path, monkeypatch):
+    module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: "bad")
+
+    assert app._quarantine_preflight_hold_from_operations() is False
+    assert store.exists() is True
+    assert not app._quarantined_preflight_holds()
+
+
+def test_draining_hold_cannot_be_quarantined_without_current_tray_pair(tmp_path, monkeypatch):
+    module, app, store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
+    store.append("PRODUCT-A")
+    store.mark_draining()
+
+    assert app._quarantine_preflight_hold_for_supervisor(
+        reason="supervisor_new_work_required", confirm=False,
+    ) is False
+    assert store.exists() is True
+    assert not app._quarantined_preflight_holds()
 
 
 def test_restore_mark_failed_error_keeps_durable_hold_inside_mutation_gate(

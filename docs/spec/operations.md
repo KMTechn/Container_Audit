@@ -312,9 +312,11 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 |---|---|---|
 | 첫 준비 또는 품목 갱신 실패 | onboarding 보고/검증 cache 진단; 유효 cache 없으면 시작 중단 | 같은 사용자·정확한 profile·연결 상태와 cache 분기 확인. [CA-01~02](README.md#ca-01) |
 | PHS2 중앙 조회 지연/오프라인 | hold FIFO와 `LOOKUP_FAILED`; 같은 현품표 재시도 | 접수되지 않은 스캔과 보존된 스캔을 구분하고 순서대로 drain. 다른 현품표로 덮어쓰지 않음. [CA-04](README.md#ca-04) |
+| 사전조회 실패로 다른 현품표 작업 필요 | `LOOKUP`/`LOOKUP_FAILED`·활성 트레이 없음 확인 후 관리자 인증·격리·동기 감사 | 보류 목록의 원본을 복원할 수 있으며 새 작업은 격리 후에만 시작. `DRAINING`/읽기 오류는 원본 쌍 대조 전 격리 불가. [CA-G14](BACKLOG.md#ca-g14) |
 | lease 없는 신규 완료·부분 집합 | 표준 PHS2 완료 차단; 목록·문맥 유지 | 중앙 GOOD 전량·barcode↔unit·lease binding 확인. 오프라인 무조건 신규 작업 허용이 아님. [CA-07](README.md#ca-07) |
 | 유효 lease 이후 중앙 연결 단절 | 내구 intent·`LINKED`·checkpoint와 원 명령으로 후속 시도 | local completion 유무에 맞는 입력 guard 확인. 이미 로컬 완료한 건은 원 key와 완료 시각을 유지해 재조정. [CA-12](README.md#ca-12), [CA-C03](contracts.md#ca-c03) |
 | 응답 유실·중앙 정합 충돌 | receipt 조회/원 요청 재생 또는 `OPERATOR_REVIEW` | scope/key/expected version·exact 결과 대조. key 변경·실물 임의 재처리로 충돌을 우회하지 않음. |
+| 완료·중앙 제품 교체 미확정으로 현재 작업대 정지 | 운영 작업에서 원 scope/key의 결과 재확인 또는 관리자 인증 후 원 current snapshot의 parked readback·감사 인계 | 다른 현품표는 계속하고 원 현품표 신규 시작은 차단. 복원 시 같은 요청·스캔·영수증으로 대조하며 조회 실패를 성공으로 표시하지 않음. [CA-G14](BACKLOG.md#ca-g14) |
 | 취소/리셋 쓰기 실패 | 마지막 스캔 취소의 목록 복원·감사 실패 처리, 지연 callback 무효화 | 목록·개수·원본 상태가 일치해야 종료. 리셋은 이미 중앙 확정한 물류의 취소 명령이 아님. [CA-08](README.md#ca-08) |
 | 보류·복원 중 종료/손상 | current/parked/hold의 보존·격리·defer; 소유자·같은 현품표 중복 확인 | 복원 대상 내구 저장/감사와 원본 정리 순서를 대조, 유일한 복구 사본 유지. [CA-09](README.md#ca-09) |
 | 로컬 CSV·디스크 쓰기 실패 | 완료 기록 실패의 `LOCAL_EVENT_RETRY`, 상태·완료 ID 유지 | 쓰기 가능 복구 후 동일 완료 사건의 중복 억제 확인. JSON·SQLite·CSV를 단일 transaction으로 가정하지 않음. [CA-C01](contracts.md#ca-c01) |

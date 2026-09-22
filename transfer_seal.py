@@ -2974,6 +2974,41 @@ class TransferSealCoordinator:
             return self._attempt_from_row(row)
         return self._attempt_row(row)
 
+    def recheck_operator_review_receipt(self, intent_id: str) -> SealAttempt:
+        """Read the original key only; never resend a reviewed command."""
+        self._assert_owner()
+        row = self.store.load(intent_id)
+        if row["status"] != "OPERATOR_REVIEW" or not row["command_json"]:
+            return self._attempt_from_row(row)
+        try:
+            context = json.loads(row["command_json"])
+            self._validate_bound_command(row, context)
+            if self.client is None:
+                return self._attempt_from_row(row)
+            receipt = self.client.get_receipt(
+                str(context["authority_scope_id"]),
+                str(context["idempotency_key"]),
+            )
+            if receipt is None:
+                return self._attempt_from_row(row)
+            data = self._validate_receipt(context, receipt)
+            qr_payload = self._seal_qr(context, data)
+            operation_lease_id = str(row["operation_lease_id"] or "").strip()
+            if operation_lease_id:
+                if self.operation_lease_manager is None:
+                    return self._attempt_from_row(row)
+                self.operation_lease_manager.store.record_receipt(
+                    lease_id=operation_lease_id,
+                    transfer_intent_id=intent_id,
+                    receipt=receipt,
+                )
+            row = self.store.record_receipt(intent_id, receipt, qr_payload)
+        except Exception:
+            # A missing, invalid, or unverifiable receipt leaves the original
+            # review and immutable command untouched for later reconciliation.
+            return self._attempt_from_row(row)
+        return self._attempt_from_row(row)
+
     def retry_operator_review(
         self,
         intent_id: str,

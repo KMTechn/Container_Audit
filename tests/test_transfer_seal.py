@@ -2287,6 +2287,44 @@ def test_precommand_review_lookup_requires_exact_commandless_row(tmp_path):
     )
 
 
+def test_review_receipt_recheck_uses_original_key_without_second_post(tmp_path):
+    original_command = None
+    receipt_invalid = False
+
+    def handler(call):
+        nonlocal original_command
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        if call["method"] == "POST" and call["url"].endswith("/transfers/seal"):
+            original_command = call["json"]
+            wrong = _receipt(original_command)
+            wrong["data"]["scanned_barcodes"] = ["WRONG"]
+            return FakeResponse(200, {"ok": True, "data": wrong})
+        if call["method"] == "GET" and "/receipts/" in call["url"]:
+            assert original_command is not None
+            receipt = _receipt(original_command)
+            if receipt_invalid:
+                receipt["data"]["scanned_barcodes"] = ["WRONG"]
+            return FakeResponse(200, {"ok": True, "data": receipt})
+        raise AssertionError(call)
+
+    client, session = _client(handler)
+    coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "review.db"), client)
+    prepared = _prepare(coordinator)
+    reviewed = coordinator.attempt(prepared.intent_id)
+    assert reviewed.status == "OPERATOR_REVIEW"
+    command_before = coordinator.store.load(prepared.intent_id)["command_json"]
+
+    receipt_invalid = True
+    assert coordinator.recheck_operator_review_receipt(prepared.intent_id).status == "OPERATOR_REVIEW"
+    assert coordinator.store.load(prepared.intent_id)["command_json"] == command_before
+
+    receipt_invalid = False
+    assert coordinator.recheck_operator_review_receipt(prepared.intent_id).status == "ACKED"
+    assert coordinator.store.load(prepared.intent_id)["command_json"] == command_before
+    assert len([call for call in session.calls if call["method"] == "POST"]) == 1
+
+
 def test_restart_reuses_immutable_command_and_recovers_lost_ack(tmp_path):
     db_path = tmp_path / "seal.db"
     first_post = []

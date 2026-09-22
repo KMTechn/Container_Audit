@@ -666,6 +666,34 @@ def test_action_button_states_follow_tray_scans():
     assert app.submit_tray_button["state"] == container_audit_module.tk.NORMAL
 
 
+def test_operations_remain_available_while_unsettled_tray_mutations_stay_locked():
+    app = _headless_app()
+    app.current_tray = TraySession(
+        master_label_code="ACTIVE", scanned_barcodes=["AAA2270730100-001"],
+    )
+    app.master_label_replace_state = None
+    app.park_button = DummyButton()
+    app.undo_button = DummyButton()
+    app.submit_tray_button = DummyButton()
+    app.operations_button = DummyButton()
+    app._preflight_context_blocks_mutation = lambda: False
+    app._precommand_operator_review_retry_context = lambda: None
+    review = container_audit_module.CompletionOutcomeSnapshot(
+        outcome=container_audit_module.CompletionOutcome.OPERATOR_REVIEW,
+        master_label="ACTIVE", scan_count=1, target_count=60,
+    )
+    app._pending_operator_review_snapshot = review
+    app.warning_presenter = container_audit_module.WarningPresenter()
+    app.warning_presenter.present_completion(review)
+
+    app._update_action_button_states()
+
+    assert app.operations_button["state"] == container_audit_module.tk.NORMAL
+    assert app.park_button["state"] == container_audit_module.tk.DISABLED
+    assert app.undo_button["state"] == container_audit_module.tk.DISABLED
+    assert app.submit_tray_button["state"] == container_audit_module.tk.DISABLED
+
+
 @pytest.mark.parametrize(
     ("active", "exact", "replacement", "dialog_open", "busy", "states"),
     [
@@ -723,6 +751,36 @@ def test_operations_menu_preserves_secondary_action_admission(
         assert commands["initiate_master_label_replacement"]["label"] == "현품표 교체 취소"
     if active and exact:
         assert commands["show_exchange_dialog"]["label"] == "현재 이적 제품 교체"
+
+
+def test_operations_menu_exposes_supervisor_hold_recovery_during_blocking_notice(monkeypatch):
+    app = _headless_app()
+    app.current_tray = TraySession()
+    app.master_label_replace_state = None
+    app._ui_lane = None
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._preflight_context_blocks_mutation = lambda: True
+    app._active_blocking_completion_snapshot = lambda: None
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._warning_state_presenter = lambda: SimpleNamespace(state=SimpleNamespace(is_blocking=True))
+    app.root = SimpleNamespace(winfo_pointerx=lambda: 0, winfo_pointery=lambda: 0)
+    app.operations_button = SimpleNamespace(winfo_rootx=lambda: 0, winfo_rooty=lambda: 0, winfo_height=lambda: 0)
+    entries = []
+    shown = []
+
+    class Menu:
+        def __init__(self, *_args, **_kwargs): pass
+        def add_command(self, **kwargs): entries.append(kwargs)
+        def add_separator(self): pass
+        def tk_popup(self, *_args): shown.append(True)
+        def grab_release(self): pass
+
+    monkeypatch.setattr(container_audit_module.tk, "Menu", Menu)
+    app._show_operations_menu()
+    recovery = [entry for entry in entries if entry["command"].__name__ == "_quarantine_preflight_hold_from_operations"]
+    assert shown == [True]
+    assert len(recovery) == 1
+    assert recovery[0]["state"] == container_audit_module.tk.NORMAL
 
 
 class DummyRoot:

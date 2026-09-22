@@ -301,7 +301,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **검증·저장·결과:** `LOOKUP` → `DRAINING` 또는 `LOOKUP_FAILED` 상태와 순서를 snapshot에 남긴다. 보류 접수 확인 뒤 입력창을 정리하며 성공 조회 뒤 순서대로 정상 제품 검증에 넘긴다.
 - **화면 최신성:** 보류 저장 성공을 받은 같은 UI callback에서 중앙 안내의 보류 수를 해당 snapshot에 맞춘다. 조회 실패 snapshot은 `중앙 조회 실패`와 남은 개수(0건 포함)를 표시하며, 조회 중 문구나 새 현품표 입력 안내를 남기지 않는다. 표시 갱신은 저장·FIFO·입력 제한을 변경하지 않는다.
 - **스캔당 처리:** 새 held 성공은 같은 동기 호출에서 catalog 판정을 한 번 검색해 재사용한다. router와 기본 형식·품목·중복·용량 gate는 다시 확인하며 판정은 callback 밖에 보관하지 않는다. 이미 내구 접수된 head의 감사 재시도는 재검색/목록 재추가 없이 원 receipt를 대조한다.
-- **실패·취소·재시작:** 쓰기 실패·가득 찬 보류·context 불일치를 성공 접수로 표시하지 않는다. 실패 조회는 보류0건이어도 다른 현품표·작업자 변경을 차단한다. 같은 현품표 재조회와, 인증된 보호 관리자가 원본을 복원 가능한 격리 목록으로 옮기는 경로를 구분한다. 일반 작업자에게 임의 삭제/취소 경로는 없다. `quarantine`, `restore_quarantined`, `_restore_preflight_scan_hold`, `_quarantine_preflight_hold_for_supervisor`가 담당한다.
+- **실패·취소·재시작:** 쓰기 실패·가득 찬 보류·context 불일치를 성공 접수로 표시하지 않는다. 실패 조회는 보류0건이어도 다른 현품표·작업자 변경을 차단한다. 같은 현품표 재조회와 운영 작업의 관리자 인증 후 격리·다른 작업 계속을 구분한다. `LOOKUP`/`LOOKUP_FAILED`이고 활성 트레이가 없을 때만 원본을 복원 가능한 격리 목록으로 옮긴다. `DRAINING`·읽기 오류·현재 트레이 동시 존재는 부분 반영 대조 전 격리하지 않는다. 일반 작업자에게 임의 삭제/취소 경로는 없다. `quarantine`, `restore_quarantined`, `_restore_preflight_scan_hold`, `_quarantine_preflight_hold_for_supervisor`가 담당한다.
 - **수용 기준:** 조회 지연·실패·프로세스 종료 뒤 같은 현품표로 돌아오면 접수된 순서와 개수가 보존되고, 미접수 입력은 작업자에게 구별되어야 한다.
 - **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 최대 연속 입력 요구·실측 처리량은 정해지지 않았다.
 
@@ -348,6 +348,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **시작·입력:** 진행 트레이 보류, 본인 보류 목록 선택, 재시작 시 current state 발견. [park_current_tray / restore_parked_tray / _load_current_tray_state](../../Container_Audit.py), [parked_tray_store](../../parked_tray_store.py)
 - **검증·저장·결과:** 작업자 소유권과 다른 작업자의 같은 현품표 보류 중복을 검사한다. 복원 상태와 복원 사건의 저장, 원본 정리 순서를 관리한다. 완료 상태 재발견 시 완료 intent와 대조한다.
 - **실패·취소·재시작:** 손상/불일치 상태는 격리·defer 경로로 보존하며 임의 빈 트레이로 대체하지 않는다. 원본 보류 삭제 전에 복원 내구 경계를 확인한다.
+- **미확정 묶음 인계:** 완료·중앙 교체의 미확정 현재 트레이는 운영 작업의 관리자 인증을 거쳐 원 snapshot을 내구 보류 저장·readback·동기 감사한 뒤에만 활성 자리를 비운다. 보류된 현품표의 신규 시작은 기존 중복 guard가 막고, 보류 목록 복원은 원 스캔·완료 사건·SQLite 원 요청을 유지한다. 실패하면 현재 잠금을 유지한다. [CA-G14](BACKLOG.md#ca-g14)의 화면/장애 한계를 구분한다.
 - **수용 기준:** 보류→종료→복원이 barcode·순서·소유권을 유지하고, 어느 쓰기 단계에서 종료해도 유일한 원본을 잃거나 이중 활성 트레이를 만들지 않아야 한다.
 - **실제 관측:** [case02 정상 앱 재시작](E:/KMTech/ca-install-qualification-20260908/case02-restarted-before-restore.txt)에서 1/2 상태의 parked JSON은 같은 hash로 남았고, [복원](E:/KMTech/ca-install-qualification-20260908/case02-restored-summary.txt)은 동일 snapshot을 current로 옮겼다. 이 결과는 임의 시점 강제 종료·OS cold boot까지 증명하지 않는다.
 - **별도 a7 lifecycle 관측:**09:39 cold boot 자동 relay 시작과09:53 정상 uninstall/reinstall 뒤 업무9·identity3 자료의 hash 보존 및 ordinary worker 화면 완료2·보류2·대기0을 확인했다. 보류 합계는 case03 미착수0스캔1152B와 case01 격리521B이며 case02/04는 ACKED다. 이후 d440 공개 Restore09로 exact a7 복원 및 실제 일반 worker/F4 완료를 확인했다. [CA-O09](operations.md#ca-o09)의 source/OS/시점별 범위를 유지하며 임의 crash 검증으로 합치지 않는다.
@@ -361,6 +362,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **시작·입력:** 중앙 `PHS/AVAILABLE` 대상의 손상 제품과 새 GOOD 제품 1~2쌍. 공여 PHS의 활성 구성원은 정확히 하나여야 한다. [정본 교체 정책](../MEMBER_EXCHANGE_POLICY.md)
 - **검증·저장·결과:** 품목/UOM·대상/공여 버전을 확인하고 한 `REPLACE_BUNDLE_MEMBERS` transaction으로 처리한다. 손상품은 `PROCESS_DAMAGE_HOLD`, 새 GOOD는 대상 PHS로 이동한다. SQLite intent와 exact receipt를 남기고 receipt 확인 뒤 로컬 목록을 한 번에 교체한다. [transfer_member_exchange](../../transfer_member_exchange.py)
 - **실패·취소·재시작:** 충돌·복수 구성원 공여·receipt 불일치는 부분 로컬 교체를 허용하지 않는다. ACK 후 로컬 적용 중 종료하면 저장된 intent와 트레이 상태를 대조한다. 원래 라벨 identity 유지 증거도 필요하다.
+- **미확정 결과:** 운영 작업의 원 요청 재확인은 저장된 교체 intent를 사용한다. 중앙 `OPERATOR_REVIEW`는 receipt 조회만 하고 새 key/명령으로 우회하지 않으며, `ACKED`라도 로컬 `OPERATOR_REVIEW`면 제품 목록을 확정하지 않는다. 관리자 보류는 원 트레이 snapshot과 교체 intent를 남긴다.
 - **수용 기준:** 1~2쌍 전체 성공/실패, 중앙·로컬 exact 집합 일치, 동일 키 재생의 단일 효과, 동시 CAS 경쟁의 한쪽 성공을 확인한다. 봉인 후 CA 로컬 목록 수정은 차단되어야 한다.
 - **연결·남은 일:** [CA-C04](contracts.md#ca-c04), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). [server-contract 테스트](../../tests/test_transfer_member_exchange_server_contract.py)는 저장된 HTTP 응답 재생이며 실제 서버 경쟁 검증과 구별한다.
 
@@ -385,6 +387,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **시작·입력:** [CA-07](#ca-07)의 전량·lease 검증을 만족한 트레이. 고정 작업 시각·작업자·멱등 키·member/version 문맥을 사용한다. [complete_tray](../../Container_Audit.py), [TransferSealStore.prepare / bind_command / confirm_completion_checkpoint](../../transfer_seal.py)
 - **검증·저장·결과:** SQLite intent와 `LINKED` 기록, GUI 완료 checkpoint를 확인한 뒤 불변 명령을 보낸다. `TRAY_COMPLETE`는 동기 내구 기록을 사용한다. `ACKED`는 중앙 receipt 검증 결과이며 로컬 완료 ID와 별개다.
 - **실패·취소·재시작:** local completion ID도 ACK도 없는 트레이는 잠근다. 이미 `LINKED`인 작업의 중앙 지연/검토가 로컬 완료를 취소하지 않는다. 응답 유실은 원 key receipt 조회·재전송, 영구 충돌은 `OPERATOR_REVIEW`, 로컬 이벤트 실패는 `LOCAL_EVENT_RETRY`로 구별한다. [TransferSealCoordinator.attempt](../../transfer_seal.py), `complete_tray`
+- **완료 전 관리자 조치:** 운영 작업의 원 요청 재확인은 원 scope/key의 receipt만 읽고 exact 영수증을 검증한다. 새 요청을 만들지 않는다. ACK가 없거나 검증되지 않으면 review를 유지하고, 관리자 보류 후 다른 현품표를 진행할 수 있다. 로컬 잠금 해제 저장이 실패하면 원 review를 유지한다. 이미 로컬 완료한 건의 별도 관리자 감사 재전송은 위 기존 절차를 따른다.
 - **수용 기준:** lease→intent→checkpoint→중앙 receipt→CSV→화면의 각각을 관측하고, 재시작/응답 유실에서 중앙 이동·로컬 완료가 각각 한 번이며 원 key가 유지되어야 한다. `LINKED`와 `ACKED` 표시/다음 입력 guard가 실제 내구 상태와 일치해야 한다.
 - **연결·남은 일:** [CA-C03](contracts.md#ca-c03), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). [transfer_seal 테스트](../../tests/test_transfer_seal.py)의 BND offline fixture를 현장 compact PHS2의 lease 복구 증거로 승계하지 않는다.
 - **실제 설치본 후속:** `a7d714f6`/개발 backend `c0c0d51`에서 원 case02의 정상 관리자 감사 재시도는09:21:22Z ACKED/attempt2, 새 case04의 일반 GOOD3 완료는09:25:36Z ACKED/attempt1이다. 각각 로컬 LINKED1이며 원 case02의 기존 review1·명령·완료 시각은 유지됐다. 중앙 case02 receipt1의 독립 조회와 downstream 인계는 [CA-O09](operations.md#ca-o09), 이후 OS/설치 복구는 별도 판정이다.

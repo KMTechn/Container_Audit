@@ -30,6 +30,7 @@ READ_ONLY_ALLOWLIST = {
     ("transfer_store.py", "TransferSealStore"): {
         "preview_intent",
         "load",
+        "bound_operator_review_for_tray",
         "precommand_operator_review",
         "pending_ids",
         "post_review_case_for_intent",
@@ -710,10 +711,10 @@ def test_transfer_writer_owner_census_includes_explicit_review_retry():
     assert counts == {
         "TransferMemberExchangeCoordinator": 4,
         "TransferMemberExchangeStore": 7,
-        "TransferSealCoordinator": 6,
+        "TransferSealCoordinator": 7,
         "TransferSealStore": 9,
     }
-    assert len(WRITER_SURFACES) == 26
+    assert len(WRITER_SURFACES) == 27
 
 
 @pytest.mark.parametrize(

@@ -245,7 +245,7 @@ def _completion_app(tmp_path, *, delete_succeeds, prior_operator_review):
     return app
 
 
-def test_operator_review_disables_active_tray_mutation_buttons():
+def test_operator_review_disables_mutation_buttons_but_exposes_recovery_menu():
     app = _operator_review_app()
     app.operations_button = DummyWidget()
     app.park_button = DummyWidget()
@@ -263,7 +263,7 @@ def test_operator_review_disables_active_tray_mutation_buttons():
         "submit": app.submit_tray_button["state"],
     }
     assert actual_states == {
-        "operations": container_audit_module.tk.DISABLED,
+        "operations": container_audit_module.tk.NORMAL,
         "park": container_audit_module.tk.DISABLED,
         "undo": container_audit_module.tk.DISABLED,
         "submit": container_audit_module.tk.DISABLED,
@@ -354,7 +354,7 @@ def _commandless_successor_review_app(tmp_path):
     return app, prepared["intent_id"]
 
 
-def test_commandless_successor_review_exposes_only_safe_retry(tmp_path):
+def test_commandless_successor_review_exposes_safe_retry_and_recovery_menu(tmp_path):
     app, _intent_id = _commandless_successor_review_app(tmp_path)
     app.park_button = DummyWidget()
     app.undo_button = DummyWidget()
@@ -377,7 +377,7 @@ def test_commandless_successor_review_exposes_only_safe_retry(tmp_path):
         app.submit_tray_button.options["command"].__name__
         == "_retry_precommand_operator_review_completion"
     )
-    assert app.operations_button["state"] == container_audit_module.tk.DISABLED
+    assert app.operations_button["state"] == container_audit_module.tk.NORMAL
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
 
 

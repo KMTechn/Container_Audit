@@ -396,10 +396,10 @@ def test_native_operator_review_keeps_scan_stopped_through_status_refresh(native
     app._render_warning_state()
     app.root.update()
     assert str(app.scan_entry.cget('state')) == 'disabled'
-    assert app.status_label.cget('text') == '스캔 중지 · 담당자 확인'
+    assert app.status_label.cget('text') == '스캔 중지 · 관리자 조치'
     app.show_status_message('후속 안내', duration=0)
     app._reset_status_message()
-    assert app.status_label.cget('text') == '스캔 중지 · 담당자 확인'
+    assert app.status_label.cget('text') == '스캔 중지 · 관리자 조치'
     app.warning_presenter = WarningPresenter()
     app._render_warning_state()
     assert str(app.scan_entry.cget('state')) == 'normal'

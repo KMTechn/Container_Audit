@@ -19,7 +19,8 @@ from warning_presenter import (
 
 MASTER_LABEL = "PHS=1|CLC=AAA2270730100|QT=3"
 OPERATOR_REVIEW_CORE = (
-    "서버 판정 미완료 · 완료 처리 중지 · 트레이·목록 유지 · 담당자 확인"
+    "중앙 완료 결과를 확인하지 못했습니다. 트레이와 스캔은 보존됩니다. "
+    "운영 작업에서 원 요청 결과를 다시 확인하거나 관리자 보류 후 다른 작업을 계속하세요."
 )
 
 

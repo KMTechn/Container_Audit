@@ -309,7 +309,8 @@ def test_operator_review_preserves_active_tray_and_center_rows_without_completio
     assert app.warning_presenter.state.completion.outcome is CompletionOutcome.OPERATOR_REVIEW
     assert app.warning_presenter.state.is_blocking is True
     worker_copy = app.warning_presenter.state.active_notice.message
-    assert "담당자" in worker_copy
+    assert "관리자 보류" in worker_copy
+    assert "원 요청 결과를 다시 확인" in worker_copy
     assert "membership conflict" not in worker_copy
     assert "MEMBERSHIP_CONFLICT" not in worker_copy
     assert not any(event[:2] == ("log_event", "TRAY_COMPLETE") for event in events)

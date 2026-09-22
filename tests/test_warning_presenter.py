@@ -14,7 +14,8 @@ from warning_presenter import (
 
 
 OPERATOR_REVIEW_CORE = (
-    "서버 판정 미완료 · 완료 처리 중지 · 트레이·목록 유지 · 담당자 확인"
+    "중앙 완료 결과를 확인하지 못했습니다. 트레이와 스캔은 보존됩니다. "
+    "운영 작업에서 원 요청 결과를 다시 확인하거나 관리자 보류 후 다른 작업을 계속하세요."
 )
 
 
@@ -168,7 +169,7 @@ def test_operator_review_does_not_repeat_default_equivalent_detail(equivalent_de
     )
 
     assert notice.message == OPERATOR_REVIEW_CORE
-    assert notice.message.count("서버 판정 미완료") == 1
+    assert notice.message.count("중앙 완료 결과") == 1
 
 
 @pytest.mark.parametrize(
