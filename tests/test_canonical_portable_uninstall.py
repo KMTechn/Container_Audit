@@ -667,7 +667,7 @@ def test_bare_uninstall_and_recovery_require_exact_fence(tmp_path, mode):
     result = _ps(source / 'INSTALL_THIS_PC.ps1', env, *args, '-SourceRoot', str(source),
                  '-InstallRoot', str(install), '-AllowNoncanonicalLayoutForTest')
     assert result.returncode != 0
-    assert 'requires exact attempt-bound writer fence parameters' in result.stderr, result.stderr
+    assert 'CONTAINER_WRITER_FENCE_PARAMETERS_INVALID' in result.stderr, result.stderr
     assert _tree(install) == original
 
 

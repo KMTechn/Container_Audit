@@ -292,7 +292,7 @@ def test_direct_production_helper_requires_exact_writer_delegation_before_elevat
     )
 
     assert completed.returncode != 0
-    assert "exact attempt-bound writer fence parameters" in (
+    assert "CONTAINER_WRITER_FENCE_PARAMETERS_INVALID" in (
         completed.stdout + completed.stderr
     )
     assert "Elevated Container verified replacement restore started" not in (
@@ -2177,7 +2177,7 @@ def test_bootstrap_refuses_implicit_replacement_and_unfenced_inverse(tmp_path):
     assert "differentordamagedhardenedcodeplacementexists" in conflict_text
     removed = _run_installer(source, install, "-Uninstall")
     assert removed.returncode != 0
-    assert "requires exact attempt-bound writer fence parameters" in removed.stderr
+    assert "CONTAINER_WRITER_FENCE_PARAMETERS_INVALID" in removed.stderr
     assert (install / "Container_Audit.exe").read_bytes() == b"container-audit-frozen-exe"
     assert user_state.read_bytes() == b"preserve-me"
 

@@ -135,7 +135,7 @@ function Enter-ContainerPlacementWriterFence {
         [string]$WriterFenceReplacementTransactionId -cnotmatch '^[0-9a-f]{32}$' -or
         [string]$WriterFenceDelegationToken -cnotmatch '^[0-9a-f]{64}$'
     ) {
-        throw 'Production placement requires exact attempt-bound writer fence parameters.'
+        throw 'CONTAINER_WRITER_FENCE_PARAMETERS_INVALID'
     }
     $writerFenceHelperFull = Get-StrictFullPath $WriterFenceHelperPath 'writer fence helper'
     $expectedWriterFenceHelper = Get-StrictFullPath `
