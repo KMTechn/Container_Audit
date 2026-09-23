@@ -66,6 +66,7 @@ APP_ROOT_FILES = (
     "legacy_state_migration.py",
     "logistics_runtime_profile.py",
     "native_audio.py",
+    "paired_preflight_handoff.py",
     "parked_tray_store.py",
     "phs_label_workflow.py",
     "phs_reconciliation_workflow.py",

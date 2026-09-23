@@ -96,6 +96,7 @@ from label_qr import (
     parse_positive_quantity,
 )
 from parked_tray_store import ParkedTrayStore
+from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
 from preflight_scan_hold import (
     HOLD_DRAINING,
     HOLD_LOOKUP,
@@ -1609,6 +1610,26 @@ class ContainerAudit:
             "preflight_hold_quarantine"
         )
 
+    def _paired_preflight_store(self) -> PairedPreflightHandoffStore:
+        return PairedPreflightHandoffStore(
+            Path(str(getattr(self, "parked_trays_dir", "") or "."))
+            / "paired_preflight_handoff"
+        )
+
+    def _paired_preflight_blocks_label(self, master: str) -> bool:
+        target = canonical_master_label_key(master)
+        store = self._paired_preflight_store()
+        try:
+            for path in store.paths():
+                record = store.read(path)
+                for name, field in (("hold", "master_raw"), ("current", "master_label_code")):
+                    original = json.loads(store._bytes(record[name]).decode("utf-8"))
+                    if canonical_master_label_key(str(original.get(field) or "")) == target:
+                        return True
+        except (OSError, ValueError, TypeError, AttributeError, PairedHandoffError):
+            return True
+        return False
+
     def _is_preflight_hold_supervisor(self) -> bool:
         return bool(
             str(getattr(self, "worker_role", "") or "").upper() == "ADMIN"
@@ -1945,7 +1966,7 @@ class ContainerAudit:
         if memory_gate:
             return True
         try:
-            return self._preflight_hold_store().exists()
+            return self._preflight_hold_store().exists() or self._paired_preflight_store().pending()
         except (OSError, PreflightHoldError, TypeError, ValueError):
             # If the durable ownership check itself cannot be completed, do
             # not let a mutation race an unreadable active-hold location.
@@ -2650,7 +2671,29 @@ class ContainerAudit:
         self.worker_name = worker_name
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
         self._load_session_state()
-        self._load_current_tray_state()
+        # A paired handoff (including a legacy mismatched DRAINING pair) owns
+        # the exact on-disk bytes. Ordinary tray recovery may rewrite or delete
+        # that slot, so inspect it read-only before offering recovery choices.
+        skip_current_recovery = self._paired_preflight_store().pending()
+        if not skip_current_recovery and self._preflight_hold_store().exists():
+            try:
+                held = self._preflight_hold_store().load()
+                if held.state == HOLD_DRAINING:
+                    current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                    saved = json.loads(current_path.read_text(encoding="utf-8"))
+                    validate_tray_state(saved, default_tray_size=self.TRAY_SIZE)
+                    candidate = tray_session_from_state(
+                        saved, session_factory=TraySession,
+                        default_tray_size=self.TRAY_SIZE,
+                    )
+                    self.current_tray = candidate
+                    skip_current_recovery = not self._preflight_hold_matches_current_tray(held)
+                    if not skip_current_recovery:
+                        self.current_tray = TraySession()
+            except (OSError, ValueError, TypeError, PreflightHoldError, TrayStateValidationError):
+                skip_current_recovery = True
+        if not skip_current_recovery:
+            self._load_current_tray_state()
         if not self.worker_name:
             return
         if not self._restore_preflight_scan_hold():
@@ -6680,6 +6723,15 @@ class ContainerAudit:
             state=tk.NORMAL if hold_blocked and not active_tray and not transfer_lane_busy else tk.DISABLED,
         )
         menu.add_command(
+            label="두 원본 함께 보류 후 계속 (관리자)",
+            command=self._defer_paired_preflight_from_operations,
+            state=tk.NORMAL if hold_blocked and not transfer_lane_busy else tk.DISABLED,
+        )
+        menu.add_command(
+            label="관리자 짝 원본 보류 목록",
+            command=self._show_paired_preflight_handoffs,
+        )
+        menu.add_command(
             label="미확정 묶음 보류 후 다른 작업 계속 (관리자)",
             command=self._defer_blocked_current_tray_for_supervisor,
             state=(
@@ -6805,27 +6857,180 @@ class ContainerAudit:
         finally:
             self._authenticated_protected_admin = previous
 
+    def _defer_paired_preflight_from_operations(self) -> bool:
+        if not self._authorize_blocked_work_supervisor():
+            return False
+        store = self._paired_preflight_store()
+        try:
+            path = store.pending_path()
+            if path is None:
+                hold = self._preflight_hold_store().load()
+                current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                current = json.loads(current_path.read_text(encoding="utf-8"))
+                validate_tray_state(current, default_tray_size=self.TRAY_SIZE)
+                if hold.state != HOLD_DRAINING or not current.get("master_label_code"):
+                    raise PairedHandoffError("paired originals are unavailable")
+                if self._preflight_hold_matches_current_tray(hold):
+                    raise PairedHandoffError("matching draining hold must use normal recovery")
+                if not messagebox.askyesno(
+                    "두 원본 보류 확인",
+                    "제품 반영 중 보류 입력과 현재 트레이가 다릅니다. 두 원본을 함께 "
+                    "보류하고 다른 현품표 작업을 계속하시겠습니까? 원 현품표는 계속 잠깁니다.",
+                    parent=getattr(self, "root", None),
+                ):
+                    return False
+                path = store.prepare(self._preflight_hold_store().path, current_path)
+            record = store.read(path)
+            held = json.loads(store._bytes(record["hold"]).decode("utf-8"))
+            current = json.loads(store._bytes(record["current"]).decode("utf-8"))
+            if held.get("state") != HOLD_DRAINING:
+                raise PairedHandoffError("paired hold state differs")
+            detail = {
+                "contract_version": record["schema"],
+                "handoff_id": record["id"],
+                "hold_master": held.get("master_raw"),
+                "current_master": current.get("master_label_code"),
+                "hold_worker": held.get("worker"),
+                "current_worker": current.get("worker_name"),
+                "hold_state": held.get("state"),
+                "current_state": "CURRENT_UNSETTLED",
+                "hold_count": len(held.get("items") or []),
+                "current_count": len(current.get("scanned_barcodes") or []),
+                "hold_sha256": record["hold"]["sha256"],
+                "current_sha256": record["current"]["sha256"],
+            }
+            if not self._log_event(
+                "PHS2_PAIRED_PREFLIGHT_DEFERRED", detail=detail, synchronous=True,
+                idempotency_key=f"paired-preflight:{record['id']}", deduplicate=True,
+            ):
+                raise PairedHandoffError("paired handoff audit failed")
+            store.move_original(path, "hold")
+            store.move_original(path, "current")
+            store.release(path)
+        except (OSError, ValueError, TypeError, PairedHandoffError, PreflightHoldError, TrayStateValidationError) as exc:
+            print(f"짝 원본 보류 실패: {exc.__class__.__name__}")
+            self._set_preflight_scan_input_locked(True)
+            messagebox.showerror(
+                "두 원본 보류 대기",
+                "두 원본을 모두 확인하지 못했습니다. 원래 잠금을 유지합니다. "
+                "관리자 인계 목록에서 같은 건을 다시 확인하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        self._preflight_hold_snapshot = None
+        self._preflight_hold_draining = False
+        self._master_preflight_pending = False
+        self.current_tray = TraySession()
+        self._invalidate_pending_scan_callbacks()
+        self._set_preflight_scan_input_locked(False)
+        self._reset_ui_to_waiting_state()
+        self._update_all_summaries()
+        self._update_parked_trays_list()
+        self._update_action_button_states()
+        self.show_status_message(
+            "두 원본을 관리자 보류 목록으로 옮겼습니다. 다른 현품표 작업을 계속하세요.",
+            self.COLOR_PRIMARY, duration=0,
+        )
+        return True
+
     def _show_blocked_work_handoff(self) -> None:
         tray = getattr(self, "current_tray", None)
-        master = str(getattr(tray, "master_label_code", "") or "")
-        count = len(getattr(tray, "scanned_barcodes", []) or [])
+        current_master = str(getattr(tray, "master_label_code", "") or "")
+        current_worker = persistent_operator_name(str(getattr(self, "worker_name", "") or ""))
+        current_count = len(getattr(tray, "scanned_barcodes", []) or [])
+        hold_line = "보류 원본: 없음"
         if self._preflight_context_blocks_mutation():
             try:
                 held = self._preflight_hold_store().load()
-                master = held.master_raw
-                count = len(held.items)
+                hold_line = (
+                    f"보류 원본: {held.master_raw}\n"
+                    f"작업자: {display_operator_name(held.worker)} · 상태: {held.state} · "
+                    f"남은 입력: {len(held.items)}건"
+                )
             except PreflightHoldError:
-                master = "보류 원본을 읽을 수 없음"
-        fields = self._parse_new_format_qr(master) or {}
-        label = str(fields.get("LBL") or fields.get("ITG") or master or "확인 불가")
+                hold_line = "보류 원본: 읽을 수 없음 · 관리자 확인 필요"
         messagebox.showinfo(
             "미확정 작업 인계",
-            f"현품표: {label}\n남은/스캔 입력: {count}건\n"
+            f"{hold_line}\n\n현재 트레이: {current_master or '없음'}\n"
+            f"작업자: {display_operator_name(current_worker)} · 상태: 미확정 · "
+            f"스캔 입력: {current_count}건\n\n"
             "관리자에게 이 PC의 보류 파일·현재 트레이 상태·원 중앙 요청/영수증을 "
             "함께 대조해 달라고 알리세요. 원본을 지우거나 새 현품표·요청 키로 "
             "다시 처리하지 마세요.",
             parent=getattr(self, "root", None),
         )
+
+    def _show_paired_preflight_handoffs(self) -> None:
+        if not self._authorize_blocked_work_supervisor():
+            return
+        store = self._paired_preflight_store()
+        paths = store.paths()
+        if not paths:
+            messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
+            return
+        for path in paths:
+            try:
+                record = store.read(path)
+                held = json.loads(store._bytes(record["hold"]).decode("utf-8"))
+                current = json.loads(store._bytes(record["current"]).decode("utf-8"))
+                if not store.is_released(path):
+                    status = "인계 미완료 · 작업대 잠금"
+                elif not store.originals_match(path):
+                    status = "원본 파일 재대조 필요 · 다른 작업 계속"
+                else:
+                    status = "관리자 보류"
+                detail = (
+                    f"상태: {status} · 시각: {record['created_at']}\n"
+                    f"보류 원본: {held.get('master_raw')} · 작업자: {held.get('worker')} · "
+                    f"상태: {held.get('state')} · 남은 입력: {len(held.get('items') or [])}건\n"
+                    f"SHA256: {record['hold']['sha256']}\n"
+                    f"현재 원본: {current.get('master_label_code')} · 작업자: "
+                    f"{current.get('worker_name')} · 상태: 미확정 · "
+                    f"스캔 입력: {len(current.get('scanned_barcodes') or [])}건\n"
+                    f"SHA256: {record['current']['sha256']}"
+                )
+            except (OSError, ValueError, PairedHandoffError):
+                messagebox.showerror("두 원본 확인 필요", "인계 원본을 읽지 못했습니다. 작업대 잠금을 유지합니다.", parent=self.root)
+                return
+            if messagebox.askyesno(
+                "두 원본 보류 목록", detail + "\n\n원 요청 결과를 같은 키로 다시 확인할까요?",
+                parent=self.root,
+            ):
+                self._recheck_paired_preflight_receipt(current)
+
+    def _recheck_paired_preflight_receipt(self, current: Mapping[str, Any]) -> None:
+        master = str(current.get("master_label_code") or "")
+        scans = tuple(current.get("scanned_barcodes") or ())
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return
+
+        def work() -> str:
+            coordinator = self._transfer_seal_runtime()
+            row = coordinator.store.bound_operator_review_for_tray(
+                master_label=master, scanned_barcodes=scans,
+            )
+            if row is None or not row["command_json"] or coordinator.client is None:
+                return "원 요청 키가 없어 중앙 결과를 조회할 수 없습니다. 두 원본은 보류 상태로 둡니다."
+            context = json.loads(row["command_json"])
+            coordinator._validate_bound_command(row, context)
+            receipt = coordinator.client.get_receipt(
+                str(context["authority_scope_id"]), str(context["idempotency_key"]),
+            )
+            if receipt is None:
+                return "원 요청의 중앙 영수증이 아직 없습니다. 두 원본은 보류 상태로 둡니다."
+            coordinator._validate_receipt(context, receipt)
+            return "원 요청의 중앙 영수증을 확인했습니다. 두 원본은 관리자 보류 상태로 유지합니다."
+
+        lane.submit(LaneTask(
+            name="paired-preflight-receipt-readback",
+            generation=getattr(self, "_scan_callback_epoch", 0),
+            work=work,
+            finish=lambda result: messagebox.showinfo("원 요청 결과 다시 확인", result, parent=self.root),
+            fail=lambda _exc: messagebox.showerror(
+                "원 요청 결과 확인 불가", "중앙 결과를 확인하지 못했습니다. 두 원본은 보류 상태로 둡니다.", parent=self.root,
+            ),
+        ))
 
     def _recheck_unsettled_current_work(self) -> bool:
         if self._preflight_context_blocks_mutation():
@@ -9481,6 +9686,20 @@ class ContainerAudit:
 
     def _restore_preflight_scan_hold(self) -> bool:
         store = self._preflight_hold_store()
+        try:
+            paired_pending = self._paired_preflight_store().pending()
+        except (OSError, PairedHandoffError):
+            paired_pending = True
+        if paired_pending:
+            self._preflight_hold_snapshot = None
+            self._set_preflight_scan_input_locked(True)
+            messagebox.showwarning(
+                "두 원본 인계 대기",
+                "두 원본의 관리자 인계가 끝나지 않았습니다. 운영 작업에서 같은 인계를 "
+                "다시 확인하세요. 원 현품표와 새 작업은 잠금 상태입니다.",
+                parent=getattr(self, "root", None),
+            )
+            return True
         if not store.exists():
             self._preflight_hold_snapshot = None
             return True
@@ -9493,7 +9712,10 @@ class ContainerAudit:
             )
             return False
         current_worker = persistent_operator_name(self.worker_name)
-        if snapshot.worker != current_worker:
+        if snapshot.worker != current_worker and not (
+            snapshot.state == HOLD_DRAINING
+            and not self._preflight_hold_matches_current_tray(snapshot)
+        ):
             if self._is_preflight_hold_supervisor() and messagebox.askyesno(
                 "다른 작업자 보류 묶음",
                 "다른 작업자의 중앙 조회 보류 묶음이 남아 있습니다. 복원 가능한 "
@@ -9520,11 +9742,11 @@ class ContainerAudit:
                     "보류 묶음 소유권 확인 필요",
                     "제품 반영 중인 보류 묶음과 현재 트레이가 일치하지 않습니다. "
                     "두 원본을 보존하고 관리자에게 현품표·작업자·남은 스캔 수를 "
-                    "알려 주세요. 부분 반영 여부를 대조하기 전에는 격리하거나 "
-                    "새 작업을 시작할 수 없습니다.",
+                    "알려 주세요. 운영 작업에서 관리자 인증 후 두 원본을 함께 "
+                    "보류하면 다른 현품표 작업을 계속할 수 있습니다.",
                     parent=getattr(self, "root", None),
                 )
-                return False
+                return True
         else:
             self.show_status_message(
                 f"중앙 조회 재확인 필요 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
@@ -10103,6 +10325,15 @@ class ContainerAudit:
             if qr_data:
                 if self._is_completed_master_label(barcode):
                     self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
+                    return
+
+                if self._paired_preflight_blocks_label(barcode):
+                    self.show_fullscreen_warning(
+                        "관리자 보류 현품표",
+                        "이 현품표는 두 원본이 관리자 보류 중입니다. "
+                        "관리자 인계 목록에서 확인하세요. 다른 현품표 작업은 계속할 수 있습니다.",
+                        self.COLOR_DANGER,
+                    )
                     return
 
                 parked_filepath = self._parked_store().existing_label_path_any_worker(master_label=barcode)
@@ -11434,6 +11665,8 @@ class ContainerAudit:
 
     def _preserve_preflight_hold_for_close(self) -> tuple[bool, bool]:
         store = self._preflight_hold_store()
+        if self._paired_preflight_store().pending():
+            return True, True
         if not store.exists():
             self._preflight_hold_snapshot = None
             self._preflight_hold_draining = False
@@ -11456,14 +11689,7 @@ class ContainerAudit:
             if not current_master or not self._preflight_hold_matches_current_tray(
                 snapshot
             ):
-                messagebox.showerror(
-                    "보류 입력 소유권 확인 필요",
-                    "제품 반영 중인 보류 묶음과 현재 트레이가 일치하지 않아 "
-                    "프로그램을 종료하지 않습니다. 파일을 보존하고 관리자에게 "
-                    "문의하세요.",
-                    parent=getattr(self, "root", None),
-                )
-                return False, True
+                return True, True
             if not self._save_current_tray_state():
                 messagebox.showerror(
                     "보류 입력 저장 실패",

@@ -312,7 +312,8 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 |---|---|---|
 | 첫 준비 또는 품목 갱신 실패 | onboarding 보고/검증 cache 진단; 유효 cache 없으면 시작 중단 | 같은 사용자·정확한 profile·연결 상태와 cache 분기 확인. [CA-01~02](README.md#ca-01) |
 | PHS2 중앙 조회 지연/오프라인 | hold FIFO와 `LOOKUP_FAILED`; 같은 현품표 재시도 | 접수되지 않은 스캔과 보존된 스캔을 구분하고 순서대로 drain. 다른 현품표로 덮어쓰지 않음. [CA-04](README.md#ca-04) |
-| 사전조회 실패로 다른 현품표 작업 필요 | `LOOKUP`/`LOOKUP_FAILED`·활성 트레이 없음 확인 후 관리자 인증·격리·동기 감사 | 보류 목록의 원본을 복원할 수 있으며 새 작업은 격리 후에만 시작. `DRAINING`/읽기 오류는 원본 쌍 대조 전 격리 불가. [CA-G14](BACKLOG.md#ca-g14) |
+| 사전조회 실패로 다른 현품표 작업 필요 | `LOOKUP`/`LOOKUP_FAILED`·활성 트레이 없음 확인 후 관리자 인증·격리·동기 감사 | 보류 목록의 원본을 복원할 수 있으며 새 작업은 격리 후에만 시작. 읽기 오류는 잠금 유지. [CA-G14](BACKLOG.md#ca-g14) |
+| `DRAINING` hold/current 불일치 | 운영 작업에서 관리자 코드 확인 → 두 원본 바이트·SHA256 내구 기록/readback → 동기 감사 → 원본 이동/readback | 단계 실패·부분 이동이면 원 잠금과 같은 인계 재개. 성공하면 두 현품표 재처리를 막고 다른 현품표만 계속. 보류 목록에서 작업자·상태·건수·해시·시각을 확인하고 원 key가 있으면 읽기 전용 영수증 조회. 해제 후 원본 파일 손상은 그 쌍에 재대조 경고를 표시하고 다른 현품표는 계속한다. 정상 종료는 원본 보존 후 허용. [CA-G14](BACKLOG.md#ca-g14) |
 | lease 없는 신규 완료·부분 집합 | 표준 PHS2 완료 차단; 목록·문맥 유지 | 중앙 GOOD 전량·barcode↔unit·lease binding 확인. 오프라인 무조건 신규 작업 허용이 아님. [CA-07](README.md#ca-07) |
 | 유효 lease 이후 중앙 연결 단절 | 내구 intent·`LINKED`·checkpoint와 원 명령으로 후속 시도 | local completion 유무에 맞는 입력 guard 확인. 이미 로컬 완료한 건은 원 key와 완료 시각을 유지해 재조정. [CA-12](README.md#ca-12), [CA-C03](contracts.md#ca-c03) |
 | 응답 유실·중앙 정합 충돌 | receipt 조회/원 요청 재생 또는 `OPERATOR_REVIEW` | scope/key/expected version·exact 결과 대조. key 변경·실물 임의 재처리로 충돌을 우회하지 않음. |
@@ -338,7 +339,7 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 PowerShell 격리 시험은 **PROVEN**, 표준 사용자에서 별도 관리자로 UAC 승격하는
 guest 실물 설치와 ACL 접근은 **NOT TESTED**다. 기존 HKCU·DPAPI·업무 원장·relay는
 작업자 계정에 남는다. 중단 메시지는 원인과 작업자/PC/attempt에서 파생한 문의 코드,
-재확인·보류 안내를 제공하며 기존 설치본과 기록을 보존한다. [CA-G15](BACKLOG.md#ca-g15).
+재확인·보류 안내를 제공하며 기존 설치본과 기록을 보존한다. 파일 접근·ACL·경로·로그 읽기·상승 자식 비정상 종료와 분류되지 않은 오류도 안전 코드와 문의 코드로 안내한다. [CA-G15](BACKLOG.md#ca-g15).
 
 예약 작업 census는 정식/qualification 작업 이름, 명시된 direct-sync/user-relay 실행 모드 또는 `tools/direct_sync_relay_runner.py` 직접 호출 action으로 writer 후보를 식별한다. 직접 script Execute는 유지하며, 인수에서 script를 찾는 경우에는 Python/py/venv 실행 파일을 확인한다. Windows quoting과 `-u`/`-B` 등 옵션·옵션 값을 처리한 첫 script 경로를 작업 디렉터리 기준으로 정규화해 기존 검증된 writer inventory의 Python `.main` route 목록과 비교하며 다중 action도 검사한다. `-c`/`-m`/stdin·도움말·버전 모드의 후속 인자와 Notepad·탐색기·다른 실행 파일이 같은 소스를 여는 작업은 제외한다. null/빈 trigger 및 CIM 속성 부재는 안전하게 정규화하며, 잘못된 writer가 활성 상태이면 `NONCANONICAL_WRITER_ENABLED`로 계속 차단한다. 정식 writer의 이름·루트 TaskPath·실행/사용자/trigger 계약과 기존 binding SHA256을 유지한다. PS5.1 모의 목록과 설치기 회귀는 [분류 시험](../../tests/test_scheduled_writer_classification.py)으로 고정하며 실제 guest 재설치는 별도 수용이다.
 

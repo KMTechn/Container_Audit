@@ -133,6 +133,88 @@ Invoke-SelfElevated
     assert f'code_placement_preflight_failure={code}' in result.stdout
 
 
+@pytest.mark.parametrize(('exception', 'code'), [
+    ('[UnauthorizedAccessException]::new("denied")', 'CONTAINER_PLACEMENT_ACCESS_DENIED'),
+    ('[IO.DirectoryNotFoundException]::new("missing")', 'CONTAINER_PLACEMENT_PATH_UNAVAILABLE'),
+    ('[IO.IOException]::new("io")', 'CONTAINER_PLACEMENT_FILE_IO_FAILED'),
+    ('[InvalidOperationException]::new("odd")', 'CONTAINER_PLACEMENT_UNCLASSIFIED'),
+])
+def test_code_placement_preflight_classifies_nonstandard_errors(tmp_path, exception, code):
+    result = run_functions(
+        tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_THIS_PC.ps1',
+        ['Get-CodePlacementPreflightFailureCode'],
+        f'try {{ throw {exception} }} catch {{ Get-CodePlacementPreflightFailureCode $_ }}',
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == code
+
+
+def test_code_placement_preflight_classifies_powershell_missing_path(tmp_path):
+    result = run_functions(
+        tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_THIS_PC.ps1',
+        ['Get-CodePlacementPreflightFailureCode'], r'''
+try {
+    Get-Item -LiteralPath (Join-Path $env:CA_CONTRACT_ROOT 'missing-path') -ErrorAction Stop
+} catch {
+    Get-CodePlacementPreflightFailureCode $_
+}
+''',
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'CONTAINER_PLACEMENT_PATH_UNAVAILABLE'
+
+
+@pytest.mark.parametrize(('log_contents', 'expected'), [
+    ('{invalid json', 'CONTAINER_PLACEMENT_LOG_UNREADABLE'),
+    (None, 'CONTAINER_PLACEMENT_CHILD_FAILED'),
+])
+def test_elevation_log_failure_and_abnormal_child_have_safe_code(tmp_path, log_contents, expected):
+    if ctypes.windll.shell32.IsUserAnAdmin():
+        pytest.skip('parent forwarding path requires a non-elevated token')
+    log = tmp_path / 'elevated.jsonl'
+    if log_contents is not None:
+        log.write_text(log_contents, encoding='utf-8')
+    result = run_functions(
+        tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_THIS_PC.ps1',
+        ['ConvertTo-ProcessArgument', 'Invoke-SelfElevated'], r'''
+$BootstrapScriptPath='C:\packet\INSTALL_THIS_PC.ps1'
+$BootstrapBoundParameters=@{}
+$ElevationLogPath=$env:CA_FAKE_ELEVATION_LOG
+function Get-StrictFullPath([string]$Value,[string]$Purpose) { return [IO.Path]::GetFullPath($Value) }
+function Assert-NoReparsePoint([string]$Value,[string]$Purpose) { }
+function Start-Process {
+    param($FilePath,$Verb,$ArgumentList,[switch]$Wait,[switch]$PassThru)
+    return [pscustomobject]@{ Id=4242; ExitCode=1 }
+}
+Invoke-SelfElevated
+''', values={'CA_FAKE_ELEVATION_LOG': str(log)},
+    )
+    assert result.returncode == 1
+    assert f'code_placement_preflight_failure={expected}' in result.stdout
+
+
+def test_unclassified_child_preflight_error_reaches_canonical_parent(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    _distinct_replacement(source)
+    helper = source / 'INSTALL_THIS_PC.ps1'
+    text = helper.read_text(encoding='utf-8-sig')
+    anchor = '        $placementWriterFenceLease = Enter-ContainerPlacementWriterFence'
+    assert text.count(anchor) == 1
+    helper.write_text(text.replace(anchor, "        throw 'unusual preflight fault'\n" + anchor), encoding='utf-8-sig')
+    _bind_packet(source)
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        result = _install(tmp_path, env, source, install)
+        assert result.returncode != 0
+        assert 'CONTAINER_PLACEMENT_UNCLASSIFIED' in result.stderr
+        assert '분류 안 된 오류' in result.stderr
+        assert '문의 코드 CA-' in result.stderr
+        assert 'unusual preflight fault' not in result.stderr
+        audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+        assert audit['code_placement'] == 'NOT_STARTED'
+        assert _tree(install) == before['code']
+
+
 def test_public_late_restore_uses_fresh_owner_preserves_history_and_is_repeatable(tmp_path):
     env, source, install, protected = _setup(tmp_path)
     _distinct_replacement(source)

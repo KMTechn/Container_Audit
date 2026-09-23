@@ -85,6 +85,25 @@ function ConvertTo-ProcessArgument([string]$Value) {
     return '"' + $Value.Replace('\', '\').Replace('"', '\"') + '"'
 }
 
+function Get-CodePlacementPreflightFailureCode($Failure) {
+    $message = [string]$Failure.Exception.Message
+    if ($message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') { return $message }
+    $exception = $Failure.Exception
+    while ($exception -is [Management.Automation.RuntimeException] -and $null -ne $exception.InnerException) {
+        $exception = $exception.InnerException
+    }
+    if ($exception -is [UnauthorizedAccessException] -or $exception -is [Security.SecurityException]) {
+        return 'CONTAINER_PLACEMENT_ACCESS_DENIED'
+    }
+    if ($exception -is [IO.FileNotFoundException] -or $exception -is [IO.DirectoryNotFoundException] -or
+        $exception -is [Management.Automation.ItemNotFoundException] -or
+        $exception -is [Management.Automation.DriveNotFoundException]) {
+        return 'CONTAINER_PLACEMENT_PATH_UNAVAILABLE'
+    }
+    if ($exception -is [IO.IOException]) { return 'CONTAINER_PLACEMENT_FILE_IO_FAILED' }
+    return 'CONTAINER_PLACEMENT_UNCLASSIFIED'
+}
+
 function Invoke-SelfElevated {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -103,21 +122,32 @@ function Invoke-SelfElevated {
     }
     $argumentLine = ($arguments | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join ' '
     $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
-    $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
-    if ($process.ExitCode -ne 0 -and -not [string]::IsNullOrWhiteSpace($ElevationLogPath)) {
+    try {
+        $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
+    } catch {
+        Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED'
+        exit 1
+    }
+    if ($process.ExitCode -ne 0) {
+        $failureCode = 'CONTAINER_PLACEMENT_CHILD_FAILED'
+        if (-not [string]::IsNullOrWhiteSpace($ElevationLogPath)) {
         try {
             $logFull = Get-StrictFullPath $ElevationLogPath 'ElevationLogPath'
             Assert-NoReparsePoint $logFull 'elevation log'
             if ((Test-Path -LiteralPath $logFull -PathType Leaf) -and
                 (Get-Item -LiteralPath $logFull).Length -le 65536) {
-                $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 | ConvertFrom-Json
+                $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
                 if ([int]$lastEntry.process_id -eq [int]$process.Id -and
                     [string]$lastEntry.status -ceq 'PREFLIGHT_FAILED' -and
-                    [string]$lastEntry.message -cmatch '^CONTAINER_(?:OPERATOR|WRITER)_[A-Z_]+$') {
-                    Write-Output "code_placement_preflight_failure=$([string]$lastEntry.message)"
+                    [string]$lastEntry.message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') {
+                    $failureCode = [string]$lastEntry.message
                 }
+            } elseif (Test-Path -LiteralPath $logFull -PathType Leaf) {
+                $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE'
             }
-        } catch { }
+        } catch { $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
+        }
+        Write-Output "code_placement_preflight_failure=$failureCode"
     }
     exit $process.ExitCode
 }
@@ -620,21 +650,21 @@ if (
 }
 $placementWriterFenceLease = $null
 if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
-    try { $placementWriterFenceLease = Enter-ContainerPlacementWriterFence }
+    try {
+        $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
+        . $WriterFenceHelperPath
+        $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    }
     catch {
-        $failureCode = [string]$_.Exception.Message
-        if ($failureCode -cmatch '^CONTAINER_(?:OPERATOR|WRITER)_[A-Z_]+$') {
-            $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-            $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-            if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-                try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode } catch { }
-            }
-            Write-Output "code_placement_preflight_failure=$failureCode"
+        $failureCode = Get-CodePlacementPreflightFailureCode $_
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+            try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode } catch { }
         }
+        Write-Output "code_placement_preflight_failure=$failureCode"
         throw
     }
-    . $WriterFenceHelperPath
-    $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
 }
 try {
 if ($RestoreVerifiedReplacement.IsPresent) {

@@ -1,0 +1,204 @@
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from Container_Audit import ContainerAudit, TraySession
+from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
+from storage_utils import atomic_write_json
+from tests.test_container_p0_contracts import _preflight_hold_ownership_app, _saved_tray_state
+
+
+def _app(tmp_path, monkeypatch):
+    _, app, hold_store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    app.root = SimpleNamespace()
+    app.worker_role = "ADMIN"
+    app._authenticated_protected_admin = True
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app._invalidate_pending_scan_callbacks = lambda: None
+    app._reset_ui_to_waiting_state = lambda: None
+    app._update_all_summaries = lambda: None
+    current = _saved_tray_state()
+    current["worker_name"] = "current worker"
+    app.current_tray = TraySession(
+        master_label_code=current["master_label_code"],
+        scanned_barcodes=list(current["scanned_barcodes"]),
+    )
+    atomic_write_json(hold_store.path.parent / "current.json", current)
+    hold_store.start(worker="hold worker", master_raw="OTHER-MASTER", scan_epoch=1)
+    hold_store.append("HELD-PRODUCT")
+    hold_store.mark_draining()
+    app._preflight_hold_snapshot = hold_store.load()
+    return app, hold_store, current
+
+
+def test_paired_handoff_blocks_only_original_labels_and_keeps_bytes(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    original_hold = hold_store.path.read_bytes()
+    original_current = (hold_store.path.parent / "current.json").read_bytes()
+    assert app._defer_paired_preflight_from_operations() is True
+    path = app._paired_preflight_store().paths()[0]
+    assert (path.parent / "hold.original").read_bytes() == original_hold
+    assert (path.parent / "current.original").read_bytes() == original_current
+    assert app._paired_preflight_store().is_released(path)
+    assert not app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    assert app._paired_preflight_blocks_label("OTHER-MASTER")
+    assert not app._paired_preflight_blocks_label("PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef")
+
+
+@pytest.mark.parametrize("stage", ["capture", "record_readback"])
+def test_paired_handoff_prepare_interruption_keeps_originals_locked(tmp_path, monkeypatch, stage):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    paired = app._paired_preflight_store()
+    app._paired_preflight_store = lambda: paired
+    hold_bytes = hold_store.path.read_bytes()
+    current_path = hold_store.path.parent / "current.json"
+    current_bytes = current_path.read_bytes()
+    name = "_part" if stage == "capture" else "read"
+    original = getattr(paired, name)
+
+    def interrupted(*args):
+        raise OSError("injected preparation interruption")
+
+    monkeypatch.setattr(paired, name, interrupted)
+    assert app._defer_paired_preflight_from_operations() is False
+    assert app._preflight_context_blocks_mutation()
+    assert hold_store.path.read_bytes() == hold_bytes
+    assert current_path.read_bytes() == current_bytes
+    monkeypatch.setattr(paired, name, original)
+    assert app._defer_paired_preflight_from_operations() is True
+
+
+@pytest.mark.parametrize("stage", ["audit", "first_move", "second_move", "release"])
+def test_paired_handoff_interruption_keeps_lock_and_replays_same_record(tmp_path, monkeypatch, stage):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    paired = app._paired_preflight_store()
+    app._paired_preflight_store = lambda: paired
+    if stage == "audit":
+        app._log_event = lambda *a, **k: False
+    else:
+        original = paired.release if stage == "release" else paired.move_original
+        calls = 0
+
+        def fail_once(*args):
+            nonlocal calls
+            calls += 1
+            if calls == (2 if stage == "second_move" else 1):
+                raise OSError("injected interruption")
+            return original(*args)
+
+        monkeypatch.setattr(paired, "release" if stage == "release" else "move_original", fail_once)
+    assert app._defer_paired_preflight_from_operations() is False
+    paths = paired.paths()
+    assert len(paths) == 1 and paired.pending()
+    assert app._preflight_context_blocks_mutation()
+    if stage == "audit":
+        app._log_event = lambda *a, **k: True
+    else:
+        monkeypatch.setattr(paired, "release" if stage == "release" else "move_original", original)
+    assert app._defer_paired_preflight_from_operations() is True
+    assert paired.paths() == paths
+    assert not paired.pending()
+
+
+def test_paired_handoff_hash_mismatch_keeps_lock(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    paired = app._paired_preflight_store()
+    path = paired.prepare(hold_store.path, hold_store.path.parent / "current.json")
+    hold_store.path.write_bytes(b"tampered")
+    app._paired_preflight_store = lambda: paired
+    assert app._defer_paired_preflight_from_operations() is False
+    assert paired.pending() and app._preflight_context_blocks_mutation()
+    record = paired.read(path)
+    hold_store.path.write_bytes(paired._bytes(record["hold"]))
+    assert app._defer_paired_preflight_from_operations() is True
+
+
+def test_worker_cannot_defer_paired_handoff(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    app._authorize_blocked_work_supervisor = lambda: False
+    assert app._defer_paired_preflight_from_operations() is False
+    assert hold_store.path.exists()
+    assert not app._paired_preflight_store().paths()
+
+
+def test_mismatched_draining_hold_allows_normal_close_handoff(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    assert app._restore_preflight_scan_hold() is True
+    assert app._preflight_context_blocks_mutation()
+    assert app._preserve_preflight_hold_for_close() == (True, True)
+    assert hold_store.path.exists()
+    assert (hold_store.path.parent / "current.json").exists()
+
+
+def test_pending_pair_after_first_move_stays_locked_on_restart(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    paired = app._paired_preflight_store()
+    path = paired.prepare(hold_store.path, hold_store.path.parent / "current.json")
+    paired.move_original(path, "hold")
+    _, restarted, _ = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    restarted.parked_trays_dir = app.parked_trays_dir
+    restarted.save_folder = app.save_folder
+    restarted.CURRENT_TRAY_STATE_FILE = app.CURRENT_TRAY_STATE_FILE
+    assert restarted._restore_preflight_scan_hold() is True
+    assert restarted._preflight_context_blocks_mutation()
+    assert restarted._preserve_preflight_hold_for_close() == (True, True)
+
+
+def test_manager_handoff_list_shows_both_originals(tmp_path, monkeypatch):
+    app, _, _ = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    notices = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda _title, message, **_kwargs: notices.append(message) or False,
+    )
+    app._show_paired_preflight_handoffs()
+    assert len(notices) == 1
+    for expected in ("hold worker", "current worker", "DRAINING", "SHA256", "관리자 보류"):
+        assert expected in notices[0]
+
+
+def test_later_archived_damage_blocks_pair_without_stopping_other_labels(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    paired = app._paired_preflight_store()
+    path = paired.paths()[0]
+    (path.parent / "hold.original").write_bytes(b"later damage")
+    assert paired.is_released(path) and not paired.originals_match(path)
+    assert not app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    notices = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda _title, message, **_kwargs: notices.append(message) or False,
+    )
+    app._show_paired_preflight_handoffs()
+    assert "원본 파일 재대조 필요" in notices[0]
+
+
+def test_paired_receipt_recheck_reads_same_key_without_settling(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    calls = []
+    messages = []
+    row = {"command_json": json.dumps({"authority_scope_id": "scope", "idempotency_key": "original-key"})}
+    coordinator = SimpleNamespace(
+        store=SimpleNamespace(bound_operator_review_for_tray=lambda **_kwargs: row),
+        client=SimpleNamespace(get_receipt=lambda scope, key: calls.append((scope, key)) or {"receipt_id": "r"}),
+        _validate_bound_command=lambda *_args: None,
+        _validate_receipt=lambda *_args: None,
+    )
+    lane = SimpleNamespace(is_busy=lambda: False, submit=lambda task: calls.append(task))
+    app._ui_task_lane = lambda: lane
+    app._transfer_seal_runtime = lambda: coordinator
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda _title, message, **_kwargs: messages.append(message))
+    app._recheck_paired_preflight_receipt(current)
+    task = calls.pop()
+    task.finish(task.work())
+    assert calls == [("scope", "original-key")]
+    assert "관리자 보류 상태로 유지" in messages[0]

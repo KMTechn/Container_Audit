@@ -2330,25 +2330,47 @@ $enteredPlacementTry = $true
             )
         }
         if ($testMode) { $bootstrap += '-AllowNoncanonicalLayoutForTest' }
-        $bootstrapOutput = @(& $winps @bootstrap)
-        $bootstrapExitCode = $LASTEXITCODE
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            # Keep the elevated helper's raw stderr out of operator-facing
+            # output; only a bounded classification line may cross this edge.
+            $ErrorActionPreference = 'Continue'
+            $bootstrapOutput = @(& $winps @bootstrap 2>&1)
+            $bootstrapExitCode = $LASTEXITCODE
+        } catch {
+            $bootstrapOutput = @('code_placement_preflight_failure=CONTAINER_PLACEMENT_CHILD_FAILED')
+            $bootstrapExitCode = 1
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
         if ($bootstrapExitCode -ne 0) {
             $preflightFailure = @($bootstrapOutput | Where-Object {
                 [string]$_ -cmatch '^code_placement_preflight_failure=CONTAINER_[A-Z_]+$'
             } | Select-Object -Last 1)
-            if ($preflightFailure.Count -eq 1) {
-                $failureCode = ([string]$preflightFailure[0]).Split('=')[1]
-                $reason = if ($failureCode -cmatch 'MUTEX_TIMEOUT$') {
-                    '다른 설치 또는 기록 작업이 진행 중입니다.'
-                } elseif ($failureCode -cmatch 'DELEGATED_OPERATION_MISMATCH$') {
-                    '이번 설치 준비가 만료되었거나 다른 시도와 섞였습니다.'
-                } else {
-                    '작업자 계정의 준비 폴더와 권한 상승 요청이 일치하지 않습니다.'
-                }
-                $inquiryCode = 'CA-' + (Get-ContainerWriterFenceStringSha256 ($operatorSid + '|' + $env:COMPUTERNAME + '|' + $Script:CanonicalWriterFenceAttemptId)).Substring(0, 12).ToUpperInvariant()
-                throw "설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다."
+            $failureCode = if ($preflightFailure.Count -eq 1) {
+                ([string]$preflightFailure[0]).Split('=')[1]
+            } else { 'CONTAINER_PLACEMENT_CHILD_FAILED' }
+            $reason = if ($failureCode -cmatch 'MUTEX_TIMEOUT$') {
+                '다른 설치 또는 기록 작업이 진행 중입니다.'
+            } elseif ($failureCode -cmatch 'DELEGATED_OPERATION_MISMATCH$') {
+                '이번 설치 준비가 만료되었거나 다른 시도와 섞였습니다.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_ACCESS_DENIED') {
+                '준비 폴더에 접근할 권한이 없습니다. 작업자 계정과 폴더 권한을 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_PATH_UNAVAILABLE') {
+                '준비 파일 경로를 찾을 수 없습니다. 원래 설치 묶음과 폴더를 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_LOG_UNREADABLE') {
+                '권한 상승 작업의 결과 기록을 읽지 못했습니다. 기록 폴더 권한을 확인하세요.'
+            } elseif ($failureCode -in @('CONTAINER_PLACEMENT_CHILD_FAILED','CONTAINER_PLACEMENT_ELEVATION_FAILED')) {
+                '권한 상승 작업이 끝나지 않았습니다. 관리자 실행을 다시 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_UNCLASSIFIED') {
+                '분류 안 된 오류가 발생했습니다. 아래 문의 코드를 담당자에게 알려 주세요.'
+            } elseif ($failureCode -cmatch '^CONTAINER_PLACEMENT_') {
+                '준비 파일을 읽거나 쓰지 못했습니다. 저장 공간과 폴더 상태를 확인하세요.'
+            } else {
+                '작업자 계정의 준비 폴더와 권한 상승 요청이 일치하지 않습니다.'
             }
-            throw "Code placement failed: $bootstrapExitCode"
+            $inquiryCode = 'CA-' + (Get-ContainerWriterFenceStringSha256 ($operatorSid + '|' + $env:COMPUTERNAME + '|' + $Script:CanonicalWriterFenceAttemptId)).Substring(0, 12).ToUpperInvariant()
+            throw "설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다."
         }
         $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
         if ($replaceExisting) {
