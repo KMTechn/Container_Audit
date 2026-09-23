@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import csv
 import os
 import re
 import uuid
@@ -14,6 +15,7 @@ from protected_admin import persistent_operator_name
 from storage_utils import atomic_write_json
 from writer_session_fence import writer_sink
 from recovery_file_read import read_recovery_file
+from paired_preflight_handoff import PairedPreflightHandoffStore
 
 
 def sanitize_filename(filename: str) -> str:
@@ -38,6 +40,24 @@ class ParkedRecoveryDeferResult:
     defer_id: str
     state_hash: str
     replayed: bool
+
+
+@dataclass(frozen=True)
+class KeyEvidence:
+    path: Path
+    kind: str
+    labels: tuple[str, ...] = ()
+    digest: str = ""
+    unidentified: bool = False
+    problem: str = ""
+    evidence_id: str = ""
+    content_sha256: str = ""
+
+    def binds(self, label: str) -> bool:
+        key = canonical_master_label_key(label)
+        return (self.unidentified
+                or any(canonical_master_label_key(value) == key for value in self.labels)
+                or bool(self.digest and self.digest == hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]))
 
 
 class ParkedTrayStore:
@@ -67,32 +87,197 @@ class ParkedTrayStore:
                 return path
         return None
 
+    def enumerate_key_evidence(
+        self, *, pair_store: PairedPreflightHandoffStore | None = None,
+    ) -> tuple[KeyEvidence, ...]:
+        """Read the remaining durable files on every call; never infer absence from an index."""
+        rows: list[KeyEvidence] = []
+        if self.directory.exists():
+            for path in sorted(self.directory.glob("parked_*.json*")):
+                name = path.name
+                identified = re.search(r"\.manager-hold\.json\.identified-(?:source-)?[0-9a-f]{64}\.json$", name) is not None
+                marker = name.endswith(".manager-hold.json")
+                bad = re.search(r"\.json\.bad-.+$", name) is not None
+                if not (identified or marker or bad or name.endswith(".json")):
+                    continue
+                source_name = (re.sub(r"\.manager-hold\.json\.identified-(?:source-)?[0-9a-f]{64}\.json$", "", name) if identified
+                               else name.removesuffix(".manager-hold.json") if marker
+                               else re.sub(r"\.bad-.+$", "", name))
+                source = path.with_name(source_name)
+                digest_match = re.search(r"_([0-9a-f]{16})\.json$", source_name)
+                digest = digest_match.group(1) if digest_match else ""
+                labels: list[str] = []
+                legacy = source_name.find("PHS=")
+                if legacy >= 0:
+                    candidate = source_name[legacy:].removesuffix(".json")
+                    if parse_new_format_qr(candidate):
+                        labels.append(candidate)
+                kind = ("parked_identified" if identified else "parked_marker" if marker
+                        else "parked_bad" if bad else "parked")
+                result = read_recovery_file(path, "parked_manager_hold" if marker or identified else "parked")
+                if result.verified:
+                    candidate = result.value.get("label" if marker or identified else "master_label_code")
+                    if isinstance(candidate, str) and candidate:
+                        labels.append(candidate)
+                    if marker and source.exists():
+                        source_read = read_recovery_file(source, "parked")
+                        if source_read.sha256 != result.value["source_sha256"]:
+                            result = result.__class__(result.path, result.raw, result.sha256,
+                                                      result.value, "관리자 보류 표시의 원본 SHA256 불일치")
+                elif result.raw is not None:
+                    try:
+                        raw_value = json.loads(result.raw.decode("utf-8"))
+                        candidate = raw_value.get("label" if marker or identified else "master_label_code") if isinstance(raw_value, dict) else None
+                        if isinstance(candidate, str) and candidate:
+                            labels.append(candidate)
+                    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+                        pass
+                if marker and not result.verified:
+                    identified_read = read_recovery_file(
+                        path.with_name(name + f".identified-{result.sha256}.json"), "parked_manager_hold",
+                    )
+                    if (identified_read.verified
+                            and identified_read.value["source_sha256"] == result.sha256):
+                        labels.append(identified_read.value["label"])
+                rows.append(KeyEvidence(path, kind, tuple(dict.fromkeys(labels)), digest,
+                                        not labels and not digest, result.reason or ""))
+        pair_store = pair_store or PairedPreflightHandoffStore(self.directory / "paired_preflight_handoff")
+        for path in pair_store.paths():
+            inspection = pair_store.inspect(path)
+            rows.append(KeyEvidence(path, "pair", inspection.labels,
+                                    unidentified=inspection.unidentified,
+                                    problem=" · ".join(inspection.problems)))
+        for path in sorted(pair_store.directory.glob("stale-current-*.json*")) if pair_store.directory.exists() else ():
+            marker = path.name.endswith(".manager-hold.json")
+            result = read_recovery_file(path, "manager_hold" if marker else "stale_hold")
+            labels = tuple(result.value["labels"]) if result.verified else ()
+            if not labels and not marker:
+                binding = read_recovery_file(pair_store.stale_manager_path(path), "manager_hold")
+                if binding.verified:
+                    labels = tuple(binding.value["labels"])
+            rows.append(KeyEvidence(path, "stale_marker" if marker else "stale", labels,
+                                    unidentified=not labels, problem=result.reason or "",
+                                    content_sha256=result.sha256 or ""))
+        if pair_store.current_path is not None:
+            current_path = pair_store.current_path
+            for path in sorted(current_path.parent.glob(current_path.name + ".bad-*")) if current_path.parent.exists() else ():
+                result = read_recovery_file(path, "stale")
+                labels = []
+                if result.verified:
+                    labels.append(result.value["master_label_code"])
+                elif result.raw is not None:
+                    try:
+                        value = json.loads(result.raw.decode("utf-8"))
+                        if isinstance(value, dict) and isinstance(value.get("master_label_code"), str):
+                            labels.append(value["master_label_code"])
+                    except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
+                        pass
+                evidence_id = hashlib.sha256(
+                    (str(path.resolve()) + ":" + result.sha256).encode("utf-8")
+                ).hexdigest() if result.sha256 else ""
+                rows.append(KeyEvidence(path, "stale_current", tuple(labels),
+                                        unidentified=not labels, problem=result.reason or "",
+                                        evidence_id=evidence_id, content_sha256=result.sha256 or ""))
+        audit_dir = self.directory.parent / "local_events"
+        if audit_dir.exists():
+            audit_events = {
+                "PHS2_DAMAGED_PARKED_DEFERRED", "PHS2_PAIRED_MANUAL_HOLD",
+                "PHS2_PAIRED_PREFLIGHT_DEFERRED", "PHS2_PAIRED_RECOVERY_DEFERRED",
+                "PHS2_PAIRED_STALE_CURRENT_DEFERRED",
+                "PHS2_PAIRED_STALE_CURRENT_PRESERVATION_REQUESTED",
+                "PHS2_STALE_HOLD_RECHECKED", "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED",
+            }
+            audit_events.add("PHS2_AUDIT_EVIDENCE_BOUND")
+            audit_rows: list[tuple[Path, str, dict[str, Any], str]] = []
+            damaged_audits: list[tuple[Path, str]] = []
+            for path in sorted(audit_dir.glob("*.csv")):
+                try:
+                    with path.open("r", encoding="utf-8-sig", newline="") as stream:
+                        for ordinal, row in enumerate(csv.DictReader(stream), 1):
+                            event = row.get("event")
+                            if event not in audit_events:
+                                continue
+                            detail = json.loads(row.get("details") or "{}")
+                            if not isinstance(detail, dict):
+                                raise ValueError("audit detail is not an object")
+                            evidence_id = hashlib.sha256(
+                                f"{path.resolve()}:{ordinal}:{event}:{row.get('details')}".encode("utf-8")
+                            ).hexdigest()
+                            audit_rows.append((path, event, detail, evidence_id))
+                except (OSError, UnicodeError, ValueError, RecursionError, csv.Error):
+                    try:
+                        digest = hashlib.sha256()
+                        with path.open("rb") as raw_stream:
+                            for block in iter(lambda: raw_stream.read(1024 * 1024), b""):
+                                digest.update(block)
+                        evidence_id = hashlib.sha256(
+                            (str(path.resolve()) + ":" + digest.hexdigest()).encode("utf-8")
+                        ).hexdigest()
+                    except OSError:
+                        evidence_id = ""
+                    damaged_audits.append((path, evidence_id))
+            known_by_handoff: dict[str, list[str]] = {}
+            known_by_audit: dict[str, list[str]] = {}
+            for _path, event, detail, _evidence_id in audit_rows:
+                handoff = detail.get("handoff_id")
+                labels = [detail.get(key) for key in (
+                    "master_label_code", "master_raw", "hold_master", "current_master",
+                )]
+                if isinstance(detail.get("labels"), list):
+                    labels.extend(detail["labels"])
+                known = [label for label in labels if isinstance(label, str) and label]
+                if isinstance(handoff, str) and handoff:
+                    known_by_handoff.setdefault(handoff, []).extend(known)
+                source_audit_id = detail.get("source_audit_id")
+                if (event == "PHS2_AUDIT_EVIDENCE_BOUND"
+                        and isinstance(source_audit_id, str) and source_audit_id):
+                    known_by_audit.setdefault(source_audit_id, []).extend(known)
+            for path, event, detail, evidence_id in audit_rows:
+                labels = [detail.get(key) for key in (
+                    "master_label_code", "master_raw", "hold_master", "current_master",
+                )]
+                if isinstance(detail.get("labels"), list):
+                    labels.extend(detail["labels"])
+                handoff = detail.get("handoff_id")
+                if isinstance(handoff, str):
+                    labels.extend(known_by_handoff.get(handoff, ()))
+                    labels.extend(label for row in rows if row.kind == "pair"
+                                  and row.path.parent.name == handoff for label in row.labels)
+                for reference in ("preserved_file", "changed_file", "source_file", "marker_file"):
+                    name = detail.get(reference)
+                    if isinstance(name, str) and name and name == Path(name).name:
+                        hashes = {detail.get(key) for key in (
+                            "original_sha256", "changed_sha256", "current_sha256",
+                        ) if isinstance(detail.get(key), str)}
+                        labels.extend(label for row in rows
+                                      if row.kind in {"stale", "stale_current", "stale_marker"}
+                                      and (row.path.name == name or row.path.name.startswith(name + ".bad-"))
+                                      and row.content_sha256 in hashes
+                                      for label in row.labels)
+                labels.extend(known_by_audit.get(evidence_id, ()))
+                labels = list(dict.fromkeys(label for label in labels
+                                            if isinstance(label, str) and label))
+                rows.append(KeyEvidence(path, "audit", tuple(labels),
+                                        unidentified=not labels,
+                                        problem="원 현품표 신원 미확인 감사 사건" if not labels else event,
+                                        evidence_id=evidence_id))
+            for path, evidence_id in damaged_audits:
+                labels = tuple(dict.fromkeys(known_by_audit.get(evidence_id, ())))
+                rows.append(KeyEvidence(path, "audit", labels, unidentified=not labels,
+                                        problem="관리자 감사 파일 판독 실패", evidence_id=evidence_id))
+            for index, row in enumerate(rows):
+                if row.kind == "stale_current" and row.evidence_id in known_by_audit:
+                    labels = tuple(dict.fromkeys((*row.labels, *known_by_audit[row.evidence_id])))
+                    rows[index] = KeyEvidence(row.path, row.kind, labels, row.digest,
+                                              not labels, row.problem, row.evidence_id,
+                                              row.content_sha256)
+        return tuple(rows)
+
     def existing_label_path_any_worker(self, *, master_label: str) -> Path | None:
-        if not self.directory.exists():
-            return None
-        target_key = canonical_master_label_key(master_label)
-        digest = hashlib.sha256(target_key.encode("utf-8")).hexdigest()[:16]
-        for marker in sorted(self.directory.glob("parked_*.json.manager-hold.json")):
-            binding = read_recovery_file(marker, "parked_manager_hold")
-            if binding.verified and canonical_master_label_key(binding.value["label"]) == target_key:
-                return marker.with_name(marker.name.removesuffix(".manager-hold.json"))
-        for path in sorted(self.directory.glob("parked_*.json")):
-            if path.name.endswith(".manager-hold.json"):
-                continue
-            # The deterministic QR filename remains a label guard even if its
-            # payload cannot be decoded. A manager binding covers other names.
-            if path.name.endswith(f"_{digest}.json"):
-                return path
-            binding = read_recovery_file(self.manager_hold_path(path), "parked_manager_hold")
-            if binding.verified and canonical_master_label_key(binding.value["label"]) == target_key:
-                return path
-            try:
-                data = self.load(path, normalize_worker=False)
-            except Exception:
-                continue
-            parked_label = str(data.get("master_label_code") or "")
-            if parked_label and canonical_master_label_key(parked_label) == target_key:
-                return path
+        phs2 = str((parse_new_format_qr(master_label) or {}).get("PHS") or "") == "2"
+        for row in self.enumerate_key_evidence():
+            if row.kind.startswith("parked") and row.binds(master_label) and (phs2 or not row.unidentified):
+                return row.path
         return None
 
     @staticmethod
@@ -109,19 +294,26 @@ class ParkedTrayStore:
             if canonical_master_label_key(previous.value["label"]) != canonical_master_label_key(label):
                 raise FileExistsError("parked manager binding differs")
             return
-        if source.verified or source.sha256 is None:
+        damaged_marker = marker.exists() and not previous.verified
+        archived_original = ".json.bad-" in path.name
+        marker_drift = previous.verified and source.sha256 is not None and previous.value["source_sha256"] != source.sha256
+        if (source.verified and not archived_original and not damaged_marker and not marker_drift) or (source.sha256 is None and not damaged_marker):
             raise ValueError("parked source is not an intact invalid file")
         payload = {
             "schema": "container-audit-parked-manager-hold-v1",
             "label": label,
-            "source_sha256": source.sha256,
+            "source_sha256": previous.sha256 if damaged_marker else source.sha256,
         }
-        if marker.exists():
-            if not previous.verified or previous.value != payload:
+        target = (marker.with_name(marker.name + f".identified-{previous.sha256}.json")
+                  if damaged_marker else marker.with_name(marker.name + f".identified-source-{source.sha256}.json")
+                  if marker_drift else marker)
+        if target.exists():
+            prior = read_recovery_file(target, "parked_manager_hold")
+            if not prior.verified or prior.value != payload:
                 raise FileExistsError("parked manager binding differs")
         else:
-            atomic_write_json(marker, payload, ensure_ascii=False)
-        check = read_recovery_file(marker, "parked_manager_hold")
+            atomic_write_json(target, payload, ensure_ascii=False)
+        check = read_recovery_file(target, "parked_manager_hold")
         if not check.verified or check.value != payload:
             raise OSError("parked manager binding readback differs")
 
@@ -217,17 +409,19 @@ class ParkedTrayStore:
         if not self.directory.exists():
             return []
         summaries: List[ParkedTraySummary] = []
-        for path in sorted(self.directory.glob("parked_*.json")):
-            if path.name.endswith(".manager-hold.json"):
+        evidence_rows = self.enumerate_key_evidence()
+        for evidence in evidence_rows:
+            if evidence.kind not in {"parked", "parked_bad"}:
                 continue
+            path = evidence.path
             try:
                 result = read_recovery_file(path, "parked" if strict else "parked_summary",
                                             tray_size=tray_size)
-                if not result.verified:
+                if not result.verified or evidence.kind == "parked_bad":
                     # An unreadable payload has no trustworthy owner. Expose
                     # it without hiding healthy rows.
                     summaries.append(ParkedTraySummary(path, f"확인 필요 · {path.name}",
-                                                        0, result.reason))
+                                                        0, result.reason or "격리된 원본 보존"))
                     continue
                 data = result.value
                 stored_worker = persistent_operator_name(data.get("worker_name"))
@@ -246,12 +440,18 @@ class ParkedTrayStore:
                     path, f"확인 필요 · {path.name}", 0,
                     f"보류 작업 판독 실패 ({exc.__class__.__name__})",
                 ))
-        for marker in sorted(self.directory.glob("parked_*.json.manager-hold.json")):
+        for evidence in evidence_rows:
+            if evidence.kind != "parked_marker":
+                continue
+            marker = evidence.path
             try:
                 source = marker.with_name(marker.name.removesuffix(".manager-hold.json"))
                 if not source.exists():
-                    summaries.append(ParkedTraySummary(source, f"확인 필요 · {source.name}", 0,
-                                                       "보류 원본 파일이 없고 관리자 보류 기록만 남음"))
+                    summaries.append(ParkedTraySummary(marker, f"확인 필요 · {source.name}", 0,
+                                                       "원본 없음, 보류 표시만 남음"))
+                elif evidence.problem:
+                    summaries.append(ParkedTraySummary(marker, f"확인 필요 · {marker.name}", 0,
+                                                       "관리자 보류 표시 손상 · 원본은 보존됨"))
             except Exception as exc:
                 summaries.append(ParkedTraySummary(marker, f"확인 필요 · {marker.name}", 0,
                                                    f"관리자 보류 판독 실패 ({exc.__class__.__name__})"))

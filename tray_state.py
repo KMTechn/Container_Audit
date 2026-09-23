@@ -596,6 +596,10 @@ def _validate_pending_parked_restore(
         or source_name != Path(source_name).name
         or not source_name.startswith("parked_")
         or not source_name.lower().endswith(".json")
+        or ".." in source_name
+        or len(source_name) > 240
+        or any(character in '\\/:*?"<>|' or ord(character) < 32 for character in source_name)
+        or Path(source_name).is_reserved()
     ):
         raise TrayStateValidationError(
             f"{PARKED_RESTORE_STATE_KEY}.parked_source_name is invalid"

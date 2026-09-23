@@ -3,17 +3,24 @@ from __future__ import annotations
 import json
 import hashlib
 import random
+import itertools
+import csv
+import datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from Container_Audit import ContainerAudit, TraySession
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
+from parked_tray_store import ParkedTrayStore
 from preflight_scan_hold import PreflightScanHoldStore
 from protected_admin import PROTECTED_ADMIN_OPERATOR_ID
 from recovery_file_read import read_recovery_file
 from storage_utils import atomic_write_json
-from tests.test_container_audit_contracts import CapturingTree
+from tray_state import (PARKED_RESTORE_STATE_KEY, PARKED_RESTORE_STATE_SCHEMA_VERSION,
+                        TrayStateValidationError, _validate_pending_parked_restore)
+from tests.test_container_audit_contracts import CapturingTree, _headless_app
 from tests.test_container_p0_contracts import _preflight_hold_ownership_app, _saved_tray_state
 
 
@@ -490,6 +497,24 @@ def test_later_archived_damage_blocks_pair_without_stopping_other_labels(tmp_pat
     assert "원본 파일 재대조 필요" in notices[0]
 
 
+def test_paired_manager_defer_reports_false_audit_and_keeps_row(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    store = app._paired_preflight_store()
+    path = store.paths()[0]
+    (path.parent / "hold.original").write_bytes(b"damaged original")
+    answers = iter((False, True))
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: next(answers))
+    errors = []
+    monkeypatch.setattr("Container_Audit.messagebox.showerror",
+                        lambda _title, message, **_kwargs: errors.append(message))
+    app._log_event = lambda *_a, **_k: False
+    app._show_paired_preflight_handoffs()
+    assert errors and "감사 기록" in errors[0]
+    assert store.paths() == (path,)
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+
+
 def test_paired_receipt_recheck_reads_same_key_without_settling(tmp_path, monkeypatch):
     app, _, current = _app(tmp_path, monkeypatch)
     calls = []
@@ -736,6 +761,489 @@ def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp
     assert path.read_bytes() == original
     assert store.manager_hold_path(path).is_file()
     assert store.existing_label_path_any_worker(master_label=current["master_label_code"]) == path
+
+
+def test_marker_only_scan_stays_blocked_and_manager_row_can_recheck(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    label = current["master_label_code"]
+    store = app._parked_store()
+    source = store.deterministic_label_path(worker_name=app.worker_name, master_label=label)
+    marker = store.manager_hold_path(source)
+    atomic_write_json(marker, {"schema": "container-audit-parked-manager-hold-v1",
+                               "label": label, "source_sha256": "a" * 64})
+    assert not source.exists()
+    assert store.existing_label_path_any_worker(master_label=label) == marker
+    rows = store.scan_for_worker(app.worker_name, strict=True)
+    assert any(row.path == marker and "원본 없음" in row.problem for row in rows)
+    app.current_tray = TraySession()
+    app.is_idle = False
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app._intercept_phs_reconciliation_scan = lambda _value: False
+    app._intercept_active_tray_phs2_scan = lambda _value: False
+    app._is_completed_master_label = lambda _value: False
+    app.COLOR_DANGER = "danger"
+    warnings = []
+    app.show_fullscreen_warning = lambda *args: warnings.append(args)
+    app._begin_compact_phs2_preflight = lambda **_kwargs: pytest.fail("duplicate preflight")
+    app._process_barcode_logic(label)
+    assert warnings and warnings[-1][0] == "관리자 보류 현품표"
+    assert marker.is_file()
+
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    app._log_event = lambda *_a, **_k: True
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._show_invalid_parked_tray(str(marker))
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    assert marker.is_file() and not source.exists()
+    assert store.existing_label_path_any_worker(master_label=label) == marker
+
+
+def test_valid_archived_parked_original_has_manager_recheck(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    label = current["master_label_code"]
+    store = app._parked_store()
+    source = store.deterministic_label_path(worker_name=app.worker_name, master_label=label)
+    archive = source.with_name(source.name + ".bad-abc123")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(archive, current)
+    original = archive.read_bytes()
+    assert any(row.path == archive and row.problem for row in store.scan_for_worker(app.worker_name, strict=True))
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    app._log_event = lambda *_a, **_k: True
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._show_invalid_parked_tray(str(archive))
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    assert store.manager_hold_path(archive).is_file()
+    assert archive.read_bytes() == original
+    assert store.existing_label_path_any_worker(master_label=label) == archive
+
+
+def test_damaged_marker_with_healthy_source_stays_visible_and_can_be_bound(tmp_path):
+    current = _saved_tray_state()
+    label = current["master_label_code"]
+    store = ParkedTrayStore(tmp_path)
+    source = store.save_state(current, worker_name="worker", master_label=label)
+    original = source.read_bytes()
+    marker = store.manager_hold_path(source)
+    marker.write_bytes(b"\xff damaged marker")
+    rows = store.scan_for_worker("worker", strict=True)
+    assert any(row.path == marker and "표시 손상" in row.problem for row in rows)
+    store.bind_invalid_label(source, label)
+    assert marker.read_bytes() == b"\xff damaged marker"
+    assert source.read_bytes() == original
+    assert read_recovery_file(marker.with_name(marker.name + ".identified-" + hashlib.sha256(marker.read_bytes()).hexdigest() + ".json"),
+                              "parked_manager_hold").verified
+    evidence = store.enumerate_key_evidence()
+    assert all(not row.unidentified for row in evidence if row.kind.startswith("parked"))
+    marker.write_bytes(b"\xfe changed marker")
+    store.bind_invalid_label(source, label)
+    assert len(list(tmp_path.glob(marker.name + ".identified-*.json"))) == 2
+    assert all(not row.unidentified for row in store.enumerate_key_evidence()
+               if row.kind.startswith("parked"))
+
+
+@pytest.mark.parametrize("original,bad,marker,record,released,stale", itertools.product(
+    ("absent", "valid", "damaged"), (False, True),
+    ("absent", "valid", "damaged"), (False, True), (False, True), (False, True),
+))
+def test_every_durable_evidence_subset_blocks_original_key(
+    tmp_path, monkeypatch, original, bad, marker, record, released, stale,
+):
+    current = _saved_tray_state()
+    label = current["master_label_code"]
+    other = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
+    app = _headless_app()
+    app.parked_trays_dir = str(tmp_path / "parked")
+    app.save_folder = str(tmp_path / "events")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.worker_name = "tester"
+    app.current_tray = TraySession()
+    app.is_idle = False
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app.COLOR_DANGER = "danger"
+    app._intercept_phs_reconciliation_scan = lambda _value: False
+    app._intercept_active_tray_phs2_scan = lambda _value: False
+    app._is_completed_master_label = lambda _value: False
+    app._item_catalog = lambda: SimpleNamespace(find_by_code=lambda _code: {"Item Code": "AAA2270730100"})
+    begun = []
+    app._begin_compact_phs2_preflight = lambda **kwargs: begun.append(kwargs["barcode"])
+    app.show_fullscreen_warning = lambda *_args: None
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: False)
+    store = app._parked_store()
+    source = store.deterministic_label_path(worker_name="tester", master_label=label)
+    source.parent.mkdir(parents=True, exist_ok=True)
+    if original == "valid":
+        atomic_write_json(source, current)
+    elif original == "damaged":
+        source.write_bytes(b"\xff original")
+    if bad:
+        source.with_name(source.name + ".bad-legacy.quarantine").write_bytes(b"\xfe original")
+    if marker != "absent":
+        hold = store.manager_hold_path(source)
+        if marker == "valid":
+            atomic_write_json(hold, {"schema": "container-audit-parked-manager-hold-v1",
+                                     "label": label, "source_sha256": "a" * 64})
+        else:
+            hold.write_bytes(b"\xfd marker")
+    pair = app._paired_preflight_store()
+    if record or released:
+        folder = pair.directory / "pair"
+        folder.mkdir(parents=True, exist_ok=True)
+        if record:
+            (folder / "record.json").write_bytes(b"\xff record")
+        if released:
+            (folder / "released.json").write_bytes(b"\xff release")
+        atomic_write_json(folder / "manager-hold.json", {
+            "schema": "container-audit-paired-manager-hold-v1", "labels": [label, label],
+        })
+    if stale:
+        pair.directory.mkdir(parents=True, exist_ok=True)
+        atomic_write_json(pair.directory / "stale-current-a.json", {
+            "schema": "container-audit-stale-current-hold-v1", "labels": [label],
+            "original_sha256": "a" * 64, "changed_sha256": "b" * 64,
+        })
+    originals = {path: path.read_bytes() for path in source.parent.glob("parked_*.json*")}
+    evidence = store.enumerate_key_evidence(pair_store=pair)
+    expected = original != "absent" or bad or marker != "absent" or record or released or stale
+    assert any(row.binds(label) for row in evidence) == expected
+    assert not any(row.binds(other) for row in evidence)
+    app._process_barcode_logic(label)
+    assert (label in begun) == (not expected)
+    app._process_barcode_logic(other)
+    assert other in begun
+    # Exercise the supervisor lane for every parked defect in the subset.
+    damaged_rows = [row for row in evidence if row.kind in {"parked", "parked_bad", "parked_marker"}
+                    and (row.problem or row.kind == "parked_bad"
+                         or row.kind == "parked_marker" and not row.path.with_name(
+                             row.path.name.removesuffix(".manager-hold.json")).exists())]
+    app.root = SimpleNamespace()
+    app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
+    app._blocked_work_identity_matches = lambda _approval: True
+    app._blocked_work_identity_is_current = lambda _approval: True
+    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    audited = []
+    app._log_event = lambda event, **_kwargs: audited.append(event) or True
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: label)
+    for row in damaged_rows:
+        app._show_invalid_parked_tray(str(row.path))
+        if tasks:
+            task = tasks.pop()
+            task.finish(task.work())
+    if damaged_rows:
+        assert audited and len(audited) == len(damaged_rows)
+    assert not any(row.unidentified for row in store.enumerate_key_evidence(pair_store=pair)
+                   if row.kind.startswith("parked"))
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
+
+
+@pytest.mark.parametrize("field,wrong", itertools.product(
+    ("schema_version", "preflight_id", "scan_epoch", "worker", "master_raw",
+     "created_at", "updated_at", "state", "items", "error_code",
+     "items.0.scan_id", "items.0.sequence", "items.0.raw_barcode", "items.0.admitted_at"),
+    (7, {}, None),
+))
+def test_hold_reader_rejects_original_json_field_types(tmp_path, field, wrong):
+    store = PreflightScanHoldStore(tmp_path / "hold.json", capacity=4)
+    store.start(worker="worker", master_raw="PHS=2|CLC=AAA2270730100", scan_epoch=1)
+    store.append("PRODUCT")
+    payload = json.loads(store.path.read_text(encoding="utf-8"))
+    assert ({"schema_version", "preflight_id", "scan_epoch", "worker", "master_raw",
+             "created_at", "updated_at", "state", "items", "error_code"}
+            == set(payload))
+    assert {"scan_id", "sequence", "raw_barcode", "admitted_at"} == set(payload["items"][0])
+    if field in {"scan_epoch", "items.0.sequence"} and wrong == 7:
+        wrong = "7"
+    if field.startswith("items.0."):
+        payload["items"][0][field.removeprefix("items.0.")] = wrong
+    else:
+        payload[field] = wrong
+    atomic_write_json(store.path, payload)
+    assert not read_recovery_file(store.path, "hold").verified
+
+
+_RECOVERY_TYPE_FIELDS = {
+    "current": ("worker_name", "master_label_code", "item_code", "item_name", "item_spec",
+                "mismatch_error_count", "total_idle_seconds", "stopwatch_seconds", "tray_size",
+                "scanned_barcodes", "scan_times"),
+    "parked": ("worker_name", "master_label_code", "item_code", "item_name", "item_spec",
+               "mismatch_error_count", "total_idle_seconds", "stopwatch_seconds", "tray_size",
+               "scanned_barcodes", "scan_times"),
+    "stale": ("worker_name", "master_label_code", "item_code", "item_name", "item_spec",
+              "mismatch_error_count", "total_idle_seconds", "stopwatch_seconds", "tray_size",
+              "scanned_barcodes", "scan_times"),
+    "released": ("id",),
+    "manager_hold": ("schema", "labels", "labels.0", "labels.1", "source_sha256",
+                     "evidence_sha256"),
+    "parked_manager_hold": ("schema", "label", "source_sha256"),
+    "stale_hold": ("schema", "labels", "labels.0", "original_sha256", "changed_sha256"),
+    "record": ("schema", "id", "created_at", "hold", "hold.path", "hold.sha256",
+               "hold.bytes_b64", "current", "current.path", "current.sha256",
+               "current.bytes_b64"),
+}
+
+
+@pytest.mark.parametrize("kind,field,variant", [
+    (kind, field, variant)
+    for kind, fields in _RECOVERY_TYPE_FIELDS.items()
+    for field in fields for variant in range(3)
+])
+def test_recovery_reader_rejects_raw_required_field_type_variants(
+    tmp_path, monkeypatch, kind, field, variant,
+):
+    label = _saved_tray_state()["master_label_code"]
+    if kind in {"current", "parked", "stale"}:
+        payload = _saved_tray_state()
+    elif kind == "released":
+        payload = {"id": "a" * 64}
+    elif kind == "manager_hold":
+        payload = {"schema": "container-audit-paired-manager-hold-v1",
+                   "labels": [label, "OTHER-MASTER"], "source_sha256": "a" * 64,
+                   "evidence_sha256": dict.fromkeys(
+                       ("record.json", "hold.original", "current.original", "released.json"), None)}
+    elif kind == "parked_manager_hold":
+        payload = {"schema": "container-audit-parked-manager-hold-v1",
+                   "label": label, "source_sha256": "a" * 64}
+    elif kind == "stale_hold":
+        payload = {"schema": "container-audit-stale-current-hold-v1",
+                   "labels": [label], "original_sha256": "a" * 64,
+                   "changed_sha256": "b" * 64}
+    else:
+        app, hold_store, _current = _app(tmp_path, monkeypatch)
+        path = app._paired_preflight_store().prepare(
+            hold_store.path, hold_store.path.parent / "current.json",
+        )
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert set(payload) == {"schema", "id", "created_at", "hold", "current"}
+        assert set(payload["hold"]) == set(payload["current"]) == {"path", "sha256", "bytes_b64"}
+    assert all(part.split(".")[0] in payload for part in _RECOVERY_TYPE_FIELDS[kind])
+    target = payload
+    parts = field.split(".")
+    for part in parts[:-1]:
+        target = target[int(part)] if part.isdecimal() else target[part]
+    leaf = int(parts[-1]) if parts[-1].isdecimal() else parts[-1]
+    original = target[leaf]
+    if isinstance(original, str):
+        wrong = (7, {}, None)[variant]
+    elif isinstance(original, bool):
+        wrong = ("true", {}, None)[variant]
+    elif isinstance(original, (int, float)):
+        wrong = ("7", {}, None)[variant]
+    elif isinstance(original, list):
+        wrong = (7, {}, None)[variant]
+    else:
+        wrong = (7, [], None)[variant]
+    target[leaf] = wrong
+    path = tmp_path / "candidate.json"
+    atomic_write_json(path, payload)
+    assert not read_recovery_file(path, kind).verified
+
+
+@pytest.mark.parametrize("part,wrong", itertools.product(
+    ("record.json", "hold.original", "current.original", "released.json"),
+    (7, [], {}),
+))
+def test_manager_hold_nested_evidence_digest_types_are_not_coerced(tmp_path, part, wrong):
+    payload = {"schema": "container-audit-paired-manager-hold-v1",
+               "labels": ["FIRST-MASTER", "SECOND-MASTER"],
+               "evidence_sha256": dict.fromkeys(
+                   ("record.json", "hold.original", "current.original", "released.json"), None)}
+    assert set(payload["evidence_sha256"]) == {
+        "record.json", "hold.original", "current.original", "released.json",
+    }
+    payload["evidence_sha256"][part] = wrong
+    path = tmp_path / "manager-hold.json"
+    atomic_write_json(path, payload)
+    assert not read_recovery_file(path, "manager_hold").verified
+
+
+@pytest.mark.parametrize("source_name", (
+    "parked_..\\outside.json", "parked_.._escape.json", "CON",
+    "parked_bad\x00.json", "parked_bad\x01.json", "parked_" + "x" * 250 + ".json",
+))
+def test_parked_restore_path_name_is_unverified_before_filesystem_access(source_name):
+    payload = {"schema_version": PARKED_RESTORE_STATE_SCHEMA_VERSION,
+               "operation_id": "parked-restore:" + "a" * 32,
+               "parked_source_name": source_name,
+               "parked_source_sha256": "a" * 64,
+               "restored_master_label_code": "PHS=2|CLC=AAA2270730100",
+               "projection_events": []}
+    # The path check precedes any projection or filesystem operation.
+    with pytest.raises(TrayStateValidationError, match="parked_source_name"):
+        _validate_pending_parked_restore(
+            {PARKED_RESTORE_STATE_KEY: payload, "master_label_code": payload["restored_master_label_code"]},
+            now=datetime.datetime.now(), future_clock_skew_seconds=30,
+        )
+
+
+def test_audit_only_key_is_guarded_and_unknown_audit_can_be_bound(tmp_path, monkeypatch):
+    app = _headless_app()
+    app.parked_trays_dir = str(tmp_path / "parked_trays")
+    app.save_folder = str(tmp_path / "events")
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.worker_name = "manager"
+    app.root = SimpleNamespace()
+    log = tmp_path / "local_events" / "이적로컬이벤트로그_manager_20260923.csv"
+    log.parent.mkdir(parents=True)
+    def append(event, detail):
+        with log.open("a", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=("timestamp", "worker_name", "event", "details"))
+            if stream.tell() == 0:
+                writer.writeheader()
+            writer.writerow({"timestamp": "2026-09-23T00:00:00", "worker_name": "manager",
+                             "event": event, "details": json.dumps(detail)})
+    label = _saved_tray_state()["master_label_code"]
+    other = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
+    append("PHS2_PAIRED_PREFLIGHT_DEFERRED", {"hold_master": label, "current_master": other,
+                                               "handoff_id": "first"})
+    append("PHS2_PAIRED_RECOVERY_DEFERRED", {"handoff_id": "second"})
+    rows = app._parked_store().enumerate_key_evidence(pair_store=app._paired_preflight_store())
+    unknown = next(row for row in rows if row.kind == "audit" and row.unidentified)
+    assert any(row.kind == "audit" and row.binds(label) and row.binds(other) for row in rows)
+    assert app._paired_preflight_blocks_label(label)
+    assert app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    third = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-THIRD|CLC=AAA2270730100|LBL=THIRD|HSH=0123456789abcdef"
+    fourth = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-FOURTH|CLC=AAA2270730100|LBL=FOURTH|HSH=0123456789abcdef"
+    scans = iter((third, fourth))
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: next(scans))
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    app._blocked_work_identity_matches = lambda _approval: True
+    app._blocked_work_identity_is_current = lambda _approval: True
+    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    app._log_event = lambda event, **kwargs: append(event, kwargs["detail"]) or True
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._identify_unreadable_audit(unknown.evidence_id, {"actor": "manager"})
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    rebound = next(row for row in app._parked_store().enumerate_key_evidence(
+        pair_store=app._paired_preflight_store(),
+    ) if row.evidence_id == unknown.evidence_id)
+    assert not rebound.unidentified and set(rebound.labels) == {third, fourth}
+    assert app._paired_preflight_blocks_label(third)
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+
+
+def test_audit_binding_event_uses_local_durable_stream_and_reenters_guard(tmp_path):
+    app = _headless_app()
+    app.parked_trays_dir = str(tmp_path / "parked_trays")
+    app.save_folder = str(tmp_path / "events")
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.log_file_path = str(tmp_path / "events" / "이적작업이벤트로그_manager_20260923.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.worker_name = "manager"
+    label = _saved_tray_state()["master_label_code"]
+    assert app._log_event(
+        "PHS2_AUDIT_EVIDENCE_BOUND",
+        detail={"source_audit_id": "a" * 64, "labels": [label]},
+        synchronous=True, idempotency_key="audit-evidence-bind:" + "a" * 64,
+        deduplicate=True,
+        log_file_path_override=str(Path(app.save_folder) / ("audit-binding-" + "a" * 64 + ".csv")),
+    )
+    assert not list(Path(app.save_folder).glob("audit-binding-*.csv"))
+    assert list(Path(app.local_events_folder).glob("*.csv"))
+    evidence = app._parked_store().enumerate_key_evidence(pair_store=app._paired_preflight_store())
+    assert any(row.kind == "audit" and row.binds(label) and not row.unidentified for row in evidence)
+
+
+def test_unidentified_stale_current_is_visible_and_manager_binds_exact_bytes(tmp_path, monkeypatch):
+    app = _headless_app()
+    app.parked_trays_dir = str(tmp_path / "parked_trays")
+    app.save_folder = str(tmp_path / "events")
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.log_file_path = str(tmp_path / "events" / "이적작업이벤트로그_manager_20260923.csv")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.worker_name = "manager"
+    app.root = SimpleNamespace()
+    source = Path(app.save_folder) / "current.json.bad-abc123"
+    source.parent.mkdir(parents=True)
+    source.write_bytes(b"\xff original stale current")
+    original = source.read_bytes()
+    app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
+    app._blocked_work_identity_matches = lambda _approval: True
+    app._blocked_work_identity_is_current = lambda _approval: True
+    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    first = _saved_tray_state()["master_label_code"]
+    second = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
+    scans = iter((first, second))
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: next(scans))
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    notices = []
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: notices.append("ok"))
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    assert app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    app._show_paired_preflight_handoffs()
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    rows = app._parked_store().enumerate_key_evidence(pair_store=app._paired_preflight_store())
+    stale = next(row for row in rows if row.kind == "stale_current")
+    assert stale.path == source and set(stale.labels) == {first, second}
+    assert not stale.unidentified and source.read_bytes() == original
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert notices and list(Path(app.local_events_folder).glob("*.csv"))
+
+
+@pytest.mark.parametrize("replacement", (
+    "C:\\outside\\hold.json", "C:\\safe\\..\\outside\\hold.json",
+    "C:\\safe\\CON", "C:\\safe\\bad\x00name.json",
+    "C:\\safe\\bad*name.json", "C:\\safe\\file. ",
+    "C:\\" + "x" * 240 + "\\hold.json",
+))
+def test_pair_record_path_is_checked_before_outside_access(tmp_path, monkeypatch, replacement):
+    app, hold_store, _current = _app(tmp_path, monkeypatch)
+    pair = app._paired_preflight_store()
+    record_path = pair.prepare(hold_store.path, hold_store.path.parent / "current.json")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    record["hold"]["path"] = replacement
+    record["id"] = hashlib.sha256("".join(
+        record[name]["path"] + record[name]["sha256"] for name in ("hold", "current")
+    ).encode("utf-8")).hexdigest()
+    candidate = pair.directory / record["id"] / "record.json"
+    atomic_write_json(candidate, record)
+    touched_outside = []
+    original_exists = Path.exists
+    def guarded_exists(path):
+        if "outside" in str(path).lower() or "CON" in str(path):
+            touched_outside.append(str(path))
+            raise AssertionError("outside path touched")
+        return original_exists(path)
+    monkeypatch.setattr(Path, "exists", guarded_exists)
+    result = read_recovery_file(candidate, "record")
+    if replacement == "C:\\outside\\hold.json":
+        assert result.verified  # Syntax is valid; slot binding rejects it.
+        with pytest.raises(PairedHandoffError):
+            pair.read(candidate)
+    else:
+        assert not result.verified
+    assert touched_outside == []
 
 
 def test_stale_current_changed_label_remains_blocked_after_restart(tmp_path, monkeypatch):

@@ -5137,7 +5137,7 @@ def test_load_current_tray_state_quarantines_invalid_state_without_deleting_evid
     assert warnings
 
 
-def test_restore_parked_tray_quarantines_invalid_file_and_keeps_current_state(tmp_path, monkeypatch):
+def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_manager(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -5147,12 +5147,14 @@ def test_restore_parked_tray_quarantines_invalid_file_and_keeps_current_state(tm
     app._update_parked_trays_list = lambda: setattr(app, "refreshed", True)
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
-    parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
+    label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-ORIGINAL|CLC=AAA2270730100|LBL=ORIGINAL|HSH=0123456789abcdef"
+    store = app._parked_store()
+    parked_file = store.deterministic_label_path(worker_name=app.worker_name, master_label=label)
     storage_utils.atomic_write_json(
         parked_file,
         {
             "worker_name": "홍길동",
-            "master_label_code": "PHS=1|CLC=AAA2270730100|QT=60",
+            "master_label_code": label,
             "item_code": "AAA2270730100",
             "item_name": "fixture item",
             "item_spec": "fixture spec",
@@ -5170,17 +5172,40 @@ def test_restore_parked_tray_quarantines_invalid_file_and_keeps_current_state(tm
         ensure_ascii=False,
     )
 
+    original = parked_file.read_bytes()
     app.restore_parked_tray(str(parked_file))
 
-    assert not parked_file.exists()
-    quarantined = list(tmp_path.glob("parked_qr_홍길동_fixture.json.bad-*"))
-    assert len(quarantined) == 1
+    assert parked_file.read_bytes() == original
+    assert store.existing_label_path_any_worker(master_label=label) == parked_file
+    assert not list(tmp_path.glob("*.bad-*"))
     assert app.current_tray.master_label_code == ""
     assert errors
     assert app.refreshed is True
 
+    app.root = SimpleNamespace()
+    app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
+    app._blocked_work_identity_matches = lambda _approval: True
+    app._blocked_work_identity_is_current = lambda _approval: True
+    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    audits = []
+    app._log_event = lambda event, **kwargs: audits.append((event, kwargs)) or True
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *_args, **_kwargs: None)
+    app._show_invalid_parked_tray(str(parked_file))
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    assert audits[0][0] == "PHS2_DAMAGED_PARKED_DEFERRED"
+    assert store.manager_hold_path(parked_file).is_file()
+    assert parked_file.read_bytes() == original
+    assert store.existing_label_path_any_worker(master_label=label) == parked_file
 
-def test_restore_parked_tray_quarantines_invalid_utf8_file_and_keeps_current_state(tmp_path, monkeypatch):
+
+def test_restore_parked_tray_preserves_invalid_utf8_file_and_keeps_current_state(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -5195,8 +5220,8 @@ def test_restore_parked_tray_quarantines_invalid_utf8_file_and_keeps_current_sta
 
     app.restore_parked_tray(str(parked_file))
 
-    assert not parked_file.exists()
-    assert list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
+    assert parked_file.read_bytes() == b"\xff\xfe\xfa"
+    assert not list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
     assert app.current_tray.master_label_code == "ACTIVE"
     assert errors
     assert app.refreshed is True

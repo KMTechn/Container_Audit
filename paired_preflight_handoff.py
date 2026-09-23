@@ -86,6 +86,12 @@ class PairedPreflightHandoffStore:
         if record is not None and record["id"] != path.parent.name:
             problems.append("인계 기록 식별자가 폴더와 다름")
             record = None
+        if record is not None and any(
+            expected is not None and Path(record[name]["path"]) != expected.resolve()
+            for name, expected in (("hold", self.hold_path), ("current", self.current_path))
+        ):
+            problems.append("인계 원본 경로가 현재 슬롯과 다름")
+            record = None
         if record is None:
             problems.append("인계 기록이 없거나 손상됨")
         labels = []
@@ -285,6 +291,9 @@ class PairedPreflightHandoffStore:
         result = read_recovery_file(path, "record")
         if not result.verified or result.value["id"] != Path(path).parent.name:
             raise PairedHandoffError("paired record cannot be verified")
+        for name, expected in (("hold", self.hold_path), ("current", self.current_path)):
+            if expected is not None and Path(result.value[name]["path"]) != expected.resolve():
+                raise PairedHandoffError("paired original path differs from active slot")
         return result.value
 
     @writer_sink("paired_preflight_record")
