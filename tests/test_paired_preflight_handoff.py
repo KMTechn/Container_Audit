@@ -10,12 +10,14 @@ from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffS
 from preflight_scan_hold import PreflightScanHoldStore
 from protected_admin import PROTECTED_ADMIN_OPERATOR_ID
 from storage_utils import atomic_write_json
+from tests.test_container_audit_contracts import CapturingTree
 from tests.test_container_p0_contracts import _preflight_hold_ownership_app, _saved_tray_state
 
 
 def _app(tmp_path, monkeypatch):
     _, app, hold_store = _preflight_hold_ownership_app(tmp_path, monkeypatch)
     app.root = SimpleNamespace()
+    app.worker_name = PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
     app.CURRENT_TRAY_STATE_FILE = "current.json"
@@ -111,6 +113,41 @@ def test_paired_parked_rejection_keeps_original_bytes_before_worker_normalizatio
     assert not app.current_tray.master_label_code
 
 
+def test_paired_parked_original_survives_list_refresh_and_duplicate_search(
+    tmp_path, monkeypatch,
+):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    parked = app._parked_store().save_state(
+        {**current, "worker_name": "tester"},
+        worker_name="tester",
+        master_label=current["master_label_code"],
+    )
+    payload = json.loads(parked.read_text(encoding="utf-8"))
+    payload["worker_name"] = PROTECTED_ADMIN_OPERATOR_ID
+    atomic_write_json(parked, payload)
+    original = parked.read_bytes()
+
+    app.parked_tree = CapturingTree()
+    app._sync_left_sidebar_switch = lambda: None
+    app._update_parked_trays_list()
+    notices = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda _title, message, **_kwargs: notices.append(message) or False,
+    )
+    app._show_paired_preflight_handoffs()
+    assert len(notices) == 1
+    assert "관리자 보류" in notices[0]
+    app._parked_store().existing_label_path_any_worker(
+        master_label=current["master_label_code"]
+    )
+    assert parked.read_bytes() == original
+    app.restore_parked_tray(str(parked))
+    assert parked.read_bytes() == original
+    assert not app.current_tray.master_label_code
+
+
 def test_paired_label_cannot_be_restored_from_stale_current_state(tmp_path, monkeypatch):
     app, hold_store, current = _app(tmp_path, monkeypatch)
     assert app._defer_paired_preflight_from_operations() is True
@@ -140,6 +177,119 @@ def test_unpreserved_stale_current_state_keeps_mutation_locked(tmp_path, monkeyp
     assert stale_path.read_bytes() == original
     assert app._preflight_context_blocks_mutation()
     assert not app.current_tray.master_label_code
+
+
+def test_stale_current_preservation_retry_then_continue_blocks_only_paired_label(
+    tmp_path, monkeypatch,
+):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    original = stale_path.read_bytes()
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    assert app._paired_stale_current_blocked
+    assert stale_path.read_bytes() == original
+    assert app._continue_after_paired_stale_current() is False
+    assert stale_path.read_bytes() == original
+    assert app._preflight_context_blocks_mutation()
+
+    app._quarantine_current_tray_state = quarantine
+    assert app._retry_paired_stale_current_preservation() is True
+    assert app._preflight_context_blocks_mutation()
+    assert not stale_path.exists()
+    assert list(stale_path.parent.glob("current.json.bad-*"))[0].read_bytes() == original
+    assert app._continue_after_paired_stale_current() is True
+    assert not app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    assert not app._paired_preflight_blocks_label("OTHER-NEW-LABEL")
+
+
+def test_stale_current_audit_failure_keeps_other_work_locked(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    app._quarantine_current_tray_state = quarantine
+    app._log_event = lambda event, **_kwargs: event.endswith("PRESERVATION_REQUESTED")
+    assert app._continue_after_paired_stale_current() is False
+    assert app._preflight_context_blocks_mutation()
+    assert not stale_path.exists()
+    assert list(stale_path.parent.glob("current.json.bad-*"))
+
+
+def test_stale_current_preservation_audit_failure_keeps_original_in_slot(
+    tmp_path, monkeypatch,
+):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    original = stale_path.read_bytes()
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    app._quarantine_current_tray_state = quarantine
+    app._log_event = lambda *_args, **_kwargs: False
+
+    assert app._retry_paired_stale_current_preservation() is False
+    assert stale_path.read_bytes() == original
+    assert not list(stale_path.parent.glob("current.json.bad-*"))
+    assert app._preflight_context_blocks_mutation()
+
+
+def test_paired_handoff_denies_actor_change_after_manager_confirmation(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    original_hold = hold_store.path.read_bytes()
+    current_path = hold_store.path.parent / "current.json"
+    original_current = current_path.read_bytes()
+    notices = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda *_args, **_kwargs: setattr(app, "worker_name", "another worker") or True,
+    )
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showwarning",
+        lambda _title, message, **_kwargs: notices.append(message),
+    )
+    assert app._defer_paired_preflight_from_operations() is False
+    assert hold_store.path.read_bytes() == original_hold
+    assert current_path.read_bytes() == original_current
+    assert not app._paired_preflight_store().paths()
+    assert any("로그인 작업자 또는 역할이 바뀌었습니다" in message for message in notices)
+
+
+def test_paired_handoff_denies_role_change_after_code_approval(tmp_path, monkeypatch):
+    app, hold_store, _ = _app(tmp_path, monkeypatch)
+    app.worker_name = "tester"
+    app.worker_role = "WORKER"
+    app._authenticated_protected_admin = False
+    original_hold = hold_store.path.read_bytes()
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: "entered-code")
+    monkeypatch.setattr("Container_Audit.is_protected_admin_code", lambda _code: True)
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.askyesno",
+        lambda *_a, **_k: setattr(app, "worker_role", "ADMIN") or True,
+    )
+    assert app._defer_paired_preflight_from_operations() is False
+    assert hold_store.path.read_bytes() == original_hold
+    assert not app._paired_preflight_store().paths()
+
+
+def test_paired_handoff_audit_binds_actor_and_approving_manager(tmp_path, monkeypatch):
+    app, _, _ = _app(tmp_path, monkeypatch)
+    audits = []
+    app._log_event = lambda _event, detail=None, **_kwargs: audits.append(detail) or True
+    assert app._defer_paired_preflight_from_operations()
+    assert audits[0]["acting_worker"] == "보호된 관리자"
+    assert audits[0]["acting_role"] == "ADMIN"
+    assert audits[0]["approving_supervisor"] == "보호된 관리자"
+    assert audits[0]["approving_role"] == "ADMIN"
 
 
 def test_worker_start_does_not_preview_paired_label_as_active(tmp_path, monkeypatch):
@@ -269,6 +419,7 @@ def test_paired_handoff_hash_mismatch_keeps_lock(tmp_path, monkeypatch):
 
 def test_worker_cannot_defer_paired_handoff(tmp_path, monkeypatch):
     app, hold_store, _ = _app(tmp_path, monkeypatch)
+    app.worker_name = "tester"
     app.worker_role = "WORKER"
     app._authenticated_protected_admin = False
     app._authorize_blocked_work_supervisor = lambda: False
@@ -352,3 +503,18 @@ def test_paired_receipt_recheck_reads_same_key_without_settling(tmp_path, monkey
     task.finish(task.work())
     assert calls == [("scope", "original-key")]
     assert "관리자 보류 상태로 유지" in messages[0]
+
+
+def test_paired_receipt_recheck_denies_actor_change_before_lane_runs(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    calls = []
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(
+        is_busy=lambda: False, submit=lambda task: tasks.append(task),
+    )
+    app._transfer_seal_runtime = lambda: calls.append("runtime")
+    app._recheck_paired_preflight_receipt(current)
+    assert len(tasks) == 1
+    app.worker_name = "another worker"
+    assert "관리자 확인을 다시 받으세요" in tasks[0].work()
+    assert calls == []

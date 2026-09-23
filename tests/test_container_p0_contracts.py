@@ -365,7 +365,7 @@ def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_
     tmp_path, monkeypatch,
 ):
     app = ContainerAudit.__new__(ContainerAudit)
-    app.worker_name = "홍길동"
+    app.worker_name = container_module.PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
     app.computer_id = "host-01"
@@ -458,7 +458,7 @@ def test_supervisor_defers_reviewed_member_exchange_without_changing_original_in
 ):
     app = ContainerAudit.__new__(ContainerAudit)
     state = _saved_tray_state()
-    app.worker_name = "홍길동"
+    app.worker_name = container_module.PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
     app.computer_id = "host-01"
@@ -1331,7 +1331,7 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
 ):
     module, _PreflightScanHoldStore = _hold_symbols()
     app = ContainerAudit.__new__(ContainerAudit)
-    app.worker_name = "tester"
+    app.worker_name = container_module.PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
     app.current_tray = TraySession()
@@ -1383,6 +1383,7 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
 
     app.worker_role = "WORKER"
     app._authenticated_protected_admin = False
+    app.worker_name = "tester"
     assert app.restore_quarantined_preflight_hold(str(quarantined[0].path)) is True
     assert store.exists() is True
     assert store.load().state == module.HOLD_LOOKUP_FAILED

@@ -1687,8 +1687,10 @@ class ContainerAudit:
         *,
         reason: str,
         confirm: bool = True,
+        approval: Optional[Dict[str, str]] = None,
     ) -> bool:
-        if not self._is_preflight_hold_supervisor():
+        approval = approval or self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
             messagebox.showwarning(
                 "보류 묶음 격리 권한",
                 "사전조회 보류 묶음 격리는 관리자 확인이 필요합니다.",
@@ -1733,6 +1735,8 @@ class ContainerAudit:
             parent=getattr(self, "root", None),
         ):
             return False
+        if not self._blocked_work_identity_matches(approval):
+            return False
         try:
             quarantined = store.quarantine(
                 self._preflight_hold_quarantine_directory(),
@@ -1752,12 +1756,13 @@ class ContainerAudit:
             reason=reason,
             quarantine_path=quarantined.path,
         )
+        detail.update(self._blocked_work_audit_identity(approval))
         audit_key = (
             "preflight-hold-quarantine:"
             f"{quarantined.snapshot.preflight_id}:{quarantined.snapshot_hash}"
         )
         try:
-            audited = bool(
+            audited = self._blocked_work_identity_matches(approval) and bool(
                 self._log_event(
                     "PHS2_PREFLIGHT_HOLD_QUARANTINED",
                     detail=detail,
@@ -3577,6 +3582,11 @@ class ContainerAudit:
                 except OSError:
                     preserved = False
                 self._paired_stale_current_blocked = not preserved
+                if not preserved:
+                    self._paired_stale_current_path = state_path
+                    self._paired_stale_current_original_hash = hashlib.sha256(original_bytes).hexdigest()
+                    self._paired_stale_current_preserved_path = str(quarantined_path or "")
+                    self._set_preflight_scan_input_locked(True)
                 messagebox.showwarning(
                     "이전 작업 복구 차단",
                     (
@@ -3584,7 +3594,8 @@ class ContainerAudit:
                         "관리자 인계 목록에서 확인하세요."
                     ) if preserved else (
                         "이 현품표는 짝 인계 보류 중입니다. 상태 파일 보존을 확인하지 "
-                        "못해 새 작업을 시작하지 않습니다. 관리자에게 문의하세요."
+                        "못해 새 작업을 시작하지 않습니다. 운영 작업에서 관리자 재확인, "
+                        "보존 다시 시도, 보류 후 다른 현품표 계속을 선택하세요."
                     ),
                 )
                 return
@@ -3845,6 +3856,143 @@ class ContainerAudit:
         except Exception as e:
             print(f"임시 트레이 상태 파일 격리 실패: {e}")
             return None
+
+    def _recheck_paired_stale_current(self) -> bool:
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
+            return False
+        source = Path(str(getattr(self, "_paired_stale_current_path", "") or ""))
+        preserved_name = str(getattr(self, "_paired_stale_current_preserved_path", "") or "")
+        preserved = Path(preserved_name) if preserved_name else None
+        expected = str(getattr(self, "_paired_stale_current_original_hash", "") or "")
+        source_status = "원 위치에 남음" if source.is_file() else "원 위치에서 이동됨"
+        preserved_status = "보존 확인 전"
+        if preserved is not None and preserved.is_file():
+            try:
+                preserved_status = (
+                    "원본 SHA256 일치" if hashlib.sha256(preserved.read_bytes()).hexdigest() == expected
+                    else "원본 SHA256 불일치 · 잠금 유지"
+                )
+            except OSError:
+                preserved_status = "보존 파일 읽기 실패 · 잠금 유지"
+        messagebox.showinfo(
+            "현재 현품표 보존 재확인",
+            f"현재 상태 파일: {source_status}\n보존 사본: {preserved_status}\n"
+            "보존을 다시 시도한 뒤 보류 후 다른 현품표 계속을 누르세요. "
+            "원 현품표는 관리자 인계 목록에서 계속 막힙니다.",
+            parent=getattr(self, "root", None),
+        )
+        return True
+
+    def _preserve_paired_stale_current(self, approval: Mapping[str, str]) -> bool:
+        if not getattr(self, "_paired_stale_current_blocked", False):
+            return True
+        if not self._blocked_work_identity_matches(approval):
+            return False
+        source = Path(str(getattr(self, "_paired_stale_current_path", "") or ""))
+        expected = str(getattr(self, "_paired_stale_current_original_hash", "") or "")
+        preserved_name = str(getattr(self, "_paired_stale_current_preserved_path", "") or "")
+        try:
+            if source.is_file():
+                original = source.read_bytes()
+                if hashlib.sha256(original).hexdigest() != expected:
+                    raise OSError("stale current changed before preservation")
+                state = json.loads(original.decode("utf-8"))
+                validate_tray_state(state, default_tray_size=self.TRAY_SIZE)
+                if not self._paired_preflight_blocks_label(str(state.get("master_label_code") or "")):
+                    raise OSError("paired handoff is no longer verifiable")
+                try:
+                    audited = self._blocked_work_identity_is_current(approval) and bool(
+                        self._log_event(
+                            "PHS2_PAIRED_STALE_CURRENT_PRESERVATION_REQUESTED",
+                            detail={
+                                "source_file": source.name,
+                                "original_sha256": expected,
+                                **self._blocked_work_audit_identity(approval),
+                            },
+                            synchronous=True,
+                            idempotency_key=(
+                                f"paired-stale-preservation:{expected}:"
+                                f"{hashlib.sha256(approval['operator'].encode('utf-8')).hexdigest()[:16]}"
+                            ),
+                            deduplicate=True,
+                        )
+                    )
+                except Exception:
+                    audited = False
+                if not audited:
+                    raise OSError("stale current preservation audit failed")
+                preserved_name = str(self._quarantine_current_tray_state("paired stale current retry") or "")
+                self._paired_stale_current_preserved_path = preserved_name
+            preserved = Path(preserved_name) if preserved_name else None
+            if source.exists() or preserved is None or not preserved.is_file():
+                raise OSError("stale current remains in active slot")
+            if hashlib.sha256(preserved.read_bytes()).hexdigest() != expected:
+                raise OSError("stale current preservation readback differs")
+        except (OSError, UnicodeDecodeError, ValueError, TrayStateValidationError):
+            messagebox.showerror(
+                "현재 현품표 보존 대기",
+                "원본 보존을 확인하지 못했습니다. 같은 현품표와 새 작업을 계속 막습니다. "
+                "저장 공간과 파일 접근을 확인한 뒤 보존을 다시 시도하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        return True
+
+    def _retry_paired_stale_current_preservation(self) -> bool:
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._preserve_paired_stale_current(approval):
+            return False
+        messagebox.showinfo(
+            "현재 현품표 보존 확인",
+            "원본을 별도로 보존했습니다. 운영 작업에서 '보류 후 다른 현품표 계속'을 "
+            "선택하면 다른 현품표를 시작할 수 있습니다.",
+            parent=getattr(self, "root", None),
+        )
+        return True
+
+    def _continue_after_paired_stale_current(self) -> bool:
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._preserve_paired_stale_current(approval):
+            return False
+        if not self._blocked_work_identity_matches(approval):
+            return False
+        source = Path(self._paired_stale_current_path)
+        preserved = Path(self._paired_stale_current_preserved_path)
+        detail = {
+            "reason": "paired_stale_current_preserved",
+            "source_file": source.name,
+            "preserved_file": preserved.name,
+            "original_sha256": self._paired_stale_current_original_hash,
+            **self._blocked_work_audit_identity(approval),
+        }
+        try:
+            audited = bool(self._log_event(
+                "PHS2_PAIRED_STALE_CURRENT_DEFERRED", detail=detail,
+                synchronous=True,
+                idempotency_key=f"paired-stale-current:{self._paired_stale_current_original_hash}",
+                deduplicate=True,
+            ))
+        except Exception:
+            audited = False
+        if not audited:
+            messagebox.showerror(
+                "현재 현품표 보류 기록 대기",
+                "원본 사본은 보존했지만 관리자 보류 기록을 남기지 못했습니다. "
+                "기록 상태를 확인하고 같은 보류 동작을 다시 시도하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
+        if not self._blocked_work_identity_matches(approval):
+            return False
+        self._paired_stale_current_blocked = False
+        self._set_preflight_scan_input_locked(False)
+        self._update_action_button_states()
+        self.show_status_message(
+            "원 현품표는 관리자 보류 상태입니다. 다른 현품표 작업을 계속하세요.",
+            self.COLOR_PRIMARY, duration=0,
+        )
+        return True
 
     def _log_current_tray_discarded(self, *, reason: str, synchronous: bool = False) -> bool:
         if not self.current_tray.master_label_code:
@@ -6767,6 +6915,19 @@ class ContainerAudit:
             label="관리자 짝 원본 보류 목록",
             command=self._show_paired_preflight_handoffs,
         )
+        if getattr(self, "_paired_stale_current_blocked", False):
+            menu.add_command(
+                label="현재 현품표 보존 재확인 (관리자)",
+                command=self._recheck_paired_stale_current,
+            )
+            menu.add_command(
+                label="현재 현품표 보존 다시 시도 (관리자)",
+                command=self._retry_paired_stale_current_preservation,
+            )
+            menu.add_command(
+                label="보류 후 다른 현품표 계속 (관리자)",
+                command=self._continue_after_paired_stale_current,
+            )
         menu.add_command(
             label="미확정 묶음 보류 후 다른 작업 계속 (관리자)",
             command=self._defer_blocked_current_tray_for_supervisor,
@@ -6862,9 +7023,20 @@ class ContainerAudit:
             except tk.TclError:
                 pass
 
-    def _authorize_blocked_work_supervisor(self) -> bool:
-        if self._is_preflight_hold_supervisor():
-            return True
+    def _authorize_blocked_work_supervisor(self) -> Optional[Dict[str, str]]:
+        operator = str(getattr(self, "worker_name", "") or "").strip()
+        role = str(getattr(self, "worker_role", "") or "").upper()
+        if operator == PROTECTED_ADMIN_OPERATOR_ID and role == "ADMIN" and getattr(
+            self, "_authenticated_protected_admin", False
+        ):
+            return {"operator": operator, "role": role, "supervisor": PROTECTED_ADMIN_OPERATOR_ID}
+        if not operator or role != "WORKER" or operator == PROTECTED_ADMIN_OPERATOR_ID:
+            messagebox.showwarning(
+                "관리자 신원 확인 필요",
+                "현재 로그인 작업자와 역할을 확인할 수 없습니다. 다시 로그인한 뒤 관리자 확인을 받으세요.",
+                parent=getattr(self, "root", None),
+            )
+            return None
         code = simpledialog.askstring(
             "관리자 확인", "보류 작업을 처리할 관리자 코드를 입력하세요.",
             parent=getattr(self, "root", None), show="●",
@@ -6879,22 +7051,56 @@ class ContainerAudit:
                 "관리자 인증을 확인하지 못했습니다. 원래 작업과 기록은 유지합니다.",
                 parent=getattr(self, "root", None),
             )
-        return authorized
+            return None
+        return {"operator": operator, "role": role, "supervisor": PROTECTED_ADMIN_OPERATOR_ID}
+
+    def _blocked_work_identity_is_current(self, approval: Mapping[str, str]) -> bool:
+        if not isinstance(approval, Mapping):
+            return False
+        operator = str(getattr(self, "worker_name", "") or "").strip()
+        role = str(getattr(self, "worker_role", "") or "").upper()
+        valid = bool(
+            approval.get("operator") == operator
+            and approval.get("role") == role
+            and approval.get("supervisor") == PROTECTED_ADMIN_OPERATOR_ID
+            and (
+                (role == "ADMIN" and operator == PROTECTED_ADMIN_OPERATOR_ID
+                 and getattr(self, "_authenticated_protected_admin", False))
+                or (role == "WORKER" and operator != PROTECTED_ADMIN_OPERATOR_ID)
+            )
+        )
+        return valid
+
+    def _blocked_work_identity_matches(self, approval: Mapping[str, str]) -> bool:
+        valid = self._blocked_work_identity_is_current(approval)
+        if not valid:
+            messagebox.showwarning(
+                "관리자 확인 다시 필요",
+                "로그인 작업자 또는 역할이 바뀌었습니다. 원본은 그대로 두고 다시 관리자 확인을 받으세요.",
+                parent=getattr(self, "root", None),
+            )
+        return valid
+
+    @staticmethod
+    def _blocked_work_audit_identity(approval: Mapping[str, str]) -> Dict[str, str]:
+        return {
+            "acting_worker": persistent_operator_name(approval["operator"]),
+            "acting_role": approval["role"],
+            "approving_supervisor": persistent_operator_name(approval["supervisor"]),
+            "approving_role": "ADMIN",
+        }
 
     def _quarantine_preflight_hold_from_operations(self) -> bool:
-        if not self._authorize_blocked_work_supervisor():
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None:
             return False
-        previous = bool(getattr(self, "_authenticated_protected_admin", False))
-        self._authenticated_protected_admin = True
-        try:
-            return self._quarantine_preflight_hold_for_supervisor(
-                reason="supervisor_new_work_required",
-            )
-        finally:
-            self._authenticated_protected_admin = previous
+        return self._quarantine_preflight_hold_for_supervisor(
+            reason="supervisor_new_work_required", approval=approval,
+        )
 
     def _defer_paired_preflight_from_operations(self) -> bool:
-        if not self._authorize_blocked_work_supervisor():
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
             return False
         store = self._paired_preflight_store()
         try:
@@ -6914,6 +7120,8 @@ class ContainerAudit:
                     "보류하고 다른 현품표 작업을 계속하시겠습니까? 원 현품표는 계속 잠깁니다.",
                     parent=getattr(self, "root", None),
                 ):
+                    return False
+                if not self._blocked_work_identity_matches(approval):
                     return False
                 path = store.prepare(self._preflight_hold_store().path, current_path)
             record = store.read(path)
@@ -6935,11 +7143,16 @@ class ContainerAudit:
                 "hold_sha256": record["hold"]["sha256"],
                 "current_sha256": record["current"]["sha256"],
             }
+            detail.update(self._blocked_work_audit_identity(approval))
+            if not self._blocked_work_identity_matches(approval):
+                return False
             if not self._log_event(
                 "PHS2_PAIRED_PREFLIGHT_DEFERRED", detail=detail, synchronous=True,
                 idempotency_key=f"paired-preflight:{record['id']}", deduplicate=True,
             ):
                 raise PairedHandoffError("paired handoff audit failed")
+            if not self._blocked_work_identity_matches(approval):
+                return False
             store.move_original(path, "hold")
             store.move_original(path, "current")
             store.release(path)
@@ -6997,7 +7210,8 @@ class ContainerAudit:
         )
 
     def _show_paired_preflight_handoffs(self) -> None:
-        if not self._authorize_blocked_work_supervisor():
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
             return
         store = self._paired_preflight_store()
         paths = store.paths()
@@ -7005,6 +7219,8 @@ class ContainerAudit:
             messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
             return
         for path in paths:
+            if not self._blocked_work_identity_matches(approval):
+                return
             try:
                 record = store.read(path)
                 held = json.loads(store._bytes(record["hold"]).decode("utf-8"))
@@ -7032,16 +7248,46 @@ class ContainerAudit:
                 "두 원본 보류 목록", detail + "\n\n원 요청 결과를 같은 키로 다시 확인할까요?",
                 parent=self.root,
             ):
-                self._recheck_paired_preflight_receipt(current)
+                if self._blocked_work_identity_matches(approval):
+                    self._recheck_paired_preflight_receipt(current, approval=approval)
 
-    def _recheck_paired_preflight_receipt(self, current: Mapping[str, Any]) -> None:
+    def _recheck_paired_preflight_receipt(
+        self, current: Mapping[str, Any], *, approval: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        approval = approval or self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
+            return
         master = str(current.get("master_label_code") or "")
         scans = tuple(current.get("scanned_barcodes") or ())
         lane = self._ui_task_lane()
         if lane.is_busy():
             return
+        if not self._blocked_work_identity_matches(approval):
+            return
+        try:
+            audited = bool(self._log_event(
+                "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED",
+                detail={
+                    "master_label_code": master,
+                    "scan_count": len(scans),
+                    **self._blocked_work_audit_identity(approval),
+                },
+                synchronous=True,
+                idempotency_key=f"paired-receipt-recheck:{uuid.uuid4().hex}",
+            ))
+        except Exception:
+            audited = False
+        if not audited:
+            messagebox.showerror(
+                "원 요청 재확인 기록 대기",
+                "관리자 재확인 기록을 남기지 못했습니다. 기록 상태를 확인한 뒤 다시 시도하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return
 
         def work() -> str:
+            if not self._blocked_work_identity_is_current(approval):
+                return "로그인 작업자 또는 역할이 바뀌어 원 요청을 조회하지 않았습니다. 관리자 확인을 다시 받으세요."
             coordinator = self._transfer_seal_runtime()
             row = coordinator.store.bound_operator_review_for_tray(
                 master_label=master, scanned_barcodes=scans,
@@ -12099,6 +12345,7 @@ class ContainerAudit:
 
     def _defer_saved_recovery_state(
         self, saved_state: Dict[str, Any], *, reason: str = "restore_declined_same_worker",
+        approval: Optional[Mapping[str, str]] = None,
     ) -> bool:
         """Park a declined same-worker recovery before releasing current state."""
 
@@ -12131,6 +12378,7 @@ class ContainerAudit:
                         "item_name": saved_state.get("item_name"),
                         "scan_count": len(saved_state.get("scanned_barcodes") or []),
                         "tray_capacity": saved_state.get("tray_size"),
+                        **(self._blocked_work_audit_identity(approval) if approval else {}),
                     },
                     synchronous=True,
                     idempotency_key=f"tray-parked-recovery:{deferred.defer_id}",
@@ -12174,7 +12422,8 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if not self._authorize_blocked_work_supervisor():
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None:
             return False
         if confirm and not messagebox.askyesno(
             "미확정 묶음 보류",
@@ -12182,6 +12431,8 @@ class ContainerAudit:
             "보류 목록에 보존하고 다른 현품표 작업을 계속하시겠습니까?",
             parent=getattr(self, "root", None),
         ):
+            return False
+        if not self._blocked_work_identity_matches(approval):
             return False
         try:
             state = self._current_tray_state_snapshot()
@@ -12197,8 +12448,10 @@ class ContainerAudit:
             with current_path.open("r", encoding="utf-8") as stream:
                 if json.load(stream) != state:
                     raise OSError("current tray snapshot readback differs")
+            if not self._blocked_work_identity_matches(approval):
+                return False
             if not self._defer_saved_recovery_state(
-                state, reason="supervisor_unsettled_tray_handoff",
+                state, reason="supervisor_unsettled_tray_handoff", approval=approval,
             ):
                 raise OSError("durable parked handoff failed")
         except (OSError, ValueError, TypeError, TrayStateValidationError) as exc:
@@ -14022,9 +14275,11 @@ class ContainerAudit:
             self.parked_tree.delete(i)
 
         try:
-            self._quarantine_invalid_parked_tray_files()
+            valid_paths = self._quarantine_invalid_parked_tray_files()
             row_index = 0
             for summary in self._parked_store().list_for_worker(self.worker_name):
+                if summary.path not in valid_paths:
+                    continue
                 tag = 'even' if row_index % 2 == 0 else 'odd'
                 self._insert_tree_row(self.parked_tree, '', 'end', values=(summary.item_name, str(summary.scan_count)), iid=str(summary.path), tags=(tag,))
                 row_index += 1
@@ -14053,23 +14308,22 @@ class ContainerAudit:
     def _quarantine_invalid_parked_tray_files(self):
         store = self._parked_store()
         if not store.directory.exists():
-            return
+            return set()
+        valid_paths = set()
+        invalid_count = 0
         for path in sorted(store.directory.glob("parked_*.json")):
             try:
                 state = ParkedTrayStore.load(path)
                 validate_tray_state(state, default_tray_size=getattr(self, "TRAY_SIZE", 60))
+                valid_paths.add(path)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError, TrayStateValidationError):
-                try:
-                    quarantined_path = quarantine_tray_state_file(path)
-                except Exception as quarantine_error:
-                    print(f"손상된 보류 작업 파일 격리 실패: {quarantine_error}")
-                    continue
-                if hasattr(self, "show_status_message"):
-                    print(f"손상된 보류 작업 파일 격리 위치: {quarantined_path}")
-                    self.show_status_message(
-                        "손상된 보류 작업을 안전하게 분리했습니다. 관리자에게 문의하세요.",
-                        getattr(self, "COLOR_DANGER", "red"),
-                    )
+                invalid_count += 1
+        if invalid_count and hasattr(self, "show_status_message"):
+            self.show_status_message(
+                f"읽을 수 없는 보류 작업 {invalid_count}건은 목록에서 제외했습니다. 원본은 보존했습니다.",
+                getattr(self, "COLOR_DANGER", "red"),
+            )
+        return valid_paths
 
     def on_parked_tray_select(self, event):
         """보류 목록에서 트레이를 더블 클릭했을 때 실행됩니다."""
@@ -14103,8 +14357,7 @@ class ContainerAudit:
             messagebox.showwarning("복원 실패", "보류 작업 폴더 밖의 파일은 복원할 수 없습니다. 목록을 갱신합니다.")
             self._update_parked_trays_list()
             return
-        # ParkedTrayStore.load may normalize and rewrite the worker name.
-        # Reject paired labels from the original bytes before that read.
+        # Reject paired labels from the original bytes before an explicit restore.
         try:
             paired_candidate = json.loads(Path(filepath).read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):

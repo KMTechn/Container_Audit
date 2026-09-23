@@ -71,7 +71,7 @@ class ParkedTrayStore:
         target_key = canonical_master_label_key(master_label)
         for path in sorted(self.directory.glob("parked_*.json")):
             try:
-                data = self.load(path)
+                data = self.load(path, normalize_worker=False)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
             parked_label = str(data.get("master_label_code") or "")
@@ -169,7 +169,7 @@ class ParkedTrayStore:
         summaries: List[ParkedTraySummary] = []
         for path in sorted(self.directory.glob("parked_*.json")):
             try:
-                data = self.load(path)
+                data = self.load(path, normalize_worker=False)
             except (OSError, UnicodeDecodeError, json.JSONDecodeError):
                 continue
             stored_worker = persistent_operator_name(data.get("worker_name"))
@@ -190,7 +190,9 @@ class ParkedTrayStore:
 
     @staticmethod
     @writer_sink("parked_tray_load_normalize")
-    def load(path: str | os.PathLike[str]) -> Dict[str, Any]:
+    def load(
+        path: str | os.PathLike[str], *, normalize_worker: bool = False,
+    ) -> Dict[str, Any]:
         source = Path(path)
         with source.open("r", encoding="utf-8") as handle:
             payload = json.load(handle)
@@ -200,7 +202,8 @@ class ParkedTrayStore:
         safe_worker = persistent_operator_name(saved_worker)
         if safe_worker != saved_worker:
             payload["worker_name"] = safe_worker
-            atomic_write_json(source, payload, indent=4, ensure_ascii=False)
+            if normalize_worker:
+                atomic_write_json(source, payload, indent=4, ensure_ascii=False)
         return payload
 
     @staticmethod

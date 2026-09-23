@@ -313,7 +313,7 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 | 첫 준비 또는 품목 갱신 실패 | onboarding 보고/검증 cache 진단; 유효 cache 없으면 시작 중단 | 같은 사용자·정확한 profile·연결 상태와 cache 분기 확인. [CA-01~02](README.md#ca-01) |
 | PHS2 중앙 조회 지연/오프라인 | hold FIFO와 `LOOKUP_FAILED`; 같은 현품표 재시도 | 접수되지 않은 스캔과 보존된 스캔을 구분하고 순서대로 drain. 다른 현품표로 덮어쓰지 않음. [CA-04](README.md#ca-04) |
 | 사전조회 실패로 다른 현품표 작업 필요 | `LOOKUP`/`LOOKUP_FAILED`·활성 트레이 없음 확인 후 관리자 인증·격리·동기 감사 | 보류 목록의 원본을 복원할 수 있으며 새 작업은 격리 후에만 시작. 읽기 오류는 잠금 유지. [CA-G14](BACKLOG.md#ca-g14) |
-| `DRAINING` hold/current 불일치 | 운영 작업에서 관리자 코드 확인 → 두 원본 바이트·SHA256 내구 기록/readback → 동기 감사 → 원본 이동/readback | 단계 실패·부분 이동이면 원 잠금과 같은 인계 재개. 성공하면 두 현품표 재처리를 막고 다른 현품표만 계속. 보류 목록에서 작업자·상태·건수·해시·시각을 확인하고 원 key가 있으면 읽기 전용 영수증 조회. 해제 후 원본 파일 손상은 그 쌍에 재대조 경고를 표시하고 다른 현품표는 계속한다. 정상 종료는 원본 보존 후 허용. [CA-G14](BACKLOG.md#ca-g14) |
+| `DRAINING` hold/current 불일치 | 운영 작업에서 관리자 코드 확인 → 두 원본 바이트·SHA256 내구 기록/readback → 동기 감사 → 원본 이동/readback | 단계 실패·부분 이동이면 원 잠금과 같은 인계 재개. 성공하면 두 현품표 재처리를 막고 다른 현품표만 계속. 보류 목록·중복 검색은 원본을 바꾸지 않으며, 관리자 목록에서 작업자·상태·건수·해시·시각을 확인하고 원 key가 있으면 읽기 전용 영수증 조회. 이미 남은 중복 current의 보존이 실패하면 운영 작업에서 관리자 재확인·보존 다시 시도·보류 후 다른 현품표 계속을 선택한다. 사본 readback과 동기 감사가 끝나야 다른 작업을 허용하고 원 현품표는 계속 차단한다. 해제 후 원본 파일 손상은 그 쌍에 재대조 경고를 표시한다. 정상 종료는 원본 보존 후 허용. [CA-G14](BACKLOG.md#ca-g14) |
 | lease 없는 신규 완료·부분 집합 | 표준 PHS2 완료 차단; 목록·문맥 유지 | 중앙 GOOD 전량·barcode↔unit·lease binding 확인. 오프라인 무조건 신규 작업 허용이 아님. [CA-07](README.md#ca-07) |
 | 유효 lease 이후 중앙 연결 단절 | 내구 intent·`LINKED`·checkpoint와 원 명령으로 후속 시도 | local completion 유무에 맞는 입력 guard 확인. 이미 로컬 완료한 건은 원 key와 완료 시각을 유지해 재조정. [CA-12](README.md#ca-12), [CA-C03](contracts.md#ca-c03) |
 | 응답 유실·중앙 정합 충돌 | receipt 조회/원 요청 재생 또는 `OPERATOR_REVIEW` | scope/key/expected version·exact 결과 대조. key 변경·실물 임의 재처리로 충돌을 우회하지 않음. |

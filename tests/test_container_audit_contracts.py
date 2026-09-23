@@ -8536,7 +8536,7 @@ def test_restore_parked_tray_preserves_outbox_when_parked_delete_fails(tmp_path,
     assert errors[0][0] == "보류 작업 복구 기록 대기"
 
 
-def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path, capsys):
+def test_update_parked_trays_list_preserves_corrupt_parked_file(tmp_path, capsys):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -8546,19 +8546,18 @@ def test_update_parked_trays_list_quarantines_corrupt_parked_file(tmp_path, caps
     app.show_status_message = lambda *args, **kwargs: messages.append(args)
     corrupt_file = tmp_path / "parked_qr_홍길동_corrupt.json"
     corrupt_file.write_text("{not-json}", encoding="utf-8")
+    original = corrupt_file.read_bytes()
 
     app._update_parked_trays_list()
 
-    assert not corrupt_file.exists()
-    assert list(tmp_path.glob("parked_qr_홍길동_corrupt.json.bad-*"))
+    assert corrupt_file.read_bytes() == original
+    assert not list(tmp_path.glob("parked_qr_홍길동_corrupt.json.bad-*"))
     assert app.parked_tree.rows == {}
     assert messages
-    assert messages[0][0] == "손상된 보류 작업을 안전하게 분리했습니다. 관리자에게 문의하세요."
-    assert ".bad-" not in messages[0][0]
-    assert ".bad-" in capsys.readouterr().out
+    assert "원본은 보존했습니다" in messages[0][0]
 
 
-def test_update_parked_trays_list_quarantines_invalid_utf8_file_and_keeps_valid_rows(tmp_path):
+def test_update_parked_trays_list_preserves_invalid_utf8_file_and_keeps_valid_rows(tmp_path):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -8584,13 +8583,13 @@ def test_update_parked_trays_list_quarantines_invalid_utf8_file_and_keeps_valid_
 
     app._update_parked_trays_list()
 
-    assert not corrupt_file.exists()
-    assert list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
+    assert corrupt_file.read_bytes() == b"\xff\xfe\xfa"
+    assert not list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
     assert app.parked_tree.rows == {str(valid_file): ("valid parked", "2")}
     assert messages
 
 
-def test_update_parked_trays_list_quarantines_semantically_invalid_parked_file(tmp_path):
+def test_update_parked_trays_list_preserves_semantically_invalid_parked_file(tmp_path):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path)
@@ -8605,11 +8604,12 @@ def test_update_parked_trays_list_quarantines_semantically_invalid_parked_file(t
         _valid_tray_state_payload(item_code=""),
         ensure_ascii=False,
     )
+    original = parked_file.read_bytes()
 
     app._update_parked_trays_list()
 
-    assert not parked_file.exists()
-    assert list(tmp_path.glob("parked_qr_홍길동_invalid.json.bad-*"))
+    assert parked_file.read_bytes() == original
+    assert not list(tmp_path.glob("parked_qr_홍길동_invalid.json.bad-*"))
     assert app.parked_tree.rows == {}
     assert messages
 
