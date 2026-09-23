@@ -7,6 +7,8 @@ import pytest
 
 from Container_Audit import ContainerAudit, TraySession
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
+from preflight_scan_hold import PreflightScanHoldStore
+from protected_admin import PROTECTED_ADMIN_OPERATOR_ID
 from storage_utils import atomic_write_json
 from tests.test_container_p0_contracts import _preflight_hold_ownership_app, _saved_tray_state
 
@@ -47,6 +49,154 @@ def test_paired_handoff_blocks_only_original_labels_and_keeps_bytes(tmp_path, mo
     assert app._paired_preflight_blocks_label(current["master_label_code"])
     assert app._paired_preflight_blocks_label("OTHER-MASTER")
     assert not app._paired_preflight_blocks_label("PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef")
+
+
+def test_paired_label_cannot_be_reactivated_from_quarantine(tmp_path, monkeypatch):
+    app, active, current = _app(tmp_path, monkeypatch)
+    label = current["master_label_code"]
+    previous = PreflightScanHoldStore(tmp_path / "previous" / "hold.json", capacity=4)
+    previous.start(worker="tester", master_raw=label, scan_epoch=1)
+    previous.append("PREVIOUS-PRODUCT")
+    previous.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    quarantined = previous.quarantine(app._preflight_hold_quarantine_directory(), reason="previous_attempt")
+    original = quarantined.path.read_bytes()
+
+    assert app._defer_paired_preflight_from_operations() is True
+    assert app._paired_preflight_blocks_label(label)
+    assert app.restore_quarantined_preflight_hold(str(quarantined.path)) is False
+    assert quarantined.path.read_bytes() == original
+    assert not app._preflight_hold_store().exists()
+
+
+def test_paired_label_cannot_be_restored_from_parked_tray(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    saved_state = {**current, "worker_name": app.worker_name}
+    parked = app._parked_store().save_state(
+        saved_state, worker_name=app.worker_name, master_label=current["master_label_code"]
+    )
+    original = parked.read_bytes()
+
+    app.restore_parked_tray(str(parked))
+
+    assert parked.read_bytes() == original
+    assert not app.current_tray.master_label_code
+    assert not (hold_store.path.parent / "current.json").exists()
+
+
+def test_paired_parked_rejection_keeps_original_bytes_before_worker_normalization(
+    tmp_path, monkeypatch
+):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    parked = app._parked_store().save_state(
+        {**current, "worker_name": "tester"},
+        worker_name="tester",
+        master_label=current["master_label_code"],
+    )
+    payload = json.loads(parked.read_text(encoding="utf-8"))
+    payload["worker_name"] = PROTECTED_ADMIN_OPERATOR_ID
+    atomic_write_json(parked, payload)
+    original = parked.read_bytes()
+    notices = []
+    monkeypatch.setattr(
+        "Container_Audit.messagebox.showwarning",
+        lambda _title, message, **_kwargs: notices.append(message),
+    )
+
+    app.restore_parked_tray(str(parked))
+
+    assert parked.read_bytes() == original
+    assert any("짝 인계 보류 중" in message for message in notices)
+    assert not app.current_tray.master_label_code
+
+
+def test_paired_label_cannot_be_restored_from_stale_current_state(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    original = stale_path.read_bytes()
+
+    app._load_current_tray_state()
+
+    assert not stale_path.exists()
+    preserved = list(stale_path.parent.glob("current.json.bad-*"))
+    assert len(preserved) == 1 and preserved[0].read_bytes() == original
+    assert not app.current_tray.master_label_code
+    assert not app._preflight_context_blocks_mutation()
+
+
+def test_unpreserved_stale_current_state_keeps_mutation_locked(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    original = stale_path.read_bytes()
+    app._quarantine_current_tray_state = lambda _reason: None
+
+    app._load_current_tray_state()
+
+    assert stale_path.read_bytes() == original
+    assert app._preflight_context_blocks_mutation()
+    assert not app.current_tray.master_label_code
+
+
+def test_worker_start_does_not_preview_paired_label_as_active(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    hold_store.start(worker="tester", master_raw=current["master_label_code"], scan_epoch=2)
+    hold_store.append("LATE-PRODUCT")
+    hold_store.mark_draining()
+    original_hold = hold_store.path.read_bytes()
+    stale_path = hold_store.path.parent / "current.json"
+    atomic_write_json(stale_path, current)
+    original_current = stale_path.read_bytes()
+    app.worker_entry = SimpleNamespace(get=lambda: "tester")
+    app._ensure_worker_login_name = lambda name: name
+    app._load_session_state = lambda: None
+    app._schedule_startup_transfer_recovery = lambda: None
+    app._begin_or_resume_work_session = lambda: True
+    app.root = SimpleNamespace(winfo_exists=lambda: False)
+
+    app.start_work()
+
+    assert not app.current_tray.master_label_code
+    assert hold_store.path.read_bytes() == original_hold
+    preserved = list(stale_path.parent.glob("current.json.bad-*"))
+    assert len(preserved) == 1 and preserved[0].read_bytes() == original_current
+
+
+def test_paired_label_cannot_be_restored_from_stale_active_hold(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+    hold_store.start(worker="tester", master_raw=current["master_label_code"], scan_epoch=2)
+    hold_store.append("LATE-PRODUCT")
+    hold_store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    original = hold_store.path.read_bytes()
+
+    assert app._restore_preflight_scan_hold() is True
+    assert hold_store.path.read_bytes() == original
+    assert not app.current_tray.master_label_code
+
+
+def test_paired_label_cannot_be_activated_by_late_preflight(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations() is True
+
+    activated = app._activate_master_label_tray(
+        barcode=current["master_label_code"],
+        item_code=current["item_code"],
+        tray_quantity=current["tray_size"],
+        matched_item={"Item Name": current["item_name"]},
+        event_name="MASTER_LABEL_SCANNED_NEW",
+        event_detail={},
+        preflight_hold_owner=True,
+    )
+
+    assert activated is False
+    assert not app.current_tray.master_label_code
+    assert not (hold_store.path.parent / "current.json").exists()
 
 
 @pytest.mark.parametrize("stage", ["capture", "record_readback"])

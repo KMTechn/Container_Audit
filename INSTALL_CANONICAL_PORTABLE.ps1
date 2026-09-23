@@ -2360,8 +2360,12 @@ $enteredPlacementTry = $true
                 '준비 파일 경로를 찾을 수 없습니다. 원래 설치 묶음과 폴더를 확인하세요.'
             } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_LOG_UNREADABLE') {
                 '권한 상승 작업의 결과 기록을 읽지 못했습니다. 기록 폴더 권한을 확인하세요.'
-            } elseif ($failureCode -in @('CONTAINER_PLACEMENT_CHILD_FAILED','CONTAINER_PLACEMENT_ELEVATION_FAILED')) {
-                '권한 상승 작업이 끝나지 않았습니다. 관리자 실행을 다시 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_LOG_WRITE_FAILED') {
+                '권한 상승 작업의 결과 기록을 남기지 못했습니다. 기록 폴더의 쓰기 권한과 저장 공간을 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_CHILD_FAILED') {
+                '권한 상승 작업이 결과 기록 없이 비정상 종료됐습니다. 담당자에게 문의 코드를 알려 주세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED') {
+                '관리자 권한 요청을 완료하지 못했습니다. 관리자 실행을 다시 확인하세요.'
             } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_UNCLASSIFIED') {
                 '분류 안 된 오류가 발생했습니다. 아래 문의 코드를 담당자에게 알려 주세요.'
             } elseif ($failureCode -cmatch '^CONTAINER_PLACEMENT_') {

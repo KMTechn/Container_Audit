@@ -1814,6 +1814,13 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
+        if self._paired_preflight_blocks_label(snapshot.master_raw):
+            messagebox.showwarning(
+                "보류 묶음 복원 차단",
+                "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return False
         current_worker = persistent_operator_name(
             str(getattr(self, "worker_name", "") or "")
         )
@@ -1961,6 +1968,7 @@ class ContainerAudit:
         memory_gate = bool(
             getattr(self, "_master_preflight_pending", False)
             or getattr(self, "_preflight_hold_draining", False)
+            or getattr(self, "_paired_stale_current_blocked", False)
             or isinstance(snapshot, PreflightHoldSnapshot)
         )
         if memory_gate:
@@ -2682,14 +2690,17 @@ class ContainerAudit:
                     current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
                     saved = json.loads(current_path.read_text(encoding="utf-8"))
                     validate_tray_state(saved, default_tray_size=self.TRAY_SIZE)
-                    candidate = tray_session_from_state(
-                        saved, session_factory=TraySession,
-                        default_tray_size=self.TRAY_SIZE,
-                    )
-                    self.current_tray = candidate
-                    skip_current_recovery = not self._preflight_hold_matches_current_tray(held)
-                    if not skip_current_recovery:
-                        self.current_tray = TraySession()
+                    if not self._paired_preflight_blocks_label(
+                        str(saved.get("master_label_code") or "")
+                    ):
+                        candidate = tray_session_from_state(
+                            saved, session_factory=TraySession,
+                            default_tray_size=self.TRAY_SIZE,
+                        )
+                        self.current_tray = candidate
+                        skip_current_recovery = not self._preflight_hold_matches_current_tray(held)
+                        if not skip_current_recovery:
+                            self.current_tray = TraySession()
             except (OSError, ValueError, TypeError, PreflightHoldError, TrayStateValidationError):
                 skip_current_recovery = True
         if not skip_current_recovery:
@@ -3552,6 +3563,31 @@ class ContainerAudit:
             with open(state_path, 'r', encoding='utf-8') as f:
                 saved_state = json.load(f)
             validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
+            saved_master_label = str(saved_state.get('master_label_code') or '')
+            if saved_master_label and self._paired_preflight_blocks_label(saved_master_label):
+                original_bytes = Path(state_path).read_bytes()
+                quarantined_path = self._quarantine_current_tray_state(
+                    "paired handoff label cannot resume"
+                )
+                try:
+                    preserved = bool(
+                        quarantined_path
+                        and Path(quarantined_path).read_bytes() == original_bytes
+                    )
+                except OSError:
+                    preserved = False
+                self._paired_stale_current_blocked = not preserved
+                messagebox.showwarning(
+                    "이전 작업 복구 차단",
+                    (
+                        "이 현품표는 짝 인계 보류 중입니다. 원래 상태를 별도로 보존했습니다. "
+                        "관리자 인계 목록에서 확인하세요."
+                    ) if preserved else (
+                        "이 현품표는 짝 인계 보류 중입니다. 상태 파일 보존을 확인하지 "
+                        "못해 새 작업을 시작하지 않습니다. 관리자에게 문의하세요."
+                    ),
+                )
+                return
             saved_worker_raw = str(saved_state.get('worker_name') or '').strip()
             saved_worker_safe = persistent_operator_name(saved_worker_raw)
             if saved_worker_safe != saved_worker_raw:
@@ -8742,6 +8778,13 @@ class ContainerAudit:
         preflight_hold_owner: bool = False,
         coordinator_ui_snapshot: Optional[Mapping[str, Any]] = None,
     ) -> bool:
+        if self._paired_preflight_blocks_label(barcode):
+            self.show_fullscreen_warning(
+                "관리자 보류 현품표",
+                "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요.",
+                self.COLOR_DANGER,
+            )
+            return False
         if (
             not preflight_hold_owner
             and self._reject_mutation_during_preflight_hold()
@@ -9711,6 +9754,16 @@ class ContainerAudit:
                 "사전조회 보류 파일을 읽지 못했습니다. 파일을 보존하고 관리자에게 문의하세요.",
             )
             return False
+        if self._paired_preflight_blocks_label(snapshot.master_raw):
+            self._preflight_hold_snapshot = None
+            self._set_preflight_scan_input_locked(True)
+            messagebox.showwarning(
+                "보류 스캔 복구 차단",
+                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
+                "관리자 인계 목록에서 확인하세요.",
+                parent=getattr(self, "root", None),
+            )
+            return True
         current_worker = persistent_operator_name(self.worker_name)
         if snapshot.worker != current_worker and not (
             snapshot.state == HOLD_DRAINING
@@ -14050,6 +14103,23 @@ class ContainerAudit:
             messagebox.showwarning("복원 실패", "보류 작업 폴더 밖의 파일은 복원할 수 없습니다. 목록을 갱신합니다.")
             self._update_parked_trays_list()
             return
+        # ParkedTrayStore.load may normalize and rewrite the worker name.
+        # Reject paired labels from the original bytes before that read.
+        try:
+            paired_candidate = json.loads(Path(filepath).read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            paired_candidate = None
+        paired_master_label = (
+            str(paired_candidate.get("master_label_code") or "")
+            if isinstance(paired_candidate, dict) else ""
+        )
+        if paired_master_label and self._paired_preflight_blocks_label(paired_master_label):
+            messagebox.showwarning(
+                "보류 작업 복원 차단",
+                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
+                "관리자 인계 목록에서 확인하세요.",
+            )
+            return
         try:
             saved_state = ParkedTrayStore.load(filepath)
             validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
@@ -14087,6 +14157,13 @@ class ContainerAudit:
             self._update_parked_trays_list()
             return
         parked_master_label = str(saved_state.get("master_label_code") or "")
+        if parked_master_label and self._paired_preflight_blocks_label(parked_master_label):
+            messagebox.showwarning(
+                "보류 작업 복원 차단",
+                "이 현품표는 짝 인계 보류 중입니다. 원래 보류 파일을 보존하고 "
+                "관리자 인계 목록에서 확인하세요.",
+            )
+            return
         if parked_master_label and self._is_completed_master_label(parked_master_label):
             try:
                 ParkedTrayStore.delete(filepath)

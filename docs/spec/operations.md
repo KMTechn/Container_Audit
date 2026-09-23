@@ -339,7 +339,7 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 PowerShell 격리 시험은 **PROVEN**, 표준 사용자에서 별도 관리자로 UAC 승격하는
 guest 실물 설치와 ACL 접근은 **NOT TESTED**다. 기존 HKCU·DPAPI·업무 원장·relay는
 작업자 계정에 남는다. 중단 메시지는 원인과 작업자/PC/attempt에서 파생한 문의 코드,
-재확인·보류 안내를 제공하며 기존 설치본과 기록을 보존한다. 파일 접근·ACL·경로·로그 읽기·상승 자식 비정상 종료와 분류되지 않은 오류도 안전 코드와 문의 코드로 안내한다. [CA-G15](BACKLOG.md#ca-g15).
+재확인·보류 안내를 제공하며 기존 설치본과 기록을 보존한다. 파일 접근·ACL·경로·상승 결과 로그 쓰기/읽기·결과 로그 없는 자식 비정상 종료와 분류되지 않은 오류를 각각 안전 코드와 문의 코드로 안내한다. 로그 쓰기 실패는 상승 자식의 전용 종료 코드로 전달하며 기존 설치본·fence 거부·롤백 경계는 유지한다. [CA-G15](BACKLOG.md#ca-g15).
 
 예약 작업 census는 정식/qualification 작업 이름, 명시된 direct-sync/user-relay 실행 모드 또는 `tools/direct_sync_relay_runner.py` 직접 호출 action으로 writer 후보를 식별한다. 직접 script Execute는 유지하며, 인수에서 script를 찾는 경우에는 Python/py/venv 실행 파일을 확인한다. Windows quoting과 `-u`/`-B` 등 옵션·옵션 값을 처리한 첫 script 경로를 작업 디렉터리 기준으로 정규화해 기존 검증된 writer inventory의 Python `.main` route 목록과 비교하며 다중 action도 검사한다. `-c`/`-m`/stdin·도움말·버전 모드의 후속 인자와 Notepad·탐색기·다른 실행 파일이 같은 소스를 여는 작업은 제외한다. null/빈 trigger 및 CIM 속성 부재는 안전하게 정규화하며, 잘못된 writer가 활성 상태이면 `NONCANONICAL_WRITER_ENABLED`로 계속 차단한다. 정식 writer의 이름·루트 TaskPath·실행/사용자/trigger 계약과 기존 binding SHA256을 유지한다. PS5.1 모의 목록과 설치기 회귀는 [분류 시험](../../tests/test_scheduled_writer_classification.py)으로 고정하며 실제 guest 재설치는 별도 수용이다.
 

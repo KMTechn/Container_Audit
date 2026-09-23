@@ -164,11 +164,12 @@ try {
     assert result.stdout.strip() == 'CONTAINER_PLACEMENT_PATH_UNAVAILABLE'
 
 
-@pytest.mark.parametrize(('log_contents', 'expected'), [
-    ('{invalid json', 'CONTAINER_PLACEMENT_LOG_UNREADABLE'),
-    (None, 'CONTAINER_PLACEMENT_CHILD_FAILED'),
+@pytest.mark.parametrize(('log_contents', 'child_exit', 'expected'), [
+    ('{invalid json', 1, 'CONTAINER_PLACEMENT_LOG_UNREADABLE'),
+    (None, 1, 'CONTAINER_PLACEMENT_CHILD_FAILED'),
+    (None, 42, 'CONTAINER_PLACEMENT_LOG_WRITE_FAILED'),
 ])
-def test_elevation_log_failure_and_abnormal_child_have_safe_code(tmp_path, log_contents, expected):
+def test_elevation_log_failure_and_abnormal_child_have_safe_code(tmp_path, log_contents, child_exit, expected):
     if ctypes.windll.shell32.IsUserAnAdmin():
         pytest.skip('parent forwarding path requires a non-elevated token')
     log = tmp_path / 'elevated.jsonl'
@@ -184,12 +185,12 @@ function Get-StrictFullPath([string]$Value,[string]$Purpose) { return [IO.Path]:
 function Assert-NoReparsePoint([string]$Value,[string]$Purpose) { }
 function Start-Process {
     param($FilePath,$Verb,$ArgumentList,[switch]$Wait,[switch]$PassThru)
-    return [pscustomobject]@{ Id=4242; ExitCode=1 }
+    return [pscustomobject]@{ Id=4242; ExitCode=[int]$env:CA_FAKE_CHILD_EXIT }
 }
 Invoke-SelfElevated
-''', values={'CA_FAKE_ELEVATION_LOG': str(log)},
+''', values={'CA_FAKE_ELEVATION_LOG': str(log), 'CA_FAKE_CHILD_EXIT': str(child_exit)},
     )
-    assert result.returncode == 1
+    assert result.returncode == child_exit
     assert f'code_placement_preflight_failure={expected}' in result.stdout
 
 
@@ -210,6 +211,38 @@ def test_unclassified_child_preflight_error_reaches_canonical_parent(tmp_path):
         assert '분류 안 된 오류' in result.stderr
         assert '문의 코드 CA-' in result.stderr
         assert 'unusual preflight fault' not in result.stderr
+        audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+        assert audit['code_placement'] == 'NOT_STARTED'
+        assert _tree(install) == before['code']
+
+
+def test_preflight_log_write_failure_has_own_operator_guidance(tmp_path):
+    env, source, install, protected = _setup(tmp_path)
+    _distinct_replacement(source)
+    helper = source / 'INSTALL_THIS_PC.ps1'
+    text = helper.read_text(encoding='utf-8-sig')
+    admission = '        $placementWriterFenceLease = Enter-ContainerPlacementWriterFence'
+    admin_check = (
+        'if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {\n'
+        "            try {\n                Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode"
+    )
+    log_target = '$path = Get-StrictFullPath $ElevationLogPath "ElevationLogPath"'
+    assert text.count(admission) == text.count(admin_check) == text.count(log_target) == 1
+    text = text.replace(admission, "        throw [IO.IOException]::new('preflight fault')\n" + admission)
+    text = text.replace(admin_check, admin_check.replace('if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))', 'if ($true)'))
+    text = text.replace(log_target, '$path = [IO.Path]::GetFullPath($OperatorLocalAppDataRoot)')
+    helper.write_text(text, encoding='utf-8-sig')
+    _bind_packet(source)
+
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        result = _install(tmp_path, env, source, install)
+        assert result.returncode != 0
+        assert 'CONTAINER_PLACEMENT_LOG_WRITE_FAILED' in result.stderr
+        assert '결과 기록을 남기지 못했습니다' in result.stderr
+        assert '기록 폴더의 쓰기 권한과 저장 공간' in result.stderr
+        assert 'CONTAINER_PLACEMENT_CHILD_FAILED' not in result.stderr
+        assert '문의 코드 CA-' in result.stderr
         audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
         assert audit['code_placement'] == 'NOT_STARTED'
         assert _tree(install) == before['code']

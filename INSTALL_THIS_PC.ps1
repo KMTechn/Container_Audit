@@ -130,22 +130,25 @@ function Invoke-SelfElevated {
     }
     if ($process.ExitCode -ne 0) {
         $failureCode = 'CONTAINER_PLACEMENT_CHILD_FAILED'
-        if (-not [string]::IsNullOrWhiteSpace($ElevationLogPath)) {
-        try {
-            $logFull = Get-StrictFullPath $ElevationLogPath 'ElevationLogPath'
-            Assert-NoReparsePoint $logFull 'elevation log'
-            if ((Test-Path -LiteralPath $logFull -PathType Leaf) -and
-                (Get-Item -LiteralPath $logFull).Length -le 65536) {
-                $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
-                if ([int]$lastEntry.process_id -eq [int]$process.Id -and
-                    [string]$lastEntry.status -ceq 'PREFLIGHT_FAILED' -and
-                    [string]$lastEntry.message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') {
-                    $failureCode = [string]$lastEntry.message
+        if ($process.ExitCode -eq 42) {
+            # The child could not write its classified preflight result.
+            $failureCode = 'CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
+        } elseif (-not [string]::IsNullOrWhiteSpace($ElevationLogPath)) {
+            try {
+                $logFull = Get-StrictFullPath $ElevationLogPath 'ElevationLogPath'
+                Assert-NoReparsePoint $logFull 'elevation log'
+                if ((Test-Path -LiteralPath $logFull -PathType Leaf) -and
+                    (Get-Item -LiteralPath $logFull).Length -le 65536) {
+                    $lastEntry = Get-Content -LiteralPath $logFull -Encoding UTF8 -Tail 1 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    if ([int]$lastEntry.process_id -eq [int]$process.Id -and
+                        [string]$lastEntry.status -ceq 'PREFLIGHT_FAILED' -and
+                        [string]$lastEntry.message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') {
+                        $failureCode = [string]$lastEntry.message
+                    }
+                } elseif (Test-Path -LiteralPath $logFull -PathType Leaf) {
+                    $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE'
                 }
-            } elseif (Test-Path -LiteralPath $logFull -PathType Leaf) {
-                $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE'
-            }
-        } catch { $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
+            } catch { $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
         }
         Write-Output "code_placement_preflight_failure=$failureCode"
     }
@@ -660,7 +663,12 @@ if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
         if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-            try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode } catch { }
+            try {
+                Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode
+            } catch {
+                Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
+                exit 42
+            }
         }
         Write-Output "code_placement_preflight_failure=$failureCode"
         throw
