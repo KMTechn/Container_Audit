@@ -13,6 +13,7 @@ from label_qr import canonical_master_label_key, parse_new_format_qr
 from protected_admin import persistent_operator_name
 from storage_utils import atomic_write_json
 from writer_session_fence import writer_sink
+from recovery_file_read import read_recovery_file
 
 
 def sanitize_filename(filename: str) -> str:
@@ -28,6 +29,7 @@ class ParkedTraySummary:
     path: Path
     item_name: str
     scan_count: int
+    problem: str = ""
 
 
 @dataclass(frozen=True)
@@ -61,7 +63,7 @@ class ParkedTrayStore:
             self.deterministic_label_path(worker_name=worker_name, master_label=master_label),
             self.legacy_deterministic_label_path(worker_name=worker_name, master_label=master_label),
         ):
-            if path is not None and path.exists():
+            if path is not None and (path.exists() or self.manager_hold_path(path).exists()):
                 return path
         return None
 
@@ -69,15 +71,59 @@ class ParkedTrayStore:
         if not self.directory.exists():
             return None
         target_key = canonical_master_label_key(master_label)
+        digest = hashlib.sha256(target_key.encode("utf-8")).hexdigest()[:16]
+        for marker in sorted(self.directory.glob("parked_*.json.manager-hold.json")):
+            binding = read_recovery_file(marker, "parked_manager_hold")
+            if binding.verified and canonical_master_label_key(binding.value["label"]) == target_key:
+                return marker.with_name(marker.name.removesuffix(".manager-hold.json"))
         for path in sorted(self.directory.glob("parked_*.json")):
+            if path.name.endswith(".manager-hold.json"):
+                continue
+            # The deterministic QR filename remains a label guard even if its
+            # payload cannot be decoded. A manager binding covers other names.
+            if path.name.endswith(f"_{digest}.json"):
+                return path
+            binding = read_recovery_file(self.manager_hold_path(path), "parked_manager_hold")
+            if binding.verified and canonical_master_label_key(binding.value["label"]) == target_key:
+                return path
             try:
                 data = self.load(path, normalize_worker=False)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            except Exception:
                 continue
             parked_label = str(data.get("master_label_code") or "")
             if parked_label and canonical_master_label_key(parked_label) == target_key:
                 return path
         return None
+
+    @staticmethod
+    def manager_hold_path(path: Path) -> Path:
+        return path.with_name(path.name + ".manager-hold.json")
+
+    @writer_sink("parked_tray_manager_hold")
+    def bind_invalid_label(self, path: Path, label: str) -> None:
+        path = Path(path)
+        source = read_recovery_file(path, "parked")
+        marker = self.manager_hold_path(path)
+        previous = read_recovery_file(marker, "parked_manager_hold")
+        if not path.exists() and previous.verified:
+            if canonical_master_label_key(previous.value["label"]) != canonical_master_label_key(label):
+                raise FileExistsError("parked manager binding differs")
+            return
+        if source.verified or source.sha256 is None:
+            raise ValueError("parked source is not an intact invalid file")
+        payload = {
+            "schema": "container-audit-parked-manager-hold-v1",
+            "label": label,
+            "source_sha256": source.sha256,
+        }
+        if marker.exists():
+            if not previous.verified or previous.value != payload:
+                raise FileExistsError("parked manager binding differs")
+        else:
+            atomic_write_json(marker, payload, ensure_ascii=False)
+        check = read_recovery_file(marker, "parked_manager_hold")
+        if not check.verified or check.value != payload:
+            raise OSError("parked manager binding readback differs")
 
     @staticmethod
     def _canonical_state_hash(state: Mapping[str, Any]) -> str:
@@ -164,28 +210,51 @@ class ParkedTrayStore:
         return path
 
     def list_for_worker(self, worker_name: str) -> List[ParkedTraySummary]:
+        return [row for row in self.scan_for_worker(worker_name) if not row.problem]
+
+    def scan_for_worker(self, worker_name: str, *, tray_size: int = 60,
+                        strict: bool = False) -> List[ParkedTraySummary]:
         if not self.directory.exists():
             return []
         summaries: List[ParkedTraySummary] = []
         for path in sorted(self.directory.glob("parked_*.json")):
+            if path.name.endswith(".manager-hold.json"):
+                continue
             try:
-                data = self.load(path, normalize_worker=False)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-                continue
-            stored_worker = persistent_operator_name(data.get("worker_name"))
-            requested_worker = persistent_operator_name(worker_name)
-            if stored_worker:
-                if stored_worker != requested_worker:
+                result = read_recovery_file(path, "parked" if strict else "parked_summary",
+                                            tray_size=tray_size)
+                if not result.verified:
+                    # An unreadable payload has no trustworthy owner. Expose
+                    # it without hiding healthy rows.
+                    summaries.append(ParkedTraySummary(path, f"확인 필요 · {path.name}",
+                                                        0, result.reason))
                     continue
-            elif f"_{_safe_worker_filename(requested_worker)}_" not in path.name:
-                continue
-            summaries.append(
-                ParkedTraySummary(
-                    path=path,
-                    item_name=str(data.get("item_name") or "알 수 없음"),
+                data = result.value
+                stored_worker = persistent_operator_name(data.get("worker_name"))
+                requested_worker = persistent_operator_name(worker_name)
+                if stored_worker:
+                    if stored_worker != requested_worker:
+                        continue
+                elif f"_{_safe_worker_filename(requested_worker)}_" not in path.name:
+                    continue
+                summaries.append(ParkedTraySummary(
+                    path=path, item_name=str(data.get("item_name") or "알 수 없음"),
                     scan_count=len(data.get("scanned_barcodes") or []),
-                )
-            )
+                ))
+            except Exception as exc:
+                summaries.append(ParkedTraySummary(
+                    path, f"확인 필요 · {path.name}", 0,
+                    f"보류 작업 판독 실패 ({exc.__class__.__name__})",
+                ))
+        for marker in sorted(self.directory.glob("parked_*.json.manager-hold.json")):
+            try:
+                source = marker.with_name(marker.name.removesuffix(".manager-hold.json"))
+                if not source.exists():
+                    summaries.append(ParkedTraySummary(source, f"확인 필요 · {source.name}", 0,
+                                                       "보류 원본 파일이 없고 관리자 보류 기록만 남음"))
+            except Exception as exc:
+                summaries.append(ParkedTraySummary(marker, f"확인 필요 · {marker.name}", 0,
+                                                   f"관리자 보류 판독 실패 ({exc.__class__.__name__})"))
         return summaries
 
     @staticmethod
@@ -194,10 +263,10 @@ class ParkedTrayStore:
         path: str | os.PathLike[str], *, normalize_worker: bool = False,
     ) -> Dict[str, Any]:
         source = Path(path)
-        with source.open("r", encoding="utf-8") as handle:
-            payload = json.load(handle)
-        if not isinstance(payload, dict):
-            raise json.JSONDecodeError("parked tray payload must be an object", "", 0)
+        result = read_recovery_file(source, "json")
+        if not result.verified:
+            raise json.JSONDecodeError("parked tray payload cannot be verified", "", 0)
+        payload = result.value
         saved_worker = str(payload.get("worker_name") or "").strip()
         safe_worker = persistent_operator_name(saved_worker)
         if safe_worker != saved_worker:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import random
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +11,7 @@ from Container_Audit import ContainerAudit, TraySession
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
 from preflight_scan_hold import PreflightScanHoldStore
 from protected_admin import PROTECTED_ADMIN_OPERATOR_ID
+from recovery_file_read import read_recovery_file
 from storage_utils import atomic_write_json
 from tests.test_container_audit_contracts import CapturingTree
 from tests.test_container_p0_contracts import _preflight_hold_ownership_app, _saved_tray_state
@@ -239,7 +242,7 @@ def test_stale_current_preservation_audit_failure_keeps_original_in_slot(
 
     assert app._retry_paired_stale_current_preservation() is False
     assert stale_path.read_bytes() == original
-    assert not list(stale_path.parent.glob("current.json.bad-*"))
+    assert any(path.read_bytes() == original for path in stale_path.parent.glob("current.json.bad-*"))
     assert app._preflight_context_blocks_mutation()
 
 
@@ -437,7 +440,7 @@ def test_mismatched_draining_hold_allows_normal_close_handoff(tmp_path, monkeypa
     assert (hold_store.path.parent / "current.json").exists()
 
 
-def test_pending_pair_after_first_move_stays_locked_on_restart(tmp_path, monkeypatch):
+def test_pending_pair_after_first_move_blocks_both_labels_on_restart(tmp_path, monkeypatch):
     app, hold_store, _ = _app(tmp_path, monkeypatch)
     paired = app._paired_preflight_store()
     path = paired.prepare(hold_store.path, hold_store.path.parent / "current.json")
@@ -447,8 +450,12 @@ def test_pending_pair_after_first_move_stays_locked_on_restart(tmp_path, monkeyp
     restarted.save_folder = app.save_folder
     restarted.CURRENT_TRAY_STATE_FILE = app.CURRENT_TRAY_STATE_FILE
     assert restarted._restore_preflight_scan_hold() is True
-    assert restarted._preflight_context_blocks_mutation()
-    assert restarted._preserve_preflight_hold_for_close() == (True, True)
+    assert paired.pending()
+    assert restarted._paired_preflight_blocks_label("OTHER-MASTER")
+    assert restarted._paired_preflight_blocks_label(_saved_tray_state()["master_label_code"])
+    assert not restarted._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert not restarted._preflight_context_blocks_mutation()
+    assert restarted._preserve_preflight_hold_for_close() == (True, False)
 
 
 def test_manager_handoff_list_shows_both_originals(tmp_path, monkeypatch):
@@ -518,3 +525,315 @@ def test_paired_receipt_recheck_denies_actor_change_before_lane_runs(tmp_path, m
     app.worker_name = "another worker"
     assert "관리자 확인을 다시 받으세요" in tasks[0].work()
     assert calls == []
+
+
+@pytest.mark.parametrize("name,damage", [
+    (name, damage)
+    for name in ("record.json", "hold.original", "current.original", "released.json")
+    for damage in ("missing", "random", "truncated", "wrong_type", "wrong_hash",
+                   "deep_json", "large_json", "nul", "invalid_utf8")
+])
+def test_fixed_seed_pair_damage_is_scoped_and_visible(tmp_path, monkeypatch, name, damage):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    store = app._paired_preflight_store()
+    record_path = store.paths()[0]
+    source = record_path.parent / name
+    original = source.read_bytes()
+    if damage == "missing":
+        source.unlink()
+    elif damage == "random":
+        source.write_bytes(random.Random(20260923 + len(name)).randbytes(47))
+    elif damage == "truncated":
+        source.write_bytes(original[:max(1, len(original) // 3)])
+    elif damage == "deep_json":
+        source.write_bytes(b"[" * 3000 + b"]" * 3000)
+    elif damage == "large_json":
+        source.write_bytes(b'{"padding":"' + b"x" * 1000000 + b'"}')
+    elif damage == "nul":
+        source.write_bytes(b"\x00")
+    elif damage == "invalid_utf8":
+        source.write_bytes(b"\xff")
+    else:
+        value = json.loads(original)
+        if name == "record.json":
+            if damage == "wrong_type":
+                value["hold"] = 7
+            else:
+                value["hold"]["sha256"] = "0" * 64
+        elif name == "released.json":
+            value["id"] = 7 if damage == "wrong_type" else "0" * 64
+        else:
+            field = "items" if name == "hold.original" else "scanned_barcodes"
+            value[field] = 7 if damage == "wrong_type" else ["HASH-CHANGED"]
+        source.write_text(json.dumps(value), encoding="utf-8")
+    damaged = source.read_bytes() if source.exists() else None
+    assert store.paths() == (record_path,)
+    assert app._paired_preflight_blocks_label("OTHER-MASTER")
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert not app._preflight_context_blocks_mutation()
+    notices = []
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",
+                        lambda _title, detail, **_kwargs: notices.append(detail) or False)
+    app._show_paired_preflight_handoffs()
+    assert notices and record_path.parent.name in notices[0]
+    assert "확인" in notices[0] or "재대조" in notices[0]
+    assert (source.read_bytes() if source.exists() else None) == damaged
+
+
+def test_missing_record_with_changed_archives_stays_unidentified(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    store = app._paired_preflight_store()
+    record_path = store.paths()[0]
+    record_path.unlink()
+    archived = record_path.parent / "current.original"
+    changed = json.loads(archived.read_text(encoding="utf-8"))
+    changed["item_name"] = "changed after record loss"
+    archived.write_text(json.dumps(changed), encoding="utf-8")
+    assert store.inspect(record_path).unidentified
+    assert app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+
+
+def test_unidentified_pair_manager_scans_and_binds_after_central_readback(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    store = app._paired_preflight_store()
+    path = store.paths()[0]
+    for name in ("record.json", "hold.original", "current.original"):
+        (path.parent / name).write_bytes(b"\xff damaged original")
+    assert store.inspect(path).unidentified and app._preflight_context_blocks_mutation()
+    first = current["master_label_code"]
+    second = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
+    scans = iter((first, second))
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring",
+                        lambda *_args, **_kwargs: next(scans))
+    notices = []
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo",
+                        lambda _title, detail, **_kwargs: notices.append(detail))
+    app._log_event = lambda *_args, **_kwargs: True
+    app._set_preflight_scan_input_locked = lambda _value: None
+    app._update_action_button_states = lambda: None
+    calls = []
+    client = SimpleNamespace(
+        authority_scope_id="scope",
+        resolve_phs_label=lambda **kwargs: calls.append(kwargs["scan_payload"]) or {"id": "known"},
+    )
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=client)
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._identify_unreadable_pair(path, app._authorize_blocked_work_supervisor())
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    assert calls == [first, second]
+    assert not store.inspect(path).unidentified
+    assert not app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(first)
+    assert app._paired_preflight_blocks_label(second)
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert (path.parent / "record.json").read_bytes() == b"\xff damaged original"
+    assert notices and "다른 현품표" in notices[0]
+
+
+def test_stale_current_changed_bytes_are_both_preserved_and_deferred(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    source = hold_store.path.parent / "current.json"
+    atomic_write_json(source, current)
+    original = source.read_bytes()
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    app._quarantine_current_tray_state = quarantine
+    changed = {**current, "item_name": "changed after failed preservation"}
+    atomic_write_json(source, changed)
+    changed_bytes = source.read_bytes()
+    app._log_event = lambda *_args, **_kwargs: True
+    assert app._continue_after_paired_stale_current()
+    copies = [path.read_bytes() for path in source.parent.glob("current.json.bad-*")]
+    assert original in copies and changed_bytes in copies
+    assert not source.exists()
+    assert not app._preflight_context_blocks_mutation()
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+
+
+@pytest.mark.parametrize("damage", ["random", "truncated", "wrong_type", "missing_field",
+                                    "changed_hash", "deep_json", "large_json", "nul", "invalid_utf8"])
+def test_fixed_seed_parked_damage_keeps_healthy_row_and_manager_action(tmp_path, monkeypatch, damage):
+    app, _, current = _app(tmp_path, monkeypatch)
+    current = {**current, "worker_name": app.worker_name}
+    store = app._parked_store()
+    healthy = store.save_state(current, worker_name=app.worker_name,
+                               master_label=current["master_label_code"])
+    other = {**current, "master_label_code": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"}
+    damaged = store.save_state(other, worker_name=app.worker_name,
+                               master_label=other["master_label_code"])
+    raw = damaged.read_bytes()
+    if damage == "random":
+        damaged.write_bytes(random.Random(20260923).randbytes(43))
+    elif damage == "truncated":
+        damaged.write_bytes(raw[:len(raw) // 2])
+    elif damage == "deep_json":
+        damaged.write_bytes(b"[" * 3000 + b"]" * 3000)
+    elif damage == "large_json":
+        damaged.write_bytes(b'{"padding":"' + b"x" * 1000000 + b'"}')
+    elif damage == "nul":
+        damaged.write_bytes(b"\x00")
+    elif damage == "invalid_utf8":
+        damaged.write_bytes(b"\xff")
+    else:
+        value = json.loads(raw)
+        if damage == "wrong_type":
+            value["scanned_barcodes"] = 1
+        elif damage == "missing_field":
+            value.pop("master_label_code")
+        else:
+            value["item_name"] = 7
+        damaged.write_text(json.dumps(value), encoding="utf-8")
+    original = damaged.read_bytes()
+    rows = store.scan_for_worker(app.worker_name, strict=True)
+    assert [row.path for row in rows if not row.problem] == [healthy]
+    assert [row.path for row in rows if row.problem] == [damaged]
+    app.parked_tree = CapturingTree()
+    ContainerAudit._update_parked_trays_list(app)
+    assert str(healthy) in app.parked_tree.rows
+    assert str(damaged) in app.parked_tree.rows
+    assert str(damaged) in app._invalid_parked_rows
+    calls = []
+    app._show_invalid_parked_tray = lambda path: calls.append(path)
+    app.parked_tree.focus = lambda: str(damaged)
+    app.on_parked_tray_select(None)
+    assert calls == [str(damaged)]
+    assert damaged.read_bytes() == original
+
+
+def test_invalid_parked_manager_readback_binds_label_without_touching_source(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    store = app._parked_store()
+    path = store.save_state(current, worker_name=app.worker_name,
+                            master_label=current["master_label_code"])
+    invalid = {**current, "scanned_barcodes": 1}
+    path.write_text(json.dumps(invalid), encoding="utf-8")
+    original = path.read_bytes()
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    app._log_event = lambda *_a, **_k: True
+    calls = []
+    client = SimpleNamespace(
+        authority_scope_id="scope",
+        resolve_phs_label=lambda **kwargs: calls.append(kwargs["scan_payload"]) or {"id": "known"},
+    )
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=client)
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._show_invalid_parked_tray(str(path))
+    assert len(tasks) == 1
+    tasks[0].finish(tasks[0].work())
+    assert calls == [current["master_label_code"]]
+    assert path.read_bytes() == original
+    assert store.manager_hold_path(path).is_file()
+    assert store.existing_label_path_any_worker(master_label=current["master_label_code"]) == path
+
+
+def test_stale_current_changed_label_remains_blocked_after_restart(tmp_path, monkeypatch):
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    source = hold_store.path.parent / "current.json"
+    atomic_write_json(source, current)
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    app._quarantine_current_tray_state = quarantine
+    changed_label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
+    changed = {**current, "master_label_code": changed_label}
+    atomic_write_json(source, changed)
+    app._log_event = lambda *_args, **_kwargs: True
+    assert app._continue_after_paired_stale_current()
+    _, restarted, _ = _preflight_hold_ownership_app(tmp_path, monkeypatch)
+    restarted.parked_trays_dir = app.parked_trays_dir
+    restarted.save_folder = app.save_folder
+    restarted.CURRENT_TRAY_STATE_FILE = app.CURRENT_TRAY_STATE_FILE
+    assert restarted._paired_preflight_blocks_label(current["master_label_code"])
+    assert restarted._paired_preflight_blocks_label(changed_label)
+    assert not restarted._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert not restarted._preflight_context_blocks_mutation()
+
+
+@pytest.mark.parametrize("kind", ["record", "hold", "current", "released",
+                                  "parked", "stale", "stale_hold"])
+@pytest.mark.parametrize("damage", ["deep_json", "large_json", "nul", "invalid_utf8"])
+def test_recovery_reader_retains_untrusted_bytes_for_every_kind(tmp_path, kind, damage):
+    payload = {
+        "deep_json": b"[" * 3000 + b"]" * 3000,
+        "large_json": b'{"padding":"' + b"x" * 1000000 + b'"}',
+        "nul": b"\x00",
+        "invalid_utf8": b"\xff",
+    }[damage]
+    path = tmp_path / ("current.json.bad-deadbeef" if kind == "stale" else f"{kind}.json")
+    path.write_bytes(payload)
+    result = read_recovery_file(path, kind)
+    assert not result.verified
+    assert result.raw == payload
+    assert result.sha256 == hashlib.sha256(payload).hexdigest()
+
+
+@pytest.mark.parametrize("damage", ["deep_json", "large_json", "nul", "invalid_utf8"])
+def test_stale_hold_damage_remains_a_manager_row_and_can_bind_two_keys(tmp_path, monkeypatch, damage):
+    app, _, current = _app(tmp_path, monkeypatch)
+    store = app._paired_preflight_store()
+    store.directory.mkdir(parents=True)
+    marker = store.directory / "stale-current-unreadable.json"
+    payload = {
+        "deep_json": b"[" * 3000 + b"]" * 3000,
+        "large_json": b'{"padding":"' + b"x" * 1000000 + b'"}',
+        "nul": b"\x00",
+        "invalid_utf8": b"\xff",
+    }[damage]
+    marker.write_bytes(payload)
+    assert not store.stale_entries()[0][1].verified
+    notices = []
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",
+                        lambda _title, detail, **_kwargs: notices.append(detail) or False)
+    app._show_paired_preflight_handoffs()
+    assert notices and marker.name in notices[0]
+    store.bind_unidentified_stale(marker, ("OTHER-MASTER", current["master_label_code"]))
+    assert app._paired_preflight_blocks_label("OTHER-MASTER")
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+    assert not app._paired_preflight_blocks_label("UNRELATED-MASTER")
+    assert marker.read_bytes() == payload
+
+
+def test_unexpected_pair_reader_error_stays_visible_to_manager(tmp_path, monkeypatch):
+    app, _, _ = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    store = app._paired_preflight_store()
+    path = store.paths()[0]
+    from paired_preflight_handoff import read_recovery_file as original_read
+
+    def fail_one(source, kind, **kwargs):
+        if source == path:
+            raise RuntimeError("synthetic per-pair read failure")
+        return original_read(source, kind, **kwargs)
+
+    monkeypatch.setattr("paired_preflight_handoff.read_recovery_file", fail_one)
+    inspection = store.inspect(path)
+    assert inspection.unidentified
+    assert "RuntimeError" in inspection.problems[0]
+    notices = []
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",
+                        lambda _title, detail, **_kwargs: notices.append(detail) or False)
+    app._show_paired_preflight_handoffs()
+    assert notices and path.parent.name in notices[0]
+
+
+def test_manager_recovery_boundary_contains_unexpected_exception(tmp_path, monkeypatch):
+    app, _, _ = _app(tmp_path, monkeypatch)
+    app._paired_preflight_store = lambda: (_ for _ in ()).throw(RuntimeError("synthetic manager failure"))
+    errors = []
+    monkeypatch.setattr("Container_Audit.messagebox.showerror",
+                        lambda *args, **_kwargs: errors.append(args))
+    assert app._show_paired_preflight_handoffs() is False
+    assert errors and errors[-1][0] == "원본 보류 유지"

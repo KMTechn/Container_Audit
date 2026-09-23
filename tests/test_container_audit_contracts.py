@@ -8552,7 +8552,8 @@ def test_update_parked_trays_list_preserves_corrupt_parked_file(tmp_path, capsys
 
     assert corrupt_file.read_bytes() == original
     assert not list(tmp_path.glob("parked_qr_홍길동_corrupt.json.bad-*"))
-    assert app.parked_tree.rows == {}
+    assert app.parked_tree.rows[str(corrupt_file)][0].startswith("확인 필요 ·")
+    assert str(corrupt_file) in app._invalid_parked_rows
     assert messages
     assert "원본은 보존했습니다" in messages[0][0]
 
@@ -8585,7 +8586,8 @@ def test_update_parked_trays_list_preserves_invalid_utf8_file_and_keeps_valid_ro
 
     assert corrupt_file.read_bytes() == b"\xff\xfe\xfa"
     assert not list(tmp_path.glob("parked_qr_홍길동_invalid_utf8.json.bad-*"))
-    assert app.parked_tree.rows == {str(valid_file): ("valid parked", "2")}
+    assert app.parked_tree.rows[str(valid_file)] == ("valid parked", "2")
+    assert app.parked_tree.rows[str(corrupt_file)][0].startswith("확인 필요 ·")
     assert messages
 
 
@@ -8610,7 +8612,8 @@ def test_update_parked_trays_list_preserves_semantically_invalid_parked_file(tmp
 
     assert parked_file.read_bytes() == original
     assert not list(tmp_path.glob("parked_qr_홍길동_invalid.json.bad-*"))
-    assert app.parked_tree.rows == {}
+    assert app.parked_tree.rows[str(parked_file)][0].startswith("확인 필요 ·")
+    assert str(parked_file) in app._invalid_parked_rows
     assert messages
 
 

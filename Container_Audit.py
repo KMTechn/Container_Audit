@@ -21,6 +21,7 @@ import subprocess
 import random
 import tempfile
 import sqlite3
+from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -96,7 +97,8 @@ from label_qr import (
     parse_positive_quantity,
 )
 from parked_tray_store import ParkedTrayStore
-from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
+from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore, preserve_stale_bytes
+from recovery_file_read import read_recovery_file
 from preflight_scan_hold import (
     HOLD_DRAINING,
     HOLD_LOOKUP,
@@ -983,6 +985,26 @@ def resource_path(relative_path: str) -> str:
     return os.path.join(base_path, relative_path)
 
 
+def _recovery_item_firewall(action):
+    """Keep an unexpected manager recovery error on its original item."""
+    @wraps(action)
+    def guarded(self, *args, **kwargs):
+        try:
+            return action(self, *args, **kwargs)
+        except Exception as exc:
+            print(f"관리자 복구 동작 보류: {action.__name__}: {exc.__class__.__name__}")
+            try:
+                messagebox.showerror(
+                    "원본 보류 유지",
+                    "이 항목을 확인하지 못했습니다. 원본을 유지하고 다시 확인하세요.",
+                    parent=getattr(self, "root", None),
+                )
+            except Exception:
+                pass
+            return False
+    return guarded
+
+
 # ####################################################################
 # # 메인 어플리케이션
 # ####################################################################
@@ -1611,9 +1633,13 @@ class ContainerAudit:
         )
 
     def _paired_preflight_store(self) -> PairedPreflightHandoffStore:
+        hold_path = getattr(self._preflight_hold_store(), "path", None)
         return PairedPreflightHandoffStore(
             Path(str(getattr(self, "parked_trays_dir", "") or "."))
-            / "paired_preflight_handoff"
+            / "paired_preflight_handoff",
+            hold_path=hold_path,
+            current_path=Path(str(getattr(self, "save_folder", "") or "."))
+            / str(getattr(self, "CURRENT_TRAY_STATE_FILE", "") or "current.json"),
         )
 
     def _paired_preflight_blocks_label(self, master: str) -> bool:
@@ -1621,12 +1647,17 @@ class ContainerAudit:
         store = self._paired_preflight_store()
         try:
             for path in store.paths():
-                record = store.read(path)
-                for name, field in (("hold", "master_raw"), ("current", "master_label_code")):
-                    original = json.loads(store._bytes(record[name]).decode("utf-8"))
-                    if canonical_master_label_key(str(original.get(field) or "")) == target:
-                        return True
-        except (OSError, ValueError, TypeError, AttributeError, PairedHandoffError):
+                inspection = store.inspect(path)
+                if inspection.unidentified or any(
+                    canonical_master_label_key(label) == target
+                    for label in inspection.labels
+                ):
+                    return True
+            if any(canonical_master_label_key(label) == target for label in store.stale_labels()):
+                return True
+        except Exception:
+            # A failure to enumerate the shared recovery directory cannot be
+            # assigned to one pair; keep the guard closed until it is readable.
             return True
         return False
 
@@ -1979,7 +2010,9 @@ class ContainerAudit:
         if memory_gate:
             return True
         try:
-            return self._preflight_hold_store().exists() or self._paired_preflight_store().pending()
+            paired = self._paired_preflight_store()
+            return (self._preflight_hold_store().exists() or paired.unidentified_pending()
+                    or paired.unidentified_stale())
         except (OSError, PreflightHoldError, TypeError, ValueError):
             # If the durable ownership check itself cannot be completed, do
             # not let a mutation race an unreadable active-hold location.
@@ -2687,14 +2720,16 @@ class ContainerAudit:
         # A paired handoff (including a legacy mismatched DRAINING pair) owns
         # the exact on-disk bytes. Ordinary tray recovery may rewrite or delete
         # that slot, so inspect it read-only before offering recovery choices.
-        skip_current_recovery = self._paired_preflight_store().pending()
+        skip_current_recovery = self._paired_preflight_store().unidentified_pending()
         if not skip_current_recovery and self._preflight_hold_store().exists():
             try:
                 held = self._preflight_hold_store().load()
                 if held.state == HOLD_DRAINING:
                     current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-                    saved = json.loads(current_path.read_text(encoding="utf-8"))
-                    validate_tray_state(saved, default_tray_size=self.TRAY_SIZE)
+                    saved_read = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                    if not saved_read.verified:
+                        raise TrayStateValidationError(saved_read.reason)
+                    saved = saved_read.value
                     if not self._paired_preflight_blocks_label(
                         str(saved.get("master_label_code") or "")
                     ):
@@ -3100,6 +3135,9 @@ class ContainerAudit:
         restore_detail: Mapping[str, Any],
         discard_detail: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
+        source_read = read_recovery_file(parked_path, "parked", tray_size=self.TRAY_SIZE)
+        if not source_read.verified:
+            raise ValueError("parked restore source cannot be verified")
         operation_id = f"parked-restore:{uuid.uuid4().hex}"
         observed_at = datetime.datetime.now()
         projection_events: List[Dict[str, Any]] = []
@@ -3125,9 +3163,7 @@ class ContainerAudit:
             "schema_version": PARKED_RESTORE_STATE_SCHEMA_VERSION,
             "operation_id": operation_id,
             "parked_source_name": parked_path.name,
-            "parked_source_sha256": hashlib.sha256(
-                parked_path.read_bytes()
-            ).hexdigest(),
+            "parked_source_sha256": source_read.sha256,
             "restored_master_label_code": str(
                 restored_state.get("master_label_code") or ""
             ),
@@ -3145,7 +3181,10 @@ class ContainerAudit:
                 return False
             if not source_path.exists():
                 return True
-            source_sha256 = hashlib.sha256(source_path.read_bytes()).hexdigest()
+            source_read = read_recovery_file(source_path, "parked", tray_size=self.TRAY_SIZE)
+            if not source_read.verified:
+                return False
+            source_sha256 = source_read.sha256
             if source_sha256 != str(contract["parked_source_sha256"]):
                 self._record_log_write_error(
                     "보류 복원 source hash가 outbox와 일치하지 않습니다."
@@ -3565,19 +3604,21 @@ class ContainerAudit:
         state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
         if not os.path.exists(state_path): return
         try:
-            with open(state_path, 'r', encoding='utf-8') as f:
-                saved_state = json.load(f)
-            validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
+            state_read = read_recovery_file(Path(state_path), "current", tray_size=self.TRAY_SIZE)
+            if not state_read.verified:
+                raise TrayStateValidationError(state_read.reason)
+            saved_state = state_read.value
             saved_master_label = str(saved_state.get('master_label_code') or '')
             if saved_master_label and self._paired_preflight_blocks_label(saved_master_label):
-                original_bytes = Path(state_path).read_bytes()
+                original_bytes = state_read.raw
                 quarantined_path = self._quarantine_current_tray_state(
                     "paired handoff label cannot resume"
                 )
                 try:
                     preserved = bool(
                         quarantined_path
-                        and Path(quarantined_path).read_bytes() == original_bytes
+                        and read_recovery_file(Path(quarantined_path), "stale",
+                                               tray_size=self.TRAY_SIZE).raw == original_bytes
                     )
                 except OSError:
                     preserved = False
@@ -3585,7 +3626,12 @@ class ContainerAudit:
                 if not preserved:
                     self._paired_stale_current_path = state_path
                     self._paired_stale_current_original_hash = hashlib.sha256(original_bytes).hexdigest()
-                    self._paired_stale_current_preserved_path = str(quarantined_path or "")
+                    self._paired_stale_current_original_bytes = original_bytes
+                    try:
+                        fallback = preserve_stale_bytes(Path(state_path), original_bytes)
+                    except Exception:
+                        fallback = None
+                    self._paired_stale_current_preserved_path = str(fallback or quarantined_path or "")
                     self._set_preflight_scan_input_locked(True)
                 messagebox.showwarning(
                     "이전 작업 복구 차단",
@@ -3857,6 +3903,7 @@ class ContainerAudit:
             print(f"임시 트레이 상태 파일 격리 실패: {e}")
             return None
 
+    @_recovery_item_firewall
     def _recheck_paired_stale_current(self) -> bool:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None or not self._blocked_work_identity_matches(approval):
@@ -3866,11 +3913,13 @@ class ContainerAudit:
         preserved = Path(preserved_name) if preserved_name else None
         expected = str(getattr(self, "_paired_stale_current_original_hash", "") or "")
         source_status = "원 위치에 남음" if source.is_file() else "원 위치에서 이동됨"
+        source_read = read_recovery_file(source, "stale", tray_size=getattr(self, "TRAY_SIZE", 60))
+        changed = bool(source_read.sha256 and source_read.sha256 != expected)
         preserved_status = "보존 확인 전"
         if preserved is not None and preserved.is_file():
             try:
                 preserved_status = (
-                    "원본 SHA256 일치" if hashlib.sha256(preserved.read_bytes()).hexdigest() == expected
+                    "원본 SHA256 일치" if read_recovery_file(preserved, "stale", tray_size=getattr(self, "TRAY_SIZE", 60)).sha256 == expected
                     else "원본 SHA256 불일치 · 잠금 유지"
                 )
             except OSError:
@@ -3878,6 +3927,7 @@ class ContainerAudit:
         messagebox.showinfo(
             "현재 현품표 보존 재확인",
             f"현재 상태 파일: {source_status}\n보존 사본: {preserved_status}\n"
+            f"보존 시점 뒤 내용: {'SHA256 변경 · 두 바이트 모두 보존 필요' if changed else '변경 확인 안 됨'}\n"
             "보존을 다시 시도한 뒤 보류 후 다른 현품표 계속을 누르세요. "
             "원 현품표는 관리자 인계 목록에서 계속 막힙니다.",
             parent=getattr(self, "root", None),
@@ -3894,13 +3944,23 @@ class ContainerAudit:
         preserved_name = str(getattr(self, "_paired_stale_current_preserved_path", "") or "")
         try:
             if source.is_file():
-                original = source.read_bytes()
-                if hashlib.sha256(original).hexdigest() != expected:
-                    raise OSError("stale current changed before preservation")
-                state = json.loads(original.decode("utf-8"))
-                validate_tray_state(state, default_tray_size=self.TRAY_SIZE)
-                if not self._paired_preflight_blocks_label(str(state.get("master_label_code") or "")):
-                    raise OSError("paired handoff is no longer verifiable")
+                current_read = read_recovery_file(source, "stale", tray_size=self.TRAY_SIZE)
+                if current_read.raw is None:
+                    raise OSError("stale current cannot be read")
+                changed_hash = current_read.sha256
+                original_copy = read_recovery_file(Path(preserved_name), "stale", tray_size=self.TRAY_SIZE) if preserved_name else None
+                if original_copy is None or original_copy.sha256 != expected:
+                    original_bytes = getattr(self, "_paired_stale_current_original_bytes", None)
+                    if original_bytes is None or hashlib.sha256(original_bytes).hexdigest() != expected:
+                        if changed_hash != expected:
+                            raise OSError("original stale bytes are unavailable")
+                    else:
+                        preserved_name = str(preserve_stale_bytes(source, original_bytes))
+                        self._paired_stale_current_preserved_path = preserved_name
+                if current_read.verified:
+                    self._paired_stale_current_changed_label = str(current_read.value.get("master_label_code") or "")
+                if changed_hash != expected:
+                    preserve_stale_bytes(source, current_read.raw)
                 try:
                     audited = self._blocked_work_identity_is_current(approval) and bool(
                         self._log_event(
@@ -3908,12 +3968,13 @@ class ContainerAudit:
                             detail={
                                 "source_file": source.name,
                                 "original_sha256": expected,
+                                "current_sha256": changed_hash,
                                 **self._blocked_work_audit_identity(approval),
                             },
                             synchronous=True,
                             idempotency_key=(
-                                f"paired-stale-preservation:{expected}:"
-                                f"{hashlib.sha256(approval['operator'].encode('utf-8')).hexdigest()[:16]}"
+                                f"paired-stale-preservation:{expected}:{changed_hash}:"
+                                f"{uuid.uuid4().hex}"
                             ),
                             deduplicate=True,
                         )
@@ -3922,12 +3983,18 @@ class ContainerAudit:
                     audited = False
                 if not audited:
                     raise OSError("stale current preservation audit failed")
-                preserved_name = str(self._quarantine_current_tray_state("paired stale current retry") or "")
-                self._paired_stale_current_preserved_path = preserved_name
+                moved = str(self._quarantine_current_tray_state("paired stale current retry") or "")
+                moved_read = read_recovery_file(Path(moved), "stale", tray_size=self.TRAY_SIZE) if moved else None
+                if moved_read is None or moved_read.sha256 != changed_hash:
+                    raise OSError("changed stale current readback differs")
+                self._paired_stale_current_changed_path = moved
+                if changed_hash == expected and not preserved_name:
+                    preserved_name = moved
+                    self._paired_stale_current_preserved_path = moved
             preserved = Path(preserved_name) if preserved_name else None
             if source.exists() or preserved is None or not preserved.is_file():
                 raise OSError("stale current remains in active slot")
-            if hashlib.sha256(preserved.read_bytes()).hexdigest() != expected:
+            if read_recovery_file(preserved, "stale", tray_size=self.TRAY_SIZE).sha256 != expected:
                 raise OSError("stale current preservation readback differs")
         except (OSError, UnicodeDecodeError, ValueError, TrayStateValidationError):
             messagebox.showerror(
@@ -3939,6 +4006,7 @@ class ContainerAudit:
             return False
         return True
 
+    @_recovery_item_firewall
     def _retry_paired_stale_current_preservation(self) -> bool:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None or not self._preserve_paired_stale_current(approval):
@@ -3951,6 +4019,7 @@ class ContainerAudit:
         )
         return True
 
+    @_recovery_item_firewall
     def _continue_after_paired_stale_current(self) -> bool:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None or not self._preserve_paired_stale_current(approval):
@@ -3964,13 +4033,17 @@ class ContainerAudit:
             "source_file": source.name,
             "preserved_file": preserved.name,
             "original_sha256": self._paired_stale_current_original_hash,
+            "changed_file": Path(str(getattr(self, "_paired_stale_current_changed_path", "") or "")).name,
             **self._blocked_work_audit_identity(approval),
         }
         try:
             audited = bool(self._log_event(
                 "PHS2_PAIRED_STALE_CURRENT_DEFERRED", detail=detail,
                 synchronous=True,
-                idempotency_key=f"paired-stale-current:{self._paired_stale_current_original_hash}",
+                idempotency_key=(
+                    f"paired-stale-current:{self._paired_stale_current_original_hash}:"
+                    f"{uuid.uuid4().hex}"
+                ),
                 deduplicate=True,
             ))
         except Exception:
@@ -3984,6 +4057,18 @@ class ContainerAudit:
             )
             return False
         if not self._blocked_work_identity_matches(approval):
+            return False
+        try:
+            changed = Path(str(getattr(self, "_paired_stale_current_changed_path", "") or ""))
+            self._paired_preflight_store().hold_stale_current(
+                preserved, changed if changed.is_file() else preserved,
+            )
+        except Exception:
+            messagebox.showerror(
+                "현재 현품표 보류 기록 대기",
+                "두 사본의 현품표 보류를 저장하지 못했습니다. 다른 작업은 계속 대기합니다.",
+                parent=getattr(self, "root", None),
+            )
             return False
         self._paired_stale_current_blocked = False
         self._set_preflight_scan_input_locked(False)
@@ -7098,6 +7183,7 @@ class ContainerAudit:
             reason="supervisor_new_work_required", approval=approval,
         )
 
+    @_recovery_item_firewall
     def _defer_paired_preflight_from_operations(self) -> bool:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None or not self._blocked_work_identity_matches(approval):
@@ -7108,8 +7194,10 @@ class ContainerAudit:
             if path is None:
                 hold = self._preflight_hold_store().load()
                 current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-                current = json.loads(current_path.read_text(encoding="utf-8"))
-                validate_tray_state(current, default_tray_size=self.TRAY_SIZE)
+                current_read = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                if not current_read.verified:
+                    raise PairedHandoffError("current original cannot be verified")
+                current = current_read.value
                 if hold.state != HOLD_DRAINING or not current.get("master_label_code"):
                     raise PairedHandoffError("paired originals are unavailable")
                 if self._preflight_hold_matches_current_tray(hold):
@@ -7209,48 +7297,245 @@ class ContainerAudit:
             parent=getattr(self, "root", None),
         )
 
+    @_recovery_item_firewall
     def _show_paired_preflight_handoffs(self) -> None:
         approval = self._authorize_blocked_work_supervisor()
         if approval is None or not self._blocked_work_identity_matches(approval):
             return
         store = self._paired_preflight_store()
         paths = store.paths()
-        if not paths:
+        stale_entries = store.stale_entries()
+        active_stale = bool(getattr(self, "_paired_stale_current_blocked", False))
+        if not paths and not stale_entries and not active_stale:
             messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
             return
         for path in paths:
             if not self._blocked_work_identity_matches(approval):
                 return
             try:
-                record = store.read(path)
-                held = json.loads(store._bytes(record["hold"]).decode("utf-8"))
-                current = json.loads(store._bytes(record["current"]).decode("utf-8"))
-                if not store.is_released(path):
-                    status = "인계 미완료 · 작업대 잠금"
-                elif not store.originals_match(path):
-                    status = "원본 파일 재대조 필요 · 다른 작업 계속"
-                else:
-                    status = "관리자 보류"
+                inspection = store.inspect(path)
+                record = inspection.record
+                held_read = inspection.hold_read
+                current_read = inspection.current_read
+                held = held_read.value if held_read.verified else None
+                current = current_read.value if current_read.verified else None
+                if record is not None:
+                    held = held or json.loads(store._bytes(record["hold"]).decode("utf-8"))
+                    current = current or json.loads(store._bytes(record["current"]).decode("utf-8"))
+                problems = list(inspection.problems)
+                if not inspection.released:
+                    problems.append("인계가 끝나지 않음")
+                if inspection.unidentified:
+                    problems.append("원 현품표 두 장을 확인할 수 없음")
+                if inspection.released and problems:
+                    problems.insert(0, "원본 파일 재대조 필요")
+                status = " · ".join(problems) if problems else "관리자 보류"
                 detail = (
-                    f"상태: {status} · 시각: {record['created_at']}\n"
-                    f"보류 원본: {held.get('master_raw')} · 작업자: {held.get('worker')} · "
-                    f"상태: {held.get('state')} · 남은 입력: {len(held.get('items') or [])}건\n"
-                    f"SHA256: {record['hold']['sha256']}\n"
-                    f"현재 원본: {current.get('master_label_code')} · 작업자: "
-                    f"{current.get('worker_name')} · 상태: 미확정 · "
-                    f"스캔 입력: {len(current.get('scanned_barcodes') or [])}건\n"
-                    f"SHA256: {record['current']['sha256']}"
+                    f"묶음: {path.parent.name}\n상태: {status}\n"
+                    f"보류 원본: {(held or {}).get('master_raw') or '확인 필요'} · 작업자: {(held or {}).get('worker') or '확인 필요'}\n"
+                    f"상태: {(held or {}).get('state') or '확인 필요'} · 남은 입력: {len((held or {}).get('items') or [])}건\n"
+                    f"현재 원본: {(current or {}).get('master_label_code') or '확인 필요'} · 작업자: {(current or {}).get('worker_name') or '확인 필요'}\n"
+                    f"스캔 입력: {len((current or {}).get('scanned_barcodes') or [])}건\n"
+                    f"원 현품표 후보: {', '.join(inspection.labels) or '없음'}\n"
+                    f"보류 원본 SHA256: {held_read.sha256 or '읽기 실패'}\n"
+                    f"현재 원본 SHA256: {current_read.sha256 or '읽기 실패'}"
                 )
-            except (OSError, ValueError, PairedHandoffError):
-                messagebox.showerror("두 원본 확인 필요", "인계 원본을 읽지 못했습니다. 작업대 잠금을 유지합니다.", parent=self.root)
-                return
+            except Exception as exc:
+                print(f"인계 묶음 목록 확인 실패: {path.parent.name}: {exc.__class__.__name__}")
+                continue
             if messagebox.askyesno(
                 "두 원본 보류 목록", detail + "\n\n원 요청 결과를 같은 키로 다시 확인할까요?",
                 parent=self.root,
             ):
                 if self._blocked_work_identity_matches(approval):
-                    self._recheck_paired_preflight_receipt(current, approval=approval)
+                    if current is not None:
+                        self._recheck_paired_preflight_receipt(current, approval=approval)
+                    else:
+                        self._identify_unreadable_pair(path, approval)
+            elif problems and messagebox.askyesno(
+                "이 묶음만 보류", detail + "\n\n이 묶음만 보류하고 다른 현품표를 계속할까요?",
+                parent=self.root,
+            ):
+                if inspection.unidentified:
+                    self._identify_unreadable_pair(path, approval)
+                elif self._blocked_work_identity_matches(approval):
+                    try:
+                        self._log_event(
+                            "PHS2_PAIRED_RECOVERY_DEFERRED",
+                            detail={"handoff_id": path.parent.name,
+                                    "reason": status,
+                                    **self._blocked_work_audit_identity(approval)},
+                            synchronous=True,
+                            idempotency_key=f"paired-recovery-defer:{path.parent.name}:{uuid.uuid4().hex}",
+                            deduplicate=True,
+                        )
+                    except Exception:
+                        messagebox.showerror("보류 기록 대기", "감사 기록을 남기지 못했습니다. 이 묶음은 계속 보류합니다.", parent=self.root)
+        if active_stale and self._blocked_work_identity_matches(approval):
+            source = Path(str(getattr(self, "_paired_stale_current_path", "") or ""))
+            latest = read_recovery_file(source, "stale", tray_size=getattr(self, "TRAY_SIZE", 60))
+            detail = (
+                f"현재 상태 변경 보류 · {source.name}\n"
+                f"처음 SHA256: {getattr(self, '_paired_stale_current_original_hash', '')}\n"
+                f"지금 SHA256: {latest.sha256 or '읽기 실패'}\n"
+                "원본과 바뀐 바이트를 보존하고 이 건만 보류할 수 있습니다."
+            )
+            if messagebox.askyesno("현재 상태 변경 보류", detail + "\n\n원본 보존 상태를 재확인할까요?", parent=self.root):
+                self._recheck_paired_stale_current()
+            elif messagebox.askyesno("현재 상태 변경 보류", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
+                self._continue_after_paired_stale_current()
+        for marker, result in stale_entries:
+            if not self._blocked_work_identity_matches(approval):
+                return
+            detail = (
+                f"현재 상태 보존 묶음: {marker.name}\n"
+                f"상태: {'원본 해시 변경 보류' if result.verified else '보류 기록 손상 · 원 현품표 확인 필요'}\n"
+                f"SHA256: {result.sha256 or '읽기 실패'}\n"
+                f"원 현품표: {', '.join(result.value['labels']) if result.verified else '확인 필요'}"
+            )
+            if messagebox.askyesno("현재 상태 보류 목록", detail + "\n\n원 현품표를 중앙에서 다시 확인할까요?", parent=self.root):
+                self._recheck_stale_hold_entry(marker, result, approval)
+            elif messagebox.askyesno("현재 상태 보류 목록", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
+                self._recheck_stale_hold_entry(marker, result, approval)
 
+    @_recovery_item_firewall
+    def _recheck_stale_hold_entry(self, marker: Path, result, approval: Mapping[str, str]) -> None:
+        if not self._blocked_work_identity_matches(approval):
+            return
+        labels = list(result.value["labels"]) if result.verified else []
+        if not labels:
+            for name in ("원래", "바뀐"):
+                label = simpledialog.askstring(
+                    "원 현품표 확인", f"{marker.name}의 {name} 현품표를 스캔하세요.", parent=self.root,
+                )
+                if not label or not self._parse_new_format_qr(label):
+                    messagebox.showwarning("원 현품표 확인 필요", "현품표를 확인할 때까지 이 건은 보류합니다.", parent=self.root)
+                    return
+                labels.append(label)
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return
+
+        def work() -> bool:
+            if not self._blocked_work_identity_is_current(approval):
+                return False
+            client = self._transfer_seal_runtime().client
+            if client is None:
+                return False
+            for label in labels:
+                found = client.resolve_phs_label(
+                    authority_scope_id=client.authority_scope_id, scan_payload=label,
+                )
+                if not isinstance(found, Mapping) or not found:
+                    return False
+            return True
+
+        def finish(verified: bool) -> None:
+            if not verified or not self._blocked_work_identity_matches(approval):
+                messagebox.showerror("중앙 확인 대기", "원 현품표를 중앙에서 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
+                return
+            try:
+                audited = self._log_event(
+                    "PHS2_STALE_HOLD_RECHECKED",
+                    detail={"marker_file": marker.name, "labels": labels,
+                            **self._blocked_work_audit_identity(approval)},
+                    synchronous=True,
+                    idempotency_key=f"stale-hold-recheck:{uuid.uuid4().hex}",
+                )
+                if not audited or not self._blocked_work_identity_matches(approval):
+                    raise OSError("stale hold audit failed")
+                if not result.verified:
+                    self._paired_preflight_store().bind_unidentified_stale(marker, tuple(labels))
+            except Exception:
+                messagebox.showerror("보류 기록 대기", "관리자 기록을 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
+                return
+            self._set_preflight_scan_input_locked(False)
+            messagebox.showinfo("현재 상태 보류", "원 현품표를 다시 확인했습니다. 이 건은 계속 보류하고 다른 현품표를 진행하세요.", parent=self.root)
+
+        lane.submit(LaneTask(
+            name="stale-hold-readback", generation=getattr(self, "_scan_callback_epoch", 0),
+            work=work, finish=finish,
+            fail=lambda _exc: messagebox.showerror("중앙 확인 대기", "중앙 조회에 실패했습니다. 이 건은 계속 보류합니다.", parent=self.root),
+        ))
+
+    @_recovery_item_firewall
+    def _identify_unreadable_pair(self, path: Path, approval: Mapping[str, str]) -> None:
+        if not self._blocked_work_identity_matches(approval):
+            return
+        labels = []
+        for name in ("보류 원본", "현재 원본"):
+            scanned = simpledialog.askstring(
+                "원 현품표 확인", f"{path.parent.name}의 {name} 현품표를 스캔하세요.",
+                parent=self.root,
+            )
+            if not scanned or not self._parse_new_format_qr(scanned):
+                messagebox.showwarning("원 현품표 확인 필요", "원래 PHS2 현품표 두 장이 필요합니다. 이 묶음은 보류합니다.", parent=self.root)
+                return
+            labels.append(scanned)
+        if canonical_master_label_key(labels[0]) == canonical_master_label_key(labels[1]):
+            messagebox.showwarning("원 현품표 확인 필요", "서로 다른 원 현품표 두 장을 스캔하세요.", parent=self.root)
+            return
+        store = self._paired_preflight_store()
+        known = store.inspect(path).labels
+        if any(canonical_master_label_key(value) not in {
+            canonical_master_label_key(label) for label in labels
+        } for value in known):
+            messagebox.showwarning("원 현품표 불일치", "남은 원본과 스캔한 현품표가 다릅니다. 원본은 보류합니다.", parent=self.root)
+            return
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return
+
+        def work() -> bool:
+            if not self._blocked_work_identity_is_current(approval):
+                return False
+            coordinator = self._transfer_seal_runtime()
+            client = coordinator.client
+            if client is None:
+                return False
+            for label in labels:
+                result = client.resolve_phs_label(
+                    authority_scope_id=client.authority_scope_id,
+                    scan_payload=label,
+                )
+                if not isinstance(result, Mapping) or not result:
+                    return False
+            return True
+
+        def finish(verified: bool) -> None:
+            if not verified or not self._blocked_work_identity_matches(approval):
+                messagebox.showerror("원 요청 재확인 대기", "중앙에서 두 원 현품표를 확인하지 못했습니다. 원본은 계속 보류합니다.", parent=self.root)
+                return
+            try:
+                audited = self._log_event(
+                    "PHS2_PAIRED_MANUAL_HOLD",
+                    detail={"handoff_id": path.parent.name, "labels": labels,
+                            **self._blocked_work_audit_identity(approval)},
+                    synchronous=True,
+                    idempotency_key=f"paired-manual-hold:{path.parent.name}:{uuid.uuid4().hex}",
+                    deduplicate=True,
+                )
+                if not audited or not self._blocked_work_identity_matches(approval):
+                    raise PairedHandoffError("manager hold audit failed")
+                store.bind_unidentified(path, tuple(labels))
+            except Exception:
+                messagebox.showerror("두 원본 보류 대기", "관리자 보류 기록을 확인하지 못했습니다. 원본은 계속 보류합니다.", parent=self.root)
+                return
+            self._set_preflight_scan_input_locked(False)
+            self._update_action_button_states()
+            messagebox.showinfo("두 원본 보류", "두 원 현품표만 보류했습니다. 다른 현품표 작업을 계속하세요.", parent=self.root)
+
+        lane.submit(LaneTask(
+            name="paired-original-identification",
+            generation=getattr(self, "_scan_callback_epoch", 0),
+            work=work,
+            finish=finish,
+            fail=lambda _exc: messagebox.showerror(
+                "원 요청 재확인 대기", "중앙 조회에 실패했습니다. 두 원본은 계속 보류합니다.", parent=self.root,
+            ),
+        ))
+
+    @_recovery_item_firewall
     def _recheck_paired_preflight_receipt(
         self, current: Mapping[str, Any], *, approval: Optional[Mapping[str, str]] = None,
     ) -> None:
@@ -9976,7 +10261,7 @@ class ContainerAudit:
     def _restore_preflight_scan_hold(self) -> bool:
         store = self._preflight_hold_store()
         try:
-            paired_pending = self._paired_preflight_store().pending()
+            paired_pending = self._paired_preflight_store().unidentified_pending()
         except (OSError, PairedHandoffError):
             paired_pending = True
         if paired_pending:
@@ -11964,7 +12249,7 @@ class ContainerAudit:
 
     def _preserve_preflight_hold_for_close(self) -> tuple[bool, bool]:
         store = self._preflight_hold_store()
-        if self._paired_preflight_store().pending():
+        if self._paired_preflight_store().unidentified_pending():
             return True, True
         if not store.exists():
             self._preflight_hold_snapshot = None
@@ -14275,14 +14560,22 @@ class ContainerAudit:
             self.parked_tree.delete(i)
 
         try:
-            valid_paths = self._quarantine_invalid_parked_tray_files()
+            summaries = self._parked_store().scan_for_worker(
+                self.worker_name, tray_size=getattr(self, "TRAY_SIZE", 60), strict=True,
+            )
+            self._invalid_parked_rows = {
+                str(summary.path): summary.problem for summary in summaries if summary.problem
+            }
             row_index = 0
-            for summary in self._parked_store().list_for_worker(self.worker_name):
-                if summary.path not in valid_paths:
-                    continue
+            for summary in summaries:
                 tag = 'even' if row_index % 2 == 0 else 'odd'
                 self._insert_tree_row(self.parked_tree, '', 'end', values=(summary.item_name, str(summary.scan_count)), iid=str(summary.path), tags=(tag,))
                 row_index += 1
+            if self._invalid_parked_rows and hasattr(self, "show_status_message"):
+                self.show_status_message(
+                    f"확인할 보류 작업 {len(self._invalid_parked_rows)}건이 목록에 있습니다. 원본은 보존했습니다.",
+                    getattr(self, "COLOR_DANGER", "red"),
+                )
             for held in self._quarantined_preflight_holds():
                 fields = self._parse_new_format_qr(held.snapshot.master_raw) or {}
                 item_code = str(fields.get("CLC") or "현품표")
@@ -14305,38 +14598,93 @@ class ContainerAudit:
             except (AttributeError, tk.TclError):
                 pass
 
-    def _quarantine_invalid_parked_tray_files(self):
-        store = self._parked_store()
-        if not store.directory.exists():
-            return set()
-        valid_paths = set()
-        invalid_count = 0
-        for path in sorted(store.directory.glob("parked_*.json")):
-            try:
-                state = ParkedTrayStore.load(path)
-                validate_tray_state(state, default_tray_size=getattr(self, "TRAY_SIZE", 60))
-                valid_paths.add(path)
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError, TrayStateValidationError):
-                invalid_count += 1
-        if invalid_count and hasattr(self, "show_status_message"):
-            self.show_status_message(
-                f"읽을 수 없는 보류 작업 {invalid_count}건은 목록에서 제외했습니다. 원본은 보존했습니다.",
-                getattr(self, "COLOR_DANGER", "red"),
-            )
-        return valid_paths
-
     def on_parked_tray_select(self, event):
         """보류 목록에서 트레이를 더블 클릭했을 때 실행됩니다."""
+        selected_item_iid = self.parked_tree.focus()
+        if selected_item_iid in getattr(self, "_invalid_parked_rows", {}):
+            self._show_invalid_parked_tray(selected_item_iid)
+            return
         if self._operator_review_blocks_mutation():
             self._render_warning_state()
             return
-        selected_item_iid = self.parked_tree.focus()
         if not selected_item_iid: return
         filepath = selected_item_iid
         if self._is_preflight_hold_quarantine_path(filepath):
             self.restore_quarantined_preflight_hold(filepath)
             return
         self.restore_parked_tray(filepath)
+
+    @_recovery_item_firewall
+    def _show_invalid_parked_tray(self, filepath: str) -> None:
+        approval = self._authorize_blocked_work_supervisor()
+        if approval is None or not self._blocked_work_identity_matches(approval):
+            return
+        path = Path(filepath)
+        if not self._is_parked_tray_path(filepath):
+            return
+        result = read_recovery_file(path, "parked", tray_size=getattr(self, "TRAY_SIZE", 60))
+        if result.verified:
+            self._update_parked_trays_list()
+            return
+        detail = (
+            f"파일: {path.name}\n원인: {result.reason}\n"
+            f"SHA256: {result.sha256 or '읽기 실패'}\n"
+            "원본은 그대로 보존합니다. 원 현품표를 중앙에서 읽기 전용으로 재확인합니다."
+        )
+        if not messagebox.askyesno("손상 보류 작업", detail + "\n\n원 현품표를 다시 확인할까요?", parent=self.root):
+            if not messagebox.askyesno("이 건만 보류", detail + "\n\n이 건만 보류하고 다른 현품표를 계속할까요?", parent=self.root):
+                return
+        parsed = read_recovery_file(path, "json")
+        candidate = str(parsed.value.get("master_label_code") or "") if parsed.verified else ""
+        label = candidate if self._parse_new_format_qr(candidate) else simpledialog.askstring(
+            "원 현품표 확인", "손상된 보류 작업의 원 현품표를 스캔하세요.", parent=self.root,
+        )
+        if not label or not self._parse_new_format_qr(label):
+            messagebox.showwarning("원 현품표 확인 필요", "원래 PHS2 현품표를 확인할 때까지 이 건을 보류합니다.", parent=self.root)
+            return
+        lane = self._ui_task_lane()
+        if lane.is_busy():
+            return
+
+        def work() -> bool:
+            if not self._blocked_work_identity_is_current(approval):
+                return False
+            client = self._transfer_seal_runtime().client
+            if client is None:
+                return False
+            resolved = client.resolve_phs_label(
+                authority_scope_id=client.authority_scope_id, scan_payload=label,
+            )
+            return isinstance(resolved, Mapping) and bool(resolved)
+
+        def finish(verified: bool) -> None:
+            if not verified or not self._blocked_work_identity_matches(approval):
+                messagebox.showerror("중앙 확인 대기", "원 현품표를 중앙에서 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
+                return
+            try:
+                audited = self._log_event(
+                    "PHS2_DAMAGED_PARKED_DEFERRED",
+                    detail={"source_file": path.name, "source_sha256": result.sha256,
+                            "master_label_code": label,
+                            **self._blocked_work_audit_identity(approval)},
+                    synchronous=True,
+                    idempotency_key=f"damaged-parked:{result.sha256}:{uuid.uuid4().hex}",
+                    deduplicate=True,
+                )
+                if not audited or not self._blocked_work_identity_matches(approval):
+                    raise OSError("parked manager audit failed")
+                self._parked_store().bind_invalid_label(path, label)
+            except Exception:
+                messagebox.showerror("보류 기록 대기", "보류 기록을 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
+                return
+            messagebox.showinfo("손상 보류 작업", "이 현품표만 보류했습니다. 다른 현품표 작업을 계속하세요.", parent=self.root)
+
+        lane.submit(LaneTask(
+            name="damaged-parked-readback",
+            generation=getattr(self, "_scan_callback_epoch", 0),
+            work=work, finish=finish,
+            fail=lambda _exc: messagebox.showerror("중앙 확인 대기", "중앙 조회에 실패했습니다. 원본을 계속 보류합니다.", parent=self.root),
+        ))
 
     def _is_parked_tray_path(self, filepath: str) -> bool:
         try:
@@ -14359,7 +14707,7 @@ class ContainerAudit:
             return
         # Reject paired labels from the original bytes before an explicit restore.
         try:
-            paired_candidate = json.loads(Path(filepath).read_text(encoding="utf-8"))
+            paired_candidate = read_recovery_file(Path(filepath), "json").value
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             paired_candidate = None
         paired_master_label = (

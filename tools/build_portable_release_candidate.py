@@ -78,6 +78,7 @@ APP_ROOT_FILES = (
     "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
+    "recovery_file_read.py",
     "recovery_two_phase.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",

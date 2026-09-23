@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4034,
+      "line": 4119,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4038,
+          "line": 4123,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -2378,16 +2378,52 @@
       "caller_guard_reason": "",
       "caller_guard_sources": [],
       "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "decorated_source": "paired_stale_evidence",
+      "direct_callers": [
+        "Container_Audit.ContainerAudit._load_current_tray_state",
+        "Container_Audit.ContainerAudit._preserve_paired_stale_current"
+      ],
+      "file": "paired_preflight_handoff.py",
+      "kind": "function",
+      "line": 24,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 30,
+          "operation": "target.open",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "paired_preflight_handoff.preserve_stale_bytes",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
       "covered_entrypoints": [],
       "decorated_source": "paired_preflight_original_move",
       "direct_callers": [],
       "file": "paired_preflight_handoff.py",
       "kind": "function",
-      "line": 101,
+      "line": 320,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 113,
+          "line": 332,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -2416,11 +2452,11 @@
       ],
       "file": "parked_tray_store.py",
       "kind": "function",
-      "line": 211,
+      "line": 280,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 212,
+          "line": 281,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -2952,8 +2988,12 @@
         "event_log_store.EventLogOutbox._persist_unstaged",
         "legacy_state_migration._seed_legacy_ui_settings_once",
         "legacy_state_migration.migrate_legacy_code_root_state",
+        "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified",
+        "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified_stale",
+        "paired_preflight_handoff.PairedPreflightHandoffStore.hold_stale_current",
         "paired_preflight_handoff.PairedPreflightHandoffStore.prepare",
         "paired_preflight_handoff.PairedPreflightHandoffStore.release",
+        "parked_tray_store.ParkedTrayStore.bind_invalid_label",
         "parked_tray_store.ParkedTrayStore.defer_recovery_state",
         "parked_tray_store.ParkedTrayStore.load",
         "parked_tray_store.ParkedTrayStore.save_state",
@@ -5401,6 +5441,7 @@
     "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
+    "recovery_file_read.py",
     "recovery_two_phase.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
@@ -5446,8 +5487,8 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 129,
-    "closure_module_count": 101,
+    "closure_direct_mutation_function_count": 130,
+    "closure_module_count": 102,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5461,8 +5502,8 @@
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 178,
-    "total_cross_language_sink_count": 179,
+    "sink_function_count": 183,
+    "total_cross_language_sink_count": 184,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -5539,6 +5580,7 @@
     "product_identity_port.py",
     "product_scan.py",
     "protected_admin.py",
+    "recovery_file_read.py",
     "recovery_two_phase.py",
     "replacement_log_lookup.py",
     "replacement_workflow.py",
@@ -5610,6 +5652,7 @@
       "product_identity_port",
       "product_scan",
       "protected_admin",
+      "recovery_file_read",
       "replacement_log_lookup",
       "replacement_workflow",
       "responsive_layout",
@@ -5798,12 +5841,14 @@
     ],
     "native_audio": [],
     "paired_preflight_handoff": [
+      "recovery_file_read",
       "storage_utils",
       "writer_session_fence"
     ],
     "parked_tray_store": [
       "label_qr",
       "protected_admin",
+      "recovery_file_read",
       "storage_utils",
       "writer_session_fence"
     ],
@@ -5844,6 +5889,10 @@
     ],
     "protected_admin": [
       "logistics_runtime_profile"
+    ],
+    "recovery_file_read": [
+      "preflight_scan_hold",
+      "tray_state"
     ],
     "recovery_two_phase": [
       "storage_utils",
@@ -6005,7 +6054,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "81b775cd41650b67df7ab35dd7290d30e24ddc67db982344894365cb3e6c5d5d",
+  "inventory_sha256": "84117029c7f3a1f63021e933fffd99ad5f56c241d0e9e5ec9e7671a528c20cbc",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6056,12 +6105,17 @@
         "operator_resume",
         "operator_review_resolution",
         "operator_spool_restore",
+        "paired_preflight_manager_hold",
         "paired_preflight_original_move",
         "paired_preflight_record",
         "paired_preflight_release",
+        "paired_stale_evidence",
+        "paired_stale_hold",
+        "paired_stale_manager_hold",
         "parked_recovery_defer",
         "parked_tray_delete",
         "parked_tray_load_normalize",
+        "parked_tray_manager_hold",
         "parked_tray_save",
         "persistent_relay_process_start",
         "persistent_relay_registry",
@@ -6172,6 +6226,7 @@
         "kmtech_shared.runtime.release_runtime_request_in_transaction",
         "legacy_state_migration._copy_file_once",
         "legacy_state_migration.migrate_legacy_code_root_state",
+        "paired_preflight_handoff.preserve_stale_bytes",
         "parked_tray_store.ParkedTrayStore.delete",
         "producer_runtime_client._post_lease_request",
         "producer_runtime_client.ensure_runtime_authority",
@@ -6227,6 +6282,7 @@
         "legacy_state_migration",
         "legacy_state_storage",
         "logistics_profile_install",
+        "paired_stale_evidence",
         "parked_tray_delete",
         "parked_tray_load_normalize",
         "persistent_relay_status",
@@ -17426,6 +17482,7 @@
     "product_identity_port.__file_entry__",
     "product_scan.__file_entry__",
     "protected_admin.__file_entry__",
+    "recovery_file_read.__file_entry__",
     "recovery_two_phase.__file_entry__",
     "replacement_log_lookup.__file_entry__",
     "replacement_workflow.__file_entry__",
@@ -17558,12 +17615,17 @@
     "operator_resume",
     "operator_review_resolution",
     "operator_spool_restore",
+    "paired_preflight_manager_hold",
     "paired_preflight_original_move",
     "paired_preflight_record",
     "paired_preflight_release",
+    "paired_stale_evidence",
+    "paired_stale_hold",
+    "paired_stale_manager_hold",
     "parked_recovery_defer",
     "parked_tray_delete",
     "parked_tray_load_normalize",
+    "parked_tray_manager_hold",
     "parked_tray_save",
     "persistent_relay_process_start",
     "persistent_relay_registry",
@@ -17860,7 +17922,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1378,
+      "line": 1400,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -17868,7 +17930,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 16225,
+      "line": 16573,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -17876,7 +17938,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4034,
+      "line": 4119,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -17884,7 +17946,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 2846,
+      "line": 2881,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -17892,7 +17954,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3242,
+      "line": 3281,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -18033,10 +18095,18 @@
       "source": "operator_spool_restore"
     },
     {
+      "direct_mutation_site_count": 0,
+      "file": "paired_preflight_handoff.py",
+      "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified",
+      "line": 229,
+      "marker_kind": "decorator",
+      "source": "paired_preflight_manager_hold"
+    },
+    {
       "direct_mutation_site_count": 1,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.move_original",
-      "line": 101,
+      "line": 320,
       "marker_kind": "decorator",
       "source": "paired_preflight_original_move"
     },
@@ -18044,7 +18114,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.prepare",
-      "line": 72,
+      "line": 291,
       "marker_kind": "decorator",
       "source": "paired_preflight_record"
     },
@@ -18052,15 +18122,39 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.release",
-      "line": 118,
+      "line": 337,
       "marker_kind": "decorator",
       "source": "paired_preflight_release"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "paired_preflight_handoff.py",
+      "function": "paired_preflight_handoff.preserve_stale_bytes",
+      "line": 24,
+      "marker_kind": "decorator",
+      "source": "paired_stale_evidence"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "paired_preflight_handoff.py",
+      "function": "paired_preflight_handoff.PairedPreflightHandoffStore.hold_stale_current",
+      "line": 196,
+      "marker_kind": "decorator",
+      "source": "paired_stale_hold"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "paired_preflight_handoff.py",
+      "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified_stale",
+      "line": 172,
+      "marker_kind": "decorator",
+      "source": "paired_stale_manager_hold"
     },
     {
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.defer_recovery_state",
-      "line": 94,
+      "line": 140,
       "marker_kind": "decorator",
       "source": "parked_recovery_defer"
     },
@@ -18068,7 +18162,7 @@
       "direct_mutation_site_count": 1,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.delete",
-      "line": 211,
+      "line": 280,
       "marker_kind": "decorator",
       "source": "parked_tray_delete"
     },
@@ -18076,15 +18170,23 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.load",
-      "line": 193,
+      "line": 262,
       "marker_kind": "decorator",
       "source": "parked_tray_load_normalize"
     },
     {
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
+      "function": "parked_tray_store.ParkedTrayStore.bind_invalid_label",
+      "line": 103,
+      "marker_kind": "decorator",
+      "source": "parked_tray_manager_hold"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.save_state",
-      "line": 142,
+      "line": 188,
       "marker_kind": "decorator",
       "source": "parked_tray_save"
     },
