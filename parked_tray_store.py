@@ -32,9 +32,30 @@ _ATOMIC_TEMP_SUFFIX = re.compile(r"\.([0-9]+)\.([0-9a-f]{32})\.tmp$")
 
 
 def atomic_temp_target(path: Path) -> Path | None:
-    """Return the destination of a leftover storage_utils atomic write."""
+    """Return the destination of a known interrupted recovery write."""
     match = _ATOMIC_TEMP_SUFFIX.search(path.name)
-    return path.with_name(path.name[:match.start()]) if match else None
+    if match:
+        return path.with_name(path.name[:match.start()])
+    if re.fullmatch(r"phs_label_exchange_recovery\.json\.[A-Za-z0-9_-]{6,}\.tmp", path.name):
+        return path.with_name("phs_label_exchange_recovery.json")
+    return None
+
+
+def _phs2_labels_in_payload(value: Any) -> list[str]:
+    labels: list[str] = []
+    pending = [(value, 0)]
+    while pending:
+        part, depth = pending.pop()
+        if depth > 8:
+            continue
+        if isinstance(part, str):
+            if str((parse_new_format_qr(part) or {}).get("PHS") or "") == "2":
+                labels.append(part)
+        elif isinstance(part, dict):
+            pending.extend((child, depth + 1) for child in part.values())
+        elif isinstance(part, list):
+            pending.extend((child, depth + 1) for child in part)
+    return labels
 
 
 @dataclass(frozen=True)
@@ -179,6 +200,13 @@ class ParkedTrayStore:
         temporary_paths = []
         if pair_store.directory.exists():
             temporary_paths.extend(pair_store.directory.rglob("*.tmp"))
+        outbox_dir = (pair_store.current_path.parent / "_event_outbox"
+                      if pair_store.current_path is not None else None)
+        if outbox_dir is not None and outbox_dir.exists():
+            temporary_paths.extend(outbox_dir.glob("*.tmp"))
+        journal_dir = self.directory.parent / "phs_label_exchange"
+        if journal_dir.exists():
+            temporary_paths.extend(journal_dir.glob("phs_label_exchange_recovery.json.*.tmp"))
         for active_path in (pair_store.current_path, pair_store.hold_path):
             if active_path is not None and active_path.parent.exists():
                 temporary_paths.extend(active_path.parent.glob(active_path.name + ".*.tmp"))
@@ -191,11 +219,13 @@ class ParkedTrayStore:
                     "released" if name == "released.json" else
                     "manager_hold" if name.endswith("manager-hold.json") else
                     "stale_hold" if name.startswith("stale-current-") else
+                    "outbox" if outbox_dir == target.parent and re.fullmatch(r"[0-9]{20}-[0-9a-f]{32}\.json", name) else
+                    "label_journal" if journal_dir == target.parent and name == "phs_label_exchange_recovery.json" else
                     "hold" if pair_store.hold_path == target else
                     "current" if pair_store.current_path == target else "")
             if not kind:
                 continue
-            result = read_recovery_file(path, kind)
+            result = read_recovery_file(path, "json" if kind in {"outbox", "label_journal"} else kind)
             value = result.value if result.verified else None
             if value is None and result.raw is not None:
                 try:
@@ -214,6 +244,18 @@ class ParkedTrayStore:
                             pass
                 elif kind in {"manager_hold", "stale_hold"}:
                     labels.extend(value.get("labels") if isinstance(value.get("labels"), list) else ())
+                elif kind == "outbox":
+                    entry = value.get("log_entry")
+                    if isinstance(entry, dict):
+                        detail = entry.get("details")
+                        if isinstance(detail, str):
+                            try:
+                                detail = json.loads(detail)
+                            except (ValueError, TypeError, RecursionError):
+                                detail = None
+                        labels.extend(_phs2_labels_in_payload(detail))
+                elif kind == "label_journal":
+                    labels.extend(_phs2_labels_in_payload(value.get("state")))
                 else:
                     label = value.get("master_raw" if kind == "hold" else "master_label_code")
                     if isinstance(label, str):

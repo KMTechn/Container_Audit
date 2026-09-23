@@ -7464,7 +7464,8 @@ class ContainerAudit:
                 if row.evidence_id:
                     self._identify_unreadable_audit(
                         row.evidence_id, approval,
-                        label_count=2 if row.path.is_relative_to(store.directory) else 1,
+                        label_count=2 if (row.path.is_relative_to(store.directory)
+                                          or row.path.parent.name in {"_event_outbox", "phs_label_exchange"}) else 1,
                     )
                 else:
                     messagebox.showerror("원본 읽기 대기", "임시 원본을 읽지 못해 이 건을 계속 보류합니다.", parent=self.root)

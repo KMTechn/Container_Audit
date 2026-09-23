@@ -67,7 +67,8 @@ def _bind_unknown_evidence(tmp_path, evidence_id, labels):
 
 @pytest.mark.parametrize("format_name,variant,final_exists", itertools.product(
     ("parked", "parked_recovery", "parked_marker", "current", "hold",
-     "pair_record", "pair_release", "pair_marker", "stale_hold", "stale_marker"),
+     "pair_record", "pair_release", "pair_marker", "stale_hold", "stale_marker",
+     "event_outbox", "label_journal"),
     ("valid", "damaged", "empty"), (False, True),
 ))
 def test_interrupted_atomic_recovery_matrix(
@@ -115,6 +116,13 @@ def test_interrupted_atomic_recovery_matrix(
         "stale_marker": (pair.stale_manager_path(stale),
                          {"schema": "container-audit-paired-manager-hold-v1",
                           "labels": [label, pair_label], "source_sha256": "a" * 64}),
+        "event_outbox": (events / "_event_outbox" / ("1" * 20 + "-" + "b" * 32 + ".json"),
+                         {"log_file_path": str(events / "audit.csv"),
+                          "log_entry": {"event": "TRAY_PARKED", "details": json.dumps(
+                              {"snapshot": {"master_label_code": label}}, ensure_ascii=False)}}),
+        "label_journal": (tmp_path / "phs_label_exchange" / "phs_label_exchange_recovery.json",
+                          {"schema_version": "container-audit-phs-label-exchange-v1",
+                           "state": {"source_label": label, "target_label": pair_label}}),
     }
     target, payload = payloads[format_name]
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -122,9 +130,13 @@ def test_interrupted_atomic_recovery_matrix(
         record_path.write_text(json.dumps(record), encoding="utf-8")
     if variant == "damaged":
         payload = dict(payload)
-        payload["schema"] = "broken"
+        if format_name == "event_outbox":
+            payload["log_entry"] = "broken"
+        else:
+            payload["schema"] = "broken"
     raw = b"" if variant == "empty" else json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    temp = target.with_name(target.name + ".123." + "a" * 32 + ".tmp")
+    temp = target.with_name(target.name + (".abc12345.tmp" if format_name == "label_journal"
+                                           else ".123." + "a" * 32 + ".tmp"))
     temp.write_bytes(raw)
     if final_exists:
         target.write_bytes(json.dumps(payloads[format_name][1], ensure_ascii=False).encode("utf-8"))
@@ -136,7 +148,8 @@ def test_interrupted_atomic_recovery_matrix(
                          "hold" if format_name == "hold" else
                          "record" if format_name == "pair_record" else
                          "released" if format_name == "pair_release" else
-                         "manager_hold" if format_name in {"pair_marker", "stale_marker"} else "stale_hold")
+                         "manager_hold" if format_name in {"pair_marker", "stale_marker"} else
+                         "json" if format_name in {"event_outbox", "label_journal"} else "stale_hold")
         assert read_recovery_file(temp, recovery_kind).verified
 
     evidence = parked.enumerate_key_evidence(pair_store=pair)
@@ -196,6 +209,22 @@ def test_atomic_parked_probe_survives_without_final_and_manager_defers(tmp_path,
     store.bind_invalid_label(temp, label)
     assert store.manager_hold_path(temp).exists()
     assert temp.read_bytes() == original
+
+
+def test_parked_temp_retains_filename_and_content_keys(tmp_path):
+    state = _saved_tray_state()
+    filename_label = state["master_label_code"]
+    content_label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-CONTENT|CLC=AAA2270730100|LBL=CONTENT|HSH=0123456789abcdef"
+    store = ParkedTrayStore(tmp_path)
+    target = store.deterministic_label_path(worker_name="tester", master_label=filename_label)
+    target.parent.mkdir(exist_ok=True)
+    temp = target.with_name(target.name + ".123." + "a" * 32 + ".tmp")
+    state.update(master_label_code=content_label, canonical_input_tag_qr=content_label,
+                 active_label_qr_payload=content_label, active_label_id="CONTENT")
+    temp.write_text(json.dumps(state), encoding="utf-8")
+    row = next(item for item in store.enumerate_key_evidence() if item.path == temp)
+    assert row.binds(filename_label) and row.binds(content_label)
+    assert not row.unidentified
 
 
 def test_manager_can_bind_unknown_current_temp_without_changing_original(tmp_path, monkeypatch):
