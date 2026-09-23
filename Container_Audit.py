@@ -1659,12 +1659,16 @@ class ContainerAudit:
             if row.kind not in {"parked_temp", "atomic_temp"}:
                 continue
             target = atomic_temp_target(row.path)
-            if target is None or not target.exists():
+            if target is None or (not target.exists() and (row.labels or row.digest)):
+                continue
+            if not row.content_sha256:
+                audited = False
                 continue
             if not self._log_event(
                 "PHS2_ATOMIC_TEMP_QUARANTINED",
                 detail={"source_file": row.path.name, "source_sha256": row.content_sha256,
-                        "final_file": target.name, "labels": list(row.labels),
+                        "final_file": target.name if target.exists() else "",
+                        "labels": list(row.labels),
                         "reason": row.problem},
                 synchronous=True,
                 idempotency_key=f"atomic-temp:{row.content_sha256}:{row.path.name}",
@@ -7469,7 +7473,9 @@ class ContainerAudit:
                     )
                 else:
                     messagebox.showerror("원본 읽기 대기", "임시 원본을 읽지 못해 이 건을 계속 보류합니다.", parent=self.root)
-            elif not row.unidentified and messagebox.askyesno(
+            elif not row.labels and not row.unidentified:
+                messagebox.showinfo("임시 원본 격리", detail + "\n\n현품표 key가 없어 다른 현품표 작업은 계속할 수 있습니다.", parent=self.root)
+            elif row.labels and messagebox.askyesno(
                 "임시 원본 보류", detail + "\n\n원 현품표를 중앙에서 다시 확인하고 이 건을 보류할까요?",
                 parent=self.root,
             ):
@@ -7501,14 +7507,19 @@ class ContainerAudit:
     ) -> None:
         if not evidence_id or not self._blocked_work_identity_matches(approval):
             return
-        labels = list(known_labels)
-        for name in (() if labels else (("첫 번째", "두 번째") if label_count == 2 else ("원래",))):
+        labels = list(known_labels) if len(known_labels) != 1 else []
+        names = (("원래",) if len(known_labels) == 1 else
+                 () if labels else (("첫 번째", "두 번째") if label_count == 2 else ("원래",)))
+        for name in names:
             label = simpledialog.askstring(
                 "원 현품표 확인", f"신원 미확인 복구 근거의 {name} 원 현품표를 스캔하세요.",
                 parent=self.root,
             )
             if not label or str((self._parse_new_format_qr(label) or {}).get("PHS") or "") != "2":
                 messagebox.showwarning("원 현품표 확인 필요", "원래 PHS2 현품표를 확인할 때까지 보류합니다.", parent=self.root)
+                return
+            if known_labels and canonical_master_label_key(label) != canonical_master_label_key(known_labels[0]):
+                messagebox.showwarning("원 현품표 불일치", "보류 근거에 기록된 원 현품표를 스캔하세요.", parent=self.root)
                 return
             labels.append(label)
         if len(labels) == 2 and canonical_master_label_key(labels[0]) == canonical_master_label_key(labels[1]):
@@ -7534,7 +7545,7 @@ class ContainerAudit:
 
         def finish(verified: bool) -> None:
             if not verified or not self._blocked_work_identity_matches(approval):
-                messagebox.showerror("중앙 확인 대기", "두 원 현품표를 확인하지 못했습니다. 감사 사건은 계속 보류합니다.", parent=self.root)
+                messagebox.showerror("중앙 확인 대기", "원 현품표를 확인하지 못했습니다. 감사 사건은 계속 보류합니다.", parent=self.root)
                 return
             try:
                 audited = self._log_event(
@@ -14811,11 +14822,15 @@ class ContainerAudit:
         source = path.with_name(path.name.removesuffix(".manager-hold.json")) if marker_only and temporary_target is None else path
         result = read_recovery_file(path, "parked_manager_hold" if marker_only else "parked",
                                     tray_size=getattr(self, "TRAY_SIZE", 60))
-        if temporary_target and temporary_target.exists():
-            evidence = next((row for row in self._parked_store().enumerate_key_evidence()
-                             if row.path == path), None)
-            if evidence is None or not self._audit_recovered_atomic_temps((evidence,)):
+        temp_evidence = None
+        if temporary_target:
+            temp_evidence = next((row for row in self._parked_store().enumerate_key_evidence()
+                                  if row.path == path), None)
+            if temp_evidence is None or not self._audit_recovered_atomic_temps((temp_evidence,)):
                 messagebox.showerror("격리 감사 대기", "임시 원본의 격리 감사 기록에 실패했습니다. 원본을 보존하고 다시 확인하세요.", parent=self.root)
+                return
+            if not temp_evidence.labels and not temp_evidence.digest and not temp_evidence.unidentified:
+                messagebox.showinfo("임시 원본 격리", "임시파일의 원 바이트와 SHA256을 감사 보존했습니다. 현품표 key가 없어 다른 현품표 작업은 계속할 수 있습니다.", parent=self.root)
                 return
         if result.verified and not marker_only and not archived_original and temporary_target is None:
             self._update_parked_trays_list()
@@ -14838,11 +14853,15 @@ class ContainerAudit:
                 return
         parsed = read_recovery_file(path, "json")
         candidate = str(parsed.value.get("label" if marker_only else "master_label_code") or "") if parsed.verified else ""
-        label = candidate if self._parse_new_format_qr(candidate) else simpledialog.askstring(
+        label = candidate if temporary_target is None and self._parse_new_format_qr(candidate) else simpledialog.askstring(
             "원 현품표 확인", "손상된 보류 작업의 원 현품표를 스캔하세요.", parent=self.root,
         )
         if not label or not self._parse_new_format_qr(label):
             messagebox.showwarning("원 현품표 확인 필요", "원래 PHS2 현품표를 확인할 때까지 이 건을 보류합니다.", parent=self.root)
+            return
+        if (temp_evidence is not None and (temp_evidence.labels or temp_evidence.digest)
+                and not temp_evidence.binds(label)):
+            messagebox.showwarning("원 현품표 불일치", "임시파일 근거에 남은 원 현품표 key와 일치하지 않습니다.", parent=self.root)
             return
         lane = self._ui_task_lane()
         if lane.is_busy():

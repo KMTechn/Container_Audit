@@ -187,7 +187,7 @@ class ParkedTrayStore:
                 if temporary_target and result.reason:
                     problem += f" · {result.reason}"
                 rows.append(KeyEvidence(path, kind, tuple(dict.fromkeys(labels)), digest,
-                                        not labels and not digest, problem,
+                                        not labels and not digest and (not temporary_target or result.raw is None), problem,
                                         content_sha256=result.sha256 or ""))
         pair_store = pair_store or PairedPreflightHandoffStore(self.directory / "paired_preflight_handoff")
         for path in pair_store.paths():
@@ -270,7 +270,8 @@ class ParkedTrayStore:
             problem = ("원자 저장 중단 임시파일 · 최종 파일 있음, 원본 격리 보존" if target.exists()
                        else "원자 저장 중단 임시파일 · 관리자 확인 필요")
             rows.append(KeyEvidence(path, "atomic_temp", tuple(labels),
-                                    unidentified=not labels, problem=problem + (f" · {result.reason}" if result.reason else ""),
+                                    unidentified=not labels and result.raw is None,
+                                    problem=problem + (f" · {result.reason}" if result.reason else ""),
                                     evidence_id=evidence_id, content_sha256=result.sha256 or ""))
         for path in sorted(pair_store.directory.glob("stale-current-*.json*")) if pair_store.directory.exists() else ():
             if atomic_temp_target(path) is not None:
@@ -393,8 +394,8 @@ class ParkedTrayStore:
                 labels = list(dict.fromkeys(label for label in labels
                                             if isinstance(label, str) and label))
                 rows.append(KeyEvidence(path, "audit", tuple(labels),
-                                        unidentified=not labels,
-                                        problem="원 현품표 신원 미확인 감사 사건" if not labels else event,
+                                        unidentified=not labels and event != "PHS2_ATOMIC_TEMP_QUARANTINED",
+                                        problem="원 현품표 신원 미확인 감사 사건" if not labels and event != "PHS2_ATOMIC_TEMP_QUARANTINED" else event,
                                         evidence_id=evidence_id))
             for path, evidence_id in damaged_audits:
                 labels = tuple(dict.fromkeys(known_by_audit.get(evidence_id, ())))
