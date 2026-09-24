@@ -287,6 +287,8 @@ def offline_passive_app(monkeypatch, tmp_path):
     app.computer_id = "test-host"
     app.current_tray = TraySession()
     app.warning_presenter = WarningPresenter()
+    app._stop_warning_beep = lambda: None
+    app._invalidate_pending_scan_callbacks = lambda: None
     return app
 
 
@@ -655,6 +657,64 @@ def test_offline_damaged_parked_source_binds_only_selected_key(monkeypatch, tmp_
                                        (label,), lambda _intent: False) is None
     assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
     assert path.read_bytes() == original
+    assert_other_phs2_starts(app, label)
+
+
+@pytest.mark.parametrize("action", ("CA.PAIR_RETRY", "CA.TRAY_HOLD"))
+@pytest.mark.parametrize("original_present", (False, True))
+def test_restart_detaches_from_original_current_without_memory_or_hold_row(
+        monkeypatch, tmp_path, action, original_present):
+    from storage_utils import atomic_write_json
+    from tests.test_container_p0_contracts import _saved_tray_state
+
+    app = offline_passive_app(monkeypatch, tmp_path)
+    state = _saved_tray_state()
+    app.TRAY_SIZE = state["tray_size"]
+    current = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    atomic_write_json(current, state)
+    original = current.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    if action == "CA.PAIR_RETRY":
+        source = {"original_sha256": digest, "current_sha256": digest,
+                  "source_file": current.name, "preserved_file": ""}
+    else:
+        source = {"tray": state, "current_sha256": digest}
+    if not original_present:
+        current.unlink()
+    label = state["master_label_code"]
+    intent = app._admin_pin_store().write({
+        "schema": "container-admin-pin-intent-v1", "state": "UNVERIFIED_DETACHING",
+        "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
+        "verification_id": "", "admin_id": "manager-1", "action": action,
+        "target": {"id": digest, "kind": action.split(".", 1)[1].lower(),
+                   "state_fingerprint": pin.fingerprint(source)},
+        "operator": {"local_id": "worker-1", "login_epoch": app._admin_pin_login_epoch},
+        "source_snapshot": source, "labels": [label], "reason": "VERIFY_UNAVAILABLE",
+    })
+    assert all(row.kind == "pin_intent" for row in app._parked_store().enumerate_key_evidence(
+        pair_store=app._paired_preflight_store()))
+    observed = []
+    errors = []
+    monkeypatch.setattr("Container_Audit.messagebox.showerror",
+                        lambda _title, message, **_kwargs: errors.append(message))
+    def log_event(event, **_kwargs):
+        observed.append((event, current.exists()))
+        return True
+    app._log_event = log_event
+    app._admin_pin_resume_unverified_detachments(startup=True)
+    saved = app._admin_pin_store().read(intent["operation_key"])
+    if not original_present:
+        assert saved["state"] == "UNVERIFIED_DETACHING"
+        assert observed == []
+        assert errors and "원본 readback" in errors[-1]
+        assert not list(Path(app.parked_trays_dir).glob("parked_recovery_*.json"))
+        assert not list(app._paired_preflight_store().directory.glob("stale-current-*.json"))
+        return
+    assert saved["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert not errors
+    assert observed == [("ADMIN_PIN_UNVERIFIED_HOLD", False)]
+    assert not current.exists()
+    assert current.with_name(f"{current.name}.bad-{digest}").read_bytes() == original
     assert_other_phs2_starts(app, label)
 
 

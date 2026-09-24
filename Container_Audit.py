@@ -7416,7 +7416,13 @@ class ContainerAudit:
             state = source["tray"]
             validate_tray_state(state, default_tray_size=self.TRAY_SIZE)
             expected = source.get("current_sha256")
-            if current.is_file() and hashlib.sha256(current.read_bytes()).hexdigest() != expected:
+            if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+                return False
+            archived = current.with_name(f"{current.name}.bad-{expected}")
+            if current.is_file():
+                if hashlib.sha256(current.read_bytes()).hexdigest() != expected:
+                    return False
+            elif not archived.is_file() or hashlib.sha256(archived.read_bytes()).hexdigest() != expected:
                 return False
             parked = self._parked_store().defer_recovery_state(
                 state, worker_name=self.worker_name,
@@ -7431,7 +7437,6 @@ class ContainerAudit:
                 moved = self._quarantine_current_tray_state("admin PIN unverified tray hold")
                 if not moved or hashlib.sha256(Path(moved).read_bytes()).hexdigest() != expected:
                     return False
-            archived = current.with_name(f"{current.name}.bad-{expected}")
             if current.exists() or not archived.is_file() or hashlib.sha256(archived.read_bytes()).hexdigest() != expected:
                 return False
             clear_active = True
