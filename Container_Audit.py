@@ -7578,7 +7578,10 @@ class ContainerAudit:
             return True
         except (OSError, ValueError, TypeError, KeyError, PreflightHoldError,
                 PairedHandoffError, TrayStateValidationError) as exc:
-            messagebox.showerror("원본 보류 대기", f"이 건의 보류가 아직 끝나지 않았습니다. {exc}",
+            reason = ("관리자 보류 원본 형식을 확인할 수 없습니다."
+                      if isinstance(exc, (ValueError, TypeError, KeyError))
+                      else "원본 readback 또는 활성 슬롯 해제에 실패했습니다.")
+            messagebox.showerror("원본 보류 대기", f"이 건의 보류가 아직 끝나지 않았습니다. {reason}",
                                  parent=getattr(self, "root", None))
             return False
         finally:
