@@ -73,6 +73,8 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
 
+- 관리자 PIN의 로컬 파일 효과는 소비된 intent에 원 경로·보류 경로·원 바이트 SHA256을 먼저 fsync한다. 원자 이동 뒤 보류 파일을 검증하고, 불일치하면 덮어쓰기 없이 활성 위치로 복귀한다. 재시작에서는 이동 intent를 먼저 재검증하고 동일 key의 남은 효과를 재개한다. 원본 변경은 `TARGET_CHANGED`로 남겨 재조회와 새 PIN을 요구하며, 양쪽 경로가 점유된 충돌은 두 원본을 남긴 채 해당 key를 보류한다.
+
 - GUI·relay의 경로 우선순위는 명시 `--data-root`(결정 함수의 `data_root`) → `CONTAINER_AUDIT_DATA_ROOT` → 현재 사용자 HKCU relay Run 등록의 `--data-root` → 기본값이다. onboarding이 exact readback하는 기존 Run 값이 영속 설정이며 별도 중복 설정 파일을 만들지 않는다. 환경 없는 바탕화면·시작 메뉴 실행도 이 설정을 읽고 GUI 초기화·onboarding·재시작 명령을 같은 루트에 고정한다. custom 루트는 events·direct_sync·logistics-profile·bootstrap을 하위에 두며, 기본 설치는 인자 없는 명령과 기존 분리 경로를 유지한다. 등록 부재/정상 기본 등록만 기본값을 허용한다. 손상·읽기 거부된 등록이나 저장된 루트 소실·접근 오류는 기본 루트 생성·전송 없이 안내 후 종료한다. onboarding 보고의 `data_root`는 관측 기록이며 설정 입력이 아니다.
 
 - 제품 형식 오류 안내는 길이/제어문자/위험 형식/트레이 설정의 판정 reason에 맞춘 안전한 문구를 일반·held 경로에서 공통 사용한다. [사유별 다음 행동](product-admission.md#형식-오류-안내의-다음-행동)은 라벨·스캐너 설정 확인 또는 담당자 문의이며, 위험 원문은 안내에 삽입하지 않고 기존 reason·hash·길이 진단을 유지한다. 문구 변경은 거부·수량·저장·ACK 조건을 바꾸지 않는다.

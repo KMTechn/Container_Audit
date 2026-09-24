@@ -809,7 +809,8 @@ def validate_tray_state(
 
 
 @writer_sink("tray_state_quarantine")
-def quarantine_tray_state_file(path: str | Path, *, now: datetime.datetime | None = None) -> Path:
+def quarantine_tray_state_file(path: str | Path, *, now: datetime.datetime | None = None,
+                               expected_sha256: str | None = None, move=None) -> Path:
     source = Path(path)
     timestamp = (now or datetime.datetime.now()).strftime("%Y%m%d%H%M%S")
     target = source.with_name(f"{source.name}.bad-{timestamp}")
@@ -817,7 +818,12 @@ def quarantine_tray_state_file(path: str | Path, *, now: datetime.datetime | Non
     while target.exists():
         target = source.with_name(f"{source.name}.bad-{timestamp}-{suffix}")
         suffix += 1
-    source.replace(target)
+    if expected_sha256 is not None:
+        if move is None:
+            raise OSError("PIN move journal is required")
+        move(source, target, expected_sha256)
+    else:
+        source.replace(target)
     return target
 
 

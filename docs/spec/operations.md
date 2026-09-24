@@ -294,6 +294,8 @@ GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼�
 <a id="ca-o04"></a>
 ## CA-O04 장애·오프라인·취소·재시작 인계
 
+PIN 소비 뒤 파일 이동 중 종료하면 `관리자 확인 다시 조회`에서 같은 operation key의 `moving` 경로·SHA256을 확인한다. 옮긴 바이트가 원본과 같으면 남은 효과와 감사 readback을 마치고, 다르면 활성 자리로 되돌린 뒤 `TARGET_CHANGED`를 안내한다. 활성 자리가 이미 차 있으면 두 파일을 보존하고 이 key만 보류한다. 새 PIN은 변경된 원본의 동작을 다시 선택할 때 받는다.
+
 완료의 [저장 결과 적용·notice](tray-completion.md)는 기존 내구 generator 순서를 유지한다.
 prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → state 적용/표시와,
 최종 held 감사 ACK 뒤 완료 접수·동일 command 재시작/중앙 retry를 각각 보존한다.

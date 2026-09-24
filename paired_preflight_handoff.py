@@ -83,6 +83,9 @@ class PairedPreflightHandoffStore:
         record_read = read_recovery_file(path, "record")
         record = record_read.value if record_read.verified else None
         problems = []
+        if (path.parent / "superseded.json").exists():
+            problems.append("PIN 원본 변경으로 이전 인계 기록 보존"
+                            if self._superseded(path) else "이전 인계 기록 표지 손상")
         if record is not None and record["id"] != path.parent.name:
             problems.append("인계 기록 식별자가 폴더와 다름")
             record = None
@@ -261,13 +264,39 @@ class PairedPreflightHandoffStore:
             raise PairedHandoffError("manager hold readback differs")
 
     def pending(self) -> bool:
-        return any(not self.inspect(path).released for path in self.paths())
+        return any(not self.inspect(path).released and not self._superseded(path)
+                   for path in self.paths())
 
     def pending_path(self) -> Path | None:
         for path in self.paths():
-            if not self.inspect(path).released:
+            if not self.inspect(path).released and not self._superseded(path):
                 return path
         return None
+
+    def _superseded(self, path: Path) -> bool:
+        marker = path.parent / "superseded.json"
+        if not marker.is_file() or not path.is_file():
+            return False
+        result = read_recovery_file(marker, "json")
+        return bool(result.verified and result.value == {
+            "id": path.parent.name, "record_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "reason": "TARGET_CHANGED",
+        })
+
+    @writer_sink("paired_preflight_changed_record")
+    def supersede_changed_record(self, path: Path) -> None:
+        record = self.read(path)
+        marker = path.parent / "superseded.json"
+        payload = {"id": record["id"],
+                   "record_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                   "reason": "TARGET_CHANGED"}
+        if marker.exists():
+            if not self._superseded(path):
+                raise PairedHandoffError("changed record marker differs")
+            return
+        atomic_write_json(marker, payload)
+        if not self._superseded(path):
+            raise PairedHandoffError("changed record marker readback differs")
 
     @staticmethod
     def _part(path: Path, kind: str) -> dict[str, str]:
@@ -326,13 +355,18 @@ class PairedPreflightHandoffStore:
         return path
 
     @writer_sink("paired_preflight_original_move")
-    def move_original(self, path: Path, name: str) -> None:
+    def move_original(self, path: Path, name: str, *, expected_sha256: str | None = None,
+                      move=None) -> None:
         record = self.read(path)
         part = record[name]
         source = Path(part["path"])
         target = path.parent / f"{name}.original"
         expected = self._bytes(part)
-        if target.exists():
+        if expected_sha256 is not None:
+            if hashlib.sha256(expected).hexdigest() != expected_sha256 or move is None:
+                raise PairedHandoffError("paired PIN source differs from record")
+            move(source, target, expected_sha256)
+        elif target.exists():
             if read_recovery_file(target, name).raw != expected or source.exists():
                 raise PairedHandoffError("paired original ownership conflicts")
         else:

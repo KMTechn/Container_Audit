@@ -391,13 +391,13 @@ def test_changed_target_after_consumption_never_reaches_writer(monkeypatch, tmp_
     )
     assert approval is None
     pending = app._admin_pin_store().pending("CA.PRECHECK_HOLD", "c" * 64)
-    assert len(pending) == 1 and pending[0]["state"] == "HANDED_OFF_UNKNOWN"
-    assert pending[0]["reason"] == "EFFECT_UNVERIFIED"
-    assert [row[0] for row in audits] == ["ADMIN_PIN_HANDOFF_UNKNOWN"]
+    assert len(pending) == 1 and pending[0]["state"] == "TARGET_CHANGED"
+    assert pending[0]["reason"] == "TARGET_CHANGED"
+    assert [row[0] for row in audits] == ["ADMIN_PIN_SUPERSEDED"]
     assert notices
 
 
-def test_changed_target_on_consumed_status_hands_off_original_key(monkeypatch, tmp_path):
+def test_changed_target_on_consumed_status_requeries_and_retries_with_new_pin(monkeypatch, tmp_path):
     app, audits, _notices = make_headless_app(monkeypatch, tmp_path, SignedPinServer())
     state = {"version": 1}
     source = lambda: dict(state)
@@ -407,9 +407,19 @@ def test_changed_target_on_consumed_status_hands_off_original_key(monkeypatch, t
     assert app._admin_pin_approval_for(
         "CA.PAIR_RETRY", "c" * 64, source, (), lambda _intent: False) is None
     saved = app._admin_pin_store().read(first["operation_key"])
-    assert saved["state"] == "HANDED_OFF_UNKNOWN"
+    assert saved["state"] == "TARGET_CHANGED"
     assert saved["operation_key"] == first["operation_key"]
-    assert [event for event, _ in audits].count("ADMIN_PIN_HANDOFF_UNKNOWN") == 1
+    assert [event for event, _ in audits].count("ADMIN_PIN_SUPERSEDED") == 1
+    app._recheck_admin_pin_intents()
+    assert app._admin_pin_store().read(first["operation_key"])["state"] == "TARGET_CHANGED"
+    effect = {"done": False}
+    second = app._admin_pin_approval_for(
+        "CA.PAIR_RETRY", "c" * 64, source, (), lambda _intent: effect["done"])
+    assert second is not None and second["operation_key"] != first["operation_key"]
+    assert app._admin_pin_store().read(first["operation_key"])["state"] == "SUPERSEDED"
+    effect["done"] = True
+    assert app._admin_pin_complete(second, lambda _intent: effect["done"])
+    assert app._admin_pin_store().read(second["operation_key"])["state"] == "APPLIED"
 
 
 @pytest.mark.parametrize("admin_id, secret", (("manager-1", "12345x"), ("", "654321")))
@@ -534,8 +544,8 @@ def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
     attempt = (app._retry_paired_stale_current_preservation if route == "retry"
                else app._continue_after_paired_stale_current)
     if interrupted:
-        def crash_after_move(reason):
-            result = quarantine(reason)
+        def crash_after_move(reason, **kwargs):
+            result = quarantine(reason, **kwargs)
             raise KeyboardInterrupt("stopped after original move")
         app._quarantine_current_tray_state = crash_after_move
         with pytest.raises(KeyboardInterrupt):
@@ -602,6 +612,8 @@ def test_offline_existing_pair_source_keeps_only_pair_keys(monkeypatch, tmp_path
     else:
         source = {"handoff_id": record.parent.name,
                   "record_sha256": hashlib.sha256(record.read_bytes()).hexdigest(),
+                  "hold_sha256": app._paired_preflight_store().read(record)["hold"]["sha256"],
+                  "current_sha256": app._paired_preflight_store().read(record)["current"]["sha256"],
                   "problems": []}
         target = record.parent.name
     assert app._admin_pin_approval_for(action, target, lambda: source,
@@ -752,11 +764,11 @@ def test_paired_handoff_resumes_same_consumed_key_across_writer_boundaries(
     original_release = PairedPreflightHandoffStore.release
     interrupted = {"done": False}
 
-    def move(self, path, name):
+    def move(self, path, name, **kwargs):
         if not interrupted["done"] and boundary == "before_hold" and name == "hold":
             interrupted["done"] = True
             raise OSError("interrupted before first original move")
-        original_move(self, path, name)
+        original_move(self, path, name, **kwargs)
         if (not interrupted["done"] and
                 ((boundary == "after_hold" and name == "hold") or
                  (boundary == "after_current" and name == "current"))):
@@ -779,9 +791,57 @@ def test_paired_handoff_resumes_same_consumed_key_across_writer_boundaries(
     if boundary == "after_release":
         app._recheck_admin_pin_intents()
     else:
-        assert app._defer_paired_preflight_from_operations() is True
+        # The consumed key now completes inside the restart/requery path.
+        app._defer_paired_preflight_from_operations()
     assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
+
+
+def test_changed_paired_current_restores_both_and_retries_new_record(monkeypatch, tmp_path):
+    from Container_Audit import ContainerAudit, messagebox
+    from paired_preflight_handoff import PairedPreflightHandoffStore
+    from tests.test_paired_preflight_handoff import _app
+
+    app, hold, current = _app(tmp_path, monkeypatch)
+    original_hold = hold.path.read_bytes()
+    current_path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    changed_state = dict(current, worker_name="changed worker")
+    changed_bytes = json.dumps(changed_state).encode("utf-8")
+    app._admin_pin_login_epoch = uuid.uuid4().hex
+    app._admin_pin_client = make_client(monkeypatch, SignedPinServer())
+    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
+    app._log_event = lambda _event, **_kwargs: True
+    monkeypatch.setattr(messagebox, "askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr(messagebox, "showerror", lambda *_a, **_k: None)
+    monkeypatch.setattr(messagebox, "showwarning", lambda *_a, **_k: None)
+    monkeypatch.setattr(messagebox, "showinfo", lambda *_a, **_k: None)
+    real_move = PairedPreflightHandoffStore.move_original
+    changed = {"done": False}
+
+    def mutate_before_current_move(store, path, name, **kwargs):
+        if name == "current" and not changed["done"]:
+            changed["done"] = True
+            current_path.write_bytes(changed_bytes)
+        return real_move(store, path, name, **kwargs)
+
+    monkeypatch.setattr(PairedPreflightHandoffStore, "move_original", mutate_before_current_move)
+    assert app._defer_paired_preflight_from_operations() is False
+    old = app._admin_pin_store().list_pending()[0]
+    assert old["state"] == "TARGET_CHANGED"
+    assert hold.path.read_bytes() == original_hold
+    assert current_path.read_bytes() == changed_bytes
+    old_record = app._paired_preflight_store().pending_path()
+    assert old_record is not None
+    old_record_bytes = old_record.read_bytes()
+    app._recheck_admin_pin_intents()
+    assert app._defer_paired_preflight_from_operations() is True
+    assert old_record.read_bytes() == old_record_bytes
+    assert (old_record.parent / "superseded.json").is_file()
+    assert app._admin_pin_store().read(old["operation_key"])["state"] == "SUPERSEDED"
+    assert len([row for row in app._admin_pin_store().directory.glob("*.json")]) == 2
+    assert not hold.path.exists() and not current_path.exists()
 
 
 def test_offline_pair_hold_detaches_active_originals_and_other_item_starts(monkeypatch, tmp_path):
@@ -901,6 +961,67 @@ def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypa
     assert app._paired_preflight_blocks_label(label)
     assert [event for event, _ in audits] == ["ADMIN_PIN_UNVERIFIED", "ADMIN_PIN_UNVERIFIED_HOLD"]
     assert_other_phs2_starts(app, label)
+
+
+def test_changed_unsettled_tray_retries_without_overwriting_active_bytes(monkeypatch, tmp_path):
+    from Container_Audit import TraySession, messagebox
+    from storage_utils import atomic_write_json
+    from tests.test_container_p0_contracts import _saved_tray_state
+
+    app, _audits, _notices = make_headless_app(monkeypatch, tmp_path, SignedPinServer())
+    app.save_folder = str(tmp_path / "events")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 60
+    app.computer_id = "test-host"
+    state = _saved_tray_state()
+    changed_state = dict(state, worker_name="changed worker")
+    app.current_tray = TraySession(master_label_code=state["master_label_code"])
+    current = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    atomic_write_json(current, state)
+    changed_bytes = json.dumps(changed_state).encode("utf-8")
+    app._current_tray_state_snapshot = lambda: dict(state)
+    app._save_tray_state_snapshot = lambda saved: atomic_write_json(current, saved) or True
+    app._active_blocking_completion_snapshot = lambda: {"blocked": True}
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app._preflight_context_blocks_mutation = lambda: False
+    presenter = SimpleNamespace(state=SimpleNamespace(completion=None, is_blocking=True))
+    presenter.clear_completion = lambda: None
+    presenter.acknowledge = lambda: None
+    app._warning_state_presenter = lambda: presenter
+    app._stop_warning_beep = lambda: None
+    app._invalidate_pending_scan_callbacks = lambda: None
+    app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
+    app._reset_ui_to_waiting_state = lambda: None
+    app._update_all_summaries = lambda: None
+    app._update_parked_trays_list = lambda: None
+    app._render_warning_state = lambda: None
+    app._update_action_button_states = lambda: None
+    app.show_status_message = lambda *_args, **_kwargs: None
+    monkeypatch.setattr(messagebox, "askyesno", lambda *_args, **_kwargs: True)
+    real_quarantine = app._quarantine_current_tray_state
+    changed = {"done": False}
+
+    def mutate_before_move(reason, **kwargs):
+        if not changed["done"]:
+            changed["done"] = True
+            current.write_bytes(changed_bytes)
+        return real_quarantine(reason, **kwargs)
+
+    app._quarantine_current_tray_state = mutate_before_move
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is False
+    old = app._admin_pin_store().list_pending()[0]
+    assert old["state"] == "TARGET_CHANGED"
+    assert current.read_bytes() == changed_bytes
+    assert app._parked_store().existing_label_path_any_worker(
+        master_label=state["master_label_code"]) is None
+    app._quarantine_current_tray_state = real_quarantine
+    app._recheck_admin_pin_intents()
+    assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
+    parked = app._parked_store().existing_label_path_any_worker(
+        master_label=state["master_label_code"])
+    assert parked is not None and app._parked_store().load(parked) == changed_state
+    assert app._admin_pin_store().read(old["operation_key"])["state"] == "SUPERSEDED"
 
 
 def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, tmp_path):

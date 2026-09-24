@@ -6,12 +6,15 @@ import random
 import itertools
 import csv
 import datetime
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from Container_Audit import ContainerAudit, TraySession
+from container_admin_pin import fingerprint as admin_pin_fingerprint
+from event_stream_policy import local_only_event_log_path
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
 from parked_tray_store import ParkedTrayStore
 from preflight_scan_hold import PreflightScanHoldStore
@@ -30,14 +33,27 @@ def _app(tmp_path, monkeypatch):
     app.worker_name = PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
-    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
-        "operator": app.worker_name, "role": app.worker_role,
-        "supervisor": PROTECTED_ADMIN_OPERATOR_ID,
-        "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
-        "verification_id": "paired-test-verification",
-        "operation_key": "paired-test-operation", "action": action, "target": target,
-    }
-    app._admin_pin_complete = lambda _approval, _effect: True
+    def fake_approval(action, target, source, labels, effect):
+        operation_key = str(uuid.uuid4())
+        snapshot = source()
+        app._admin_pin_store().write({
+            "operation_key": operation_key,
+            "target": {"id": target, "state_fingerprint": admin_pin_fingerprint(snapshot)},
+            "state": "CONSUMED", "action": action, "source_snapshot": snapshot,
+        })
+        return {
+            "operator": app.worker_name, "role": app.worker_role,
+            "supervisor": PROTECTED_ADMIN_OPERATOR_ID,
+            "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
+            "verification_id": "paired-test-verification",
+            "operation_key": operation_key, "action": action, "target": target,
+        }
+    app._admin_pin_approval_for = fake_approval
+    def fake_complete(approval, _effect):
+        store = app._admin_pin_store()
+        store.transition(store.read(approval["operation_key"]), "APPLIED")
+        return True
+    app._admin_pin_complete = fake_complete
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app._invalidate_pending_scan_callbacks = lambda: None
     app._reset_ui_to_waiting_state = lambda: None
@@ -943,11 +959,20 @@ def test_every_durable_evidence_subset_blocks_original_key(
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
-    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
-        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
-        "verification_id": "evidence-test-verification",
-        "operation_key": "evidence-test-operation", "action": action, "target": target,
-    }
+    def evidence_approval(action, target, source, labels, effect):
+        operation_key = str(uuid.uuid4())
+        snapshot = source()
+        app._admin_pin_store().write({
+            "operation_key": operation_key,
+            "target": {"id": target, "state_fingerprint": admin_pin_fingerprint(snapshot)},
+            "state": "CONSUMED", "action": action, "source_snapshot": snapshot,
+        })
+        return {
+            "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+            "verification_id": "evidence-test-verification",
+            "operation_key": operation_key, "action": action, "target": target,
+        }
+    app._admin_pin_approval_for = evidence_approval
     app._admin_pin_complete = lambda _approval, _effect: True
     audited = []
     app._log_event = lambda event, **_kwargs: audited.append(event) or True
@@ -1120,8 +1145,10 @@ def test_audit_only_key_is_guarded_and_unknown_audit_can_be_bound(tmp_path, monk
     app.root = SimpleNamespace()
     log = tmp_path / "local_events" / "이적로컬이벤트로그_manager_20260923.csv"
     log.parent.mkdir(parents=True)
-    def append(event, detail):
-        with log.open("a", encoding="utf-8", newline="") as stream:
+    def append(event, detail, target=None):
+        destination = Path(target) if target else log
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("a", encoding="utf-8", newline="") as stream:
             writer = csv.DictWriter(stream, fieldnames=("timestamp", "worker_name", "event", "details"))
             if stream.tell() == 0:
                 writer.writeheader()
@@ -1145,12 +1172,25 @@ def test_audit_only_key_is_guarded_and_unknown_audit_can_be_bound(tmp_path, monk
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
-    app._log_event = lambda event, **kwargs: append(event, kwargs["detail"]) or True
-    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
-        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
-        "verification_id": "audit-test-verification",
-        "operation_key": "audit-test-operation", "action": action, "target": target,
-    }
+    app._log_event = lambda event, **kwargs: append(
+        event, kwargs["detail"],
+        local_only_event_log_path(kwargs["log_file_path_override"],
+                                  local_events_dir=app.local_events_folder)
+        if kwargs.get("log_file_path_override") else None) or True
+    def audit_approval(action, target, source, labels, effect):
+        operation_key = str(uuid.uuid4())
+        snapshot = source()
+        app._admin_pin_store().write({
+            "operation_key": operation_key,
+            "target": {"id": target, "state_fingerprint": admin_pin_fingerprint(snapshot)},
+            "state": "CONSUMED", "action": action, "source_snapshot": snapshot,
+        })
+        return {
+            "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+            "verification_id": "audit-test-verification",
+            "operation_key": operation_key, "action": action, "target": target,
+        }
+    app._admin_pin_approval_for = audit_approval
     app._admin_pin_complete = lambda _approval, _effect: True
     app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
         authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
@@ -1207,11 +1247,20 @@ def test_unidentified_stale_current_is_visible_and_manager_binds_exact_bytes(tmp
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
-    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
-        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
-        "verification_id": "stale-test-verification",
-        "operation_key": "stale-test-operation", "action": action, "target": target,
-    }
+    def stale_approval(action, target, source, labels, effect):
+        operation_key = str(uuid.uuid4())
+        snapshot = source()
+        app._admin_pin_store().write({
+            "operation_key": operation_key,
+            "target": {"id": target, "state_fingerprint": admin_pin_fingerprint(snapshot)},
+            "state": "CONSUMED", "action": action, "source_snapshot": snapshot,
+        })
+        return {
+            "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+            "verification_id": "stale-test-verification",
+            "operation_key": operation_key, "action": action, "target": target,
+        }
+    app._admin_pin_approval_for = stale_approval
     app._admin_pin_complete = lambda _approval, _effect: True
     first = _saved_tray_state()["master_label_code"]
     second = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"

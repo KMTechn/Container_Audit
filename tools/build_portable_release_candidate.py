@@ -69,6 +69,7 @@ APP_ROOT_FILES = (
     "native_audio.py",
     "paired_preflight_handoff.py",
     "parked_tray_store.py",
+    "pin_file_move.py",
     "phs_label_workflow.py",
     "phs_reconciliation_workflow.py",
     "preflight_scan_hold.py",

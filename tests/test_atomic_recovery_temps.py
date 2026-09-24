@@ -6,12 +6,14 @@ import base64
 import hashlib
 import itertools
 import json
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from Container_Audit import TraySession
+from container_admin_pin import fingerprint as admin_pin_fingerprint
 from parked_tray_store import ParkedTrayStore, atomic_temp_target
 from preflight_scan_hold import PreflightScanHoldStore
 from recovery_file_read import read_recovery_file
@@ -36,12 +38,21 @@ def _test_app(tmp_path, monkeypatch):
     app._intercept_phs_reconciliation_scan = lambda _value: False
     app._intercept_active_tray_phs2_scan = lambda _value: False
     app._is_completed_master_label = lambda _value: False
-    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
-        "operator": app.worker_name, "role": getattr(app, "worker_role", "WORKER"),
-        "supervisor": "manager", "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
-        "verification_id": "atomic-test-verification",
-        "operation_key": "atomic-test-operation", "action": action, "target": target,
-    }
+    def fake_approval(action, target, source, labels, effect):
+        operation_key = str(uuid.uuid4())
+        snapshot = source()
+        app._admin_pin_store().write({
+            "operation_key": operation_key,
+            "target": {"id": target, "state_fingerprint": admin_pin_fingerprint(snapshot)},
+            "state": "CONSUMED", "action": action, "source_snapshot": snapshot,
+        })
+        return {
+            "operator": app.worker_name, "role": getattr(app, "worker_role", "WORKER"),
+            "supervisor": "manager", "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
+            "verification_id": "atomic-test-verification",
+            "operation_key": operation_key, "action": action, "target": target,
+        }
+    app._admin_pin_approval_for = fake_approval
     app._admin_pin_complete = lambda _approval, _effect: True
     app._item_catalog = lambda: SimpleNamespace(find_by_code=lambda _code: {"Item Code": "AAA2270730100"})
     begun = []
@@ -164,23 +175,28 @@ def test_interrupted_atomic_recovery_matrix(
     if row.binds(label):
         app._process_barcode_logic(label)
         assert label not in begun
+    app.root = SimpleNamespace()
+    app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
+    app._blocked_work_identity_matches = lambda _approval: True
+    app._blocked_work_identity_is_current = lambda _approval: True
+    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    queried = []
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **kw: queried.append(kw["scan_payload"]) or {"id": "known"},
+    ))
+    prompts, tasks = [], []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda title, *_a, **_k:
+                        title in {"임시 원본 보류", "손상 보류 작업"})
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: prompts.append(1) or label)
     if row.kind == "parked_temp":
-        parked.bind_invalid_label(temp, label)
+        app._show_invalid_parked_tray(str(temp))
+        assert len(tasks) == (1 if row.labels or row.digest else 0)
+        for task in tasks:
+            task.finish(task.work())
+        assert queried == ([label] if tasks else [])
     else:
-        app.root = SimpleNamespace()
-        app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
-        app._blocked_work_identity_matches = lambda _approval: True
-        app._blocked_work_identity_is_current = lambda _approval: True
-        app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
-        queried = []
-        app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
-            authority_scope_id="scope", resolve_phs_label=lambda **kw: queried.append(kw["scan_payload"]) or {"id": "known"},
-        ))
-        prompts, tasks = [], []
-        app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
-        monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda title, *_a, **_k: title == "임시 원본 보류")
-        monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
-        monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: prompts.append(1) or label)
         app._show_paired_preflight_handoffs()
         assert len(tasks) == (1 if row.labels else 0)
         for task in tasks:

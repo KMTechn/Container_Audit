@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from tkinter import font as tkfont
 import copy
+from contextlib import ExitStack, contextmanager
 import argparse
 import csv
 import datetime
@@ -61,6 +62,8 @@ from container_admin_pin import (
     fingerprint as admin_pin_fingerprint, operator_local_id,
     operator_message as admin_pin_message,
 )
+from pin_file_move import (PinnedMoveError, PinnedTargetChanged, file_sha256,
+                           locked_pinned_source, pinned_move, recover_pinned_move)
 from event_contracts import plan_b_event_detail, stable_hash
 from event_log_store import (
     EventLogOutbox,
@@ -1796,7 +1799,8 @@ class ContainerAudit:
             for path in self._preflight_hold_quarantine_directory().glob(
                     f"preflight_hold_{snapshot.preflight_id}_*.json"):
                 try:
-                    if store.snapshot_hash(store.load_path(path)) == snapshot_hash:
+                    if (file_sha256(path) == _intent["source_snapshot"]["hold_sha256"]
+                            and store.snapshot_hash(store.load_path(path)) == snapshot_hash):
                         return True
                 except (OSError, PreflightHoldError):
                     pass
@@ -1812,9 +1816,13 @@ class ContainerAudit:
         if not self._blocked_work_identity_matches(approval):
             return False
         try:
+            pin_intent = self._admin_pin_store().read(approval["operation_key"])
             quarantined = store.quarantine(
                 self._preflight_hold_quarantine_directory(),
                 reason=reason,
+                expected_sha256=pin_intent["source_snapshot"]["hold_sha256"],
+                move=lambda source, target, digest: self._admin_pin_move(
+                    approval, source, target, digest),
             )
         except (OSError, PreflightHoldError) as exc:
             print(f"사전조회 보류 격리 실패: {exc.__class__.__name__}")
@@ -3949,12 +3957,18 @@ class ContainerAudit:
         if not restored_operator_review:
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
 
-    def _quarantine_current_tray_state(self, reason: str) -> Optional[str]:
+    def _quarantine_current_tray_state(self, reason: str, *,
+                                       approval: Optional[Mapping[str, str]] = None,
+                                       expected_sha256: str = "") -> Optional[str]:
         state_path = os.path.join(self.save_folder, self.CURRENT_TRAY_STATE_FILE)
         if not os.path.exists(state_path):
             return None
         try:
-            quarantined_path = quarantine_tray_state_file(state_path)
+            options = ({"expected_sha256": expected_sha256,
+                        "move": lambda original, held, digest: self._admin_pin_move(
+                            approval, original, held, digest)}
+                       if approval and expected_sha256 else {})
+            quarantined_path = quarantine_tray_state_file(state_path, **options)
             print(f"임시 트레이 상태 파일 격리: {quarantined_path} ({reason})")
             return str(quarantined_path)
         except Exception as e:
@@ -4041,7 +4055,11 @@ class ContainerAudit:
                     audited = False
                 if not audited:
                     raise OSError("stale current preservation audit failed")
-                moved = str(self._quarantine_current_tray_state("paired stale current retry") or "")
+                pinned = self._admin_pin_store().read(approval["operation_key"])["source_snapshot"]
+                pinned_sha = str(pinned.get("current_sha256") or pinned.get("current_observed_sha256") or "")
+                moved = str(self._quarantine_current_tray_state(
+                    "paired stale current retry", approval=approval,
+                    expected_sha256=pinned_sha) or "")
                 moved_read = read_recovery_file(Path(moved), "stale", tray_size=self.TRAY_SIZE) if moved else None
                 if moved_read is None or moved_read.sha256 != changed_hash:
                     raise OSError("changed stale current readback differs")
@@ -7290,6 +7308,10 @@ class ContainerAudit:
     def _admin_pin_audit(self, event: str, intent: Mapping[str, Any]) -> bool:
         resume_epoch = (str((intent.get("resuming_operator") or {}).get("login_epoch") or "")
                         if event == "ADMIN_PIN_RESUMED" else "")
+        source = intent.get("source_snapshot") or {}
+        audit_path = (str(Path(self.save_folder) /
+                          f"admin-pin-{uuid.UUID(intent['operation_key']).hex}.csv")
+                      if source.get("source_audit_id") else "")
         return bool(self._log_event(
             event,
             detail={"action": intent["action"], "target": intent["target"],
@@ -7303,6 +7325,7 @@ class ContainerAudit:
             synchronous=True,
             idempotency_key=f"admin-pin:{event}:{intent['operation_key']}:{resume_epoch}",
             deduplicate=True,
+            log_file_path_override=audit_path,
         ))
 
     def _admin_pin_record_resumer(self, intent: Mapping[str, Any]) -> Dict[str, Any]:
@@ -7329,6 +7352,103 @@ class ContainerAudit:
             "원 operation key와 원본을 보존하고 지원 인계하세요.",
             parent=getattr(self, "root", None),
         )
+
+    def _admin_pin_target_changed(self, intent: Mapping[str, Any]) -> None:
+        changed = dict(intent, reason="TARGET_CHANGED")
+        if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED", changed):
+            raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
+        self._admin_pin_store().transition(changed, "TARGET_CHANGED", reason="TARGET_CHANGED")
+        messagebox.showwarning(
+            "관리자 확인 다시 조회",
+            "원본이 바뀌었습니다. 변경 바이트를 보존했습니다. 관리자 목록에서 다시 조회한 뒤 "
+            "이 동작을 새 PIN으로 다시 실행하세요.",
+            parent=getattr(self, "root", None),
+        )
+
+    def _admin_pin_journal_move(self, approval: Mapping[str, str], source: Path,
+                                target: Path, expected_sha256: str) -> None:
+        store = self._admin_pin_store()
+        intent = store.read(approval["operation_key"])
+        if intent.get("state") not in {"CONSUMED", "UNVERIFIED_DETACHING"}:
+            raise PinnedMoveError("PIN move has no active intent")
+        snapshot = intent.get("source_snapshot") or {}
+        if expected_sha256 not in (value for name, value in snapshot.items()
+                                   if name.endswith("sha256")):
+            raise PinnedMoveError("PIN move differs from bound source")
+        move = {"source": str(source.resolve()), "target": str(target.resolve()),
+                "sha256": expected_sha256}
+        moves = list(intent.get("moving") or ())
+        if any(row["source"] == move["source"] and row != move for row in moves):
+            raise PinnedMoveError("PIN move target changed")
+        if move not in moves:
+            store.write(dict(intent, move_state="MOVING", moving=[*moves, move]))
+
+    def _admin_pin_move(self, approval: Mapping[str, str], source: Path,
+                        target: Path, expected_sha256: str) -> Path:
+        try:
+            return pinned_move(
+                source, target, expected_sha256,
+                lambda original, held, digest: self._admin_pin_journal_move(
+                    approval, original, held, digest),
+            )
+        except PinnedTargetChanged:
+            intent = self._admin_pin_store().read(approval["operation_key"])
+            if intent.get("state") == "CONSUMED" and self._admin_pin_restore_moves(intent):
+                self._admin_pin_target_changed(intent)
+            raise
+
+    def _admin_pin_check_moves(self, intent: Mapping[str, Any]) -> bool:
+        for move in intent.get("moving") or ():
+            try:
+                status = recover_pinned_move(
+                    Path(move["source"]), Path(move["target"]), move["sha256"])
+            except PinnedTargetChanged:
+                if intent.get("state") == "CONSUMED" and self._admin_pin_restore_moves(intent):
+                    self._admin_pin_target_changed(intent)
+                return False
+            except (OSError, KeyError, TypeError, ValueError):
+                return False
+        return True
+
+    def _admin_pin_restore_moves(self, intent: Mapping[str, Any]) -> bool:
+        for move in reversed(intent.get("moving") or ()):
+            source, target = Path(move["source"]), Path(move["target"])
+            if target.exists():
+                if source.exists():
+                    return False
+                target.rename(source)
+        return True
+
+    @contextmanager
+    def _admin_pin_locked_sources(self, approval: Mapping[str, str],
+                                  sources: Sequence[tuple[Path, str]]):
+        intent = self._admin_pin_store().read(approval["operation_key"])
+        pinned = {value for name, value in (intent.get("source_snapshot") or {}).items()
+                  if name.endswith("sha256")}
+        try:
+            with ExitStack() as stack:
+                for path, digest in sorted(sources, key=lambda item: str(item[0])):
+                    if digest not in pinned:
+                        raise PinnedTargetChanged("source differs from PIN intent")
+                    stack.enter_context(locked_pinned_source(path, digest))
+                yield
+        except PinnedTargetChanged:
+            if intent.get("state") == "CONSUMED":
+                self._admin_pin_target_changed(intent)
+            raise
+
+    @contextmanager
+    def _admin_pin_locked_evidence(self, approval: Mapping[str, str],
+                                   path: Path, read_source):
+        intent = self._admin_pin_store().read(approval["operation_key"])
+        with locked_pinned_source(path, None):
+            try:
+                if admin_pin_fingerprint(read_source()) != intent["target"]["state_fingerprint"]:
+                    raise PinnedTargetChanged("evidence differs from PIN source")
+                yield
+            except PinnedTargetChanged:
+                self._admin_pin_target_changed(intent)
+                raise
 
     def _admin_pin_effect_audited(self, event: str, operation_key: str) -> bool:
         folders = (getattr(self, "local_events_folder", ""), getattr(self, "save_folder", ""))
@@ -7364,7 +7484,10 @@ class ContainerAudit:
                 if hashlib.sha256(hold.path.read_bytes()).hexdigest() != source["hold_sha256"]:
                     return False
                 hold.quarantine(self._preflight_hold_quarantine_directory(),
-                                reason="admin_pin_unverified_operator_hold")
+                                reason="admin_pin_unverified_operator_hold",
+                                expected_sha256=source["hold_sha256"],
+                                move=lambda original, held, digest: self._admin_pin_move(
+                                    intent, original, held, digest))
             copies = self._preflight_hold_quarantine_directory().glob(
                 f"preflight_hold_{source.get('preflight_id', '')}_*.json")
             if hold.path.exists() or not any(
@@ -7390,8 +7513,12 @@ class ContainerAudit:
                     record[name]["sha256"] != source.get(name + "_sha256")
                     for name in ("hold", "current")):
                 return False
-            store.move_original(path, "hold")
-            store.move_original(path, "current")
+            for name in ("hold", "current"):
+                store.move_original(
+                    path, name, expected_sha256=source[name + "_sha256"],
+                    move=lambda original, held, digest: self._admin_pin_move(
+                        intent, original, held, digest),
+                )
             store.release(path)
             if store.inspect(path).unidentified:
                 labels = tuple(intent.get("labels") or ())
@@ -7434,7 +7561,9 @@ class ContainerAudit:
                 if hashlib.sha256(raw).hexdigest() != expected:
                     return False
                 preserve_stale_bytes(current, raw)
-                moved = self._quarantine_current_tray_state("admin PIN unverified tray hold")
+                moved = self._quarantine_current_tray_state(
+                    "admin PIN unverified tray hold", approval=intent,
+                    expected_sha256=expected)
                 if not moved or hashlib.sha256(Path(moved).read_bytes()).hexdigest() != expected:
                     return False
             if current.exists() or not archived.is_file() or hashlib.sha256(archived.read_bytes()).hexdigest() != expected:
@@ -7471,7 +7600,9 @@ class ContainerAudit:
                 return False
             self._paired_preflight_store().hold_stale_current(original, changed)
             if current.is_file():
-                moved = self._quarantine_current_tray_state("admin PIN unverified stale current")
+                moved = self._quarantine_current_tray_state(
+                    "admin PIN unverified stale current", approval=intent,
+                    expected_sha256=observed_sha)
                 if not moved or hashlib.sha256(Path(moved).read_bytes()).hexdigest() != observed_sha:
                     return False
             if current.exists():
@@ -7568,6 +7699,8 @@ class ContainerAudit:
     def _admin_pin_finish_unverified_detachment(self, intent: Mapping[str, Any], *, startup: bool = False) -> bool:
         self._admin_pin_detach_startup = startup
         try:
+            if not self._admin_pin_check_moves(intent):
+                raise OSError("unverified moved original differs")
             if not self._admin_pin_detach_unverified(intent):
                 raise OSError("원본 readback 또는 활성 슬롯 해제에 실패했습니다.")
             if intent.get("state") == "UNVERIFIED_DETACHING":
@@ -7643,6 +7776,12 @@ class ContainerAudit:
             if pending:
                 intent = pending[0]
                 active_intent = intent
+                if intent.get("state") == "TARGET_CHANGED":
+                    retire_intent = intent
+                    retire_reason = "TARGET_CHANGED"
+                    pending = []
+            if pending:
+                intent = pending[0]
                 if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
                     self._admin_pin_finish_unverified_detachment(intent)
                     return None
@@ -7682,6 +7821,8 @@ class ContainerAudit:
                         verification_id, intent["operation_key"])
                     if status == "CONSUMED":
                         intent = self._admin_pin_record_resumer(intent)
+                        if not self._admin_pin_check_moves(intent):
+                            return None
                         try:
                             effect_complete = effect_readback(intent)
                         except (OSError, ValueError, KeyError, TypeError):
@@ -7693,11 +7834,16 @@ class ContainerAudit:
                                     PreflightHoldError, PairedHandoffError):
                                 effect_complete = False
                         if effect_complete:
-                            if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
-                                raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                            store.transition(intent, "APPLIED")
+                            intent = store.read(intent["operation_key"])
+                            if intent.get("state") != "CONSUMED" or not self._admin_pin_check_moves(intent):
+                                return None
+                            recovery_approval = {"operation_key": intent["operation_key"]}
+                            if not self._admin_pin_complete(recovery_approval, effect_readback):
+                                return None
                             messagebox.showinfo("관리자 확인", "같은 요청의 완료 상태를 확인했습니다.",
                                                 parent=getattr(self, "root", None))
+                            return None
+                        if store.read(intent["operation_key"]).get("state") != "CONSUMED":
                             return None
                         try:
                             original = read_source()
@@ -7711,7 +7857,7 @@ class ContainerAudit:
                             raise
                         source_hash = admin_pin_fingerprint(original)
                         if intent["target"]["state_fingerprint"] != source_hash:
-                            self._admin_pin_handoff_unknown(intent, "EFFECT_UNVERIFIED")
+                            self._admin_pin_target_changed(intent)
                             return None
                         if not self._admin_pin_audit(
                                 "ADMIN_PIN_CONSUMED", dict(intent, resuming_operator={})):
@@ -7736,6 +7882,11 @@ class ContainerAudit:
                     raise AdminPinError("TARGET_CHANGED", unknown=True)
                 intent = retry_intent
             else:
+                if retire_intent is not None:
+                    if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
+                                                 dict(retire_intent, reason=retire_reason)):
+                        raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
+                    store.transition(retire_intent, "SUPERSEDED", reason=retire_reason)
                 intent = store.write({
                     "schema": "container-admin-pin-intent-v1", "state": "PREPARED",
                     "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
@@ -7746,11 +7897,6 @@ class ContainerAudit:
                     "labels": list(labels), "reason": "",
                 })
                 active_intent = intent
-                if retire_intent is not None:
-                    if not self._admin_pin_audit("ADMIN_PIN_SUPERSEDED",
-                                                 dict(retire_intent, reason=retire_reason)):
-                        raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
-                    store.transition(retire_intent, "SUPERSEDED", reason=retire_reason)
             try:
                 if not admin_id or not re.fullmatch(r"[0-9]{6}", pin):
                     raise AdminPinError("PIN_FORMAT_INVALID")
@@ -7764,7 +7910,7 @@ class ContainerAudit:
                               action=action, target=target, operator=operator)
                 intent = store.transition(intent, "CONSUMED")
                 if read_source() != original:
-                    self._admin_pin_handoff_unknown(intent, "EFFECT_UNVERIFIED")
+                    self._admin_pin_target_changed(intent)
                     return None
                 if not self._blocked_work_identity_is_current(base):
                     messagebox.showwarning(
@@ -7796,16 +7942,43 @@ class ContainerAudit:
             return None
 
     def _admin_pin_complete(self, approval: Mapping[str, str], effect_readback) -> bool:
+        intent = None
         try:
             store = self._admin_pin_store()
             intent = store.read(approval["operation_key"])
-            if not effect_readback(intent):
-                raise OSError("admin PIN effect readback incomplete")
-            if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
-                raise OSError("admin PIN success audit unavailable")
-            store.transition(intent, "APPLIED")
+            if intent.get("state") != "CONSUMED":
+                raise OSError("admin PIN intent is no longer consumable")
+            if not self._admin_pin_check_moves(intent):
+                raise OSError("admin PIN moved original differs")
+            source = intent.get("source_snapshot") or {}
+            held = [(Path(move["target"]), move["sha256"])
+                    for move in intent.get("moving") or () if Path(move["target"]).is_file()]
+            if source.get("handoff_id") and source.get("record_sha256"):
+                held.append((self._paired_preflight_store().directory
+                             / str(source["handoff_id"]) / "record.json",
+                             source["record_sha256"]))
+            if source.get("marker_sha256"):
+                held.append((self._paired_preflight_store().directory
+                             / (str(intent["target"]["id"]) + ".json"),
+                             source["marker_sha256"]))
+            if (intent.get("action") == "CA.TRAY_HOLD" and source.get("source_file")
+                    and source.get("source_sha256")):
+                held.append((Path(self.parked_trays_dir) / str(source["source_file"]),
+                             source["source_sha256"]))
+            with ExitStack() as stack:
+                for path, digest in sorted(set(held), key=lambda item: str(item[0])):
+                    stack.enter_context(locked_pinned_source(path, digest))
+                if not self._admin_pin_check_moves(intent) or not effect_readback(intent):
+                    raise OSError("admin PIN effect readback incomplete")
+                if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
+                    raise OSError("admin PIN success audit unavailable")
+                if not self._admin_pin_check_moves(intent) or not effect_readback(intent):
+                    raise OSError("admin PIN effect changed during success audit")
+                store.transition(intent, "APPLIED")
             return True
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            if isinstance(exc, PinnedTargetChanged) and intent is not None:
+                self._admin_pin_check_moves(intent)
             messagebox.showwarning("관리자 확인 대기", "로컬 효과 확인이 불완전합니다. 같은 건을 다시 확인하세요.",
                                    parent=getattr(self, "root", None))
             return False
@@ -7829,12 +8002,25 @@ class ContainerAudit:
         if action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
             path = self._paired_preflight_store().directory / str(source["handoff_id"]) / "record.json"
             store = self._paired_preflight_store()
-            if (path.is_file() and store.is_released(path) and store.originals_match(path)
+            if (path.is_file() and (not source.get("record_sha256")
+                                    or file_sha256(path) == source["record_sha256"])
+                    and store.is_released(path) and store.originals_match(path)
                     and self._admin_pin_effect_audited("PHS2_PAIRED_PREFLIGHT_DEFERRED", key)):
                 return True
             marker = read_recovery_file(path.parent / "manager-hold.json", "manager_hold")
-            return bool(marker.verified and marker.value["labels"] == intent.get("labels")
+            return bool(path.is_file()
+                        and (not source.get("record_sha256")
+                             or file_sha256(path) == source["record_sha256"])
+                        and all((not source.get(name + "_sha256")
+                                 or read_recovery_file(path.parent / f"{name}.original", name).sha256
+                                 == source[name + "_sha256"])
+                                for name in ("hold", "current"))
+                        and marker.verified and marker.value["labels"] == intent.get("labels")
                         and self._admin_pin_effect_audited("PHS2_PAIRED_MANUAL_HOLD", key))
+        if action == "CA.TRAY_HOLD" and source.get("handoff_id"):
+            path = self._paired_preflight_store().directory / str(source["handoff_id"]) / "record.json"
+            return bool(path.is_file() and file_sha256(path) == source.get("record_sha256")
+                        and self._admin_pin_effect_audited("PHS2_PAIRED_RECOVERY_DEFERRED", key))
         if action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
             labels = intent.get("labels") or ()
             parked = self._parked_store().existing_label_path_any_worker(
@@ -7866,6 +8052,9 @@ class ContainerAudit:
                        for row in rows)
         if source.get("source_file") and action == "CA.TRAY_HOLD":
             if not self._admin_pin_effect_audited("PHS2_DAMAGED_PARKED_DEFERRED", key):
+                return False
+            path = Path(self.parked_trays_dir) / str(source["source_file"])
+            if not path.is_file() or file_sha256(path) != source.get("source_sha256"):
                 return False
             rows = self._parked_store().enumerate_key_evidence()
             return any(row.kind in {"parked_marker", "parked_identified"}
@@ -7904,7 +8093,7 @@ class ContainerAudit:
         if not isinstance(source, dict):
             return False
         action = intent.get("action")
-        if action not in {"CA.PRECHECK_HOLD", "CA.TRAY_HOLD"}:
+        if action not in {"CA.PRECHECK_HOLD", "CA.PAIR_HANDOFF", "CA.TRAY_HOLD"}:
             return False
         base = self._authorize_blocked_work_supervisor()
         if base is None:
@@ -7914,6 +8103,34 @@ class ContainerAudit:
                     "verification_id": intent["verification_id"],
                     "operation_key": intent["operation_key"], "action": action,
                     "target": intent["target"]["id"]}
+        if action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
+            store = self._paired_preflight_store()
+            path = store.directory / str(source["handoff_id"]) / "record.json"
+            if (not path.is_file() or (source.get("record_sha256")
+                                      and file_sha256(path) != source["record_sha256"])):
+                if self._admin_pin_restore_moves(intent):
+                    self._admin_pin_target_changed(intent)
+                return False
+            for name in ("hold", "current"):
+                store.move_original(
+                    path, name, expected_sha256=source[name + "_sha256"],
+                    move=lambda original, held, digest: self._admin_pin_move(
+                        approval, original, held, digest),
+                )
+            store.release(path)
+            return self._admin_pin_recovered_effect(intent)
+        if action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
+            current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+            archived = next((Path(move["target"]) for move in intent.get("moving") or ()
+                             if move.get("source") == str(current.resolve())), None)
+            if (current.exists() or archived is None or not archived.is_file()
+                    or file_sha256(archived) != source.get("current_sha256")):
+                return False
+            if not self._defer_saved_recovery_state(
+                    source["tray"], reason="supervisor_unsettled_tray_handoff",
+                    approval=approval, already_moved=True):
+                return False
+            return self._admin_pin_recovered_effect(intent)
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
             hold = self._preflight_hold_store()
             if hold.path.exists():
@@ -8022,6 +8239,13 @@ class ContainerAudit:
                                        "이 건의 원 key와 원본은 지원 인계 보류 중입니다.",
                                        parent=getattr(self, "root", None))
                 continue
+            if intent.get("state") == "TARGET_CHANGED":
+                messagebox.showinfo(
+                    "관리자 확인 다시 조회",
+                    "원본 변경을 확인했습니다. 같은 동작을 다시 선택해 바뀐 원본으로 새 PIN을 받으세요.",
+                    parent=getattr(self, "root", None),
+                )
+                continue
             if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
                 if not self._admin_pin_finish_unverified_detachment(intent):
                     continue
@@ -8075,11 +8299,17 @@ class ContainerAudit:
                     verification_id, intent["operation_key"])
                 if status == "CONSUMED":
                     intent = self._admin_pin_record_resumer(intent)
+                    if not self._admin_pin_check_moves(intent):
+                        continue
                     if (self._admin_pin_recovered_effect(intent)
                             or self._admin_pin_resume_intermediate(intent)):
-                        if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
-                            raise OSError("admin PIN recovery audit failed")
-                        store.transition(intent, "APPLIED")
+                        intent = store.read(intent["operation_key"])
+                        if intent.get("state") != "CONSUMED" or not self._admin_pin_check_moves(intent):
+                            continue
+                        if not self._admin_pin_complete(
+                                {"operation_key": intent["operation_key"]},
+                                self._admin_pin_recovered_effect):
+                            continue
                         messagebox.showinfo("관리자 확인 완료", "같은 key의 로컬 효과 전체를 확인했습니다.",
                                             parent=getattr(self, "root", None))
                     else:
@@ -8163,6 +8393,20 @@ class ContainerAudit:
         store = self._paired_preflight_store()
         try:
             path = store.pending_path()
+            if path is not None:
+                changed_intents = self._admin_pin_store().pending("CA.PAIR_HANDOFF", path.parent.name)
+                if any(row.get("state") == "TARGET_CHANGED" for row in changed_intents):
+                    old = store.read(path)
+                    originals = {name: Path(old[name]["path"]) for name in ("hold", "current")}
+                    if (all(original.is_file() for original in originals.values())
+                            and any(file_sha256(originals[name]) != old[name]["sha256"]
+                                    for name in originals)):
+                        store.supersede_changed_record(path)
+                        for changed_intent in changed_intents:
+                            if changed_intent.get("state") == "TARGET_CHANGED":
+                                self._admin_pin_store().transition(
+                                    changed_intent, "SUPERSEDED", reason="REBOUND_RECORD")
+                        path = None
             if path is None:
                 hold = self._preflight_hold_store().load()
                 current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
@@ -8199,12 +8443,14 @@ class ContainerAudit:
                     candidate = archived if archived.exists() else original
                     observed[name] = hashlib.sha256(candidate.read_bytes()).hexdigest()
                 return {"handoff_id": saved["id"],
+                        "record_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "hold_sha256": observed["hold"],
                         "current_sha256": observed["current"],
                         "labels": [held.get("master_raw"), current.get("master_label_code")]}
 
             def effect(_intent):
-                return store.is_released(path) and store.originals_match(path)
+                return bool(file_sha256(path) == _intent["source_snapshot"]["record_sha256"]
+                            and store.is_released(path) and store.originals_match(path))
 
             pin_approval = self._admin_pin_approval_for(
                 "CA.PAIR_HANDOFF", str(record["id"]), source,
@@ -8238,13 +8484,22 @@ class ContainerAudit:
                 raise PairedHandoffError("paired handoff audit failed")
             if not self._blocked_work_identity_matches(approval):
                 return False
-            store.move_original(path, "hold")
-            store.move_original(path, "current")
+            pin_intent = self._admin_pin_store().read(approval["operation_key"])
+            pin_source = pin_intent["source_snapshot"]
+            if file_sha256(path) != pin_source["record_sha256"]:
+                self._admin_pin_target_changed(pin_intent)
+                return False
+            for name in ("hold", "current"):
+                store.move_original(
+                    path, name, expected_sha256=pin_source[name + "_sha256"],
+                    move=lambda original, held, digest: self._admin_pin_move(
+                        approval, original, held, digest),
+                )
             store.release(path)
             if not self._admin_pin_complete(approval, effect):
                 return False
         except (OSError, ValueError, TypeError, PairedHandoffError, PreflightHoldError, TrayStateValidationError) as exc:
-            print(f"짝 원본 보류 실패: {exc.__class__.__name__}")
+            print(f"짝 원본 보류 실패: {exc.__class__.__name__}: {exc}")
             self._set_preflight_scan_input_locked(True)
             messagebox.showerror(
                 "두 원본 보류 대기",
@@ -8358,7 +8613,11 @@ class ContainerAudit:
             ):
                 if self._blocked_work_identity_matches(approval):
                     if current is not None:
-                        self._recheck_paired_preflight_receipt(current, approval=approval)
+                        current_source = path.parent / "current.original"
+                        if not current_source.is_file() and record is not None:
+                            current_source = Path(record["current"]["path"])
+                        self._recheck_paired_preflight_receipt(
+                            current, approval=approval, source_path=current_source)
                     else:
                         self._identify_unreadable_pair(path, approval)
             elif problems and messagebox.askyesno(
@@ -8370,31 +8629,38 @@ class ContainerAudit:
                 elif self._blocked_work_identity_matches(approval):
                     try:
                         def source():
+                            saved = store.read(path)
                             return {"handoff_id": path.parent.name,
                                     "record_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                                    "hold_sha256": saved["hold"]["sha256"],
+                                    "current_sha256": saved["current"]["sha256"],
                                     "problems": list(inspection.problems)}
 
                         def effect(intent):
-                            return self._admin_pin_effect_audited(
-                                "PHS2_PAIRED_RECOVERY_DEFERRED", intent["operation_key"])
+                            return bool(file_sha256(path) == intent["source_snapshot"]["record_sha256"]
+                                        and self._admin_pin_effect_audited(
+                                            "PHS2_PAIRED_RECOVERY_DEFERRED", intent["operation_key"]))
 
                         pin_approval = self._admin_pin_approval_for(
                             "CA.TRAY_HOLD", path.parent.name, source,
                             tuple(inspection.labels), effect)
                         if pin_approval is None:
                             continue
-                        audited = self._log_event(
-                            "PHS2_PAIRED_RECOVERY_DEFERRED",
-                            detail={"handoff_id": path.parent.name,
-                                    "reason": status,
-                                    **self._blocked_work_audit_identity(pin_approval)},
-                            synchronous=True,
-                            idempotency_key=f"paired-recovery-defer:{path.parent.name}:{uuid.uuid4().hex}",
-                            deduplicate=True,
-                        )
-                        if not audited:
-                            raise PairedHandoffError("paired recovery defer audit failed")
-                        self._admin_pin_complete(pin_approval, effect)
+                        with self._admin_pin_locked_sources(pin_approval, [
+                                (path, self._admin_pin_store().read(pin_approval["operation_key"])
+                                 ["source_snapshot"]["record_sha256"])]):
+                            audited = self._log_event(
+                                "PHS2_PAIRED_RECOVERY_DEFERRED",
+                                detail={"handoff_id": path.parent.name,
+                                        "reason": status,
+                                        **self._blocked_work_audit_identity(pin_approval)},
+                                synchronous=True,
+                                idempotency_key=f"paired-recovery-defer:{path.parent.name}:{uuid.uuid4().hex}",
+                                deduplicate=True,
+                            )
+                            if not audited:
+                                raise PairedHandoffError("paired recovery defer audit failed")
+                            self._admin_pin_complete(pin_approval, effect)
                     except Exception:
                         messagebox.showerror("보류 기록 대기", "감사 기록을 남기지 못했습니다. 이 묶음은 계속 보류합니다.", parent=self.root)
         if active_stale and self._blocked_work_identity_matches(approval):
@@ -8559,24 +8825,28 @@ class ContainerAudit:
                     evidence_id, source, tuple(labels), effect)
                 if pin_approval is None:
                     return
-                audited = self._log_event(
-                    "PHS2_AUDIT_EVIDENCE_BOUND",
-                    detail={"source_audit_id": evidence_id, "labels": labels,
-                            **self._blocked_work_audit_identity(pin_approval)},
-                    synchronous=True,
-                    idempotency_key=f"audit-evidence-bind:{evidence_id}", deduplicate=True,
-                    log_file_path_override=str(Path(self.save_folder) / f"audit-binding-{evidence_id}.csv"),
-                )
-                if not audited or not self._blocked_work_identity_matches(pin_approval):
-                    raise OSError("audit evidence binding failed")
-                rows = self._parked_store().enumerate_key_evidence(pair_store=self._paired_preflight_store())
-                if not any(row.evidence_id == evidence_id and not row.unidentified
-                           and {canonical_master_label_key(value) for value in row.labels}
-                           == {canonical_master_label_key(value) for value in labels}
-                           for row in rows):
-                    raise OSError("audit evidence binding readback failed")
-                if not self._admin_pin_complete(pin_approval, effect):
-                    return
+                row = next(row for row in self._parked_store().enumerate_key_evidence(
+                    pair_store=self._paired_preflight_store()) if row.evidence_id == evidence_id)
+                with self._admin_pin_locked_evidence(pin_approval, row.path, source):
+                    audited = self._log_event(
+                        "PHS2_AUDIT_EVIDENCE_BOUND",
+                        detail={"source_audit_id": evidence_id, "labels": labels,
+                                **self._blocked_work_audit_identity(pin_approval)},
+                        synchronous=True,
+                        idempotency_key=f"audit-evidence-bind:{evidence_id}", deduplicate=True,
+                        log_file_path_override=str(Path(self.save_folder) / f"audit-binding-{evidence_id}.csv"),
+                    )
+                    if not audited or not self._blocked_work_identity_matches(pin_approval):
+                        raise OSError("audit evidence binding failed")
+                    rows = self._parked_store().enumerate_key_evidence(
+                        pair_store=self._paired_preflight_store())
+                    if not any(row.evidence_id == evidence_id and not row.unidentified
+                               and {canonical_master_label_key(value) for value in row.labels}
+                               == {canonical_master_label_key(value) for value in labels}
+                               for row in rows):
+                        raise OSError("audit evidence binding readback failed")
+                    if not self._admin_pin_complete(pin_approval, effect):
+                        return
             except Exception:
                 messagebox.showerror("보류 기록 대기", "감사 기록을 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
                 return
@@ -8633,26 +8903,30 @@ class ContainerAudit:
                     bound = (result.verified or read_recovery_file(
                         self._paired_preflight_store().stale_manager_path(marker),
                         "manager_hold").verified)
-                    return bool(bound and self._admin_pin_effect_audited(
+                    return bool(file_sha256(marker) == intent["source_snapshot"]["marker_sha256"]
+                                and bound and self._admin_pin_effect_audited(
                         "PHS2_STALE_HOLD_RECHECKED", intent["operation_key"]))
 
                 pin_approval = self._admin_pin_approval_for(
                     "CA.PAIR_RETRY", marker.stem, source, tuple(labels), effect)
                 if pin_approval is None:
                     return
-                audited = self._log_event(
-                    "PHS2_STALE_HOLD_RECHECKED",
-                    detail={"marker_file": marker.name, "labels": labels,
-                            **self._blocked_work_audit_identity(pin_approval)},
-                    synchronous=True,
-                    idempotency_key=f"stale-hold-recheck:{uuid.uuid4().hex}",
-                )
-                if not audited or not self._blocked_work_identity_matches(pin_approval):
-                    raise OSError("stale hold audit failed")
-                if not result.verified:
-                    self._paired_preflight_store().bind_unidentified_stale(marker, tuple(labels))
-                if not self._admin_pin_complete(pin_approval, effect):
-                    return
+                with self._admin_pin_locked_sources(pin_approval, [
+                        (marker, self._admin_pin_store().read(pin_approval["operation_key"])
+                         ["source_snapshot"]["marker_sha256"])]):
+                    audited = self._log_event(
+                        "PHS2_STALE_HOLD_RECHECKED",
+                        detail={"marker_file": marker.name, "labels": labels,
+                                **self._blocked_work_audit_identity(pin_approval)},
+                        synchronous=True,
+                        idempotency_key=f"stale-hold-recheck:{uuid.uuid4().hex}",
+                    )
+                    if not audited or not self._blocked_work_identity_matches(pin_approval):
+                        raise OSError("stale hold audit failed")
+                    if not result.verified:
+                        self._paired_preflight_store().bind_unidentified_stale(marker, tuple(labels))
+                    if not self._admin_pin_complete(pin_approval, effect):
+                        return
             except Exception:
                 messagebox.showerror("보류 기록 대기", "관리자 기록을 확인하지 못했습니다. 이 건은 계속 보류합니다.", parent=self.root)
                 return
@@ -8723,25 +8997,39 @@ class ContainerAudit:
 
                 def effect(_intent):
                     marker = read_recovery_file(path.parent / "manager-hold.json", "manager_hold")
-                    return bool(marker.verified and marker.value["labels"] == labels)
+                    pinned = _intent["source_snapshot"]
+                    return bool(file_sha256(path) == pinned["record_sha256"]
+                                and read_recovery_file(path.parent / "hold.original", "hold").sha256
+                                == pinned["hold_sha256"]
+                                and read_recovery_file(path.parent / "current.original", "current").sha256
+                                == pinned["current_sha256"]
+                                and marker.verified and marker.value["labels"] == labels)
 
                 pin_approval = self._admin_pin_approval_for(
                     "CA.PAIR_HANDOFF", path.parent.name, source, tuple(labels), effect)
                 if pin_approval is None:
                     return
-                audited = self._log_event(
-                    "PHS2_PAIRED_MANUAL_HOLD",
-                    detail={"handoff_id": path.parent.name, "labels": labels,
-                            **self._blocked_work_audit_identity(pin_approval)},
-                    synchronous=True,
-                    idempotency_key=f"paired-manual-hold:{path.parent.name}:{uuid.uuid4().hex}",
-                    deduplicate=True,
-                )
-                if not audited or not self._blocked_work_identity_matches(pin_approval):
-                    raise PairedHandoffError("manager hold audit failed")
-                store.bind_unidentified(path, tuple(labels))
-                if not self._admin_pin_complete(pin_approval, effect):
-                    return
+                pinned = self._admin_pin_store().read(pin_approval["operation_key"])["source_snapshot"]
+                guarded = [(path, pinned["record_sha256"])]
+                for name in ("hold", "current"):
+                    digest = pinned.get(name + "_sha256")
+                    original = path.parent / f"{name}.original"
+                    if digest and original.is_file():
+                        guarded.append((original, digest))
+                with self._admin_pin_locked_sources(pin_approval, guarded):
+                    audited = self._log_event(
+                        "PHS2_PAIRED_MANUAL_HOLD",
+                        detail={"handoff_id": path.parent.name, "labels": labels,
+                                **self._blocked_work_audit_identity(pin_approval)},
+                        synchronous=True,
+                        idempotency_key=f"paired-manual-hold:{path.parent.name}:{uuid.uuid4().hex}",
+                        deduplicate=True,
+                    )
+                    if not audited or not self._blocked_work_identity_matches(pin_approval):
+                        raise PairedHandoffError("manager hold audit failed")
+                    store.bind_unidentified(path, tuple(labels))
+                    if not self._admin_pin_complete(pin_approval, effect):
+                        return
             except Exception:
                 messagebox.showerror("두 원본 보류 대기", "관리자 보류 기록을 확인하지 못했습니다. 원본은 계속 보류합니다.", parent=self.root)
                 return
@@ -8762,6 +9050,7 @@ class ContainerAudit:
     @_recovery_item_firewall
     def _recheck_paired_preflight_receipt(
         self, current: Mapping[str, Any], *, approval: Optional[Mapping[str, str]] = None,
+        source_path: Optional[Path] = None,
     ) -> None:
         master = str(current.get("master_label_code") or "")
         scans = tuple(current.get("scanned_barcodes") or ())
@@ -8771,12 +9060,19 @@ class ContainerAudit:
         target_id = hashlib.sha256(canonical_master_label_key(master).encode("utf-8")).hexdigest()
 
         def source():
-            return {"master_label_code": master, "current": dict(current),
-                    "state_sha256": admin_pin_fingerprint(dict(current))}
+            observed = (read_recovery_file(source_path, "current").value
+                        if source_path is not None else dict(current))
+            return {"master_label_code": master, "current": dict(observed),
+                    "state_sha256": admin_pin_fingerprint(dict(observed)),
+                    **({"current_sha256": file_sha256(source_path)}
+                       if source_path is not None else {})}
 
         def effect(intent):
-            return self._admin_pin_effect_audited(
+            return bool((source_path is None or
+                         file_sha256(source_path) == intent["source_snapshot"]["current_sha256"])
+                        and self._admin_pin_effect_audited(
                 "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED", intent["operation_key"])
+                        )
 
         approval = self._admin_pin_approval_for(
             "CA.PAIR_RETRY", target_id, source, (master,), effect)
@@ -8785,16 +9081,21 @@ class ContainerAudit:
         if not self._blocked_work_identity_matches(approval):
             return
         try:
-            audited = bool(self._log_event(
-                "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED",
-                detail={
-                    "master_label_code": master,
-                    "scan_count": len(scans),
-                    **self._blocked_work_audit_identity(approval),
-                },
-                synchronous=True,
-                idempotency_key=f"paired-receipt-recheck:{uuid.uuid4().hex}",
-            ))
+            with self._admin_pin_locked_sources(
+                    approval, [(source_path, self._admin_pin_store().read(approval["operation_key"])
+                                ["source_snapshot"]["current_sha256"])] if source_path else []):
+                audited = bool(self._log_event(
+                    "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED",
+                    detail={
+                        "master_label_code": master,
+                        "scan_count": len(scans),
+                        **self._blocked_work_audit_identity(approval),
+                    },
+                    synchronous=True,
+                    idempotency_key=f"paired-receipt-recheck:{uuid.uuid4().hex}",
+                ))
+                if audited and not self._admin_pin_complete(approval, effect):
+                    return
         except Exception:
             audited = False
         if not audited:
@@ -8804,9 +9105,6 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return
-        if not self._admin_pin_complete(approval, effect):
-            return
-
         def work() -> str:
             if not self._blocked_work_identity_is_current(approval):
                 return "로그인 작업자 또는 역할이 바뀌어 원 요청을 조회하지 않았습니다. 관리자 확인을 다시 받으세요."
@@ -13885,8 +14183,19 @@ class ContainerAudit:
     def _defer_saved_recovery_state(
         self, saved_state: Dict[str, Any], *, reason: str = "restore_declined_same_worker",
         approval: Optional[Mapping[str, str]] = None,
+        already_moved: bool = False,
     ) -> bool:
         """Park a declined same-worker recovery before releasing current state."""
+
+        if approval and not already_moved:
+            current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+            pinned = self._admin_pin_store().read(approval["operation_key"])["source_snapshot"]
+            moved = self._quarantine_current_tray_state(
+                "admin PIN unsettled tray", approval=approval,
+                expected_sha256=str(pinned["current_sha256"]),
+            )
+            if not moved or current.exists() or file_sha256(Path(moved)) != pinned["current_sha256"]:
+                return False
 
         try:
             validate_tray_state(saved_state, default_tray_size=self.TRAY_SIZE)
@@ -13932,7 +14241,10 @@ class ContainerAudit:
             parked_logged = False
         if not parked_logged:
             return False
-        if not self._delete_current_tray_state():
+        if approval:
+            if (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists():
+                return False
+        elif not self._delete_current_tray_state():
             return False
         self.current_tray = TraySession()
         return True
@@ -13974,23 +14286,33 @@ class ContainerAudit:
         if not self._blocked_work_identity_matches(approval):
             return False
         try:
-            state = self._current_tray_state_snapshot()
+            current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+            target_id = hashlib.sha256(
+                canonical_master_label_key(master_label).encode("utf-8")).hexdigest()
+            changed_pending = any(
+                row.get("state") == "TARGET_CHANGED"
+                for row in self._admin_pin_store().pending("CA.TRAY_HOLD", target_id))
+            if changed_pending:
+                current_read = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                if not current_read.verified or current_read.value.get("master_label_code") != master_label:
+                    raise OSError("changed current tray needs a matching original")
+                state = current_read.value
+            else:
+                state = self._current_tray_state_snapshot()
             validate_tray_state(state, default_tray_size=self.TRAY_SIZE)
             existing = self._parked_store().existing_label_path_any_worker(
                 master_label=master_label,
             )
             if existing is not None and ParkedTrayStore.load(existing) != state:
                 raise FileExistsError("another parked owner already has this label")
-            if not self._save_tray_state_snapshot(state):
+            if not changed_pending and not self._save_tray_state_snapshot(state):
                 raise OSError("current tray snapshot write failed")
-            current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
             with current_path.open("r", encoding="utf-8") as stream:
                 if json.load(stream) != state:
                     raise OSError("current tray snapshot readback differs")
 
             def source():
-                saved = self._current_tray_state_snapshot()
-                return {"master_label_code": master_label, "tray": saved,
+                return {"master_label_code": master_label, "tray": state,
                         "current_sha256": hashlib.sha256(current_path.read_bytes()).hexdigest()}
 
             def effect(_intent):
@@ -14000,7 +14322,7 @@ class ContainerAudit:
 
             pin_approval = self._admin_pin_approval_for(
                 "CA.TRAY_HOLD",
-                hashlib.sha256(canonical_master_label_key(master_label).encode("utf-8")).hexdigest(),
+                target_id,
                 source, (master_label,), effect,
             )
             if pin_approval is None:
@@ -15975,7 +16297,9 @@ class ContainerAudit:
                     evidence = self._parked_store().enumerate_key_evidence()
                     return bool(self._admin_pin_effect_audited(
                         "PHS2_DAMAGED_PARKED_DEFERRED", intent["operation_key"])
+                        and file_sha256(path) == intent["source_snapshot"]["source_sha256"]
                         and any(row.kind in {"parked_marker", "parked_identified"}
+                                and row.content_sha256 == intent["source_snapshot"]["source_sha256"]
                                 and row.binds(label) for row in evidence))
 
                 pin_approval = self._admin_pin_approval_for(
@@ -15984,20 +16308,22 @@ class ContainerAudit:
                     source_snapshot, (label,), effect)
                 if pin_approval is None:
                     return
-                audited = self._log_event(
-                    "PHS2_DAMAGED_PARKED_DEFERRED",
-                    detail={"source_file": path.name, "source_sha256": result.sha256,
-                            "master_label_code": label,
-                            **self._blocked_work_audit_identity(pin_approval)},
-                    synchronous=True,
-                    idempotency_key=f"damaged-parked:{result.sha256}:{uuid.uuid4().hex}",
-                    deduplicate=True,
-                )
-                if not audited or not self._blocked_work_identity_matches(pin_approval):
-                    raise OSError("parked manager audit failed")
-                self._parked_store().bind_invalid_label(source, label)
-                if not self._admin_pin_complete(pin_approval, effect):
-                    return
+                pinned = self._admin_pin_store().read(pin_approval["operation_key"])["source_snapshot"]
+                with self._admin_pin_locked_sources(pin_approval, [(path, pinned["source_sha256"])]):
+                    audited = self._log_event(
+                        "PHS2_DAMAGED_PARKED_DEFERRED",
+                        detail={"source_file": path.name, "source_sha256": result.sha256,
+                                "master_label_code": label,
+                                **self._blocked_work_audit_identity(pin_approval)},
+                        synchronous=True,
+                        idempotency_key=f"damaged-parked:{result.sha256}:{uuid.uuid4().hex}",
+                        deduplicate=True,
+                    )
+                    if not audited or not self._blocked_work_identity_matches(pin_approval):
+                        raise OSError("parked manager audit failed")
+                    self._parked_store().bind_invalid_label(source, label)
+                    if not self._admin_pin_complete(pin_approval, effect):
+                        return
             except Exception:
                 messagebox.showerror("보류 기록 대기", "보류 기록을 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
                 return

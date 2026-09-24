@@ -368,6 +368,8 @@ class PreflightScanHoldStore:
         target_directory: str | os.PathLike[str],
         *,
         reason: str,
+        expected_sha256: str | None = None,
+        move=None,
     ) -> QuarantinedPreflightHold:
         with self._lock:
             snapshot = self.load()
@@ -379,7 +381,11 @@ class PreflightScanHoldStore:
             target = target_root / (
                 f"preflight_hold_{snapshot.preflight_id}_{timestamp}_{suffix}.json"
             )
-            if target.exists():
+            if expected_sha256 is not None:
+                if move is None:
+                    raise PreflightHoldError("PIN move journal is required")
+                move(self.path, target, expected_sha256)
+            elif target.exists():
                 existing = self.load_path(target)
                 if self.snapshot_hash(existing) != snapshot_hash:
                     raise PreflightHoldConflict("preflight quarantine identity collision")
