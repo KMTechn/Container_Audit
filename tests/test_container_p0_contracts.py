@@ -34,6 +34,29 @@ _TransferSealStore = TransferSealStore
 _TransferMemberExchangeStore = TransferMemberExchangeStore
 
 
+def _linked_test_pin(app, *, reject=False):
+    """Exercise the app PIN gate while legacy tests inspect their original writer."""
+    from container_admin_pin import AdminPinError
+
+    class Client:
+        def verify(self, **_kwargs):
+            if reject:
+                raise AdminPinError("PIN_INVALID")
+            return {"verification_id": "11111111-1111-4111-8111-111111111111",
+                    "proof": "fixture-proof"}
+
+        def redeem(self, **_kwargs):
+            return None
+
+        def status(self, *_args):
+            return "CONSUMED"
+
+    app._admin_pin_login_epoch = "fixture-epoch"
+    app.CURRENT_TRAY_STATE_FILE = getattr(app, "CURRENT_TRAY_STATE_FILE", "current.json")
+    app._admin_pin_client = Client()
+    app._prompt_blocked_work_admin_pin = lambda: ("fixture-manager", "123456")
+
+
 def _transfer_coordinator_owner_error_type():
     module = importlib.import_module("transfer_seal")
     return getattr(module, "TransferCoordinatorOwnerError", RuntimeError)
@@ -408,6 +431,7 @@ def test_supervisor_defer_blocked_tray_preserves_review_and_releases_only_after_
     app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
     app._pending_completion_event_contract = None
     monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    _linked_test_pin(app)
 
     assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
     parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
@@ -439,6 +463,8 @@ def test_supervisor_defer_denies_worker_and_audit_failure_keeps_active_owner(
     atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
     monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: "bad")
     monkeypatch.setattr("Container_Audit.messagebox.showwarning", lambda *_a, **_k: None)
+    app._log_event = lambda *_args, **_kwargs: True
+    _linked_test_pin(app, reject=True)
 
     assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is False
     assert (tmp_path / "current.json").exists()
@@ -489,6 +515,7 @@ def test_supervisor_defers_reviewed_member_exchange_without_changing_original_in
     app.show_status_message = lambda *_args, **_kwargs: None
     app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
     atomic_write_json(tmp_path / "current.json", state, ensure_ascii=False)
+    _linked_test_pin(app)
 
     assert app._defer_blocked_current_tray_for_supervisor(confirm=False) is True
     parked = list((tmp_path / "parked").glob("parked_recovery_*.json"))
@@ -1369,6 +1396,7 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
     store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    _linked_test_pin(app)
 
     assert app._quarantine_preflight_hold_for_supervisor(
         reason="supervisor_new_work_required",
@@ -1377,9 +1405,9 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     quarantined = app._quarantined_preflight_holds()
     assert len(quarantined) == 1
     assert store.exists() is False
-    assert audits[0][0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED"
-    assert audits[0][1]["held_scan_count"] == 1
-    assert audits[0][2]["synchronous"] is True
+    quarantine_audit = next(row for row in audits if row[0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED")
+    assert quarantine_audit[1]["held_scan_count"] == 1
+    assert quarantine_audit[2]["synchronous"] is True
 
     app.worker_role = "WORKER"
     app._authenticated_protected_admin = False
@@ -1389,7 +1417,7 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     assert store.load().state == module.HOLD_LOOKUP_FAILED
     assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
     assert quarantined[0].path.exists() is False
-    assert audits[1][0] == "PHS2_PREFLIGHT_HOLD_RESTORED"
+    assert any(row[0] == "PHS2_PREFLIGHT_HOLD_RESTORED" for row in audits)
 
 
 def test_unverified_worker_cannot_quarantine_hold_from_operations(tmp_path, monkeypatch):
@@ -1398,6 +1426,7 @@ def test_unverified_worker_cannot_quarantine_hold_from_operations(tmp_path, monk
     store.append("PRODUCT-A")
     store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
     monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *_a, **_k: "bad")
+    _linked_test_pin(app, reject=True)
 
     assert app._quarantine_preflight_hold_from_operations() is False
     assert store.exists() is True

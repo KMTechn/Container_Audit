@@ -36,6 +36,13 @@ def _test_app(tmp_path, monkeypatch):
     app._intercept_phs_reconciliation_scan = lambda _value: False
     app._intercept_active_tray_phs2_scan = lambda _value: False
     app._is_completed_master_label = lambda _value: False
+    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
+        "operator": app.worker_name, "role": getattr(app, "worker_role", "WORKER"),
+        "supervisor": "manager", "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
+        "verification_id": "atomic-test-verification",
+        "operation_key": "atomic-test-operation", "action": action, "target": target,
+    }
+    app._admin_pin_complete = lambda _approval, _effect: True
     app._item_catalog = lambda: SimpleNamespace(find_by_code=lambda _code: {"Item Code": "AAA2270730100"})
     begun = []
     app._begin_compact_phs2_preflight = lambda **kwargs: begun.append(kwargs["barcode"])

@@ -124,6 +124,26 @@ class ParkedTrayStore:
     ) -> tuple[KeyEvidence, ...]:
         """Read the remaining durable files on every call; never infer absence from an index."""
         rows: list[KeyEvidence] = []
+        pin_dir = self.directory / "admin_pin_intents"
+        for path in sorted(pin_dir.glob("admin-pin-*.json")) if pin_dir.exists() else ():
+            match = re.fullmatch(
+                r"admin-pin-([0-9a-f]{16})-([0-9a-f]{32})\.json", path.name,
+            )
+            target_digest = match.group(1) if match else ""
+            labels: tuple[str, ...] = ()
+            problem = ""
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(value, dict):
+                    raise ValueError("admin PIN intent is not an object")
+                if value.get("state") in {"APPLIED", "REJECTED", "SUPERSEDED"}:
+                    continue
+                labels = tuple(label for label in value.get("labels", ())
+                               if isinstance(label, str) and label)
+            except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
+                problem = "관리자 PIN intent 원본 확인 필요"
+            rows.append(KeyEvidence(path, "pin_intent", labels, target_digest,
+                                    problem=problem))
         if self.directory.exists():
             for path in sorted(self.directory.glob("parked_*.json*")):
                 name = path.name

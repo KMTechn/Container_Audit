@@ -5183,7 +5183,12 @@ def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_ma
     assert app.refreshed is True
 
     app.root = SimpleNamespace()
-    app._authorize_blocked_work_supervisor = lambda: {"actor": "manager"}
+    from tests.test_container_p0_contracts import _linked_test_pin
+    _linked_test_pin(app)
+    app._authorize_blocked_work_supervisor = lambda: {
+        "operator": app.worker_name, "role": "WORKER", "supervisor": "",
+        "login_epoch": app._admin_pin_login_epoch,
+    }
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
@@ -5199,7 +5204,7 @@ def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_ma
     app._show_invalid_parked_tray(str(parked_file))
     assert len(tasks) == 1
     tasks[0].finish(tasks[0].work())
-    assert audits[0][0] == "PHS2_DAMAGED_PARKED_DEFERRED"
+    assert any(event == "PHS2_DAMAGED_PARKED_DEFERRED" for event, _kwargs in audits)
     assert store.manager_hold_path(parked_file).is_file()
     assert parked_file.read_bytes() == original
     assert store.existing_label_path_any_worker(master_label=label) == parked_file

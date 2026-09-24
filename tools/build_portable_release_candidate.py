@@ -47,6 +47,7 @@ RUNTIME_ROOT_FILES = (
 APP_ROOT_FILES = (
     "best_time_records.py",
     "Container_Audit.py",
+    "container_admin_pin.py",
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
     "current_user_onboarding.py",

@@ -14,6 +14,14 @@ from event_stream_policy import (
 
 EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
     {
+        "ADMIN_PIN_APPLIED",
+        "ADMIN_PIN_CONSUMED",
+        "ADMIN_PIN_HANDOFF_UNKNOWN",
+        "ADMIN_PIN_REJECTED",
+        "ADMIN_PIN_RESUMED",
+        "ADMIN_PIN_SUPERSEDED",
+        "ADMIN_PIN_UNVERIFIED",
+        "ADMIN_PIN_UNVERIFIED_HOLD",
         "ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED",
         "ACTIVE_TRAY_PHS2_SCAN_REJECTED",
         "HISTORICAL_REPLACE_CANCEL",
@@ -65,7 +73,7 @@ def test_audited_container_csv_values_have_one_exhaustive_disposition():
         EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS
     )
     assert len(CONTRACT_CANDIDATE_EVENT_TYPES) == 14
-    assert len(LOCAL_ONLY_EVENT_TYPES) == 28
+    assert len(LOCAL_ONLY_EVENT_TYPES) == 36
     assert not FORBIDDEN_EVENT_TYPES
     assert not (CONTRACT_CANDIDATE_EVENT_TYPES & LOCAL_ONLY_EVENT_TYPES)
 

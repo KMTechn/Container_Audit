@@ -30,6 +30,14 @@ def _app(tmp_path, monkeypatch):
     app.worker_name = PROTECTED_ADMIN_OPERATOR_ID
     app.worker_role = "ADMIN"
     app._authenticated_protected_admin = True
+    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
+        "operator": app.worker_name, "role": app.worker_role,
+        "supervisor": PROTECTED_ADMIN_OPERATOR_ID,
+        "login_epoch": getattr(app, "_admin_pin_login_epoch", ""),
+        "verification_id": "paired-test-verification",
+        "operation_key": "paired-test-operation", "action": action, "target": target,
+    }
+    app._admin_pin_complete = lambda _approval, _effect: True
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app._invalidate_pending_scan_callbacks = lambda: None
     app._reset_ui_to_waiting_state = lambda: None
@@ -935,6 +943,12 @@ def test_every_durable_evidence_subset_blocks_original_key(
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
+        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+        "verification_id": "evidence-test-verification",
+        "operation_key": "evidence-test-operation", "action": action, "target": target,
+    }
+    app._admin_pin_complete = lambda _approval, _effect: True
     audited = []
     app._log_event = lambda event, **_kwargs: audited.append(event) or True
     app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
@@ -1132,6 +1146,12 @@ def test_audit_only_key_is_guarded_and_unknown_audit_can_be_bound(tmp_path, monk
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
     app._log_event = lambda event, **kwargs: append(event, kwargs["detail"]) or True
+    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
+        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+        "verification_id": "audit-test-verification",
+        "operation_key": "audit-test-operation", "action": action, "target": target,
+    }
+    app._admin_pin_complete = lambda _approval, _effect: True
     app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
         authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
     ))
@@ -1187,6 +1207,12 @@ def test_unidentified_stale_current_is_visible_and_manager_binds_exact_bytes(tmp
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
     app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    app._admin_pin_approval_for = lambda action, target, source, labels, effect: {
+        "operator": "manager", "role": "ADMIN", "supervisor": "manager",
+        "verification_id": "stale-test-verification",
+        "operation_key": "stale-test-operation", "action": action, "target": target,
+    }
+    app._admin_pin_complete = lambda _approval, _effect: True
     first = _saved_tray_state()["master_label_code"]
     second = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-OTHER|CLC=AAA2270730100|LBL=OTHER|HSH=0123456789abcdef"
     scans = iter((first, second))
