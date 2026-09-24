@@ -1651,11 +1651,14 @@ class ContainerAudit:
             / str(getattr(self, "CURRENT_TRAY_STATE_FILE", "") or "current.json"),
         )
 
-    def _paired_preflight_blocks_label(self, master: str) -> bool:
+    def _paired_preflight_blocks_label(self, master: str, *, restoring_paths: Sequence[Path] = ()) -> bool:
         try:
             return any(row.binds(master) for row in self._parked_store().enumerate_key_evidence(
                 pair_store=self._paired_preflight_store(),
-            ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent"})
+            ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent",
+                               "precheck_pin", "preflight_quarantine"}
+                and not (row.kind in {"precheck_pin", "preflight_quarantine"}
+                         and row.path.resolve() in restoring_paths))
         except Exception:
             # A failure to enumerate the shared recovery directory cannot be
             # assigned to one pair; keep the guard closed until it is readable.
@@ -1871,10 +1874,7 @@ class ContainerAudit:
             return False
         if not self._admin_pin_complete(approval, effect):
             return False
-        self._preflight_hold_snapshot = None
-        self._preflight_hold_draining = False
-        self._master_preflight_pending = False
-        self._set_preflight_scan_input_locked(False)
+        self._finish_preflight_handoff()
         if hasattr(self, "_update_parked_trays_list"):
             self._update_parked_trays_list()
         self.show_status_message(
@@ -1895,15 +1895,30 @@ class ContainerAudit:
             return False
         store = self._preflight_hold_store()
         try:
-            snapshot = PreflightScanHoldStore.load_path(filepath)
-        except PreflightHoldError:
+            path = Path(filepath).resolve()
+            original_present = path.is_file()
+            snapshot = PreflightScanHoldStore.load_path(path if original_present else store.path)
+            digest = file_sha256(path if original_present else store.path)
+            pin_store = self._admin_pin_store()
+            target_id = hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest()
+            intents = [row for row in pin_store.pending("CA.PRECHECK_HOLD", target_id, include_applied=True)
+                       if row.get("state") == "APPLIED"
+                       and (row.get("source_snapshot") or {}).get("preflight_id") == snapshot.preflight_id
+                       and row["source_snapshot"].get("hold_sha256") == digest]
+            resuming_restore = not original_present and any(
+                (row.get("restoration") or {}).get("state") == "RESTORING"
+                and (row.get("restoration") or {}).get("source") == str(path) for row in intents)
+            if not original_present and not resuming_restore:
+                raise PreflightHoldError("restoration original is unavailable")
+            restoring_paths = (path, *(pin_store.path(row["operation_key"]).resolve() for row in intents))
+        except (OSError, ValueError, TypeError, KeyError, PreflightHoldError):
             messagebox.showerror(
                 "보류 묶음 복원 실패",
                 "선택한 격리 보류 파일을 읽지 못했습니다.",
                 parent=getattr(self, "root", None),
             )
             return False
-        if self._paired_preflight_blocks_label(snapshot.master_raw):
+        if self._paired_preflight_blocks_label(snapshot.master_raw, restoring_paths=restoring_paths):
             messagebox.showwarning(
                 "보류 묶음 복원 차단",
                 "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요.",
@@ -1920,7 +1935,7 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if store.exists() or self._preflight_context_blocks_mutation():
+        if not resuming_restore and (store.exists() or self._preflight_context_blocks_mutation()):
             messagebox.showwarning(
                 "보류 묶음 복원 차단",
                 "현재 사전조회 보류 묶음을 먼저 해결해야 합니다.",
@@ -1942,11 +1957,10 @@ class ContainerAudit:
         ):
             return False
         try:
-            restored = store.restore_quarantined(filepath)
-            if restored.state == HOLD_DRAINING:
-                restored = store.mark_failed(
-                    error_code="PHS2_QUARANTINE_RESTORE_REVIEW"
-                )
+            for row in intents:
+                pin_store.write(dict(row, restoration={"state": "RESTORING", "source": str(path),
+                                                        "hold_sha256": digest}))
+            restored = store.load() if resuming_restore else store.restore_quarantined(filepath)
         except (OSError, PreflightHoldError) as exc:
             self._set_preflight_scan_input_locked(
                 self._preflight_context_blocks_mutation()
@@ -2002,6 +2016,22 @@ class ContainerAudit:
                 "복원 감사 기록을 남기지 못해 격리 상태를 유지합니다.",
                 parent=getattr(self, "root", None),
             )
+            return False
+        try:
+            for row in intents:
+                pin_store.write(dict(row, restoration={
+                    "state": "RESTORED", "source": str(path), "hold_sha256": digest,
+                    "master_label_key": canonical_master_label_key(restored.master_raw),
+                    "snapshot_hash": restored_hash, "audit_key": audit_key,
+                }))
+            if restored.state == HOLD_DRAINING:
+                restored = store.mark_failed(error_code="PHS2_QUARANTINE_RESTORE_REVIEW")
+        except (OSError, ValueError, PreflightHoldError):
+            self._set_preflight_scan_input_locked(self._preflight_context_blocks_mutation())
+            self._update_action_button_states()
+            messagebox.showerror("보류 묶음 복원 기록 대기",
+                                 "복원 완료 기록을 확인하지 못했습니다. 관리자 확인 다시 조회에서 재개하세요.",
+                                 parent=getattr(self, "root", None))
             return False
         if restored.worker != current_worker:
             self._preflight_hold_snapshot = None
@@ -7386,6 +7416,13 @@ class ContainerAudit:
     def _admin_pin_move(self, approval: Mapping[str, str], source: Path,
                         target: Path, expected_sha256: str) -> Path:
         try:
+            intent = self._admin_pin_store().read(approval["operation_key"])
+            for move in intent.get("moving") or ():
+                if move["source"] == str(source.resolve()):
+                    if move["sha256"] != expected_sha256:
+                        raise PinnedMoveError("PIN move source hash changed")
+                    source, target = Path(move["source"]), Path(move["target"])
+                    break
             return pinned_move(
                 source, target, expected_sha256,
                 lambda original, held, digest: self._admin_pin_journal_move(
@@ -7402,6 +7439,9 @@ class ContainerAudit:
             try:
                 status = recover_pinned_move(
                     Path(move["source"]), Path(move["target"]), move["sha256"])
+                if status == "SOURCE_UNMOVED":
+                    self._admin_pin_move(
+                        intent, Path(move["source"]), Path(move["target"]), move["sha256"])
             except PinnedTargetChanged:
                 if intent.get("state") == "CONSUMED" and self._admin_pin_restore_moves(intent):
                     self._admin_pin_target_changed(intent)
@@ -7840,6 +7880,7 @@ class ContainerAudit:
                             recovery_approval = {"operation_key": intent["operation_key"]}
                             if not self._admin_pin_complete(recovery_approval, effect_readback):
                                 return None
+                            self._admin_pin_release_completed_work(intent)
                             messagebox.showinfo("관리자 확인", "같은 요청의 완료 상태를 확인했습니다.",
                                                 parent=getattr(self, "root", None))
                             return None
@@ -8087,6 +8128,53 @@ class ContainerAudit:
                 return True
         return False
 
+    def _finish_preflight_handoff(self, *, paired: bool = False) -> None:
+        self._preflight_hold_snapshot = None
+        self._preflight_hold_draining = False
+        self._master_preflight_pending = False
+        if paired:
+            self.current_tray = TraySession()
+            self._invalidate_pending_scan_callbacks()
+        self._set_preflight_scan_input_locked(False)
+        if paired:
+            self._reset_ui_to_waiting_state()
+            self._update_all_summaries()
+            self._update_parked_trays_list()
+            self._update_action_button_states()
+
+    def _admin_pin_release_completed_work(self, intent: Mapping[str, Any]) -> None:
+        """Apply normal completion cleanup only to this recovered active owner."""
+        source = intent.get("source_snapshot") or {}
+        action = intent.get("action")
+        if not ((action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"))
+                or (action == "CA.PAIR_HANDOFF" and source.get("handoff_id"))
+                or (action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict))):
+            return
+        current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+        hold = self._preflight_hold_store()
+        if hold.path.exists() or current.exists():
+            return
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        master = str(getattr(getattr(self, "current_tray", None), "master_label_code", "") or "")
+        labels = {canonical_master_label_key(label) for label in intent.get("labels") or ()}
+        if master and canonical_master_label_key(master) not in labels:
+            return
+        if snapshot is not None:
+            if action == "CA.PRECHECK_HOLD":
+                if snapshot.preflight_id != source.get("preflight_id"):
+                    return
+            elif canonical_master_label_key(snapshot.master_raw) not in labels:
+                return
+        if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
+            self._finish_preflight_handoff()
+            self._update_parked_trays_list()
+            self._schedule_startup_transfer_recovery()
+        elif action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
+            self._finish_preflight_handoff(paired=True)
+        elif action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
+            self.current_tray = TraySession()
+            self._finish_blocked_current_tray_handoff()
+
     def _admin_pin_resume_intermediate(self, intent: Mapping[str, Any]) -> bool:
         """Finish only an original-byte-preserving, consumed local write."""
         source = intent.get("source_snapshot") or {}
@@ -8156,10 +8244,6 @@ class ContainerAudit:
                         return False
                 if not self._admin_pin_recovered_effect(intent):
                     return False
-                self._preflight_hold_snapshot = None
-                self._preflight_hold_draining = False
-                self._master_preflight_pending = False
-                self._set_preflight_scan_input_locked(False)
                 return True
             return False
         if action == "CA.TRAY_HOLD" and source.get("original_sha256"):
@@ -8234,6 +8318,10 @@ class ContainerAudit:
             return
         for intent in intents:
             action = intent.get("action")
+            if (action == "CA.PRECHECK_HOLD" and intent.get("state") == "APPLIED"
+                    and (intent.get("restoration") or {}).get("state") == "RESTORING"):
+                self.restore_quarantined_preflight_hold(intent["restoration"]["source"])
+                continue
             if intent.get("state") == "HANDED_OFF_UNKNOWN":
                 messagebox.showwarning("PIN 지원 인계",
                                        "이 건의 원 key와 원본은 지원 인계 보류 중입니다.",
@@ -8310,6 +8398,7 @@ class ContainerAudit:
                                 {"operation_key": intent["operation_key"]},
                                 self._admin_pin_recovered_effect):
                             continue
+                        self._admin_pin_release_completed_work(intent)
                         messagebox.showinfo("관리자 확인 완료", "같은 key의 로컬 효과 전체를 확인했습니다.",
                                             parent=getattr(self, "root", None))
                     else:
@@ -8452,13 +8541,15 @@ class ContainerAudit:
                 return bool(file_sha256(path) == _intent["source_snapshot"]["record_sha256"]
                             and store.is_released(path) and store.originals_match(path))
 
+            resuming = self._admin_pin_store().pending("CA.PAIR_HANDOFF", str(record["id"]))
             pin_approval = self._admin_pin_approval_for(
                 "CA.PAIR_HANDOFF", str(record["id"]), source,
                 tuple(label for label in (held.get("master_raw"), current.get("master_label_code"))
                       if isinstance(label, str) and label), effect,
             )
             if pin_approval is None:
-                return False
+                return any(self._admin_pin_store().read(row["operation_key"])["state"] == "APPLIED"
+                           for row in resuming)
             approval = pin_approval
             detail = {
                 "contract_version": record["schema"],
@@ -8508,16 +8599,7 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        self._preflight_hold_snapshot = None
-        self._preflight_hold_draining = False
-        self._master_preflight_pending = False
-        self.current_tray = TraySession()
-        self._invalidate_pending_scan_callbacks()
-        self._set_preflight_scan_input_locked(False)
-        self._reset_ui_to_waiting_state()
-        self._update_all_summaries()
-        self._update_parked_trays_list()
-        self._update_action_button_states()
+        self._finish_preflight_handoff(paired=True)
         self.show_status_message(
             "두 원본을 관리자 보류 목록으로 옮겼습니다. 다른 현품표 작업을 계속하세요.",
             self.COLOR_PRIMARY, duration=0,
@@ -8569,10 +8651,33 @@ class ContainerAudit:
                                   canonical_master_label_key(label) not in physical_keys
                                   for label in row.labels)))
         temp_entries = tuple(row for row in evidence if row.kind == "atomic_temp")
+        preflight_entries = tuple(row for row in evidence if row.kind in {"preflight_quarantine", "precheck_pin"})
         active_stale = bool(getattr(self, "_paired_stale_current_blocked", False))
-        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not active_stale:
+        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not preflight_entries and not active_stale:
             messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
             return
+        for row in preflight_entries:
+            if not self._blocked_work_identity_matches(approval):
+                return
+            if row.kind == "precheck_pin":
+                # The physical row owns restoration; the intent also survives a missing original.
+                if not any(set(row.labels) & set(other.labels) for other in preflight_entries
+                           if other.kind == "preflight_quarantine"):
+                    messagebox.showwarning("사전조회 격리 원본 확인",
+                                           "격리 원본을 찾지 못했습니다. 이 현품표는 계속 보류합니다. "
+                                           "원본과 복원 기록을 다시 확인하세요.", parent=self.root)
+                continue
+            if not row.problem and not row.unidentified:
+                self.restore_quarantined_preflight_hold(str(row.path))
+            elif row.evidence_id and messagebox.askyesno(
+                    "사전조회 격리 원본 확인",
+                    f"{row.path.name}: {row.problem or '현품표 확인 필요'}\n"
+                    "원 현품표를 중앙에서 확인하고 이 건만 보류할까요?", parent=self.root):
+                self._identify_unreadable_audit(row.evidence_id, approval,
+                                                label_count=1, known_labels=row.labels)
+            else:
+                messagebox.showwarning("사전조회 격리 원본 확인",
+                                       "원본을 읽지 못했습니다. 원본을 보존하고 다시 확인하세요.", parent=self.root)
         for path in paths:
             if not self._blocked_work_identity_matches(approval):
                 return
@@ -14345,6 +14450,15 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
+        self._finish_blocked_current_tray_handoff()
+        self.show_status_message(
+            "미확정 묶음을 보류했습니다. 다른 현품표 작업을 시작할 수 있습니다. "
+            "원 묶음은 보류 목록에서 다시 확인하세요.",
+            self.COLOR_PRIMARY, duration=0,
+        )
+        return True
+
+    def _finish_blocked_current_tray_handoff(self) -> None:
         self._pending_operator_review_snapshot = None
         self._pending_completion_event_contract = None
         presenter = self._warning_state_presenter()
@@ -14356,6 +14470,7 @@ class ContainerAudit:
         presenter.acknowledge()
         self._stop_warning_beep()
         self._invalidate_pending_scan_callbacks()
+        self._set_preflight_scan_input_locked(False)
         self.scanned_listbox.delete(0, tk.END)
         self._reset_ui_to_waiting_state()
         self._update_all_summaries()
@@ -14363,12 +14478,6 @@ class ContainerAudit:
         self._show_left_sidebar_view("parked")
         self._render_warning_state()
         self._update_action_button_states()
-        self.show_status_message(
-            "미확정 묶음을 보류했습니다. 다른 현품표 작업을 시작할 수 있습니다. "
-            "원 묶음은 보류 목록에서 다시 확인하세요.",
-            self.COLOR_PRIMARY, duration=0,
-        )
-        return True
 
     def _log_event(
         self,

@@ -256,7 +256,7 @@ def assert_other_phs2_starts(app, blocked_label):
     assert not app._preflight_context_blocks_mutation()
     assert not app._scan_entry_admission_block_reason()
     assert app._paired_preflight_blocks_label(blocked_label)
-    app.current_tray = TraySession()
+    assert not getattr(getattr(app, "current_tray", None), "master_label_code", "")
     app.is_idle = False
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -268,8 +268,16 @@ def assert_other_phs2_starts(app, blocked_label):
     app.show_fullscreen_warning = lambda *_args: None
     started = []
     app._begin_compact_phs2_preflight = lambda **kwargs: started.append(kwargs["barcode"])
-    app._process_barcode_logic(blocked_label)
-    app._process_barcode_logic(other)
+    entry = {"text": ""}
+    app.scan_entry = SimpleNamespace(
+        get=lambda: entry["text"],
+        delete=lambda *_args: entry.update(text=""),
+        configure=lambda **_kwargs: None,
+    )
+    app.root = SimpleNamespace(after=lambda _delay, callback, *args: callback(*args))
+    for label in (blocked_label, other):
+        entry["text"] = label
+        app.process_barcode()
     assert started == [other]
 
 
@@ -792,9 +800,13 @@ def test_paired_handoff_resumes_same_consumed_key_across_writer_boundaries(
         app._recheck_admin_pin_intents()
     else:
         # The consumed key now completes inside the restart/requery path.
-        app._defer_paired_preflight_from_operations()
+        assert app._defer_paired_preflight_from_operations() is True
     assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
+    assert app._preflight_hold_snapshot is None
+    assert not app._preflight_context_blocks_mutation()
+    assert not app._scan_entry_admission_block_reason()
+    assert_other_phs2_starts(app, _current["master_label_code"])
 
 
 def test_changed_paired_current_restores_both_and_retries_new_record(monkeypatch, tmp_path):
@@ -1024,7 +1036,8 @@ def test_changed_unsettled_tray_retries_without_overwriting_active_bytes(monkeyp
     assert app._admin_pin_store().read(old["operation_key"])["state"] == "SUPERSEDED"
 
 
-def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, tmp_path):
+@pytest.mark.parametrize("boundary", ("after_move", "after_audit"))
+def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, tmp_path, boundary):
     from Container_Audit import ContainerAudit, messagebox
     from preflight_scan_hold import PreflightScanHoldStore
     from tests.test_container_p0_contracts import _preflight_hold_ownership_app
@@ -1047,6 +1060,8 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
     hold.append("PRODUCT-A")
     hold.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
     original = hold.path.read_bytes()
+    app._preflight_hold_snapshot = hold.load()
+    app._set_preflight_scan_input_locked(True)
     server = SignedPinServer()
     app._admin_pin_client = make_client(monkeypatch, server)
     app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
@@ -1064,10 +1079,17 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
             interrupted["once"] = True
             raise KeyboardInterrupt("simulated stop after durable move")
         return result
-    monkeypatch.setattr(PreflightScanHoldStore, "quarantine", crash_after_move)
-    with pytest.raises(KeyboardInterrupt):
-        app._quarantine_preflight_hold_for_supervisor(
-            reason="supervisor_new_work_required", confirm=False)
+    if boundary == "after_move":
+        monkeypatch.setattr(PreflightScanHoldStore, "quarantine", crash_after_move)
+        with pytest.raises(KeyboardInterrupt):
+            app._quarantine_preflight_hold_for_supervisor(
+                reason="supervisor_new_work_required", confirm=False)
+    else:
+        complete = app._admin_pin_complete
+        app._admin_pin_complete = lambda *_args: False
+        assert app._quarantine_preflight_hold_for_supervisor(
+            reason="supervisor_new_work_required", confirm=False) is False
+        app._admin_pin_complete = complete
     intent = app._admin_pin_store().list_pending()[0]
     assert intent["state"] == "CONSUMED" and not hold.path.exists()
     assert any(path.read_bytes() == original for path in app._preflight_hold_quarantine_directory().glob("*.json"))
@@ -1077,6 +1099,10 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
     assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
     assert app._admin_pin_store().read(intent["operation_key"])["resuming_operator"]["local_id"] == "worker-2"
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 1
+    assert app._preflight_hold_snapshot is None
+    assert not app._preflight_context_blocks_mutation()
+    assert not app._scan_entry_admission_block_reason()
+    assert_other_phs2_starts(app, "MASTER")
 
 
 def test_stale_recheck_recovery_reads_marker_with_json_suffix(monkeypatch, tmp_path):

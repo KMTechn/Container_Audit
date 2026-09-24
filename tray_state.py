@@ -821,7 +821,7 @@ def quarantine_tray_state_file(path: str | Path, *, now: datetime.datetime | Non
     if expected_sha256 is not None:
         if move is None:
             raise OSError("PIN move journal is required")
-        move(source, target, expected_sha256)
+        target = move(source, target, expected_sha256)
     else:
         source.replace(target)
     return target

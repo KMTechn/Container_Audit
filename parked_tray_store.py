@@ -124,6 +124,7 @@ class ParkedTrayStore:
     ) -> tuple[KeyEvidence, ...]:
         """Read the remaining durable files on every call; never infer absence from an index."""
         rows: list[KeyEvidence] = []
+        quarantine_labels: dict[str, tuple[str, ...]] = {}
         pin_dir = self.directory / "admin_pin_intents"
         for path in sorted(pin_dir.glob("admin-pin-*.json")) if pin_dir.exists() else ():
             match = re.fullmatch(
@@ -132,18 +133,55 @@ class ParkedTrayStore:
             target_digest = match.group(1) if match else ""
             labels: tuple[str, ...] = ()
             problem = ""
+            kind = "pin_intent"
             try:
                 value = json.loads(path.read_text(encoding="utf-8"))
                 if not isinstance(value, dict):
                     raise ValueError("admin PIN intent is not an object")
-                if value.get("state") in {"APPLIED", "REJECTED", "SUPERSEDED"}:
+                precheck = (value.get("action") == "CA.PRECHECK_HOLD"
+                            and value.get("state") == "APPLIED")
+                restored = value.get("restoration") or {}
+                source = value.get("source_snapshot") or {}
+                if (precheck and restored.get("state") == "RESTORED"
+                        and restored.get("hold_sha256") == source.get("hold_sha256")
+                        and restored.get("master_label_key") in {
+                            canonical_master_label_key(label) for label in value.get("labels", ())}
+                        and restored.get("snapshot_hash")
+                        and restored.get("audit_key") == (
+                            f"preflight-hold-restore:{source.get('preflight_id')}:{restored['snapshot_hash']}")):
+                    continue
+                if not precheck and value.get("state") in {"APPLIED", "REJECTED", "SUPERSEDED"}:
                     continue
                 labels = tuple(label for label in value.get("labels", ())
                                if isinstance(label, str) and label)
-            except (OSError, UnicodeError, ValueError, TypeError, RecursionError):
+                if precheck:
+                    kind = "precheck_pin"
+                    for move in value.get("moving") or ():
+                        quarantine_labels[str(Path(move["target"]).resolve())] = labels
+            except (OSError, UnicodeError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
                 problem = "관리자 PIN intent 원본 확인 필요"
-            rows.append(KeyEvidence(path, "pin_intent", labels, target_digest,
+            rows.append(KeyEvidence(path, kind, labels, target_digest,
                                     problem=problem))
+        quarantine = self.directory / "preflight_hold_quarantine"
+        for path in sorted(quarantine.glob("preflight_hold_*.json")) if quarantine.exists() else ():
+            result = read_recovery_file(path, "hold")
+            labels = list(quarantine_labels.get(str(path.resolve()), ()))
+            if result.verified:
+                labels.append(result.value["master_raw"])
+            elif result.raw is not None:
+                try:
+                    value = json.loads(result.raw.decode("utf-8"))
+                    if (isinstance(value, dict) and isinstance(value.get("master_raw"), str)
+                            and value["master_raw"].strip()):
+                        labels.append(value["master_raw"])
+                except (UnicodeError, ValueError, TypeError, RecursionError):
+                    pass
+            evidence_id = hashlib.sha256(
+                (str(path.resolve()) + ":" + result.sha256).encode("utf-8")
+            ).hexdigest() if result.sha256 else ""
+            rows.append(KeyEvidence(path, "preflight_quarantine", tuple(dict.fromkeys(labels)),
+                                    unidentified=not labels, problem=result.reason or "",
+                                    evidence_id=evidence_id, content_sha256=result.sha256 or ""))
         if self.directory.exists():
             for path in sorted(self.directory.glob("parked_*.json*")):
                 name = path.name
@@ -388,7 +426,7 @@ class ParkedTrayStore:
                         and isinstance(source_audit_id, str) and source_audit_id):
                     known_by_audit.setdefault(source_audit_id, []).extend(known)
             for index, row in enumerate(rows):
-                if row.kind in {"stale_current", "atomic_temp"} and row.evidence_id in known_by_audit:
+                if row.kind in {"stale_current", "atomic_temp", "preflight_quarantine"} and row.evidence_id in known_by_audit:
                     labels = tuple(dict.fromkeys((*row.labels, *known_by_audit[row.evidence_id])))
                     rows[index] = KeyEvidence(row.path, row.kind, labels, row.digest,
                                               not labels, row.problem, row.evidence_id,

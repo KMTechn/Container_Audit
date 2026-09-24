@@ -384,7 +384,7 @@ class PreflightScanHoldStore:
             if expected_sha256 is not None:
                 if move is None:
                     raise PreflightHoldError("PIN move journal is required")
-                move(self.path, target, expected_sha256)
+                target = move(self.path, target, expected_sha256)
             elif target.exists():
                 existing = self.load_path(target)
                 if self.snapshot_hash(existing) != snapshot_hash:

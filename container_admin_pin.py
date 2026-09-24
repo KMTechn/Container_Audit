@@ -243,14 +243,16 @@ class AdminPinIntentStore:
             raise ValueError("admin PIN intent differs")
         return value
 
-    def pending(self, action: str, target_id: str) -> list[dict[str, Any]]:
+    def pending(self, action: str, target_id: str, *, include_applied: bool = False) -> list[dict[str, Any]]:
         rows = []
         digest = self._target_digest(target_id)
         for path in sorted(self.directory.glob(f"admin-pin-{digest}-*.json")) if self.directory.exists() else ():
             row = self.read(str(uuid.UUID(hex=path.stem[-32:])))
             if row.get("target", {}).get("id") != target_id:
                 raise ValueError("admin PIN target differs from bound evidence")
-            if row.get("action") == action and row.get("state") not in {"APPLIED", "REJECTED", "SUPERSEDED"}:
+            if (row.get("action") == action
+                    and (row.get("state") not in {"APPLIED", "REJECTED", "SUPERSEDED"}
+                         or (include_applied and row.get("state") == "APPLIED"))):
                 rows.append(row)
         return rows
 
@@ -258,7 +260,9 @@ class AdminPinIntentStore:
         rows = []
         for path in sorted(self.directory.glob("admin-pin-*.json")) if self.directory.exists() else ():
             row = self.read(str(uuid.UUID(hex=path.stem[-32:])))
-            if row.get("state") not in {"APPLIED", "REJECTED", "SUPERSEDED"}:
+            if (row.get("state") not in {"APPLIED", "REJECTED", "SUPERSEDED"}
+                    or (row.get("action") == "CA.PRECHECK_HOLD"
+                        and (row.get("restoration") or {}).get("state") == "RESTORING")):
                 rows.append(row)
         return rows
 
