@@ -7585,6 +7585,8 @@ class ContainerAudit:
             self._admin_pin_detach_startup = False
 
     def _admin_pin_resume_unverified_detachments(self, *, startup: bool = False) -> None:
+        if not getattr(self, "parked_trays_dir", None):
+            return
         try:
             intents = self._admin_pin_store().list_pending()
         except (OSError, ValueError, TypeError):
