@@ -183,6 +183,37 @@ def test_operator_id_is_stable_and_web_safe():
     assert pin.operator_local_id("가" * 64).startswith("wh:")
 
 
+def test_operator_original_and_sent_id_are_audited_without_secret(monkeypatch, tmp_path):
+    server = SignedPinServer()
+    app, audits, _notices = make_headless_app(monkeypatch, tmp_path, server)
+    app.worker_name = "작업자 김"
+    source = lambda: {"version": 1}
+    approval = app._admin_pin_approval_for(
+        "CA.PAIR_RETRY", "a" * 64, source, (), lambda _intent: False)
+    assert approval is not None
+    intent = app._admin_pin_store().read(approval["operation_key"])
+    sent = pin.operator_local_id("작업자 김")
+    assert intent["operator_raw"] == "작업자 김"
+    assert intent["operator"]["local_id"] == sent
+    consumed = next(kwargs["detail"] for event, kwargs in audits if event == "ADMIN_PIN_CONSUMED")
+    assert consumed["operator_raw"] == "작업자 김"
+    assert consumed["operator"]["local_id"] == sent
+    verified_request = next(body for path, body in server.calls if path.endswith("/verifications"))
+    assert verified_request["operator"] == intent["operator"]
+    assert "operator_raw" not in verified_request
+    app.worker_name = "재개 작업자"
+    app._admin_pin_login_epoch = uuid.uuid4().hex
+    assert app._admin_pin_approval_for(
+        "CA.PAIR_RETRY", "a" * 64, source, (), lambda _intent: False) is not None
+    resumed = app._admin_pin_store().read(approval["operation_key"])
+    assert resumed["resuming_operator_raw"] == "재개 작업자"
+    resume_detail = next(kwargs["detail"] for event, kwargs in audits if event == "ADMIN_PIN_RESUMED")
+    assert resume_detail["resuming_operator_raw"] == "재개 작업자"
+    assert resume_detail["resuming_operator"]["local_id"] == pin.operator_local_id("재개 작업자")
+    assert b"194826" not in app._admin_pin_store().path(approval["operation_key"]).read_bytes()
+    assert b"test-proof" not in app._admin_pin_store().path(approval["operation_key"]).read_bytes()
+
+
 def test_damaged_other_key_does_not_block_healthy_key(tmp_path):
     store = pin.AdminPinIntentStore(tmp_path / "intents")
     first = {"operation_key": str(uuid.uuid4()), "target": {"id": "a" * 64},
@@ -216,6 +247,47 @@ def make_headless_app(monkeypatch, tmp_path, server):
     monkeypatch.setattr(messagebox, "showinfo", lambda *args, **kwargs: notices.append(args))
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
     return app, audits, notices
+
+
+def assert_other_phs2_starts(app, blocked_label):
+    from Container_Audit import TraySession
+
+    other = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-FREE|CLC=AAA2270730100|LBL=FREE|HSH=0123456789abcdef"
+    assert not app._preflight_context_blocks_mutation()
+    assert not app._scan_entry_admission_block_reason()
+    assert app._paired_preflight_blocks_label(blocked_label)
+    app.current_tray = TraySession()
+    app.is_idle = False
+    app.completed_master_labels = set()
+    app.master_label_replace_state = None
+    app._intercept_phs_reconciliation_scan = lambda _value: False
+    app._intercept_active_tray_phs2_scan = lambda _value: False
+    app._is_completed_master_label = lambda _value: False
+    app._item_catalog = lambda: SimpleNamespace(
+        find_by_code=lambda _code: {"Item Code": "AAA2270730100"})
+    app.show_fullscreen_warning = lambda *_args: None
+    started = []
+    app._begin_compact_phs2_preflight = lambda **kwargs: started.append(kwargs["barcode"])
+    app._process_barcode_logic(blocked_label)
+    app._process_barcode_logic(other)
+    assert started == [other]
+
+
+def offline_passive_app(monkeypatch, tmp_path):
+    from Container_Audit import TraySession, WarningPresenter
+
+    def offline(*_args):
+        raise TimeoutError("offline")
+    app, _audits, _notices = make_headless_app(monkeypatch, tmp_path, offline)
+    app.save_folder = str(tmp_path / "events")
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
+    app.TRAY_SIZE = 60
+    app.computer_id = "test-host"
+    app.current_tray = TraySession()
+    app.warning_presenter = WarningPresenter()
+    return app
 
 
 def test_headless_consumed_intent_resumes_same_key_before_writer(monkeypatch, tmp_path):
@@ -414,13 +486,176 @@ def test_offline_hold_is_key_specific_and_has_no_writer_approval(monkeypatch, tm
         ("original-label",), lambda _intent: False)
     assert first is None
     pending = app._admin_pin_store().pending("CA.TRAY_HOLD", "e" * 64)
-    assert len(pending) == 1 and pending[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert len(pending) == 1 and pending[0]["state"] == "UNVERIFIED_DETACHING"
     assert pending[0]["reason"] == "VERIFY_UNAVAILABLE"
     second = app._admin_pin_approval_for(
         "CA.TRAY_HOLD", "f" * 64, lambda: {"version": 1},
         ("other-label",), lambda _intent: False)
     assert second is not None and second["target"] == "f" * 64
-    assert [event for event, _ in audits].count("ADMIN_PIN_UNVERIFIED_HOLD") == 1
+    assert [event for event, _ in audits].count("ADMIN_PIN_UNVERIFIED_HOLD") == 0
+
+
+@pytest.mark.parametrize("route", ("retry", "hold"))
+@pytest.mark.parametrize("interrupted", (False, True))
+def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
+        monkeypatch, tmp_path, route, interrupted):
+    from Container_Audit import ContainerAudit, TraySession, WarningPresenter, messagebox
+    from storage_utils import atomic_write_json
+    from tests.test_paired_preflight_handoff import _app
+
+    app, hold_store, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    stale = hold_store.path.parent / "current.json"
+    atomic_write_json(stale, current)
+    original = stale.read_bytes()
+    quarantine = app._quarantine_current_tray_state
+    app._quarantine_current_tray_state = lambda _reason: None
+    app._load_current_tray_state()
+    assert app._paired_stale_current_blocked
+    app._quarantine_current_tray_state = quarantine
+    app._admin_pin_login_epoch = uuid.uuid4().hex
+    app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    app._admin_pin_client = make_client(
+        monkeypatch, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
+    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    audits = []
+    app._log_event = lambda event, **_kwargs: audits.append(event) or True
+    app.warning_presenter = WarningPresenter()
+    app._stop_warning_beep = lambda: None
+    app.scanned_listbox = SimpleNamespace(delete=lambda *_args: None)
+    app._reset_ui_to_waiting_state = lambda: None
+    app._update_all_summaries = lambda: None
+    app._render_warning_state = lambda: None
+    monkeypatch.setattr(messagebox, "askyesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(messagebox, "showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(messagebox, "showerror", lambda *_args, **_kwargs: None)
+    attempt = (app._retry_paired_stale_current_preservation if route == "retry"
+               else app._continue_after_paired_stale_current)
+    if interrupted:
+        def crash_after_move(reason):
+            result = quarantine(reason)
+            raise KeyboardInterrupt("stopped after original move")
+        app._quarantine_current_tray_state = crash_after_move
+        with pytest.raises(KeyboardInterrupt):
+            attempt()
+        assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_DETACHING"
+        assert "ADMIN_PIN_UNVERIFIED_HOLD" not in audits
+        app._quarantine_current_tray_state = quarantine
+        app._admin_pin_resume_unverified_detachments(startup=True)
+    else:
+        assert attempt() is False
+    intent = app._admin_pin_store().list_pending()[0]
+    assert intent["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert audits.count("ADMIN_PIN_UNVERIFIED_HOLD") == 1
+    assert not stale.exists()
+    assert any(path.read_bytes() == original for path in stale.parent.glob("current.json.bad-*"))
+    assert_other_phs2_starts(app, current["master_label_code"])
+    app._recheck_admin_pin_intents()
+    assert app._admin_pin_store().read(intent["operation_key"])["state"] == "HANDED_OFF_UNKNOWN"
+    assert app._paired_preflight_blocks_label(current["master_label_code"])
+
+
+def test_offline_stale_marker_identifies_two_keys_without_pin_effect(monkeypatch, tmp_path):
+    from storage_utils import atomic_write_json
+
+    app = offline_passive_app(monkeypatch, tmp_path)
+    first = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-A|CLC=AAA2270730100|LBL=A|HSH=0123456789abcdef"
+    second = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-B|CLC=AAA2270730100|LBL=B|HSH=0123456789abcdef"
+    marker = app._paired_preflight_store().directory / ("stale-current-" + ("a" * 64) + ".json")
+    atomic_write_json(marker, {"schema": "damaged", "labels": []})
+    original = marker.read_bytes()
+    source = {"marker_sha256": hashlib.sha256(marker.read_bytes()).hexdigest(),
+              "labels": [first, second], "state": {}}
+    assert app._preflight_context_blocks_mutation()
+    assert app._admin_pin_approval_for("CA.PAIR_RETRY", marker.stem, lambda: source,
+                                       (first, second), lambda _intent: False) is None
+    intent = app._admin_pin_store().list_pending()[0]
+    assert intent["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert marker.read_bytes() == original
+    assert_other_phs2_starts(app, first)
+    assert app._paired_preflight_blocks_label(second)
+
+
+@pytest.mark.parametrize("action", ("CA.PAIR_RETRY", "CA.TRAY_HOLD"))
+def test_offline_existing_pair_source_keeps_only_pair_keys(monkeypatch, tmp_path, action):
+    from Container_Audit import ContainerAudit, messagebox
+    from tests.test_paired_preflight_handoff import _app
+
+    app, _hold, current = _app(tmp_path, monkeypatch)
+    assert app._defer_paired_preflight_from_operations()
+    app._admin_pin_login_epoch = uuid.uuid4().hex
+    app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
+    app._admin_pin_client = make_client(
+        monkeypatch, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
+    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    monkeypatch.setattr(messagebox, "askyesno", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(messagebox, "showerror", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(messagebox, "showwarning", lambda *_args, **_kwargs: None)
+    record = app._paired_preflight_store().paths()[0]
+    labels = tuple(app._paired_preflight_store().inspect(record).labels)
+    if action == "CA.PAIR_RETRY":
+        source = {"master_label_code": current["master_label_code"],
+                  "current": dict(current), "state_sha256": pin.fingerprint(dict(current))}
+        target = hashlib.sha256(current["master_label_code"].encode()).hexdigest()
+    else:
+        source = {"handoff_id": record.parent.name,
+                  "record_sha256": hashlib.sha256(record.read_bytes()).hexdigest(),
+                  "problems": []}
+        target = record.parent.name
+    assert app._admin_pin_approval_for(action, target, lambda: source,
+                                       labels,
+                                       lambda _intent: False) is None
+    assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert_other_phs2_starts(app, current["master_label_code"])
+    assert all(app._paired_preflight_blocks_label(label) for label in labels)
+
+
+@pytest.mark.parametrize("action", ("CA.PAIR_HANDOFF", "CA.TRAY_HOLD"))
+def test_offline_audit_source_binds_key_without_approval_effect(monkeypatch, tmp_path, action):
+    app = offline_passive_app(monkeypatch, tmp_path)
+    audit_file = Path(app.local_events_folder) / "audit.csv"
+    audit_file.parent.mkdir(parents=True)
+    def log_event(event, detail=None, **_kwargs):
+        with audit_file.open("a", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=("event", "details"))
+            if stream.tell() == 0:
+                writer.writeheader()
+            writer.writerow({"event": event, "details": json.dumps(detail or {})})
+        return True
+    app._log_event = log_event
+    label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-AUDIT|CLC=AAA2270730100|LBL=AUDIT|HSH=0123456789abcdef"
+    other_bound = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-AUDIT2|CLC=AAA2270730100|LBL=AUDIT2|HSH=0123456789abcdef"
+    labels = (label, other_bound) if action == "CA.PAIR_HANDOFF" else (label,)
+    log_event("PHS2_PAIRED_RECOVERY_DEFERRED", {})
+    row = next(row for row in app._parked_store().enumerate_key_evidence(
+        pair_store=app._paired_preflight_store()) if row.kind == "audit")
+    assert row.unidentified
+    source = {"source_audit_id": row.evidence_id,
+              "source_sha256": row.content_sha256, "labels": list(labels)}
+    target = row.evidence_id
+    assert app._admin_pin_approval_for(action, target, lambda: source,
+                                       labels, lambda _intent: False) is None
+    assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert_other_phs2_starts(app, label)
+    assert all(app._paired_preflight_blocks_label(value) for value in labels)
+    assert not app._paired_preflight_blocks_label(
+        "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-FREE|CLC=AAA2270730100|LBL=FREE|HSH=0123456789abcdef")
+
+
+def test_offline_damaged_parked_source_binds_only_selected_key(monkeypatch, tmp_path):
+    app = offline_passive_app(monkeypatch, tmp_path)
+    label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-PARKED|CLC=AAA2270730100|LBL=PARKED|HSH=0123456789abcdef"
+    path = Path(app.parked_trays_dir) / "parked_damaged.json"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"{damaged")
+    original = path.read_bytes()
+    source = {"source_file": path.name, "source_sha256": hashlib.sha256(original).hexdigest(),
+              "label": label}
+    assert app._admin_pin_approval_for("CA.TRAY_HOLD", "parked-target", lambda: source,
+                                       (label,), lambda _intent: False) is None
+    assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert path.read_bytes() == original
+    assert_other_phs2_starts(app, label)
 
 
 @pytest.mark.parametrize("boundary", ("before_hold", "after_hold", "after_current", "after_release"))
@@ -558,6 +793,7 @@ def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatc
     assert not app._preflight_context_blocks_mutation()
     assert app._paired_preflight_blocks_label(label)
     assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    assert_other_phs2_starts(app, label)
 
 
 def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypatch, tmp_path):
@@ -566,7 +802,8 @@ def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypa
     from tests.test_container_p0_contracts import _saved_tray_state
     from label_qr import canonical_master_label_key
 
-    app, audits, _notices = make_headless_app(monkeypatch, tmp_path, SignedPinServer())
+    app, audits, _notices = make_headless_app(
+        monkeypatch, tmp_path, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
     app.save_folder = str(tmp_path / "events")
     app.CURRENT_TRAY_STATE_FILE = "current.json"
     app.PREFLIGHT_SCAN_HOLD_FILE = "hold.json"
@@ -592,16 +829,9 @@ def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypa
     app._update_action_button_states = lambda: None
     label = state["master_label_code"]
     target_id = hashlib.sha256(canonical_master_label_key(label).encode()).hexdigest()
-    intent = app._admin_pin_store().write({
-        "schema": "container-admin-pin-intent-v1", "state": "PREPARED",
-        "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
-        "verification_id": "", "admin_id": "manager-1", "action": "CA.TRAY_HOLD",
-        "target": {"id": target_id, "kind": "tray_hold", "state_fingerprint": "a" * 64},
-        "operator": {"local_id": "worker-1", "login_epoch": app._admin_pin_login_epoch},
-        "source_snapshot": {"tray": state, "current_sha256": hashlib.sha256(current.read_bytes()).hexdigest()},
-        "labels": [label], "reason": "",
-    })
-    app._admin_pin_failed(intent, "VERIFY_UNAVAILABLE", unknown=True)
+    source = lambda: {"tray": state, "current_sha256": hashlib.sha256(current.read_bytes()).hexdigest()}
+    assert app._admin_pin_approval_for("CA.TRAY_HOLD", target_id, source,
+                                       (label,), lambda _intent: False) is None
     assert not current.exists()
     parked = app._parked_store().existing_label_path_any_worker(master_label=label)
     assert parked is not None and app._parked_store().load(parked) == state
@@ -609,7 +839,8 @@ def test_offline_tray_hold_preserves_snapshot_and_clears_active_session(monkeypa
     assert not app._preflight_context_blocks_mutation()
     assert not app._scan_entry_admission_block_reason()
     assert app._paired_preflight_blocks_label(label)
-    assert [event for event, _ in audits] == ["ADMIN_PIN_UNVERIFIED_HOLD"]
+    assert [event for event, _ in audits] == ["ADMIN_PIN_UNVERIFIED", "ADMIN_PIN_UNVERIFIED_HOLD"]
+    assert_other_phs2_starts(app, label)
 
 
 def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, tmp_path):

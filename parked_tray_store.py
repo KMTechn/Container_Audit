@@ -191,6 +191,10 @@ class ParkedTrayStore:
                             labels.append(candidate)
                     except (UnicodeDecodeError, ValueError, TypeError, RecursionError):
                         pass
+                if not labels and not marker and not identified and result.sha256:
+                    binding = read_recovery_file(self.manager_hold_path(path), "parked_manager_hold")
+                    if binding.verified and binding.value["source_sha256"] == result.sha256:
+                        labels.append(binding.value["label"])
                 if marker and not result.verified:
                     identified_read = read_recovery_file(
                         path.with_name(name + f".identified-{result.sha256}.json"), "parked_manager_hold",
@@ -336,7 +340,8 @@ class ParkedTrayStore:
                 "PHS2_STALE_HOLD_RECHECKED", "PHS2_PAIRED_RECEIPT_RECHECK_REQUESTED",
                 "PHS2_ATOMIC_TEMP_QUARANTINED",
             }
-            audit_events.add("PHS2_AUDIT_EVIDENCE_BOUND")
+            audit_events.update({"PHS2_AUDIT_EVIDENCE_BOUND",
+                                 "PHS2_AUDIT_EVIDENCE_UNVERIFIED_HOLD"})
             audit_rows: list[tuple[Path, str, dict[str, Any], str]] = []
             damaged_audits: list[tuple[Path, str]] = []
             for path in sorted(audit_dir.glob("*.csv")):
@@ -378,7 +383,8 @@ class ParkedTrayStore:
                 if isinstance(handoff, str) and handoff:
                     known_by_handoff.setdefault(handoff, []).extend(known)
                 source_audit_id = detail.get("source_audit_id")
-                if (event == "PHS2_AUDIT_EVIDENCE_BOUND"
+                if (event in {"PHS2_AUDIT_EVIDENCE_BOUND",
+                              "PHS2_AUDIT_EVIDENCE_UNVERIFIED_HOLD"}
                         and isinstance(source_audit_id, str) and source_audit_id):
                     known_by_audit.setdefault(source_audit_id, []).extend(known)
             for index, row in enumerate(rows):

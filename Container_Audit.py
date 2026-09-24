@@ -2764,6 +2764,7 @@ class ContainerAudit:
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
         self._admin_pin_login_epoch = uuid.uuid4().hex
         self._load_session_state()
+        self._admin_pin_resume_unverified_detachments(startup=True)
         # A paired handoff (including a legacy mismatched DRAINING pair) owns
         # the exact on-disk bytes. Ordinary tray recovery may rewrite or delete
         # that slot, so inspect it read-only before offering recovery choices.
@@ -7292,8 +7293,10 @@ class ContainerAudit:
         return bool(self._log_event(
             event,
             detail={"action": intent["action"], "target": intent["target"],
-                    "operator": intent["operator"],
-                    "resuming_operator": intent.get("resuming_operator") or {},
+                     "operator": intent["operator"],
+                     "operator_raw": intent.get("operator_raw") or "",
+                     "resuming_operator": intent.get("resuming_operator") or {},
+                     "resuming_operator_raw": intent.get("resuming_operator_raw") or "",
                     "verification_id": intent.get("verification_id") or "",
                     "operation_key": intent["operation_key"],
                     "reason": intent.get("reason") or ""},
@@ -7310,7 +7313,8 @@ class ContainerAudit:
                     "login_epoch": base["login_epoch"]}
         if operator == intent["operator"] or operator == intent.get("resuming_operator"):
             return dict(intent)
-        resumed = dict(intent, resuming_operator=operator)
+        resumed = dict(intent, resuming_operator=operator,
+                       resuming_operator_raw=base["operator"])
         if not self._admin_pin_audit("ADMIN_PIN_RESUMED", resumed):
             raise AdminPinError("AUDIT_UNAVAILABLE", unknown=True)
         return self._admin_pin_store().write(resumed)
@@ -7348,33 +7352,53 @@ class ContainerAudit:
 
     def _admin_pin_detach_unverified(self, intent: Mapping[str, Any]) -> bool:
         """Park active original bytes as an unapproved hold so another key can start."""
-        source = intent.get("source_snapshot") or {}
+        source = intent.get("source_snapshot")
+        if not isinstance(source, dict):
+            raise ValueError("관리자 보류 원본 형식을 확인할 수 없습니다.")
         action = intent.get("action")
+        startup = bool(getattr(self, "_admin_pin_detach_startup", False))
+        clear_active = False
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
             hold = self._preflight_hold_store()
-            if not hold.path.is_file() or hashlib.sha256(hold.path.read_bytes()).hexdigest() != source["hold_sha256"]:
-                return False
-            moved = hold.quarantine(self._preflight_hold_quarantine_directory(),
-                                    reason="admin_pin_unverified_operator_hold")
-            if hashlib.sha256(moved.path.read_bytes()).hexdigest() != source["hold_sha256"]:
+            if hold.path.is_file():
+                if hashlib.sha256(hold.path.read_bytes()).hexdigest() != source["hold_sha256"]:
+                    return False
+                hold.quarantine(self._preflight_hold_quarantine_directory(),
+                                reason="admin_pin_unverified_operator_hold")
+            copies = self._preflight_hold_quarantine_directory().glob(
+                f"preflight_hold_{source.get('preflight_id', '')}_*.json")
+            if hold.path.exists() or not any(
+                    hashlib.sha256(path.read_bytes()).hexdigest() == source["hold_sha256"]
+                    for path in copies):
                 return False
             self._preflight_hold_snapshot = None
             self._preflight_hold_draining = False
             self._master_preflight_pending = False
             self._set_preflight_scan_input_locked(False)
-            if hasattr(self, "_update_parked_trays_list"):
+            if not startup and hasattr(self, "_update_parked_trays_list"):
                 self._update_parked_trays_list()
             return not self._preflight_context_blocks_mutation()
-        if action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
+        if action in {"CA.PAIR_HANDOFF", "CA.TRAY_HOLD"} and source.get("handoff_id"):
             store = self._paired_preflight_store()
             path = store.directory / str(source["handoff_id"]) / "record.json"
+            if not path.is_file():
+                return False
+            if source.get("record_sha256") and hashlib.sha256(path.read_bytes()).hexdigest() != source["record_sha256"]:
+                return False
             record = store.read(path)
-            if any(record[name]["sha256"] != source.get(name + "_sha256")
-                   for name in ("hold", "current")):
+            if action == "CA.PAIR_HANDOFF" and any(
+                    record[name]["sha256"] != source.get(name + "_sha256")
+                    for name in ("hold", "current")):
                 return False
             store.move_original(path, "hold")
             store.move_original(path, "current")
-            if not store.originals_match(path):
+            store.release(path)
+            if store.inspect(path).unidentified:
+                labels = tuple(intent.get("labels") or ())
+                if len(labels) != 2:
+                    return False
+                store.bind_unidentified(path, labels)
+            if not store.originals_match(path) or not store.is_released(path):
                 return False
             self._preflight_hold_snapshot = None
             self._preflight_hold_draining = False
@@ -7382,23 +7406,138 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self._set_preflight_scan_input_locked(False)
-            self._reset_ui_to_waiting_state()
-            self._update_all_summaries()
-            self._update_parked_trays_list()
+            if not startup:
+                self._reset_ui_to_waiting_state()
+                self._update_all_summaries()
+                self._update_parked_trays_list()
             return not self._preflight_context_blocks_mutation()
         if action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
             current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-            if (not current.is_file() or hashlib.sha256(current.read_bytes()).hexdigest()
-                    != source.get("current_sha256")):
-                return False
             state = source["tray"]
             validate_tray_state(state, default_tray_size=self.TRAY_SIZE)
+            expected = source.get("current_sha256")
+            if current.is_file() and hashlib.sha256(current.read_bytes()).hexdigest() != expected:
+                return False
             parked = self._parked_store().defer_recovery_state(
                 state, worker_name=self.worker_name,
                 computer_id=str(getattr(self, "computer_id", "") or ""))
-            if ParkedTrayStore.load(parked.path) != state or not self._delete_current_tray_state():
+            if ParkedTrayStore.load(parked.path) != state:
                 return False
+            if current.is_file():
+                raw = current.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != expected:
+                    return False
+                preserve_stale_bytes(current, raw)
+                moved = self._quarantine_current_tray_state("admin PIN unverified tray hold")
+                if not moved or hashlib.sha256(Path(moved).read_bytes()).hexdigest() != expected:
+                    return False
+            archived = current.with_name(f"{current.name}.bad-{expected}")
+            if current.exists() or not archived.is_file() or hashlib.sha256(archived.read_bytes()).hexdigest() != expected:
+                return False
+            clear_active = True
+        elif action in {"CA.PAIR_RETRY", "CA.TRAY_HOLD"} and source.get("original_sha256"):
+            name = str(source.get("source_file") or self.CURRENT_TRAY_STATE_FILE)
+            if Path(name).name != name:
+                return False
+            current = Path(self.save_folder) / name
+            original_sha = str(source["original_sha256"])
+            observed_sha = str(source.get("current_sha256") if action == "CA.PAIR_RETRY"
+                               else source.get("current_observed_sha256"))
+            if not re.fullmatch(r"[0-9a-f]{64}", original_sha) or not re.fullmatch(r"[0-9a-f]{64}", observed_sha):
+                return False
+            if current.is_file() and hashlib.sha256(current.read_bytes()).hexdigest() != observed_sha:
+                return False
+            original = current.with_name(f"{current.name}.bad-{original_sha}")
+            if not original.is_file():
+                original_bytes = getattr(self, "_paired_stale_current_original_bytes", None)
+                if original_bytes is not None and hashlib.sha256(original_bytes).hexdigest() == original_sha:
+                    preserve_stale_bytes(current, original_bytes)
+                elif current.is_file() and hashlib.sha256(current.read_bytes()).hexdigest() == original_sha:
+                    preserve_stale_bytes(current, current.read_bytes())
+            if not original.is_file() or hashlib.sha256(original.read_bytes()).hexdigest() != original_sha:
+                return False
+            if current.is_file():
+                raw = current.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != observed_sha:
+                    return False
+                preserve_stale_bytes(current, raw)
+            changed = current.with_name(f"{current.name}.bad-{observed_sha}")
+            if not changed.is_file() or hashlib.sha256(changed.read_bytes()).hexdigest() != observed_sha:
+                return False
+            self._paired_preflight_store().hold_stale_current(original, changed)
+            if current.is_file():
+                moved = self._quarantine_current_tray_state("admin PIN unverified stale current")
+                if not moved or hashlib.sha256(Path(moved).read_bytes()).hexdigest() != observed_sha:
+                    return False
+            if current.exists():
+                return False
+            clear_active = True
+        elif action == "CA.PAIR_RETRY" and source.get("marker_sha256"):
+            store = self._paired_preflight_store()
+            marker = store.directory / (str(intent["target"]["id"]) + ".json")
+            if not marker.is_file() or hashlib.sha256(marker.read_bytes()).hexdigest() != source["marker_sha256"]:
+                return False
+            if not read_recovery_file(marker, "stale_hold").verified:
+                labels = tuple(intent.get("labels") or ())
+                if len(labels) != 2:
+                    return False
+                store.bind_unidentified_stale(marker, labels)
+            return not self._preflight_context_blocks_mutation()
+        elif action == "CA.PAIR_RETRY" and source.get("state_sha256"):
+            master = str(source.get("master_label_code") or "")
+            rows = self._parked_store().enumerate_key_evidence(pair_store=self._paired_preflight_store())
+            return bool(master and isinstance(source.get("current"), dict)
+                        and source.get("state_sha256") == admin_pin_fingerprint(source["current"])
+                        and any(row.kind == "pair" and row.binds(master) for row in rows)
+                        and not self._preflight_context_blocks_mutation())
+        elif action in {"CA.PAIR_HANDOFF", "CA.TRAY_HOLD"} and source.get("source_audit_id"):
+            rows = self._parked_store().enumerate_key_evidence(pair_store=self._paired_preflight_store())
+            if not any(row.evidence_id == source["source_audit_id"]
+                       and row.content_sha256 == source.get("source_sha256") for row in rows):
+                return False
+            labels = tuple(intent.get("labels") or ())
+            if not labels or not self._log_event(
+                    "PHS2_AUDIT_EVIDENCE_UNVERIFIED_HOLD",
+                    detail={"source_audit_id": source["source_audit_id"],
+                            "source_sha256": source["source_sha256"],
+                            "labels": list(labels), "operation_key": intent["operation_key"]},
+                    synchronous=True,
+                    idempotency_key=f"admin-pin-unverified-evidence:{intent['operation_key']}",
+                    deduplicate=True):
+                return False
+            rows = self._parked_store().enumerate_key_evidence(pair_store=self._paired_preflight_store())
+            expected = {canonical_master_label_key(label) for label in labels}
+            return bool(any(row.evidence_id == source["source_audit_id"]
+                            and row.content_sha256 == source["source_sha256"]
+                            and not row.unidentified
+                            and {canonical_master_label_key(label) for label in row.labels} == expected
+                            for row in rows) and not self._preflight_context_blocks_mutation())
+        elif action == "CA.TRAY_HOLD" and source.get("source_file") and source.get("source_sha256"):
+            name = str(source["source_file"])
+            if Path(name).name != name:
+                return False
+            path = Path(self.parked_trays_dir) / name
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != source["source_sha256"]:
+                return False
+            label = str(source.get("label") or "")
+            if not label or not any(canonical_master_label_key(value) == canonical_master_label_key(label)
+                                    for value in intent.get("labels") or ()):
+                return False
+            rows = self._parked_store().enumerate_key_evidence()
+            if any(row.path == path and row.unidentified for row in rows):
+                base = path.with_name(name.removesuffix(".manager-hold.json"))
+                self._parked_store().bind_invalid_label(base, label)
+            rows = self._parked_store().enumerate_key_evidence()
+            return bool(any(row.path == path and not row.unidentified and row.binds(label)
+                            for row in rows) and not self._preflight_context_blocks_mutation())
+        else:
+            raise ValueError(f"지원하지 않는 관리자 보류 원본 형식입니다: {action}")
+        if clear_active:
             self.current_tray = TraySession()
+            self._paired_stale_current_blocked = False
+            self._master_preflight_pending = False
+            self._preflight_hold_snapshot = None
+            self._preflight_hold_draining = False
             self._pending_operator_review_snapshot = None
             self._pending_completion_event_contract = None
             presenter = self._warning_state_presenter()
@@ -7410,14 +7549,44 @@ class ContainerAudit:
             presenter.acknowledge()
             self._stop_warning_beep()
             self._invalidate_pending_scan_callbacks()
-            self.scanned_listbox.delete(0, tk.END)
-            self._reset_ui_to_waiting_state()
-            self._update_all_summaries()
-            self._update_parked_trays_list()
-            self._render_warning_state()
-            self._update_action_button_states()
+            self._set_preflight_scan_input_locked(False)
+            if not startup:
+                self.scanned_listbox.delete(0, tk.END)
+                self._reset_ui_to_waiting_state()
+                self._update_all_summaries()
+                self._update_parked_trays_list()
+                self._render_warning_state()
+                self._update_action_button_states()
             return not self._preflight_context_blocks_mutation()
-        return True
+        return False
+
+    def _admin_pin_finish_unverified_detachment(self, intent: Mapping[str, Any], *, startup: bool = False) -> bool:
+        self._admin_pin_detach_startup = startup
+        try:
+            if not self._admin_pin_detach_unverified(intent):
+                raise OSError("원본 readback 또는 활성 슬롯 해제에 실패했습니다.")
+            if intent.get("state") == "UNVERIFIED_DETACHING":
+                if not self._admin_pin_audit("ADMIN_PIN_UNVERIFIED_HOLD", intent):
+                    raise OSError("관리자 보류 완료 감사를 저장하지 못했습니다.")
+                self._admin_pin_store().transition(intent, "UNVERIFIED_OPERATOR_HOLD",
+                                                   reason=str(intent.get("reason") or ""))
+            return True
+        except (OSError, ValueError, TypeError, KeyError, PreflightHoldError,
+                PairedHandoffError, TrayStateValidationError) as exc:
+            messagebox.showerror("원본 보류 대기", f"이 건의 보류가 아직 끝나지 않았습니다. {exc}",
+                                 parent=getattr(self, "root", None))
+            return False
+        finally:
+            self._admin_pin_detach_startup = False
+
+    def _admin_pin_resume_unverified_detachments(self, *, startup: bool = False) -> None:
+        try:
+            intents = self._admin_pin_store().list_pending()
+        except (OSError, ValueError, TypeError):
+            return
+        for intent in intents:
+            if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
+                self._admin_pin_finish_unverified_detachment(intent, startup=startup)
 
     def _admin_pin_failed(self, intent: Mapping[str, Any], code: str, *, unknown: bool) -> None:
         store = self._admin_pin_store()
@@ -7428,12 +7597,11 @@ class ContainerAudit:
             "아니요를 누르면 같은 건을 다시 확인할 수 있습니다.",
             parent=getattr(self, "root", None),
         ))
-        event = ("ADMIN_PIN_UNVERIFIED_HOLD" if hold else
-                 "ADMIN_PIN_UNVERIFIED" if unknown else "ADMIN_PIN_REJECTED")
+        event = "ADMIN_PIN_UNVERIFIED" if unknown else "ADMIN_PIN_REJECTED"
         try:
             if not self._admin_pin_audit(event, failed):
                 raise OSError("admin PIN audit unavailable")
-            failed = store.transition(failed, "UNVERIFIED_OPERATOR_HOLD" if hold else
+            failed = store.transition(failed, "UNVERIFIED_DETACHING" if hold else
                                       "UNKNOWN" if unknown else "REJECTED",
                                       reason=code)
         except (OSError, ValueError):
@@ -7441,15 +7609,7 @@ class ContainerAudit:
                                  parent=getattr(self, "root", None))
             return
         if hold:
-            try:
-                if not self._admin_pin_detach_unverified(failed):
-                    raise OSError("unverified hold did not release the active slot")
-            except (OSError, ValueError, TypeError, PreflightHoldError,
-                    PairedHandoffError, TrayStateValidationError):
-                messagebox.showerror(
-                    "원본 보류 대기", "관리자 미확인 보류 기록은 남겼지만 활성 원본을 분리하지 못했습니다. "
-                    "이 작업대를 유지하고 같은 건을 다시 확인하세요.",
-                    parent=getattr(self, "root", None))
+            if not self._admin_pin_finish_unverified_detachment(failed):
                 return
         messagebox.showwarning("관리자 확인 대기", admin_pin_message(code),
                                parent=getattr(self, "root", None))
@@ -7473,6 +7633,9 @@ class ContainerAudit:
             if pending:
                 intent = pending[0]
                 active_intent = intent
+                if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
+                    self._admin_pin_finish_unverified_detachment(intent)
+                    return None
                 if intent.get("state") == "HANDED_OFF_UNKNOWN":
                     messagebox.showwarning("PIN 지원 인계",
                                            "이 건은 원본 효과를 증명할 수 없어 지원 인계 보류 중입니다.",
@@ -7567,7 +7730,8 @@ class ContainerAudit:
                     "schema": "container-admin-pin-intent-v1", "state": "PREPARED",
                     "operation_key": str(uuid.uuid4()), "request_id": str(uuid.uuid4()),
                     "verification_id": "", "admin_id": admin_id, "action": action,
-                    "target": target, "operator": operator, "source_evidence_sha256": source_hash,
+                    "target": target, "operator": operator, "operator_raw": base["operator"],
+                    "source_evidence_sha256": source_hash,
                     "source_snapshot": original,
                     "labels": list(labels), "reason": "",
                 })
@@ -7848,6 +8012,10 @@ class ContainerAudit:
                                        "이 건의 원 key와 원본은 지원 인계 보류 중입니다.",
                                        parent=getattr(self, "root", None))
                 continue
+            if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
+                if not self._admin_pin_finish_unverified_detachment(intent):
+                    continue
+                intent = store.read(intent["operation_key"])
             labels = intent.get("labels") or ()
             detail = (f"동작: {action}\n현품표: {', '.join(labels) or '확인 필요'}\n"
                       f"상태: {intent.get('state')} · 원인: {intent.get('reason') or '확인 대기'}")
