@@ -1656,7 +1656,7 @@ class ContainerAudit:
             return any(row.binds(master) for row in self._parked_store().enumerate_key_evidence(
                 pair_store=self._paired_preflight_store(),
             ) if row.kind in {"pair", "stale", "stale_marker", "stale_current", "atomic_temp", "audit", "pin_intent",
-                               "precheck_pin", "preflight_quarantine"}
+                               "precheck_pin", "preflight_quarantine", "directory_error"}
                 and not (row.kind in {"precheck_pin", "preflight_quarantine"}
                          and row.path.resolve() in restoring_paths))
         except Exception:
@@ -7327,7 +7327,7 @@ class ContainerAudit:
         try:
             return bool(self._admin_pin_store().list_pending())
         except (OSError, ValueError, TypeError):
-            return bool(tuple(self._admin_pin_store().directory.glob("admin-pin-*.json")))
+            return True  # Keep administrator requery available when listing fails.
 
     def _admin_pin_client_for_work(self) -> AdminPinClient:
         injected = getattr(self, "_admin_pin_client", None)
@@ -7437,6 +7437,12 @@ class ContainerAudit:
     def _admin_pin_check_moves(self, intent: Mapping[str, Any]) -> bool:
         for move in intent.get("moving") or ():
             try:
+                if intent.get("state") == "APPLIED":
+                    # Completed effects are read-only; changed evidence stays put.
+                    if (Path(move["source"]).exists()
+                            or file_sha256(Path(move["target"])) != move["sha256"]):
+                        return False
+                    continue
                 status = recover_pinned_move(
                     Path(move["source"]), Path(move["target"]), move["sha256"])
                 if status == "SOURCE_UNMOVED":
@@ -7768,7 +7774,12 @@ class ContainerAudit:
         except (OSError, ValueError, TypeError):
             return
         for intent in intents:
-            if intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
+            if intent.get("state") == "APPLIED":
+                if self._admin_pin_complete(
+                        {"operation_key": intent["operation_key"]},
+                        self._admin_pin_recovered_effect):
+                    self._admin_pin_release_completed_work(intent, startup=startup)
+            elif intent.get("state") in {"UNVERIFIED_DETACHING", "UNVERIFIED_OPERATOR_HOLD"}:
                 self._admin_pin_finish_unverified_detachment(intent, startup=startup)
 
     def _admin_pin_failed(self, intent: Mapping[str, Any], code: str, *, unknown: bool) -> None:
@@ -7987,7 +7998,7 @@ class ContainerAudit:
         try:
             store = self._admin_pin_store()
             intent = store.read(approval["operation_key"])
-            if intent.get("state") != "CONSUMED":
+            if intent.get("state") not in {"CONSUMED", "APPLIED"}:
                 raise OSError("admin PIN intent is no longer consumable")
             if not self._admin_pin_check_moves(intent):
                 raise OSError("admin PIN moved original differs")
@@ -8011,6 +8022,11 @@ class ContainerAudit:
                     stack.enter_context(locked_pinned_source(path, digest))
                 if not self._admin_pin_check_moves(intent) or not effect_readback(intent):
                     raise OSError("admin PIN effect readback incomplete")
+                if intent.get("state") == "APPLIED":
+                    # Only finish cleanup; never replay an already completed effect.
+                    if not self._admin_pin_effect_audited("ADMIN_PIN_APPLIED", intent["operation_key"]):
+                        raise OSError("admin PIN completion audit unavailable")
+                    return True
                 if not self._admin_pin_audit("ADMIN_PIN_APPLIED", intent):
                     raise OSError("admin PIN success audit unavailable")
                 if not self._admin_pin_check_moves(intent) or not effect_readback(intent):
@@ -8128,7 +8144,7 @@ class ContainerAudit:
                 return True
         return False
 
-    def _finish_preflight_handoff(self, *, paired: bool = False) -> None:
+    def _finish_preflight_handoff(self, *, paired: bool = False, startup: bool = False) -> None:
         self._preflight_hold_snapshot = None
         self._preflight_hold_draining = False
         self._master_preflight_pending = False
@@ -8136,13 +8152,13 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
         self._set_preflight_scan_input_locked(False)
-        if paired:
+        if paired and not startup:
             self._reset_ui_to_waiting_state()
             self._update_all_summaries()
             self._update_parked_trays_list()
             self._update_action_button_states()
 
-    def _admin_pin_release_completed_work(self, intent: Mapping[str, Any]) -> None:
+    def _admin_pin_release_completed_work(self, intent: Mapping[str, Any], *, startup: bool = False) -> None:
         """Apply normal completion cleanup only to this recovered active owner."""
         source = intent.get("source_snapshot") or {}
         action = intent.get("action")
@@ -8166,14 +8182,15 @@ class ContainerAudit:
             elif canonical_master_label_key(snapshot.master_raw) not in labels:
                 return
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
-            self._finish_preflight_handoff()
-            self._update_parked_trays_list()
-            self._schedule_startup_transfer_recovery()
+            self._finish_preflight_handoff(startup=startup)
+            if not startup:
+                self._update_parked_trays_list()
+                self._schedule_startup_transfer_recovery()
         elif action == "CA.PAIR_HANDOFF" and source.get("handoff_id"):
-            self._finish_preflight_handoff(paired=True)
+            self._finish_preflight_handoff(paired=True, startup=startup)
         elif action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict):
             self.current_tray = TraySession()
-            self._finish_blocked_current_tray_handoff()
+            self._finish_blocked_current_tray_handoff(startup=startup)
 
     def _admin_pin_resume_intermediate(self, intent: Mapping[str, Any]) -> bool:
         """Finish only an original-byte-preserving, consumed local write."""
@@ -8321,6 +8338,14 @@ class ContainerAudit:
             if (action == "CA.PRECHECK_HOLD" and intent.get("state") == "APPLIED"
                     and (intent.get("restoration") or {}).get("state") == "RESTORING"):
                 self.restore_quarantined_preflight_hold(intent["restoration"]["source"])
+                continue
+            if intent.get("state") == "APPLIED":
+                if self._admin_pin_complete(
+                        {"operation_key": intent["operation_key"]},
+                        self._admin_pin_recovered_effect):
+                    self._admin_pin_release_completed_work(intent)
+                    messagebox.showinfo("관리자 확인 완료", "같은 key의 완료 효과와 입력 정리를 확인했습니다.",
+                                        parent=getattr(self, "root", None))
                 continue
             if intent.get("state") == "HANDED_OFF_UNKNOWN":
                 messagebox.showwarning("PIN 지원 인계",
@@ -8640,6 +8665,12 @@ class ContainerAudit:
             return
         store = self._paired_preflight_store()
         evidence = self._parked_store().enumerate_key_evidence(pair_store=store)
+        directory_errors = tuple(row for row in evidence if row.kind == "directory_error")
+        for row in directory_errors:
+            messagebox.showwarning(
+                "보류 폴더 다시 확인", f"{row.path.name}: {row.problem}\n"
+                "확인된 현품표만 계속 보류합니다. 다른 현품표는 작업할 수 있습니다. "
+                "잠시 뒤 이 목록을 다시 열어 확인하세요.", parent=self.root)
         paths = tuple(row.path for row in evidence if row.kind == "pair")
         stale_entries = tuple((row.path, read_recovery_file(row.path, "stale_hold"))
                               for row in evidence if row.kind == "stale")
@@ -8653,7 +8684,7 @@ class ContainerAudit:
         temp_entries = tuple(row for row in evidence if row.kind == "atomic_temp")
         preflight_entries = tuple(row for row in evidence if row.kind in {"preflight_quarantine", "precheck_pin"})
         active_stale = bool(getattr(self, "_paired_stale_current_blocked", False))
-        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not preflight_entries and not active_stale:
+        if not paths and not stale_entries and not stale_current_entries and not temp_entries and not audit_entries and not preflight_entries and not active_stale and not directory_errors:
             messagebox.showinfo("두 원본 보류 목록", "인계된 두 원본 묶음이 없습니다.", parent=self.root)
             return
         for row in preflight_entries:
@@ -14458,7 +14489,7 @@ class ContainerAudit:
         )
         return True
 
-    def _finish_blocked_current_tray_handoff(self) -> None:
+    def _finish_blocked_current_tray_handoff(self, *, startup: bool = False) -> None:
         self._pending_operator_review_snapshot = None
         self._pending_completion_event_contract = None
         presenter = self._warning_state_presenter()
@@ -14471,6 +14502,8 @@ class ContainerAudit:
         self._stop_warning_beep()
         self._invalidate_pending_scan_callbacks()
         self._set_preflight_scan_input_locked(False)
+        if startup:
+            return
         self.scanned_listbox.delete(0, tk.END)
         self._reset_ui_to_waiting_state()
         self._update_all_summaries()

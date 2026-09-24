@@ -124,9 +124,23 @@ class ParkedTrayStore:
     ) -> tuple[KeyEvidence, ...]:
         """Read the remaining durable files on every call; never infer absence from an index."""
         rows: list[KeyEvidence] = []
+        directory_errors: list[KeyEvidence] = []
+
+        def listed_paths(directory: Path, pattern: str) -> tuple[Path, ...]:
+            try:
+                with os.scandir(directory) as entries:
+                    return tuple(sorted(Path(entry.path) for entry in entries
+                                        if Path(entry.name).match(pattern)))
+            except FileNotFoundError:
+                return ()
+            except OSError:
+                directory_errors.append(KeyEvidence(
+                    directory, "directory_error", problem="보류 폴더 목록을 읽지 못했습니다"))
+                return ()
+
         quarantine_labels: dict[str, tuple[str, ...]] = {}
         pin_dir = self.directory / "admin_pin_intents"
-        for path in sorted(pin_dir.glob("admin-pin-*.json")) if pin_dir.exists() else ():
+        for path in listed_paths(pin_dir, "admin-pin-*.json"):
             match = re.fullmatch(
                 r"admin-pin-([0-9a-f]{16})-([0-9a-f]{32})\.json", path.name,
             )
@@ -163,7 +177,7 @@ class ParkedTrayStore:
             rows.append(KeyEvidence(path, kind, labels, target_digest,
                                     problem=problem))
         quarantine = self.directory / "preflight_hold_quarantine"
-        for path in sorted(quarantine.glob("preflight_hold_*.json")) if quarantine.exists() else ():
+        for path in listed_paths(quarantine, "preflight_hold_*.json"):
             result = read_recovery_file(path, "hold")
             labels = list(quarantine_labels.get(str(path.resolve()), ()))
             if result.verified:
@@ -380,6 +394,11 @@ class ParkedTrayStore:
             }
             audit_events.update({"PHS2_AUDIT_EVIDENCE_BOUND",
                                  "PHS2_AUDIT_EVIDENCE_UNVERIFIED_HOLD"})
+            # A listing failure must not erase known holds. The independent
+            # local audit identifies their keys even if both folders are unreadable.
+            precheck_events = {"PHS2_PREFLIGHT_HOLD_QUARANTINED", "PHS2_PREFLIGHT_HOLD_RESTORED"}
+            if directory_errors:
+                audit_events.update(precheck_events)
             audit_rows: list[tuple[Path, str, dict[str, Any], str]] = []
             damaged_audits: list[tuple[Path, str]] = []
             for path in sorted(audit_dir.glob("*.csv")):
@@ -431,7 +450,14 @@ class ParkedTrayStore:
                     rows[index] = KeyEvidence(row.path, row.kind, labels, row.digest,
                                               not labels, row.problem, row.evidence_id,
                                               row.content_sha256)
+            restored_files = {detail.get("quarantine_file") for _path, event, detail, _id in audit_rows
+                              if event == "PHS2_PREFLIGHT_HOLD_RESTORED"
+                              and detail.get("quarantine_file")}
             for path, event, detail, evidence_id in audit_rows:
+                if event in precheck_events:
+                    if (event == "PHS2_PREFLIGHT_HOLD_RESTORED"
+                            or detail.get("quarantine_file") in restored_files):
+                        continue
                 labels = [detail.get(key) for key in (
                     "master_label_code", "master_raw", "hold_master", "current_master",
                 )]
@@ -458,14 +484,14 @@ class ParkedTrayStore:
                 labels = list(dict.fromkeys(label for label in labels
                                             if isinstance(label, str) and label))
                 rows.append(KeyEvidence(path, "audit", tuple(labels),
-                                        unidentified=not labels and event != "PHS2_ATOMIC_TEMP_QUARANTINED",
-                                        problem="원 현품표 신원 미확인 감사 사건" if not labels and event != "PHS2_ATOMIC_TEMP_QUARANTINED" else event,
+                                        unidentified=not labels and event not in precheck_events | {"PHS2_ATOMIC_TEMP_QUARANTINED"},
+                                        problem="원 현품표 신원 미확인 감사 사건" if not labels and event not in precheck_events | {"PHS2_ATOMIC_TEMP_QUARANTINED"} else event,
                                         evidence_id=evidence_id))
             for path, evidence_id in damaged_audits:
                 labels = tuple(dict.fromkeys(known_by_audit.get(evidence_id, ())))
                 rows.append(KeyEvidence(path, "audit", labels, unidentified=not labels,
                                         problem="관리자 감사 파일 판독 실패", evidence_id=evidence_id))
-        return tuple(rows)
+        return tuple([*rows, *directory_errors])
 
     def existing_label_path_any_worker(self, *, master_label: str) -> Path | None:
         phs2 = str((parse_new_format_qr(master_label) or {}).get("PHS") or "") == "2"

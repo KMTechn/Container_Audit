@@ -551,6 +551,7 @@ def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
     monkeypatch.setattr(messagebox, "showerror", lambda *_args, **_kwargs: None)
     attempt = (app._retry_paired_stale_current_preservation if route == "retry"
                else app._continue_after_paired_stale_current)
+    action = "CA.PAIR_RETRY" if route == "retry" else "CA.TRAY_HOLD"
     if interrupted:
         def crash_after_move(reason, **kwargs):
             result = quarantine(reason, **kwargs)
@@ -558,13 +559,14 @@ def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
         app._quarantine_current_tray_state = crash_after_move
         with pytest.raises(KeyboardInterrupt):
             attempt()
-        assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_DETACHING"
+        pending, = (row for row in app._admin_pin_store().list_pending() if row["action"] == action)
+        assert pending["state"] == "UNVERIFIED_DETACHING"
         assert "ADMIN_PIN_UNVERIFIED_HOLD" not in audits
         app._quarantine_current_tray_state = quarantine
         app._admin_pin_resume_unverified_detachments(startup=True)
     else:
         assert attempt() is False
-    intent = app._admin_pin_store().list_pending()[0]
+    intent, = (row for row in app._admin_pin_store().list_pending() if row["action"] == action)
     assert intent["state"] == "UNVERIFIED_OPERATOR_HOLD"
     assert audits.count("ADMIN_PIN_UNVERIFIED_HOLD") == 1
     assert not stale.exists()
@@ -627,7 +629,8 @@ def test_offline_existing_pair_source_keeps_only_pair_keys(monkeypatch, tmp_path
     assert app._admin_pin_approval_for(action, target, lambda: source,
                                        labels,
                                        lambda _intent: False) is None
-    assert app._admin_pin_store().list_pending()[0]["state"] == "UNVERIFIED_OPERATOR_HOLD"
+    intent, = app._admin_pin_store().pending(action, target)
+    assert intent["state"] == "UNVERIFIED_OPERATOR_HOLD"
     assert_other_phs2_starts(app, current["master_label_code"])
     assert all(app._paired_preflight_blocks_label(label) for label in labels)
 

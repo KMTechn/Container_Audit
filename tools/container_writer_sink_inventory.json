@@ -53,11 +53,11 @@
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 98,
+      "line": 99,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 125,
+          "line": 126,
           "operation": "self.session.post",
           "writer_admission_sources": []
         }
@@ -78,17 +78,17 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 149,
+      "line": 150,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 157,
+          "line": 158,
           "operation": "self.post",
           "writer_admission_sources": []
         },
         {
           "category": "network",
-          "line": 161,
+          "line": 162,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -112,11 +112,11 @@
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 183,
+      "line": 184,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 184,
+          "line": 185,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -137,11 +137,11 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 198,
+      "line": 199,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 204,
+          "line": 205,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -2566,11 +2566,11 @@
       ],
       "file": "parked_tray_store.py",
       "kind": "function",
-      "line": 675,
+      "line": 701,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 676,
+          "line": 702,
           "operation": "unlink",
           "writer_admission_sources": []
         }
@@ -6257,7 +6257,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "14f79eacdff0db9e14ce8563ecae03230da3059abe27316190fe2c7b4ea39545",
+  "inventory_sha256": "09d3f96e81f5477e5324e9b76e025efc8c1df88a90eaa9bc17883dddc2caeaaa",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -17898,7 +17898,7 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinIntentStore.write",
-      "line": 270,
+      "line": 280,
       "marker_kind": "decorator",
       "source": "admin_pin_intent"
     },
@@ -17906,7 +17906,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.post",
-      "line": 98,
+      "line": 99,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -17914,7 +17914,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.redeem",
-      "line": 198,
+      "line": 199,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -17922,7 +17922,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.status",
-      "line": 183,
+      "line": 184,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -17930,7 +17930,7 @@
       "direct_mutation_site_count": 2,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.verify",
-      "line": 149,
+      "line": 150,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -18202,7 +18202,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 18317,
+      "line": 18350,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -18434,7 +18434,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.defer_recovery_state",
-      "line": 527,
+      "line": 553,
       "marker_kind": "decorator",
       "source": "parked_recovery_defer"
     },
@@ -18442,7 +18442,7 @@
       "direct_mutation_site_count": 1,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.delete",
-      "line": 675,
+      "line": 701,
       "marker_kind": "decorator",
       "source": "parked_tray_delete"
     },
@@ -18450,7 +18450,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.load",
-      "line": 657,
+      "line": 683,
       "marker_kind": "decorator",
       "source": "parked_tray_load_normalize"
     },
@@ -18458,7 +18458,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.bind_invalid_label",
-      "line": 482,
+      "line": 508,
       "marker_kind": "decorator",
       "source": "parked_tray_manager_hold"
     },
@@ -18466,7 +18466,7 @@
       "direct_mutation_site_count": 0,
       "file": "parked_tray_store.py",
       "function": "parked_tray_store.ParkedTrayStore.save_state",
-      "line": 575,
+      "line": 601,
       "marker_kind": "decorator",
       "source": "parked_tray_save"
     },

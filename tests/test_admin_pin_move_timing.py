@@ -528,3 +528,194 @@ def test_audit_evidence_success_uses_separate_local_stream(monkeypatch, tmp_path
         assert app._admin_pin_audit("ADMIN_PIN_APPLIED", intent)
     assert destinations[0] != source
     assert source.read_bytes() == b"existing audit evidence"
+
+
+@pytest.mark.parametrize("action,source_name,held_name", ACTIONS)
+@pytest.mark.parametrize("restart", (False, True))
+def test_applied_readback_failure_resumes_completion(
+        monkeypatch, tmp_path, action, source_name, held_name, restart):
+    from container_admin_pin import AdminPinIntentStore
+    from tests.test_container_admin_pin import assert_other_phs2_starts
+
+    app, server, audits, original, label, invoke = _business_case(monkeypatch, tmp_path, action)
+    raw = original.read_bytes()
+    read = AdminPinIntentStore.read
+    interrupted = []
+
+    def fail_once(store, key):
+        row = read(store, key)
+        if row.get("state") == "APPLIED" and not interrupted:
+            interrupted.append(key)
+            raise PermissionError("readback after durable APPLIED")
+        return row
+
+    with monkeypatch.context() as failure:
+        failure.setattr(AdminPinIntentStore, "read", fail_once)
+        assert invoke() is False
+    assert len(interrupted) == 1
+    intent = app._admin_pin_store().read(interrupted[0])
+    assert intent["state"] == "APPLIED"
+    assert intent in app._admin_pin_store().list_pending()
+    if restart:
+        app._admin_pin_login_epoch = uuid.uuid4().hex
+        app._preflight_hold_store_instance = None
+        app.parked_tray_store = None
+        with monkeypatch.context() as startup:
+            def before_working_screen():
+                pytest.fail("startup cleanup reached working-screen widgets")
+            for name in ("_reset_ui_to_waiting_state", "_update_all_summaries",
+                         "_update_parked_trays_list", "_schedule_startup_transfer_recovery"):
+                startup.setattr(app, name, before_working_screen)
+            app._admin_pin_resume_unverified_detachments(startup=True)
+    else:
+        app._recheck_admin_pin_intents()
+    if action == "CA.PAIR_RETRY":
+        assert app._continue_after_paired_stale_current() is True
+    assert_other_phs2_starts(app, label)
+    # A repeated query must not consume another PIN or repeat the completed effect.
+    app._recheck_admin_pin_intents()
+    assert not app._preflight_context_blocks_mutation()
+    assert not original.exists()
+    move = next(row for row in intent["moving"] if row["source"] == str(original.resolve()))
+    assert Path(move["target"]).read_bytes() == raw
+    saved = app._admin_pin_store().read(intent["operation_key"])
+    assert saved["moving"] == intent["moving"] and saved["state"] == "APPLIED"
+    effect = {"CA.PRECHECK_HOLD": "PHS2_PREFLIGHT_HOLD_QUARANTINED",
+              "CA.PAIR_HANDOFF": "PHS2_PAIRED_PREFLIGHT_DEFERRED",
+              "CA.TRAY_HOLD": "TRAY_PARKED",
+              "CA.PAIR_RETRY": "PHS2_PAIRED_STALE_CURRENT_PRESERVATION_REQUESTED"}[action]
+    assert audits.count(effect) == 1
+    assert len([body for path, body in server.calls if path.endswith("/redemptions")
+                and body["operation_key"] == intent["operation_key"]]) == 1
+
+
+@pytest.mark.parametrize("action", ("CA.PRECHECK_HOLD", "CA.PAIR_HANDOFF"))
+def test_applied_requery_keeps_unverified_effect_locked(monkeypatch, tmp_path, action):
+    import json
+    from container_admin_pin import AdminPinIntentStore
+
+    app, _server, _audits, _original, _label, invoke = _business_case(monkeypatch, tmp_path, action)
+    read = AdminPinIntentStore.read
+    interrupted = []
+
+    def fail_once(store, key):
+        row = read(store, key)
+        if row.get("state") == "APPLIED" and not interrupted:
+            interrupted.append(key)
+            raise PermissionError("readback after durable APPLIED")
+        return row
+
+    with monkeypatch.context() as failure:
+        failure.setattr(AdminPinIntentStore, "read", fail_once)
+        assert invoke() is False
+    intent = app._admin_pin_store().read(interrupted[0])
+    held = Path(intent["moving"][0]["target"])
+    changed = json.loads(held.read_text(encoding="utf-8"))
+    changed["worker"] = "changed-worker"
+    held.write_text(json.dumps(changed), encoding="utf-8")
+    app._recheck_admin_pin_intents()
+    assert app._preflight_context_blocks_mutation()
+    assert app._admin_pin_store().read(intent["operation_key"])["state"] == "APPLIED"
+    assert json.loads(held.read_text(encoding="utf-8")) == changed
+
+
+@pytest.mark.parametrize("missing", ("intent", "quarantine", "neither"))
+@pytest.mark.parametrize("restart", (False, True))
+def test_directory_listing_failure_holds_only_identified_label(monkeypatch, tmp_path, missing, restart):
+    import os
+    from Container_Audit import messagebox
+    from tests.test_container_admin_pin import assert_other_phs2_starts
+
+    app, _server, _audits, _original, label, invoke = _business_case(monkeypatch, tmp_path, "CA.PRECHECK_HOLD")
+    assert invoke() is True
+    pin_store = app._admin_pin_store()
+    pin_path = next(pin_store.directory.glob("*.json"))
+    intent = pin_store.read(str(uuid.UUID(hex=pin_path.stem[-32:])))
+    held = Path(intent["moving"][0]["target"])
+    originals = {path: path.read_bytes() for path in (pin_path, held)}
+    if missing == "intent":
+        pin_path.rename(tmp_path / "preserved-intent.json")
+        denied = {held.parent.resolve()}
+    elif missing == "quarantine":
+        held.rename(tmp_path / "preserved-hold.json")
+        denied = {pin_store.directory.resolve()}
+    else:
+        denied = {held.parent.resolve(), pin_store.directory.resolve()}
+    if restart:
+        app.parked_tray_store = None
+        app._preflight_hold_store_instance = None
+        app._admin_pin_login_epoch = uuid.uuid4().hex
+    scandir = os.scandir
+
+    def deny(path):
+        if Path(path).resolve() in denied:
+            raise PermissionError("injected directory listing failure")
+        return scandir(path)
+
+    notices = []
+    with monkeypatch.context() as failure:
+        failure.setattr(os, "scandir", deny)
+        if restart:
+            app._admin_pin_resume_unverified_detachments(startup=True)
+        evidence = app._parked_store().enumerate_key_evidence(pair_store=app._paired_preflight_store())
+        errors = [row for row in evidence if row.kind == "directory_error"]
+        assert {row.path.resolve() for row in errors} == denied
+        assert all(row.problem and not row.unidentified for row in errors)
+        assert_other_phs2_starts(app, label)
+        failure.setattr(messagebox, "showwarning", lambda *args, **_kwargs: notices.append(args))
+        failure.setattr(messagebox, "askyesno", lambda *_args, **_kwargs: False)
+        app._show_paired_preflight_handoffs()
+        assert any("폴더" in str(args) and "다시" in str(args) for args in notices)
+        if pin_store.directory.resolve() in denied:
+            with pytest.raises(PermissionError):
+                pin_store.list_pending()
+            assert app._admin_pin_has_pending()
+    assert not any(row.kind == "directory_error" for row in
+                   app._parked_store().enumerate_key_evidence(pair_store=app._paired_preflight_store()))
+    for path, raw in originals.items():
+        preserved = tmp_path / ("preserved-intent.json" if path == pin_path else "preserved-hold.json")
+        assert (path if path.exists() else preserved).read_bytes() == raw
+
+
+def test_directory_listing_failure_does_not_revive_restored_precheck(monkeypatch, tmp_path):
+    import os
+
+    app, _server, _audits, _original, label, invoke = _business_case(monkeypatch, tmp_path, "CA.PRECHECK_HOLD")
+    assert invoke() is True
+    pin_store = app._admin_pin_store()
+    pin_path = next(pin_store.directory.glob("*.json"))
+    intent = pin_store.read(str(uuid.UUID(hex=pin_path.stem[-32:])))
+    held = Path(intent["moving"][0]["target"])
+    assert app.restore_quarantined_preflight_hold(str(held)) is True
+    denied = {held.parent.resolve(), app._admin_pin_store().directory.resolve()}
+    scandir = os.scandir
+
+    def deny(path):
+        if Path(path).resolve() in denied:
+            raise PermissionError("injected directory listing failure")
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", deny)
+    assert not app._paired_preflight_blocks_label(label)
+    snapshot = app._preflight_hold_store().load()
+    assert snapshot.master_raw == label and [item.raw_barcode for item in snapshot.items] == ["PRODUCT-A"]
+
+
+def test_unidentified_directory_error_does_not_lock_all_labels(monkeypatch, tmp_path):
+    import os
+    from parked_tray_store import ParkedTrayStore
+
+    store = ParkedTrayStore(tmp_path / "parked")
+    directory = store.directory / "preflight_hold_quarantine"
+    directory.mkdir(parents=True)
+    scandir = os.scandir
+
+    def deny(path):
+        if Path(path).resolve() == directory.resolve():
+            raise PermissionError("injected directory listing failure")
+        return scandir(path)
+
+    monkeypatch.setattr(os, "scandir", deny)
+    rows = store.enumerate_key_evidence()
+    assert len(rows) == 1 and rows[0].kind == "directory_error"
+    assert not rows[0].binds("PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-1|CLC=AAA2270730100|LBL=LBL-1|HSH=0123456789abcdef")

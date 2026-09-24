@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import re
 import unicodedata
 import uuid
@@ -225,11 +226,20 @@ class AdminPinIntentStore:
         return (target_id[:16] if re.fullmatch(r"[0-9a-f]{64}", target_id)
                 else hashlib.sha256(target_id.encode("utf-8")).hexdigest()[:16])
 
+    def _paths(self, pattern: str) -> tuple[Path, ...]:
+        # Path.glob hides scandir errors on supported Python versions.
+        try:
+            with os.scandir(self.directory) as entries:
+                return tuple(sorted(Path(entry.path) for entry in entries
+                                    if Path(entry.name).match(pattern)))
+        except FileNotFoundError:
+            return ()
+
     def path(self, operation_key: str, target_id: str = "") -> Path:
         if not _valid_uuid(operation_key):
             raise ValueError("invalid operation key")
         operation_hex = uuid.UUID(operation_key).hex
-        matches = tuple(self.directory.glob(f"admin-pin-*-{operation_hex}.json"))
+        matches = self._paths(f"admin-pin-*-{operation_hex}.json")
         if len(matches) == 1:
             return matches[0]
         if matches:
@@ -246,7 +256,7 @@ class AdminPinIntentStore:
     def pending(self, action: str, target_id: str, *, include_applied: bool = False) -> list[dict[str, Any]]:
         rows = []
         digest = self._target_digest(target_id)
-        for path in sorted(self.directory.glob(f"admin-pin-{digest}-*.json")) if self.directory.exists() else ():
+        for path in self._paths(f"admin-pin-{digest}-*.json"):
             row = self.read(str(uuid.UUID(hex=path.stem[-32:])))
             if row.get("target", {}).get("id") != target_id:
                 raise ValueError("admin PIN target differs from bound evidence")
@@ -258,11 +268,11 @@ class AdminPinIntentStore:
 
     def list_pending(self) -> list[dict[str, Any]]:
         rows = []
-        for path in sorted(self.directory.glob("admin-pin-*.json")) if self.directory.exists() else ():
+        for path in self._paths("admin-pin-*.json"):
             row = self.read(str(uuid.UUID(hex=path.stem[-32:])))
-            if (row.get("state") not in {"APPLIED", "REJECTED", "SUPERSEDED"}
-                    or (row.get("action") == "CA.PRECHECK_HOLD"
-                        and (row.get("restoration") or {}).get("state") == "RESTORING")):
+            # APPLIED can be durable before its readback or active-state cleanup.
+            if (row.get("state") not in {"REJECTED", "SUPERSEDED"}
+                    and (row.get("restoration") or {}).get("state") != "RESTORED"):
                 rows.append(row)
         return rows
 
