@@ -24,11 +24,13 @@ from typing import Any, BinaryIO, Callable, Dict, Iterable, Mapping
 from urllib.parse import parse_qsl, urlencode, urlparse
 
 from producer_runtime_client import (
+    CONTRACT_VERSION as RUNTIME_CONTRACT_VERSION,
     METADATA_FIELDS as RUNTIME_METADATA_FIELDS,
     OPERATOR_REVIEW_CODES as RUNTIME_OPERATOR_REVIEW_CODES,
     apply_runtime_receipt_in_transaction,
     client_runtime_lease_mode,
     disable_runtime_authority_in_transaction,
+    expire_dead_fence_authority_in_transaction,
     init_runtime_schema,
     mark_runtime_operator_review_in_transaction,
     prepare_runtime_metadata,
@@ -116,6 +118,10 @@ class DirectSyncPushError(Exception):
 
 
 class RelayLeaseLostBeforeSourcePost(DirectSyncPushError):
+    pass
+
+
+class DeadFenceAuthorityNotBound(DirectSyncPushError):
     pass
 
 
@@ -1284,10 +1290,25 @@ def _upload_response_result(
             and client_runtime_lease_mode(credentials) == "observe"
             and not receipt_error_code
         )
+        # A committed observe receipt whose only finding is the dead fence N
+        # stored the exact source; the row's authority then expires locally.
+        dead_fence_receipt_accepted = (
+            runtime_error_code == "STALE_RUNTIME_FENCE"
+            and payload["runtime_lease"].get("contract_version") == RUNTIME_CONTRACT_VERSION
+            and client_runtime_lease_mode(credentials) == "observe"
+            and 200 <= status_code < 300
+            and not receipt_error_code
+            and errors == 0
+            and quarantined == 0
+        )
         if legacy_receipt_accepted or observe_receipt_accepted:
             safe_payload = dict(safe_payload)
             safe_payload["_local_runtime_lease_status"] = "legacy_accepted"
             runtime_disposition = "legacy_accepted"
+        elif dead_fence_receipt_accepted:
+            safe_payload = dict(safe_payload)
+            safe_payload["_local_runtime_lease_status"] = "dead_fence"
+            runtime_disposition = "dead_fence"
         elif runtime_error_code:
             receipt_error_code = runtime_error_code
             receipt_error_message = runtime_error_message
@@ -2317,7 +2338,7 @@ def _set_relay_status(
             "runtime_lease_receipt"
         )
         authority_action = str(runtime_authority_action or "").strip().lower()
-        if authority_action not in {"", "legacy_accepted", "operator_review", "release"}:
+        if authority_action not in {"", "dead_fence", "legacy_accepted", "operator_review", "release"}:
             raise DirectSyncPushError("runtime authority action is invalid")
         if not authority_action and runtime_review:
             authority_action = "operator_review"
@@ -2373,6 +2394,16 @@ def _set_relay_status(
                     credentials=runtime_credentials,
                     now=now,
                 )
+            elif authority_action == "dead_fence":
+                if not expire_dead_fence_authority_in_transaction(
+                    conn,
+                    relay_id=relay_id,
+                    metadata=runtime_metadata or {},
+                    now=now,
+                ):
+                    raise DeadFenceAuthorityNotBound(
+                        "committed dead-fence upload no longer holds its runtime authority"
+                    )
             elif authority_action == "legacy_accepted":
                 disable_runtime_authority_in_transaction(
                     conn,
@@ -2911,6 +2942,33 @@ def drain_one_relay_batch(
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
     result = _local_relay_upload_result(row, result)
+    if result._runtime_disposition == "dead_fence":
+        try:
+            if not _set_claimed_relay_status(
+                row,
+                db_path=db_path,
+                status=RELAY_STATUS_ACKED,
+                receipt=result.receipt,
+                upload_status_path=result.status_path,
+                error_code=result.error_code,
+                error_message=result.error_message,
+                runtime_credentials=credentials,
+                runtime_authority_action="dead_fence",
+            ):
+                return _relay_status_update_conflict(row, committed=True, prior_result=result)
+            return result
+        except DeadFenceAuthorityNotBound as exc:
+            # The authority moved on: keep today's committed operator review.
+            receipt = dict(result.receipt)
+            receipt.pop("_local_runtime_lease_status", None)
+            result = replace(
+                result,
+                success=False,
+                receipt=receipt,
+                error_code="STALE_RUNTIME_FENCE",
+                error_message=str(exc),
+                _runtime_disposition="",
+            )
     if result.success:
         if not _set_claimed_relay_status(
             row,

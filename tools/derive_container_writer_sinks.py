@@ -168,6 +168,7 @@ CALLER_FENCED_MUTATIONS: dict[str, dict[str, tuple[str, ...] | str]] = {
             "producer_runtime_client._operator_review_or_recover_exact_clone",
             "producer_runtime_client._replace_expired_identity",
             "producer_runtime_client.ensure_runtime_authority",
+            "producer_runtime_client.expire_dead_fence_authority_in_transaction",
             "producer_runtime_client.prepare_runtime_metadata",
         ),
         "reason": "byte-pinned runtime SQL is reached only through the guarded CA facades and their exact core callees",
