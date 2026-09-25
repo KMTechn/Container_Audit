@@ -1064,6 +1064,13 @@ def run_relay_once(
             now=cycle_now,
         )
         runtime_lease = dict(runtime_preparation.receipt or {})
+        if runtime_preparation.operator_review:
+            # Not recovered automatically (live clone, stale token, bound row):
+            # the operator card asks for an administrator instead of a resume.
+            runtime_lease = {
+                "status": "operator_review",
+                "error_code": runtime_preparation.error_code,
+            }
         if runtime_preparation.error_code:
             raise DirectSyncPushError(runtime_preparation.error_code)
         result = drain_one_relay_batch(

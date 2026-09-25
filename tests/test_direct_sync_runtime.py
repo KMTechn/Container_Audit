@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import direct_sync_health
 import direct_sync_push
 import direct_sync_runtime
 from producer_runtime_client import RuntimePreparation
@@ -1621,3 +1622,57 @@ def test_runtime_twenty_container_audit_pcs_same_korean_filename_lost_ack_replay
         assert first_metadata["row_count"] == retry_metadata["row_count"] == 1
         assert first_metadata["first_row_number"] == retry_metadata["first_row_number"] == 2
         assert first_metadata["last_row_number"] == retry_metadata["last_row_number"] == 2
+
+
+def test_runtime_lease_left_for_review_asks_for_an_administrator(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **_kwargs: RuntimePreparation(
+            operator_review=True,
+            error_code="EXACT_CLONE_RUNTIME_CONFLICT",
+            error_message="runtime authority requires operator review",
+        ),
+    )
+
+    status = run_relay_once(config, session=EchoAcceptedSession())
+
+    assert status["status"] == "runtime_error"
+    assert status["runtime_lease"] == {
+        "status": "operator_review",
+        "error_code": "EXACT_CLONE_RUNTIME_CONFLICT",
+    }
+    health = direct_sync_health.read_relay_health(
+        db_path=config.db_path, runtime_status_path=config.runtime_status_path
+    )
+    assert (health.state, health.operator_attention) == ("isolated", True)
+    card = direct_sync_health.relay_health_card_model(health)
+    assert (card["summary"], card["detail"], card["tone"]) == (
+        "서버 반영 멈춤",
+        "작업 계속 가능 · 관리자에게 알려 주세요",
+        "amber",
+    )
+
+
+def test_retryable_runtime_lease_error_keeps_the_ordinary_display(tmp_path, monkeypatch):
+    config = make_config(tmp_path)
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **_kwargs: RuntimePreparation(
+            retryable=True,
+            error_code="runtime_lease_transport_error",
+            error_message="runtime lease transport error: ConnectionError",
+        ),
+    )
+
+    status = run_relay_once(config, session=EchoAcceptedSession())
+
+    assert status["status"] == "runtime_error"
+    assert status["runtime_lease"] == {}
+    health = direct_sync_health.read_relay_health(
+        db_path=config.db_path, runtime_status_path=config.runtime_status_path
+    )
+    assert health.state == "ready"
+    assert direct_sync_health.relay_health_card_model(health)["tone"] == "neutral"

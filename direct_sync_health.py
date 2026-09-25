@@ -44,7 +44,7 @@ class RelayHealth:
 
     @property
     def operator_attention(self) -> bool:
-        return self.state in {"review", "blocked"}
+        return self.state in {"review", "blocked", "isolated"}
 
 
 def read_relay_health(
@@ -65,6 +65,8 @@ def read_relay_health(
     runtime_enabled = bool(runtime.get("enabled"))
     runtime_available = bool(runtime.get("available"))
     runtime_state = str(runtime.get("status") or "").strip().lower()
+    runtime_payload = runtime.get("payload") if isinstance(runtime.get("payload"), Mapping) else {}
+    runtime_lease = runtime_payload.get("runtime_lease")
 
     state = "ready"
     error_code = ""
@@ -77,6 +79,10 @@ def read_relay_health(
     elif runtime_state in RUNTIME_BLOCKED_STATUSES:
         state = "blocked"
         error_code = "direct_sync_runtime_blocked"
+    elif isinstance(runtime_lease, Mapping) and runtime_lease.get("status") == "operator_review":
+        # Scanning continues; the relay stays stopped until an administrator acts.
+        state = "isolated"
+        error_code = "runtime_lease_operator_review"
     elif failed_permanent or operator_review:
         state = "review"
         error_code = (
@@ -118,6 +124,9 @@ def relay_health_card_model(health: RelayHealth) -> dict[str, str]:
         detail = f"대기 {health.pending_count}건 · 전송 상세 확인"
         if review_count:
             detail += f" · 담당자 확인 {review_count}건"
+    elif health.state == "isolated":
+        summary = "서버 반영 멈춤"
+        detail = "작업 계속 가능 · 관리자에게 알려 주세요"
     elif health.operator_attention:
         summary = f"담당자 확인 {review_count}건"
         detail = f"전송 대기 {health.pending_count}건"

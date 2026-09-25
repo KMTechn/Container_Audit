@@ -303,6 +303,12 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **소스·격리 시험 PROVEN:** 작업자 prepared receipt의 SID·LOCALAPPDATA·session/attempt/transaction과 token을 상승 helper가 대조한다. 기본 root의 기존 admission mutex 이름을 계정과 무관하게 사용하며, 잘못된 SID/root·오래된 시도·경쟁 writer를 거부한다. [설치 계약](operations.md#ca-o05)과 [구현 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cafence/RESULT.md)를 따른다.
 - **guest 실물 NOT TESTED:** 정확한 새 packet으로 표준 작업자+별도 관리자 UAC 신규 설치, 같은 관리자 계정 상승, ACL/mutex 교차 계정 접근, 첫 실행의 작업자 HKCU·DPAPI·ledger·relay 소유권을 확인한다. 기존 설치본/기록 보존과 화면 문의 코드도 대조한다. 운영 PC·서버 배포는 별도 권한 범위다.
 
+<a id="ca-g16"></a>
+## CA-G16 runtime lease 격리 자동 회복의 남은 경계 (w9calmleasefix)
+
+- **소스·격리 시험 PROVEN:** 갱신이 `STALE_RUNTIME_FENCE`로 거절되면 묶인 행이 없을 때 새 신원 발급으로 같은 주기에 회복하고, 교정 전 저장된 같은 검토도 첫 주기에 풀린다([계약](contracts.md#ca-lease-dead-renewal)). Web 362ae46 lease 서비스를 프로세스 안에 띄운 재현(TTL 3초 축척)에서 margin·long 모두 fence 2로 회복했다.
+- **남은 경계:** 자료 경로의 `observed_rejected` STALE(원본은 서버에 커밋, 행·authority는 검토)과 교정 전 행 준비에서 검토로 간 relay 행은 자동으로 풀지 않는다. 실제 HTTPS·nginx 502 경로, 랩 장비·회사 서버에서의 회복과 전송 카드 실제 화면은 NOT TESTED다.
+
 ## 갱신 기준
 
 요구 확정·소스 변경·실행 결과가 생긴 담당자는 연결된 기능/계약/운영 항목과 이 문서의 상태·다음 행동을 같은 작업에서 갱신한다. Main에 중앙 INT-02/03/04/09/10, I02/I04 및 Q01/Q07에 미치는 차이를 알린다. 과거 실패·미실행을 삭제하지 않고 새 버전·환경의 근거를 연결한다. [AGENTS의 지속 관리 규칙](../../AGENTS.md)을 적용한다.
