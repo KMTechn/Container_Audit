@@ -2431,3 +2431,25 @@ def test_enforce_refuses_the_dead_fence_uncommitted_and_stays_in_review(tmp_path
     assert _relay_rows(db_path)["relay-a"] == ("operator_review", "STALE_RUNTIME_FENCE")
     assert server.stored == {}
     assert _authority_row(db_path)["status"] == "OPERATOR_REVIEW"
+
+
+def test_enforce_client_acks_the_observe_servers_committed_dead_fence_receipt(tmp_path):
+    # Registered credentials carry no runtime_lease_mode, so field clients run enforce.
+    db_path = tmp_path / "relay.sqlite3"
+    server = _DataPathServer()
+    _dead_fence_outage(db_path, server, tmp_path, mode="enforce")
+
+    _, recovered = _data_path_cycle(db_path, server, 960, tmp_path, mode="enforce")
+    reissued, _ = _data_path_cycle(db_path, server, 990, tmp_path, mode="enforce")
+    _make_pending_relay(db_path, tmp_path, "relay-b")
+    _, next_row = _data_path_cycle(db_path, server, 1000, tmp_path, mode="enforce")
+
+    assert recovered.success is True and recovered.committed is True
+    assert reissued.receipt["fence"] == 2 and next_row.success is True
+    assert {relay: row[0] for relay, row in _relay_rows(db_path).items()} == {
+        "relay-a": "acked", "relay-b": "acked"
+    }
+    assert server.audit == [("STALE_RUNTIME_FENCE", 1)]
+    assert server.stored["relay-b"][0]["runtime_fence"] == 2
+    row = _authority_row(db_path)
+    assert (row["status"], row["fence"], row["assigned_relay_id"]) == ("ACTIVE", 2, None)

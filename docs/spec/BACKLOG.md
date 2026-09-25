@@ -307,7 +307,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 ## CA-G16 runtime lease 격리 자동 회복의 남은 경계 (w9calmleasefix)
 
 - **소스·격리 시험 PROVEN:** 갱신이 `STALE_RUNTIME_FENCE`로 거절되면 묶인 행이 없을 때 새 신원 발급으로 같은 주기에 회복하고, 교정 전 저장된 같은 검토도 첫 주기에 풀린다([계약](contracts.md#ca-lease-dead-renewal)). Web 362ae46 lease 서비스를 프로세스 안에 띄운 재현(TTL 3초 축척)에서 margin·long 모두 fence 2로 회복했다.
-- **자료 경로 dead fence(w9calmdatapath) 소스·격리 시험 PROVEN:** observe 커밋 `STALE_RUNTIME_FENCE`는 행 ACK·권한 만료 전이·fence N+1로 회복한다([계약](contracts.md#ca-lease-dead-fence-datapath)). 가짜 서버 11사례와 Web 362ae46 ingest·lease 하네스로 확인했다.
+- **자료 경로 dead fence(w9calmdatapath) 소스·격리 시험 PROVEN:** observe 서버가 커밋한 `STALE_RUNTIME_FENCE`는 클라이언트 모드와 관계없이(운영 자격증명 기본 enforce, w9calmenforce) 행 ACK·권한 만료 전이·fence N+1로 회복한다([계약](contracts.md#ca-lease-dead-fence-datapath)). 가짜 서버 11사례와 Web 362ae46 ingest·lease 하네스로 확인했다.
 - **남은 경계:** 교정 전 판본이 이미 검토로 보낸 자료 경로 행·authority와 교정 전 행 준비에서 검토로 간 relay 행은 자동으로 풀지 않는다. enforce 전환 시 자료 경로 409 STALE은 계속 검토로 간다. 실제 HTTPS·nginx 502 경로, 랩 장비·회사 서버에서의 회복과 전송 카드 실제 화면은 NOT TESTED다.
 
 ## 갱신 기준
