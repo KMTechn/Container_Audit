@@ -605,6 +605,7 @@ $stop=Join-Path $env:CA_CONTRACT_ROOT 'stop.json'
 $removalPath=Join-Path $env:CA_CONTRACT_ROOT 'removal.json'
 $before=@{exists=($env:CA_REMOVAL_FAULT -ceq 'run');kind='';data=''}
 $old=@()
+$freshRemovedPreimage=$null
 $marker=@{schema_version='container-audit-user-relay-stop-v1';request_id=('a'*32);requested_at=[DateTime]::UtcNow.ToString('o')}
 $receipt=@{status='PASS_DATA_PRESERVED';state_scope='current_user';data_preserved=$true;
     relay_autostart=@{status='ABSENT'};relay_process=@{status='ABSENT';request_id=$marker.request_id;stop_request_path=$stop};

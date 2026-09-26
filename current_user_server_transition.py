@@ -254,7 +254,7 @@ def _work_observation(entries):
                                 row[field] += count
                                 if str(status).upper() in {"UNKNOWN", "OPERATOR_REVIEW", "LEASED", "UPLOADING"}:
                                     row["unknown"] += count
-                        if not tables:
+                        if not tables.intersection({"direct_sync_relay_batches", "transfer_seal_intents", "transfer_member_exchange_intents"}):
                             row["unknown"] += 1
                     except sqlite3.DatabaseError:
                         row["unknown"] += 1

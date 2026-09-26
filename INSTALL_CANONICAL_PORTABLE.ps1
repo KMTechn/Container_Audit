@@ -756,7 +756,8 @@ function Product([string]$Root,[string]$Mode,[string]$FreshAction = '') {
     if ($Mode -ceq '--fresh-server-registration') {
         $args += ' --action ' + (Arg $FreshAction) + ' --input ' + (Arg $FreshTransitionInput) +
             ' --archive-root ' + (Arg $FreshArchiveRoot) + ' --transition-id ' + (Arg $FreshTransitionId)
-        if ($auditPath) { $args += ' --lifecycle-receipt ' + (Arg $auditPath) }
+        $freshAuditPath = Get-Variable -Name auditPath -ValueOnly -ErrorAction SilentlyContinue
+        if ($freshAuditPath) { $args += ' --lifecycle-receipt ' + (Arg $freshAuditPath) }
         if ($ConfirmFreshServerRegistration) { $args += ' --confirm ' + (Arg $ConfirmFreshServerRegistration) }
         if ($ConfirmArchivePending) { $args += ' --confirm-pending' }
         if ($FreshAction -ceq 'plan') { $args += ' --report-path ' + (Arg (Join-Path $FreshArchiveRoot 'transition-plan.json')) }

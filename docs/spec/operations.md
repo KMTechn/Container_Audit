@@ -9,6 +9,9 @@
 SYSTEM task를 만들었다. 그 판본의 `-Uninstall`은 소유 task를 Stop/Unregister하고 ABSENT를 확인한다.
 새 fresh 옵션은 이 단계의 실제 실행을 대신하지 않는다. SYSTEM task 활성·상태 UNKNOWN 또는
 HKLM 물류 환경 앵커가 있으면 값을 출력하지 않고 관리자 지원으로 중단한다.
+현재 사용자 지원 제거의 stop marker는 영수증의 request ID·두 root·relay/Run 부재와 대조한다.
+새 정지 요청으로 덮어쓰지 않으며 등록 전 복원 시 그대로 유지한다. 새 등록 활성화 때 제거하는
+기존 marker의 exact 사본은 보호 보관물에 남긴다.
 
 승인한 stock packet의 원본 `INSTALL_CANONICAL_PORTABLE.ps1`을 원 작업자 계정에서 실행한다.
 아래 변수는 예시이며 실제 승인 입력·별도 로컬 보관 위치를 사용한다. 전환 ID는 한 번 정한 뒤
