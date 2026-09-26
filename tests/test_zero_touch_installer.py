@@ -506,10 +506,15 @@ def test_portable_installer_validates_runtime_binding_before_preimage_acceptance
     validation_index = text.index(
         "$runtimePreimageBinding = Assert-CanonicalRuntimePreimage", capture_index
     )
-    audit_index = text.index("$audit = [ordered]@{", validation_index)
-    save_index = text.index("Save $auditPath $audit", audit_index)
-    disable_index = text.index("$writerDisabled = Disable-CanonicalWriter", save_index)
-    assert capture_index < validation_index < audit_index < save_index < disable_index
+    audit_indexes = [
+        match.start()
+        for match in re.finditer(r"\$audit = New-CanonicalOperationAudit\b", text)
+    ]
+    assert audit_indexes
+    for audit_index in audit_indexes:
+        save_index = text.index("Save $auditPath $audit", audit_index)
+        disable_index = text.index("$writerDisabled = Disable-CanonicalWriter", save_index)
+        assert capture_index < validation_index < audit_index < save_index < disable_index
 
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
