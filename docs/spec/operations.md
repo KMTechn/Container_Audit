@@ -1,5 +1,55 @@
 # 운영·환경·장애 복구
 
+<a id="ca-fresh-server-transition"></a>
+## 옛 자료 보관 후 fresh 서버 등록
+
+대상 서버 수용 기록과 [공통 입력 계약](contracts.md#ca-fresh-server-transition)을 먼저 준비한다.
+옛 패킷의 지원 제거로 앱·relay·SYSTEM task를 정지/해제하고 업무·신원 파일은 보존한다.
+8/27 `497d1cf` 설치기의 `INSTALL_THIS_PC.ps1`은 ProgramData 앱 profile과 relay root 및
+SYSTEM task를 만들었다. 그 판본의 `-Uninstall`은 소유 task를 Stop/Unregister하고 ABSENT를 확인한다.
+새 fresh 옵션은 이 단계의 실제 실행을 대신하지 않는다. SYSTEM task 활성·상태 UNKNOWN 또는
+HKLM 물류 환경 앵커가 있으면 값을 출력하지 않고 관리자 지원으로 중단한다.
+
+승인한 stock packet의 원본 `INSTALL_CANONICAL_PORTABLE.ps1`을 원 작업자 계정에서 실행한다.
+아래 변수는 예시이며 실제 승인 입력·별도 로컬 보관 위치를 사용한다. 전환 ID는 한 번 정한 뒤
+입력·보관 root와 함께 유지한다. `packet`에는 이 stock packet의 manifest SHA256을 기록한다.
+
+```powershell
+$transitionInput = 'C:\KMTech\FreshTransfer\input.json'
+$transitionArchive = 'C:\KMTech\FreshArchive\Container_Audit-20260926'
+$transitionId = [Guid]::NewGuid().ToString('N')
+$target = Get-Content -LiteralPath $transitionInput -Raw -Encoding UTF8 | ConvertFrom-Json
+$confirmation = "이 PC의 옛 자료를 보관하고 $($target.origin.TrimEnd('/')) / $($target.scope) / $($target.deployment_id)에 새로 등록합니다"
+$transitionArgs = @{
+    PrepareFreshServerRegistration = $true
+    FreshTransitionInput = $transitionInput
+    FreshArchiveRoot = $transitionArchive
+    FreshTransitionId = $transitionId
+    ConfirmFreshServerRegistration = $confirmation
+}
+& .\INSTALL_CANONICAL_PORTABLE.ps1 @transitionArgs -PlanOnly
+# transition-plan.json의 PC/SID, 대상, 원본·보관 위치, 용량 및 미전송/UNKNOWN 수를 대조한다.
+& .\INSTALL_CANONICAL_PORTABLE.ps1 @transitionArgs -ConfirmArchivePending
+```
+
+`ConfirmArchivePending`은 미전송·UNKNOWN·보류 자료를 새 서버로 재생하지 않고 보관만 한다는
+별도 확인이다. PlanOnly는 CNG 키를 열거나 서버에 등록하지 않는다. App·relay 정지,
+현재 writer authority·receipt·원 SID가 증명된 뒤에만 분리한다. 권한 상승은 앱 전용
+ProgramData 두 root의 bytes 복사·검증·rename에 사용하고, 새 DPAPI credential은 원 사용자에서 게시한다.
+
+중단 시 표시된 canonical receipt 경로와 SHA256을 보존한다. 조회는 동일 인자로
+`-FreshTransitionAction Status`, 재개는 `-FreshTransitionAction Resume
+-ResumeFreshTransitionReceiptPath <표시된 경로> -ResumeFreshTransitionReceiptSha256 <표시된 SHA256>`을 추가한다.
+이전 소유 프로세스 종료·authority 소멸과 exact receipt·fence를 모두 대조한다.
+`transition-result.json`은 비밀 없는 요약이며, `transition-journal.json`과 `original/`은
+보호된 원본 보관물이다. UNKNOWN 시도와 중단된 사본도 지우지 않는다.
+
+등록 전 복원은 같은 receipt 인자와 `-FreshTransitionAction Restore`를 사용한다.
+새 로컬 자료가 생겼거나 원본/ACL이 달라지면 덮어쓰지 않는다. REGISTERING 이후는 복원 불가이며
+관리자 지원과 동일 candidate의 재연결로 복구한다. 수용된 서버 snapshot을 되돌리지 않는다.
+완료 재실행은 신원 readback만 수행한다. 진행 중 marker·archive를 수동 삭제하거나 옛 queue를
+새 root에 복사하지 않는다. cold boot, 실제 교차 계정 UAC, 운영 서버 연결은 별도 랩 수용 항목이다.
+
 [제품·기능](README.md) · [데이터·통합 계약](contracts.md) · [백로그](BACKLOG.md) · [중앙 준비도](../../../Program_Spec_Hub/READINESS.md)
 
 현재 S05 소스 단순화와 검증 범위는 [CA-O11](#ca-o11)을 따른다. 아래 과거 실행의

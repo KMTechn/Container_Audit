@@ -18,6 +18,7 @@ DIRECT_SYNC_RELAY_MODE = "--container-audit-direct-sync-relay"
 USER_RELAY_MODE = "--container-audit-user-relay"
 ONBOARD_CURRENT_USER_MODE = "--onboard-current-user"
 REMOVE_CURRENT_USER_MODE = "--remove-current-user-setup"
+FRESH_SERVER_MODE = "--fresh-server-registration"
 RESTORE_CURRENT_USER_LIFECYCLE_MODE = (
     "--restore-current-user-lifecycle-after-replacement"
 )
@@ -28,6 +29,7 @@ PRODUCT_MODES = frozenset(
         ONBOARD_CURRENT_USER_MODE,
         REMOVE_CURRENT_USER_MODE,
         RESTORE_CURRENT_USER_LIFECYCLE_MODE,
+        FRESH_SERVER_MODE,
     }
 )
 HOSTED_RELAY_FAILURE_EXIT_CODE = 1
@@ -180,6 +182,10 @@ def dispatch_product_mode(argv: Sequence[str]) -> int | None:
             from current_user_onboarding import onboarding_main
 
             return int(onboarding_main(arguments))
+        if mode == FRESH_SERVER_MODE:
+            from current_user_server_transition import transition_main
+
+            return int(transition_main(arguments))
         if mode == REMOVE_CURRENT_USER_MODE:
             from current_user_onboarding import removal_main
 

@@ -5,6 +5,15 @@ param(
     [string]$EvidencePath = "",
     [string]$ServerBaseUrl = "",
     [switch]$PlanOnly,
+    [switch]$PrepareFreshServerRegistration,
+    [ValidateSet('Prepare','Resume','Status','Restore')][string]$FreshTransitionAction = 'Prepare',
+    [string]$FreshTransitionInput = '',
+    [string]$FreshArchiveRoot = '',
+    [string]$FreshTransitionId = '',
+    [string]$ConfirmFreshServerRegistration = '',
+    [switch]$ConfirmArchivePending,
+    [string]$ResumeFreshTransitionReceiptPath = '',
+    [string]$ResumeFreshTransitionReceiptSha256 = '',
     [switch]$Uninstall,
     [switch]$CompleteRetiredRemoval,
     [string]$OldSourceRoot = "",
@@ -735,16 +744,111 @@ function Assert-CanonicalRuntimePreimage(
         stop_marker_absent=$true
     }
 }
-function Product([string]$Root,[string]$Mode) {
+function Product([string]$Root,[string]$Mode,[string]$FreshAction = '') {
     $args = '-I -B {0} {1} --app-root {2}' -f
         (Arg (Join-Path $Root 'app\main.py')),$Mode,(Arg (Join-Path $Root 'app'))
     if ($Mode -ceq '--onboard-current-user' -and $onboardingServerBaseUrl) {
         $args += ' --server-base-url ' + (Arg $onboardingServerBaseUrl)
     }
+    if ($Mode -ceq '--onboard-current-user' -and $PrepareFreshServerRegistration) {
+        $args += ' --fresh-transition-journal ' + (Arg (Join-Path $FreshArchiveRoot 'transition-journal.json'))
+    }
+    if ($Mode -ceq '--fresh-server-registration') {
+        $args += ' --action ' + (Arg $FreshAction) + ' --input ' + (Arg $FreshTransitionInput) +
+            ' --archive-root ' + (Arg $FreshArchiveRoot) + ' --transition-id ' + (Arg $FreshTransitionId)
+        if ($auditPath) { $args += ' --lifecycle-receipt ' + (Arg $auditPath) }
+        if ($ConfirmFreshServerRegistration) { $args += ' --confirm ' + (Arg $ConfirmFreshServerRegistration) }
+        if ($ConfirmArchivePending) { $args += ' --confirm-pending' }
+        if ($FreshAction -ceq 'plan') { $args += ' --report-path ' + (Arg (Join-Path $FreshArchiveRoot 'transition-plan.json')) }
+    }
     $process = Start-Process (Join-Path $Root 'runtime\pythonw.exe') -ArgumentList $args -WindowStyle Hidden -PassThru
     # Start-Process -Wait includes the persistent relay child; this waits only for the host.
     $process.WaitForExit()
+    if ($Mode -ceq '--fresh-server-registration' -and $FreshAction -ceq 'preflight') { return [int]$process.ExitCode }
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
+}
+function Read-CanonicalFreshResume {
+    $path = Full $ResumeFreshTransitionReceiptPath 'fresh resume receipt'
+    if ((Get-ContainerWriterFenceFileSha256 $path 1048576) -cne $ResumeFreshTransitionReceiptSha256) {
+        throw 'FRESH_RESUME_RECEIPT_HASH_MISMATCH'
+    }
+    $prior = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $f = $prior.fresh_transition
+    if ([string]$prior.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$prior.operation -cne 'PREPARE_FRESH_SERVER_REGISTRATION' -or
+        -not (Same ([string]$prior.install_root) $install) -or
+        [string]$prior.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$f.transition_id -cne $FreshTransitionId -or [string]$f.sid -cne $operatorSid -or
+        [string]$f.input_sha256 -cne (Sha $FreshTransitionInput) -or
+        -not (Same ([string]$f.archive_root) $FreshArchiveRoot) -or
+        [string]$f.orchestrator_sha256 -cne (Sha $PSCommandPath) -or
+        [string]$f.session_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$f.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
+        -not (Test-JsonTrue $f.quiesced)) { throw 'FRESH_RESUME_BINDING_MISMATCH' }
+    $expectedAuthority = Get-ContainerWriterSessionAuthorityMutexName `
+        ([string]$f.session_id) ([string]$f.attempt_id) ([string]$f.orchestrator_sha256) `
+        ([string]$prior.code_replacement.transaction_id) ([string]$lifecycleManifest.writer_session_contract_sha256)
+    if ([string]$f.authority_mutex_name -cne $expectedAuthority) { throw 'FRESH_RESUME_AUTHORITY_MISMATCH' }
+    Assert-RetirementOwnerExited $f
+    $priorFence = Read-ContainerWriterFence
+    if ([string]$priorFence.session_id -cne [string]$f.session_id -or
+        [string]$priorFence.attempt_id -cne [string]$f.attempt_id -or
+        [string]$priorFence.replacement_transaction_id -cne [string]$prior.code_replacement.transaction_id -or
+        [string]$priorFence.orchestrator_sha256 -cne [string]$f.orchestrator_sha256 -or
+        [string]$priorFence.prepared_receipt_path -cne [string]$f.prepared_receipt_path -or
+        [string]$priorFence.prepared_receipt_sha256 -cne [string]$f.prepared_receipt_sha256) {
+        throw 'FRESH_RESUME_FOREIGN_FENCE'
+    }
+    if ((Test-Path -LiteralPath $stop) -and (Sha $stop) -cne [string]$f.stop_sha256) {
+        throw 'FRESH_RESUME_STOP_REQUEST_CHANGED'
+    }
+    return $prior
+}
+function Read-FreshRemovedPreimage {
+    if ([bool]$before.exists -or @($old).Count -ne 0) { throw 'FRESH_OLD_REMOVAL_HAS_ACTIVE_WRITERS' }
+    $markerSha = Get-ContainerWriterFenceFileSha256 $stop 4096
+    $receiptSha = Get-ContainerWriterFenceFileSha256 $removalPath 65536
+    $marker = Get-Content -LiteralPath $stop -Raw -Encoding UTF8 | ConvertFrom-Json
+    $receipt = Get-Content -LiteralPath $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not (Test-ExactPropertySet $marker @('schema_version','request_id','requested_at')) -or
+        [string]$marker.schema_version -cne 'container-audit-user-relay-stop-v1' -or
+        [string]$marker.request_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$receipt.status -cne 'PASS_DATA_PRESERVED' -or
+        [string]$receipt.state_scope -cne 'current_user' -or -not (Test-JsonTrue $receipt.data_preserved) -or
+        [string]$receipt.relay_autostart.status -cne 'ABSENT' -or [string]$receipt.relay_process.status -cne 'ABSENT' -or
+        [string]$receipt.relay_process.request_id -cne [string]$marker.request_id -or
+        -not (Same ([string]$receipt.relay_process.stop_request_path) $stop) -or
+        -not (Same ([string]$receipt.machine_code_root) (Join-Path $install 'app')) -or
+        @($receipt.preserved_paths).Count -ne 3 -or
+        -not (Same ([string]$receipt.preserved_paths[0]) $activeDataRoot) -or
+        -not (Same ([string]$receipt.preserved_paths[1]) $activeRelayRoot)) { throw 'FRESH_OLD_REMOVAL_BINDING_MISMATCH' }
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$marker.requested_at))
+    if ((Get-ContainerWriterFenceFileSha256 $stop 4096) -cne $markerSha -or
+        (Get-ContainerWriterFenceFileSha256 $removalPath 65536) -cne $receiptSha) { throw 'FRESH_OLD_REMOVAL_CHANGED' }
+    if ($freshRemovedPreimage -and ($markerSha -cne [string]$freshRemovedPreimage.stop_sha256 -or
+        $receiptSha -cne [string]$freshRemovedPreimage.removal_sha256)) { throw 'FRESH_OLD_REMOVAL_PREIMAGE_CHANGED' }
+    return [ordered]@{stop_sha256=$markerSha;removal_sha256=$receiptSha;request_id=[string]$marker.request_id}
+}
+function Invoke-FreshMachineProfile([bool]$RestoreProfile) {
+    $freshJournalPath = Join-Path $FreshArchiveRoot 'transition-journal.json'
+    $machineArguments = @(
+        '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
+        '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),'-SourceRoot',$source,'-InstallRoot',$install,
+        '-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,'-ElevationLogPath',$elevationLogPath,
+        '-FreshMachineTransitionJournalPath',$freshJournalPath,
+        '-FreshMachineTransitionJournalSha256',(Sha $freshJournalPath),'-FreshMachineTransitionId',$FreshTransitionId,
+        '-WriterFencePreparedReceiptPath',([string]$canonicalWriterFencePreparedReceipt.path),
+        '-WriterFencePreparedReceiptSha256',([string]$canonicalWriterFencePreparedReceipt.sha256),
+        '-WriterFenceHelperPath',(Join-Path $source 'tools\container_writer_fence.ps1'),
+        '-ExpectedWriterFenceHelperSha256',([string]$sourceManifest.writer_fence_helper_sha256),
+        '-WriterFenceSessionId',$Script:CanonicalWriterFenceSessionId,'-WriterFenceAttemptId',$Script:CanonicalWriterFenceAttemptId,
+        '-WriterFenceReplacementTransactionId',$Script:CanonicalWriterFenceTransactionId,
+        '-WriterFenceDelegationToken',$Script:CanonicalWriterFenceDelegationToken
+    )
+    if ($RestoreProfile) { $machineArguments += '-RestoreFreshMachineProfile' }
+    if ($testMode) { $machineArguments += '-AllowNoncanonicalLayoutForTest' }
+    & $winps @machineArguments
+    if ($LASTEXITCODE -ne 0) { throw 'FRESH_MACHINE_PROFILE_OPERATION_FAILED' }
 }
 function Read-CanonicalRetiredRemoval {
     # These are observations, never authority. The caller still acquires the
@@ -1580,6 +1684,27 @@ function Confirm-CanonicalWriterRunning([string]$InstallRootValue, $EnabledBasel
 }
 
 if (-not $SourceRoot) { $SourceRoot = $PSScriptRoot }
+if ($PrepareFreshServerRegistration) {
+    foreach ($anchor in @('KM_LOGISTICS_PROFILE_PATH','KM_LOGISTICS_REQUIRED')) {
+        if (-not [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($anchor, 'Machine'))) {
+            throw 'HKLM 물류 환경 앵커가 있어 보관 전에 중단했습니다 — 관리자 지원 필요 (값 비출력).'
+        }
+    }
+    if ($Uninstall -or $CompleteRetiredRemoval -or $RestoreVerifiedReplacement -or
+        -not $FreshTransitionInput -or -not $FreshArchiveRoot -or $FreshTransitionId -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'FRESH_TRANSITION_EXPLICIT_INPUT_ARCHIVE_ID_REQUIRED'
+    }
+    $FreshTransitionInput = Full $FreshTransitionInput 'fresh transition input'
+    $FreshArchiveRoot = Full $FreshArchiveRoot 'fresh archive root'
+    if ($FreshTransitionAction -cin @('Resume','Restore') -and
+        (-not $ResumeFreshTransitionReceiptPath -or $ResumeFreshTransitionReceiptSha256 -cnotmatch '^[0-9a-f]{64}$')) {
+        throw 'FRESH_TRANSITION_RESUME_EXACT_RECEIPT_REQUIRED'
+    }
+}
+elseif ($FreshTransitionInput -or $FreshArchiveRoot -or $FreshTransitionId -or $ConfirmFreshServerRegistration -or
+    $ConfirmArchivePending -or $ResumeFreshTransitionReceiptPath -or $ResumeFreshTransitionReceiptSha256 -or $FreshTransitionAction -cne 'Prepare') {
+    throw 'FRESH_TRANSITION_ARGUMENTS_REQUIRE_PREPARE_OPTION'
+}
 if ($CompleteRetiredRemoval) {
     if ($Uninstall -or $RestoreVerifiedReplacement -or $ServerBaseUrl -or -not $OldSourceRoot -or
         $RetiredRemovalReceiptSha256 -cnotmatch '^[0-9a-f]{64}$' -or
@@ -1640,10 +1765,59 @@ if (-not (Test-Path -LiteralPath $writerFenceHelperPath -PathType Leaf)) {
     throw 'Portable tree is missing the all-writer fence helper.'
 }
 . $writerFenceHelperPath
+if ($PrepareFreshServerRegistration -and -not $testMode) {
+    # Removal of the old SYSTEM layout belongs to its old admitted packet.
+    Assert-ContainerFreshSystemTasksStopped -SystemOnly
+}
 $sourceManifestSha256 = Sha (Join-Path $source 'portable-manifest.json')
 $sourceHelperSha256 = Sha (Join-Path $source 'INSTALL_THIS_PC.ps1')
 $sourceIntegrityHelperSha256 = Sha (Join-Path $source 'tools\bootstrap_integrity.ps1')
 $wanted = Command $install
+$replacementTransactionId = [Guid]::NewGuid().ToString('N')
+$Script:CanonicalWriterFenceSessionId = [Guid]::NewGuid().ToString('N')
+$Script:CanonicalWriterFenceAttemptId = [Guid]::NewGuid().ToString('N')
+$Script:CanonicalWriterFenceTransactionId = $replacementTransactionId
+$canonicalWriterFenceStartedAtUtc = [DateTime]::UtcNow.ToString('o')
+$canonicalWriterFenceOrchestratorSha256 = Sha $PSCommandPath
+$canonicalWriterFenceContractSha256 = ([string]$lifecycleManifest.writer_session_contract_sha256).ToLowerInvariant()
+$Script:CanonicalWriterFenceDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
+$canonicalWriterFenceEnvironmentNames = @(
+    'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID',
+    'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID'
+)
+$canonicalWriterFenceEnvironmentBefore = @{}
+foreach ($name in $canonicalWriterFenceEnvironmentNames) {
+    $canonicalWriterFenceEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+}
+$canonicalWriterFenceAuthority = $null
+$retirementResumeClaim = $null
+$canonicalPreparationStarted = $false
+try {
+# Hold the existing in-memory session authority across every child launch,
+# including read-only planning. No persistent fence exists until preparation.
+$canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
+    -SessionId $Script:CanonicalWriterFenceSessionId `
+    -AttemptId $Script:CanonicalWriterFenceAttemptId `
+    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+    -WriterContractSha256 $canonicalWriterFenceContractSha256
+if ($PrepareFreshServerRegistration -and ($PlanOnly -or $FreshTransitionAction -ceq 'Status')) {
+    $readAction = if ($PlanOnly) { 'plan' } else { 'status' }
+    Product $source '--fresh-server-registration' $readAction
+    "fresh_transition_report=$(Join-Path $FreshArchiveRoot ('transition-' + $(if ($PlanOnly) { 'plan' } else { 'result' }) + '.json'))"
+    return
+}
+if ($PrepareFreshServerRegistration) {
+    $freshPreflight = Product $source '--fresh-server-registration' 'preflight'
+    if ($freshPreflight -eq 0) {
+        'fresh_transition_status=ACTIVATED_READBACK_ONLY'
+        "fresh_transition_report=$(Join-Path $FreshArchiveRoot 'transition-result.json')"
+        return
+    }
+    if ($freshPreflight -ne 10) { throw 'FRESH_TRANSITION_INPUT_KEY_OR_CONFIRMATION_INVALID' }
+}
 if ($PlanOnly) {
     "install_status=PLAN_ONLY"
     if ($CompleteRetiredRemoval) { 'operation=COMPLETE_RETIRED_REMOVAL'; 'retirement_identity_status=NOT_CHECKED_PLAN_ONLY' }
@@ -1677,6 +1851,7 @@ if (Test-Path -LiteralPath $install -PathType Container) {
 }
 $lad = Full $env:LOCALAPPDATA 'LOCALAPPDATA'
 $operatorSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$freshResume = $null
 $retirementResume = if ($ResumeRetirementReceiptPath) { Read-CanonicalRetirementResume } else { $null }
 $retirementResumeBeforeRemoval = $retirementResume -and [string]$retirementResume.status -ceq 'PREIMAGE_SAVED'
 if ($RestoreVerifiedReplacement) {
@@ -1731,13 +1906,15 @@ $stop = Join-Path $activeRelayRoot 'control\container_audit_user_relay.stop.json
 $onboardingPath = Join-Path $statusRoot 'current_user_onboarding.json'
 $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
+if ($PrepareFreshServerRegistration -and $ResumeFreshTransitionReceiptPath) {
+    $freshResume = Read-CanonicalFreshResume
+}
 $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else { $null }
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
 $canonicalWriterFencePreparedPath = Join-Path $auditRoot "canonical-portable-$runId-writer-prepared.json"
 $elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"
-$replacementTransactionId = [Guid]::NewGuid().ToString('N')
 $replacementReceiptPath = Join-Path $auditRoot "canonical-portable-$runId-replacement.json"
 $replacementRestoreEvidencePath = Join-Path $auditRoot "canonical-portable-$runId-code-restore.json"
 $productNaturalTriggerAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-product-natural-trigger-release.json"
@@ -1745,24 +1922,6 @@ $productCompleteAuthorizationPath = Join-Path $auditRoot "canonical-portable-$ru
 $rollbackNaturalTriggerAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-rollback-natural-trigger-release.json"
 $rollbackCompleteAuthorizationPath = Join-Path $auditRoot "canonical-portable-$runId-rollback-complete-release.json"
 $evidenceFull = if ($EvidencePath) { Full $EvidencePath 'EvidencePath' } else { '' }
-$Script:CanonicalWriterFenceSessionId = [Guid]::NewGuid().ToString('N')
-$Script:CanonicalWriterFenceAttemptId = [Guid]::NewGuid().ToString('N')
-$Script:CanonicalWriterFenceTransactionId = $replacementTransactionId
-$canonicalWriterFenceStartedAtUtc = [DateTime]::UtcNow.ToString('o')
-$canonicalWriterFenceOrchestratorSha256 = Sha $PSCommandPath
-$canonicalWriterFenceContractSha256 = ([string]$lifecycleManifest.writer_session_contract_sha256).ToLowerInvariant()
-$Script:CanonicalWriterFenceDelegationToken = [Guid]::NewGuid().ToString('N') + [Guid]::NewGuid().ToString('N')
-$canonicalWriterFenceEnvironmentNames = @(
-    'CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN',
-    'CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID',
-    'CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID',
-    'CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID'
-)
-$canonicalWriterFenceEnvironmentBefore = @{}
-foreach ($name in $canonicalWriterFenceEnvironmentNames) {
-    $canonicalWriterFenceEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
-}
-$canonicalWriterFenceAuthority = $null
 $canonicalWriterFenceActive = $false
 $canonicalWriterFenceLastReleaseAuthorizationPath = ''
 $canonicalWriterFenceLastReleaseAuthorizationSha256 = ''
@@ -1774,6 +1933,11 @@ if ($CompleteRetiredRemoval) {
 }
 $before = Snapshot
 $old = @(Relays)
+$freshRemovedPreimage = $null
+if ($PrepareFreshServerRegistration) {
+    if ($freshResume) { $freshRemovedPreimage = $freshResume.fresh_transition.original_removal }
+    elseif (Test-Path -LiteralPath $stop) { $freshRemovedPreimage = Read-FreshRemovedPreimage }
+}
 if ($retirementResume) {
     if ($retirementResumeBeforeRemoval) {
         if ([bool]$before.exists -ne [bool]$retirementResume.preimage.exists -or
@@ -1856,6 +2020,21 @@ if ($retirementResume) {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
         -ExpectedCommand $wanted -ExpectedRoot $install -StopMarkerExists $false
 }
+elseif ($freshResume) {
+    [void](Read-CanonicalFreshResume)
+    [void](Assert-CanonicalRuntimePreimage -Before $before -Processes @() `
+        -ExpectedCommand $wanted -ExpectedRoot $install -StopMarkerExists $false)
+    # A controlled relay can outlive an interrupted activation before Run is
+    # published. Admit only its exact command; the ordinary stop handshake
+    # below must still prove it absent before touching any archived state.
+    $relayBinding = if ($old.Count -gt 0) { [ordered]@{exists=$true;kind='String';data=$wanted} } else { $before }
+    $runtimePreimageBinding = Assert-CanonicalRuntimePreimage -Before $relayBinding -Processes $old `
+        -ExpectedCommand $wanted -ExpectedRoot $install -StopMarkerExists $false
+}
+elseif ($freshRemovedPreimage) {
+    $runtimePreimageBinding = Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
+        -ExpectedCommand $wanted -ExpectedRoot $install -StopMarkerExists $false
+}
 else {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
         -Before $before `
@@ -1868,21 +2047,22 @@ $writerBefore = if ($testMode) {
     [ordered]@{ present=$false; classification='TEST_BYPASS'; restore_required=$false }
 }
 else { Get-CanonicalWriterPreimageForQuiesce $install }
+if ($freshResume) {
+    $originalWriter = $freshResume.fresh_transition.original_scheduled_writer
+    if ([bool]$originalWriter.present -ne [bool]$writerBefore.present -or
+        ([bool]$writerBefore.present -and [string]$writerBefore.binding_sha256 -cne [string]$originalWriter.binding_sha256)) {
+        throw 'FRESH_RESUME_SCHEDULED_WRITER_BINDING_CHANGED'
+    }
+}
 if (($Uninstall -or $RestoreVerifiedReplacement) -and [bool]$writerBefore.present) {
     throw 'Uninstall/restore requires the current-user layout without legacy scheduled writers.'
 }
 $uninstallCodeStarted = $false
 $uninstallStopSha256 = ''
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
-$retirementResumeClaim = $null
-try {
 if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
-$canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
-    -SessionId $Script:CanonicalWriterFenceSessionId `
-    -AttemptId $Script:CanonicalWriterFenceAttemptId `
-    -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
-    -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
-    -WriterContractSha256 $canonicalWriterFenceContractSha256
+if ($freshResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $freshResume }
+$canonicalPreparationStarted = $true
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
     -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -1930,6 +2110,27 @@ if ($retirementResume) {
     }
     finally { Exit-ContainerWriterAdmission $resumeAdmission }
 }
+elseif ($freshResume) {
+    $resumeAdmission = Enter-ContainerWriterAdmission
+    try {
+        [void](Read-CanonicalFreshResume)
+        $resumedFence = New-ContainerWriterFencePayload `
+            -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
+            -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
+            -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
+            -SessionStartedAtUtc $canonicalWriterFenceStartedAtUtc `
+            -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
+            -WriterContractSha256 $canonicalWriterFenceContractSha256 `
+            -PreparedReceiptPath ([string]$canonicalWriterFencePreparedReceipt.path) `
+            -PreparedReceiptSha256 ([string]$canonicalWriterFencePreparedReceipt.sha256) `
+            -DelegationToken $Script:CanonicalWriterFenceDelegationToken `
+            -DelegatedSources $canonicalWriterFenceDelegatedSources `
+            -DelegationExpiresAtUtc ([DateTime]::UtcNow.AddMinutes(20).ToString('o'))
+        Assert-ContainerWriterSessionAuthority $resumedFence $canonicalWriterFenceAuthority
+        [void](Write-ContainerWriterFenceAtomic '' $resumedFence)
+    }
+    finally { Exit-ContainerWriterAdmission $resumeAdmission }
+}
 else {
 [void](Start-ContainerWriterFence `
     -Status 'INSTALLING' `
@@ -1954,7 +2155,7 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
 $audit = [ordered]@{
     schema='container-audit-canonical-portable-install-v2'
-    operation=if ($CompleteRetiredRemoval) { 'COMPLETE_RETIRED_REMOVAL' } elseif ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
+    operation=if ($PrepareFreshServerRegistration) { 'PREPARE_FRESH_SERVER_REGISTRATION' } elseif ($CompleteRetiredRemoval) { 'COMPLETE_RETIRED_REMOVAL' } elseif ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
     status='PREIMAGE_SAVED'
     run_id=$runId
     captured_at=(Get-Date).ToUniversalTime().ToString('o')
@@ -1995,6 +2196,27 @@ $audit = [ordered]@{
         applied=$false
         runtime_restored=$false
         scheduled_writer_restored=(-not [bool]$writerBefore.restore_required)
+    }
+}
+if ($PrepareFreshServerRegistration) {
+    $audit.fresh_transition = [ordered]@{
+        transition_id=$FreshTransitionId; sid=$operatorSid; archive_root=$FreshArchiveRoot
+        input_sha256=(Sha $FreshTransitionInput); quiesced=$false; stop_sha256=''
+        owner_process_id=$PID; owner_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+        authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
+        session_id=$Script:CanonicalWriterFenceSessionId; attempt_id=$Script:CanonicalWriterFenceAttemptId
+        orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
+        prepared_receipt_path=[string]$canonicalWriterFencePreparedReceipt.path
+        prepared_receipt_sha256=[string]$canonicalWriterFencePreparedReceipt.sha256
+        original_preimage=$(if ($freshResume) { $freshResume.fresh_transition.original_preimage } else { $before })
+        original_removal=$freshRemovedPreimage
+        original_relays=$(if ($freshResume) { $freshResume.fresh_transition.original_relays } else {
+            [Object[]]@($old | ForEach-Object { [ordered]@{ProcessId=[int]$_.ProcessId;ExecutablePath=[string]$_.ExecutablePath;CommandLine=[string]$_.CommandLine} })
+        })
+        original_scheduled_writer=$(if ($freshResume) { $freshResume.fresh_transition.original_scheduled_writer } else { $writerBefore })
+        original_task_xml=$(if ($freshResume) { [string]$freshResume.fresh_transition.original_task_xml } elseif ([bool]$writerBefore.present) {
+            [string](Export-ScheduledTask -TaskName ([string]$writerBefore.task_name) -TaskPath ([string]$writerBefore.task_path))
+        } else { '' })
     }
 }
 if ($CompleteRetiredRemoval) {
@@ -2291,7 +2513,10 @@ $enteredPlacementTry = $true
         if ($replaceExisting) {
             Sync-CanonicalWriterFenceInventory $installedInventorySha256
             $mutated = $true
-            Product $install '--remove-current-user-setup'
+            if (-not ($PrepareFreshServerRegistration -and $freshRemovedPreimage -and
+                (Test-Path -LiteralPath $stop) -and (Sha $stop) -ceq [string]$freshRemovedPreimage.stop_sha256)) {
+                Product $install '--remove-current-user-setup'
+            } else { [void](Read-FreshRemovedPreimage) }
             $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
             if (
                 (Snapshot).exists -or
@@ -2419,12 +2644,92 @@ $enteredPlacementTry = $true
     if ($evidenceFull) { Save $evidenceFull $audit }
 
     $mutated = $true
-    Product $install '--remove-current-user-setup'
+    if (-not ($PrepareFreshServerRegistration -and $freshRemovedPreimage -and
+        (Test-Path -LiteralPath $stop) -and (Sha $stop) -ceq [string]$freshRemovedPreimage.stop_sha256)) {
+        Product $install '--remove-current-user-setup'
+    } else { [void](Read-FreshRemovedPreimage) }
     $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ((Snapshot).exists -or [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
         [string]$removal.relay_process.status -cne 'ABSENT' -or @(Relays).Count -ne 0) { throw 'Removal readback failed.' }
+    if ($PrepareFreshServerRegistration) {
+        Assert-RetirementWriterQuiescence
+        if (-not $testMode) { Assert-ContainerFreshSystemTasksStopped }
+        if ([bool]$writerBefore.present) {
+            $freshWriterReadback = Get-CanonicalWriterSnapshot $install
+            if ([bool]$freshWriterReadback.enabled -or [int]$freshWriterReadback.process_count -ne 0 -or
+                [string]$freshWriterReadback.binding_sha256 -cne [string]$writerBefore.binding_sha256) {
+                throw 'FRESH_SCHEDULED_WRITER_NOT_QUIESCED'
+            }
+            # Keep the exact task definition in place but inactive. The new
+            # current-user relay is the only enabled automatic consumer.
+            $writerRestoreNeeded=$false
+            $audit.scheduled_writer.held_disabled_for_fresh_registration=$true
+        }
+        $audit.fresh_transition.quiesced=$true
+        $audit.fresh_transition.stop_sha256=Sha $stop
+        $audit.status='FRESH_TRANSITION_QUIESCED'
+        Save $auditPath $audit
+        if ($FreshTransitionAction -ceq 'Restore') {
+            Product $install '--fresh-server-registration' 'restore'
+            $restoreJournalPath = Join-Path $FreshArchiveRoot 'transition-journal.json'
+            if ((Get-Item -LiteralPath $restoreJournalPath).Length -gt 33554432) { throw 'FRESH_JOURNAL_OVERSIZED' }
+            $restoreJournal = Get-Content -LiteralPath $restoreJournalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (Test-JsonTrue $restoreJournal.machine_restore_pending) {
+                Invoke-FreshMachineProfile $true
+                Product $install '--fresh-server-registration' 'restore'
+            }
+            Restore $audit.fresh_transition.original_preimage
+            if ((Sha $stop) -cne [string]$audit.fresh_transition.stop_sha256) { throw 'FRESH_RESTORE_STOP_REQUEST_CHANGED' }
+            if ($freshRemovedPreimage) {
+                if ((Sha $stop) -cne [string]$freshRemovedPreimage.stop_sha256 -or
+                    (Sha $removalPath) -cne [string]$freshRemovedPreimage.removal_sha256) { throw 'FRESH_OLD_REMOVAL_RESTORE_CHANGED' }
+            } else { Remove-Item -LiteralPath $stop }
+            $restoredRun = Snapshot
+            $originalRun = $audit.fresh_transition.original_preimage
+            if ([bool]$restoredRun.exists -ne [bool]$originalRun.exists -or
+                [string]$restoredRun.kind -cne [string]$originalRun.kind -or
+                [string]$restoredRun.data -cne [string]$originalRun.data -or
+                (Test-Path -LiteralPath $stop) -ne [bool]$freshRemovedPreimage) {
+                throw 'FRESH_RESTORE_RUN_READBACK_FAILED'
+            }
+            $audit.status='ROLLBACK_AWAITING_FENCE_RELEASE'
+            $restoreWriterBaseline=$null
+            $originalWriter=$audit.fresh_transition.original_scheduled_writer
+            if ([bool]$originalWriter.present -and [bool]$originalWriter.enabled) {
+                $restoreWriterBaseline=Enable-CanonicalWriter $install $originalWriter
+                $audit.scheduled_writer.restore_readback=$restoreWriterBaseline
+            }
+            Save $auditPath $audit
+            $restoreReleasePhase=if ($restoreWriterBaseline) { 'ROLLBACK_NATURAL_TRIGGER' } else { 'ROLLBACK_COMPLETE' }
+            $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization -Path $rollbackCompleteAuthorizationPath -Phase $restoreReleasePhase -AuditPath $auditPath -EnabledBaseline $restoreWriterBaseline
+            Set-CanonicalWriterFenceReleaseAuthorization $releaseAuthorization
+            Clear-CanonicalWriterFenceReleaseDelegation
+            Stop-CanonicalWriterFenceRelease $releaseAuthorization
+            $canonicalWriterFenceActive=$false
+            foreach ($item in @($audit.fresh_transition.original_relays)) { [void](StartRaw ([string]$item.CommandLine)) }
+            if (@($audit.fresh_transition.original_relays).Count -gt 0) { Start-Sleep -Seconds 3 }
+            [void](Assert-RollbackRelayPreimage @($audit.fresh_transition.original_relays))
+            if ($restoreWriterBaseline) {
+                $audit.scheduled_writer.natural_trigger_proof=Confirm-CanonicalWriterRunning $install $restoreWriterBaseline
+            }
+            $audit.status='PASS_FRESH_ARCHIVE_RESTORED'
+            Save $auditPath $audit
+            "fresh_transition_status=$($audit.status)"
+            return
+        }
+        Product $install '--fresh-server-registration' 'prepare'
+        $freshJournalPath = Join-Path $FreshArchiveRoot 'transition-journal.json'
+        if ((Get-Item -LiteralPath $freshJournalPath).Length -gt 33554432) { throw 'FRESH_JOURNAL_OVERSIZED' }
+        $freshJournal = Get-Content -LiteralPath $freshJournalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if (Test-JsonTrue $freshJournal.machine_pending) {
+            Invoke-FreshMachineProfile $false
+            Product $install '--fresh-server-registration' 'prepare'
+        }
+        Product $install '--fresh-server-registration' 'register'
+    }
     $started = (Get-Date).ToUniversalTime()
     Product $install '--onboard-current-user'
+    if ($PrepareFreshServerRegistration) { Product $install '--fresh-server-registration' 'activate' }
     $onboarding = Get-Content $onboardingPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $after = Snapshot
     if ([string]$onboarding.status -cne 'READY' -or [string]$onboarding.relay_autostart.command -cne $wanted -or
@@ -2524,6 +2829,18 @@ $enteredPlacementTry = $true
 }
 catch {
     $original=$_
+    if (-not $canonicalPreparationStarted) { throw $original }
+    if ($PrepareFreshServerRegistration -and $enteredPlacementTry -and $audit.fresh_transition.quiesced) {
+        # Once detachment can have begun, old code/Run must never be restored by
+        # the ordinary installer rollback. Preserve this exact attempt/fence.
+        $audit.status='FRESH_TRANSITION_UNKNOWN_RESUME_REQUIRED'
+        $audit.failure_type=$original.Exception.GetType().Name
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+        "fresh_transition_receipt=$auditPath"
+        "fresh_transition_receipt_sha256=$(Sha $auditPath)"
+        throw '새 서버 전환은 미완료입니다. 같은 입력과 전환 ID 및 표시된 receipt로 다시 확인/이어서 등록하세요. 원본은 보존되어 있습니다.'
+    }
     if (-not $enteredPlacementTry) {
         if ($retirementResume -and $canonicalWriterFenceActive) {
             throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
@@ -2697,7 +3014,9 @@ catch {
     if ($codeRestoreNeeded) {
         try {
             Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
-            Product $install '--remove-current-user-setup'
+            if ($PrepareFreshServerRegistration -and $freshRemovedPreimage) {
+                [void](Read-FreshRemovedPreimage)
+            } else { Product $install '--remove-current-user-setup' }
             if ((Snapshot).exists -or @(Relays).Count -ne 0) {
                 throw 'Replacement rollback runtime quiescence failed.'
             }
@@ -2755,10 +3074,12 @@ catch {
     try {
         if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
             Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
-            Product $install '--remove-current-user-setup'
+            if ($PrepareFreshServerRegistration -and $freshRemovedPreimage) {
+                [void](Read-FreshRemovedPreimage)
+            } else { Product $install '--remove-current-user-setup' }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
             Restore $before
-            if (Test-Path $stop) { Remove-Item $stop -Force }
+            if (-not $freshRemovedPreimage -and (Test-Path $stop)) { Remove-Item $stop -Force }
             $check = Snapshot
             if (
                 [bool]$check.exists -ne [bool]$before.exists -or

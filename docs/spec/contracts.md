@@ -1,5 +1,50 @@
 # 데이터·상태·통합 계약
 
+<a id="ca-fresh-server-transition"></a>
+## fresh 서버 전환 계약
+
+전환 입력은 `kmtech.fresh-transition.v1`의 정확한 필드 집합
+`schema, origin, scope, deployment_id, packet, pc, sid, acceptance`다.
+`origin`은 HTTPS origin, `deployment_id`는 서버의 절대 설치 root,
+`packet`은 사용할 `portable-manifest.json` SHA256, `pc/sid`는 현재 원 사용자 결속이다.
+`acceptance`는 `record_path, record_sha256, source_commit, accepted_by`를 갖는다.
+입력·수용 기록은 원 사용자·SYSTEM·관리자만 접근하는 보호 ACL의 로컬 JSON이며
+각 64 KiB 이하, 중복 키 금지다. 수용 기록은 `phase=ACCEPTED`, `ready=true`,
+`client_writes_blocked=false`, `snapshot_rollback_allowed=false`, 일치하는 `source_commit`을 요구한다.
+새 HTTPS `/health/ready`와 source header, 공식 candidate의 최초 challenge가 반환한
+정확한 404 `producer_identity_not_found`도 대조한다. 이 404는 서버 전체 DB가 비었다는 증명이 아니다.
+
+| 원본 | 보관·비활성화 | 재탐색 차단 |
+|---|---|---|
+| 기본·custom 업무 root의 DB/WAL/SHM/journal, CSV, parked·세션 | 보호 보관 root의 `original/<index>` 사본 + 원본 옆 `.<name>.fresh-<id>` | 활성 파일·events·parked 경로에서 분리, legacy 코드 root 이관 차단 |
+| 기본·custom DirectSync의 신원·manifest·credential·status·receipt·queue·spool·lease keyring | 같은 규칙; manifest가 참조하는 외부 소비 경로도 조사 | 원본 queue 재생 금지, 새 queue 행 수 0 확인 |
+| 앱 전용 현재 사용자 profile/token/bootstrap CA | 같은 규칙; 필요한 TLS CA만 별도 검증 사본으로 유지 | 전환 marker가 선택한 새 앱 profile을 명시 사용 |
+| `%ProgramData%/KMTech/Logistics/profiles/Container_Audit` 및 `%ProgramData%/KMTech/DirectSync/container_audit` | 원 SID·prepared receipt·live fence에 묶인 승격 helper가 복사·검증·같은 볼륨 rename | 앱 전용 두 root만 허용, 활성 machine 경로 부재 대조 |
+| 다른 앱과 공유하는 legacy profile | 읽기 사본만 보관, 원본·공유 설정 불변 | CA의 새 앱 profile 선택으로 fallback 배제 |
+| HKCU Run·정본 사용자 예약 작업 | canonical audit에 정확한 Run 값·종류·작업 정의와 binding 저장 | Run 제거·relay 정지 후 보관, 사용자 작업은 비활성 유지 |
+
+현행 writer-control, 이번 install-audit, 기본·custom 두 root의 은퇴 marker와 제거 영수증은
+이동하지 않는다. 파일 bytes/SHA256·속성·원본 ACL과 디렉터리 집합을 대조한다.
+보관 사본은 원 사용자·SYSTEM·관리자 ACL로 보호하고 원본 ACL은 같은 볼륨 rename으로 보존한다.
+미전송·UNKNOWN·보류·미완료 관측은 별도 `ConfirmArchivePending` 없이 보관·분리할 수 없다.
+읽을 수 없거나 분류할 수 없는 원본을 성공으로 추정하지 않는다.
+
+SYSTEM task는 옛 패킷 제거 단계에서 이미 ABSENT 또는 DISABLED+STOPPED여야 한다.
+fresh 옵션은 SYSTEM task를 중지하지 않으며 활성·모호 상태를 관리자 지원으로 거부한다.
+HKLM `KM_LOGISTICS_PROFILE_PATH` 또는 `KM_LOGISTICS_REQUIRED` 앵커가 있으면 값 비출력으로
+보관 전에 거부한다. 다른 앱의 HKLM·공유 profile을 변경하지 않는다.
+
+기록 단계는 `PLANNED → QUIESCED → ARCHIVE_VERIFIED → DETACHED → REGISTERING → REGISTERED → ACTIVATED`다.
+machine helper 대기 중에는 `QUIESCED`와 `machine_pending`을 유지한다. candidate·대상·공유 키와
+`REGISTERING`을 HTTP 이전에 저장한다. 서버 commit 응답 유실·부분 로컬 게시 후에는 동일 candidate의
+signed reattach만 허용한다. UNKNOWN 시도 기록을 남기며 서로 다른 전환·SID·대상·키로 이어 붙이지 않는다.
+
+`REGISTERING` 전에는 새 로컬 자료가 없고 전체 원본·ACL이 일치할 때만 정확한 원본과 Run을 복원한다.
+**이번 판은 REGISTERING 이후 복원을 지원하지 않는다.** “새 서버 등록이 시작됐을 수 있어
+되돌릴 수 없음 — 관리자 지원 필요”와 보관 위치를 표시하고 같은 전환으로 앞으로 복구한다.
+ACCEPTED 서버의 snapshot rollback이나 새 퇴역 증거 형식을 만들지 않는다.
+구현: `current_user_server_transition.py`, 기존 onboarding/등록기, 두 공개 설치기 및 writer fence helper.
+
 [제품·기능 카드](README.md) · [운영](operations.md) · [백로그](BACKLOG.md) · [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md) · [공통 용어](../../../Program_Spec_Hub/GLOSSARY.md)
 
 기준일 2026-09-07, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`와 당시 수정 작업 트리를 대상으로 한다. [정확한 소스·증거 경계](README.md#ca-evidence-scope)를 함께 적용한다. 아래는 소스에서 확인한 계약이며 대상 서버의 활성 설정·설치 provider·실행 성공은 별도 증거가 필요하다. 상대 저장소의 조사 HEAD는 [SOURCE-MAP 및 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md)에 있으며 링크 대상이 이후 바뀌면 재대조한다.

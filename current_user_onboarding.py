@@ -208,6 +208,19 @@ def resolve_current_user_onboarding_paths(
         logistics_profile = _resolved(profile_candidate)
     else:
         logistics_profile = default_logistics_profile
+    from writer_session_fence import canonical_control_root
+
+    if values.get("LOCALAPPDATA") and (canonical_control_root(values) / "server-transition/fresh-server-transition.json").is_file():
+        from current_user_server_transition import current_transition
+
+        transition = current_transition()
+        if transition and transition["phase"] != "RESTORED":
+            if str(data_root) != transition["data_root"]:
+                raise CurrentUserOnboardingError(
+                    "새 서버 전환은 원래 선택한 데이터 폴더에서 이어서 진행하세요.",
+                    report_path=Path(transition["archive_root"]) / "transition-result.json",
+                )
+            logistics_profile = Path(transition["profile_path"])
     bootstrap_tls_ca_bundle = (
         data_root / "bootstrap" / "ca-bundle.pem"
         if explicit_data_root
@@ -1238,8 +1251,22 @@ def onboard_current_user(
     ledger_factory: Callable[[Path], None] = _create_ledger,
     autostart_installer: Callable[..., Mapping[str, Any]] = install_user_relay_autostart,
     relay_launcher: Callable[..., Mapping[str, Any]] = start_user_relay_process,
+    fresh_transition_journal: str = "",
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
+    from current_user_server_transition import current_transition, _require_quiesced_authority
+
+    transition = current_transition()
+    fresh = transition is not None and (transition["phase"] not in {"ACTIVATED", "RESTORED"} or bool(fresh_transition_journal))
+    if fresh:
+        if (transition["phase"] not in {"REGISTERED", "ACTIVATED"} or not fresh_transition_journal
+                or str(Path(fresh_transition_journal).resolve()) != str(Path(transition["archive_root"]) / "transition-journal.json")
+                or transition["data_root"] != str(paths.data_root)):
+            raise CurrentUserOnboardingError(
+                "새 서버 전환이 진행 중입니다. 공개 설치기의 같은 전환에서 다시 확인 / 이어서 등록하세요.",
+                report_path=Path(transition["archive_root"]) / "transition-result.json",
+            )
+        _require_quiesced_authority(transition)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
     for directory in (
         paths.data_root,
@@ -1355,7 +1382,10 @@ def onboard_current_user(
             raise ValueError("current-user business ledger readback failed")
         stop_path = user_relay_stop_path(paths.direct_sync_root)
         stop_path.unlink(missing_ok=True)
-        report["relay_autostart"] = dict(autostart_installer(paths.app_root, environ=environ))
+        report["relay_autostart"] = (
+            {"status": "PASS", "activation": "WAITING_FIRST_LEASE"}
+            if fresh else dict(autostart_installer(paths.app_root, environ=environ))
+        )
         autostart_status = str(report["relay_autostart"].get("status") or "")
         if autostart_status in {"", "UNKNOWN"}:
             raise CurrentUserOnboardingError(
@@ -1381,7 +1411,7 @@ def onboard_current_user(
         )
         report.update(
             {
-                "status": "READY",
+                "status": "ACTIVATION_PENDING" if fresh else "READY",
                 "state_readback": state,
                 "server_registration_verified": True,
                 "ledger_status": "READY",
@@ -1954,12 +1984,14 @@ def onboarding_main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--app-root", default=str(_default_app_root()))
     parser.add_argument("--server-base-url", default=DEFAULT_SERVER_BASE_URL)
+    parser.add_argument("--fresh-transition-journal", default="")
     args = parser.parse_args(argv)
     try:
         report = onboard_current_user(
             args.app_root,
             server_base_url=args.server_base_url,
             require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+            **({"fresh_transition_journal": args.fresh_transition_journal} if args.fresh_transition_journal else {}),
         )
     except CurrentUserOnboardingError as exc:
         print(f"onboarding_status={exc.status}")

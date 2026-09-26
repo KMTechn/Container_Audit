@@ -1,5 +1,24 @@
 # 남은 요구·검증·문서·추가 제안
 
+<a id="ca-fresh-server-transition"></a>
+## fresh 서버 전환 실물 수용
+
+옛 READY·legacy·partial/ABSENT 자료 보관, exact candidate 등록/reattach, helper의 앱 전용
+ProgramData 두 root 분리·복원, 원본·ACL·SID/대상/키 결속, 실패 시 UNKNOWN 보존,
+첫 lease 후 Run 게시를 소스와 격리 headless 시험으로 검증한다.
+실제 운영 적용 완료를 뜻하지 않는다. [운영 절차](operations.md#ca-fresh-server-transition)를 기준으로
+랩에서 다음 항목을 확인해야 한다.
+
+- 옛 `497d1cf` 계열 패킷 제거를 실제 실행하고 SYSTEM task의 ABSENT 또는 DISABLED+STOPPED를 확인한다.
+- 원 작업자와 다른 관리자 계정의 UAC로 Users Read ProgramData 원본의 bytes·ACL을 보존하고 두 root를 분리한다.
+- 실제 수용 서버의 TLS/source/최초 404, 공유 CNG 기존 키 재사용, 응답 유실 reattach, 첫 lease·빈 queue·단일 relay를 확인한다.
+- 보관·rename·응답 유실·부분 게시·Run 게시 경계의 강제 종료 후 exact receipt 재개와 cold boot를 확인한다.
+- 기본/custom 두 root의 은퇴 marker·원본 영수증 및 다른 앱의 공유 profile·키가 유지되는지 확인한다.
+
+이 항목들은 **NOT VERIFIED**다. REGISTERING 이후 복원은 이번 판의 지원 범위에 포함하지 않으며
+관리자 지원과 앞으로 복구만 제공한다. HKLM 앵커 자동 변경, SYSTEM task의 fresh 경로 강제 중지,
+보관 queue 재생, 서버 snapshot rollback도 지원하지 않는다.
+
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
 **현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 상세 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 아래 과거 시점의 판단을 보존하며 물리 장비·공장 배포는 별도 범위다. 현재 소스 단순화의 변경·검증·독립 검토는 [CA-G11](#ca-g11)에 기록한다.

@@ -1,5 +1,23 @@
 # Container_Audit 기술 명세
 
+<a id="ca-fresh-server-transition"></a>
+## 옛 PC 자료를 보관한 뒤 새 서버에 등록
+
+`INSTALL_CANONICAL_PORTABLE.ps1 -PrepareFreshServerRegistration`은 옛 READY·legacy·partial
+상태를 보관하고, 승인한 fresh 서버에 같은 PC의 공식 파생 신원을 등록하는 명시 경로다.
+기존 설치·업데이트·일반 온보딩의 READY 재사용 동작은 유지한다. 진행 중 전환에서는
+일반 온보딩 대신 같은 전환의 재확인·재개를 안내한다.
+
+원본 업무·신원·queue·profile을 검증한 사본으로 보관하고 같은 볼륨의 비활성 위치로
+분리한다. 공유 CNG possession key는 기존 키를 열어 사용하며 생성·삭제·회전하지 않는다.
+새 등록 응답의 신원·scope·키·manifest·epoch를 대조하고, 빈 queue의 단일 relay가
+첫 유효 lease를 받은 뒤 Run 자동 시작을 게시한다.
+
+[입력·보관·복원 계약](contracts.md#ca-fresh-server-transition),
+[운영 절차](operations.md#ca-fresh-server-transition),
+[실물 검증 잔여 범위](BACKLOG.md#ca-fresh-server-transition)를 함께 적용한다.
+소스 및 격리 headless 검증 범위이며 운영 서버·현장 PC·교차 계정 UAC 실행은 **NOT VERIFIED**다.
+
 표준 작업자 계정에서 시작한 canonical 설치는 별도 관리자 계정으로 코드 배치를
 승격할 수 있다. 작업자 SID·프로필 루트·이번 prepared receipt·fence를 결속하며
 교차 계정 guest 실물 설치는 [CA-G15](BACKLOG.md#ca-g15)의 미검증 항목이다.

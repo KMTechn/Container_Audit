@@ -1186,6 +1186,13 @@ def _initial_possession_key(
     args: argparse.Namespace,
     identity: dict[str, str],
 ) -> PersistentPossessionKey:
+    fresh = getattr(args, "_fresh_transition", None)
+    if fresh is not None:
+        key = PersistentPossessionKey.open_existing(scope=SCOPE_CURRENT_USER)
+        if key.descriptor().fingerprint != fresh["possession"]["fingerprint"]:
+            key.close()
+            raise DirectSyncPushError("fresh transition possession binding differs")
+        return key
     existing_contract = str(
         identity.get("existing_enrollment_contract_version") or ""
     )
@@ -1596,6 +1603,10 @@ def _finalize_server_registration(
     non_exportability,
     extra_report: dict | None = None,
 ) -> tuple[dict, dict]:
+    if getattr(args, "_fresh_transition", None) is not None:
+        from current_user_server_transition import validate_registration_response
+
+        validate_registration_response(args._fresh_transition, response_payload)
     expected_manifest_hash = manifest_hash(manifest)
     active_manifest_hashes = response_payload.get("active_manifest_hashes")
     if (
@@ -2816,23 +2827,25 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
     hostname = args.hostname or socket.gethostname()
     storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
     ensure_container_audit_storage_dirs(storage_paths)
-    identity = _resolve_producer_identity(
-        args,
-        storage_paths,
-        hostname=hostname,
-    )
+    if getattr(args, "fresh_transition_journal", ""):
+        from current_user_server_transition import registration_binding
+
+        args._fresh_transition = registration_binding(args, storage_paths)
+        identity = dict(args._fresh_transition["candidate"]["identity"])
+    else:
+        identity = _resolve_producer_identity(
+            args, storage_paths, hostname=hostname,
+        )
     source_host_id = identity["source_host_id"]
     producer_install_id = identity["producer_install_id"]
     producer_id = identity["producer_id"]
     pc_id = identity["pc_id"]
     key_id = args.key_id or identity["pending_key_id"]
     secret_ref = args.secret_ref or _default_secret_ref(producer_install_id)
-    _require_explicit_existing_identity_migration(
-        args,
-        storage_paths,
-        identity=identity,
-        secret_ref=secret_ref,
-    )
+    if getattr(args, "_fresh_transition", None) is None:
+        _require_explicit_existing_identity_migration(
+            args, storage_paths, identity=identity, secret_ref=secret_ref,
+        )
     endpoint_url = args.endpoint_url or DEFAULT_ENDPOINT_URL
     isolated_context = None
     isolated_context_path = str(
@@ -2871,6 +2884,9 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
             else "missing"
         ),
     )
+    if getattr(args, "_fresh_transition", None) is not None:
+        if manifest != args._fresh_transition["candidate"]["manifest"]:
+            raise DirectSyncPushError("fresh transition candidate manifest differs")
     credential = {
         "credential_schema_version": "producer-ingest-credential-reference-v1",
         "created_at": captured_at,
@@ -2992,6 +3008,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Register local Container_Audit producer identity for this PC")
     parser.add_argument("--app-root", default=_default_app_root())
+    parser.add_argument("--fresh-transition-journal", default="")
     parser.add_argument("--endpoint-url", default=DEFAULT_ENDPOINT_URL)
     parser.add_argument("--hostname", default="")
     parser.add_argument("--source-host-id", default="")

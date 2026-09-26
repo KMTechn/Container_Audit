@@ -1,4 +1,4 @@
-Set-StrictMode -Version Latest
+﻿Set-StrictMode -Version Latest
 
 $Script:ContainerWriterFenceActiveSchema = 'container-audit-all-writer-fence-active-v1'
 $Script:ContainerWriterFenceReleaseSchema = 'container-audit-all-writer-fence-release-v1'
@@ -7,7 +7,7 @@ $Script:ContainerWriterFenceTupleVersion = 'container-audit-deployment-session-a
 $Script:ContainerWriterFenceSessionMutexPrefix = 'Local\KMTech.ContainerAudit.DeploymentSession.'
 $Script:ContainerWriterFenceAdmissionMutexName = 'Local\KMTech.ContainerAudit.WriterAdmission.v1'
 $Script:ContainerWriterFenceAdmissionProductionRoot = ''
-$Script:ContainerWriterFenceInventorySha256 = 'bf5366217eb75c5063e039582a069983a534d4f9575f900ea396dac856ae6eb1'
+$Script:ContainerWriterFenceInventorySha256 = 'bdff8ac83e810c7ceea60b470922200b00639df425efdbc0087e472aac480825'
 $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
 $Script:ContainerWriterFenceMaximumBytes = 262144
 $Script:ContainerWriterFenceActiveFields = @(
@@ -218,6 +218,28 @@ function Assert-ContainerWriterFenceNoReparse([string]$PathValue) {
             $item = Get-Item -LiteralPath $current -Force -ErrorAction Stop
             if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
                 throw 'CONTAINER_WRITER_FENCE_REPARSE_REJECTED'
+            }
+        }
+    }
+}
+
+function Assert-ContainerFreshSystemTasksStopped([switch]$SystemOnly) {
+    try { $tasks = @(Get-ScheduledTask -ErrorAction Stop) }
+    catch { throw 'FRESH_SYSTEM_TASK_OBSERVATION_UNKNOWN_ADMIN_REQUIRED' }
+    foreach ($name in @('direct-sync-relay-container-audit','container-audit-isolated-qualification-authority')) {
+        $matching = @($tasks | Where-Object { [string]$_.TaskName -ieq $name })
+        if ($matching.Count -gt 1) { throw 'FRESH_SYSTEM_TASK_NONUNIQUE_ADMIN_REQUIRED' }
+        foreach ($task in $matching) {
+            $principal = [string]$task.Principal.UserId
+            try {
+                $sid = if ($principal -match '^S-1-') { $principal } else {
+                    (New-Object Security.Principal.NTAccount($principal)).Translate([Security.Principal.SecurityIdentifier]).Value
+                }
+            } catch { throw 'FRESH_SYSTEM_TASK_PRINCIPAL_UNKNOWN_ADMIN_REQUIRED' }
+            if ($SystemOnly -and $sid -cne 'S-1-5-18') { continue }
+            if ($task.Settings.Enabled -isnot [bool] -or [bool]$task.Settings.Enabled -or
+                [string]$task.State -cnotin @('Disabled','Ready')) {
+                throw 'FRESH_SYSTEM_TASK_MUST_ALREADY_BE_DISABLED_STOPPED_ADMIN_REQUIRED'
             }
         }
     }

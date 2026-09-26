@@ -2,6 +2,10 @@
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
+    [string]$FreshMachineTransitionJournalPath = '',
+    [string]$FreshMachineTransitionJournalSha256 = '',
+    [string]$FreshMachineTransitionId = '',
+    [switch]$RestoreFreshMachineProfile,
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
     [string]$TlsCaBundlePath = "",
@@ -362,6 +366,118 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
     }
     return 'PORTABLE_CPYTHON'
 }
+function Detach-FreshMachineProfile {
+    if (-not $testOverride) { Assert-ContainerFreshSystemTasksStopped }
+    if ($Uninstall -or $DryRun -or $RestoreVerifiedReplacement -or $ReplaceExistingVerifiedPortable -or
+        $FreshMachineTransitionId -cnotmatch '^[0-9a-f]{32}$' -or
+        $FreshMachineTransitionJournalSha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'FRESH_MACHINE_EXCLUSIVE_BOUND_OPERATION_REQUIRED' }
+    $journalPath = Get-StrictFullPath $FreshMachineTransitionJournalPath 'fresh journal'
+    Assert-NoReparsePoint $journalPath 'fresh journal'
+    if ((Get-Item -LiteralPath $journalPath).Length -gt 33554432 -or
+        (Get-FileSha256 $journalPath) -cne $FreshMachineTransitionJournalSha256) { throw 'FRESH_MACHINE_JOURNAL_PIN_MISMATCH' }
+    $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$journal.schema -cne 'container-audit-fresh-server-transition-v1' -or
+        [string]$journal.transition_id -cne $FreshMachineTransitionId -or [string]$journal.sid -cne $OperatorSid -or
+        [string]$journal.phase -cnotin @('QUIESCED','ARCHIVE_VERIFIED','DETACHED') -or
+        (-not $RestoreFreshMachineProfile -and [string]$journal.phase -cnotin @('QUIESCED','ARCHIVE_VERIFIED'))) {
+        throw 'FRESH_MACHINE_JOURNAL_BINDING_MISMATCH'
+    }
+    if ($RestoreFreshMachineProfile -and
+        ($journal.machine_restore_pending -isnot [bool] -or -not $journal.machine_restore_pending)) { throw 'FRESH_MACHINE_RESTORE_NOT_REQUESTED' }
+    $machineHome = if ($testOverride) { $env:PROGRAMDATA } else { 'C:\ProgramData' }
+    $allowed = @((Join-Path $machineHome 'KMTech\Logistics\profiles\Container_Audit'),
+                 (Join-Path $machineHome 'KMTech\DirectSync\container_audit'))
+    $entries = @($journal.entries | Where-Object { $_.machine_state -is [bool] -and $_.machine_state })
+    if ($entries.Count -lt 1 -or $entries.Count -gt 2) { throw 'FRESH_MACHINE_APP_SCOPED_ROOT_REQUIRED' }
+    $archiveRoot = Get-StrictFullPath ([string]$journal.archive_root) 'transition archive'
+    $archiveSecurity = Get-Acl -LiteralPath $archiveRoot
+    if (-not $archiveSecurity.AreAccessRulesProtected) { throw 'FRESH_MACHINE_ARCHIVE_ACL_NOT_PRIVATE' }
+    $archiveRules = @($archiveSecurity.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+    foreach ($rule in $archiveRules) {
+        if ([string]$rule.AccessControlType -cne 'Allow' -or
+            [string]$rule.IdentityReference.Value -cnotin @($OperatorSid,'S-1-5-18','S-1-5-32-544')) {
+            throw 'FRESH_MACHINE_ARCHIVE_ACL_NOT_PRIVATE'
+        }
+    }
+    if (@($archiveRules | Where-Object { [string]$_.IdentityReference.Value -ceq $OperatorSid }).Count -ne 1) {
+        throw 'FRESH_MACHINE_ARCHIVE_ORIGINAL_USER_ABSENT'
+    }
+    $selected = @()
+    # Validate and copy every machine root before renaming either original.
+    foreach ($entry in $entries) {
+        $machine = Get-StrictFullPath ([string]$entry.source) 'machine original'
+        $inactive = Join-Path (Split-Path -Parent $machine) ('.' + (Split-Path -Leaf $machine) + '.fresh-' + $FreshMachineTransitionId)
+        if (@($allowed | Where-Object { Test-SamePath $_ $machine }).Count -ne 1 -or $selected -contains $machine -or
+            -not (Test-SamePath ([string]$entry.inactive) $inactive) -or $entry.directory -isnot [bool] -or -not $entry.directory) {
+            throw 'FRESH_MACHINE_APP_SCOPED_ROOT_REQUIRED'
+        }
+        $selected += $machine
+        $archive = Get-StrictFullPath ([string]$entry.archive) 'archived machine state'
+        if (-not $archive.StartsWith($archiveRoot + '\original\', [StringComparison]::OrdinalIgnoreCase)) { throw 'FRESH_MACHINE_ARCHIVE_OUTSIDE_TRANSITION' }
+        foreach ($path in @($machine,$inactive,$archive,$archiveRoot)) { Assert-NoReparsePoint $path 'fresh machine state' }
+        if ((Test-Path -LiteralPath $machine) -and (Test-Path -LiteralPath $inactive)) { throw 'FRESH_MACHINE_TWO_ACTIVE_ORIGINALS' }
+        $readRoot = if (Test-Path -LiteralPath $inactive) { $inactive } else { $machine }
+        if (-not (Test-Path -LiteralPath $readRoot -PathType Container) -or (Get-Acl -LiteralPath $readRoot).Sddl -cne [string]$entry.root_acl) {
+            throw 'FRESH_MACHINE_ORIGINAL_ACL_CHANGED'
+        }
+        $files = @(Get-ChildItem -LiteralPath $readRoot -File -Recurse -Force)
+        if ($files.Count -ne @($entry.files).Count) { throw 'FRESH_MACHINE_FILE_SET_MISMATCH' }
+        $directories = @(Get-ChildItem -LiteralPath $readRoot -Directory -Recurse -Force)
+        if ($directories.Count -ne @($entry.directories).Count) { throw 'FRESH_MACHINE_DIRECTORY_SET_MISMATCH' }
+        foreach ($directory in @($entry.directories)) {
+            $relative = [string]$directory.relative
+            if ([IO.Path]::IsPathRooted($relative) -or $relative -match '(^|[\\/])\.\.([\\/]|$)') { throw 'FRESH_MACHINE_RELATIVE_PATH_INVALID' }
+            $original = Join-Path $readRoot $relative
+            if ((Get-Acl -LiteralPath $original).Sddl -cne [string]$directory.acl -or
+                [int](Get-Item -LiteralPath $original -Force).Attributes -ne [int]$directory.attributes) { throw 'FRESH_MACHINE_ORIGINAL_ACL_CHANGED' }
+            if (-not $RestoreFreshMachineProfile) { [void][IO.Directory]::CreateDirectory((Join-Path $archive $relative)) }
+        }
+        if (-not $RestoreFreshMachineProfile) { [void][IO.Directory]::CreateDirectory($archive) }
+        foreach ($file in @($entry.files)) {
+            $relative = [string]$file.relative
+            if ([IO.Path]::IsPathRooted($relative) -or $relative -match '(^|[\\/])\.\.([\\/]|$)') { throw 'FRESH_MACHINE_RELATIVE_PATH_INVALID' }
+            $original = Join-Path $readRoot $relative
+            $copy = Join-Path $archive $relative
+            if ((Get-Item -LiteralPath $original -Force).Length -ne [int64]$file.bytes -or
+                (Get-FileSha256 $original) -cne [string]$file.sha256 -or
+                (Get-Acl -LiteralPath $original).Sddl -cne [string]$file.acl -or
+                [int](Get-Item -LiteralPath $original -Force).Attributes -ne [int]$file.attributes) { throw 'FRESH_MACHINE_ORIGINAL_CHANGED' }
+            if (-not (Test-Path -LiteralPath $copy) -and -not $RestoreFreshMachineProfile) {
+                [void][IO.Directory]::CreateDirectory((Split-Path -Parent $copy))
+                $scratch = Join-Path $archiveRoot 'machine-copy-attempts'
+                [void][IO.Directory]::CreateDirectory($scratch)
+                $temporary = Join-Path $scratch ([Guid]::NewGuid().ToString('N'))
+                $reader = [IO.File]::OpenRead($original)
+                try {
+                    $writer = New-Object IO.FileStream($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+                    try { $reader.CopyTo($writer); $writer.Flush($true) } finally { $writer.Dispose() }
+                } finally { $reader.Dispose() }
+                [IO.File]::SetAttributes($temporary, [IO.FileAttributes][int]$file.attributes)
+                Move-Item -LiteralPath $temporary -Destination $copy
+            }
+            if ((Get-Item -LiteralPath $copy -Force).Length -ne [int64]$file.bytes -or
+                (Get-FileSha256 $copy) -cne [string]$file.sha256) { throw 'FRESH_MACHINE_ARCHIVE_READBACK_FAILED' }
+        }
+        foreach ($directory in @($entry.directories)) {
+            if (-not $RestoreFreshMachineProfile) {
+                [IO.File]::SetAttributes((Join-Path $archive ([string]$directory.relative)), [IO.FileAttributes][int]$directory.attributes)
+            }
+        }
+        if (@(Get-ChildItem -LiteralPath $archive -File -Recurse -Force).Count -ne $files.Count) { throw 'FRESH_MACHINE_ARCHIVE_FILE_SET_MISMATCH' }
+    }
+    foreach ($entry in $entries) {
+        $machine = [string]$entry.source
+        $inactive = [string]$entry.inactive
+        if ($RestoreFreshMachineProfile) {
+            if (Test-Path -LiteralPath $inactive) { Move-Item -LiteralPath $inactive -Destination $machine }
+            if ((Test-Path -LiteralPath $inactive) -or -not (Test-Path -LiteralPath $machine)) { throw 'FRESH_MACHINE_RESTORE_READBACK_FAILED' }
+        } else {
+            if (Test-Path -LiteralPath $machine) { Move-Item -LiteralPath $machine -Destination $inactive }
+            if ((Test-Path -LiteralPath $machine) -or -not (Test-Path -LiteralPath $inactive)) { throw 'FRESH_MACHINE_DETACH_READBACK_FAILED' }
+        }
+    }
+    Write-Output $(if ($RestoreFreshMachineProfile) { 'fresh_machine_profile_status=RESTORED' } else { 'fresh_machine_profile_status=DETACHED' })
+}
 
 function Write-ElevationLog([string]$Status, [string]$Message) {
     if ([string]::IsNullOrWhiteSpace($ElevationLogPath)) { return }
@@ -675,6 +791,12 @@ if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or
     }
 }
 try {
+if ($FreshMachineTransitionJournalPath) {
+    $freshSource = Get-StrictFullPath $SourceRoot 'fresh management packet'
+    [void](Assert-RequiredRelease $freshSource $testOverride)
+    Detach-FreshMachineProfile
+    return
+}
 if ($RestoreVerifiedReplacement.IsPresent) {
     if ($DryRun.IsPresent -or $Uninstall.IsPresent -or $ReplaceExistingVerifiedPortable.IsPresent) {
         throw 'RestoreVerifiedReplacement cannot be combined with placement, uninstall, or DryRun.'

@@ -188,6 +188,12 @@ def migrate_legacy_code_root_state(
     root is renamed, deleted, normalized, or quarantined.
     """
 
+    from current_user_server_transition import current_transition
+
+    transition = current_transition()
+    if transition and transition["phase"] != "RESTORED":
+        return {"schema_version": MIGRATION_SCHEMA, "status": "EXCLUDED_FRESH_TRANSITION",
+                "transition_id": transition["transition_id"]}
     code_root = Path(application_path).expanduser().resolve(strict=False)
     selected_config_dir = Path(config_dir).expanduser().resolve(strict=False)
     selected_parked_dir = Path(parked_trays_dir).expanduser().resolve(strict=False)

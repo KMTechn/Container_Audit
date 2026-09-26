@@ -389,6 +389,17 @@ def _test1_isolated_legacy_override_enabled() -> bool:
 def _runtime_environment(
     environ: Mapping[str, str] | None,
 ) -> Mapping[str, str]:
+    from writer_session_fence import canonical_control_root
+
+    if os.environ.get("LOCALAPPDATA") and (canonical_control_root() / "server-transition/fresh-server-transition.json").is_file():
+        from current_user_server_transition import current_transition
+
+        transition = current_transition()
+        if transition and transition["phase"] != "RESTORED":
+            # The app's explicit new profile excludes both shared machine and
+            # process fallback without changing another application's settings.
+            return {PROFILE_PATH_ENV: transition["profile_path"], REQUIRED_ENV: "1",
+                    "CONTAINER_AUDIT_FRESH_PROFILE": transition["profile_path"]}
     if environ is not None:
         return environ
     if _test1_isolated_legacy_override_enabled():
@@ -658,7 +669,7 @@ def load_logistics_runtime_profile(
     ):
         return None
     required_value = logistics_runtime_required(values) if required is None else bool(required)
-    explicit_path = profile_path or str(values.get(PROFILE_PATH_ENV) or "").strip()
+    explicit_path = values.get("CONTAINER_AUDIT_FRESH_PROFILE") or profile_path or str(values.get(PROFILE_PATH_ENV) or "").strip()
     path = assert_path_has_no_reparse_components(
         Path(explicit_path) if explicit_path else default_logistics_profile_path(values),
         label="runtime profile",
