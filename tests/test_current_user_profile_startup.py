@@ -22,6 +22,7 @@ APP_ROOT = Path(app_module.__file__).resolve().parent
 ONBOARDED_ORIGIN = "https://lab-onboarded.example.invalid"
 EXPLICIT_ORIGIN = "https://explicit.example.invalid"
 PROCESS_ORIGIN = "https://process-env.example.invalid"
+MACHINE_ORIGIN = "https://machine-profile.example.invalid"
 TOKEN = "synthetic-w9caprofile-token"
 SETUP_TITLE = "중앙 연결 설정 필요"
 
@@ -104,9 +105,17 @@ def test_launcher_start_uses_onboarded_current_user_profile(launcher, monkeypatc
     assert app_module.container_startup_logistics_client().base_url == ONBOARDED_ORIGIN
 
 
-@pytest.mark.parametrize("selector", ["container_audit_explicit", "process_km_logistics"])
+@pytest.mark.parametrize(
+    "selector",
+    ["container_audit_explicit", "process_km_logistics", "onboarded_over_machine"],
+)
 def test_environment_selected_profiles_are_kept(launcher, monkeypatch, tmp_path, selector):
-    if selector == "container_audit_explicit":
+    if selector == "onboarded_over_machine":
+        _install_profile(runtime_module._canonical_machine_profile_path(), MACHINE_ORIGIN)
+        onboarded = resolve_current_user_onboarding_paths(APP_ROOT).logistics_profile_path
+        _install_profile(onboarded, ONBOARDED_ORIGIN)
+        expected_origin = ONBOARDED_ORIGIN
+    elif selector == "container_audit_explicit":
         onboarded = resolve_current_user_onboarding_paths(APP_ROOT).logistics_profile_path
         _install_profile(onboarded, ONBOARDED_ORIGIN)
         explicit = _install_profile(tmp_path / "explicit" / "runtime-profile.json", EXPLICIT_ORIGIN)
