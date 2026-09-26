@@ -260,13 +260,12 @@ def test_retirement_marker_does_not_prove_external_packet_writer_stopped(tmp_pat
     env, old_source, manager, install, protected, receipt, marker = _retired_fixture(tmp_path)
     script = manager / 'INSTALL_CANONICAL_PORTABLE.ps1'
     text = script.read_text(encoding='utf-8-sig')
-    needle = "    return CimCmdlets\\Get-CimInstance @PSBoundParameters"
+    # Inject into the owned census, preserving the external-writer refusal.
+    needle = "        return @(Relays)"
     assert text.count(needle) == 1
     text = text.replace(needle,
-        "    if ($ClassName -ceq 'Win32_Process' -and -not $Filter) {\n"
         "        return [pscustomobject]@{ ProcessId=1; ExecutablePath=$env:CA_UNINSTALL_PYTHON; "
-        "CommandLine=($env:CA_UNINSTALL_PYTHON + ' -I -B ' + $env:CA_RETIREMENT_EXTERNAL_SCRIPT) }\n"
-        "    }\n" + needle)
+        "CommandLine=($env:CA_UNINSTALL_PYTHON + ' -I -B ' + $env:CA_RETIREMENT_EXTERNAL_SCRIPT) }")
     script.write_text(text, encoding='utf-8-sig')
     manifest_path = manager / 'portable-manifest.json'
     manifest = json.loads(manifest_path.read_text())

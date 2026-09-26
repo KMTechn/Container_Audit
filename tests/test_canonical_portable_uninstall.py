@@ -60,6 +60,8 @@ if sys.argv[1] == 'relay':
         stream.write(json.dumps(observation) + '\n')
     (root / 'relay.pid').write_text(str(os.getpid()))
     (root / 'relay.ready').touch()
+    if launch_ready := os.environ.get('CA_UNINSTALL_LAUNCH_READY'):
+        Path(launch_ready).write_text(str(os.getpid()))
     stop = user_relay.user_relay_stop_path(direct)
     try:
         if os.environ.get('CA_UNINSTALL_REFUSE') == '1':
@@ -181,6 +183,10 @@ function Product([string]$Root, [string]$Mode) {
 function Get-CimInstance {
     [CmdletBinding()]
     param([string]$ClassName, [string]$Filter)
+    # This fixture models owned processes; host-wide census is outside its OS.
+    if ($ClassName -ceq 'Win32_Process' -and [string]::IsNullOrWhiteSpace($Filter)) {
+        return @(Relays)
+    }
     if ($ClassName -ceq 'Win32_Process' -and $Filter -match '^ProcessId = (\d+)$') {
         $selectedPid = [int]$Matches[1]
         foreach ($relay in @(Relays)) {
@@ -197,8 +203,29 @@ function StartRaw([string]$Line) {
     $env:CA_UNINSTALL_LAUNCH_COMMAND = $Line
     $env:CA_UNINSTALL_LAUNCH_EXECUTABLE = Join-Path $InstallRoot 'runtime\pythonw.exe'
     $arguments = '-I -B ' + (Arg $env:CA_UNINSTALL_HOST) + ' relay'
-    $child = Start-Process -FilePath $env:CA_UNINSTALL_PYTHON -ArgumentList $arguments -WindowStyle Hidden -PassThru
-    return $child.Id
+    # Publish the stand-in's synthetic executable and command before callers
+    # observe this PID, using a receipt for this launch to exclude stale files.
+    $readyReceipt = Join-Path $env:CA_UNINSTALL_ROOT ('relay-launch-' + [Guid]::NewGuid().ToString('N') + '.ready')
+    $previousReceipt = $env:CA_UNINSTALL_LAUNCH_READY
+    try {
+        $env:CA_UNINSTALL_LAUNCH_READY = $readyReceipt
+        $child = Start-Process -FilePath $env:CA_UNINSTALL_PYTHON -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    } finally {
+        $env:CA_UNINSTALL_LAUNCH_READY = $previousReceipt
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds(10)
+    while (-not $child.HasExited -and [DateTime]::UtcNow -lt $deadline) {
+        if ((Test-Path -LiteralPath $readyReceipt -PathType Leaf) -and
+            [IO.File]::ReadAllText($readyReceipt) -ceq [string]$child.Id) {
+            return $child.Id
+        }
+        [Threading.Thread]::Sleep(50)
+    }
+    if (-not $child.HasExited) {
+        $child.Kill()
+        if (-not $child.WaitForExit(5000)) { throw 'Owned relay cleanup did not finish' }
+    }
+    throw 'Owned relay did not publish its process identity'
 }
 '''
 
