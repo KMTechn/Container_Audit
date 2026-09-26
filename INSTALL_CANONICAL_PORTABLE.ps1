@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -454,8 +454,10 @@ function Restore($Before) {
 function Save([string]$Path, $Value) {
     New-Item -ItemType Directory -Path (Split-Path -Parent $Path) -Force | Out-Null
     $temp = "$Path.tmp.$PID"
-    $json = ($Value|ConvertTo-Json -Depth 8)+[Environment]::NewLine
-    if (Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) {
+    $depth = if (Get-Variable -Name PrepareFreshServerRegistration -ValueOnly -ErrorAction SilentlyContinue) { 20 } else { 8 }
+    $json = ($Value|ConvertTo-Json -Depth $depth)+[Environment]::NewLine
+    if ((Get-Variable -Name CompleteRetiredRemoval -ValueOnly -ErrorAction SilentlyContinue) -or
+        (Get-Variable -Name PrepareFreshServerRegistration -ValueOnly -ErrorAction SilentlyContinue)) {
         $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes($json)
         $stream = New-Object IO.FileStream($temp, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) }
@@ -775,13 +777,285 @@ function Product([string]$Root,[string]$Mode,[string]$FreshAction = '') {
     if ($Mode -ceq '--fresh-server-registration' -and $FreshAction -ceq 'preflight') { return [int]$process.ExitCode }
     if ($process.ExitCode -ne 0) { throw "Product mode failed: $Mode/$($process.ExitCode)" }
 }
+function New-CanonicalOperationAudit {
+    $audit = [ordered]@{
+        schema='container-audit-canonical-portable-install-v2'
+        operation=if ($PrepareFreshServerRegistration) { 'PREPARE_FRESH_SERVER_REGISTRATION' } elseif ($CompleteRetiredRemoval) { 'COMPLETE_RETIRED_REMOVAL' } elseif ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
+        status='PREIMAGE_SAVED'
+        run_id=$runId
+        captured_at=(Get-Date).ToUniversalTime().ToString('o')
+        install_root=$install
+        code_placement='NOT_STARTED'
+        source_commit=[string]$sourceManifest.source_commit
+        source_manifest_sha256=$sourceManifestSha256
+        runtime_pythonw_sha256=''
+        runtime_pythonw_signature=''
+        registry_value=$RunName
+        preimage=$before
+        runtime_preimage_binding=$runtimePreimageBinding
+        after=[ordered]@{exists=$true;kind='String';data=$wanted}
+        stop_marker_path=$stop
+        scheduled_writer=[ordered]@{
+            classification=[string]$writerBefore.classification
+            preimage=$writerBefore
+            disable_readback=$null
+            stop_proof=$null
+            restore_readback=$null
+            natural_trigger_proof=$null
+            restore_failure_code=''
+        }
+        code_replacement=[ordered]@{
+            status='NOT_REQUIRED'
+            prestate='NOT_EVALUATED'
+            transaction_id=$replacementTransactionId
+            receipt_path=''
+            receipt_sha256=''
+            rollback_root=''
+            restore_evidence_path=''
+            restore_evidence_sha256=''
+            later_restore_surface='NOT_REQUIRED'
+            identity_or_credential_copied=$false
+        }
+        rollback=[ordered]@{
+            available=$true
+            applied=$false
+            runtime_restored=$false
+            scheduled_writer_restored=(-not [bool]$writerBefore.restore_required)
+        }
+    }
+    if ($PrepareFreshServerRegistration) {
+        $audit.fresh_transition = [ordered]@{
+            transition_id=$FreshTransitionId; sid=$operatorSid; archive_root=$FreshArchiveRoot
+            input_sha256=(Sha $FreshTransitionInput)
+            quiesced=$(if ($freshResume) { [bool]$freshResume.fresh_transition.quiesced } else { $false })
+            stop_sha256=$(if ($freshResume) { [string]$freshResume.fresh_transition.stop_sha256 } elseif ($freshRemovedPreimage) { [string]$freshRemovedPreimage.stop_sha256 } else { '' })
+            owner_process_id=$PID; owner_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
+            authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
+            session_id=$Script:CanonicalWriterFenceSessionId; attempt_id=$Script:CanonicalWriterFenceAttemptId
+            orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
+            prepared_receipt_path=''
+            prepared_receipt_sha256=''
+            original_preimage=$(if ($freshResume) { $freshResume.fresh_transition.original_preimage } else { $before })
+            original_removal=$freshRemovedPreimage
+            original_relays=$(if ($freshResume) { $freshResume.fresh_transition.original_relays } else {
+                [Object[]]@($old | ForEach-Object { [ordered]@{ProcessId=[int]$_.ProcessId;ExecutablePath=[string]$_.ExecutablePath;CommandLine=[string]$_.CommandLine} })
+            })
+            original_scheduled_writer=$(if ($freshResume) { $freshResume.fresh_transition.original_scheduled_writer } else { $writerBefore })
+            original_task_xml=$(if ($freshResume) { [string]$freshResume.fresh_transition.original_task_xml } elseif ([bool]$writerBefore.present) {
+                [string](Export-ScheduledTask -TaskName ([string]$writerBefore.task_name) -TaskPath ([string]$writerBefore.task_path))
+            } else { '' })
+        }
+    }
+    if ($CompleteRetiredRemoval) {
+        $audit.retirement=$retirement
+        $retirement.owner_process_id=$PID
+        $retirement.owner_started_at_utc=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
+        $retirement.session_id=$Script:CanonicalWriterFenceSessionId
+        $retirement.attempt_id=$Script:CanonicalWriterFenceAttemptId
+        $retirement.orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
+        $retirement.authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
+        $retirement.prepared_receipt_path=[string]$canonicalWriterFencePreparedReceipt.path
+        $retirement.prepared_receipt_sha256=[string]$canonicalWriterFencePreparedReceipt.sha256
+        $retirement.old_record_sha256=$uninstallRecordSha256
+        $retirement.original_relays=[Object[]]@($old | ForEach-Object {
+            [ordered]@{ ProcessId=[int]$_.ProcessId; ExecutablePath=[string]$_.ExecutablePath; CommandLine=[string]$_.CommandLine }
+        })
+        $retirement.resume_receipt_path=$ResumeRetirementReceiptPath
+        $retirement.resume_receipt_sha256=$ResumeRetirementReceiptSha256
+    }
+    return $audit
+}
+function Assert-CanonicalFreshPreparationIdentity($Audit) {
+    $f = $Audit.fresh_transition
+    if ([string]$Audit.schema -cne 'container-audit-canonical-portable-install-v2' -or
+        [string]$Audit.operation -cne 'PREPARE_FRESH_SERVER_REGISTRATION' -or
+        -not (Same ([string]$Audit.install_root) $install) -or
+        [string]$Audit.source_manifest_sha256 -cne $sourceManifestSha256 -or
+        [string]$f.transition_id -cne $FreshTransitionId -or [string]$f.sid -cne $operatorSid -or
+        [string]$f.input_sha256 -cne (Sha $FreshTransitionInput) -or
+        -not (Same ([string]$f.archive_root) $FreshArchiveRoot) -or
+        [string]$f.orchestrator_sha256 -cne (Sha $PSCommandPath) -or
+        [string]$f.session_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$f.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
+        [string]$Audit.code_replacement.transaction_id -cnotmatch '^[0-9a-f]{32}$') {
+        throw 'FRESH_PREPARATION_IDENTITY_MISMATCH'
+    }
+    $authority = Get-ContainerWriterSessionAuthorityMutexName `
+        ([string]$f.session_id) ([string]$f.attempt_id) ([string]$f.orchestrator_sha256) `
+        ([string]$Audit.code_replacement.transaction_id) ([string]$lifecycleManifest.writer_session_contract_sha256)
+    if ([string]$f.authority_mutex_name -cne $authority) { throw 'FRESH_PREPARATION_AUTHORITY_MISMATCH' }
+    Assert-RetirementOwnerExited $f
+}
+function Read-CanonicalFreshPreparation([string]$Path) {
+    $root = Join-Path $activeDataRoot 'install-audit'
+    $Path = Full $Path 'fresh preparation'
+    $sha = Get-ContainerWriterFenceFileSha256 $Path 1048576
+    if (-not (Same (Split-Path -Parent $Path) $root) -or
+        [IO.Path]::GetFileName($Path) -cne ('fa-' + $sha + '.json')) {
+        throw 'FRESH_PREPARATION_HASH_MISMATCH'
+    }
+    $record = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not (Test-ExactPropertySet $record @('schema','audit_path','audit','parent_receipt_path',
+        'parent_receipt_sha256','origin_receipt_path','origin_receipt_sha256','prior_fence_sha256','install_preimage')) -or
+        [string]$record.schema -cne 'container-audit-fresh-preparation-v1' -or
+        [string]$record.audit.run_id -cnotmatch '^[0-9A-Za-z_-]{1,80}$' -or
+        -not (Same (Split-Path -Parent ([string]$record.audit_path)) $root) -or
+        -not (Same ([string]$record.audit_path) (Join-Path $root ('canonical-portable-' + [string]$record.audit.run_id + '.json'))) -or
+        [string]$record.audit.fresh_transition.prepared_receipt_path -or
+        [string]$record.audit.fresh_transition.prepared_receipt_sha256) {
+        throw 'FRESH_PREPARATION_RECORD_INVALID'
+    }
+    if (-not (Test-ExactPropertySet $record.install_preimage @('exists','manifest_sha256','integrity_sha256')) -or
+        $record.install_preimage.exists -isnot [bool] -or
+        [string]$record.install_preimage.manifest_sha256 -cnotmatch '^([0-9a-f]{64})?$' -or
+        [string]$record.install_preimage.integrity_sha256 -cnotmatch '^([0-9a-f]{64})?$') {
+        throw 'FRESH_PREPARATION_PREIMAGE_INVALID'
+    }
+    foreach ($prefix in @('parent','origin')) {
+        $receiptPath = [string]$record.($prefix + '_receipt_path')
+        $receiptSha = [string]$record.($prefix + '_receipt_sha256')
+        if (($receiptPath -and ($receiptSha -cnotmatch '^[0-9a-f]{64}$' -or
+                -not (Same (Split-Path -Parent (Full $receiptPath 'fresh parent')) $root))) -or
+            (-not $receiptPath -and $receiptSha)) { throw 'FRESH_PREPARATION_PARENT_INVALID' }
+    }
+    if (([string]$record.parent_receipt_path -and [string]$record.prior_fence_sha256 -cnotmatch '^[0-9a-f]{64}$') -or
+        (-not [string]$record.parent_receipt_path -and [string]$record.prior_fence_sha256)) {
+        throw 'FRESH_PREPARATION_FENCE_INVALID'
+    }
+    Assert-CanonicalFreshPreparationIdentity $record.audit
+    return $record
+}
+function Set-CanonicalFreshPreparationBinding($Record, [string]$Path) {
+    $auditCopy = $Record.audit | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+    $f = $auditCopy.fresh_transition
+    $sha = Get-ContainerWriterFenceFileSha256 $Path 1048576
+    $prepared = Join-Path (Split-Path -Parent $Path) ('fp-' + $sha + '.json')
+    $f.prepared_receipt_path = $prepared
+    $f.prepared_receipt_sha256 = if (Test-Path -LiteralPath $prepared) {
+        Get-ContainerWriterFenceFileSha256 $prepared 65536
+    } else { '' }
+    $f | Add-Member preparation_receipt_path $Path
+    $f | Add-Member preparation_receipt_sha256 $sha
+    $f | Add-Member resume_origin_path ([string]$Record.origin_receipt_path)
+    $f | Add-Member resume_origin_sha256 ([string]$Record.origin_receipt_sha256)
+    if ($f.prepared_receipt_sha256) {
+        $p = Get-Content -LiteralPath $prepared -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$p.schema -cne 'container-audit-canonical-writer-prepared-v1' -or
+            [string]$p.status -cne 'PREPARED' -or [string]$p.app_id -cne 'container_audit' -or
+            [string]$p.session_id -cne [string]$f.session_id -or [string]$p.attempt_id -cne [string]$f.attempt_id -or
+            [string]$p.replacement_transaction_id -cne [string]$auditCopy.code_replacement.transaction_id -or
+            [string]$p.orchestrator_sha256 -cne [string]$f.orchestrator_sha256 -or
+            [string]$p.writer_contract_sha256 -cne [string]$lifecycleManifest.writer_session_contract_sha256 -or
+            [string]$p.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+            [string]$p.source_manifest_sha256 -cne $sourceManifestSha256 -or
+            [string]$p.operator_sid -cne $operatorSid) { throw 'FRESH_PREPARATION_PREPARED_MISMATCH' }
+    }
+    return $auditCopy
+}
+function Assert-CanonicalFreshPreparationPreimage($Record, [bool]$FencePublished) {
+    # Only a publication interrupted before quiescing can use this path. Once
+    # runtime/code changed the operator must supply the current audit receipt.
+    $snapshot = Snapshot
+    $before = $Record.audit.preimage
+    if ($null -eq $before) { $before = $Record.audit.fresh_transition.original_preimage }
+    if ([bool]$snapshot.exists -ne [bool]$before.exists -or
+        [string]$snapshot.kind -cne [string]$before.kind -or [string]$snapshot.data -cne [string]$before.data) {
+        throw 'FRESH_PREPARATION_RUNTIME_CHANGED'
+    }
+    # Publishing our fence can itself make an ordinary relay exit before the
+    # first explicit stop handshake. An exact owned fence plus disk-observed
+    # absence is recoverable; unexpected live commands remain forbidden.
+    if (-not $FencePublished -or @(Relays).Count -ne 0) {
+        [void](Assert-RollbackRelayPreimage @($Record.audit.fresh_transition.original_relays))
+    }
+    $preimage = $Record.install_preimage
+    if ([bool]$preimage.exists -ne (Test-Path -LiteralPath $install -PathType Container)) {
+        throw 'FRESH_PREPARATION_CODE_CHANGED'
+    }
+    foreach ($item in @(@('portable-manifest.json','manifest_sha256'), @('bootstrap-integrity.json','integrity_sha256'))) {
+        $file = Join-Path $install $item[0]
+        $actual = if (Test-Path -LiteralPath $file) { Sha $file } else { '' }
+        if ($actual -cne [string]$preimage.($item[1])) { throw 'FRESH_PREPARATION_CODE_CHANGED' }
+    }
+    if (Test-Path -LiteralPath (Join-Path $FreshArchiveRoot 'transition-journal.json')) {
+        throw 'FRESH_PREPARATION_JOURNAL_ALREADY_STARTED'
+    }
+}
+function Resolve-CanonicalFreshPreparation($Prior, [string]$Path, [string]$ReceiptSha, $Fence) {
+    $recordPath = ''
+    $direct = [string]$Prior.schema -ceq 'container-audit-fresh-preparation-v1'
+    $suppliedAudit = if ($direct) { $Prior.audit } else { $Prior }
+    if ($null -ne $Fence -and [string]$Fence.prepared_receipt_path -match '[\\/]fp-([0-9a-f]{64})\.json$' -and
+        ([string]$Fence.session_id -cne [string]$suppliedAudit.fresh_transition.session_id -or
+         [string]$Fence.attempt_id -cne [string]$suppliedAudit.fresh_transition.attempt_id)) {
+        $recordPath = Join-Path (Split-Path -Parent ([string]$Fence.prepared_receipt_path)) ('fa-' + $Matches[1] + '.json')
+        $direct = $false
+    }
+    elseif ($direct) { $recordPath = $Path }
+    elseif ($Prior.fresh_transition.PSObject.Properties.Name -ccontains 'preparation_receipt_path') {
+        $recordPath = [string]$Prior.fresh_transition.preparation_receipt_path
+    }
+    if (-not $recordPath) { return @{audit=$Prior;path=$Path;prepublication=$false;proof=$null} }
+    $record = Read-CanonicalFreshPreparation $recordPath
+    $bound = Set-CanonicalFreshPreparationBinding $record $recordPath
+    $follows = -not $direct -and -not (Same $Path ([string]$record.audit_path))
+    if ($follows -and -not (
+        ((Same $Path ([string]$record.parent_receipt_path)) -and $ReceiptSha -ceq [string]$record.parent_receipt_sha256) -or
+        ((Same $Path ([string]$record.origin_receipt_path)) -and $ReceiptSha -ceq [string]$record.origin_receipt_sha256))) {
+        throw 'FRESH_PREPARATION_PARENT_MISMATCH'
+    }
+    if ($direct -or $follows) {
+        if (Test-Path -LiteralPath ([string]$record.audit_path)) {
+            $savedSha = Get-ContainerWriterFenceFileSha256 ([string]$record.audit_path) 1048576
+            $saved = Get-Content -LiteralPath ([string]$record.audit_path) -Raw -Encoding UTF8 | ConvertFrom-Json
+            if (($saved | ConvertTo-Json -Depth 20 -Compress) -cne ($bound | ConvertTo-Json -Depth 20 -Compress)) {
+                $freshReceiptRequired = New-Object InvalidOperationException('FRESH_RESUME_CURRENT_AUDIT_REQUIRED')
+                $freshReceiptRequired.Data['receipt_path'] = [string]$record.audit_path
+                $freshReceiptRequired.Data['receipt_sha256'] = $savedSha
+                throw $freshReceiptRequired
+            }
+        }
+        $Prior = $bound
+    } else {
+        # Mutable status/stop/completion fields are pinned by the caller's audit
+        # SHA. All immutable owner/target/original-runtime fields remain bound
+        # to the durable preparation whose name is pinned by the active fence.
+        foreach ($name in $bound.fresh_transition.PSObject.Properties.Name) {
+            if ($name -cin @('quiesced','stop_sha256')) { continue }
+            if (($Prior.fresh_transition.$name | ConvertTo-Json -Depth 20 -Compress) -cne
+                ($bound.fresh_transition.$name | ConvertTo-Json -Depth 20 -Compress)) {
+                throw 'FRESH_PREPARATION_AUDIT_CHANGED'
+            }
+        }
+        if ([string]$Prior.code_replacement.transaction_id -cne [string]$bound.code_replacement.transaction_id -or
+            [string]$Prior.run_id -cne [string]$bound.run_id) { throw 'FRESH_PREPARATION_AUDIT_CHANGED' }
+    }
+    # A quiesced attempt may already have released its fence. It must prove
+    # that release below, rather than revalidate the original code preimage.
+    $prepublication = $null -eq $Fence -and -not [string]$record.parent_receipt_path -and
+        -not (Test-JsonTrue $Prior.fresh_transition.quiesced)
+    if ($prepublication -or -not (Test-JsonTrue $Prior.fresh_transition.quiesced)) {
+        $published = $null -ne $Fence -and
+            [string]$Fence.session_id -ceq [string]$bound.fresh_transition.session_id -and
+            [string]$Fence.attempt_id -ceq [string]$bound.fresh_transition.attempt_id -and
+            (Same ([string]$Fence.prepared_receipt_path) ([string]$bound.fresh_transition.prepared_receipt_path)) -and
+            [string]$Fence.prepared_receipt_sha256 -ceq [string]$bound.fresh_transition.prepared_receipt_sha256
+        Assert-CanonicalFreshPreparationPreimage $record $published
+    }
+    return @{audit=$Prior;path=[string]$record.audit_path;prepublication=$prepublication;proof=$record}
+}
 function Read-CanonicalFreshResume {
     $path = Full $ResumeFreshTransitionReceiptPath 'fresh resume receipt'
     if ((Get-ContainerWriterFenceFileSha256 $path 1048576) -cne $ResumeFreshTransitionReceiptSha256) {
         throw 'FRESH_RESUME_RECEIPT_HASH_MISMATCH'
     }
     $prior = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $priorFence = Read-ContainerWriterFence -AllowAbsent
+    $resolved = Resolve-CanonicalFreshPreparation $prior $path $ResumeFreshTransitionReceiptSha256 $priorFence
+    $prior = $resolved.audit
+    $path = $resolved.path
     $prior | Add-Member -NotePropertyName resume_release -NotePropertyValue $null
+    $prior | Add-Member -NotePropertyName resume_prepublication -NotePropertyValue ([bool]$resolved.prepublication)
     $f = $prior.fresh_transition
     if ([string]$prior.schema -cne 'container-audit-canonical-portable-install-v2' -or
         [string]$prior.operation -cne 'PREPARE_FRESH_SERVER_REGISTRATION' -or
@@ -793,13 +1067,12 @@ function Read-CanonicalFreshResume {
         [string]$f.orchestrator_sha256 -cne (Sha $PSCommandPath) -or
         [string]$f.session_id -cnotmatch '^[0-9a-f]{32}$' -or
         [string]$f.attempt_id -cnotmatch '^[0-9a-f]{32}$' -or
-        -not (Test-JsonTrue $f.quiesced)) { throw 'FRESH_RESUME_BINDING_MISMATCH' }
+        (-not (Test-JsonTrue $f.quiesced) -and $null -eq $resolved.proof)) { throw 'FRESH_RESUME_BINDING_MISMATCH' }
     $expectedAuthority = Get-ContainerWriterSessionAuthorityMutexName `
         ([string]$f.session_id) ([string]$f.attempt_id) ([string]$f.orchestrator_sha256) `
         ([string]$prior.code_replacement.transaction_id) ([string]$lifecycleManifest.writer_session_contract_sha256)
     if ([string]$f.authority_mutex_name -cne $expectedAuthority) { throw 'FRESH_RESUME_AUTHORITY_MISMATCH' }
     Assert-RetirementOwnerExited $f
-    $priorFence = Read-ContainerWriterFence -AllowAbsent
     if ($null -ne $priorFence -and ([string]$priorFence.session_id -cne [string]$f.session_id -or
         [string]$priorFence.attempt_id -cne [string]$f.attempt_id -or
         [string]$priorFence.replacement_transaction_id -cne [string]$prior.code_replacement.transaction_id -or
@@ -815,7 +1088,7 @@ function Read-CanonicalFreshResume {
             (Get-ContainerWriterFenceFileSha256 ([string]$f.prepared_receipt_path)) -cne [string]$f.prepared_receipt_sha256) {
             throw 'FRESH_RESUME_PREPARED_CHANGED'
         }
-    } else {
+    } elseif (-not $resolved.prepublication) {
         $releasePaths = @('product-complete','rollback-complete') | ForEach-Object {
             Join-Path (Split-Path -Parent $path) ('canonical-portable-' + [string]$prior.run_id + '-' + $_ + '-release.json')
         }
@@ -2224,6 +2497,46 @@ $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-i
 if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
 if ($freshResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $freshResume }
 $canonicalPreparationStarted = $true
+if ($PrepareFreshServerRegistration) {
+    # Publish an immutable recovery record before either the new fence or its
+    # first mutable audit. The standard prepared-receipt path commits its hash
+    # without changing the shared writer-session wire contract.
+    $audit = New-CanonicalOperationAudit
+    $parentPath = ''; $parentSha = ''; $priorSha = ''; $originPath = ''; $originSha = ''
+    if ($freshResume -and -not $freshResume.resume_prepublication) {
+        $parentPath = $ResumeFreshTransitionReceiptPath
+        $parentSha = $ResumeFreshTransitionReceiptSha256
+        $priorSha = Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)
+        $originPath = $parentPath; $originSha = $parentSha
+        if ($freshResume.fresh_transition.PSObject.Properties.Name -ccontains 'resume_origin_path' -and
+            [string]$freshResume.fresh_transition.resume_origin_path) {
+            $originPath = [string]$freshResume.fresh_transition.resume_origin_path
+            $originSha = [string]$freshResume.fresh_transition.resume_origin_sha256
+        }
+    }
+    $preimage = [ordered]@{
+        exists=(Test-Path -LiteralPath $install -PathType Container)
+        manifest_sha256=$(if (Test-Path -LiteralPath (Join-Path $install 'portable-manifest.json')) { Sha (Join-Path $install 'portable-manifest.json') } else { '' })
+        integrity_sha256=$(if (Test-Path -LiteralPath (Join-Path $install 'bootstrap-integrity.json')) { Sha (Join-Path $install 'bootstrap-integrity.json') } else { '' })
+    }
+    $preparation = [ordered]@{
+        schema='container-audit-fresh-preparation-v1'; audit_path=$auditPath; audit=$audit
+        parent_receipt_path=$parentPath; parent_receipt_sha256=$parentSha
+        origin_receipt_path=$originPath; origin_receipt_sha256=$originSha
+        prior_fence_sha256=$priorSha; install_preimage=$preimage
+    }
+    $pendingPreparation = Join-Path $auditRoot ('fresh-pending-' + $Script:CanonicalWriterFenceAttemptId + '.json')
+    Save $pendingPreparation $preparation
+    $preparationSha = Get-ContainerWriterFenceFileSha256 $pendingPreparation 1048576
+    $preparationPath = Join-Path $auditRoot ('fa-' + $preparationSha + '.json')
+    Move-Item -LiteralPath $pendingPreparation -Destination $preparationPath
+    if ((Get-ContainerWriterFenceFileSha256 $preparationPath 1048576) -cne $preparationSha) {
+        throw 'FRESH_PREPARATION_PUBLISH_READBACK_FAILED'
+    }
+    $canonicalWriterFencePreparedPath = Join-Path $auditRoot ('fp-' + $preparationSha + '.json')
+    "fresh_preparation_receipt=$preparationPath"
+    "fresh_preparation_receipt_sha256=$preparationSha"
+}
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
     -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -2235,6 +2548,15 @@ $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -SourceManifestSha256 $sourceManifestSha256 `
     -OperatorSid $operatorSid `
     -OperatorLocalAppDataRoot $lad
+if ($PrepareFreshServerRegistration) {
+    $audit.fresh_transition.prepared_receipt_path = [string]$canonicalWriterFencePreparedReceipt.path
+    $audit.fresh_transition.prepared_receipt_sha256 = [string]$canonicalWriterFencePreparedReceipt.sha256
+    $audit.fresh_transition.preparation_receipt_path = $preparationPath
+    $audit.fresh_transition.preparation_receipt_sha256 = $preparationSha
+    $audit.fresh_transition.resume_origin_path = $originPath
+    $audit.fresh_transition.resume_origin_sha256 = $originSha
+    Save $auditPath $audit
+}
 if ($retirementResume) {
     $resumeAdmission = Enter-ContainerWriterAdmission
     try {
@@ -2275,6 +2597,12 @@ elseif ($freshResume) {
     $resumeAdmission = Enter-ContainerWriterAdmission
     try {
         [void](Read-CanonicalFreshResume)
+        $currentFence = Read-ContainerWriterFence -AllowAbsent
+        if (($freshResume.resume_prepublication -and $null -ne $currentFence) -or
+            (-not $freshResume.resume_prepublication -and
+                ($null -eq $currentFence -or (Get-ContainerWriterFenceFileSha256 (Get-ContainerWriterFenceActivePath)) -cne $preparation.prior_fence_sha256))) {
+            throw 'FRESH_PREPARATION_PRIOR_FENCE_CHANGED'
+        }
         $resumedFence = New-ContainerWriterFencePayload `
             -Status 'INSTALLING' -OwnerKind 'canonical_installer' `
             -SessionId $Script:CanonicalWriterFenceSessionId -AttemptId $Script:CanonicalWriterFenceAttemptId `
@@ -2314,89 +2642,7 @@ $canonicalWriterFenceActive = $true
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID', $Script:CanonicalWriterFenceSessionId, 'Process')
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID', $Script:CanonicalWriterFenceAttemptId, 'Process')
 [Environment]::SetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID', $Script:CanonicalWriterFenceTransactionId, 'Process')
-$audit = [ordered]@{
-    schema='container-audit-canonical-portable-install-v2'
-    operation=if ($PrepareFreshServerRegistration) { 'PREPARE_FRESH_SERVER_REGISTRATION' } elseif ($CompleteRetiredRemoval) { 'COMPLETE_RETIRED_REMOVAL' } elseif ($Uninstall) { 'UNINSTALL' } elseif ($RestoreVerifiedReplacement) { 'RESTORE_VERIFIED_REPLACEMENT' } else { 'INSTALL' }
-    status='PREIMAGE_SAVED'
-    run_id=$runId
-    captured_at=(Get-Date).ToUniversalTime().ToString('o')
-    install_root=$install
-    code_placement='NOT_STARTED'
-    source_commit=[string]$sourceManifest.source_commit
-    source_manifest_sha256=$sourceManifestSha256
-    runtime_pythonw_sha256=''
-    runtime_pythonw_signature=''
-    registry_value=$RunName
-    preimage=$before
-    runtime_preimage_binding=$runtimePreimageBinding
-    after=[ordered]@{exists=$true;kind='String';data=$wanted}
-    stop_marker_path=$stop
-    scheduled_writer=[ordered]@{
-        classification=[string]$writerBefore.classification
-        preimage=$writerBefore
-        disable_readback=$null
-        stop_proof=$null
-        restore_readback=$null
-        natural_trigger_proof=$null
-        restore_failure_code=''
-    }
-    code_replacement=[ordered]@{
-        status='NOT_REQUIRED'
-        prestate='NOT_EVALUATED'
-        transaction_id=$replacementTransactionId
-        receipt_path=''
-        receipt_sha256=''
-        rollback_root=''
-        restore_evidence_path=''
-        restore_evidence_sha256=''
-        later_restore_surface='NOT_REQUIRED'
-        identity_or_credential_copied=$false
-    }
-    rollback=[ordered]@{
-        available=$true
-        applied=$false
-        runtime_restored=$false
-        scheduled_writer_restored=(-not [bool]$writerBefore.restore_required)
-    }
-}
-if ($PrepareFreshServerRegistration) {
-    $audit.fresh_transition = [ordered]@{
-        transition_id=$FreshTransitionId; sid=$operatorSid; archive_root=$FreshArchiveRoot
-        input_sha256=(Sha $FreshTransitionInput); quiesced=$false; stop_sha256=''
-        owner_process_id=$PID; owner_started_at_utc=(Get-Process -Id $PID).StartTime.ToUniversalTime().ToString('o')
-        authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
-        session_id=$Script:CanonicalWriterFenceSessionId; attempt_id=$Script:CanonicalWriterFenceAttemptId
-        orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
-        prepared_receipt_path=[string]$canonicalWriterFencePreparedReceipt.path
-        prepared_receipt_sha256=[string]$canonicalWriterFencePreparedReceipt.sha256
-        original_preimage=$(if ($freshResume) { $freshResume.fresh_transition.original_preimage } else { $before })
-        original_removal=$freshRemovedPreimage
-        original_relays=$(if ($freshResume) { $freshResume.fresh_transition.original_relays } else {
-            [Object[]]@($old | ForEach-Object { [ordered]@{ProcessId=[int]$_.ProcessId;ExecutablePath=[string]$_.ExecutablePath;CommandLine=[string]$_.CommandLine} })
-        })
-        original_scheduled_writer=$(if ($freshResume) { $freshResume.fresh_transition.original_scheduled_writer } else { $writerBefore })
-        original_task_xml=$(if ($freshResume) { [string]$freshResume.fresh_transition.original_task_xml } elseif ([bool]$writerBefore.present) {
-            [string](Export-ScheduledTask -TaskName ([string]$writerBefore.task_name) -TaskPath ([string]$writerBefore.task_path))
-        } else { '' })
-    }
-}
-if ($CompleteRetiredRemoval) {
-    $audit.retirement=$retirement
-    $retirement.owner_process_id=$PID
-    $retirement.owner_started_at_utc=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')
-    $retirement.session_id=$Script:CanonicalWriterFenceSessionId
-    $retirement.attempt_id=$Script:CanonicalWriterFenceAttemptId
-    $retirement.orchestrator_sha256=$canonicalWriterFenceOrchestratorSha256
-    $retirement.authority_mutex_name=[string]$canonicalWriterFenceAuthority.name
-    $retirement.prepared_receipt_path=[string]$canonicalWriterFencePreparedReceipt.path
-    $retirement.prepared_receipt_sha256=[string]$canonicalWriterFencePreparedReceipt.sha256
-    $retirement.old_record_sha256=$uninstallRecordSha256
-    $retirement.original_relays=[Object[]]@($old | ForEach-Object {
-        [ordered]@{ ProcessId=[int]$_.ProcessId; ExecutablePath=[string]$_.ExecutablePath; CommandLine=[string]$_.CommandLine }
-    })
-    $retirement.resume_receipt_path=$ResumeRetirementReceiptPath
-    $retirement.resume_receipt_sha256=$ResumeRetirementReceiptSha256
-}
+if (-not $PrepareFreshServerRegistration) { $audit = New-CanonicalOperationAudit }
 Save $auditPath $audit
 if ($evidenceFull) { Save $evidenceFull $audit }
 
@@ -3001,6 +3247,11 @@ catch {
     if (-not $canonicalPreparationStarted) {
         if ($PrepareFreshServerRegistration) {
             $freshFailureCode = if ($original.Exception.Message -cmatch '^[A-Z][A-Z0-9_]+$') { $original.Exception.Message } else { 'FRESH_RESUME_UNVERIFIED' }
+            if ($freshFailureCode -ceq 'FRESH_RESUME_CURRENT_AUDIT_REQUIRED') {
+                "fresh_transition_receipt=$($original.Exception.Data['receipt_path'])"
+                "fresh_transition_receipt_sha256=$($original.Exception.Data['receipt_sha256'])"
+                throw '전환 기록이 준비 단계보다 진행됐습니다. 표시된 현재 영수증과 SHA256으로 다시 확인/이어서 등록하세요.'
+            }
             throw "같은 전환의 재개를 완료하지 못했습니다. 이전 작업 종료와 원 영수증·대상을 관리자가 확인하세요. 문의 코드: $freshFailureCode"
         }
         throw $original

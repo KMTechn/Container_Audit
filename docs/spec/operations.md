@@ -44,6 +44,12 @@ ProgramData 두 root의 bytes 복사·검증·rename에 사용하고, 새 DPAPI 
 `-FreshTransitionAction Status`, 재개는 `-FreshTransitionAction Resume
 -ResumeFreshTransitionReceiptPath <표시된 경로> -ResumeFreshTransitionReceiptSha256 <표시된 SHA256>`을 추가한다.
 이전 소유 프로세스 종료·authority 소멸과 exact receipt·fence를 모두 대조한다.
+첫 fence 또는 재개 attempt 게시 전에 `fresh_preparation_receipt`와 SHA256을 내구 저장한다.
+첫 canonical audit가 남기 전에 중단됐으면 이 준비 영수증을 같은 resume 인자에 지정한다.
+준비 기록은 `install-audit/fa-<SHA256>.json`이며 active fence의 prepared 경로가 그 해시를 결속한다.
+재개 fence 교체 직후 중단은 원 영수증에 결속된 새 준비 기록으로 이어간다. 그 뒤 audit가 이미
+진행했다면 표시된 현재 canonical audit와 SHA256으로 다시 확인하며 오래된 상태를 덮지 않는다.
+코드 배치는 보관 전에 실행될 수 있고, 등록·온보딩·relay 활성화는 반드시 보관 뒤에 실행한다.
 `ACTIVATION_PENDING_RELEASE` 또는 `RESTORE_PENDING_RELEASE`는 전환 마무리 대기다.
 같은 지원 재개가 원 audit에 결속된 해제 증명을 확인하고 잠금을 마무리해야 최종 완료가 된다.
 다른 전환·살아 있는 owner·변조된 증명이면 잠금을 보존하며 원 영수증과 이전 작업 종료를 관리자가 확인한다.

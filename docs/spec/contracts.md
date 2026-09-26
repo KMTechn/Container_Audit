@@ -39,6 +39,11 @@ HKLM `KM_LOGISTICS_PROFILE_PATH` 또는 `KM_LOGISTICS_REQUIRED` 앵커가 있으
 최종 완료는 fence 부재만으로 추정하지 않으며 원 audit·session·attempt·transaction과 해제 증명을 결속한다.
 완료 직전 중단 시 지원 재개만 죽은 원 owner와 동일 fence를 검증하여 해제를 마무리한다.
 일반 시작은 남의 fence나 죽은 owner의 fence를 인수하지 않는다. 설정/profile 파일은 새 업무 수에 포함하지 않는다.
+fresh 초기 owner·재개 attempt는 불변 준비 기록과 첫 audit를 저장한 뒤 fence에 게시한다.
+준비 기록은 원 영수증·SID·대상·원 runtime·설치 preimage·새 owner를 포함하며, 그 SHA256을
+표준 prepared receipt 파일명에 결속해 공유 writer wire 형식을 유지한다. 지원 재개는 caller SHA,
+active fence·prepared bytes와 같은 준비 기록을 대조하며, 게시 전 중단은 실제 원본 상태까지 대조한다.
+rename 뒤 journal 저장 전 중단은 단계 문자열 대신 source/inactive의 bytes·속성·ACL로 복원 여부를 판단한다.
 machine helper 대기 중에는 `QUIESCED`와 `machine_pending`을 유지한다. candidate·대상·공유 키와
 `REGISTERING`을 HTTP 이전에 저장한다. 서버 commit 응답 유실·부분 로컬 게시 후에는 동일 candidate의
 signed reattach만 허용한다. UNKNOWN 시도 기록을 남기며 서로 다른 전환·SID·대상·키로 이어 붙이지 않는다.

@@ -21,6 +21,9 @@ def test_native_fresh_resume_recognizes_only_its_release(tmp_path, phase, cut, f
         "Read-CanonicalFreshResume", "New-CanonicalWriterFenceReleaseAuthorization",
         "Complete-CanonicalFreshReleasedResume", "Enter-RetirementResumeClaim", "Exit-RetirementResumeClaim",
         "Assert-RollbackRelayPreimage",
+        "Read-CanonicalFreshPreparation", "Resolve-CanonicalFreshPreparation",
+        "Set-CanonicalFreshPreparationBinding", "Assert-CanonicalFreshPreparationIdentity",
+        "Assert-CanonicalFreshPreparationPreimage",
     ], r'''
 . (Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'tools/container_writer_fence.ps1')
 # An extracted function has no automatic PSCommandPath; bind only that missing
