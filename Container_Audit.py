@@ -1039,6 +1039,7 @@ class ContainerAudit:
     AUDIO_ENABLED_ENV = "CONTAINER_AUDIT_AUDIO_ENABLED"
     EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
+    PREFLIGHT_OFFLINE_RETRY_MS = 30_000
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -1198,6 +1199,8 @@ class ContainerAudit:
         self._master_preflight_pending = False
         self._master_preflight_queue: queue.Queue = queue.Queue(maxsize=1)
         self._master_preflight_poll_job: Optional[str] = None
+        self._master_preflight_retry_job: Optional[str] = None
+        self._preflight_offline_error_code = ""
         self._ui_lane: Optional[TkSerialUiLane] = None
         self._completion_lane_busy = False
         self._completion_task_handle = None
@@ -10891,6 +10894,12 @@ class ContainerAudit:
                 if isinstance(snapshot, PreflightHoldSnapshot)
                 else 0
             )
+            if getattr(self, "_preflight_offline_error_code", ""):
+                self.current_item_label['text'] = (
+                    f"서버 연결 끊김 · 저장됨 {held_count}개 · 연결되면 자동 확인"
+                )
+                self.current_item_label['foreground'] = self.COLOR_IDLE_TEXT
+                return
             self.current_item_label['text'] = (
                 f"중앙 검사 완료 수량 확인 중 · 보류 {held_count}건"
             )
@@ -10925,6 +10934,14 @@ class ContainerAudit:
             except (tk.TclError, AttributeError):
                 pass
         self._master_preflight_poll_job = None
+        retry_job = getattr(self, "_master_preflight_retry_job", None)
+        if retry_job:
+            try:
+                self.root.after_cancel(retry_job)
+            except (tk.TclError, AttributeError):
+                pass
+        self._master_preflight_retry_job = None
+        self._preflight_offline_error_code = ""
         self._master_preflight_pending = False
 
     def _settle_stale_preflight_result(
@@ -11084,6 +11101,7 @@ class ContainerAudit:
         barcode: str,
         qr_data: Dict[str, Any],
         matched_item: Dict[str, Any],
+        offline_retry: bool = False,
     ) -> bool:
         try:
             canonical_fields = validate_compact_phs2_fields(qr_data)
@@ -11107,11 +11125,15 @@ class ContainerAudit:
         ) + 1
         token = self._master_preflight_epoch
         self._master_preflight_pending = True
-        self.show_status_message(
-            "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
-            self.COLOR_PRIMARY,
-            duration=0,
-        )
+        if offline_retry:
+            self._show_preflight_offline_notice()
+        else:
+            self._preflight_offline_error_code = ""
+            self.show_status_message(
+                "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
         self._update_current_item_label("중앙 검사 완료 정보를 확인 중입니다.")
 
         hold_store = self._preflight_hold_store()
@@ -11443,22 +11465,46 @@ class ContainerAudit:
                 "PHS2_PREFLIGHT_FAILED",
                 "중앙 PHS=2 확인에 실패했습니다.",
             )
-            self._mark_preflight_hold_failed(failure.code)
-            self._update_current_item_label()
-            try:
-                self._log_event(
-                    "MASTER_LABEL_PREFLIGHT_FAILED",
-                    detail={
-                        "contract_version": "container-audit-phs2-preflight-v1",
-                        "input_tag_id": canonical_fields.get("ITG"),
-                        "input_tag_label_id": canonical_fields.get("LBL"),
-                        "item_code": canonical_fields.get("CLC"),
-                        "error_code": failure.code,
-                        "retryable": failure.retryable,
-                    },
+            # A server that cannot be reached is not a verdict on this label:
+            # keep the same durable hold open and look it up again later.
+            offline = bool(
+                len(result) > 4
+                and isinstance(result[4], PreflightHoldSnapshot)
+                and (
+                    failure.code == "PHS2_PREFLIGHT_UNAVAILABLE"
+                    or 500 <= failure.status_code <= 599
                 )
+            )
+            already_offline = bool(
+                getattr(self, "_preflight_offline_error_code", "")
+            )
+            if not offline:
+                self._mark_preflight_hold_failed(failure.code)
+                self._update_current_item_label()
+            try:
+                if not (offline and already_offline):
+                    self._log_event(
+                        "MASTER_LABEL_PREFLIGHT_FAILED",
+                        detail={
+                            "contract_version": "container-audit-phs2-preflight-v1",
+                            "input_tag_id": canonical_fields.get("ITG"),
+                            "input_tag_label_id": canonical_fields.get("LBL"),
+                            "item_code": canonical_fields.get("CLC"),
+                            "error_code": failure.code,
+                            "retryable": failure.retryable,
+                        },
+                    )
             except Exception:
                 pass
+            if offline:
+                self._keep_preflight_hold_for_offline_retry(
+                    token,
+                    barcode,
+                    canonical_fields,
+                    matched_item,
+                    failure.code,
+                )
+                return
             title, message = self._preflight_failure_guidance(
                 failure.code,
                 held_retry=self._preflight_hold_store().exists(),
@@ -11468,6 +11514,7 @@ class ContainerAudit:
             return
 
         self._master_preflight_pending = False
+        self._preflight_offline_error_code = ""
         self._set_preflight_scan_input_locked(True)
         detail = dict(canonical_fields)
         detail["central_source_preflight"] = preflight.audit_detail()
@@ -11550,7 +11597,102 @@ class ContainerAudit:
             "검사 완료 상태와 네트워크를 확인하세요. " + retry,
         )
 
+    def _show_preflight_offline_notice(self) -> None:
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        held_count = (
+            len(snapshot.items) if isinstance(snapshot, PreflightHoldSnapshot) else 0
+        )
+        self.show_status_message(
+            f"서버 연결 끊김 · 현품표와 제품 {held_count}개 저장됨(삭제되지 않음). "
+            "이 현품표 제품은 계속 스캔하세요. 30초마다 자동 확인하고, 연결되면 "
+            "저장한 순서대로 반영한 뒤 이적 완료합니다. 이미 스캔한 것은 다시 "
+            "스캔하지 마세요.",
+            self.COLOR_IDLE,
+            duration=0,
+        )
+
+    def _keep_preflight_hold_for_offline_retry(
+        self,
+        token: int,
+        barcode: str,
+        canonical_fields: Dict[str, str],
+        matched_item: Dict[str, Any],
+        error_code: str,
+    ) -> None:
+        """Keep scanning into the LOOKUP hold and retry the same label later."""
+
+        self._preflight_offline_error_code = error_code
+        self._set_preflight_scan_input_locked(False)
+        self._update_current_item_label()
+
+        def finish(snapshot: PreflightHoldSnapshot) -> None:
+            if token != getattr(self, "_master_preflight_epoch", 0):
+                return
+            self._preflight_hold_snapshot = snapshot
+            self._update_current_item_label()
+            self._show_preflight_offline_notice()
+            self._schedule_offline_preflight_retry(
+                token, barcode, canonical_fields, matched_item
+            )
+            self._schedule_focus_return()
+
+        # Serialized behind appends that arrived during the failed lookup.
+        admission = self._preflight_hold_writer().submit(
+            self._preflight_hold_store().load,
+            finish,
+            lambda _exc: self._mark_preflight_hold_failed(error_code),
+        )
+        if not admission.accepted:
+            self._mark_preflight_hold_failed(error_code)
+
+    def _schedule_offline_preflight_retry(
+        self,
+        token: int,
+        barcode: str,
+        canonical_fields: Dict[str, str],
+        matched_item: Dict[str, Any],
+    ) -> None:
+        try:
+            self._master_preflight_retry_job = self.root.after(
+                self.PREFLIGHT_OFFLINE_RETRY_MS,
+                self._retry_offline_preflight,
+                token,
+                barcode,
+                canonical_fields,
+                matched_item,
+            )
+        except (tk.TclError, AttributeError):
+            self._master_preflight_retry_job = None
+
+    def _retry_offline_preflight(
+        self,
+        token: int,
+        barcode: str,
+        canonical_fields: Dict[str, str],
+        matched_item: Dict[str, Any],
+    ) -> None:
+        self._master_preflight_retry_job = None
+        if (
+            token != getattr(self, "_master_preflight_epoch", 0)
+            or not getattr(self, "_master_preflight_pending", False)
+            or getattr(self, "_ui_close_requested", False)
+            or getattr(getattr(self, "current_tray", None), "master_label_code", "")
+        ):
+            return
+        if self._ui_task_lane().is_busy():
+            self._schedule_offline_preflight_retry(
+                token, barcode, canonical_fields, matched_item
+            )
+            return
+        self._begin_compact_phs2_preflight(
+            barcode=barcode,
+            qr_data=canonical_fields,
+            matched_item=matched_item,
+            offline_retry=True,
+        )
+
     def _mark_preflight_hold_failed(self, error_code: str) -> None:
+        self._preflight_offline_error_code = ""
         store = self._preflight_hold_store()
         if not store.exists():
             self._master_preflight_pending = False
@@ -11765,6 +11907,18 @@ class ContainerAudit:
         self,
         raw_barcode: str,
     ) -> ProductScanDecision:
+        if self._parse_new_format_qr(raw_barcode):
+            # A label held by an older version must not stall the drain in the
+            # active-tray label path; reject it durably like other bad input.
+            return ProductScanDecision(
+                status=SCAN_FORMAT_ERROR,
+                event_name="SCAN_FAIL_FORMAT",
+                event_detail={
+                    "raw_barcode": raw_barcode,
+                    "reason": "master_label_scanned_as_product",
+                    "item_code_length": self.ITEM_CODE_LENGTH,
+                },
+            )
         decision = decide_product_scan(
             self.current_tray,
             raw_barcode,
@@ -11890,6 +12044,17 @@ class ContainerAudit:
         raw = str(raw_barcode or "").strip()
         if not raw:
             return False
+        if self._parse_new_format_qr(raw):
+            # The pending label is already held; a label is never a product.
+            if clear_entry_after_ack:
+                self._clear_consumed_scan_entry(raw)
+            self.show_status_message(
+                "현품표 확인이 끝날 때까지 현품표 스캔은 받지 않습니다(이번 입력 미접수). "
+                "이 현품표 제품은 계속 스캔하세요.",
+                self.COLOR_DANGER,
+                duration=0,
+            )
+            return False
         if clear_entry_after_ack and getattr(
             self, "_preflight_hold_append_pending", False
         ):
@@ -11917,6 +12082,9 @@ class ContainerAudit:
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
                 self._set_scan_callback_pending(False)
+            if getattr(self, "_preflight_offline_error_code", ""):
+                self._show_preflight_offline_notice()
+                return
             self.show_status_message(
                 f"중앙 확인 중 · 보류 스캔 {len(snapshot.items)}건",
                 self.COLOR_PRIMARY,

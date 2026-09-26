@@ -8,6 +8,7 @@ from Container_Audit import ContainerAudit, TraySession
 from item_catalog import ItemCatalog
 from preflight_scan_hold import (
     HOLD_DRAINING,
+    HOLD_LOOKUP,
     HOLD_LOOKUP_FAILED,
     HeldScan,
     PreflightHoldSnapshot,
@@ -17,6 +18,7 @@ from terminal_operation_lease import (
     OperationLeaseStore,
     PinnedOperationLeaseKeyring,
 )
+from transfer_common import TransferSealError
 from transfer_seal import (
     TransferSealStore,
     _deterministic_id,
@@ -49,6 +51,10 @@ HASH_PREFIX = LABEL_HASH[:16]
 COMPACT_QR = (
     f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={INPUT_TAG}|CLC={ITEM}|"
     f"LBL={LABEL_ID}|HSH={HASH_PREFIX}"
+)
+OTHER_LABEL = (
+    f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-COMPACT-002|CLC={ITEM}|"
+    f"LBL=LBL-COMPACT-002|HSH={'c' * 16}"
 )
 GOAL_ITEM = "AAA2270730200"
 GOAL_INPUT_TAG = "ITAG-20260727-170859-F6EAEC"
@@ -515,7 +521,7 @@ def test_admin_released_prefetch_uses_fresh_durable_key_for_same_physical_qr(
     assert [row["status"] for row in attempts] == ["RELEASED", "PREFETCHED"]
 
 
-def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
+def test_prefetch_lost_ack_auto_retry_reuses_key_and_accepts_replayed_envelope(
     tmp_path,
 ):
     class LostAckThenReplayClient(BlockingClient):
@@ -559,10 +565,13 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
 
     app._process_barcode_logic(COMPACT_QR)
     _wait_for_preflight_work(app)
-    _pump_until(app.root, lambda: not app._master_preflight_pending)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
     assert app.current_tray.master_label_code == ""
 
-    app._process_barcode_logic(COMPACT_QR)
+    # The lost response is retried automatically with the same durable key.
+    retry = _offline_retry_job(app.root)
+    app.root.jobs.remove(retry)
+    retry[2](*retry[3])
     _wait_for_preflight_work(app)
     _pump_until(
         app.root,
@@ -586,13 +595,35 @@ def test_prefetch_lost_ack_rescan_reuses_key_and_accepts_replayed_envelope(
     assert [row["status"] for row in attempts] == ["PREFETCHED"]
 
 
+def _offline_retry_job(root):
+    return next((job for job in root.jobs if job[1] == 30_000), None)
+
+
 @pytest.mark.parametrize("held_count", [0, 2])
-def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path, held_count):
+@pytest.mark.parametrize(
+    "error",
+    [
+        TransferSealError(
+            "PHS2_SOURCE_NOT_INSPECTION_COMPLETED",
+            "fixture definitive rejection",
+            status_code=409,
+            retryable=False,
+            committed=False,
+        ),
+        TransferSealError("LOGISTICS_AUTH_REQUIRED", "fixture auth", status_code=401),
+    ],
+    ids=["409", "401"],
+)
+def test_preflight_failure_preserves_held_fifo_until_same_master_retry(
+    tmp_path, held_count, error,
+):
+    # A definitive server answer still blocks only this label until the
+    # same-master retry; connection failures are covered by the offline test.
     gate = threading.Event()
     client = BlockingClient(
         _resolved(count=4),
         gate=gate,
-        error=ConnectionError("fixture preflight failure"),
+        error=error,
     )
     app = _app(tmp_path, client)
     app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
@@ -619,12 +650,15 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path,
 
     failed = app._preflight_hold_store().load()
     assert [item.raw_barcode for item in failed.items] == held
+    assert failed.error_code == error.code
     assert app.current_tray.master_label_code == ""
     assert app._preflight_scan_input_locked is True
     assert app.current_item_label["text"] == (
         f"중앙 조회 실패 · 보류 {len(failed.items)}건 (삭제되지 않음)"
     )
     assert app.current_item_label["foreground"] == app.COLOR_DANGER
+    assert app.warnings and app.warnings[-1][0] == "중앙 PHS=2 확인 실패"
+    assert _offline_retry_job(app.root) is None
 
     client.error = None
     client.gate = None
@@ -640,6 +674,183 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(tmp_path,
     assert app.current_tray.scanned_barcodes == held
     assert not app._preflight_hold_store().exists()
     assert "중앙 조회 실패" not in app.current_item_label["text"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ConnectionError("fixture transport outage"),
+        TransferSealError(
+            "LOGISTICS_SERVER_REJECTED",
+            "fixture gateway outage",
+            status_code=503,
+            retryable=True,
+            committed=None,
+        ),
+        TransferSealError(
+            "INVALID_SERVER_RESPONSE",
+            "fixture proxy error page",
+            status_code=502,
+            retryable=True,
+            committed=None,
+        ),
+    ],
+    ids=["transport", "503", "502-non-json"],
+)
+def test_offline_preflight_keeps_scanning_and_auto_retry_drains_with_scan_rules(
+    tmp_path, error,
+):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=2), gate=gate, error=error)
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    completions = []
+    app.complete_tray = lambda: completions.append(
+        (list(app.current_tray.scanned_barcodes), app._preflight_hold_store().exists())
+    ) or True
+    first, second = f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"
+    wrong_item = "BBB2270730100-PRODUCT"
+    over_quantity = f"{ITEM}-SERIAL-003"
+    store = app._preflight_hold_store()
+
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
+    app._process_barcode_logic(first)
+    gate.set()
+    _wait_for_preflight_work(app)
+    _pump_until(
+        app.root,
+        lambda: _offline_retry_job(app.root) is not None,
+        phase="offline retry scheduling",
+    )
+
+    # Server outage: the label hold keeps accepting scans; nothing to acknowledge.
+    assert store.load().state == HOLD_LOOKUP
+    assert app._master_preflight_pending is True
+    assert app._preflight_scan_input_locked is False
+    assert app.warnings == []
+    assert app.current_tray.master_label_code == ""
+    assert app.current_item_label["text"].startswith("서버 연결 끊김")
+    outage_notice = app.statuses[-1][0]
+    assert "서버 연결 끊김" in outage_notice
+    assert "계속 스캔" in outage_notice
+    assert "자동" in outage_notice
+    assert "관리자 인증" not in outage_notice
+    assert error.__class__.__name__ not in outage_notice
+    failures = [event for event in app.events if event[0] == "MASTER_LABEL_PREFLIGHT_FAILED"]
+    assert len(failures) == 1
+
+    retry = _offline_retry_job(app.root)
+    app.root.jobs.remove(retry)
+    for barcode in (first, COMPACT_QR, wrong_item, OTHER_LABEL, second, over_quantity):
+        app._process_barcode_logic(barcode)
+    _pump_until(app.root, lambda: len(store.load().items) == 5, phase="offline hold append")
+    _pump_for(app.root, duration=0.1)
+    assert app.current_tray.scanned_barcodes == []
+    assert app._preflight_scan_input_locked is False
+    # Label rescans are answered at once and never stored as products.
+    assert len([
+        status for status in app.statuses
+        if status[0].startswith("현품표 확인이 끝날 때까지 현품표 스캔은 받지 않습니다")
+    ]) == 2
+    assert COMPACT_QR not in [item.raw_barcode for item in store.load().items]
+
+    # Still offline at the next automatic lookup: same hold, same FIFO, no new audit row.
+    retry[2](*retry[3])
+    _wait_for_preflight_work(app)
+    _pump_until(
+        app.root,
+        lambda: _offline_retry_job(app.root) is not None,
+        phase="second offline retry scheduling",
+    )
+    held = store.load()
+    assert held.state == HOLD_LOOKUP
+    assert [item.raw_barcode for item in held.items] == [
+        first, first, wrong_item, second, over_quantity,
+    ]
+    assert len([event for event in app.events if event[0] == "MASTER_LABEL_PREFLIGHT_FAILED"]) == 1
+    assert app._preflight_scan_input_locked is False
+
+    # Recovery: no rescan or acknowledgement; the same hold drains by live scan rules.
+    retry = _offline_retry_job(app.root)
+    app.root.jobs.remove(retry)
+    client.error = None
+    client.gate = None
+    retry[2](*retry[3])
+    _wait_for_preflight_work(app)
+    _pump_until(app.root, lambda: bool(completions), phase="drain and completion")
+
+    assert completions == [([first, second], False)]
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.tray_size == 2
+    assert len(client.identities) == 3
+    assert all(identity["scan_payload"] == COMPACT_QR for identity in client.identities)
+    assert "서버 연결 끊김" not in app.current_item_label["text"]
+    scan_ok = [event for event in app.events if event[0] == "SCAN_OK"]
+    assert len(scan_ok) == 2
+    rejected = [
+        event[0] for event in app.events
+        if event[2].get("idempotency_key", "").startswith("preflight-held-reject:")
+    ]
+    assert rejected == ["SCAN_FAIL_DUPLICATE", "SCAN_FAIL_MISMATCH", "SCAN_FAIL_TRAY_FULL"]
+    assert _offline_retry_job(app.root) is None
+
+
+def test_offline_preflight_retry_is_cancelled_with_the_preflight_and_hold_is_kept(
+    tmp_path,
+):
+    client = BlockingClient(None, error=ConnectionError("fixture outage"))
+    app = _app(tmp_path, client)
+
+    app._process_barcode_logic(COMPACT_QR)
+    _wait_for_preflight_work(app)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    job = _offline_retry_job(app.root)[0]
+
+    app._cancel_master_preflight()
+
+    assert job in app.root.cancelled
+    assert app._master_preflight_pending is False
+    held = app._preflight_hold_store().load()
+    assert held.state == HOLD_LOOKUP
+    assert held.master_raw == COMPACT_QR
+
+
+def test_label_already_in_a_hold_is_durably_rejected_and_drain_continues(tmp_path):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=1), gate=gate)
+    app = _app(tmp_path, client)
+    app.add_scanned_barcode = lambda barcode, scan_time, _interval: (
+        app.current_tray.scanned_barcodes.append(barcode),
+        app.current_tray.scan_times.append(scan_time),
+    )
+    completions = []
+    app.complete_tray = lambda: completions.append(
+        list(app.current_tray.scanned_barcodes)
+    ) or True
+    first = f"{ITEM}-SERIAL-001"
+    store = app._preflight_hold_store()
+
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, client.started.is_set, phase="preflight client admission")
+    store.append(OTHER_LABEL)  # held by a version without the hold-time guard
+    app._process_barcode_logic(first)
+    _pump_until(app.root, lambda: len(store.load().items) == 2, phase="hold append")
+    gate.set()
+    _wait_for_preflight_work(app)
+    _pump_until(app.root, lambda: bool(completions), phase="drain and completion")
+
+    assert completions == [[first]]
+    assert not store.exists()
+    event_name, detail, kwargs = next(
+        event for event in app.events if event[0] == "SCAN_FAIL_FORMAT"
+    )
+    assert detail["reason"] == "master_label_scanned_as_product"
+    assert kwargs["idempotency_key"].startswith("preflight-held-reject:")
+    assert app.warnings[-1][0] == "바코드 형식 오류"
 
 
 def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
@@ -1042,12 +1253,13 @@ def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     _wait_for_preflight_work(app)
-    app.root.run_next()
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
 
     assert app.current_tray.master_label_code == ""
     assert app.current_tray.tray_size == app.TRAY_SIZE
-    assert app.warnings
-    assert "PHS2_PREFLIGHT_UNAVAILABLE" not in app.warnings[-1][1]
+    assert app.warnings == []
+    assert "서버 연결 끊김" in app.statuses[-1][0]
+    assert "PHS2_PREFLIGHT_UNAVAILABLE" not in app.statuses[-1][0]
     assert app.events[-1][0] == "MASTER_LABEL_PREFLIGHT_FAILED"
     assert app.events[-1][1]["error_code"] == "PHS2_PREFLIGHT_UNAVAILABLE"
 
