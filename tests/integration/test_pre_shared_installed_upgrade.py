@@ -82,10 +82,12 @@ $originalAggregate=(Assert-BootstrapIntegrityRecord $install).aggregate_sha256
 
 # Execute the actual preflight statement, including its integrity and writer
 # semantics checks, before any fence or lifecycle mutation can be reached.
-$preflight=@($ast.EndBlock.Statements | Where-Object {
-    $_ -is [Management.Automation.Language.IfStatementAst] -and
-    $_.Extent.Text.Contains('$preflightCandidate = InstalledManifest')
-})
+# Canonical cleanup now wraps preflight in try/finally. Locate the actual
+# statement at any AST depth while retaining the unique-statement assertion.
+$preflight=@($ast.FindAll({ param($node)
+    $node -is [Management.Automation.Language.IfStatementAst] -and
+    $node.Extent.Text.Contains('$preflightCandidate = InstalledManifest')
+}, $true))
 if ($preflight.Count -ne 1) { throw 'expected the actual installed-tree preflight' }
 $compatibleInventory=$sourceWriterInventory
 $currentManifest=Manifest $env:CA_UPGRADE_CURRENT_SOURCE $true
