@@ -51,6 +51,7 @@ APP_ROOT_FILES = (
     "container_audit_product_host.py",
     "container_audit_test_harness.py",
     "current_user_onboarding.py",
+    "current_user_server_transition.py",
     "direct_sync_auto_bootstrap.py",
     "direct_sync_health.py",
     "direct_sync_operator.py",
@@ -393,6 +394,7 @@ def _assert_portable_import_closure(
         "Container_Audit",
         "container_audit_product_host",
         "current_user_onboarding",
+        "current_user_server_transition",
     ]
     modules.extend(
         "tools."

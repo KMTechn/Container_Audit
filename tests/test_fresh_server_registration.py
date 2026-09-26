@@ -110,6 +110,27 @@ def test_archive_cannot_be_a_runtime_input(transition, old_pc):
         transition.plan_archive(app, archive_root=paths.events_dir / "archive", transition_id="a" * 32)
 
 
+def test_archive_requires_an_absolute_preservation_path(transition, old_pc, monkeypatch):
+    app, paths, archive = old_pc
+    monkeypatch.chdir(archive.parent)
+    relative = os.path.relpath(archive)
+    with pytest.raises(ValueError, match="로컬|절대"):
+        transition.plan_archive(app, archive_root=relative, transition_id="a" * 32)
+    assert paths.identity_path.is_file()
+    assert not archive.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows volume policy")
+@pytest.mark.parametrize("drive_type", [0, 1, 4, 5, 6])
+def test_archive_rejects_nonlocal_or_nonpersistent_volumes(transition, old_pc, monkeypatch, drive_type):
+    app, paths, archive = old_pc
+    monkeypatch.setattr(transition.ctypes.windll.kernel32, "GetDriveTypeW", lambda path: drive_type)
+    with pytest.raises(ValueError, match="로컬|보존"):
+        transition.plan_archive(app, archive_root=archive, transition_id="a" * 32)
+    assert paths.identity_path.is_file()
+    assert not archive.exists()
+
+
 @pytest.fixture
 def fresh_context(transition, old_pc, monkeypatch):
     app, paths, archive = old_pc

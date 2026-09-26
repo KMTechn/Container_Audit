@@ -281,9 +281,22 @@ def plan_archive(app_root, *, archive_root, transition_id, environ=None, preserv
     if not re.fullmatch(r"[0-9a-f]{32}", transition_id):
         raise ValueError("전환 ID가 올바르지 않습니다")
     paths = onboarding.resolve_current_user_onboarding_paths(app_root, environ=values)
-    archive_root = Path(archive_root).resolve()
-    if not Path(archive_root).is_absolute() or archive_root == Path(archive_root.anchor):
+    archive_root = Path(archive_root)
+    if not archive_root.is_absolute() or str(archive_root).startswith(("\\\\", "//")):
         raise ValueError("보관 위치는 별도 로컬 보존 폴더여야 합니다")
+    _assert_no_reparse_components(archive_root)
+    archive_root = archive_root.resolve()
+    if archive_root == Path(archive_root.anchor):
+        raise ValueError("보관 위치는 별도 로컬 보존 폴더여야 합니다")
+    if os.name == "nt":
+        from ctypes import wintypes
+        get_drive_type = ctypes.windll.kernel32.GetDriveTypeW
+        get_drive_type.argtypes = [wintypes.LPCWSTR]
+        get_drive_type.restype = wintypes.UINT
+        # A mapped network drive also has a drive letter; only persistent local
+        # fixed/removable volumes satisfy the preservation contract.
+        if get_drive_type(archive_root.anchor) not in (2, 3):
+            raise ValueError("보관 위치는 별도 로컬 보존 볼륨이어야 합니다")
     roots = _roots(paths, values)
     code_roots = [paths.app_root]
     if (paths.app_root.parent / "portable-manifest.json").is_file():

@@ -6387,7 +6387,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "9cc36fb4d7916f7d9bef15b5e6f3dde92f34e7c70034a5a30161c313ce47f684",
+  "inventory_sha256": "1e97f18c882326069a70953daa570c54a464f52d9b6bf29791912abb7dc9037e",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18776,7 +18776,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition.restore_archive",
-      "line": 876,
+      "line": 889,
       "marker_kind": "decorator",
       "source": "current_user_lifecycle_restore"
     },
@@ -18800,7 +18800,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition.archive_state",
-      "line": 437,
+      "line": 450,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -18808,7 +18808,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition.prepare_registration",
-      "line": 708,
+      "line": 721,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -18816,7 +18816,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition.register_transition",
-      "line": 783,
+      "line": 796,
       "marker_kind": "decorator",
       "source": "current_user_onboarding"
     },
@@ -18856,7 +18856,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition._copy_entry",
-      "line": 385,
+      "line": 398,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -18872,7 +18872,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition._save",
-      "line": 423,
+      "line": 436,
       "marker_kind": "decorator",
       "source": "current_user_onboarding_storage"
     },
@@ -20240,7 +20240,7 @@
       "direct_mutation_site_count": 0,
       "file": "current_user_server_transition.py",
       "function": "current_user_server_transition._verify_fresh_server",
-      "line": 602,
+      "line": 615,
       "marker_kind": "decorator",
       "source": "worker_enrollment_network"
     },
