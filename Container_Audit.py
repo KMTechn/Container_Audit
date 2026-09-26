@@ -1040,6 +1040,7 @@ class ContainerAudit:
     EVENT_LOG_CLOSE_JOIN_TIMEOUT_SECONDS = 1.0
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
     PREFLIGHT_OFFLINE_RETRY_MS = 30_000
+    PREFLIGHT_OFFLINE_WAITING_LIMIT = 20
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -1743,6 +1744,28 @@ class ContainerAudit:
         )
 
     @staticmethod
+    def _is_offline_preflight_hold(snapshot) -> bool:
+        return bool(isinstance(snapshot, PreflightHoldSnapshot)
+                    and snapshot.state == HOLD_LOOKUP and snapshot.error_code)
+
+    def _offline_waiting_preflight_holds(self) -> tuple[QuarantinedPreflightHold, ...]:
+        return tuple(held for held in PreflightScanHoldStore.list_quarantined(
+            self._preflight_hold_quarantine_directory()
+        ) if self._is_offline_preflight_hold(held.snapshot))
+
+    def _offline_preflight_quarantine_blocked(self) -> bool:
+        if getattr(self, "_preflight_offline_error_code", ""):
+            return True
+        snapshot = getattr(self, "_preflight_hold_snapshot", None)
+        if not isinstance(snapshot, PreflightHoldSnapshot):
+            store = self._preflight_hold_store()
+            try:
+                snapshot = store.load() if store.exists() else None
+            except PreflightHoldError:
+                return False
+        return self._is_offline_preflight_hold(snapshot)
+
+    @staticmethod
     def _preflight_hold_ownership_detail(
         snapshot: PreflightHoldSnapshot,
         *,
@@ -1781,6 +1804,9 @@ class ContainerAudit:
                 "사전조회 보류 파일을 읽지 못해 격리하지 않습니다.",
                 parent=getattr(self, "root", None),
             )
+            return False
+        if self._is_offline_preflight_hold(snapshot):
+            self._show_preflight_offline_notice()
             return False
         if snapshot.state not in {HOLD_LOOKUP, HOLD_LOOKUP_FAILED}:
             messagebox.showerror(
@@ -1909,7 +1935,7 @@ class ContainerAudit:
         self._schedule_startup_transfer_recovery()
         return True
 
-    def restore_quarantined_preflight_hold(self, filepath: str) -> bool:
+    def restore_quarantined_preflight_hold(self, filepath: str, *, confirm: bool = True) -> bool:
         if not self._is_preflight_hold_quarantine_path(filepath):
             messagebox.showwarning(
                 "보류 묶음 복원 실패",
@@ -1925,7 +1951,8 @@ class ContainerAudit:
             digest = file_sha256(path if original_present else store.path)
             pin_store = self._admin_pin_store()
             target_id = hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest()
-            intents = [row for row in pin_store.pending("CA.PRECHECK_HOLD", target_id, include_applied=True)
+            pending_intents = pin_store.pending("CA.PRECHECK_HOLD", target_id, include_applied=True)
+            intents = [row for row in pending_intents
                        if row.get("state") == "APPLIED"
                        and (row.get("source_snapshot") or {}).get("preflight_id") == snapshot.preflight_id
                        and row["source_snapshot"].get("hold_sha256") == digest]
@@ -1943,9 +1970,14 @@ class ContainerAudit:
             )
             return False
         if self._paired_preflight_blocks_label(snapshot.master_raw, restoring_paths=restoring_paths):
+            pin_blocked = any(row.get("state") != "APPLIED" for row in pending_intents)
             messagebox.showwarning(
                 "보류 묶음 복원 차단",
-                "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요.",
+                ("이 현품표는 관리자 PIN 확인이 끝나지 않아 보류 중입니다. 연결 후 운영 작업의 "
+                 "관리자 확인 다시 조회에서 확인하세요. 미확정 인계가 남으면 원본을 보존하고 "
+                 "IT 담당자에게 인계하세요. 다른 현품표 작업은 계속할 수 있습니다."
+                 if pin_blocked else
+                 "이 현품표는 짝 인계 보류 중입니다. 관리자 인계 목록에서 확인하세요."),
                 parent=getattr(self, "root", None),
             )
             return False
@@ -1973,7 +2005,7 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        if not messagebox.askyesno(
+        if confirm and not messagebox.askyesno(
             "보류 묶음 복원 확인",
             f"격리된 중앙 조회 보류 {len(snapshot.items)}건을 활성 보류 상태로 "
             "되돌리시겠습니까?",
@@ -2001,7 +2033,7 @@ class ContainerAudit:
         detail = self._preflight_hold_ownership_detail(
             restored,
             snapshot_hash=restored_hash,
-            reason="supervisor_restore",
+            reason="supervisor_restore" if confirm else "offline_label_rescan",
             quarantine_path=Path(filepath),
         )
         audit_key = (
@@ -2070,12 +2102,16 @@ class ContainerAudit:
             )
             return True
         self._preflight_hold_snapshot = restored
-        self._set_preflight_scan_input_locked(True)
-        self.show_fullscreen_warning(
-            "중앙 조회 재확인 필요",
-            "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
-            self.COLOR_DANGER,
-        )
+        if not confirm and self._is_offline_preflight_hold(restored):
+            self._set_preflight_scan_input_locked(False)
+            self._process_barcode_logic(restored.master_raw)
+        else:
+            self._set_preflight_scan_input_locked(True)
+            self.show_fullscreen_warning(
+                "중앙 조회 재확인 필요",
+                "격리 보류 묶음을 복원했습니다. 확인을 누르면 같은 현품표로 다시 조회합니다.",
+                self.COLOR_DANGER,
+            )
         if hasattr(self, "_update_parked_trays_list"):
             self._update_parked_trays_list()
         return True
@@ -7103,6 +7139,7 @@ class ContainerAudit:
         """Show secondary and destructive actions without growing the center pane."""
 
         hold_blocked = self._preflight_context_blocks_mutation()
+        offline_hold = hold_blocked and self._offline_preflight_quarantine_blocked()
         active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
         completion_blocked = bool(
             active_tray and self._active_blocking_completion_snapshot() is not None
@@ -7177,8 +7214,12 @@ class ContainerAudit:
         menu.add_command(
             label="보류 묶음 격리 후 다른 작업 계속 (관리자)",
             command=self._quarantine_preflight_hold_from_operations,
-            state=tk.NORMAL if hold_blocked and not active_tray and not transfer_lane_busy else tk.DISABLED,
+            state=tk.NORMAL if hold_blocked and not active_tray and not transfer_lane_busy
+            and not offline_hold
+            else tk.DISABLED,
         )
+        if offline_hold:
+            menu.add_command(label="연결 끊김: PIN 격리 불가 · 다음 현품표를 스캔하세요", state=tk.DISABLED)
         menu.add_command(
             label="두 원본 함께 보류 후 계속 (관리자)",
             command=self._defer_paired_preflight_from_operations,
@@ -8516,6 +8557,9 @@ class ContainerAudit:
         return detail
 
     def _quarantine_preflight_hold_from_operations(self) -> bool:
+        if self._offline_preflight_quarantine_blocked():
+            self._show_preflight_offline_notice()
+            return False
         approval = self._authorize_blocked_work_supervisor()
         if approval is None:
             return False
@@ -10896,7 +10940,7 @@ class ContainerAudit:
             )
             if getattr(self, "_preflight_offline_error_code", ""):
                 self.current_item_label['text'] = (
-                    f"서버 연결 끊김 · 저장됨 {held_count}개 · 연결되면 자동 확인"
+                    f"서버 연결 끊김 · 저장 {held_count}개 · 대기 {len(self._offline_waiting_preflight_holds())}개"
                 )
                 self.current_item_label['foreground'] = self.COLOR_IDLE_TEXT
                 return
@@ -11624,10 +11668,10 @@ class ContainerAudit:
             len(snapshot.items) if isinstance(snapshot, PreflightHoldSnapshot) else 0
         )
         self.show_status_message(
-            f"서버 연결 끊김 · 현품표와 제품 {held_count}개 저장됨(삭제되지 않음). "
-            "이 현품표 제품은 계속 스캔하세요. 30초마다 자동 확인하고, 연결되면 "
-            "저장한 순서대로 반영한 뒤 이적 완료합니다. 이미 스캔한 것은 다시 "
-            "스캔하지 마세요.",
+            f"서버 연결 끊김 · 제품 {held_count}개 저장 · 대기 {len(self._offline_waiting_preflight_holds())}개. "
+            "제품은 계속 스캔하세요. 현재 현품표는 30초마다 자동 확인합니다. "
+            "다음 현품표를 스캔하면 지금 것은 대기합니다. "
+            "대기는 연결되면 그 현품표를 다시 스캔하세요. 제품은 다시 스캔하지 마세요.",
             self.COLOR_IDLE,
             duration=0,
         )
@@ -11659,7 +11703,7 @@ class ContainerAudit:
 
         # Serialized behind appends that arrived during the failed lookup.
         admission = self._preflight_hold_writer().submit(
-            self._preflight_hold_store().load,
+            lambda: self._preflight_hold_store().mark_offline(error_code=error_code),
             finish,
             lambda _exc: self._mark_preflight_hold_failed(error_code),
         )
@@ -12081,6 +12125,25 @@ class ContainerAudit:
         if not raw:
             return False
         if self._parse_new_format_qr(raw):
+            snapshot = getattr(self, "_preflight_hold_snapshot", None)
+            if (self._is_offline_preflight_hold(snapshot)
+                    and snapshot.worker == persistent_operator_name(self.worker_name)
+                    and not getattr(self.current_tray, "master_label_code", "")
+                    and not self._ui_task_lane().is_busy()
+                    and not getattr(self, "_master_preflight_poll_job", None)
+                    and not getattr(self, "_preflight_hold_switch_pending", False)
+                    and not getattr(self, "_ui_close_requested", False)
+                    and canonical_master_label_key(raw) != canonical_master_label_key(snapshot.master_raw)):
+                if clear_entry_after_ack:
+                    self._clear_consumed_scan_entry(raw)
+                if len(self._offline_waiting_preflight_holds()) >= self.PREFLIGHT_OFFLINE_WAITING_LIMIT:
+                    self.show_status_message(
+                        "대기 현품표 한도 20개 — 이번 현품표는 미접수입니다. 연결 후 대기 현품표를 다시 스캔하세요.",
+                        self.COLOR_DANGER, duration=0,
+                    )
+                    return False
+                self._process_barcode_logic(raw, _offline_hold_switch=snapshot)
+                return bool(getattr(self, "_preflight_hold_switch_pending", False))
             # The pending label is already held; a label is never a product.
             if clear_entry_after_ack:
                 self._clear_consumed_scan_entry(raw)
@@ -12153,6 +12216,62 @@ class ContainerAudit:
             )
             return False
         return True
+
+    def _queue_offline_preflight_hold(self, snapshot: PreflightHoldSnapshot, barcode: str) -> None:
+        """Move the unconfirmed owner only after the next label's admission checks."""
+        store = self._preflight_hold_store()
+        self._cancel_master_preflight()
+        token = self._master_preflight_epoch
+        self._preflight_hold_switch_pending = True
+        self._set_preflight_scan_input_locked(True)
+
+        def move():
+            current = store.load()
+            if (current.preflight_id != snapshot.preflight_id
+                    or current.worker != snapshot.worker or current.master_raw != snapshot.master_raw
+                    or not self._is_offline_preflight_hold(current)):
+                raise PreflightHoldConflict("offline hold owner changed")
+            quarantined = store.quarantine(
+                self._preflight_hold_quarantine_directory(), reason="offline_next_label",
+            )
+            try:
+                audited = self._log_event(
+                    "PHS2_PREFLIGHT_HOLD_QUARANTINED",
+                    detail=self._preflight_hold_ownership_detail(
+                        quarantined.snapshot, snapshot_hash=quarantined.snapshot_hash,
+                        reason="offline_next_label", quarantine_path=quarantined.path,
+                    ),
+                    synchronous=True, deduplicate=True,
+                    idempotency_key=f"preflight-hold-quarantine:{current.preflight_id}:{quarantined.snapshot_hash}",
+                )
+            except Exception:
+                audited = False
+            if not audited:
+                store.restore_quarantined(quarantined.path)
+                raise PreflightHoldError("offline hold audit failed")
+            return quarantined
+
+        def finish(_quarantined):
+            self._preflight_hold_switch_pending = False
+            self._finish_preflight_handoff()
+            self._update_parked_trays_list()
+            if token == self._master_preflight_epoch and not getattr(self, "_ui_close_requested", False):
+                self._process_barcode_logic(barcode)
+
+        def fail(_exc):
+            self._preflight_hold_switch_pending = False
+            self._finish_preflight_handoff()
+            self._update_parked_trays_list()
+            if not getattr(self, "_ui_close_requested", False):
+                self._restore_preflight_scan_hold()
+                self.show_status_message(
+                    "대기 이동을 확인하지 못해 이번 현품표는 미접수입니다. 원본은 보존했습니다. 보류 목록을 확인하세요.",
+                    self.COLOR_DANGER, duration=0,
+                )
+
+        admission = self._preflight_hold_writer().submit(move, finish, fail)
+        if not admission.accepted:
+            fail(PreflightHoldError("offline hold writer is busy"))
 
     def _restore_preflight_scan_hold(self) -> bool:
         store = self._preflight_hold_store()
@@ -12227,6 +12346,9 @@ class ContainerAudit:
                     parent=getattr(self, "root", None),
                 )
                 return True
+        elif self._is_offline_preflight_hold(snapshot):
+            self._set_preflight_scan_input_locked(False)
+            self._process_barcode_logic(snapshot.master_raw)
         else:
             self.show_status_message(
                 f"중앙 조회 재확인 필요 · 보류 {len(snapshot.items)}건 (삭제되지 않음)",
@@ -12684,11 +12806,12 @@ class ContainerAudit:
     def _process_barcode_logic(
         self, raw_barcode: str, *, _durable_scan_log: bool = False,
         _durable_scan_id: str = "", _catalog_decision=None,
-        _defer_persistence: bool = False,
+        _defer_persistence: bool = False, _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
         steps = self._process_barcode_steps(
             raw_barcode, _durable_scan_log=_durable_scan_log,
             _durable_scan_id=_durable_scan_id, _catalog_decision=_catalog_decision,
+            _offline_hold_switch=_offline_hold_switch,
         )
         if _defer_persistence:
             return steps
@@ -12725,6 +12848,7 @@ class ContainerAudit:
         _durable_scan_log: bool = False,
         _durable_scan_id: str = "",
         _catalog_decision: Optional[ProductScanDecision] = None,
+        _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
         """바코드 데이터를 받아 실제 처리 로직을 수행합니다."""
         if not raw_barcode: return
@@ -12735,7 +12859,10 @@ class ContainerAudit:
                 duration=0,
             )
             return
-        if getattr(self, "_master_preflight_pending", False):
+        if getattr(self, "_preflight_hold_switch_pending", False):
+            self.show_status_message("대기 현품표 저장 중입니다. 이번 입력은 미접수입니다.", self.COLOR_DANGER, duration=0)
+            return
+        if getattr(self, "_master_preflight_pending", False) and _offline_hold_switch is None:
             self._hold_scan_during_preflight(raw_barcode)
             return
         hold_snapshot = getattr(self, "_preflight_hold_snapshot", None)
@@ -12807,7 +12934,11 @@ class ContainerAudit:
                     self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
                     return
 
-                if self._paired_preflight_blocks_label(barcode):
+                waiting = [held for held in self._offline_waiting_preflight_holds()
+                           if canonical_master_label_key(held.snapshot.master_raw) == canonical_master_label_key(barcode)]
+                waiting_hold = waiting[0] if len(waiting) == 1 else None
+                restoring_paths = (waiting_hold.path.resolve(),) if waiting_hold else ()
+                if self._paired_preflight_blocks_label(barcode, restoring_paths=restoring_paths):
                     self.show_fullscreen_warning(
                         "관리자 보류 현품표",
                         "이 현품표는 두 원본이 관리자 보류 중입니다. "
@@ -12864,6 +12995,21 @@ class ContainerAudit:
                     matched_item = self._item_catalog().find_by_code(item_code)
                     if not matched_item:
                         self.show_fullscreen_warning("품목 없음", f"코드 '{item_code}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
+                        return
+                    if waiting_hold and waiting_hold.snapshot.worker != persistent_operator_name(self.worker_name):
+                        self.show_fullscreen_warning(
+                            "보류 묶음 작업자 확인", "원래 작업자로 로그인한 뒤 대기 현품표를 다시 스캔하세요.", self.COLOR_DANGER,
+                        )
+                        return
+                    if _offline_hold_switch is not None:
+                        if str(qr_data.get("PHS") or "").strip() == "2":
+                            validate_compact_phs2_fields(qr_data)
+                        elif parse_positive_quantity(qr_data, default=self.TRAY_SIZE) is None:
+                            raise ValueError("invalid next label quantity")
+                        self._queue_offline_preflight_hold(_offline_hold_switch, barcode)
+                        return
+                    if waiting_hold:
+                        self.restore_quarantined_preflight_hold(str(waiting_hold.path), confirm=False)
                         return
                     if str(qr_data.get("PHS") or "").strip() == "2":
                         self._begin_compact_phs2_preflight(
@@ -16543,12 +16689,15 @@ class ContainerAudit:
             for held in self._quarantined_preflight_holds():
                 fields = self._parse_new_format_qr(held.snapshot.master_raw) or {}
                 item_code = str(fields.get("CLC") or "현품표")
+                title = (f"서버 확인 대기 · …{item_code[-4:]}/…{str(fields.get('LBL') or '')[-4:]}"
+                         if self._is_offline_preflight_hold(held.snapshot)
+                         else f"사전조회 격리 · {item_code}")
                 tag = "even" if row_index % 2 == 0 else "odd"
                 self._insert_tree_row(
                     self.parked_tree,
                     "",
                     "end",
-                    values=(f"사전조회 격리 · {item_code}", str(len(held.snapshot.items))),
+                    values=(title, str(len(held.snapshot.items))),
                     iid=str(held.path),
                     tags=(tag,),
                 )

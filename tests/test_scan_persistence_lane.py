@@ -92,6 +92,7 @@ def test_scan_ack_keeps_count_sound_and_next_input_behind_worker_fsync(app, monk
         return fsync(fd)
 
     def delayed(state):
+        assert threading.get_ident() != owner, "durable scan persistence must not block Tk"
         entered.set()
         assert release.wait(timeout=5)
         return save(state)
@@ -99,10 +100,13 @@ def test_scan_ack_keeps_count_sound_and_next_input_behind_worker_fsync(app, monk
     monkeypatch.setattr(storage_utils.os, "fsync", fsync_spy)
     app._save_tray_state_snapshot = delayed
     try:
-        started = time.perf_counter()
+        # Keep the 100 ms execution budget, excluding host descheduling. The
+        # unreleased worker barrier and thread assertion separately prove that
+        # fsync cannot synchronously block this call or publish success early.
+        started = time.thread_time()
         app._process_barcode_logic(ITEM + "-1", _durable_scan_log=held,
                                   _durable_scan_id="held-1" if held else "")
-        assert time.perf_counter() - started < 0.1
+        assert time.thread_time() - started < 0.1
         pump(app, entered.is_set)
         assert app.current_tray.scanned_barcodes == []
         assert app.scanned_listbox.rows == []

@@ -12,7 +12,9 @@
 
 ## 문서 작성 진행과 제품 준비도
 
-- **w9cadrain2:** 끊김 뒤 drain 거절 경고에 제품 바코드(형식 오류는 원문 대신 보류 순번)와 할 일(상자에서 빼기·한 개만 있는지 확인)을 넣었다. 통신 예외만 `PHS2_PREFLIGHT_UNAVAILABLE`로 보고, 이 PC의 로컬 예외(sqlite 등)는 `PHS2_PREFLIGHT_LOCAL_ERROR`로 이 현품표만 `LOOKUP_FAILED`('PC 처리 오류', 확인=재조회, 관리자 격리)로 둔다. 첫 시작 캐시 없음+끊김의 시작 오류는 계약대로 두고 설치 뒤 연결 상태 첫 시작 1회를 운영 절차로 삼는다. [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cadrain2/RESULT.md). 보류 시점 CLC 즉시 대조와 hold 큐는 후속이다.
+- **w9caqueue:** 끊김 표식 `LOOKUP`을 PIN 없이 기존 격리 폴더의 대기 목록으로 옮겨 다음 현품표를 받는다(최대 20개, 승인 효과 없음). 원 작업자 재스캔은 원 FIFO 복원·재조회, 끊김 표식 재시작은 확인창 없이 재조회다. 끊김 중 PIN 격리 메뉴를 끄고 기존 PIN 미확인 복원 거부의 원인·할 일을 바로잡았다. [검증·한계](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caqueue/RESULT.md), [CA-04](README.md#ca-04).
+
+- **w9cadrain2:** 끊김 뒤 drain 거절 경고에 제품 바코드(형식 오류는 원문 대신 보류 순번)와 할 일(상자에서 빼기·한 개만 있는지 확인)을 넣었다. 통신 예외만 `PHS2_PREFLIGHT_UNAVAILABLE`로 보고, 이 PC의 로컬 예외(sqlite 등)는 `PHS2_PREFLIGHT_LOCAL_ERROR`로 이 현품표만 `LOOKUP_FAILED`('PC 처리 오류', 확인=재조회, 관리자 격리)로 둔다. 첫 시작 캐시 없음+끊김의 시작 오류는 계약대로 두고 설치 뒤 연결 상태 첫 시작 1회를 운영 절차로 삼는다. [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cadrain2/RESULT.md). 보류 시점 CLC 즉시 대조는 후속이고, 여러 현품표 대기는 w9caqueue를 따른다.
 - **w9caoffline:** 서버 끊김 중 첫 PHS2 조회 실패가 hold를 `LOOKUP_FAILED`로 바꾸고 입력 전체를 잠그던(관리자 PIN 격리도 끊김 중 불가) 현장 정지를 고쳤다. 연결 실패는 `LOOKUP`을 유지해 이 현품표 제품을 계속 보류 저장하고 30초마다 같은 hold로 자동 재조회하며, 복구되면 사람 조치 없이 기존 판정으로 drain한다. 확정 실패는 지금처럼 이 현품표만 막는다. 조회·끊김 중 현품표 QR이 보류되어 복구 뒤 drain이 멈추던 결함도 막았다. 서버·계약·hold 상태는 바꾸지 않았다. [CA-04](README.md#ca-04), [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caoffline/RESULT.md). 실제 guest 화면·랩 서버 끊김 재연은 NOT VERIFIED다.
 
 - **w9caprofile:** 바로가기 시작의 품목 목록 갱신이 onboarding 사용자 profile을 찾지 못해 기본 운영 host에 무인증 요청(401)·번들 목록으로 떨어지던 결함을 고쳤다. 품목 갱신이 물류 client와 같은 profile 선택을 쓰고, profile이 없으면 요청 없이 기존 목록으로 계속하며 설정 필요·할 일을 보인다. [선택 순서](operations.md#ca-o02), [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caprofile/RESULT.md). 실제 guest 화면·랩 서버 확인은 NOT VERIFIED다.
@@ -291,7 +293,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g14"></a>
 ## CA-G14 현장 중단 방지의 남은 복구 경계 (w9nb)
 
-- **w9caoffline 남은 경계:** hold는 PC당 하나라 끊김 중에는 현재 현품표 하나만 진행되고 다른 현품표는 연결 뒤 시작한다(여러 hold 대기는 P2 후속). 끊김 중 재시작하면 기존처럼 `중앙 조회 재확인 필요` 확인 한 번 뒤 자동 재조회로 이어진다. 설치기 활성 작업 probe는 hold 파일을 보지 않는다(기존과 같음, 공유 probe 미변경). 촬영 도구 `m7_central_preflight_queue` 장면은 `PHS2_PREFLIGHT_UNAVAILABLE`을 `LOOKUP_FAILED`로 그리는 고정 자료라 현재 끊김 화면과 다르다.
+- **w9caqueue 남은 경계:** 활성 hold 1개·대기 최대 20개이며, 대기는 자동 다중 drain 대신 원 작업자가 현품표를 재스캔해 처리한다. 실제 1024×768 창·글꼴 배치, 실제 서버 끊김·lease 만료는 미검증이다. 설치기 활성 작업 probe는 활성/격리 hold를 보지 않고, 끊김 중 작업자 교대도 기존 차단을 유지한다(별도 후속). 과거 `UNVERIFIED_OPERATOR_HOLD`→`HANDED_OFF_UNKNOWN`의 앱 안 최종 해소는 별도 후속이며 이번에는 신규 오프라인 PIN 격리를 차단한다. 촬영 도구 `m7_central_preflight_queue`의 고정 실패 장면도 현재 끊김 화면과 다르다.
 - **w9pincaconf 소스·headless 경계:** `APPLIED` 저장 뒤 단회 readback 실패는 관리자 재조회·시작 복구의 완료 효과 재검증과 메모리 정리로 이어간다. PIN intent·사전조회 격리 폴더의 열거 오류는 관리자 재확인 대상으로 구분하고 감사로 식별한 key만 보류한다. 두 실패 경로는 예외 주입 headless 회귀 범위이며 실제 폴더 ACL 장애·Tk 조작은 미검증이다. 네 로컬 PIN 동작은 중단 후 기록된 이동 목적지·원 SHA256을 재사용하며 복구 `APPLIED` 뒤 정상 완료의 입력 해제를 적용한다. 실제 업무 handler의 이동 전·이동 후·검증 후·효과 readback 후 중단을 headless로 주입한다. PRECHECK 격리 `APPLIED` 뒤 같은 key가 재진입하던 기존 결함도 차단하고 원 FIFO 복원·감사 결속 후 재개한다. 복원은 기존 원 작업자/관리자 인증이며 **PIN 분류 후속 필요**다. `TARGET_CHANGED`의 새 PIN 재실행과 parked 임시파일 관리자 경로는 유지한다. 실제 Tk 창, 운영 서버·PC, 실제 프로세스/전원 중단은 별도 검증이다.
 
 - **C01/C03/C04 소스 조치:** 운영 작업에 원 요청 결과 재확인·관리자 보류 후 계속·인계 안내를 연결했다. 정상 조회 실패 hold는 관리자 격리·감사 뒤 새 현품표를 허용하며, 완료/교체 미확정 current는 원 snapshot을 parked readback·감사 뒤 인계한다. 원 intent/key·수량·membership·중앙 결과는 보류로 바꾸지 않는다. 실제 현장 화면·서버 응답은 별도 확인 대상이다.

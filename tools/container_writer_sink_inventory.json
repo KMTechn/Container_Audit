@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4285,
+      "line": 4321,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4289,
+          "line": 4325,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -2734,17 +2734,17 @@
       "direct_callers": [],
       "file": "preflight_scan_hold.py",
       "kind": "function",
-      "line": 366,
+      "line": 381,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 377,
+          "line": 392,
           "operation": "target_root.mkdir",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 397,
+          "line": 412,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -2765,17 +2765,17 @@
       "direct_callers": [],
       "file": "preflight_scan_hold.py",
       "kind": "function",
-      "line": 404,
+      "line": 419,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 420,
+          "line": 435,
           "operation": "source.unlink",
           "writer_admission_sources": []
         },
         {
           "category": "filesystem",
-          "line": 424,
+          "line": 439,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -6257,7 +6257,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "880cb0e0fa7f07c98dc0eb8a08b76a6599c23d613d5a9d9b857bf2911ecbe24a",
+  "inventory_sha256": "bf5366217eb75c5063e039582a069983a534d4f9575f900ea396dac856ae6eb1",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18194,7 +18194,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1420,
+      "line": 1421,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -18202,7 +18202,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 18594,
+      "line": 18743,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -18210,7 +18210,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4285,
+      "line": 4321,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -18218,7 +18218,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3001,
+      "line": 3037,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -18226,7 +18226,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3401,
+      "line": 3437,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -18570,7 +18570,7 @@
       "direct_mutation_site_count": 0,
       "file": "preflight_scan_hold.py",
       "function": "preflight_scan_hold.PreflightScanHoldStore.ack_head",
-      "line": 341,
+      "line": 356,
       "marker_kind": "decorator",
       "source": "preflight_scan_hold"
     },
@@ -18578,7 +18578,7 @@
       "direct_mutation_site_count": 2,
       "file": "preflight_scan_hold.py",
       "function": "preflight_scan_hold.PreflightScanHoldStore.quarantine",
-      "line": 366,
+      "line": 381,
       "marker_kind": "decorator",
       "source": "preflight_scan_hold_quarantine"
     },
@@ -18586,7 +18586,7 @@
       "direct_mutation_site_count": 2,
       "file": "preflight_scan_hold.py",
       "function": "preflight_scan_hold.PreflightScanHoldStore.restore_quarantined",
-      "line": 404,
+      "line": 419,
       "marker_kind": "decorator",
       "source": "preflight_scan_hold_quarantine_restore"
     },

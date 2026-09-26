@@ -1,12 +1,15 @@
+import csv
+import hashlib
 import queue
 import sqlite3
 import threading
 import time
+import uuid
 from types import SimpleNamespace
 
 import pytest
 import requests
-from Container_Audit import ContainerAudit, TraySession
+from Container_Audit import ContainerAudit, TraySession, canonical_master_label_key
 from item_catalog import ItemCatalog
 from preflight_scan_hold import (
     HOLD_DRAINING,
@@ -14,6 +17,7 @@ from preflight_scan_hold import (
     HOLD_LOOKUP_FAILED,
     HeldScan,
     PreflightHoldSnapshot,
+    PreflightScanHoldStore,
 )
 from terminal_operation_lease import (
     OperationLeaseManager,
@@ -750,7 +754,7 @@ def test_offline_preflight_keeps_scanning_and_auto_retry_drains_with_scan_rules(
 
     retry = _offline_retry_job(app.root)
     app.root.jobs.remove(retry)
-    for barcode in (first, COMPACT_QR, wrong_item, OTHER_LABEL, second, over_quantity):
+    for barcode in (first, COMPACT_QR, wrong_item, second, over_quantity):
         app._process_barcode_logic(barcode)
     _pump_until(app.root, lambda: len(store.load().items) == 5, phase="offline hold append")
     _pump_for(app.root, duration=0.1)
@@ -760,7 +764,7 @@ def test_offline_preflight_keeps_scanning_and_auto_retry_drains_with_scan_rules(
     assert len([
         status for status in app.statuses
         if status[0].startswith("현품표 확인이 끝날 때까지 현품표 스캔은 받지 않습니다")
-    ]) == 2
+    ]) == 1
     assert COMPACT_QR not in [item.raw_barcode for item in store.load().items]
 
     # Still offline at the next automatic lookup: same hold, same FIFO, no new audit row.
@@ -1525,3 +1529,348 @@ def test_compact_phs2_incomplete_completion_uses_current_remainder_guidance(tmp_
     assert "이름·시간·품목·수량·수기 코드" in message
     assert "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다" in message
     assert "RSL1로 별도 발행" not in message
+
+
+def _offline_queue_app(tmp_path, monkeypatch):
+    client = BlockingClient(_resolved(count=2), error=ConnectionError("fixture outage"))
+    app = _app(tmp_path, client)
+    app.save_folder = str(tmp_path)
+    app.local_events_folder = str(tmp_path / "local_events")
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    capture_event = app._log_event
+
+    def log_event(event, detail=None, **kwargs):
+        capture_event(event, detail, **kwargs)
+        if kwargs.get("synchronous"):
+            return ContainerAudit._log_event(app, event, detail, **kwargs)
+        return True
+
+    app._log_event = log_event
+    app.dialogs = []
+    for method in ("showwarning", "showerror", "showinfo"):
+        monkeypatch.setattr("Container_Audit.messagebox." + method,
+                            lambda *args, **kwargs: app.dialogs.append(args))
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",
+                        lambda *args, **kwargs: pytest.fail("unexpected confirmation"))
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    # A fake Tk scheduler must not run a 30-second timer immediately.
+    app.root.jobs.remove(_offline_retry_job(app.root))
+    return app, client
+
+
+def test_offline_queue_next_label_preserves_original_bytes_and_audit(tmp_path, monkeypatch):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    for index in range(3):
+        app._process_barcode_logic(f"{ITEM}-SERIAL-{index + 1:03d}")
+    _pump_until(app.root, lambda: len(store.load().items) == 3)
+    original = store.path.read_bytes()
+
+    app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: len(app._quarantined_preflight_holds()) == 1)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+
+    waiting, = app._quarantined_preflight_holds()
+    assert waiting.path.read_bytes() == original
+    assert waiting.snapshot.state == HOLD_LOOKUP and waiting.snapshot.error_code
+    assert store.load().master_raw == OTHER_LABEL
+    assert app.current_tray.master_label_code == ""
+    assert app.current_tray.scanned_barcodes == []
+    assert app._paired_preflight_blocks_label(COMPACT_QR)
+    moved = [event for event in app.events if event[0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED"]
+    assert len(moved) == 1
+    assert moved[0][1]["reason"] == "offline_next_label"
+    assert moved[0][2]["synchronous"] and moved[0][2]["deduplicate"]
+    audit_rows = []
+    for path in (tmp_path / "local_events").glob("*.csv"):
+        with path.open(encoding="utf-8-sig", newline="") as handle:
+            audit_rows.extend(csv.DictReader(handle))
+    assert sum(row["event"] == "PHS2_PREFLIGHT_HOLD_QUARANTINED" for row in audit_rows) == 1
+    assert [row["scan_payload"] for row in client.identities] == [COMPACT_QR, OTHER_LABEL]
+    assert "대기 1개" in app.current_item_label["text"]
+    assert any("연결되면 그 현품표를 다시 스캔" in status[0] for status in app.statuses)
+
+
+@pytest.mark.parametrize("before_snapshot", [False, True])
+def test_offline_queue_disables_pin_quarantine_and_explains_next_scan(tmp_path, monkeypatch, before_snapshot):
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    if before_snapshot:
+        app._preflight_hold_snapshot = None
+        app._preflight_offline_error_code = ""
+        app._master_preflight_pending = False
+    app._exact_transfer_exchange_blocked = lambda: False
+    app._current_transfer_member_exchange_attempt = lambda: None
+    app.operations_button = SimpleNamespace(winfo_rootx=lambda: 0, winfo_rooty=lambda: 0,
+                                           winfo_height=lambda: 0)
+    entries = []
+
+    class Menu:
+        def __init__(self, *args, **kwargs): pass
+        def add_command(self, **kwargs): entries.append(kwargs)
+        def add_separator(self): pass
+        def tk_popup(self, *args): pass
+        def grab_release(self): pass
+
+    monkeypatch.setattr("Container_Audit.tk.Menu", Menu)
+    app._show_operations_menu()
+    quarantine = next(row for row in entries
+                      if row.get("command") == app._quarantine_preflight_hold_from_operations)
+    assert quarantine["state"] == "disabled"
+    assert any("연결" in row["label"] and "다음 현품표" in row["label"] for row in entries)
+    original = app._preflight_hold_store().path.read_bytes()
+    app._authorize_blocked_work_supervisor = lambda: pytest.fail("offline PIN prompt")
+    assert app._quarantine_preflight_hold_from_operations() is False
+    assert app._preflight_hold_store().path.read_bytes() == original
+    assert app._admin_pin_store().list_pending() == []
+
+
+@pytest.mark.parametrize("state", ["UNVERIFIED_OPERATOR_HOLD", "HANDED_OFF_UNKNOWN"])
+def test_offline_queue_pin_restore_refusal_names_pin_cause(tmp_path, monkeypatch, state):
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    original = store.path.read_bytes()
+    waiting = store.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture_pin_hold")
+    app._cancel_master_preflight()
+    app._finish_preflight_handoff()
+    target = hashlib.sha256(canonical_master_label_key(COMPACT_QR).encode()).hexdigest()
+    app._admin_pin_store().write({
+        "operation_key": str(uuid.uuid4()), "action": "CA.PRECHECK_HOLD",
+        "target": {"id": target}, "labels": [COMPACT_QR], "state": state,
+        "source_snapshot": {"preflight_id": waiting.snapshot.preflight_id,
+                            "hold_sha256": hashlib.sha256(original).hexdigest()},
+    })
+
+    assert app.restore_quarantined_preflight_hold(str(waiting.path)) is False
+    assert waiting.path.read_bytes() == original and not store.exists()
+    message = app.dialogs[-1][1]
+    assert "PIN" in message and "관리자 확인 다시 조회" in message
+    assert "짝 인계" not in message
+
+
+@pytest.mark.parametrize("blocked", ["lookup", "poll", "lane", "failed", "draining", "active"])
+def test_offline_queue_only_moves_an_idle_offline_lookup(tmp_path, monkeypatch, blocked):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    store.append(ITEM + "-SERIAL-001")
+    if blocked == "lookup":
+        store.resume(master_raw=COMPACT_QR, worker=app.worker_name)
+    elif blocked == "poll":
+        app._master_preflight_poll_job = "pending-result"
+    elif blocked == "lane":
+        monkeypatch.setattr(app._ui_task_lane(), "is_busy", lambda: True)
+    elif blocked == "failed":
+        store.mark_failed(error_code="PHS2_SOURCE_NOT_INSPECTION_COMPLETED")
+    elif blocked == "draining":
+        store.mark_draining()
+    elif blocked == "active":
+        app.current_tray = TraySession(master_label_code=COMPACT_QR, item_code=ITEM)
+    app._preflight_hold_snapshot = store.load()
+    original = store.path.read_bytes()
+
+    app._process_barcode_logic(OTHER_LABEL)
+
+    assert store.path.read_bytes() == original
+    assert app._quarantined_preflight_holds() == ()
+    assert len(client.identities) == 1
+    assert not any(row[0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED" for row in app.events)
+    assert "미접수" in app.statuses[-1][0]
+
+
+@pytest.mark.parametrize("invalid", ["compact_fields", "item", "completed", "parked"])
+def test_offline_queue_validates_next_label_before_moving(tmp_path, monkeypatch, invalid):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    candidate = OTHER_LABEL
+    if invalid == "compact_fields":
+        candidate += "|QT=2"
+    elif invalid == "item":
+        candidate = candidate.replace(ITEM, "BBB2270730100")
+    elif invalid == "completed":
+        app.completed_master_labels.add(canonical_master_label_key(candidate))
+    else:
+        from storage_utils import atomic_write_json
+        atomic_write_json(tmp_path / "parked" / "parked_other.json", {
+            "worker_name": "other-worker", "master_label_code": candidate,
+            "scanned_barcodes": [], "item_code": ITEM,
+        })
+    original = app._preflight_hold_store().path.read_bytes()
+
+    app._process_barcode_logic(candidate)
+
+    assert app._preflight_hold_store().path.read_bytes() == original
+    assert not app._quarantined_preflight_holds()
+    assert len(client.identities) == 1
+    assert app.warnings
+
+
+def test_offline_queue_limit_and_same_qr_reprint_do_not_create_another_hold(tmp_path, monkeypatch):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    original = app._preflight_hold_store().path.read_bytes()
+    app._process_barcode_logic(COMPACT_QR)
+    assert app._preflight_hold_store().path.read_bytes() == original
+    assert not app._quarantined_preflight_holds()
+    for index in range(20):
+        seed = PreflightScanHoldStore(tmp_path / "seed.json", capacity=68)
+        label = OTHER_LABEL.replace("COMPACT-002", f"WAITING-{index}")
+        seed.start(worker=app.worker_name, master_raw=label, scan_epoch=index)
+        seed.mark_offline(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+        seed.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture_waiting")
+
+    app._process_barcode_logic(OTHER_LABEL)
+
+    assert app._preflight_hold_store().path.read_bytes() == original
+    assert len(app._quarantined_preflight_holds()) == 20
+    assert len(client.identities) == 1
+    assert "20개" in app.statuses[-1][0] and "미접수" in app.statuses[-1][0]
+
+
+def test_offline_queue_waiting_list_retains_count_and_short_label_suffixes(tmp_path, monkeypatch):
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    store.append(ITEM + "-SERIAL-001")
+    held = store.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture_waiting")
+    rows = []
+    app.parked_tree = SimpleNamespace(get_children=lambda: (),
+                                     insert=lambda *args, **kwargs: rows.append(kwargs))
+    app._update_parked_recovery_affordance = lambda: None
+    app._update_parked_trays_list()
+    assert len(rows) == 1
+    title, count = rows[0]["values"]
+    assert title == f"서버 확인 대기 · …{ITEM[-4:]}/…{LABEL_ID[-4:]}"
+    assert count == "1" and rows[0]["iid"] == str(held.path)
+
+
+def test_offline_queue_other_worker_waiting_label_does_not_displace_active_hold(tmp_path, monkeypatch):
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    original = store.path.read_bytes()
+    seed = PreflightScanHoldStore(tmp_path / "seed.json", capacity=68)
+    seed.start(worker="other-worker", master_raw=OTHER_LABEL, scan_epoch=1)
+    seed.mark_offline(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    other = seed.quarantine(app._preflight_hold_quarantine_directory(), reason="fixture_waiting")
+    other_original = other.path.read_bytes()
+    app._process_barcode_logic(OTHER_LABEL)
+    assert store.path.read_bytes() == original and other.path.read_bytes() == other_original
+    assert app.warnings[-1][0] == "보류 묶음 작업자 확인"
+
+
+def test_offline_queue_swaps_labels_then_recovers_original_fifo_before_completion(tmp_path, monkeypatch):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    first, second = ITEM + "-SERIAL-001", ITEM + "-SERIAL-002"
+    for barcode in (first, first, second):
+        app._process_barcode_logic(barcode)
+    _pump_until(app.root, lambda: len(app._preflight_hold_snapshot.items) == 3)
+    a_snapshot = store.load()
+    app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    app.root.jobs.remove(_offline_retry_job(app.root))
+    app._process_barcode_logic(ITEM + "-B")
+    _pump_until(app.root, lambda: len(app._preflight_hold_snapshot.items) == 1)
+    b_original = store.path.read_bytes()
+
+    # A reprint of A restores its owner; no second copy or product interpretation.
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    app.root.jobs.remove(_offline_retry_job(app.root))
+    assert store.load().preflight_id == a_snapshot.preflight_id
+    assert store.load().items == a_snapshot.items
+    waiting, = app._quarantined_preflight_holds()
+    assert waiting.snapshot.master_raw == OTHER_LABEL
+    assert waiting.path.read_bytes() == b_original
+    assert app.current_tray.master_label_code == ""
+    with sqlite3.connect(tmp_path / "transfer-seal.db") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM transfer_seal_intents").fetchone()[0] == 0
+    assert app._admin_pin_store().list_pending() == []
+
+    app.add_scanned_barcode = lambda barcode, when, interval: (
+        app.current_tray.scanned_barcodes.append(barcode), app.current_tray.scan_times.append(when))
+    completed = []
+    app.complete_tray = lambda: completed.append((list(app.current_tray.scanned_barcodes), store.exists())) or True
+    client.error = None
+    app._retry_offline_preflight(app._master_preflight_epoch, COMPACT_QR,
+                                app._parse_new_format_qr(COMPACT_QR), app.items_data[0])
+    _pump_until(app.root, lambda: bool(completed))
+    assert completed == [([first, second], False)]
+    assert app.current_tray.tray_size == 2
+    rejected = [row for row in app.events if row[2].get("idempotency_key", "").startswith("preflight-held-reject:")]
+    assert [row[0] for row in rejected] == ["SCAN_FAIL_DUPLICATE"]
+    assert waiting.path.read_bytes() == b_original
+    assert [row["idempotency_key"] for row in client.identities if row["scan_payload"] == COMPACT_QR] == [
+        client.identities[0]["idempotency_key"]] * 3
+    assert app.dialogs == []
+
+
+@pytest.mark.parametrize("error_code,status", [("PHS2_SOURCE_NOT_INSPECTION_COMPLETED", 409), ("LOGISTICS_AUTH_REQUIRED", 401)])
+def test_offline_queue_definitive_rejection_only_fails_returned_label(tmp_path, monkeypatch, error_code, status):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    app.root.jobs.remove(_offline_retry_job(app.root))
+    client.error = TransferSealError(error_code, "fixture denial", status_code=status)
+
+    app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, lambda: isinstance(app._preflight_hold_snapshot, PreflightHoldSnapshot)
+                and app._preflight_hold_snapshot.state == HOLD_LOOKUP_FAILED
+                and not app._master_preflight_pending)
+    assert app._preflight_hold_store().load().master_raw == COMPACT_QR
+    waiting, = app._quarantined_preflight_holds()
+    assert waiting.snapshot.master_raw == OTHER_LABEL and waiting.snapshot.state == HOLD_LOOKUP
+    assert app.current_tray.master_label_code == ""
+
+
+@pytest.mark.parametrize("marked", [False, True])
+def test_offline_queue_restart_only_skips_confirmation_for_durable_outage(tmp_path, monkeypatch, marked):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    if not marked:
+        store.resume(master_raw=COMPACT_QR, worker=app.worker_name)
+    app._cancel_master_preflight()
+    app = _app(tmp_path, client)
+    app.save_folder = str(tmp_path)
+    app.CURRENT_TRAY_STATE_FILE = "current.json"
+    assert app._restore_preflight_scan_hold()
+    if marked:
+        _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+        assert len(client.identities) == 2
+        assert not app.warnings and not app._preflight_scan_input_locked
+    else:
+        assert len(client.identities) == 1
+        assert app.warnings[-1][0] == "중앙 조회 재확인 필요"
+
+
+@pytest.mark.parametrize("failure", ["audit_false", "audit_raise", "after_move"])
+def test_offline_queue_interrupted_move_keeps_one_original_and_restarts(tmp_path, monkeypatch, failure):
+    app, client = _offline_queue_app(tmp_path, monkeypatch)
+    store = app._preflight_hold_store()
+    original = store.path.read_bytes()
+    log_event = app._log_event
+    quarantine = store.quarantine
+
+    def broken_log(event, *args, **kwargs):
+        if event == "PHS2_PREFLIGHT_HOLD_QUARANTINED":
+            if failure == "audit_raise":
+                raise OSError("fixture audit failure")
+            return False
+        return log_event(event, *args, **kwargs)
+
+    def moved_then_failed(*args, **kwargs):
+        quarantine(*args, **kwargs)
+        raise OSError("fixture interruption after replace")
+
+    if failure == "after_move":
+        monkeypatch.setattr(store, "quarantine", moved_then_failed)
+    else:
+        app._log_event = broken_log
+    app._process_barcode_logic(OTHER_LABEL)
+    _pump_until(app.root, lambda: not getattr(app, "_preflight_hold_switch_pending", False))
+    assert all(row["scan_payload"] == COMPACT_QR for row in client.identities)
+    copies = ([store.path] if store.exists() else []) + [held.path for held in app._quarantined_preflight_holds()]
+    assert len(copies) == 1 and copies[0].read_bytes() == original
+    if failure == "after_move":
+        assert app._paired_preflight_blocks_label(COMPACT_QR)
+        monkeypatch.setattr(store, "quarantine", quarantine)
+        app._process_barcode_logic(COMPACT_QR)
+    _pump_until(app.root, lambda: _offline_retry_job(app.root) is not None)
+    assert store.load().master_raw == COMPACT_QR
+    assert app.current_tray.master_label_code == ""

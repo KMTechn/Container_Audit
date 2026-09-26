@@ -286,6 +286,21 @@ class PreflightScanHoldStore:
             )
             return item
 
+    def mark_offline(self, *, error_code: str) -> PreflightHoldSnapshot:
+        with self._lock:
+            snapshot = self.load()
+            if snapshot.state != HOLD_LOOKUP:
+                raise PreflightHoldConflict("preflight hold is not awaiting lookup")
+            return self._write(
+                PreflightHoldSnapshot(
+                    **{
+                        **snapshot.__dict__,
+                        "updated_at": _utc_now(),
+                        "error_code": str(error_code or "PHS2_PREFLIGHT_UNAVAILABLE").strip(),
+                    }
+                )
+            )
+
     def mark_failed(self, *, error_code: str) -> PreflightHoldSnapshot:
         with self._lock:
             snapshot = self.load()
