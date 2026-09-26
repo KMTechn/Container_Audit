@@ -528,6 +528,30 @@ def test_absent_profile_preserves_unauthenticated_override(monkeypatch, tmp_path
     assert calls == [(UNAUTHENTICATED_OVERRIDE_URL, 2.0)]
 
 
+@pytest.mark.parametrize("url", [None, PRODUCTION_CATALOG_URL_WITH_PORT])
+def test_absent_profile_sends_no_anonymous_request_to_central_catalog(
+    monkeypatch, tmp_path, url
+):
+    for name in (sync.URL_ENV, *sync.BASE_URL_ENV_NAMES):
+        monkeypatch.delenv(name, raising=False)
+    bundle = tmp_path / "bundle.csv"
+    bundle.write_bytes(CATALOG)
+    calls = []
+
+    assert refresh_item_catalog(
+        bundle,
+        cache_path=tmp_path / "cache.csv",
+        url=url,
+        get=lambda *args, **_kwargs: calls.append(args),
+    ) == bundle
+
+    context = sync.get_catalog_attempt_context()
+    assert calls == []
+    assert context["request_sent"] is False
+    assert context["pre_send_rejection_code"] == sync.PROFILE_ABSENT
+    assert context["catalog_source"] == "BUNDLED"
+
+
 def test_unavailable_profile_fails_closed_without_unauthenticated_transport_or_leak(
     monkeypatch, tmp_path, caplog
 ):
@@ -675,6 +699,7 @@ def test_replace_race_returns_cache_created_before_permission_error(
     result = refresh_item_catalog(
         bundle,
         cache_path=cache,
+        url=UNAUTHENTICATED_OVERRIDE_URL,
         get=lambda *_args, **_kwargs: FakeResponse(CATALOG),
     )
 
@@ -1053,7 +1078,7 @@ def test_catalog_cause_code_snapshot_unavailable_after_verify(monkeypatch, tmp_p
     key = sync._catalog_snapshot_key(cache)
     sync._REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.add(key)
     sync._forget_verified_catalog_snapshot(cache)
-    monkeypatch.setattr(app_module, "refresh_item_catalog", lambda _path: cache)
+    monkeypatch.setattr(app_module, "refresh_item_catalog", lambda _path, **_kw: cache)
     try:
         with pytest.raises(sync.ItemCatalogSyncError) as raised:
             app_module.prepare_startup_item_catalog()
@@ -1185,7 +1210,7 @@ def test_startup_load_items_uses_verified_snapshot_after_cache_tamper(
     assert sync.requires_verified_catalog_snapshot(cache)
     assert sync.get_verified_catalog_snapshot(cache) == CATALOG
 
-    monkeypatch.setattr(app_module, "refresh_item_catalog", lambda _path: cache)
+    monkeypatch.setattr(app_module, "refresh_item_catalog", lambda _path, **_kw: cache)
     assert app_module.prepare_startup_item_catalog() == str(cache)
     tampered = CATALOG.replace(b"AAA0000000001", b"AAA9999999999")
     cache.write_bytes(tampered)
@@ -1213,6 +1238,7 @@ def test_invalid_response_keeps_bundle_and_url_contract(tmp_path):
     assert refresh_item_catalog(
         bundle,
         cache_path=cache,
+        url=UNAUTHENTICATED_OVERRIDE_URL,
         get=lambda *_args, **_kwargs: FakeResponse(b"wrong,header\n"),
     ) == bundle
     assert not cache.exists()

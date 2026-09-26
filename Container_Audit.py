@@ -81,6 +81,7 @@ from item_catalog import ItemCatalog
 from item_catalog_sync import (
     ACTIVE_PATH_ENV,
     ItemCatalogSyncError,
+    PROFILE_ABSENT,
     SNAPSHOT_PARSE_FAILED,
     SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
     get_catalog_attempt_context,
@@ -445,8 +446,8 @@ def apply_startup_geometry(
     return parsed
 
 
-def container_startup_logistics_client():
-    """Load current-user credentials without making startup depend on the server."""
+def _current_user_logistics_profile_path() -> str:
+    """Explicit or onboarded current-user profile; "" leaves machine/process selection."""
 
     explicit_user_profile = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
     if not explicit_user_profile and not os.environ.get("PYTEST_CURRENT_TEST"):
@@ -461,6 +462,13 @@ def container_startup_logistics_client():
                 explicit_user_profile = str(candidate.logistics_profile_path)
         except Exception:
             explicit_user_profile = ""
+    return explicit_user_profile
+
+
+def container_startup_logistics_client():
+    """Load current-user credentials without making startup depend on the server."""
+
+    explicit_user_profile = _current_user_logistics_profile_path()
     if explicit_user_profile:
         values = dict(os.environ)
         values[LOGISTICS_RUNTIME_PROFILE_PATH_ENV] = explicit_user_profile
@@ -1508,11 +1516,22 @@ class ContainerAudit:
 
         previous_path = os.environ.get(ACTIVE_PATH_ENV)
 
-        def fail(_exc: Optional[BaseException] = None) -> None:
+        def fail(
+            _exc: Optional[BaseException] = None, *, setup_required: bool = False
+        ) -> None:
             if previous_path is None:
                 os.environ.pop(ACTIVE_PATH_ENV, None)
             else:
                 os.environ[ACTIVE_PATH_ENV] = previous_path
+            if setup_required:
+                messagebox.showwarning(
+                    ITEM_CATALOG_SETUP_REQUIRED_TITLE,
+                    ITEM_CATALOG_SETUP_REQUIRED_MESSAGE.format(
+                        catalog=f"기존 품목 목록 {len(self.items_data)}건으로"
+                    ),
+                    parent=self.root,
+                )
+                return
             messagebox.showwarning(
                 "품목 목록 새로 고침 실패",
                 "최신 품목 목록을 받지 못했습니다. "
@@ -1528,7 +1547,9 @@ class ContainerAudit:
 
         def finish(context: Mapping[str, object]) -> None:
             if context.get("catalog_source") != "CENTRAL_REFRESH":
-                fail()
+                fail(setup_required=(
+                    context.get("pre_send_rejection_code") == PROFILE_ABSENT
+                ))
                 return
             try:
                 items = self.load_items(show_errors=False)
@@ -18211,7 +18232,9 @@ class ContainerAudit:
 
 def prepare_startup_item_catalog() -> str:
     bundled_path = Path(resource_path(os.path.join("assets", "Item.csv")))
-    active_path = refresh_item_catalog(bundled_path)
+    active_path = refresh_item_catalog(
+        bundled_path, profile_path=_current_user_logistics_profile_path()
+    )
     if (
         requires_verified_catalog_snapshot(active_path)
         and get_verified_catalog_snapshot(active_path) is None
@@ -18236,6 +18259,13 @@ ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
     "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n\n"
     "캐시 기준 시각: {cache_time}\n"
     "네트워크가 복구되면 다음 실행에서 중앙 목록을 다시 확인합니다."
+)
+ITEM_CATALOG_SETUP_REQUIRED_TITLE = "중앙 연결 설정 필요"
+ITEM_CATALOG_SETUP_REQUIRED_MESSAGE = (
+    "이 PC의 현재 Windows 사용자에 중앙 연결 설정이 없어 최신 품목 목록을 받지 않았습니다.\n"
+    "{catalog} 작업은 계속할 수 있습니다. 목록에 없는 품목은 '품목 없음'으로 표시됩니다.\n\n"
+    "할 일: 설치 담당자에게 이 Windows 사용자로 이적 검사 설치(초기 설정)를 "
+    "다시 실행해 달라고 요청한 뒤 프로그램을 다시 시작하세요."
 )
 FIRST_RUN_ONBOARDING_ERROR_TITLE = "초기 설정 실패"
 FIRST_RUN_ONBOARDING_ERROR_MESSAGE = (
@@ -18314,6 +18344,16 @@ def _show_item_catalog_cache_warning(context: Mapping[str, object]) -> None:
         messagebox.showwarning(
             ITEM_CATALOG_CACHE_WARNING_TITLE,
             ITEM_CATALOG_CACHE_WARNING_MESSAGE.format(cache_time=cache_time),
+        )
+    except Exception:
+        pass
+
+
+def _show_item_catalog_setup_required() -> None:
+    try:
+        messagebox.showwarning(
+            ITEM_CATALOG_SETUP_REQUIRED_TITLE,
+            ITEM_CATALOG_SETUP_REQUIRED_MESSAGE.format(catalog="기존 품목 목록으로"),
         )
     except Exception:
         pass
@@ -18414,6 +18454,8 @@ def _prepare_gui_startup(*, data_root=None):
                     and catalog_context.get("catalog_source") == "VERIFIED_CACHE"
                 ):
                     _show_item_catalog_cache_warning(catalog_context)
+                if catalog_context.get("pre_send_rejection_code") == PROFILE_ABSENT:
+                    _show_item_catalog_setup_required()
             app = ContainerAudit()
         except ItemCatalogSyncError as exc:
             try:

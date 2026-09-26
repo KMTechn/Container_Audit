@@ -8,7 +8,9 @@ import pytest
 import Container_Audit as app_module
 import item_catalog_sync as sync
 from item_catalog import ItemCatalog
-from tests.test_item_catalog_sync import CATALOG, FakeResponse, _profile
+from tests.test_item_catalog_sync import (
+    CATALOG, UNAUTHENTICATED_OVERRIDE_URL, FakeResponse, _profile,
+)
 from tests.test_tk_serial_ui_lane import FakeTkRoot
 from warning_presenter import WarningPresenter
 
@@ -43,7 +45,7 @@ def refresh_app(tmp_path, monkeypatch):
     app.show_status_message = lambda *_args, **_kwargs: None
     monkeypatch.setenv(app_module.DATA_ROOT_ENV, app.data_root)
     monkeypatch.setenv(sync.ACTIVE_PATH_ENV, str(tmp_path / "previous.csv"))
-    monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", lambda: _profile())
+    monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", lambda _path="": _profile())
     responses = [CATALOG]
     requests = []
 
@@ -109,7 +111,7 @@ def test_refresh_failure_keeps_current_catalog_and_gives_safe_retry_guidance(
     if failure == "cache_fallback":
         responses.append(OSError("NETWORK_FAILED C:/private/profile.json"))
     elif failure == "profile":
-        def reject():
+        def reject(_path=""):
             raise sync.ItemCatalogSyncError("AUTH_FAILED C:/private/profile.json")
         monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", reject)
     elif failure == "snapshot":
@@ -121,7 +123,8 @@ def test_refresh_failure_keeps_current_catalog_and_gives_safe_retry_guidance(
         monkeypatch.setattr(app, "load_items", reject_load)
     else:
         responses.append(UPDATED)
-        monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", lambda: None)
+        monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", lambda _path="": None)
+        monkeypatch.setenv(sync.URL_ENV, UNAUTHENTICATED_OVERRIDE_URL)
         load = app.load_items
         def missing_file(**kwargs):
             Path(os.environ[sync.ACTIVE_PATH_ENV]).unlink()
@@ -137,6 +140,27 @@ def test_refresh_failure_keeps_current_catalog_and_gives_safe_retry_guidance(
     assert kind == "showwarning" and title == "품목 목록 새로 고침 실패"
     assert "기존 품목 목록 2건" in body and "다시" in body and "담당자" in body
     assert "FAILED" not in body and "C:/" not in body and "캐시" not in body
+
+
+def test_refresh_without_profile_sends_nothing_and_names_the_setup_action(
+    refresh_app, monkeypatch,
+):
+    app, messages, responses, requests = refresh_app
+    rows, catalog = app.items_data, app.item_catalog
+    active_path = os.environ[sync.ACTIVE_PATH_ENV]
+    for name in (sync.URL_ENV, *sync.BASE_URL_ENV_NAMES):
+        monkeypatch.delenv(name, raising=False)
+    responses.append(UPDATED)
+    monkeypatch.setattr(sync, "_load_item_catalog_logistics_profile", lambda _path="": None)
+    assert app._refresh_item_catalog() is True
+    _finish(app)
+    assert requests == []
+    assert app.items_data is rows and app.item_catalog is catalog
+    assert os.environ[sync.ACTIVE_PATH_ENV] == active_path
+    kind, title, body = messages[-1]
+    assert kind == "showwarning" and title == "중앙 연결 설정 필요"
+    assert "기존 품목 목록 2건으로 작업은 계속" in body
+    assert "Windows 사용자" in body and "할 일" in body and "다시 시작" in body
 
 
 @pytest.mark.parametrize("state", [

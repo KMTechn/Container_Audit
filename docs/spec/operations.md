@@ -242,18 +242,18 @@ canonical 설치/제거/검증된 복원 controller는 기존 exact preimage 계
 
 GUI 설정은 패키지 `config/container_audit_settings.json` 템플릿을 먼저 읽고 사용자 config의 UI 설정을 덮어쓴다. 사용자 `update_settings`는 제거하여 배포 업데이트 권한/provider 정책을 바꾸지 못하게 한다. frozen에서는 내부 시험 설정도 제거한다. 저장은 사용자 config로 한다. [load_app_settings / save_settings / _drop_release_disabled_settings](../../Container_Audit.py), [기본 템플릿](../../config/container_audit_settings.json).
 
-물류 설정에는 선택 경로가 있다. 메인 앱은 명시 `CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH` 또는 발견한 현재 사용자 profile을 복사한 환경과 사용자 DPAPI decryptor로 전달한다. 사용자 profile이 선택되지 않은 경로는 [logistics_runtime_profile._runtime_environment](../../logistics_runtime_profile.py)의 app-scoped machine profile·Machine 환경 그룹·process fallback 규칙을 따른다. Machine 값 한쪽을 process 값으로 메우지 않는다. profile이 없는 허용 호환 경로에서만 [logistics_transfer_client_from_env](../../transfer_seal.py)의 `WORKER_ANALYSIS_LOGISTICS_*` 설정을 사용한다. TEST1의 엄격한 격리 예외는 일반 운영 설정 우회법이 아니다. 비밀 값이나 DPAPI 내용을 명세·진단 출력에 넣지 않는다.
+물류 설정에는 선택 경로가 있다. 메인 앱의 물류 client와 품목 목록 갱신은 같은 [선택 함수](../../Container_Audit.py)(`_current_user_logistics_profile_path`)로 한 profile을 고른다. 순서는 ① process `CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH`(파일이 없으면 시작 오류) ② 현재 Windows 사용자의 onboarding profile(위 표의 사용자/격리 override 경로, 파일이 있을 때) ③ app-scoped machine profile·Machine 환경 그룹 ④ process `KM_LOGISTICS_*` 순이다. 사용자 profile과 machine profile이 함께 있으면 사용자 profile을 쓴다. 다른 Windows 사용자의 profile은 읽지 않는다(각 사용자 `%LOCALAPPDATA%`·사용자 DPAPI). 바로가기 `launch-container-audit.cmd`는 비frozen이라 앱 안 onboarding을 건너뛰지만 설치 때 만든 ②를 이 순서로 찾는다. 선택된 profile은 사용자 DPAPI decryptor로 연다. 사용자 profile이 선택되지 않은 경로는 [logistics_runtime_profile._runtime_environment](../../logistics_runtime_profile.py)의 app-scoped machine profile·Machine 환경 그룹·process fallback 규칙을 따른다. Machine 값 한쪽을 process 값으로 메우지 않는다. profile이 없는 허용 호환 경로에서만 [logistics_transfer_client_from_env](../../transfer_seal.py)의 `WORKER_ANALYSIS_LOGISTICS_*` 설정을 사용한다. TEST1의 엄격한 격리 예외는 일반 운영 설정 우회법이 아니다. 비밀 값이나 DPAPI 내용을 명세·진단 출력에 넣지 않는다.
 
 공급자 호환은 [contract.lock.json](../../contract.lock.json)의 bundle/API/capability 선언과 실제 설치 후보를 함께 확인한다. 물류 lease 서명 검증은 [terminal_operation_lease](../../terminal_operation_lease.py)가 `vendor.kmtech_zero_pe`를 import하는 소스 경로다. CA에 Rework의 sibling/provider 선택 규칙을 그대로 적용할 근거는 없다. 현재 설치된 Python/Tcl, vendor·overlay 유무/해시, 서버 flags·인증 scope·TLS 설정·capability는 이 문서 작업에서 확인하지 않았다. 이름이나 HEAD만으로 설치 조합을 추정하지 않는다. [CA-G05](BACKLOG.md#ca-g05).
 
-품목은 중앙 CSV와 검증 cache·복구 cache를 관리한다. 중앙 갱신 실패 시 검증된 cache로 시작하면 캐시 시각 경고를 표시하고 다음 시작에서 갱신을 다시 시도한다. 검증 가능한 cache가 없거나 검증 뒤 snapshot이 사라진 경로는 시작 오류다. [refresh_item_catalog](../../item_catalog_sync.py), [prepare_startup_item_catalog / load_items](../../Container_Audit.py), [CA-C08](contracts.md#ca-c08). 허용 cache 나이와 갱신 지연의 업무 목표는 미정이다.
+품목은 중앙 CSV와 검증 cache·복구 cache를 관리한다. 중앙 갱신 실패 시 검증된 cache로 시작하면 캐시 시각 경고를 표시하고 다음 시작에서 갱신을 다시 시도한다. 선택된 profile이 없으면 인증이 필요한 운영 품목 원본(`worker.kmtecherp.com`, 기본값)에 요청하지 않는다. 로컬 cache 또는 패키지 목록으로 시작하고 진단에 `request_sent=false`·`pre_send_rejection_code=PROFILE_ABSENT`를 남기며 `중앙 연결 설정 필요` 창에서 작업 계속 가능과 할 일(이 Windows 사용자로 설치·초기 설정 재실행 후 재시작)을 알린다. 명시한 다른 origin의 무인증 override는 기존대로다. 검증 가능한 cache가 없거나 검증 뒤 snapshot이 사라진 경로는 시작 오류다. [refresh_item_catalog](../../item_catalog_sync.py), [prepare_startup_item_catalog / load_items](../../Container_Audit.py), [CA-C08](contracts.md#ca-c08). 허용 cache 나이와 갱신 지연의 업무 목표는 미정이다.
 
 <a id="ca-catalog-refresh"></a>
 ### 실행 중 품목 목록 새로 고침
 
 1. 현재 트레이를 완료하거나 보류하고 조회·제출·교체 처리가 끝날 때까지 기다린다.
 2. `운영 작업 ▾ → 품목 목록 새로 고침`을 누른다. `품목 목록을 확인하고 있습니다. 잠시 기다려 주세요.`가 표시된다. 작업 중이면 기존 작업을 먼저 처리하고 다시 누르라는 안내가 나온다.
-3. `품목 목록 새로 고침 완료`와 `품목 목록을 새로 받았습니다. 현재 N건입니다.`를 확인한 뒤 새 품목의 현품표를 읽는다. 실패하면 기존 N건을 그대로 사용하며 네트워크 확인 후 다시 누른다. 계속 실패하면 담당자에게 이 PC의 중앙 연결 설정 확인을 요청한다.
+3. `품목 목록 새로 고침 완료`와 `품목 목록을 새로 받았습니다. 현재 N건입니다.`를 확인한 뒤 새 품목의 현품표를 읽는다. 실패하면 기존 N건을 그대로 사용하며 네트워크 확인 후 다시 누른다. 계속 실패하면 담당자에게 이 PC의 중앙 연결 설정 확인을 요청한다. `중앙 연결 설정 필요`가 나오면 요청을 보내지 않은 것이다. 기존 N건으로 작업을 계속하고 설치 담당자에게 이 Windows 사용자로 설치(초기 설정) 재실행을 요청한 뒤 다시 시작한다.
 
 일반 작업자도 실행할 수 있으며 재시작·새 화면·자동 주기 갱신은 필요 없다. 이전 cache만 반환한 경우 최신 목록 성공으로 표시하지 않는다. 현재 선택된 데이터 루트와 기존 작업·보류·전송 상태는 유지한다. 실제 화면·중앙 신규 품목 확인은 별도 촬영 레인에서 검증한다.
 

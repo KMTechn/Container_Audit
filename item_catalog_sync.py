@@ -39,6 +39,7 @@ CACHE_HMAC_DOMAIN = _catalog_core.CACHE_HMAC_DOMAIN
 CATALOG_DIAGNOSTIC_SCHEMA = "kmtech.container-audit.item-catalog-startup-diagnostic.v1"
 PROFILE_LOAD_FAILED = "PROFILE_LOAD_FAILED"
 PROFILE_INCOMPLETE = "PROFILE_INCOMPLETE"
+PROFILE_ABSENT = "PROFILE_ABSENT"
 URL_NOT_TRUSTED = "URL_NOT_TRUSTED"
 REQUEST_FAILED_NO_CACHE = "REQUEST_FAILED_NO_CACHE"
 SNAPSHOT_UNAVAILABLE_AFTER_VERIFY = "SNAPSHOT_UNAVAILABLE_AFTER_VERIFY"
@@ -47,6 +48,7 @@ ITEM_CATALOG_CAUSE_CODES = frozenset(
     {
         PROFILE_LOAD_FAILED,
         PROFILE_INCOMPLETE,
+        PROFILE_ABSENT,
         URL_NOT_TRUSTED,
         REQUEST_FAILED_NO_CACHE,
         SNAPSHOT_UNAVAILABLE_AFTER_VERIFY,
@@ -393,10 +395,21 @@ def resolve_catalog_url(environ: Mapping[str, str] | None = None) -> str:
     return base_url.rstrip("/") + CATALOG_PATH
 
 
-def _load_item_catalog_logistics_profile() -> Any | None:
-    from logistics_runtime_profile import load_logistics_runtime_profile
+def _load_item_catalog_logistics_profile(profile_path: str = "") -> Any | None:
+    from logistics_runtime_profile import (
+        load_logistics_runtime_profile,
+        unprotect_current_user_secret,
+    )
 
-    profile = load_logistics_runtime_profile(required=None)
+    profile = (
+        load_logistics_runtime_profile(
+            required=True,
+            profile_path=profile_path,
+            decryptor=unprotect_current_user_secret,
+        )
+        if profile_path
+        else load_logistics_runtime_profile(required=None)
+    )
     if profile is None:
         return None
     qualification_authority_id_present = bool(
@@ -816,6 +829,7 @@ def refresh_item_catalog(
     url: str | None = None,
     timeout_seconds: float = 2.0,
     get: Callable[..., object] | None = None,
+    profile_path: str = "",
 ) -> Path:
     bundled = Path(bundled_path)
     cache = Path(cache_path) if cache_path is not None else default_cache_path()
@@ -830,7 +844,7 @@ def refresh_item_catalog(
     )
     fallback = cache if _is_valid_catalog(cache) else bundled
     try:
-        profile = _load_item_catalog_logistics_profile()
+        profile = _load_item_catalog_logistics_profile(profile_path)
     except ItemCatalogSyncError:
         raise
     except Exception as exc:  # noqa: BLE001 - classify without exposing secrets.
@@ -872,6 +886,18 @@ def refresh_item_catalog(
             and str(getattr(profile, "tls_ca_bundle_path", "") or "").strip()
         ),
     )
+    if not central_enrolled and _is_trusted_authenticated_catalog_url(effective_url):
+        # The central catalog only answers this PC's profile; an anonymous
+        # request can only be refused, so keep the local list and report setup.
+        _update_catalog_attempt_context(pre_send_rejection_code=PROFILE_ABSENT)
+        _mark_catalog_source(
+            fallback,
+            source="LOCAL_CACHE" if fallback == cache else "BUNDLED",
+            cache_state="VALID_UNAUTHENTICATED" if fallback == cache else "ABSENT",
+            cache_used=fallback == cache,
+        )
+        logger.warning("Item catalog profile is absent; using %s", fallback)
+        return fallback
     if central_enrolled and not _is_trusted_authenticated_catalog_url(
         effective_url, profile
     ):

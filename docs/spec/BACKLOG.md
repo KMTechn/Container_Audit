@@ -12,6 +12,8 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9caprofile:** 바로가기 시작의 품목 목록 갱신이 onboarding 사용자 profile을 찾지 못해 기본 운영 host에 무인증 요청(401)·번들 목록으로 떨어지던 결함을 고쳤다. 품목 갱신이 물류 client와 같은 profile 선택을 쓰고, profile이 없으면 요청 없이 기존 목록으로 계속하며 설정 필요·할 일을 보인다. [선택 순서](operations.md#ca-o02), [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caprofile/RESULT.md). 실제 guest 화면·랩 서버 확인은 NOT VERIFIED다.
+
 - **w9caloaderr:** 금일 작업 현황의 읽기 오류를 오류 건수·수량 누락 가능성·관리자 확인 요청 경고로 표시한다. 정상 자료와 정상 0건/성공 문구는 유지하며 폴더 읽기 오류도 구별한다. [RED/GREEN·회귀 근거](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caloaderr/RESULT.md)를 따른다. 실제 GUI 가독성·guest 적용·촬영은 증거 없음이다.
 
 - **w9caretire:** 관리 패키지의 `CompleteRetiredRemoval`이 exact old helper를 호출하여
