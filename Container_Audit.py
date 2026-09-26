@@ -11328,13 +11328,27 @@ class ContainerAudit:
                     hold_snapshot,
                 )
             except Exception as exc:
+                # Only a transport failure means the server was not reached; a
+                # local fault (e.g. sqlite) fails this label instead of looping
+                # as an outage.
+                transport = isinstance(
+                    exc,
+                    (
+                        requests.exceptions.RequestException,
+                        ConnectionError,
+                        TimeoutError,
+                    ),
+                )
                 result = (
                     False,
                     None,
                     "",
                     TransferSealError(
-                        "PHS2_PREFLIGHT_UNAVAILABLE",
-                        f"중앙 PHS=2 확인 중 통신 오류가 발생했습니다: {exc.__class__.__name__}",
+                        "PHS2_PREFLIGHT_UNAVAILABLE"
+                        if transport
+                        else "PHS2_PREFLIGHT_LOCAL_ERROR",
+                        f"중앙 PHS=2 확인 중 {'통신' if transport else '이 PC 처리'} "
+                        f"오류가 발생했습니다: {exc.__class__.__name__}",
                         retryable=True,
                         committed=None,
                     ),
@@ -11380,7 +11394,7 @@ class ContainerAudit:
                     None,
                     "",
                     TransferSealError(
-                        "PHS2_PREFLIGHT_UNAVAILABLE",
+                        "PHS2_PREFLIGHT_LOCAL_ERROR",
                         "중앙 PHS=2 확인 중 처리 오류가 발생했습니다.",
                         retryable=True,
                         committed=None,
@@ -11591,6 +11605,13 @@ class ContainerAudit:
                 "잠시 기다린 뒤 확인을 누르세요. "
                 + retry
                 + " 반복되면 IT 담당자에게 PC·서버 시간 동기화를 요청하세요.",
+            )
+        if error_code == "PHS2_PREFLIGHT_LOCAL_ERROR":
+            return (
+                "PC 처리 오류",
+                "서버 연결 문제가 아닙니다. 이 PC에서 현품표 확인 처리 중 오류가 났습니다. "
+                + retry
+                + " 반복되면 IT 담당자에게 알리세요.",
             )
         return (
             "중앙 PHS=2 확인 실패",
@@ -11939,22 +11960,37 @@ class ContainerAudit:
     ):
         title = "보류 스캔 확인"
         message = "보류 중 접수된 제품 바코드를 반영하지 않았습니다."
+        action = "이 제품이 상자에 있으면 빼세요."
         if decision.status == SCAN_FORMAT_ERROR:
             title = "바코드 형식 오류"
             message = decision.format_error_message
         elif decision.status == SCAN_DUPLICATE:
             title = "바코드 중복"
             message = "보류 중 같은 제품 바코드가 중복 접수되어 두 번째 입력을 반영하지 않았습니다."
+            action = "이 바코드는 한 번 반영됐습니다. 상자에 이 제품이 한 개만 있는지 확인하세요."
         elif decision.status == SCAN_TRAY_FULL:
             title = "트레이 수량 초과"
             message = "목표 수량을 넘는 보류 스캔을 반영하지 않았습니다."
+            action = "이 제품을 상자에서 빼세요."
         elif decision.event_name == "SCAN_FAIL_AMBIGUOUS_ITEM_CODE":
             title = "품목 코드 모호"
             message = "여러 품목 코드가 포함된 보류 스캔을 반영하지 않았습니다."
+            action = "이 제품을 상자에서 빼세요."
         elif decision.status == SCAN_MISMATCH:
             title = "품목 코드 불일치"
             message = "현재 트레이와 품목 코드가 다른 보류 스캔을 반영하지 않았습니다."
-        self.show_fullscreen_warning(title, message, self.COLOR_DANGER)
+            action = "이 제품을 상자에서 빼세요."
+        # Held scans skipped the live check, so the product may already be in
+        # the box: name it. A format rejection may carry an unsafe raw value,
+        # so it is named by its hold order instead.
+        subject = (
+            f"보류 {head.sequence}번째 스캔"
+            if decision.status == SCAN_FORMAT_ERROR
+            else f"바코드: {head.raw_barcode}"
+        )
+        self.show_fullscreen_warning(
+            title, f"{subject}\n{message}\n{action}", self.COLOR_DANGER
+        )
         if not decision.event_name:
             return False
         durable = yield lambda: self._log_event(

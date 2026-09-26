@@ -12,6 +12,7 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9cadrain2:** 끊김 뒤 drain 거절 경고에 제품 바코드(형식 오류는 원문 대신 보류 순번)와 할 일(상자에서 빼기·한 개만 있는지 확인)을 넣었다. 통신 예외만 `PHS2_PREFLIGHT_UNAVAILABLE`로 보고, 이 PC의 로컬 예외(sqlite 등)는 `PHS2_PREFLIGHT_LOCAL_ERROR`로 이 현품표만 `LOOKUP_FAILED`('PC 처리 오류', 확인=재조회, 관리자 격리)로 둔다. 첫 시작 캐시 없음+끊김의 시작 오류는 계약대로 두고 설치 뒤 연결 상태 첫 시작 1회를 운영 절차로 삼는다. [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cadrain2/RESULT.md). 보류 시점 CLC 즉시 대조와 hold 큐는 후속이다.
 - **w9caoffline:** 서버 끊김 중 첫 PHS2 조회 실패가 hold를 `LOOKUP_FAILED`로 바꾸고 입력 전체를 잠그던(관리자 PIN 격리도 끊김 중 불가) 현장 정지를 고쳤다. 연결 실패는 `LOOKUP`을 유지해 이 현품표 제품을 계속 보류 저장하고 30초마다 같은 hold로 자동 재조회하며, 복구되면 사람 조치 없이 기존 판정으로 drain한다. 확정 실패는 지금처럼 이 현품표만 막는다. 조회·끊김 중 현품표 QR이 보류되어 복구 뒤 drain이 멈추던 결함도 막았다. 서버·계약·hold 상태는 바꾸지 않았다. [CA-04](README.md#ca-04), [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caoffline/RESULT.md). 실제 guest 화면·랩 서버 끊김 재연은 NOT VERIFIED다.
 
 - **w9caprofile:** 바로가기 시작의 품목 목록 갱신이 onboarding 사용자 profile을 찾지 못해 기본 운영 host에 무인증 요청(401)·번들 목록으로 떨어지던 결함을 고쳤다. 품목 갱신이 물류 client와 같은 profile 선택을 쓰고, profile이 없으면 요청 없이 기존 목록으로 계속하며 설정 필요·할 일을 보인다. [선택 순서](operations.md#ca-o02), [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caprofile/RESULT.md). 실제 guest 화면·랩 서버 확인은 NOT VERIFIED다.
