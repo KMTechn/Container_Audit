@@ -44,13 +44,17 @@ ProgramData 두 root의 bytes 복사·검증·rename에 사용하고, 새 DPAPI 
 `-FreshTransitionAction Status`, 재개는 `-FreshTransitionAction Resume
 -ResumeFreshTransitionReceiptPath <표시된 경로> -ResumeFreshTransitionReceiptSha256 <표시된 SHA256>`을 추가한다.
 이전 소유 프로세스 종료·authority 소멸과 exact receipt·fence를 모두 대조한다.
+`ACTIVATION_PENDING_RELEASE` 또는 `RESTORE_PENDING_RELEASE`는 전환 마무리 대기다.
+같은 지원 재개가 원 audit에 결속된 해제 증명을 확인하고 잠금을 마무리해야 최종 완료가 된다.
+다른 전환·살아 있는 owner·변조된 증명이면 잠금을 보존하며 원 영수증과 이전 작업 종료를 관리자가 확인한다.
 `transition-result.json`은 비밀 없는 요약이며, `transition-journal.json`과 `original/`은
 보호된 원본 보관물이다. UNKNOWN 시도와 중단된 사본도 지우지 않는다.
 
 등록 전 복원은 같은 receipt 인자와 `-FreshTransitionAction Restore`를 사용한다.
 새 로컬 자료가 생겼거나 원본/ACL이 달라지면 덮어쓰지 않는다. REGISTERING 이후는 복원 불가이며
 관리자 지원과 동일 candidate의 재연결로 복구한다. 수용된 서버 snapshot을 되돌리지 않는다.
-완료 재실행은 신원 readback만 수행한다. 진행 중 marker·archive를 수동 삭제하거나 옛 queue를
+완료 재실행은 신원·해제 증명을 대조한다. 영수증을 지정한 지원 재개는 해제 직후 중단된 relay 시작도
+원 Run 명령으로 마무리하며 재등록·원본 보관을 반복하지 않는다. 진행 중 marker·archive를 수동 삭제하거나 옛 queue를
 새 root에 복사하지 않는다. cold boot, 실제 교차 계정 UAC, 운영 서버 연결은 별도 랩 수용 항목이다.
 
 [제품·기능](README.md) · [데이터·통합 계약](contracts.md) · [백로그](BACKLOG.md) · [중앙 준비도](../../../Program_Spec_Hub/READINESS.md)

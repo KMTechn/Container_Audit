@@ -34,7 +34,11 @@ fresh 옵션은 SYSTEM task를 중지하지 않으며 활성·모호 상태를 �
 HKLM `KM_LOGISTICS_PROFILE_PATH` 또는 `KM_LOGISTICS_REQUIRED` 앵커가 있으면 값 비출력으로
 보관 전에 거부한다. 다른 앱의 HKLM·공유 profile을 변경하지 않는다.
 
-기록 단계는 `PLANNED → QUIESCED → ARCHIVE_VERIFIED → DETACHED → REGISTERING → REGISTERED → ACTIVATED`다.
+기록 단계는 `PLANNED → QUIESCED → ARCHIVE_VERIFIED → DETACHED → REGISTERING → REGISTERED → ACTIVATION_PENDING_RELEASE → ACTIVATED`다.
+복원은 원본 대조 뒤 `RESTORE_PENDING_RELEASE`, 같은 전환의 잠금 해제 영수증 대조 뒤 `RESTORED`로 확정한다.
+최종 완료는 fence 부재만으로 추정하지 않으며 원 audit·session·attempt·transaction과 해제 증명을 결속한다.
+완료 직전 중단 시 지원 재개만 죽은 원 owner와 동일 fence를 검증하여 해제를 마무리한다.
+일반 시작은 남의 fence나 죽은 owner의 fence를 인수하지 않는다. 설정/profile 파일은 새 업무 수에 포함하지 않는다.
 machine helper 대기 중에는 `QUIESCED`와 `machine_pending`을 유지한다. candidate·대상·공유 키와
 `REGISTERING`을 HTTP 이전에 저장한다. 서버 commit 응답 유실·부분 로컬 게시 후에는 동일 candidate의
 signed reattach만 허용한다. UNKNOWN 시도 기록을 남기며 서로 다른 전환·SID·대상·키로 이어 붙이지 않는다.

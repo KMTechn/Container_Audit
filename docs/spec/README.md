@@ -12,6 +12,7 @@
 분리한다. 공유 CNG possession key는 기존 키를 열어 사용하며 생성·삭제·회전하지 않는다.
 새 등록 응답의 신원·scope·키·manifest·epoch를 대조하고, 빈 queue의 단일 relay가
 첫 유효 lease를 받은 뒤 Run 자동 시작을 게시한다.
+전환 완료는 같은 전환의 writer 잠금 해제 증명 뒤 확정하며, 직전 중단은 영수증에 묶인 지원 재개로 마무리한다.
 
 [입력·보관·복원 계약](contracts.md#ca-fresh-server-transition),
 [운영 절차](operations.md#ca-fresh-server-transition),

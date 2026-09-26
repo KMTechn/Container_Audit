@@ -757,10 +757,17 @@ function Product([string]$Root,[string]$Mode,[string]$FreshAction = '') {
         $args += ' --action ' + (Arg $FreshAction) + ' --input ' + (Arg $FreshTransitionInput) +
             ' --archive-root ' + (Arg $FreshArchiveRoot) + ' --transition-id ' + (Arg $FreshTransitionId)
         $freshAuditPath = Get-Variable -Name auditPath -ValueOnly -ErrorAction SilentlyContinue
+        if (-not $freshAuditPath -and $FreshAction -ceq 'preflight' -and $ResumeFreshTransitionReceiptPath) {
+            $freshAuditPath = $ResumeFreshTransitionReceiptPath
+        }
         if ($freshAuditPath) { $args += ' --lifecycle-receipt ' + (Arg $freshAuditPath) }
         if ($ConfirmFreshServerRegistration) { $args += ' --confirm ' + (Arg $ConfirmFreshServerRegistration) }
         if ($ConfirmArchivePending) { $args += ' --confirm-pending' }
         if ($FreshAction -ceq 'plan') { $args += ' --report-path ' + (Arg (Join-Path $FreshArchiveRoot 'transition-plan.json')) }
+        if ($FreshAction -ceq 'complete') {
+            $args += ' --release-authorization-path ' + (Arg ([string]$releaseAuthorization.path)) +
+                ' --release-authorization-sha256 ' + (Arg ([string]$releaseAuthorization.sha256))
+        }
     }
     $process = Start-Process (Join-Path $Root 'runtime\pythonw.exe') -ArgumentList $args -WindowStyle Hidden -PassThru
     # Start-Process -Wait includes the persistent relay child; this waits only for the host.
@@ -774,6 +781,7 @@ function Read-CanonicalFreshResume {
         throw 'FRESH_RESUME_RECEIPT_HASH_MISMATCH'
     }
     $prior = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    $prior | Add-Member -NotePropertyName resume_release -NotePropertyValue $null
     $f = $prior.fresh_transition
     if ([string]$prior.schema -cne 'container-audit-canonical-portable-install-v2' -or
         [string]$prior.operation -cne 'PREPARE_FRESH_SERVER_REGISTRATION' -or
@@ -791,19 +799,167 @@ function Read-CanonicalFreshResume {
         ([string]$prior.code_replacement.transaction_id) ([string]$lifecycleManifest.writer_session_contract_sha256)
     if ([string]$f.authority_mutex_name -cne $expectedAuthority) { throw 'FRESH_RESUME_AUTHORITY_MISMATCH' }
     Assert-RetirementOwnerExited $f
-    $priorFence = Read-ContainerWriterFence
-    if ([string]$priorFence.session_id -cne [string]$f.session_id -or
+    $priorFence = Read-ContainerWriterFence -AllowAbsent
+    if ($null -ne $priorFence -and ([string]$priorFence.session_id -cne [string]$f.session_id -or
         [string]$priorFence.attempt_id -cne [string]$f.attempt_id -or
         [string]$priorFence.replacement_transaction_id -cne [string]$prior.code_replacement.transaction_id -or
         [string]$priorFence.orchestrator_sha256 -cne [string]$f.orchestrator_sha256 -or
-        [string]$priorFence.prepared_receipt_path -cne [string]$f.prepared_receipt_path -or
-        [string]$priorFence.prepared_receipt_sha256 -cne [string]$f.prepared_receipt_sha256) {
+        [string]$priorFence.writer_contract_sha256 -cne [string]$lifecycleManifest.writer_session_contract_sha256 -or
+        [string]$priorFence.owner_kind -cne 'canonical_installer')) {
         throw 'FRESH_RESUME_FOREIGN_FENCE'
+    }
+    $originalPrepared = $null -ne $priorFence -and
+        (Same ([string]$priorFence.prepared_receipt_path) ([string]$f.prepared_receipt_path))
+    if ($originalPrepared) {
+        if ([string]$priorFence.prepared_receipt_sha256 -cne [string]$f.prepared_receipt_sha256 -or
+            (Get-ContainerWriterFenceFileSha256 ([string]$f.prepared_receipt_path)) -cne [string]$f.prepared_receipt_sha256) {
+            throw 'FRESH_RESUME_PREPARED_CHANGED'
+        }
+    } else {
+        $releasePaths = @('product-complete','rollback-complete') | ForEach-Object {
+            Join-Path (Split-Path -Parent $path) ('canonical-portable-' + [string]$prior.run_id + '-' + $_ + '-release.json')
+        }
+        $candidates = @($releasePaths | Where-Object {
+            if ($null -ne $priorFence) { Same $_ ([string]$priorFence.prepared_receipt_path) }
+            else { Test-Path -LiteralPath $_ -PathType Leaf }
+        })
+        if ($candidates.Count -ne 1) { throw 'FRESH_RESUME_RELEASE_BINDING_MISMATCH' }
+        $releasePath = [string]$candidates[0]
+        $releaseSha = Get-ContainerWriterFenceFileSha256 $releasePath 65536
+        if ($null -ne $priorFence -and [string]$priorFence.prepared_receipt_sha256 -cne $releaseSha) {
+            throw 'FRESH_RESUME_RELEASE_CHANGED'
+        }
+        $release = Get-Content -LiteralPath $releasePath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $journalPath = Join-Path $FreshArchiveRoot 'transition-journal.json'
+        [void](Get-ContainerWriterFenceFileSha256 $journalPath 33554432)
+        $journal = Get-Content -LiteralPath $journalPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $releaseFields = @('schema','status','phase','app_id','session_id','attempt_id',
+            'replacement_transaction_id','writer_inventory_sha256','task_name','task_path','binding_sha256',
+            'future_natural_trigger_utc','install_audit_path','install_audit_sha256','created_at_utc','secret_values_recorded')
+        $expectedAuditSha = $ResumeFreshTransitionReceiptSha256
+        if ([string]$journal.phase -cin @('ACTIVATED','RESTORED') -and
+            $journal.PSObject.Properties.Name -ccontains 'completion_release') {
+            if (-not (Same ([string]$journal.completion_release.authorization_path) $releasePath) -or
+                [string]$journal.completion_release.authorization_sha256 -cne $releaseSha) {
+                throw 'FRESH_RESUME_COMPLETION_PROOF_CHANGED'
+            }
+            $expectedAuditSha = [string]$journal.completion_release.install_audit_sha256
+        }
+        $activation = [string]$journal.phase -cin @('ACTIVATION_PENDING_RELEASE','ACTIVATED')
+        $restoration = [string]$journal.phase -cin @('RESTORE_PENDING_RELEASE','RESTORED')
+        if (-not (Test-ExactPropertySet $release $releaseFields) -or
+            -not (Test-ExactStringProperties $release @($releaseFields | Where-Object { $_ -cne 'secret_values_recorded' })) -or
+            $release.secret_values_recorded -isnot [bool] -or [bool]$release.secret_values_recorded -or
+            [string]$release.schema -cne 'container-audit-writer-release-authorization-v1' -or
+            [string]$release.status -cne 'AUTHORIZED' -or [string]$release.app_id -cne 'container_audit' -or
+            [string]$release.session_id -cne [string]$f.session_id -or
+            [string]$release.attempt_id -cne [string]$f.attempt_id -or
+            [string]$release.replacement_transaction_id -cne [string]$prior.code_replacement.transaction_id -or
+            [string]$release.writer_inventory_sha256 -cne $Script:ContainerWriterFenceInventorySha256 -or
+            -not (Same ([string]$release.install_audit_path) $path) -or
+            [string]$release.install_audit_sha256 -cne $expectedAuditSha -or
+            [string]$journal.schema -cne 'container-audit-fresh-server-transition-v1' -or
+            [string]$journal.sid -cne $operatorSid -or [string]$journal.transition_id -cne $FreshTransitionId -or
+            (-not $activation -and -not $restoration) -or
+            ($activation -and [string]$release.phase -cne 'PRODUCT_COMPLETE') -or
+            ($restoration -and [string]$release.phase -cnotin @('ROLLBACK_COMPLETE','ROLLBACK_NATURAL_TRIGGER'))) {
+            throw 'FRESH_RESUME_RELEASE_AUDIT_MISMATCH'
+        }
+        [void](ConvertTo-ContainerWriterFenceUtc ([string]$release.created_at_utc))
+        if ($null -eq $priorFence) {
+            $releaseReceipt = Join-Path (Get-ContainerWriterFenceControlRoot) (
+                'release-' + [string]$prior.code_replacement.transaction_id + '-' + $releaseSha + '.json')
+            [void](Assert-ContainerWriterFenceReleaseReceiptMatches `
+                -Receipt (Read-ContainerWriterFenceReleaseReceipt $releaseReceipt) `
+                -SessionId ([string]$f.session_id) -AttemptId ([string]$f.attempt_id) `
+                -ReplacementTransactionId ([string]$prior.code_replacement.transaction_id) `
+                -ReleaseAuthorizationPath $releasePath -ReleaseAuthorizationSha256 $releaseSha)
+        }
+        $prior.resume_release = [ordered]@{
+            path=$releasePath;sha256=$releaseSha;phase=[string]$release.phase;released=($null -eq $priorFence)
+        }
     }
     if ((Test-Path -LiteralPath $stop) -and (Sha $stop) -cne [string]$f.stop_sha256) {
         throw 'FRESH_RESUME_STOP_REQUEST_CHANGED'
     }
     return $prior
+}
+function Complete-CanonicalFreshReleasedResume($Prior) {
+    $claim = Enter-RetirementResumeClaim $Prior
+    $admission = $null
+    $oldAuthority = $null
+    try {
+        $admission = Enter-ContainerWriterAdmission
+        $verified = Read-CanonicalFreshResume
+        if (-not $verified.resume_release) { throw 'FRESH_RESUME_RELEASE_NOT_PROVEN' }
+        $releaseAuthorization = $verified.resume_release
+        $auditPath = $ResumeFreshTransitionReceiptPath
+        $activation = [string]$releaseAuthorization.phase -ceq 'PRODUCT_COMPLETE'
+        $expectedRun = if ($activation) { [ordered]@{exists=$true;kind='String';data=$wanted} }
+            else { $verified.fresh_transition.original_preimage }
+        $currentRun = Snapshot
+        if ([bool]$currentRun.exists -ne [bool]$expectedRun.exists -or
+            [string]$currentRun.kind -cne [string]$expectedRun.kind -or
+            [string]$currentRun.data -cne [string]$expectedRun.data) { throw 'FRESH_RESUME_COMPLETED_RUN_CHANGED' }
+        $expectedRelays = @(if ($activation) {
+            @([pscustomobject]@{ExecutablePath=(Join-Path $install 'runtime\pythonw.exe');CommandLine=$wanted})
+        } else { @($verified.fresh_transition.original_relays) })
+        if (-not $activation -and [bool]$verified.fresh_transition.original_scheduled_writer.present) {
+            $originalWriter = $verified.fresh_transition.original_scheduled_writer
+            $writer = Get-CanonicalWriterSnapshot $install
+            if ([string]$writer.binding_sha256 -cne [string]$originalWriter.binding_sha256 -or
+                [bool]$writer.enabled -ne [bool]$originalWriter.enabled) { throw 'FRESH_RESUME_COMPLETED_TASK_CHANGED' }
+        }
+        if (-not (Test-JsonTrue $verified.resume_release.released)) {
+            # The original process and its authority were proved dead under
+            # the claim/admission locks. Finish only its already authorized
+            # release; never rerun archive/registration or clear another fence.
+            $old = $verified.fresh_transition
+            $oldAuthority = Enter-ContainerWriterSessionAuthority `
+                -SessionId ([string]$old.session_id) -AttemptId ([string]$old.attempt_id) `
+                -OrchestratorSha256 ([string]$old.orchestrator_sha256) `
+                -ReplacementTransactionId ([string]$verified.code_replacement.transaction_id) `
+                -WriterContractSha256 ([string]$lifecycleManifest.writer_session_contract_sha256)
+            [void](Stop-ContainerWriterFence `
+                -SessionId ([string]$old.session_id) -AttemptId ([string]$old.attempt_id) `
+                -ReplacementTransactionId ([string]$verified.code_replacement.transaction_id) `
+                -ReleaseAuthorizationPath ([string]$releaseAuthorization.path) `
+                -ReleaseAuthorizationSha256 ([string]$releaseAuthorization.sha256) -AuthorityLease $oldAuthority)
+            Exit-ContainerWriterSessionAuthority $oldAuthority
+            $oldAuthority = $null
+        }
+        Exit-ContainerWriterAdmission $admission
+        $admission = $null
+        Product $install '--fresh-server-registration' 'complete'
+        $admission = Enter-ContainerWriterAdmission
+        if ($null -ne (Read-ContainerWriterFence -AllowAbsent)) { throw 'FRESH_RESUME_NEW_FENCE_PRESENT' }
+        $actual = @(Relays)
+        foreach ($item in $actual) {
+            $matches = @($expectedRelays | Where-Object {
+                (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) -and
+                [string]$_.CommandLine -ceq [string]$item.CommandLine
+            })
+            if ($matches.Count -ne 1) { throw 'FRESH_RESUME_COMPLETED_RELAY_CHANGED' }
+        }
+        $started = $false
+        foreach ($item in $expectedRelays) {
+            $matches = @($actual | Where-Object {
+                (Same ([string]$_.ExecutablePath) ([string]$item.ExecutablePath)) -and
+                [string]$_.CommandLine -ceq [string]$item.CommandLine
+            })
+            if ($matches.Count -gt 1) { throw 'FRESH_RESUME_COMPLETED_RELAY_DUPLICATED' }
+            if ($matches.Count -eq 0) { [void](StartRaw ([string]$item.CommandLine)); $started=$true }
+        }
+        Exit-ContainerWriterAdmission $admission
+        $admission = $null
+        if ($started) { Start-Sleep -Seconds 3 }
+        [void](Assert-RollbackRelayPreimage -ExpectedRelays $expectedRelays)
+        'fresh_transition_status=COMPLETED_RELEASE_VERIFIED'
+    } finally {
+        if ($null -ne $oldAuthority) { Exit-ContainerWriterSessionAuthority $oldAuthority }
+        if ($null -ne $admission) { Exit-ContainerWriterAdmission $admission }
+        Exit-RetirementResumeClaim $claim
+    }
 }
 function Read-FreshRemovedPreimage {
     if ([bool]$before.exists -or @($old).Count -ne 0) { throw 'FRESH_OLD_REMOVAL_HAS_ACTIVE_WRITERS' }
@@ -1812,12 +1968,12 @@ if ($PrepareFreshServerRegistration -and ($PlanOnly -or $FreshTransitionAction -
 }
 if ($PrepareFreshServerRegistration) {
     $freshPreflight = Product $source '--fresh-server-registration' 'preflight'
-    if ($freshPreflight -eq 0) {
+    if ($freshPreflight -eq 0 -and -not $ResumeFreshTransitionReceiptPath) {
         'fresh_transition_status=ACTIVATED_READBACK_ONLY'
         "fresh_transition_report=$(Join-Path $FreshArchiveRoot 'transition-result.json')"
         return
     }
-    if ($freshPreflight -ne 10) { throw 'FRESH_TRANSITION_INPUT_KEY_OR_CONFIRMATION_INVALID' }
+    if ($freshPreflight -notin @(0,10)) { throw 'FRESH_TRANSITION_INPUT_KEY_OR_CONFIRMATION_INVALID' }
 }
 if ($PlanOnly) {
     "install_status=PLAN_ONLY"
@@ -1909,6 +2065,10 @@ $removalPath = Join-Path $statusRoot 'current_user_removal.json'
 $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 if ($PrepareFreshServerRegistration -and $ResumeFreshTransitionReceiptPath) {
     $freshResume = Read-CanonicalFreshResume
+    if ($freshResume.resume_release) {
+        Complete-CanonicalFreshReleasedResume $freshResume
+        return
+    }
 }
 $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else { $null }
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
@@ -2707,6 +2867,7 @@ $enteredPlacementTry = $true
             Clear-CanonicalWriterFenceReleaseDelegation
             Stop-CanonicalWriterFenceRelease $releaseAuthorization
             $canonicalWriterFenceActive=$false
+            Product $install '--fresh-server-registration' 'complete'
             foreach ($item in @($audit.fresh_transition.original_relays)) { [void](StartRaw ([string]$item.CommandLine)) }
             if (@($audit.fresh_transition.original_relays).Count -gt 0) { Start-Sleep -Seconds 3 }
             [void](Assert-RollbackRelayPreimage @($audit.fresh_transition.original_relays))
@@ -2793,8 +2954,8 @@ $enteredPlacementTry = $true
         $writerRestoreNeeded=$false
     }
     $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
-    $audit.status=$terminalStatus
-    $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
+    $audit.status=if ($PrepareFreshServerRegistration) { 'FRESH_ACTIVATION_AWAITING_FENCE_RELEASE' } else { $terminalStatus }
+    if (-not $PrepareFreshServerRegistration) { $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o') }
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
     if ($canonicalWriterFenceActive) {
@@ -2809,7 +2970,14 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
+        if ($PrepareFreshServerRegistration) { Product $install '--fresh-server-registration' 'complete' }
         $pidValue = Start-CanonicalRelayAfterFenceRelease
+    }
+    if ($PrepareFreshServerRegistration) {
+        $audit.status=$terminalStatus
+        $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
     }
     "install_status=$terminalStatus"
     "install_root=$install"
@@ -2830,7 +2998,13 @@ $enteredPlacementTry = $true
 }
 catch {
     $original=$_
-    if (-not $canonicalPreparationStarted) { throw $original }
+    if (-not $canonicalPreparationStarted) {
+        if ($PrepareFreshServerRegistration) {
+            $freshFailureCode = if ($original.Exception.Message -cmatch '^[A-Z][A-Z0-9_]+$') { $original.Exception.Message } else { 'FRESH_RESUME_UNVERIFIED' }
+            throw "같은 전환의 재개를 완료하지 못했습니다. 이전 작업 종료와 원 영수증·대상을 관리자가 확인하세요. 문의 코드: $freshFailureCode"
+        }
+        throw $original
+    }
     if ($PrepareFreshServerRegistration -and $enteredPlacementTry -and $audit.fresh_transition.quiesced) {
         # Once detachment can have begun, old code/Run must never be restored by
         # the ordinary installer rollback. Preserve this exact attempt/fence.

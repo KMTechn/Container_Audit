@@ -1259,7 +1259,7 @@ def onboard_current_user(
     transition = current_transition()
     fresh = transition is not None and (transition["phase"] not in {"ACTIVATED", "RESTORED"} or bool(fresh_transition_journal))
     if fresh:
-        if (transition["phase"] not in {"REGISTERED", "ACTIVATED"} or not fresh_transition_journal
+        if (transition["phase"] not in {"REGISTERED", "ACTIVATION_PENDING_RELEASE", "ACTIVATED"} or not fresh_transition_journal
                 or str(Path(fresh_transition_journal).resolve()) != str(Path(transition["archive_root"]) / "transition-journal.json")
                 or transition["data_root"] != str(paths.data_root)):
             raise CurrentUserOnboardingError(

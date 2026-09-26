@@ -13,6 +13,7 @@ ProgramData 두 root 분리·복원, 원본·ACL·SID/대상/키 결속, 실패 
 - 원 작업자와 다른 관리자 계정의 UAC로 Users Read ProgramData 원본의 bytes·ACL을 보존하고 두 root를 분리한다.
 - 실제 수용 서버의 TLS/source/최초 404, 공유 CNG 기존 키 재사용, 응답 유실 reattach, 첫 lease·빈 queue·단일 relay를 확인한다.
 - 보관·rename·응답 유실·부분 게시·Run 게시 경계의 강제 종료 후 exact receipt 재개와 cold boot를 확인한다.
+- activation/restore의 완료 대기 기록, 해제 증명 게시, fence 삭제, relay 재시작 사이 중단 뒤 같은 전환의 마무리와 일반 writer 재개를 확인한다.
 - 기본/custom 두 root의 은퇴 marker·원본 영수증 및 다른 앱의 공유 profile·키가 유지되는지 확인한다.
 
 이 항목들은 **NOT VERIFIED**다. REGISTERING 이후 복원은 이번 판의 지원 범위에 포함하지 않으며

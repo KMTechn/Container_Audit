@@ -366,6 +366,9 @@ def test_run_waits_for_first_lease_and_empty_queue(transition, fresh_context, mo
         ledger_factory=_ledger_factory, relay_launcher=lambda *a, **k: {"status": "START_REQUESTED", "process_id": 123},
         autostart_installer=lambda *a, **k: pytest.fail("Run installed before first lease"))
     assert result["status"] == "ACTIVATION_PENDING"
+    # These newly published non-business files must not count as queued work.
+    (fresh_context.paths.data_root / "new-settings.json").write_text('{"theme":"system"}')
+    assert fresh_context.paths.logistics_profile_path.is_file()
     monkeypatch.setattr(onboarding, "install_user_relay_autostart", lambda *a, **k: installed.append(True) or {"status": "PASS", "command": "synthetic"})
     with pytest.raises(ValueError, match="UNKNOWN"):
         transition.complete_activation(plan, timeout_seconds=0)
@@ -376,7 +379,7 @@ def test_run_waits_for_first_lease_and_empty_queue(transition, fresh_context, mo
     conn.commit()
     conn.close()
     result = transition.complete_activation(plan)
-    assert result["phase"] == "ACTIVATED"
+    assert result["phase"] == "ACTIVATION_PENDING_RELEASE"
     assert installed == [True]
     assert json.loads(fresh_context.paths.onboarding_report_path.read_text())["status"] == "READY"
 
@@ -411,7 +414,7 @@ def test_original_directories_attributes_and_acl_survive_restore(transition, old
     before = {str(p): transition._acl(p) for p in paths.data_root.rglob("*")}
     monkeypatch.setattr(transition, "_require_quiesced_authority", lambda p: {})
     plan = transition.archive_state(plan, confirm_pending=True)
-    assert transition.restore_archive(plan)["phase"] == "RESTORED"
+    assert transition.restore_archive(plan)["phase"] == "RESTORE_PENDING_RELEASE"
     assert empty.is_dir()
     assert all(transition._acl(Path(p)) == acl for p, acl in before.items())
 
@@ -556,7 +559,7 @@ Detach-FreshMachineProfile
     assert plan["machine_restore_pending"] and not paths.identity_path.exists()
     result = run(restore=True)
     assert result.returncode == 0, result.stderr
-    assert transition.restore_archive(plan)["phase"] == "RESTORED"
+    assert transition.restore_archive(plan)["phase"] == "RESTORE_PENDING_RELEASE"
     assert machine.is_dir() and transition._files(machine) == original
     assert old_relay.is_dir() and transition._files(old_relay) == relay_original
 

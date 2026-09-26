@@ -35,7 +35,8 @@ from writer_session_fence import (
 SCHEMA = "container-audit-fresh-server-transition-v1"
 INPUT_SCHEMA = "kmtech.fresh-transition.v1"
 POINTER_NAME = "fresh-server-transition.json"
-PHASES = ("PLANNED", "QUIESCED", "ARCHIVE_VERIFIED", "DETACHED", "REGISTERING", "REGISTERED", "ACTIVATED")
+PHASES = ("PLANNED", "QUIESCED", "ARCHIVE_VERIFIED", "DETACHED", "REGISTERING", "REGISTERED",
+          "ACTIVATION_PENDING_RELEASE", "ACTIVATED", "RESTORE_PENDING_RELEASE", "RESTORED")
 
 
 def _json(path, maximum=64 * 1024):
@@ -439,7 +440,7 @@ def _save(plan):
     public.update(updated_at=onboarding._now(), restore_available=plan["phase"] in PHASES[:4],
                   next_action="다시 확인 / 이어서 등록 / 가능한 경우 복원",
                   original_credentials_uploaded=False)
-    if plan["phase"] in {"REGISTERING", "REGISTERED", "ACTIVATED"}:
+    if plan["phase"] in {"REGISTERING", "REGISTERED", "ACTIVATION_PENDING_RELEASE", "ACTIVATED"}:
         public["administrator_message"] = "새 서버 등록이 시작됐을 수 있어 되돌릴 수 없음 — 관리자 지원 필요"
     public["attempts"] = [{k: attempt[k] for k in ("stage", "status", "started_at", "error_type") if k in attempt}
                           for attempt in plan["attempts"]]
@@ -797,7 +798,7 @@ def register_transition(plan):
     from tools import register_container_audit_worker_pc as registration
 
     _require_quiesced_authority(plan)
-    if plan["phase"] in {"REGISTERED", "ACTIVATED"}:
+    if plan["phase"] in {"REGISTERED", "ACTIVATION_PENDING_RELEASE", "ACTIVATED"}:
         return plan
     if plan["phase"] not in {"DETACHED", "REGISTERING"} or plan.get("identity_absent") is not True:
         raise ValueError("원본 보관·ABSENT 확인 뒤 이어서 등록하세요")
@@ -849,7 +850,7 @@ def _first_lease(plan):
 def complete_activation(plan, *, timeout_seconds=75):
     """Let the delegated single relay obtain its lease before publishing Run."""
     _require_quiesced_authority(plan)
-    if plan["phase"] not in {"REGISTERED", "ACTIVATED"}:
+    if plan["phase"] not in {"REGISTERED", "ACTIVATION_PENDING_RELEASE", "ACTIVATED"}:
         raise ValueError("새 서버 등록 검증 뒤 자동 시작을 활성화하세요")
     with writer_admission("current_user_onboarding_storage"):
         plan["attempts"].append({"stage": "activation", "status": "UNKNOWN", "started_at": onboarding._now()})
@@ -879,7 +880,7 @@ def complete_activation(plan, *, timeout_seconds=75):
             raise ValueError("새 자동 시작 Run 게시 결과를 확인하지 못했습니다")
         report["status"] = "READY"
         onboarding._write_json_atomic(paths.onboarding_report_path, report)
-        plan.update(phase="ACTIVATED", first_lease="VERIFIED", new_queue_rows=0)
+        plan.update(phase="ACTIVATION_PENDING_RELEASE", first_lease="VERIFIED", new_queue_rows=0)
         plan["attempts"][-1]["status"] = "PASS"
         _save(plan)
     return plan
@@ -890,9 +891,9 @@ def restore_archive(plan):
     _require_quiesced_authority(plan)
     # A request may have committed remotely. Absence of a local credential is
     # deliberately not proof that a remote registration/lease does not exist.
-    if plan["phase"] in {"REGISTERING", "REGISTERED", "ACTIVATED"}:
+    if plan["phase"] in {"REGISTERING", "REGISTERED", "ACTIVATION_PENDING_RELEASE", "ACTIVATED"}:
         raise ValueError("새 서버 등록이 시작됐을 수 있어 되돌릴 수 없음 — 관리자 지원 필요. 같은 전환으로 이어서 등록하세요")
-    if plan["phase"] == "RESTORED":
+    if plan["phase"] in {"RESTORE_PENDING_RELEASE", "RESTORED"}:
         return plan
     pending = []
     for entry in reversed(plan["entries"]):
@@ -923,7 +924,75 @@ def restore_archive(plan):
             raise ValueError("원본 ACL·바이트 복원 대조 실패")
         entry["detached"] = False
         _save(plan)
-    plan["phase"] = "RESTORED"
+    plan["phase"] = "RESTORE_PENDING_RELEASE"
+    _save(plan)
+    return plan
+
+
+def _verified_release(plan, authorization_path, authorization_sha256):
+    """Read the existing canonical release contract; never infer release from a phase."""
+    from writer_session_fence import RELEASE_SCHEMA, WRITER_INVENTORY_SHA256
+
+    if active_fence() is not None:
+        raise ValueError("전환 잠금이 남아 있습니다. 관리자가 같은 전환의 재개를 실행하세요")
+    path = Path(authorization_path)
+    if not path.is_absolute() or not re.fullmatch(r"[0-9a-f]{64}", authorization_sha256):
+        raise ValueError("전환 마무리 증명의 경로·hash가 올바르지 않습니다")
+    authorization = _json(path)
+    if onboarding._file_sha256(path) != authorization_sha256:
+        raise ValueError("전환 마무리 증명이 변경됐습니다")
+    audit_path = Path(plan["lifecycle_receipt"])
+    audit = _json(audit_path, maximum=1024 * 1024)
+    fresh = audit.get("fresh_transition") or {}
+    transaction = (audit.get("code_replacement") or {}).get("transaction_id")
+    expected_phase = ("PRODUCT_COMPLETE",) if plan["phase"] in {"ACTIVATION_PENDING_RELEASE", "ACTIVATED"} else (
+        "ROLLBACK_COMPLETE", "ROLLBACK_NATURAL_TRIGGER") if plan["phase"] in {"RESTORE_PENDING_RELEASE", "RESTORED"} else ()
+    previous = plan.get("completion_release") or {}
+    audit_sha = previous.get("install_audit_sha256") if plan["phase"] in {"ACTIVATED", "RESTORED"} and previous else onboarding._file_sha256(audit_path)
+    if (audit.get("schema") != "container-audit-canonical-portable-install-v2"
+            or audit.get("operation") != "PREPARE_FRESH_SERVER_REGISTRATION"
+            or fresh.get("transition_id") != plan["transition_id"] or fresh.get("sid") != plan["sid"]
+            or plan["sid"] != _sid() or fresh.get("quiesced") is not True
+            or authorization.get("schema") != "container-audit-writer-release-authorization-v1"
+            or authorization.get("status") != "AUTHORIZED" or authorization.get("app_id") != "container_audit"
+            or authorization.get("phase") not in expected_phase
+            or authorization.get("writer_inventory_sha256") != WRITER_INVENTORY_SHA256
+            or authorization.get("install_audit_path") != str(audit_path)
+            or authorization.get("install_audit_sha256") != audit_sha):
+        raise ValueError("전환 완료의 원 사용자·단계·audit 결속이 다릅니다")
+    bindings = {"session_id": fresh.get("session_id"), "attempt_id": fresh.get("attempt_id"),
+                "replacement_transaction_id": transaction}
+    if any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{32}", value)
+           or authorization.get(key) != value for key, value in bindings.items()):
+        raise ValueError("전환 완료의 session·attempt·transaction이 다릅니다")
+    receipt_path = canonical_control_root() / f"release-{transaction}-{authorization_sha256}.json"
+    released = _json(receipt_path)
+    expected = {"schema": RELEASE_SCHEMA, "status": "RELEASED", "app_id": "container_audit", **bindings,
+                "writer_inventory_sha256": WRITER_INVENTORY_SHA256,
+                "release_authorization_path": str(path), "release_authorization_sha256": authorization_sha256,
+                "secret_values_recorded": False}
+    if (set(released) != set(expected) | {"released_at_utc"}
+            or any(released.get(key) != value for key, value in expected.items())
+            or type(released.get("secret_values_recorded")) is not bool):
+        raise ValueError("이번 전환의 잠금 해제 영수증을 확인하지 못했습니다")
+    try:
+        released_at = datetime.fromisoformat(released["released_at_utc"].replace("Z", "+00:00"))
+        if released_at.tzinfo is None:
+            raise ValueError("missing timezone")
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("잠금 해제 영수증의 시간이 올바르지 않습니다") from exc
+    return {"authorization_path": str(path), "authorization_sha256": authorization_sha256,
+            "install_audit_sha256": audit_sha, "phase": authorization["phase"],
+            "receipt_path": str(receipt_path), "receipt_sha256": onboarding._file_sha256(receipt_path)}
+
+
+@writer_sink("current_user_onboarding_storage")
+def finalize_transition(plan, authorization_path, authorization_sha256):
+    proof = _verified_release(plan, authorization_path, authorization_sha256)
+    if plan["phase"] in {"ACTIVATED", "RESTORED"} and plan.get("completion_release") == proof:
+        return plan
+    final = "ACTIVATED" if proof["phase"] == "PRODUCT_COMPLETE" else "RESTORED"
+    plan.update(phase=final, completion_release=proof)
     _save(plan)
     return plan
 
@@ -931,7 +1000,7 @@ def restore_archive(plan):
 def transition_main(argv=None):
     parser = argparse.ArgumentParser(description="옛 자료 보관 후 새 서버 등록 / 다시 확인 / 가능한 경우 복원")
     parser.add_argument("--app-root", required=True)
-    parser.add_argument("--action", choices=("plan", "preflight", "prepare", "register", "activate", "status", "restore"), required=True)
+    parser.add_argument("--action", choices=("plan", "preflight", "prepare", "register", "activate", "status", "restore", "complete"), required=True)
     parser.add_argument("--input", default="")
     parser.add_argument("--archive-root", default="")
     parser.add_argument("--transition-id", default="")
@@ -939,6 +1008,8 @@ def transition_main(argv=None):
     parser.add_argument("--confirm", default="")
     parser.add_argument("--confirm-pending", action="store_true")
     parser.add_argument("--report-path", default="")
+    parser.add_argument("--release-authorization-path", default="")
+    parser.add_argument("--release-authorization-sha256", default="")
     args = parser.parse_args(argv)
     try:
         if args.action == "preflight":
@@ -958,7 +1029,11 @@ def transition_main(argv=None):
                     if state["status"] != "READY" or state["base_url"].rstrip("/") != target["origin"]:
                         raise ValueError("완료 전환의 신원 readback 실패")
                     if active_fence() is None:
+                        proof = plan.get("completion_release") or {}
+                        _verified_release(plan, proof.get("authorization_path", ""), proof.get("authorization_sha256", ""))
                         return 0  # The canonical owner also finished/released.
+                if not args.lifecycle_receipt:
+                    raise ValueError("진행 중인 전환은 원 영수증을 지정한 지원 재개로 이어서 실행하세요")
             return 10  # Validated; the canonical controller may acquire ownership.
         if args.action == "plan":
             plan = plan_archive(args.app_root, archive_root=args.archive_root, transition_id=args.transition_id)
@@ -980,7 +1055,11 @@ def transition_main(argv=None):
             plan = current_transition()
             if not plan or plan["transition_id"] != args.transition_id:
                 raise ValueError("같은 전환 ID의 보존 기록이 필요합니다")
-            if args.action != "status":
+            if args.action == "complete":
+                if str(Path(args.lifecycle_receipt).resolve()) != plan["lifecycle_receipt"]:
+                    raise ValueError("전환 마무리는 마지막 정지 증명과 같은 audit에서 실행하세요")
+                plan = finalize_transition(plan, args.release_authorization_path, args.release_authorization_sha256)
+            elif args.action != "status":
                 plan["lifecycle_receipt"] = str(Path(args.lifecycle_receipt).resolve())
                 _require_quiesced_authority(plan)
                 with writer_admission("current_user_onboarding_storage"):
