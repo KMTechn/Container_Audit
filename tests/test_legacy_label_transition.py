@@ -24,7 +24,6 @@ from Container_Audit import ContainerAudit, TraySession
 from direct_sync_health import RelayHealth
 from label_qr import canonical_master_label_key
 from parked_tray_store import ParkedTrayStore
-from session_history import completed_label_round
 from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401 - fixture
 from tests.test_container_audit_contracts import (
     CapturingListbox,
@@ -599,7 +598,7 @@ def test_same_label_completed_twice_with_the_same_products_counts_both_rounds(fl
     assert restarted.work_summary[ITEM]["transition_counts"] == {"LEGACY": 2}
     assert restarted.work_summary[ITEM]["transition_duplicates"] == 1
     # A completed round's leftover state is still discarded on restart.
-    assert completed_label_round(OLD_QR, first["start_time"]) in restarted.completed_label_rounds
+    assert session_history.completed_label_round(OLD_QR, first["start_time"]) in restarted.completed_label_rounds
 
 
 def test_on_old_v209_label_is_legacy(flow):
