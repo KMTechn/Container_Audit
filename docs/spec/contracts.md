@@ -56,6 +56,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 **과도기 모드(`KMTECH_LEGACY_LABEL_TRANSITION`):** 앱 시작 때 HKLM Session Manager Environment 값만 읽어 정확히 `1`이면 켠다. 프로세스·사용자 범위 값은 보지 않고, 읽기 오류는 끔이며 자동 만료는 없다.
 켜짐이면 PHS=2가 아닌 현품표(13자리 품목코드·옛 QR) 트레이를 중앙 조회·lease·봉인·SQLite intent 없이 완료한다. 60개 자동 완료와 부분 `제출` 모두 정상 완료와 같은 contract 저장 → 동기 `TRAY_COMPLETE` → 상태 삭제 순서이며, detail에 `transfer_seal_status=LEGACY_LOCAL_ONLY`·`transfer_seal_intent_id=legacy-local-only-…`·`source_computer_id`·`source_host_name`을 남긴다.
 꺼짐이면 이런 현품표를 트레이 시작에서 거절한다. 보류 트레이의 스캔 복원 등 기존 경로는 그대로다. PHS2 흐름은 두 상태에서 같다.
+켜짐에서 서버 끊김으로 PHS2 현품표가 보류 중이면 13자리 현품표도 옛 QR처럼 [다음 현품표](README.md#ca-04)로 받아 보류를 대기 목록으로 옮긴 뒤 레거시 트레이를 시작한다(13자 입력은 제품이 될 수 없다).
 13자리 코드는 같은 품목의 모든 트레이가 공유하므로 재시작 뒤에도 완료 현품표 집합에 넣지 않는다. [운영 절차](operations.md#ca-legacy-transition-ops), [CA-G17](BACKLOG.md#ca-g17).
 
 ## 3. 완료 상태와 관측 지점

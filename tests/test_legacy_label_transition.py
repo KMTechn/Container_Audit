@@ -32,6 +32,7 @@ from tests.test_phs2_master_preflight import (
     COMPACT_QR,
     ITEM,
     _app,
+    _offline_queue_app,
     _pump_until,
     _resolved,
 )
@@ -529,6 +530,26 @@ def test_relay_rejection_or_outage_does_not_hold_the_next_legacy_tray(
     }
     assert app.current_tray.master_label_code == ""
     assert app.work_summary[ITEM]["legacy_count"] == 2
+
+
+def test_on_legacy_label_takes_over_from_a_phs2_label_held_offline(tmp_path, monkeypatch):
+    app, _client = _offline_queue_app(tmp_path, monkeypatch)
+    app.legacy_label_transition = True
+    store = app._preflight_hold_store()
+    app._process_barcode_logic(f"{ITEM}-SERIAL-001")
+    _pump_until(app.root, lambda: len(store.load().items) == 1)
+    original = store.path.read_bytes()
+
+    app._process_barcode_logic(ITEM)
+    _pump_until(app.root, lambda: app.current_tray.master_label_code == ITEM)
+
+    # The held PHS2 label waits unchanged; the legacy tray starts during the outage.
+    waiting, = app._quarantined_preflight_holds()
+    assert waiting.path.read_bytes() == original
+    assert [
+        event[1]["reason"] for event in app.events if event[0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED"
+    ] == ["offline_next_label"]
+    assert app.current_tray.scanned_barcodes == []
 
 
 def _phs2_completion(flow, root, *, transition):

@@ -12166,7 +12166,11 @@ class ContainerAudit:
         raw = str(raw_barcode or "").strip()
         if not raw:
             return False
-        if self._parse_new_format_qr(raw):
+        # In transition mode a 13-character input is a pre-PHS2 label, never a product.
+        if self._parse_new_format_qr(raw) or (
+            getattr(self, "legacy_label_transition", False)
+            and is_start_item_code(raw, item_code_length=self.ITEM_CODE_LENGTH)
+        ):
             snapshot = getattr(self, "_preflight_hold_snapshot", None)
             if (self._is_offline_preflight_hold(snapshot)
                     and snapshot.worker == persistent_operator_name(self.worker_name)
@@ -13098,7 +13102,10 @@ class ContainerAudit:
                 if not matched_item:
                     self.show_fullscreen_warning("품목 없음", f"현품표 코드 '{barcode}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
                     return
-                
+                if _offline_hold_switch is not None:
+                    self._queue_offline_preflight_hold(_offline_hold_switch, barcode)
+                    return
+
                 self._activate_master_label_tray(
                     barcode=barcode,
                     item_code=barcode,
