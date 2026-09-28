@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import json
 import os
@@ -134,6 +135,21 @@ def isolate_product_state(tmp_path, monkeypatch):
     monkeypatch.setenv("KMTECH_TEST_CA_WRITER_MUTEX", mutex)
     test_dir = Path(__file__).resolve().parent
     monkeypatch.setenv("PYTHONPATH", os.pathsep.join((str(test_dir), str(test_dir.parent))))
+    import logistics_runtime_profile as runtime_profile
+
+    machine_value = runtime_profile._machine_environment_value
+
+    @functools.wraps(machine_value)
+    def machine_value_without_host_transition(name):
+        # The host's administrator switch never reaches a test; a test that
+        # needs it injects a fake registry behind the unwrapped reader.
+        if name == runtime_profile.LEGACY_LABEL_TRANSITION_ENV:
+            return ""
+        return machine_value(name)
+
+    monkeypatch.setattr(
+        runtime_profile, "_machine_environment_value", machine_value_without_host_transition
+    )
 
 
 # Automated GUI/contract runs must never reach the operator's audio device.

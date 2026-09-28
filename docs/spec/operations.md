@@ -56,6 +56,32 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 자료를 삭제하거나 빈 로그로 덮어쓰지 않는다. 정상 0건은 경고 없이 기존 빈 표를 유지한다.
 실제 경고창의 화면 배치·가독성은 headless 검증 범위 밖이다.
 
+<a id="ca-legacy-transition-ops"></a>
+## 과도기 모드 켜고 끄기 (관리자)
+
+새 시스템 전환 전에 이 PC가 지금 현장 현품표(13자리 품목코드·옛 QR)를 받아야 할 때만 켠다.
+관리자 권한으로만 바꿀 수 있고, CA를 다시 시작해야 적용된다. 자동으로 꺼지지 않는다. [계약](contracts.md#ca-legacy-transition)
+
+| 할 일 | 관리자 PowerShell |
+|---|---|
+| 켜기 | `[Environment]::SetEnvironmentVariable('KMTECH_LEGACY_LABEL_TRANSITION','1','Machine')` |
+| 끄기 | `[Environment]::SetEnvironmentVariable('KMTECH_LEGACY_LABEL_TRANSITION',$null,'Machine')` |
+| 확인 | `reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v KMTECH_LEGACY_LABEL_TRANSITION` |
+
+값이 정확히 `1`일 때만 켜진다. 사용자 환경 변수나 실행 명령의 환경 값으로는 켜지지 않는다.
+바꾼 뒤 CA를 종료하고 다시 실행한다. 켜지면 창 제목과 작업자 칸에 `과도기 모드 — 옛 현품표 받음`이 보인다.
+
+**현장 관리자 안내:** 과도기 모드가 켜진 PC에서는 지금 쓰는 현품표(13자리, 옛 QR)로 옛 이적 프로그램처럼 일할 수 있다.
+현품표를 찍고 제품을 찍으면 60개에서 자동 완료되고, 60개가 안 되면 `제출`로 끝낸다. 다른 품목 제품과 같은 제품 두 번은 지금처럼 막는다.
+이 기록은 이 PC와 서버 화면에만 남고 새 재고·이적·출고 장부에는 들어가지 않는다. 그래서 이 트레이는 새 포장·폰 출고로 이어지지 않으니 포장·출고는 지금 방식으로 한다.
+새 현품표(PHS=2)는 켜져 있어도 새 시스템대로 처리된다. 옛 현품표 트레이와 새 현품표 트레이의 제품은 선반을 나눠 섞지 않는다.
+서버 연결이 끊겨도 옛 현품표 작업은 멈추지 않는다.
+
+**끄기 전:** 진행 중·보류 중인 옛 현품표 트레이를 모두 완료하거나 초기화한다. 끈 뒤 복원한 13자리 트레이는 완료되지 않고 원인을 안내한다(다시 켜면 완료된다).
+옛 QR 보류 트레이는 끈 뒤 복원하면 기존 중앙 확인 흐름으로 가서 담당자 확인 대상이 될 수 있다.
+
+**하루 건수:** 작업자 화면 `금일 작업 현황`의 `(과도기 N)`, 또는 이벤트 CSV(`이적작업이벤트로그_[작업자]_[날짜].csv`)에서 `TRAY_COMPLETE` 중 `transfer_seal_status`가 `LEGACY_LOCAL_ONLY`인 행 수. 서버 대시보드는 아직 구분하지 않는다([CA-G17](BACKLOG.md#ca-g17)).
+
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 

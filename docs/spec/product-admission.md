@@ -6,7 +6,7 @@ W5-B2 기준은 `00c5deb1085a5b2c7b95b975fe0443bae56061a5`의 현행 동작이�
 
 | 순서·경로 | 검사와 현재 의미 | 실패/결과 |
 |---|---|---|
-| 시작 호환 분기 | QR 분기 밖에서 길이가 `ITEM_CODE_LENGTH=13`인지 확인 후 catalog exact lookup | 기존 시작 오류/품목 없음; 활성 트레이 제품 gate와 별도 |
+| 시작 호환 분기 | QR 분기 밖에서 길이가 `ITEM_CODE_LENGTH=13`인지 확인 후 catalog exact lookup | 기존 시작 오류/품목 없음; 활성 트레이 제품 gate와 별도. [과도기 모드](contracts.md#ca-legacy-transition)가 꺼져 있으면 길이 확인 직후 `새 시스템 이전 현품표`로 거절(옛 QR은 보류 복원 확인 뒤 같은 거절) |
 | 제품 1 | `str(barcode or "")`; 양의 item-code 길이 검증. bool 거부, 기존 int 변환 유지 | 잘못된 길이 설정이 unsafe 이유보다 우선; unsafe이면 raw 대신 SHA256·길이 |
 | 제품 2 | unsafe 순서: >128 → 외곽 공백 → C0/DEL → 수식 시작 → HTML/script → 경로 | `SCAN_FAIL_FORMAT`; raw redaction. NFKC/uppercase/strip을 새로 적용하지 않음 |
 | 제품 3 | 문자열 길이 > 현재 item-code 길이(기본13) | 이하이면 `barcode_too_short` |

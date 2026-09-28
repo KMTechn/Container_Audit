@@ -52,6 +52,12 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 실제 원장 표본의 형식별 발생 여부와 저장 상태 이행·지원 종료를 확인한 뒤 제거를 검토한다.
 표준 compact PHS2는 중앙 GOOD 구성원 전량 확인을 유지하고 부족 수량의 부분 제출을 차단한다.
 
+<a id="ca-legacy-transition"></a>
+**과도기 모드(`KMTECH_LEGACY_LABEL_TRANSITION`):** 앱 시작 때 HKLM Session Manager Environment 값만 읽어 정확히 `1`이면 켠다. 프로세스·사용자 범위 값은 보지 않고, 읽기 오류는 끔이며 자동 만료는 없다.
+켜짐이면 PHS=2가 아닌 현품표(13자리 품목코드·옛 QR) 트레이를 중앙 조회·lease·봉인·SQLite intent 없이 완료한다. 60개 자동 완료와 부분 `제출` 모두 정상 완료와 같은 contract 저장 → 동기 `TRAY_COMPLETE` → 상태 삭제 순서이며, detail에 `transfer_seal_status=LEGACY_LOCAL_ONLY`·`transfer_seal_intent_id=legacy-local-only-…`·`source_computer_id`·`source_host_name`을 남긴다.
+꺼짐이면 이런 현품표를 트레이 시작에서 거절한다. 보류 트레이의 스캔 복원 등 기존 경로는 그대로다. PHS2 흐름은 두 상태에서 같다.
+13자리 코드는 같은 품목의 모든 트레이가 공유하므로 재시작 뒤에도 완료 현품표 집합에 넣지 않는다. [운영 절차](operations.md#ca-legacy-transition-ops), [CA-G17](BACKLOG.md#ca-g17).
+
 ## 3. 완료 상태와 관측 지점
 
 작업 시작 시 금일 집계는 `session_history.load_session_history`에서 읽은 로컬 기록이다.
@@ -182,6 +188,8 @@ Label의 원본 PHS2 한 번→선택 F4→F3 흐름, F4 뒤 새 전자 QR 확�
 **정적 소비 사슬:** CA 완료/스캔 CSV → [producer_ingest](../../../WorkerAnalysisGUI-web/producer_ingest.py) → [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py) → [app.projection_dashboard_sessions_df 및 분석 API](../../../WorkerAnalysisGUI-web/app.py) → [dashboard_standard.source.js](../../../WorkerAnalysisGUI-web/static/dashboard_standard.source.js), [index.html](../../../WorkerAnalysisGUI-web/templates/index.html).
 
 `TRAY_COMPLETE`는 `TRANSFER_LEGACY`, 스캔·생명주기 사건은 `TRANSFER_ACTIVITY` 분류를 사용한다. `LEGACY`라는 분류명만으로 현재 producer 경로를 폐기 기능이라고 판정하지 않는다. local-only 사건은 relay 비재귀 scan 경계 밖에 두며 시험·복구 플래그와 source scope를 유지한다. [event_stream_policy](../../event_stream_policy.py), [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py).
+
+[과도기](#ca-legacy-transition) `LEGACY_LOCAL_ONLY` 완료도 같은 CSV 통로로 올라가 `TRANSFER_LEGACY`로 투영된다(Web e356a09 판독: `master_label_code`로 식별을 통과하고 seal 상태는 읽지 않는다). CA가 물류 명령을 보내지 않으므로 재고·이적·출고 원장에는 들어가지 않는다. 대시보드는 이 완료를 일반 이적 실적과 구분하지 못하고, `transfer_legacy_projection`은 13자리 트레이를 품목코드 키로 덮어쓴다. [CA-G17](BACKLOG.md#ca-g17).
 
 CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해당 변환/목록 조회에 seal `ACKED` 필터가 확인되지 않았다. 따라서 이적 처리 실적을 중앙 봉인 확정량으로 표기할 근거가 부족하다. 물류 snapshot의 현재 재고와도 합산하지 않는다. 표준 dashboard는 이적 처리 수량/트레이·대기 수량을 소비하지만 모든 화면의 집계 경로, 배포 flag, 누락/지연 표시까지 확인한 것은 아니다. [_session_row_from_container_audit_projection / list_container_audit_dashboard_sessions](../../../WorkerAnalysisGUI-web/common_projection.py), [period.transfer 렌더링](../../../WorkerAnalysisGUI-web/static/dashboard_standard.source.js).
 

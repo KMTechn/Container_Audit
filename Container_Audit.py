@@ -95,6 +95,7 @@ from legacy_state_migration import migrate_legacy_code_root_state
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV as LOGISTICS_RUNTIME_PROFILE_PATH_ENV,
     REQUIRED_ENV as LOGISTICS_RUNTIME_REQUIRED_ENV,
+    legacy_label_transition_enabled,
     load_logistics_runtime_profile,
     unprotect_current_user_secret,
 )
@@ -1026,6 +1027,7 @@ def _recovery_item_firewall(action):
 # ####################################################################
 class ContainerAudit:
     APP_TITLE = f"이적 검사 시스템 ({CURRENT_VERSION})"
+    LEGACY_LABEL_TRANSITION_NOTICE = "과도기 모드 — 옛 현품표 받음"
     DEFAULT_FONT = 'Malgun Gothic'
     TRAY_SIZE = 60
     SETTINGS_DIR = 'config'
@@ -1079,11 +1081,16 @@ class ContainerAudit:
         # during a server outage.
         startup_logistics_client = container_startup_logistics_client()
         startup_geometry = os.getenv("CONTAINER_AUDIT_STARTUP_GEOMETRY", "").strip()
+        self.legacy_label_transition = legacy_label_transition_enabled()
         self._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
         self.root = tk.Tk()
         if startup_geometry:
             self.root.withdraw()
-        self.root.title(self.APP_TITLE)
+        self.root.title(
+            f"{self.APP_TITLE} · {self.LEGACY_LABEL_TRANSITION_NOTICE}"
+            if self.legacy_label_transition
+            else self.APP_TITLE
+        )
         self.root.minsize(self.MIN_WINDOW_WIDTH, self.MIN_WINDOW_HEIGHT)
         if startup_geometry:
             apply_startup_geometry(self.root, startup_geometry)
@@ -2314,6 +2321,31 @@ class ContainerAudit:
         if candidate_key in completed_labels:
             return True
         return any(canonical_master_label_key(label) == candidate_key for label in completed_labels)
+
+    def _legacy_label_local_only(self) -> bool:
+        """Transition mode completes a pre-PHS2 tray on this PC only, outside the ledger."""
+        tray = self.current_tray
+        master_fields = self._parse_new_format_qr(tray.master_label_code) or {}
+        return bool(
+            getattr(self, "legacy_label_transition", False)
+            and not tray.is_test_tray
+            and str(master_fields.get("PHS") or "").strip() != "2"
+        )
+
+    def _reject_legacy_master_label(self, qr_data: Optional[Mapping[str, Any]]) -> bool:
+        """Outside transition mode a pre-PHS2 label stops at tray start, before any product scan."""
+        if getattr(self, "legacy_label_transition", False):
+            return False
+        if str((qr_data or {}).get("PHS") or "").strip() == "2":
+            return False
+        self.show_fullscreen_warning(
+            "새 시스템 이전 현품표",
+            "이 현품표는 새 시스템 이전 방식입니다. 관리자에게 알려 주세요.\n"
+            "이 PC는 과도기 모드가 꺼져 있어 PHS=2 현품표만 받습니다. "
+            "옛 현품표를 받아야 하는 기간에만 관리자가 과도기 모드를 켭니다.",
+            self.COLOR_DANGER,
+        )
+        return True
 
     def _setup_core_ui_structure(self):
         status_bar = tk.Frame(
@@ -10159,6 +10191,16 @@ class ContainerAudit:
         )
         self.worker_info_label.grid(row=0, column=0, sticky='ew')
         self._bind_label_to_container_width(self.worker_info_label, worker_info_frame, padding=8)
+        if getattr(self, "legacy_label_transition", False):
+            transition_label = ttk.Label(
+                worker_info_frame,
+                text=self.LEGACY_LABEL_TRANSITION_NOTICE,
+                style='Sidebar.TLabel',
+                foreground=self.COLOR_DANGER,
+                justify='left',
+            )
+            transition_label.grid(row=1, column=0, sticky='ew', pady=(2, 0))
+            self._bind_label_to_container_width(transition_label, worker_info_frame, padding=8)
         buttons_frame = ttk.Frame(header_frame, style='Sidebar.TFrame')
         self._worker_buttons_frame = buttons_frame
         buttons_frame.grid(row=1, column=0, sticky='ew', pady=(6, 0))
@@ -12987,6 +13029,8 @@ class ContainerAudit:
                     if messagebox.askyesno("보류 작업 발견", "이 현품표는 보류 중인 작업입니다.\n이 작업을 복원하시겠습니까?"):
                         self.restore_parked_tray(str(parked_filepath))
                     return
+                if self._reject_legacy_master_label(qr_data):
+                    return
                 try:
                     item_code = inspection_master_item_code(qr_data)
                     if not item_code:
@@ -13047,7 +13091,9 @@ class ContainerAudit:
                 if not is_start_item_code(barcode, item_code_length=self.ITEM_CODE_LENGTH):
                     self.show_fullscreen_warning("작업 시작 오류", f"잘못된 형식의 바코드입니다.\n{self.ITEM_CODE_LENGTH}자리 품목코드 또는 신규 QR을 스캔하세요.", self.COLOR_DANGER)
                     return
-                
+                if self._reject_legacy_master_label(None):
+                    return
+
                 matched_item = self._item_catalog().find_by_code(barcode)
                 if not matched_item:
                     self.show_fullscreen_warning("품목 없음", f"현품표 코드 '{barcode}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
@@ -13613,6 +13659,8 @@ class ContainerAudit:
         for i in self.summary_tree.get_children(): self.summary_tree.delete(i)
         for row_index, (item_code, data) in enumerate(sorted(self.work_summary.items())):
             count_display = str(data.get('count', 0))
+            if data.get('legacy_count', 0) > 0:
+                count_display += f" (과도기 {data['legacy_count']})"
             if data.get('test_count', 0) > 0:
                 count_display += f" (T{data['test_count']})"
             item_name_spec = f"{data.get('name', '')}"

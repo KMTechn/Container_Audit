@@ -318,6 +318,15 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **자료 경로 dead fence(w9calmdatapath) 소스·격리 시험 PROVEN:** observe 서버가 커밋한 `STALE_RUNTIME_FENCE`는 클라이언트 모드와 관계없이(운영 자격증명 기본 enforce, w9calmenforce) 행 ACK·권한 만료 전이·fence N+1로 회복한다([계약](contracts.md#ca-lease-dead-fence-datapath)). 가짜 서버 11사례와 Web 362ae46 ingest·lease 하네스로 확인했다.
 - **남은 경계:** 교정 전 판본이 이미 검토로 보낸 자료 경로 행·authority와 교정 전 행 준비에서 검토로 간 relay 행은 자동으로 풀지 않는다. enforce 전환 시 자료 경로 409 STALE은 계속 검토로 간다. 실제 HTTPS·nginx 502 경로, 랩 장비·회사 서버에서의 회복과 전송 카드 실제 화면은 NOT TESTED다.
 
+<a id="ca-g17"></a>
+## CA-G17 과도기 모드(옛 현품표 로컬 완료)의 남은 경계 (w9catransit)
+
+- **소스·격리 시험 PROVEN:** 가짜 레지스트리로 HKLM 값 `1`만 켜짐, 프로세스·사용자 값·읽기 오류는 꺼짐. 꺼짐의 시작 거절, 켜짐의 13자리 60개·부분 제출·옛 QR 로컬 완료, 재시작 뒤 기록·같은 품목 진행 트레이 보존, relay 실패 중 다음 트레이 진행, PHS2 결과의 켬·끔 동일을 headless로 확인했다. [계약](contracts.md#ca-legacy-transition), [시험](../../tests/test_legacy_label_transition.py).
+- **서버 변경 필요(Web, 표시용):** `transfer_legacy_projection`이 `master_label_code`를 키로 써서 13자리 트레이가 품목별 마지막 한 건으로 덮인다(포장 대기 수량 과소). 대시보드는 `transfer_seal_status=LEGACY_LOCAL_ONLY`를 구분하지 않는다. 이 값일 때 사건 식별자를 키로 쓰고 일반 이적 실적·포장 대기와 분리 표시해야 한다. 이번 작업은 Web을 고치지 않았다.
+- **검사 수준 차이:** 제품 검사는 v2.0.9와 같은 품목 포함·중복·개수에 더해 새 판의 입력 안전 검사(128자 초과·공백·제어문자·수식/HTML/경로 형식)와 catalog 모호성 거부를 그대로 쓴다([순서](product-admission.md)). 품목은 검증된 중앙 품목 목록에서 찾으며, 없으면 v2.0.9처럼 `품목 없음`으로 시작하지 않는다. 웹에 품목을 등록한 뒤 `운영 작업 ▾ → 품목 목록 새로 고침` 또는 재시작으로 풀린다(실행 미검증).
+- **남은 위험:** 같은 제품이 레거시와 새 체인에 두 번 계수될 수 있다(선반 분리·바코드 대조로 관리). 끈 뒤 복원한 옛 QR 보류 트레이는 기존 중앙 확인 흐름으로 간다. `tools/run_container_audit_ui_validation.py`의 기본 `PHS=1` 현품표는 켜짐에서만 시작한다.
+- **NOT TESTED:** 실제 PC의 HKLM 값 설정과 창 표시(1024×768 포함), 서버의 실제 수신·대시보드 표시, 패키지 설치본 실행, 현장 60개 처리 속도.
+
 ## 갱신 기준
 
 요구 확정·소스 변경·실행 결과가 생긴 담당자는 연결된 기능/계약/운영 항목과 이 문서의 상태·다음 행동을 같은 작업에서 갱신한다. Main에 중앙 INT-02/03/04/09/10, I02/I04 및 Q01/Q07에 미치는 차이를 알린다. 과거 실패·미실행을 삭제하지 않고 새 버전·환경의 근거를 연결한다. [AGENTS의 지속 관리 규칙](../../AGENTS.md)을 적용한다.

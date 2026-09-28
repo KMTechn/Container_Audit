@@ -20,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 PROFILE_CONTRACT_VERSION = "km-logistics-runtime-profile-v1"
 PROFILE_PATH_ENV = "KM_LOGISTICS_PROFILE_PATH"
 REQUIRED_ENV = "KM_LOGISTICS_REQUIRED"
+LEGACY_LABEL_TRANSITION_ENV = "KMTECH_LEGACY_LABEL_TRANSITION"
 TEST1_ISOLATED_LEGACY_OVERRIDE_ENV = (
     "KMTECH_TEST1_ALLOW_ISOLATED_LEGACY_LOGISTICS"
 )
@@ -247,6 +248,20 @@ def _machine_environment_value(name: str) -> str:
             "Windows Machine logistics environment could not be read"
         ) from exc
     return str(value or "").strip()
+
+
+def legacy_label_transition_enabled() -> bool:
+    """Read the administrator-only switch that accepts pre-PHS2 labels.
+
+    Only the HKLM Session Manager value "1" enables it; process and
+    user-scope environment values are never consulted. An unreadable Machine
+    environment leaves it off rather than stopping the application.
+    """
+    try:
+        return _machine_environment_value(LEGACY_LABEL_TRANSITION_ENV) == "1"
+    except LogisticsRuntimeConfigurationError:
+        print(f"{LEGACY_LABEL_TRANSITION_ENV} could not be read; transition mode is off")
+        return False
 
 
 def _test1_run_path(
@@ -806,6 +821,7 @@ def assert_logistics_runtime_ready(
 __all__ = [
     "DPAPI_ENTROPY",
     "DEFAULT_TOKEN_REF",
+    "LEGACY_LABEL_TRANSITION_ENV",
     "LogisticsRuntimeConfigurationError",
     "LogisticsRuntimeProfile",
     "PROFILE_CONTRACT_VERSION",
@@ -816,6 +832,7 @@ __all__ = [
     "assert_path_has_no_reparse_components",
     "default_logistics_profile_path",
     "default_profile_path",
+    "legacy_label_transition_enabled",
     "load_logistics_runtime_profile",
     "logistics_runtime_required",
     "profile_from_values",

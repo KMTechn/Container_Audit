@@ -295,9 +295,16 @@ def load_session_history(
                         _validate_history_complete_details(details)
                         details["timestamp"] = timestamp
                         details["_history_source"] = f"{log_path}:{row_number}"
+                        # A 13-digit label is the item code shared by every tray of
+                        # that item; only a QR label names one tray, as in the live
+                        # completion path (which also closes a partial legacy QR).
                         if (
                             details.get("is_test_tray") is not True
-                            and details.get("is_partial_submission") is not True
+                            and (
+                                details.get("is_partial_submission") is not True
+                                or details.get("transfer_seal_status") == "LEGACY_LOCAL_ONLY"
+                            )
+                            and parse_new_format_qr(_text_field(details, "master_label_code"))
                         ):
                             _remember_completed_label(history.completed_master_labels, _text_field(details, "master_label_code"))
                         row_worker_name = _sanitize_worker_name(row.get("worker_name", ""))
@@ -334,6 +341,9 @@ def load_session_history(
             history.work_summary[item_code]["test_count"] += 1
         else:
             history.work_summary[item_code]["count"] += 1
+            if session.get("transfer_seal_status") == "LEGACY_LOCAL_ONLY":
+                item_summary = history.work_summary[item_code]
+                item_summary["legacy_count"] = item_summary.get("legacy_count", 0) + 1
         if not session.get("is_test_tray", False) and not session.get("is_partial_submission", False):
             history.total_tray_count += 1
 

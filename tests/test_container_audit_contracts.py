@@ -6769,6 +6769,7 @@ def test_reset_current_work_logs_sync_and_clears_after_state_delete(monkeypatch)
 
 def test_process_barcode_rejects_non_positive_qr_quantity(tmp_path):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -6788,6 +6789,7 @@ def test_process_barcode_rejects_non_positive_qr_quantity(tmp_path):
 
 def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -6829,6 +6831,7 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
 
 def test_worker_scanner_full_tray_flow_writes_csv_sequence_before_relay_plan(tmp_path):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.worker_name = "홍길동"
     app.log_file_path = str(tmp_path / "이적작업이벤트로그_홍길동_20260624.csv")
     app.log_queue = ImmediateLogQueue()
@@ -7146,6 +7149,7 @@ def test_process_barcode_blocks_same_label_parked_by_other_worker(tmp_path, monk
 
 def test_process_barcode_keeps_empty_tray_when_master_label_state_save_fails(tmp_path):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -7194,6 +7198,7 @@ def test_process_barcode_preserves_outbox_state_when_master_label_audit_projecti
     monkeypatch,
 ):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -7250,6 +7255,7 @@ def test_process_barcode_preserves_outbox_state_when_master_label_audit_projecti
 
 def test_process_barcode_starts_tray_from_base64_encoded_json_master_label(tmp_path):
     app = _headless_app()
+    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None

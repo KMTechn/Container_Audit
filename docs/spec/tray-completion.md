@@ -13,6 +13,7 @@
 | `complete_tray` :10458–10461 / `_complete_tray_steps` :10463–10917 | 동기 복구도 같은 runner/generator; `_prepared_transfer_attempt`가 있으면 새 prepare 없이 그 객체 사용 | lane은 `_lane_prechecked=True`로 중복 admission만 생략; 원 guard 유지 |
 | `_complete_tray_steps` 전반 | intent mismatch·unlinked review·미확정/증거 회귀 분기; 동일 event 시각/key/worker/detail 보존 | 각 outcome의 원 저장→안내 순서; 미확정이면 트레이/스캔 잠금 유지 |
 | completion event | yield 재시도 contract JSON → yield 동기 `TRAY_COMPLETE` → 필요 시 post-review outbox projection | local CSV ACK 실패 시 `LOCAL_EVENT_RETRY`; 성공 표시·카운트 적용 전 반환 |
+| 과도기 레거시 트레이 | [과도기 모드](contracts.md#ca-legacy-transition)의 PHS2 아닌 트레이는 coordinator 조회·prepare 없이 결정적 `LEGACY_LOCAL_ONLY` attempt로 위 contract → 동기 `TRAY_COMPLETE` → state 삭제 순서를 쓴다 | 성공 안내·`legacy_count`는 일반 완료 집계와 같은 위치; 꺼진 PC의 13자리 완료 차단은 원인 안내 문구만 다름 |
 | completion summary | replay/다른 worker면 CSV에서 집계 재구성; 아니면 완료·test 개수/최고 기록 적용 | stopwatch/idle/undo 및 test 상태 안내는 기존 위치 유지 |
 | 최종 state 적용 | pending contract 해제 → 새 `TraySession` → 필요 시 epoch 무효화 → yield current state 삭제 → 실패 감사 | 별도 `apply_completed_tray_state_steps`; notice를 먼저 실행하지 않음 |
 | 최종 notice | listbox 정리·summary/UI reset → snapshot publish/삭제 실패 안내 → post-review 안내 | 별도 `present_completed_tray`; 마지막 완료 시각·True는 orchestration에서 유지 |
