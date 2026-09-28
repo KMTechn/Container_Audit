@@ -15,6 +15,7 @@ from label_qr import (
     TRANSITION_LOCAL_SEAL_STATUS,
     TRANSITION_PHS2_CENTRAL,
     parse_label_fields_leniently,
+    transition_reason_code,
 )
 from protected_admin import persistent_operator_name
 from session_history import TRANSITION_CLASS_NAMES, count_transition_completion
@@ -32,7 +33,6 @@ COMPLETION_BLOCK_CAUSES = {
     "PHS2_ACTIVE_LABEL_INVALID": LEGACY_LABEL_COMPLETION_BLOCKED,
     "OPERATION_LEASE_REQUIRED": (
         "이 트레이에는 중앙 이적 확인 정보(lease)가 없어 완료할 수 없습니다. "
-        "과도기 모드에서 시작한 트레이면 과도기 모드를 켠 PC에서 완료됩니다. "
         "현재 작업은 보존합니다. 관리자에게 알려 주세요."
     ),
 }
@@ -227,7 +227,7 @@ def request_complete_tray(
 
     identity = self._completion_lane_identity()
     finish_identity = self._capture_mutation_finish_identity()
-    transition = bool(getattr(self, "legacy_label_transition", False))
+    transition = self._in_transition_round()
     coordinator = None if local_only else self._transfer_seal_runtime()
     item_code = str(self.current_tray.item_code or "")
     scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
@@ -240,36 +240,14 @@ def request_complete_tray(
     )
 
     def work() -> bool:
-        # Transition mode: a central check that refuses this tray before any
-        # command (e.g. its scanned membership) completes it locally instead.
         precommand_block = ""
-        if not local_only and transition and existing_contract_snapshot is None:
-            try:
-                coordinator.preview(
-                    master_label=source_label_payload,
-                    master_label_fields=dict(source_label_fields),
-                    item_id=item_code,
-                    scanned_barcodes=scanned_barcodes,
-                    operation_lease_id=operation_lease_id,
-                )
-            except TransferSealError as exc:
-                if exc.code.startswith("TRANSFER_COORDINATOR_"):
-                    raise  # a local owner/thread fault, not a central refusal
-                precommand_block = exc.code
-        # A transition tray completed on this PC has no central seal; the
-        # completion steps record its local-only attempt instead.
-        attempt = None if local_only or precommand_block else self._prepare_and_attempt_transfer_seal_snapshot(
-            coordinator=coordinator,
-            source_label_payload=source_label_payload,
-            source_label_fields=dict(source_label_fields),
-            item_code=item_code,
-            operator=operator,
-            scanned_barcodes=scanned_barcodes,
-            relay_log_file_path=relay_log_path,
-            operation_lease_id=operation_lease_id,
-            on_prepared=lambda attempt: self._run_durable_ui_steps(
+        bound_intents = []
+
+        def on_prepared(prepared: SealAttempt) -> None:
+            bound_intents.append(prepared.intent_id)
+            self._run_durable_ui_steps(
                 self._prepared_completion_contract_steps(
-                    attempt,
+                    prepared,
                     existing_event_contract=existing_contract_snapshot,
                     completion_observed_at=completion_observed_at,
                     projection_log_path=projection_log_path,
@@ -278,8 +256,37 @@ def request_complete_tray(
                     master_label=master_label,
                     mutation_identity=finish_identity,
                 ), lane=lane,
-            ),
-        )
+            )
+
+        # A transition tray completed on this PC has no central seal; the
+        # completion steps record its local-only attempt instead.
+        attempt = None
+        if not local_only:
+            try:
+                attempt = self._prepare_and_attempt_transfer_seal_snapshot(
+                    coordinator=coordinator,
+                    source_label_payload=source_label_payload,
+                    source_label_fields=dict(source_label_fields),
+                    item_code=item_code,
+                    operator=operator,
+                    scanned_barcodes=scanned_barcodes,
+                    relay_log_file_path=relay_log_path,
+                    operation_lease_id=operation_lease_id,
+                    on_prepared=on_prepared,
+                )
+            except TransferSealError as exc:
+                # Transition mode: a check that refuses this tray before its completion
+                # contract binds a central intent - so before any command can exist -
+                # completes it locally instead (its scanned membership, a lease that
+                # expired meanwhile). A local owner/thread fault is not a refusal.
+                if (
+                    not transition
+                    or existing_contract_snapshot is not None
+                    or bound_intents
+                    or exc.code.startswith("TRANSFER_COORDINATOR_")
+                ):
+                    raise
+                precommand_block = transition_reason_code(exc.code)
         precommand_query = None
         if attempt is not None and attempt.status == "OPERATOR_REVIEW" and attempt.error_code:
             precommand_query = {
@@ -650,14 +657,17 @@ def complete_tray_steps(
     base_detail_keys = set(log_detail)
     self._attach_transfer_seal_detail(log_detail, transfer_attempt)
     transition_class = ""
-    if getattr(self, "legacy_label_transition", False) and not is_test:
-        # Every transition completion carries its class for display and measurement.
+    if self._in_transition_round():
+        # Every transition completion carries its class for display and measurement;
+        # the round keeps it through a retry or a restart (saved with the contract below).
         transition_class, transition_reasons = transition_route or (TRANSITION_PHS2_CENTRAL, [])
+        self.current_tray.transition_class = transition_class
         log_detail["transition_class"] = transition_class
         log_detail["transition_reasons"] = list(transition_reasons)
         log_detail["transition_duplicate"] = "DUPLICATE_LABEL" in transition_reasons
         log_detail["source_computer_id"] = str(getattr(self, "computer_id", "") or "")
         log_detail["source_host_name"] = socket.gethostname()
+        log_detail["app_version"] = str(getattr(self, "APP_VERSION", "") or "")
     current_transfer_detail = {
         key: value
         for key, value in log_detail.items()
@@ -811,9 +821,8 @@ def complete_tray_steps(
             or (local_only and parse_label_fields_leniently(master_label))
         )
     ):
-        self._remember_completed_master_label(
-            master_label, start_time=str(log_detail.get("start_time") or "")
-        )
+        self._remember_completed_master_label(master_label)
+        self._remember_completed_round(master_label, str(log_detail.get("start_time") or ""))
 
     item_code = self.current_tray.item_code
     if item_code not in self.work_summary: self.work_summary[item_code] = {'name': self.current_tray.item_name, 'spec': self.current_tray.item_spec, 'count': 0, 'test_count': 0}

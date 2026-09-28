@@ -1,6 +1,7 @@
 import base64
 import binascii
 import json
+import re
 from typing import Dict, List, Optional, Tuple
 
 # Transition mode records every completion under one of these classes; LM uses the same names.
@@ -24,6 +25,11 @@ TRANSITION_LOCAL_SEAL_STATUS = {
     TRANSITION_PHS2_LOCAL: "PHS2_LOCAL_ONLY",
     TRANSITION_PHS2_MALFORMED: "PHS2_MALFORMED_LOCAL_ONLY",
 }
+
+
+def transition_reason_code(code: object) -> str:
+    """A reason in the shared code shape (A-Z, 0-9, _), e.g. from a server error code."""
+    return re.sub(r"[^A-Z0-9_]+", "_", str(code or "").upper()).strip("_") or "UNKNOWN"
 
 
 class _MalformedQrJson(ValueError):

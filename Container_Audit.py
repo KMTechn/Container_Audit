@@ -104,6 +104,7 @@ from label_qr import (
     TRANSITION_PHS2_CENTRAL,
     TRANSITION_PHS2_LOCAL,
     TRANSITION_PHS2_MALFORMED,
+    TRANSITION_LOCAL_SEAL_STATUS,
     canonical_master_label_key,
     inspection_master_item_code,
     is_new_system_label_pair,
@@ -112,6 +113,7 @@ from label_qr import (
     parse_label_fields_leniently,
     parse_new_format_qr,
     parse_positive_quantity,
+    transition_reason_code,
 )
 from parked_tray_store import ParkedTrayStore, atomic_temp_target
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore, preserve_stale_bytes
@@ -988,6 +990,12 @@ class TraySession:
     operation_lease_id: str = ""
     # Transition mode: why this tray completes on this PC only (e.g. its preflight failure).
     transition_reasons: List[str] = field(default_factory=list)
+    # Transition mode: the class this round got with the switch on. It keeps the
+    # round on that path through a retry, a restart or the switch turned off.
+    transition_class: str = ""
+    # First attempt (timestamp, event file) of an undo/reset whose write may have
+    # landed: its retry, even after a restart on a later day, is the same row.
+    cancel_event_attempts: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
 
 class _LocalValueVar:
@@ -1036,6 +1044,7 @@ def _recovery_item_firewall(action):
 # ####################################################################
 class ContainerAudit:
     APP_TITLE = f"이적 검사 시스템 ({CURRENT_VERSION})"
+    APP_VERSION = CURRENT_VERSION
     LEGACY_LABEL_TRANSITION_NOTICE = "과도기 모드 — 옛 현품표 받음"
     # Transition mode starts a tray whose item it cannot confirm under this name.
     UNCONFIRMED_ITEM = {"Item Name": "품목 미확인", "Spec": ""}
@@ -2315,17 +2324,21 @@ class ContainerAudit:
             self._reject_mutation_during_preflight_hold()
         return False
 
-    def _remember_completed_master_label(self, master_label: str, *, start_time: str = "") -> None:
+    def _remember_completed_master_label(self, master_label: str) -> None:
         if not master_label:
             return
         if not hasattr(self, "completed_master_labels"):
             self.completed_master_labels = set()
         self.completed_master_labels.add(master_label)
         self.completed_master_labels.add(canonical_master_label_key(master_label))
-        if start_time:
-            if not hasattr(self, "completed_label_rounds"):
-                self.completed_label_rounds = set()
-            self.completed_label_rounds.add(completed_label_round(master_label, start_time))
+
+    def _remember_completed_round(self, master_label: str, start_time: str) -> None:
+        """One completed round (label + start time) of a label transition mode may complete again."""
+        if not master_label or not start_time:
+            return
+        if not hasattr(self, "completed_label_rounds"):
+            self.completed_label_rounds = set()
+        self.completed_label_rounds.add(completed_label_round(master_label, start_time))
 
     def _is_completed_tray_state(self, state: Mapping[str, Any]) -> bool:
         """A saved tray of a completed label is that completion's leftover, unless
@@ -2387,35 +2400,50 @@ class ContainerAudit:
                 )
         return (TRANSITION_PHS2_MALFORMED if reasons else TRANSITION_PHS2_CENTRAL), reasons
 
-    def _transition_local_tray(self) -> bool:
-        """Transition mode: a tray without an operation lease never takes the central path."""
+    def _in_transition_round(self) -> bool:
+        """Transition rules apply while the switch is on, and to a round that got
+        its class with the switch on; only a round started with it off is strict."""
         tray = self.current_tray
-        return bool(
+        return not tray.is_test_tray and bool(
             getattr(self, "legacy_label_transition", False)
-            and not tray.is_test_tray
-            and not str(getattr(tray, "operation_lease_id", "") or "").strip()
+            or getattr(tray, "transition_class", "")
+        )
+
+    def _transition_local_tray(self) -> bool:
+        """Transition mode: a tray without an operation lease, or whose round is
+        fixed to a local class, never takes the central path."""
+        tray = self.current_tray
+        return self._in_transition_round() and (
+            not str(getattr(tray, "operation_lease_id", "") or "").strip()
+            or str(getattr(tray, "transition_class", "") or "") in TRANSITION_LOCAL_SEAL_STATUS
         )
 
     def _transition_completion_route(self) -> Optional[Tuple[str, List[str]]]:
         """Transition mode: (class, reasons) of a tray this PC completes outside the ledger.
 
-        None keeps the normal path: always outside transition mode, and for a
-        full PHS=2 tray holding its operation lease.
+        None keeps the normal path: always for a strict round, and for a full
+        PHS=2 tray holding its operation lease.
         """
         tray = self.current_tray
-        if not getattr(self, "legacy_label_transition", False) or tray.is_test_tray:
+        if not self._in_transition_round():
             return None
         label_class, label_reasons = self._transition_label_class(tray.master_label_code)
         reasons = list(dict.fromkeys(
             [*(getattr(tray, "transition_reasons", None) or []), *label_reasons]
         ))
-        if label_class != TRANSITION_PHS2_CENTRAL:
-            return label_class, reasons
-        if not reasons and not str(getattr(tray, "operation_lease_id", "") or "").strip():
-            reasons.append("OPERATION_LEASE_REQUIRED")
-        if len(tray.scanned_barcodes) != int(tray.tray_size or 0):
-            reasons.append("PARTIAL_TRANSFER")
-        return (TRANSITION_PHS2_LOCAL, reasons) if reasons else None
+        if label_class == TRANSITION_PHS2_CENTRAL:
+            if not reasons and not str(getattr(tray, "operation_lease_id", "") or "").strip():
+                reasons.append("OPERATION_LEASE_REQUIRED")
+            if len(tray.scanned_barcodes) != int(tray.tray_size or 0):
+                reasons.append("PARTIAL_TRANSFER")
+            if reasons:
+                label_class = TRANSITION_PHS2_LOCAL
+        fixed_class = str(getattr(tray, "transition_class", "") or "")
+        if fixed_class in TRANSITION_LOCAL_SEAL_STATUS:
+            # A round decided local stays local: no retry, restart or later
+            # central answer takes it to a seal command or the ledger.
+            return fixed_class, reasons
+        return None if label_class == TRANSITION_PHS2_CENTRAL else (label_class, reasons)
 
     def _reject_legacy_master_label(self, qr_data: Optional[Mapping[str, Any]]) -> bool:
         """Outside transition mode, stop a pre-PHS2 or damaged new label at tray start."""
@@ -11199,6 +11227,7 @@ class ContainerAudit:
         preflight_hold_owner: bool = False,
         coordinator_ui_snapshot: Optional[Mapping[str, Any]] = None,
         transition_reasons: Sequence[str] = (),
+        transition_class: str = "",
     ) -> bool:
         if self._paired_preflight_blocks_label(barcode):
             self.show_fullscreen_warning(
@@ -11225,6 +11254,7 @@ class ContainerAudit:
             item_name=matched_item.get('Item Name', ''),
             item_spec=matched_item.get('Spec', ''),
             transition_reasons=list(transition_reasons),
+            transition_class=transition_class,
         )
         self.current_tray.stopwatch_seconds = 0
         self.current_tray.start_time = datetime.datetime.now()
@@ -11766,6 +11796,11 @@ class ContainerAudit:
             operation_lease_id=operation_lease_id,
             preflight_hold_owner=True,
             coordinator_ui_snapshot=result[6] if len(result) > 6 else None,
+            transition_class=(
+                TRANSITION_PHS2_CENTRAL
+                if getattr(self, "legacy_label_transition", False)
+                else ""
+            ),
         )
         if activated:
             self._begin_preflight_hold_drain()
@@ -11784,6 +11819,7 @@ class ContainerAudit:
     ) -> None:
         """Transition mode: a PHS=2 label the central check refused or could not reach
         starts a local tray (no lease, no ledger) and takes over its held scans."""
+        reason = transition_reason_code(failure.code)
         try:
             self._log_event(
                 "MASTER_LABEL_PREFLIGHT_FAILED",
@@ -11802,7 +11838,7 @@ class ContainerAudit:
         self._master_preflight_pending = False
         self._preflight_offline_error_code = ""
         self._set_preflight_scan_input_locked(True)
-        notice = f"중앙 확인 실패({failure.code}) · 과도기 로컬 작업(새 원장 제외)"
+        notice = f"중앙 확인 실패({reason}) · 과도기 로컬 작업(새 원장 제외)"
         activated = self._activate_master_label_tray(
             barcode=barcode,
             item_code=str(canonical_fields.get("CLC") or ""),
@@ -11812,10 +11848,11 @@ class ContainerAudit:
             event_detail={
                 **canonical_fields,
                 "transition_class": TRANSITION_PHS2_LOCAL,
-                "transition_reasons": [failure.code],
+                "transition_reasons": [reason],
             },
             preflight_hold_owner=True,
-            transition_reasons=[failure.code],
+            transition_reasons=[reason],
+            transition_class=TRANSITION_PHS2_LOCAL,
         )
         if activated:
             self.show_status_message(notice, self.COLOR_DANGER, duration=0)
@@ -13258,13 +13295,16 @@ class ContainerAudit:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드 수량(QT)은 1 이상의 숫자여야 합니다.", self.COLOR_DANGER)
                         return
                     event_detail = dict(qr_data)
+                    round_class = ""
                     if transition:
+                        # A label reaching here with the switch on completes on this PC only.
+                        round_class = (
+                            TRANSITION_PHS2_LOCAL
+                            if transition_class == TRANSITION_PHS2_CENTRAL
+                            else transition_class
+                        )
                         event_detail.update(
-                            transition_class=(
-                                TRANSITION_PHS2_LOCAL
-                                if transition_class == TRANSITION_PHS2_CENTRAL
-                                else transition_class
-                            ),
+                            transition_class=round_class,
                             transition_reasons=list(transition_reasons),
                         )
                     if self._activate_master_label_tray(
@@ -13275,6 +13315,7 @@ class ContainerAudit:
                         event_name='MASTER_LABEL_SCANNED_NEW',
                         event_detail=event_detail,
                         transition_reasons=transition_reasons,
+                        transition_class=round_class,
                     ) and "DUPLICATE_LABEL" in transition_reasons:
                         self.show_fullscreen_warning(
                             "현품표 중복 · 과도기 기록",
@@ -13330,6 +13371,7 @@ class ContainerAudit:
                     event_name='MASTER_LABEL_SCANNED_OLD',
                     event_detail=event_detail,
                     transition_reasons=transition_reasons,
+                    transition_class=TRANSITION_LEGACY if transition else "",
                 )
             return
             
@@ -13727,6 +13769,14 @@ class ContainerAudit:
         if not self.current_tray.scanned_barcodes: return
         last_barcode = self.current_tray.scanned_barcodes.pop()
         last_scan_time = self.current_tray.scan_times.pop()
+        undo_key = self._cancel_event_key("scan-undo", {
+            "master_label": self.current_tray.master_label_code,
+            "start_time": self.current_tray.start_time.isoformat() if self.current_tray.start_time else "",
+            "position": len(self.current_tray.scanned_barcodes) + 1,
+            "barcode": last_barcode,
+            "scanned_at": last_scan_time.isoformat() if hasattr(last_scan_time, "isoformat") else str(last_scan_time),
+        })
+        self._cancel_event_attempt(undo_key, self.current_tray.cancel_event_attempts)
         self.scanned_listbox.delete(0)
         if not self._save_current_tray_state():
             self.current_tray.scanned_barcodes.append(last_barcode)
@@ -13741,7 +13791,10 @@ class ContainerAudit:
             self._schedule_focus_return()
             return
         self._update_center_display()
-        if not self._log_event('SCAN_UNDO', detail={'undone_barcode': last_barcode}, synchronous=True):
+        if not self._log_cancel_event(
+            'SCAN_UNDO', {'undone_barcode': last_barcode}, undo_key,
+            self.current_tray.cancel_event_attempts,
+        ):
             self.current_tray.scanned_barcodes.append(last_barcode)
             self.current_tray.scan_times.append(last_scan_time)
             row_text = self._format_scanned_list_row(len(self.current_tray.scanned_barcodes), last_barcode)
@@ -13783,13 +13836,21 @@ class ContainerAudit:
                 'master_label_code': self.current_tray.master_label_code,
                 'scan_count_at_reset': len(self.current_tray.scanned_barcodes),
             }
+            reset_key = self._cancel_event_key("tray-reset", {
+                "master_label": self.current_tray.master_label_code,
+                "start_time": self.current_tray.start_time.isoformat() if self.current_tray.start_time else "",
+                "scanned_barcodes": list(self.current_tray.scanned_barcodes),
+            })
+            self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts)
             state_snapshot = self._current_tray_state_snapshot()
             if self._delete_current_tray_state() is False:
                 self._log_event('TRAY_RESET_STATE_DELETE_FAILED', detail=reset_detail)
                 messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못해 현재 작업을 유지합니다.")
                 self.show_status_message("현재 작업 상태 파일 삭제에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
                 return
-            if not self._log_event('TRAY_RESET', detail=reset_detail, synchronous=True):
+            if not self._log_cancel_event(
+                'TRAY_RESET', reset_detail, reset_key, self.current_tray.cancel_event_attempts,
+            ):
                 restore_ok = self._save_tray_state_snapshot(state_snapshot)
                 message = "초기화 기록을 남기지 못해 현재 작업을 유지합니다."
                 if not restore_ok:
@@ -16757,6 +16818,49 @@ class ContainerAudit:
     def _stable_hash(data: Dict[str, Any]) -> str:
         return stable_hash(data)
 
+    def _cancel_event_key(self, kind: str, identity: Mapping[str, Any]) -> str:
+        """The event ID of one cancellation: a retry after a lost write
+        acknowledgement finds its durable row and writes no second one."""
+        return f"{kind}:{self._stable_hash(dict(identity))[:40]}"
+
+    def _cancel_event_attempt(self, key: str, attempts: Dict[str, Dict[str, str]]) -> Dict[str, str]:
+        """The first attempt of one cancellation. Its retry - on a later day, when
+        the event file is another - writes the same row to the same file, where
+        the durable row, if any, is found by its event ID."""
+        if key not in attempts:
+            attempts[key] = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "log_file_name": Path(str(getattr(self, "log_file_path", "") or "")).name,
+            }
+        return attempts[key]
+
+    def _log_cancel_event(
+        self,
+        event_type: str,
+        detail: Dict[str, Any],
+        key: str,
+        attempts: Optional[Dict[str, Dict[str, str]]] = None,
+    ) -> bool:
+        if attempts is None:  # a cancellation not bound to the saved tray
+            attempts = vars(self).setdefault("_cancel_event_attempts", {})
+        attempt = self._cancel_event_attempt(key, attempts)
+        logged = self._log_event(
+            event_type,
+            detail=detail,
+            synchronous=True,
+            idempotency_key=key,
+            deduplicate=True,
+            event_timestamp=attempt["timestamp"],
+            log_file_path_override=(
+                str(self._completion_projection_log_path(attempt["log_file_name"]))
+                if attempt["log_file_name"]
+                else None
+            ),
+        )
+        if logged:
+            attempts.pop(key, None)
+        return logged
+
     def show_status_message(self, message: str, color: Optional[str] = None, duration: int = 4000):
         self._cancel_status_message_timer()
         generation = self._status_message_generation
@@ -17552,6 +17656,7 @@ class ContainerAudit:
             if not self._log_event('HISTORICAL_REPLACE_START', synchronous=True):
                 messagebox.showerror("교체 시작 기록 실패", "현품표 교체 시작 기록을 남기지 못했습니다. 다시 시도해주세요.")
                 return
+            self.replacement_context = {"replacement_session_id": uuid.uuid4().hex}
             self._invalidate_pending_scan_callbacks()
             self.master_label_replace_state = 'awaiting_old_completed'
             self.show_status_message("교체할 '완료된' 현품표를 스캔하세요.", self.COLOR_PRIMARY)
@@ -17578,17 +17683,21 @@ class ContainerAudit:
 
     def _log_master_label_replacement_cancel(self, *, reason: str) -> bool:
         context = self.replacement_context
-        return self._log_event(
+        detail = {
+            'reason': reason,
+            'state': self.master_label_replace_state,
+            'old_label': context.get('old_label'),
+            'new_label': context.get('new_label'),
+            'additional_count': len(context.get('additional_items') or []),
+            'removed_count': len(context.get('removed_items') or []),
+        }
+        return self._log_cancel_event(
             'HISTORICAL_REPLACE_CANCEL',
-            detail={
-                'reason': reason,
-                'state': self.master_label_replace_state,
-                'old_label': context.get('old_label'),
-                'new_label': context.get('new_label'),
-                'additional_count': len(context.get('additional_items') or []),
-                'removed_count': len(context.get('removed_items') or []),
-            },
-            synchronous=True,
+            detail,
+            self._cancel_event_key("historical-replace-cancel", {
+                "session": context.get("replacement_session_id") or "",
+                "detail": detail,
+            }),
         )
 
     def _reset_master_label_replacement_state(self):
@@ -18643,7 +18752,11 @@ class ContainerAudit:
                 "good_barcodes": list(session.good_barcodes),
                 "reason": reason,
             }
-            if not self._log_event("PRODUCT_EXCHANGE_CANCELLED", detail=detail, synchronous=True):
+            if not self._log_cancel_event(
+                "PRODUCT_EXCHANGE_CANCELLED",
+                detail,
+                self._cancel_event_key("product-exchange-cancel", detail),
+            ):
                 messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록 저장에 실패했습니다. 교환 상태를 유지합니다.")
                 return False
 

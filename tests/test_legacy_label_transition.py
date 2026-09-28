@@ -15,6 +15,8 @@ import queue
 import socket
 import threading
 
+from pathlib import Path
+
 import pytest
 
 import Container_Audit as container_audit_module
@@ -22,6 +24,7 @@ import logistics_runtime_profile as runtime_profile
 import session_history
 from Container_Audit import ContainerAudit, TraySession
 from direct_sync_health import RelayHealth
+import label_qr
 from label_qr import canonical_master_label_key
 from parked_tray_store import ParkedTrayStore
 from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401 - fixture
@@ -357,6 +360,7 @@ def test_off_keeps_resuming_a_parked_old_qr_tray_by_scanning_its_label(flow, mon
 def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(
     flow, foreground, snapshot_label, expected
 ):
+    # A round without a transition class (never started with the switch on) is strict.
     app = flow(transition=False)
     app._transfer_member_exchange_attempt_snapshot = {
         "known": True, "master_label": snapshot_label, "attempt": None,
@@ -381,8 +385,10 @@ def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(
 
 
 @pytest.mark.parametrize("foreground", [False, True])
-def test_off_phs2_tray_started_locally_is_kept_and_the_block_names_its_cause(flow, foreground):
-    # A PHS2_LOCAL tray (no lease) restored after the switch was turned off.
+def test_off_phs2_tray_without_a_lease_or_class_is_kept_and_the_block_names_its_cause(
+    flow, foreground
+):
+    # A lease-less PHS=2 round without a transition class is strict with the switch off.
     app = flow(transition=False)
     app._transfer_member_exchange_attempt_snapshot = {
         "known": True, "master_label": COMPACT_QR, "attempt": None,
@@ -494,6 +500,7 @@ def test_on_completes_a_full_13_digit_tray_locally_without_seal_or_ledger(flow):
     assert detail["is_partial_submission"] is False
     assert detail["source_computer_id"] == "0xfixturepc"
     assert detail["source_host_name"] == socket.gethostname()
+    assert detail["app_version"] == container_audit_module.CURRENT_VERSION
     assert row["worker_name"] == "tester"
     assert datetime.datetime.fromisoformat(row["timestamp"]).date() == datetime.date.today()
     assert detail["transfer_bundle_id"] is None and detail["transfer_seal_receipt_id"] is None
@@ -599,6 +606,131 @@ def test_same_label_completed_twice_with_the_same_products_counts_both_rounds(fl
     assert restarted.work_summary[ITEM]["transition_duplicates"] == 1
     # A completed round's leftover state is still discarded on restart.
     assert session_history.completed_label_round(OLD_QR, first["start_time"]) in restarted.completed_label_rounds
+
+
+@pytest.mark.parametrize(
+    ("action", "event", "key_prefix"),
+    [("undo", "SCAN_UNDO", "scan-undo:"), ("reset", "TRAY_RESET", "tray-reset:")],
+)
+def test_cancellation_retried_after_a_lost_write_ack_leaves_one_row_with_its_event_id(
+    flow, monkeypatch, action, event, key_prefix
+):
+    # sub-04 R8: the row was durable but its acknowledgement was lost; the
+    # operator's retry must not write a second row (the server would quarantine
+    # a second TRAY_RESET of the same label and stop this PC's upload line).
+    app = flow(transition=True)
+    app._process_barcode_logic(ITEM)
+    _scan_products(app, 2)
+    lost = []
+
+    def losing(real):
+        def append(path, entry, *args, **kwargs):
+            result = real(path, entry, *args, **kwargs)
+            if entry["event"] == event and not lost:
+                lost.append(entry)
+                raise OSError("write acknowledgement lost")
+            return result
+        return append
+
+    for name in ("append_event_log_entry", "append_event_log_entry_idempotent"):
+        monkeypatch.setattr(container_audit_module, name, losing(getattr(container_audit_module, name)))
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
+    cancel = app.undo_last_scan if action == "undo" else app.reset_current_work
+
+    cancel()
+    assert lost and app.current_tray.master_label_code == ITEM  # kept: the app saw a failure
+    cancel()
+
+    [row] = _rows(app, event)
+    assert _details(row)["idempotency_key"].startswith(key_prefix)
+    assert row["timestamp"] == lost[0]["timestamp"]
+
+
+def _rows_in(path, event):
+    with open(path, encoding="utf-8-sig", newline="") as handle:
+        return [row for row in csv.DictReader(handle) if row["event"] == event]
+
+
+@pytest.mark.parametrize(("action", "event"), [("undo", "SCAN_UNDO"), ("reset", "TRAY_RESET")])
+def test_cancellation_retried_after_a_restart_on_a_later_day_finds_its_first_row(
+    flow, tmp_path, monkeypatch, action, event
+):
+    # Coordinator 09-29 (LM class): the first write landed in that day's file
+    # but its acknowledgement was lost; a retry after a restart the next day
+    # must not write the same event ID again, with another time, to the new file.
+    first = flow(transition=True, root=tmp_path / "pc")
+    first._process_barcode_logic(ITEM)
+    _scan_products(first, 2)
+    lost = []
+    real = container_audit_module.append_event_log_entry_idempotent
+
+    def losing(path, entry, *args, **kwargs):
+        result = real(path, entry, *args, **kwargs)
+        if entry["event"] == event and not lost:
+            lost.append(entry)
+            raise OSError("write acknowledgement lost")
+        return result
+
+    monkeypatch.setattr(container_audit_module, "append_event_log_entry_idempotent", losing)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
+    (first.undo_last_scan if action == "undo" else first.reset_current_work)()
+    assert lost and first.current_tray.master_label_code == ITEM
+    day_one = first.log_file_path
+
+    restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=True)
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001", f"{ITEM}-0002"]
+    restarted.log_file_path = str(tmp_path / "pc" / "이적작업이벤트로그_tester_20991231.csv")
+    (restarted.undo_last_scan if action == "undo" else restarted.reset_current_work)()
+
+    [row] = _rows_in(day_one, event)
+    assert row["timestamp"] == lost[0]["timestamp"]
+    later = tmp_path / "pc" / "이적작업이벤트로그_tester_20991231.csv"
+    assert not later.exists() or _rows_in(later, event) == []
+    if action == "undo":
+        assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001"]
+    else:
+        assert restarted.current_tray.master_label_code == ""
+
+
+def test_replacement_and_exchange_cancellations_carry_event_ids_and_retry_as_one_row(flow, monkeypatch):
+    from product_exchange import ProductExchangeSession
+
+    app = flow(transition=False)
+    app.master_label_replace_state = "awaiting_old_completed"
+    app.replacement_context = {"replacement_session_id": "replace-session-1"}
+    assert app._log_master_label_replacement_cancel(reason="operator_cancel") is True
+    assert app._log_master_label_replacement_cancel(reason="operator_cancel") is True  # the retry
+
+    lost = []
+    real = container_audit_module.append_event_log_entry_idempotent
+
+    def losing(path, entry, *args, **kwargs):
+        result = real(path, entry, *args, **kwargs)
+        if entry["event"] == "PRODUCT_EXCHANGE_CANCELLED" and not lost:
+            lost.append(entry)
+            raise OSError("write acknowledgement lost")
+        return result
+
+    monkeypatch.setattr(container_audit_module, "append_event_log_entry_idempotent", losing)
+    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
+    app._update_action_button_states = lambda: None
+    app.exchange_dialog = None
+    session = ProductExchangeSession(item_code=ITEM, defective_barcodes=[f"{ITEM}-0001"])
+    app.current_exchange_session = session
+    assert app._finish_exchange_cancel_ui("operator_cancel") is False  # kept for the retry
+    first_file = app.log_file_path
+    app.log_file_path = str(Path(first_file).with_name("이적작업이벤트로그_tester_20991231.csv"))  # a later day
+    app.current_exchange_session = session
+    assert app._finish_exchange_cancel_ui("operator_cancel") is True
+    later, app.log_file_path = app.log_file_path, first_file
+    assert not Path(later).exists() or _rows_in(later, "PRODUCT_EXCHANGE_CANCELLED") == []
+
+    [replace_cancel] = _rows(app, "HISTORICAL_REPLACE_CANCEL")
+    assert _details(replace_cancel)["idempotency_key"].startswith("historical-replace-cancel:")
+    [exchange_cancel] = _rows(app, "PRODUCT_EXCHANGE_CANCELLED")
+    assert _details(exchange_cancel)["idempotency_key"].startswith("product-exchange-cancel:")
 
 
 def test_on_old_v209_label_is_legacy(flow):
@@ -823,10 +955,20 @@ def _phs2_tray(flow, root, *, transition):
     )
     assert app.current_tray.operation_lease_id
     app.seal_calls.clear()
-    app._prepare_and_attempt_transfer_seal_snapshot = lambda **kwargs: (
+
+    def acked_seal(**kwargs):
+        # The real pre-command checks, then a command the fixture acknowledges.
+        kwargs["coordinator"].preview(
+            master_label=kwargs["source_label_payload"],
+            master_label_fields=kwargs["source_label_fields"],
+            item_id=kwargs["item_code"],
+            scanned_barcodes=kwargs["scanned_barcodes"],
+            operation_lease_id=kwargs["operation_lease_id"],
+        )
         app.seal_calls.append(kwargs["source_label_payload"])
-        or SealAttempt("intent-phs2", "ACKED", receipt_id="receipt-phs2")
-    )
+        return SealAttempt("intent-phs2", "ACKED", receipt_id="receipt-phs2")
+
+    app._prepare_and_attempt_transfer_seal_snapshot = acked_seal
     app.current_tray.scanned_barcodes = [f"{ITEM}-SERIAL-001"]  # the lease's members
     app.current_tray.scan_times = [datetime.datetime.now()]
     return app
@@ -851,7 +993,7 @@ def _phs2_completion(flow, root, *, transition, last=f"{ITEM}-SERIAL-002"):
 
 TRANSITION_KEYS = {
     "transition_class", "transition_reasons", "transition_duplicate",
-    "source_computer_id", "source_host_name",
+    "source_computer_id", "source_host_name", "app_version",
 }
 
 
@@ -885,6 +1027,41 @@ def test_on_phs2_tray_the_lease_refuses_before_any_command_completes_locally(flo
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
+def test_on_phs2_lease_expiring_between_the_checks_still_completes_locally(flow, tmp_path):
+    # sub-04 P2-1: the lease passed the preview but expired before prepare wrote
+    # an intent; the first press completes the tray locally.
+    app = _phs2_tray(flow, tmp_path / "on", transition=True)
+    del app._prepare_and_attempt_transfer_seal_snapshot  # the real seal steps
+    app.current_tray.scanned_barcodes.append(f"{ITEM}-SERIAL-002")
+    app.current_tray.scan_times.append(datetime.datetime.now())
+    coordinator = app.transfer_seal_coordinator
+    # As the real constructor: the completion lane owns the seal coordinator.
+    coordinator._owner_thread_id_provider = app._transfer_coordinator_owner_thread_id
+    real_verify = coordinator._verified_operation_lease
+    checks = []
+
+    def expiring(**kwargs):
+        checks.append(kwargs["lease_id"])
+        if len(checks) > 1:
+            raise TransferSealError("OPERATION_LEASE_EXPIRED", "fixture expiry")
+        return real_verify(**kwargs)
+
+    coordinator._verified_operation_lease = expiring
+    completed = []
+    assert app.request_complete_tray(completion_callback=completed.append) is True
+    _pump_until(app.root, lambda: bool(completed))
+
+    assert completed == [True] and len(checks) == 2
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert (detail["transition_class"], detail["transition_reasons"]) == (
+        "PHS2_LOCAL", ["OPERATION_LEASE_EXPIRED"],
+    )
+    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
+    assert _has_seal_intent(app) is False
+
+
+@pytest.mark.usefixtures("fixed_operation_lease_clock")
 def test_partial_phs2_tray_is_refused_off_and_recorded_locally_on(flow, tmp_path, monkeypatch):
     off = _phs2_tray(flow, tmp_path / "off", transition=False)
     assert off.submit_current_tray() is None
@@ -908,8 +1085,10 @@ def test_partial_phs2_tray_is_refused_off_and_recorded_locally_on(flow, tmp_path
     [
         (ConnectionError("fixture outage"), "PHS2_PREFLIGHT_UNAVAILABLE"),
         (TransferSealError("PHS2_SOURCE_NOT_INSPECTED", "fixture refusal"), "PHS2_SOURCE_NOT_INSPECTED"),
+        # A server code outside the shared shape is recorded in it.
+        (TransferSealError("phs2-source.not inspected", "fixture refusal"), "PHS2_SOURCE_NOT_INSPECTED"),
     ],
-    ids=["offline", "refused"],
+    ids=["offline", "refused", "server-code-shape"],
 )
 def test_on_phs2_label_the_central_check_blocks_becomes_a_local_tray_with_its_held_scans(
     flow, monkeypatch, error, reason
@@ -942,6 +1121,121 @@ def test_on_phs2_label_the_central_check_blocks_becomes_a_local_tray_with_its_he
     assert detail["transition_reasons"] == [reason, "PARTIAL_TRANSFER"]
     assert detail["product_barcodes"] == [f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"]
     assert app.seal_calls == [] and _has_seal_intent(app) is False
+
+
+def _restart(flow, root, monkeypatch, *, transition, client=None):
+    app = flow(transition=transition, client=client, root=root)
+    app.worker_name = "tester"
+    app._load_session_state()
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
+    app._load_current_tray_state()
+    return app
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [(ITEM, "LEGACY"), (OLD_QR, "LEGACY"), (COMPACT_QR.replace("PHS=2|", ""), "PHS2_MALFORMED")],
+)
+def test_round_started_on_completes_in_its_class_after_the_switch_is_turned_off(
+    flow, tmp_path, monkeypatch, label, expected
+):
+    # 09-29 decision: a round keeps the class it got with the switch on; only a
+    # round started with the switch off is strict.
+    first = flow(transition=True, root=tmp_path / "pc")
+    first._process_barcode_logic(label)
+    _scan_products(first, 1)
+    assert first.current_tray.transition_class == expected
+
+    restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=False)
+    assert restarted.current_tray.transition_class == expected
+    _submit(restarted, monkeypatch)
+
+    [row] = _rows(restarted, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == expected
+    assert detail["transfer_seal_status"] == label_qr.TRANSITION_LOCAL_SEAL_STATUS[expected]
+    assert restarted.seal_calls == [] and _has_seal_intent(restarted) is False
+
+
+@pytest.mark.parametrize("restart_on", [True, False], ids=["restart-on", "restart-off"])
+def test_phs2_round_started_locally_never_reaches_the_central_path_later(
+    flow, tmp_path, monkeypatch, restart_on
+):
+    # Started PHS2_LOCAL during an outage; restarted with the server back (and
+    # the switch on or off) it completes locally without a central call.
+    first = flow(
+        transition=True,
+        client=BlockingClient(_resolved(count=2), error=ConnectionError("fixture outage")),
+        root=tmp_path / "pc",
+    )
+    first._process_barcode_logic(COMPACT_QR)
+    _pump_until(
+        first.root,
+        lambda: bool(first.current_tray.master_label_code)
+        and not first._preflight_hold_store().exists()
+        and not getattr(first, "_preflight_scan_input_locked", False),
+    )
+    first._process_barcode_logic(f"{ITEM}-SERIAL-001")
+    assert first.current_tray.transition_class == "PHS2_LOCAL"
+
+    online = BlockingClient(_resolved(count=2))
+    restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=restart_on, client=online)
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-SERIAL-001"]
+    _submit(restarted, monkeypatch)
+
+    [row] = _rows(restarted, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_LOCAL", "PHS2_LOCAL_ONLY")
+    assert detail["transition_reasons"] == ["PHS2_PREFLIGHT_UNAVAILABLE", "PARTIAL_TRANSFER"]
+    assert online.identities == [] and restarted.seal_calls == []
+    assert _has_seal_intent(restarted) is False
+
+
+@pytest.mark.usefixtures("fixed_operation_lease_clock")
+def test_phs2_round_refused_before_a_command_stays_local_after_a_failed_write_and_switch_off(
+    flow, tmp_path, monkeypatch
+):
+    app = _phs2_tray(flow, tmp_path / "pc", transition=True)
+    app.current_tray.scanned_barcodes.append(f"{ITEM}-OTHER-999")
+    app.current_tray.scan_times.append(datetime.datetime.now())
+    failed = []
+
+    def failing(real):
+        def append(path, entry, *args, **kwargs):
+            if entry["event"] == "TRAY_COMPLETE" and not failed:
+                failed.append(entry)
+                raise OSError("fixture write failure")
+            return real(path, entry, *args, **kwargs)
+        return append
+
+    for name in ("append_event_log_entry", "append_event_log_entry_idempotent"):
+        monkeypatch.setattr(container_audit_module, name, failing(getattr(container_audit_module, name)))
+    completed = []
+    assert app.request_complete_tray(completion_callback=completed.append) is True
+    _pump_until(app.root, lambda: bool(completed))
+    assert completed == [False] and failed and _rows(app, "TRAY_COMPLETE") == []
+
+    restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=False)
+    assert restarted.current_tray.transition_class == "PHS2_LOCAL"
+    completed = []
+    assert restarted.request_complete_tray(completion_callback=completed.append) is True
+    _pump_until(restarted.root, lambda: bool(completed))
+
+    assert completed == [True]
+    [row] = _rows(restarted, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_LOCAL", "PHS2_LOCAL_ONLY")
+    assert detail["transition_reasons"] == ["BARCODE_NOT_IN_SOURCE_BUNDLE"]
+    # The retry is the same event: same ID and timestamp as the failed write.
+    assert detail["idempotency_key"] == json.loads(failed[0]["details"])["idempotency_key"]
+    assert row["timestamp"] == failed[0]["timestamp"]
+    assert restarted.seal_calls == [] and _has_seal_intent(restarted) is False
+
+
+def test_transition_reason_codes_keep_the_shared_shape():
+    assert label_qr.transition_reason_code("PHS2_SOURCE_NOT_INSPECTED") == "PHS2_SOURCE_NOT_INSPECTED"
+    assert label_qr.transition_reason_code("phs2-source.not inspected") == "PHS2_SOURCE_NOT_INSPECTED"
+    assert label_qr.transition_reason_code("서버 오류") == "UNKNOWN"
 
 
 def test_on_duplicate_phs2_label_goes_local_without_a_central_call(flow, monkeypatch):

@@ -3,7 +3,12 @@ import json
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
-from label_qr import inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
+from label_qr import (
+    TRANSITION_CLASSES,
+    inspection_master_item_code,
+    parse_new_format_qr,
+    parse_positive_quantity,
+)
 from protected_admin import persistent_operator_name
 from writer_session_fence import writer_sink
 
@@ -75,6 +80,14 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
     transition_reasons = list(getattr(tray, "transition_reasons", []) or [])
     if transition_reasons:
         state["transition_reasons"] = transition_reasons
+    transition_class = str(getattr(tray, "transition_class", "") or "")
+    if transition_class:
+        state["transition_class"] = transition_class
+    cancel_event_attempts = dict(getattr(tray, "cancel_event_attempts", {}) or {})
+    if cancel_event_attempts:
+        state["cancel_event_attempts"] = {
+            str(key): dict(attempt) for key, attempt in cancel_event_attempts.items()
+        }
     scanned_barcodes = set(state["scanned_barcodes"])
     raw_receipts = getattr(tray, "preflight_scan_receipts", {})
     if isinstance(raw_receipts, Mapping):
@@ -748,6 +761,27 @@ def validate_tray_state(
         raise TrayStateValidationError(
             "transition_reasons must be a list of reason codes"
         )
+    if state.get("transition_class", "") not in ("", *TRANSITION_CLASSES):
+        raise TrayStateValidationError("transition_class must be a transition class")
+    cancel_event_attempts = state.get("cancel_event_attempts", {})
+    if not isinstance(cancel_event_attempts, dict) or not all(
+        isinstance(key, str) and key.strip()
+        and isinstance(attempt, dict)
+        and set(attempt) == {"timestamp", "log_file_name"}
+        and isinstance(attempt["timestamp"], str) and attempt["timestamp"].strip()
+        and isinstance(attempt["log_file_name"], str)
+        and (
+            attempt["log_file_name"] == ""
+            or (
+                attempt["log_file_name"] == Path(attempt["log_file_name"]).name
+                and attempt["log_file_name"].lower().endswith(".csv")
+            )
+        )
+        for key, attempt in cancel_event_attempts.items()
+    ):
+        raise TrayStateValidationError(
+            "cancel_event_attempts must map event IDs to a timestamp and event file"
+        )
 
     scan_times = state.get("scan_times")
     if not isinstance(scan_times, list) or not all(isinstance(value, str) for value in scan_times):
@@ -859,6 +893,12 @@ def tray_session_from_state(
         if state.get("transition_reasons")
         else {}
     )
+    if state.get("transition_class"):
+        transition["transition_class"] = str(state["transition_class"])
+    if state.get("cancel_event_attempts"):
+        transition["cancel_event_attempts"] = {
+            key: dict(attempt) for key, attempt in state["cancel_event_attempts"].items()
+        }
     return session_factory(
         **transition,
         master_label_code=state["master_label_code"],

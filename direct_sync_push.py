@@ -1100,6 +1100,64 @@ def _strict_non_negative_int(value: Any) -> int | None:
     return value
 
 
+# The server keeps a transition completion it has already seen (an intended
+# duplicate, or a label another PC completed first) as raw evidence only.
+TRANSITION_DUPLICATE_RECEIPT_ENTRY = {
+    "raw_event_name": "TRAY_COMPLETE",
+    "projection_required": False,
+    "projection_status": "NOT_PROJECTED",
+    "event_projection_class": "RAW_EVIDENCE_ONLY",
+    "raw_only_reason_code": "TRANSITION_DUPLICATE_OBSERVED",
+}
+
+
+def _transition_duplicates_only(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> bool:
+    """A RAW_LEGITIMATE receipt that only records this PC's transition completions.
+
+    Every uploaded row must be a TRAY_COMPLETE carrying transition_class that
+    this host wrote, and every receipt entry the exact duplicate observation,
+    covering all rows. Accepting it keeps the next delta of the same file moving.
+    """
+    observation = receipt.get("projection_observation")
+    entries = observation.get("event_classifications") if isinstance(observation, Mapping) else None
+    if not isinstance(entries, list) or not entries:
+        return False
+    observed = 0
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            return False
+        count = entry.get("count")
+        if type(count) is not int or count <= 0:
+            return False
+        if {key: entry.get(key) for key in TRANSITION_DUPLICATE_RECEIPT_ENTRY} != TRANSITION_DUPLICATE_RECEIPT_ENTRY:
+            return False
+        observed += count
+    row_count = plan.metadata.get("row_count")
+    if type(row_count) is not int or observed != row_count:
+        return False
+    try:
+        with Path(plan.source_file_path).open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = [row for row in csv.DictReader(handle) if any(str(cell or "").strip() for cell in row.values())]
+    except (OSError, UnicodeDecodeError, csv.Error):
+        return False
+    if len(rows) != row_count:
+        return False
+    for row in rows:
+        try:
+            details = json.loads(row.get("details") or "")
+        except ValueError:
+            return False
+        if (
+            row.get("event") != "TRAY_COMPLETE"
+            or not isinstance(details, dict)
+            or not details.get("transition_class")
+            # A shared event folder can hold another PC's rows.
+            or str(details.get("source_host_name") or "").casefold() != socket.gethostname().casefold()
+        ):
+            return False
+    return True
+
+
 def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> tuple[str, str, int, int]:
     identity_error_code, identity_error_message = _receipt_identity_issue(plan, receipt)
     if identity_error_code:
@@ -1128,7 +1186,9 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
             0,
             0,
         )
-    if projection_disposition != "COMPLETE":
+    if projection_disposition != "COMPLETE" and not (
+        projection_disposition == "RAW_LEGITIMATE" and _transition_duplicates_only(plan, receipt)
+    ):
         return (
             "producer_projection_incomplete",
             "accepted receipt projection_disposition must be COMPLETE",

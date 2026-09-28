@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import socket
 import sqlite3
 from pathlib import Path
 
@@ -3410,3 +3411,115 @@ def test_relay_status_and_retention_candidates_do_not_create_missing_db(tmp_path
     assert status["acked_retention"]["cleanup_safe"] is False
     assert acked_relay_retention_candidates(db_path) == ()
     assert not db_path.exists()
+
+
+def _write_transition_rows(tmp_path, rows):
+    path = tmp_path / "이적작업이벤트로그_홍길동_20260929.csv"
+    for index, (event, detail) in enumerate(rows):
+        append_event_log_entry(
+            str(path),
+            {
+                "timestamp": f"2026-09-29T09:0{index}:00",
+                "worker_name": "홍길동",
+                "event": event,
+                "details": json.dumps(detail, ensure_ascii=False),
+            },
+        )
+    return path
+
+
+TRANSITION_DUPLICATE = (
+    "TRAY_COMPLETE",
+    {
+        "master_label_code": "CLC=AAA2270730100|QT=2",
+        "item_code": "AAA2270730100",
+        "product_barcodes": ["AAA2270730100-0001", "AAA2270730100-0002"],
+        "transition_class": "LEGACY",
+        "transition_reasons": ["DUPLICATE_LABEL"],
+        "transition_duplicate": True,
+        "source_host_name": socket.gethostname(),
+        "idempotency_key": "tray-complete:legacy-local-only-0123456789abcdef01234567",
+    },
+)
+
+
+def _duplicate_receipt(row, server_source_file_id, *, count=1, **entry_changes):
+    entry = {**direct_sync_push.TRANSITION_DUPLICATE_RECEIPT_ENTRY, "count": count, **entry_changes}
+    return {
+        "request_id": "request-transition-duplicate",
+        "upload_id": "request-transition-duplicate",
+        "client_batch_id": row.relay_id,
+        "server_source_file_id": server_source_file_id,
+        "committed": True,
+        "status": "accepted",
+        "projection_disposition": "RAW_LEGITIMATE",
+        "projection_observation": {"event_classifications": [entry]},
+        "retryable": False,
+        "next_retry_after": None,
+        "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
+    }
+
+
+def _drain_transition_rows(tmp_path, rows, **receipt_changes):
+    manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = _write_transition_rows(tmp_path, rows)
+    credentials = make_credentials()
+    db_path = tmp_path / "relay.sqlite3"
+    row = enqueue_source_file_for_relay(
+        db_path=db_path,
+        spool_dir=tmp_path / "spool",
+        source_file_path=csv_path,
+        producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    server_source_file_id = (
+        f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
+    )
+    receipt = _duplicate_receipt(row, server_source_file_id, **receipt_changes)
+    result = drain_one_relay_batch(
+        db_path=db_path,
+        credentials=credentials,
+        session=FakeSession(FakeResponse(200, receipt)),
+        status_dir=tmp_path / "status",
+    )
+    with sqlite3.connect(db_path) as conn:
+        status = conn.execute(
+            "SELECT status FROM direct_sync_relay_batches WHERE relay_id = ?", (row.relay_id,)
+        ).fetchone()[0]
+    return result, status
+
+
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
+def test_raw_legitimate_receipt_of_this_pcs_transition_duplicate_is_accepted(tmp_path):
+    # Coordinator 09-29: the server keeps an intended duplicate as raw evidence
+    # only; refusing that receipt would stop every later delta of this file.
+    result, status = _drain_transition_rows(tmp_path, [TRANSITION_DUPLICATE])
+
+    assert result.success is True and result.error_code == ""
+    assert status == RELAY_STATUS_ACKED
+
+
+@pytest.mark.parametrize(
+    ("rows", "receipt_changes"),
+    [
+        ([TRANSITION_DUPLICATE], {"raw_only_reason_code": "NO_STAGE1_REDUCER"}),
+        ([TRANSITION_DUPLICATE], {"projection_status": "PROJECTED"}),
+        ([TRANSITION_DUPLICATE], {"projection_required": True}),
+        ([TRANSITION_DUPLICATE], {"event_projection_class": "TRANSFER_LEGACY"}),
+        ([TRANSITION_DUPLICATE], {"raw_event_name": "SCAN_OK"}),
+        ([TRANSITION_DUPLICATE], {"count": 2}),
+        # A switch-off completion carries no transition_class.
+        ([("TRAY_COMPLETE", {k: v for k, v in TRANSITION_DUPLICATE[1].items() if not k.startswith("transition_")})], {}),
+        ([("SCAN_OK", {"barcode": "AAA2270730100-0001"})], {}),
+        # Another PC's row in a shared event folder.
+        ([("TRAY_COMPLETE", {**TRANSITION_DUPLICATE[1], "source_host_name": "OTHER-PC"})], {}),
+    ],
+    ids=["reason", "projected", "required", "class", "event", "count", "switch-off-row", "other-row", "other-pc"],
+)
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
+def test_any_other_raw_legitimate_receipt_still_goes_to_operator_review(tmp_path, rows, receipt_changes):
+    result, status = _drain_transition_rows(tmp_path, rows, **receipt_changes)
+
+    assert result.success is False
+    assert result.error_code == "producer_projection_incomplete"
+    assert status == RELAY_STATUS_OPERATOR_REVIEW

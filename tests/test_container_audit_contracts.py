@@ -5810,7 +5810,7 @@ def test_on_closing_logs_replacement_cancel_before_shutdown(monkeypatch):
     app.save_settings = lambda: None
     app._cancel_all_jobs = lambda: None
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
@@ -6052,7 +6052,7 @@ def test_initiate_replacement_invalidates_pending_main_scan_before_replacement_m
     processed = []
     logged = []
     app._process_barcode_logic = lambda raw_barcode: processed.append(raw_barcode)
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     app.show_status_message = lambda *args, **kwargs: None
@@ -6066,7 +6066,7 @@ def test_initiate_replacement_invalidates_pending_main_scan_before_replacement_m
 
     assert processed == []
     assert app.master_label_replace_state == "awaiting_old_completed"
-    assert app.replacement_context == {}
+    assert set(app.replacement_context) == {"replacement_session_id"}  # names its cancellation
     assert logged == [{"event": "HISTORICAL_REPLACE_START", "detail": None, "synchronous": True}]
 
 
@@ -6264,7 +6264,7 @@ def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero():
     app._update_current_item_label = lambda: None
     app._schedule_focus_return = lambda: None
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {"event": event, "detail": detail, "saved_before_log": list(saved), "synchronous": synchronous}
     ) or True
     messages = []
@@ -6306,7 +6306,7 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
     app._update_current_item_label = lambda: setattr(app, "item_label_updated", True)
     app._schedule_focus_return = lambda: setattr(app, "focus_scheduled", True)
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) and False
     messages = []
@@ -6741,7 +6741,7 @@ def test_reset_current_work_logs_sync_and_clears_after_state_delete(monkeypatch)
     app._reset_ui_to_waiting_state = lambda: setattr(app, "ui_reset", True)
     app._schedule_focus_return = lambda: setattr(app, "focus_scheduled", True)
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     app.show_status_message = lambda *args, **kwargs: setattr(app, "status_message", args)
@@ -6767,9 +6767,11 @@ def test_reset_current_work_logs_sync_and_clears_after_state_delete(monkeypatch)
     assert app.focus_scheduled is True
 
 
-def test_process_barcode_rejects_non_positive_qr_quantity(tmp_path):
+def test_process_barcode_records_non_positive_qr_quantity_in_transition_mode(tmp_path):
+    # A pre-PHS2 label starts only in transition mode, which takes every label:
+    # an unusable QT is recorded and never becomes the tray quantity.
     app = _headless_app()
-    app.legacy_label_transition = True  # a pre-PHS2 label starts only in transition mode
+    app.legacy_label_transition = True
     app.current_tray = TraySession()
     app.completed_master_labels = set()
     app.master_label_replace_state = None
@@ -6780,11 +6782,14 @@ def test_process_barcode_rejects_non_positive_qr_quantity(tmp_path):
     app.last_activity_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
     app.warning = None
     app.show_fullscreen_warning = lambda *args, **kwargs: setattr(app, "warning", args)
+    started = []
+    app._activate_master_label_tray = lambda **kwargs: started.append(kwargs) or True
 
     app._process_barcode_logic('{"CLC":"AAA2270730100","QT":"0"}')
 
-    assert app.current_tray.master_label_code == ""
-    assert app.warning[0] == "QR코드 오류"
+    assert app.warning is None
+    assert started[0]["tray_quantity"] == app.TRAY_SIZE
+    assert started[0]["transition_reasons"] == ["QT_INVALID"]
 
 
 def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
@@ -9308,7 +9313,7 @@ def test_cancel_master_label_replacement_logs_synchronously_before_clearing_stat
         "additional_items": ["BC-1"],
     }
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {
             "event": event,
             "detail": detail,
@@ -9551,7 +9556,7 @@ def test_cancel_exchange_logs_partial_scans_before_resetting_session(monkeypatch
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     app.exchange_quantity_spin = DummyButton()
     logged = []
-    app._log_event = lambda event, detail=None, synchronous=False: logged.append(
+    app._log_event = lambda event, detail=None, synchronous=False, **_event_id: logged.append(
         {
             "event": event,
             "detail": detail,
