@@ -135,7 +135,9 @@ def build_tray_complete_detail(
             )
             if key in inspection_trace
         })
-        detail.setdefault("source_session_id", inspection_trace["input_tag_id"])
+        # A damaged label may carry LBL/HSH without ITG (transition mode records it).
+        if "input_tag_id" in inspection_trace:
+            detail.setdefault("source_session_id", inspection_trace["input_tag_id"])
         detail["inspection_trace"] = inspection_trace
     return detail
 

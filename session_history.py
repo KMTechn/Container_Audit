@@ -11,7 +11,48 @@ from typing import Any, Callable, Dict, List, Set
 
 from event_contracts import stable_hash
 from event_payloads import product_barcodes_from_completion
-from label_qr import canonical_master_label_key, inspection_master_item_code, parse_new_format_qr, parse_positive_quantity
+from label_qr import (
+    TRANSITION_LEGACY,
+    TRANSITION_LOCAL_SEAL_STATUS,
+    TRANSITION_PHS2_CENTRAL,
+    TRANSITION_PHS2_LOCAL,
+    TRANSITION_PHS2_MALFORMED,
+    canonical_master_label_key,
+    inspection_master_item_code,
+    parse_label_fields_leniently,
+    parse_new_format_qr,
+    parse_positive_quantity,
+)
+
+TRANSITION_CLASS_NAMES = {
+    TRANSITION_LEGACY: "옛",
+    TRANSITION_PHS2_CENTRAL: "새 중앙",
+    TRANSITION_PHS2_LOCAL: "새 로컬",
+    TRANSITION_PHS2_MALFORMED: "새 형식오류",
+}
+
+
+def count_transition_completion(
+    item_summary: Dict[str, Any], transition_class: str, *, duplicate: bool
+) -> None:
+    """Count one transition completion per class (and duplicates) for today's summary."""
+    counts = item_summary.setdefault("transition_counts", {})
+    counts[transition_class] = counts.get(transition_class, 0) + 1
+    if duplicate:
+        item_summary["transition_duplicates"] = item_summary.get("transition_duplicates", 0) + 1
+
+
+def transition_summary_text(item_summary: Dict[str, Any]) -> str:
+    """'옛 3 · 새 로컬 1 · 중복 1' for an item's transition completions, or ''."""
+    counts = item_summary.get("transition_counts") or {}
+    parts = [
+        f"{name} {counts[transition_class]}"
+        for transition_class, name in TRANSITION_CLASS_NAMES.items()
+        if counts.get(transition_class)
+    ]
+    if item_summary.get("transition_duplicates"):
+        parts.append(f"중복 {item_summary['transition_duplicates']}")
+    return " · ".join(parts)
 
 
 @dataclass
@@ -297,16 +338,24 @@ def load_session_history(
                         details["_history_source"] = f"{log_path}:{row_number}"
                         # A 13-digit label is the item code shared by every tray of
                         # that item; only a QR label names one tray, as in the live
-                        # completion path (which also closes a partial legacy QR).
+                        # completion path (which also closes a partial transition QR).
+                        master_label_code = _text_field(details, "master_label_code")
+                        transition_local = (
+                            details.get("transfer_seal_status")
+                            in TRANSITION_LOCAL_SEAL_STATUS.values()
+                        )
                         if (
                             details.get("is_test_tray") is not True
                             and (
                                 details.get("is_partial_submission") is not True
-                                or details.get("transfer_seal_status") == "LEGACY_LOCAL_ONLY"
+                                or transition_local
                             )
-                            and parse_new_format_qr(_text_field(details, "master_label_code"))
+                            and (
+                                parse_new_format_qr(master_label_code)
+                                or (transition_local and parse_label_fields_leniently(master_label_code))
+                            )
                         ):
-                            _remember_completed_label(history.completed_master_labels, _text_field(details, "master_label_code"))
+                            _remember_completed_label(history.completed_master_labels, master_label_code)
                         row_worker_name = _sanitize_worker_name(row.get("worker_name", ""))
                         if is_current_worker_file and row_worker_name == sanitized_name:
                             completion_identity = _completion_replay_identity(details)
@@ -341,9 +390,12 @@ def load_session_history(
             history.work_summary[item_code]["test_count"] += 1
         else:
             history.work_summary[item_code]["count"] += 1
-            if session.get("transfer_seal_status") == "LEGACY_LOCAL_ONLY":
-                item_summary = history.work_summary[item_code]
-                item_summary["legacy_count"] = item_summary.get("legacy_count", 0) + 1
+            if session.get("transition_class"):
+                count_transition_completion(
+                    history.work_summary[item_code],
+                    str(session["transition_class"]),
+                    duplicate=session.get("transition_duplicate") is True,
+                )
         if not session.get("is_test_tray", False) and not session.get("is_partial_submission", False):
             history.total_tray_count += 1
 

@@ -14,7 +14,7 @@ import threading
 import time
 import json
 import re
-from typing import List, Dict, Optional, Any, Callable, Mapping, Sequence
+from typing import List, Dict, Optional, Any, Callable, Mapping, Sequence, Tuple
 from dataclasses import dataclass, field
 import queue
 import uuid
@@ -100,9 +100,14 @@ from logistics_runtime_profile import (
     unprotect_current_user_secret,
 )
 from label_qr import (
+    TRANSITION_LEGACY,
+    TRANSITION_PHS2_CENTRAL,
+    TRANSITION_PHS2_LOCAL,
+    TRANSITION_PHS2_MALFORMED,
     canonical_master_label_key,
     inspection_master_item_code,
     normalize_master_label_input,
+    parse_label_fields_leniently,
     parse_new_format_qr,
     parse_positive_quantity,
 )
@@ -183,7 +188,7 @@ from responsive_layout import (
     worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
 from runtime_instance import acquire_runtime_instance
-from session_history import load_session_history
+from session_history import load_session_history, transition_summary_text
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import (
     DATA_ROOT_ENV,
@@ -979,6 +984,8 @@ class TraySession:
     active_label_business_date: str = ""
     active_label_worker_code: str = ""
     operation_lease_id: str = ""
+    # Transition mode: why this tray completes on this PC only (e.g. its preflight failure).
+    transition_reasons: List[str] = field(default_factory=list)
 
 
 class _LocalValueVar:
@@ -1028,6 +1035,8 @@ def _recovery_item_firewall(action):
 class ContainerAudit:
     APP_TITLE = f"이적 검사 시스템 ({CURRENT_VERSION})"
     LEGACY_LABEL_TRANSITION_NOTICE = "과도기 모드 — 옛 현품표 받음"
+    # Transition mode starts a tray whose item it cannot confirm under this name.
+    UNCONFIRMED_ITEM = {"Item Name": "품목 미확인", "Spec": ""}
     DEFAULT_FONT = 'Malgun Gothic'
     TRAY_SIZE = 60
     SETTINGS_DIR = 'config'
@@ -1569,6 +1578,7 @@ class ContainerAudit:
                 fail(exc)
                 return
             self.items_data, self.item_catalog = items, catalog
+            self.item_catalog_unconfirmed = False
             messagebox.showinfo(
                 "품목 목록 새로 고침 완료",
                 f"품목 목록을 새로 받았습니다. 현재 {len(items)}건입니다.",
@@ -2322,22 +2332,94 @@ class ContainerAudit:
             return True
         return any(canonical_master_label_key(label) == candidate_key for label in completed_labels)
 
-    def _legacy_label_local_only(self) -> bool:
-        """Transition mode completes a pre-PHS2 tray on this PC only, outside the ledger."""
+    @staticmethod
+    def _is_pre_phs2_label(fields: Optional[Mapping[str, Any]]) -> bool:
+        """A 13-digit item code, or a QR carrying neither PHS=2 nor any new-system identity."""
+        fields = fields or {}
+        if str(fields.get("PHS") or "").strip() == "2":
+            return False
+        if str(fields.get("SRC") or "").strip().upper() == "KMTECH_INPUT_TAG":
+            return False
+        return not any(
+            str(fields.get(name) or "").strip()
+            for name in ("ITG", "LBL", "HSH", "HSH_CORE", "HSH_LABEL",
+                         "BND", "BUNDLE_ID", "SOURCE_BUNDLE_ID")
+        )
+
+    def _transition_label_class(self, raw_label: str) -> Tuple[str, List[str]]:
+        """Classify a label for transition mode, with the reason codes of its defects.
+
+        LEGACY is a 13-digit item code or an old QR; PHS2_CENTRAL a valid PHS=2
+        label (it still completes locally when the central path blocks it);
+        PHS2_MALFORMED a label carrying new-system identity in a broken form.
+        """
+        parsed = parse_label_fields_leniently(raw_label)
+        fields, reasons = parsed if parsed is not None else ({}, [])
+        if self._is_pre_phs2_label(fields):
+            return TRANSITION_LEGACY, reasons
+        phs = fields.get("PHS")
+        if phs is None:
+            reasons.append("PHS_MISSING")
+        elif not str(phs).strip():
+            reasons.append("PHS_EMPTY")
+        elif str(phs).strip() != "2":
+            reasons.append("PHS_NOT_2")
+        elif not reasons:
+            try:
+                validate_compact_phs2_fields(fields)
+            except TransferSealError as exc:
+                reasons.append(
+                    "LINEAGE_MISSING"
+                    if exc.code == "PHS2_CANONICAL_EVIDENCE_REQUIRED"
+                    else exc.code
+                )
+        return (TRANSITION_PHS2_MALFORMED if reasons else TRANSITION_PHS2_CENTRAL), reasons
+
+    def _transition_local_tray(self) -> bool:
+        """Transition mode: a tray without an operation lease never takes the central path."""
         tray = self.current_tray
-        master_fields = self._parse_new_format_qr(tray.master_label_code) or {}
         return bool(
             getattr(self, "legacy_label_transition", False)
             and not tray.is_test_tray
-            and str(master_fields.get("PHS") or "").strip() != "2"
+            and not str(getattr(tray, "operation_lease_id", "") or "").strip()
         )
 
+    def _transition_completion_route(self) -> Optional[Tuple[str, List[str]]]:
+        """Transition mode: (class, reasons) of a tray this PC completes outside the ledger.
+
+        None keeps the normal path: always outside transition mode, and for a
+        full PHS=2 tray holding its operation lease.
+        """
+        tray = self.current_tray
+        if not getattr(self, "legacy_label_transition", False) or tray.is_test_tray:
+            return None
+        label_class, label_reasons = self._transition_label_class(tray.master_label_code)
+        reasons = list(dict.fromkeys(
+            [*(getattr(tray, "transition_reasons", None) or []), *label_reasons]
+        ))
+        if label_class != TRANSITION_PHS2_CENTRAL:
+            return label_class, reasons
+        if not reasons and not str(getattr(tray, "operation_lease_id", "") or "").strip():
+            reasons.append("OPERATION_LEASE_REQUIRED")
+        if len(tray.scanned_barcodes) != int(tray.tray_size or 0):
+            reasons.append("PARTIAL_TRANSFER")
+        return (TRANSITION_PHS2_LOCAL, reasons) if reasons else None
+
     def _reject_legacy_master_label(self, qr_data: Optional[Mapping[str, Any]]) -> bool:
-        """Outside transition mode a pre-PHS2 label stops at tray start, before any product scan."""
+        """Outside transition mode, stop a pre-PHS2 or damaged new label at tray start."""
         if getattr(self, "legacy_label_transition", False):
             return False
         if str((qr_data or {}).get("PHS") or "").strip() == "2":
             return False
+        if not self._is_pre_phs2_label(qr_data):
+            self.show_fullscreen_warning(
+                "현품표 정보 확인 필요",
+                "이 현품표에는 새 시스템 정보가 있지만 PHS=2 표시가 없습니다. "
+                "손상되었거나 잘못 읽혔을 수 있습니다.\n"
+                "현품표를 다시 스캔하고, 계속 안 되면 관리자에게 알려 주세요.",
+                self.COLOR_DANGER,
+            )
+            return True
         self.show_fullscreen_warning(
             "새 시스템 이전 현품표",
             "이 현품표는 새 시스템 이전 방식입니다. 관리자에게 알려 주세요.\n"
@@ -11103,6 +11185,7 @@ class ContainerAudit:
         operation_lease_id: str = "",
         preflight_hold_owner: bool = False,
         coordinator_ui_snapshot: Optional[Mapping[str, Any]] = None,
+        transition_reasons: Sequence[str] = (),
     ) -> bool:
         if self._paired_preflight_blocks_label(barcode):
             self.show_fullscreen_warning(
@@ -11128,6 +11211,7 @@ class ContainerAudit:
             tray_size=tray_quantity,
             item_name=matched_item.get('Item Name', ''),
             item_spec=matched_item.get('Spec', ''),
+            transition_reasons=list(transition_reasons),
         )
         self.current_tray.stopwatch_seconds = 0
         self.current_tray.start_time = datetime.datetime.now()
@@ -11578,6 +11662,11 @@ class ContainerAudit:
             already_offline = bool(
                 getattr(self, "_preflight_offline_error_code", "")
             )
+            if getattr(self, "legacy_label_transition", False):
+                self._start_transition_tray_after_preflight_failure(
+                    barcode, canonical_fields, matched_item, failure,
+                )
+                return
             if not offline:
                 self._mark_preflight_hold_failed(failure.code)
                 self._update_current_item_label()
@@ -11669,6 +11758,55 @@ class ContainerAudit:
             self._begin_preflight_hold_drain()
             if marker_new:
                 self._show_phs_replacement_required_notice()
+        else:
+            self._mark_preflight_hold_failed("PHS2_ACTIVATION_DURABILITY_FAILED")
+        self._update_action_button_states()
+
+    def _start_transition_tray_after_preflight_failure(
+        self,
+        barcode: str,
+        canonical_fields: Mapping[str, str],
+        matched_item: Dict[str, Any],
+        failure: TransferSealError,
+    ) -> None:
+        """Transition mode: a PHS=2 label the central check refused or could not reach
+        starts a local tray (no lease, no ledger) and takes over its held scans."""
+        try:
+            self._log_event(
+                "MASTER_LABEL_PREFLIGHT_FAILED",
+                detail={
+                    "contract_version": "container-audit-phs2-preflight-v1",
+                    "input_tag_id": canonical_fields.get("ITG"),
+                    "input_tag_label_id": canonical_fields.get("LBL"),
+                    "item_code": canonical_fields.get("CLC"),
+                    "error_code": failure.code,
+                    "retryable": failure.retryable,
+                    "transition_class": TRANSITION_PHS2_LOCAL,
+                },
+            )
+        except Exception:
+            pass
+        self._master_preflight_pending = False
+        self._preflight_offline_error_code = ""
+        self._set_preflight_scan_input_locked(True)
+        notice = f"중앙 확인 실패({failure.code}) · 과도기 로컬 작업(새 원장 제외)"
+        activated = self._activate_master_label_tray(
+            barcode=barcode,
+            item_code=str(canonical_fields.get("CLC") or ""),
+            tray_quantity=self.TRAY_SIZE,
+            matched_item=matched_item,
+            event_name="MASTER_LABEL_SCANNED_NEW",
+            event_detail={
+                **canonical_fields,
+                "transition_class": TRANSITION_PHS2_LOCAL,
+                "transition_reasons": [failure.code],
+            },
+            preflight_hold_owner=True,
+            transition_reasons=[failure.code],
+        )
+        if activated:
+            self.show_status_message(notice, self.COLOR_DANGER, duration=0)
+            self._begin_preflight_hold_drain(notice=notice)
         else:
             self._mark_preflight_hold_failed("PHS2_ACTIVATION_DURABILITY_FAILED")
         self._update_action_button_states()
@@ -11842,7 +11980,7 @@ class ContainerAudit:
                 duration=0,
             )
 
-    def _begin_preflight_hold_drain(self) -> None:
+    def _begin_preflight_hold_drain(self, notice: str = "중앙 확인 완료") -> None:
         self._set_preflight_scan_input_locked(True)
         store = self._preflight_hold_store()
         if not store.exists():
@@ -11858,13 +11996,13 @@ class ContainerAudit:
             if snapshot is None:
                 self._set_preflight_scan_input_locked(False)
                 self.show_status_message(
-                    "중앙 확인 완료 · 보류 스캔 없음",
+                    f"{notice} · 보류 스캔 없음",
                     self.COLOR_SUCCESS,
                 )
                 self._schedule_startup_transfer_recovery()
                 return
             self.show_status_message(
-                f"중앙 확인 완료 · 보류 {len(snapshot.items)}건 순서대로 처리 중",
+                f"{notice} · 보류 {len(snapshot.items)}건 순서대로 처리 중",
                 self.COLOR_PRIMARY,
                 duration=0,
             )
@@ -12709,6 +12847,14 @@ class ContainerAudit:
 
         if self._reject_mutation_during_preflight_hold():
             return True
+        if self._transition_local_tray():
+            # A tray completed on this PC has no central label to refresh.
+            self.show_status_message(
+                "과도기 로컬 트레이에는 현품표를 다시 확인하지 않습니다. 제품을 계속 스캔하세요.",
+                self.COLOR_DANGER,
+            )
+            self._schedule_focus_return()
+            return True
         current_fields = self._parse_new_format_qr(
             normalize_master_label_input(self.current_tray.master_label_code)
         ) or {}
@@ -12974,11 +13120,21 @@ class ContainerAudit:
         if not self.current_tray.master_label_code:
             barcode = normalize_master_label_input(raw_barcode)
             qr_data = self._parse_new_format_qr(barcode)
+            transition = bool(getattr(self, "legacy_label_transition", False))
+            if not qr_data and transition:
+                # Transition mode takes a label the strict parser refuses and records its defects.
+                qr_data = (parse_label_fields_leniently(barcode) or ({}, []))[0]
 
             if qr_data:
+                transition_class, transition_reasons = (
+                    self._transition_label_class(barcode) if transition else ("", [])
+                )
                 if self._is_completed_master_label(barcode):
-                    self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
-                    return
+                    if not transition:
+                        self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
+                        return
+                    # Transition mode warns after the start and records the tray as a duplicate.
+                    transition_reasons.append("DUPLICATE_LABEL")
 
                 waiting = [held for held in self._offline_waiting_preflight_holds()
                            if canonical_master_label_key(held.snapshot.master_raw) == canonical_master_label_key(barcode)]
@@ -13041,6 +13197,11 @@ class ContainerAudit:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)
                         return
                     matched_item = self._item_catalog().find_by_code(item_code)
+                    if transition and (
+                        not matched_item or getattr(self, "item_catalog_unconfirmed", False)
+                    ):
+                        transition_reasons.append("ITEM_UNCONFIRMED")
+                        matched_item = matched_item or self.UNCONFIRMED_ITEM
                     if not matched_item:
                         self.show_fullscreen_warning("품목 없음", f"코드 '{item_code}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
                         return
@@ -13050,7 +13211,10 @@ class ContainerAudit:
                         )
                         return
                     if _offline_hold_switch is not None:
-                        if str(qr_data.get("PHS") or "").strip() == "2":
+                        if (
+                            str(qr_data.get("PHS") or "").strip() == "2"
+                            and transition_class != TRANSITION_PHS2_MALFORMED
+                        ):
                             validate_compact_phs2_fields(qr_data)
                         elif parse_positive_quantity(qr_data, default=self.TRAY_SIZE) is None:
                             raise ValueError("invalid next label quantity")
@@ -13059,7 +13223,10 @@ class ContainerAudit:
                     if waiting_hold:
                         self.restore_quarantined_preflight_hold(str(waiting_hold.path), confirm=False)
                         return
-                    if str(qr_data.get("PHS") or "").strip() == "2":
+                    if str(qr_data.get("PHS") or "").strip() == "2" and not (
+                        transition
+                        and (transition_class != TRANSITION_PHS2_CENTRAL or transition_reasons)
+                    ):
                         self._begin_compact_phs2_preflight(
                             barcode=barcode,
                             qr_data=qr_data,
@@ -13070,14 +13237,31 @@ class ContainerAudit:
                     if tray_quantity is None:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드 수량(QT)은 1 이상의 숫자여야 합니다.", self.COLOR_DANGER)
                         return
-                    self._activate_master_label_tray(
+                    event_detail = dict(qr_data)
+                    if transition:
+                        event_detail.update(
+                            transition_class=(
+                                TRANSITION_PHS2_LOCAL
+                                if transition_class == TRANSITION_PHS2_CENTRAL
+                                else transition_class
+                            ),
+                            transition_reasons=list(transition_reasons),
+                        )
+                    if self._activate_master_label_tray(
                         barcode=barcode,
                         item_code=item_code,
                         tray_quantity=tray_quantity,
                         matched_item=matched_item,
                         event_name='MASTER_LABEL_SCANNED_NEW',
-                        event_detail=qr_data,
-                    )
+                        event_detail=event_detail,
+                        transition_reasons=transition_reasons,
+                    ) and "DUPLICATE_LABEL" in transition_reasons:
+                        self.show_fullscreen_warning(
+                            "현품표 중복 · 과도기 기록",
+                            "이미 완료 처리된 현품표입니다. 과도기 모드라 막지 않고 "
+                            "'중복'으로 기록합니다.\n같은 제품이 두 번 들어가지 않았는지 확인하세요.",
+                            self.COLOR_DANGER,
+                        )
                     return
                 except Exception as e:
                     print(
@@ -13099,6 +13283,12 @@ class ContainerAudit:
                     return
 
                 matched_item = self._item_catalog().find_by_code(barcode)
+                transition_reasons = []
+                if transition and (
+                    not matched_item or getattr(self, "item_catalog_unconfirmed", False)
+                ):
+                    transition_reasons.append("ITEM_UNCONFIRMED")
+                    matched_item = matched_item or self.UNCONFIRMED_ITEM
                 if not matched_item:
                     self.show_fullscreen_warning("품목 없음", f"현품표 코드 '{barcode}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
                     return
@@ -13106,13 +13296,20 @@ class ContainerAudit:
                     self._queue_offline_preflight_hold(_offline_hold_switch, barcode)
                     return
 
+                event_detail = {'master_label_code': barcode}
+                if transition:
+                    event_detail.update(
+                        transition_class=TRANSITION_LEGACY,
+                        transition_reasons=list(transition_reasons),
+                    )
                 self._activate_master_label_tray(
                     barcode=barcode,
                     item_code=barcode,
                     tray_quantity=self.TRAY_SIZE,
                     matched_item=matched_item,
                     event_name='MASTER_LABEL_SCANNED_OLD',
-                    event_detail={'master_label_code': barcode},
+                    event_detail=event_detail,
+                    transition_reasons=transition_reasons,
                 )
             return
             
@@ -13616,6 +13813,8 @@ class ContainerAudit:
         if (
             str(master_fields.get("PHS") or "").strip() == "2"
             and len(self.current_tray.scanned_barcodes) != int(self.current_tray.tray_size or 0)
+            # Transition mode records a partial PHS=2 tray locally instead.
+            and self._transition_completion_route() is None
         ):
             self.show_status_message(
                 "PHS=2 현품표는 일부 제출할 수 없습니다. 등록된 제품을 모두 스캔하세요. "
@@ -13666,8 +13865,9 @@ class ContainerAudit:
         for i in self.summary_tree.get_children(): self.summary_tree.delete(i)
         for row_index, (item_code, data) in enumerate(sorted(self.work_summary.items())):
             count_display = str(data.get('count', 0))
-            if data.get('legacy_count', 0) > 0:
-                count_display += f" (과도기 {data['legacy_count']})"
+            transition_text = transition_summary_text(data)
+            if transition_text:
+                count_display += f" ({transition_text})"
             if data.get('test_count', 0) > 0:
                 count_display += f" (T{data['test_count']})"
             item_name_spec = f"{data.get('name', '')}"
@@ -15427,6 +15627,10 @@ class ContainerAudit:
         if attempt is None:
             if getattr(self, "transfer_member_exchange_coordinator", None) is None:
                 return False
+            if self._transition_local_tray():
+                # A central member exchange needs the tray's operation lease;
+                # a transition tray without one has no exchange to wait on.
+                return False
             tray = getattr(self, "current_tray", None)
             master_label = str(
                 getattr(tray, "master_label_code", "") or ""
@@ -15442,7 +15646,11 @@ class ContainerAudit:
                 or str(snapshot.get("master_label") or "") != master_label
             ):
                 self.show_status_message(
-                    "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
+                    "이 현품표는 새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 "
+                    f"{action} 작업을 할 수 없습니다. 현재 작업은 보존합니다. 관리자에게 알려 주세요."
+                    if not getattr(self, "legacy_label_transition", False)
+                    and self._is_pre_phs2_label(self._parse_new_format_qr(master_label))
+                    else "이전 중앙 작업 처리 중입니다. 이번 현품표 입력은 접수되지 않았습니다.",
                     self.COLOR_DANGER,
                 )
                 return True
@@ -18668,6 +18876,13 @@ ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
     "캐시 기준 시각: {cache_time}\n"
     "네트워크가 복구되면 다음 실행에서 중앙 목록을 다시 확인합니다."
 )
+ITEM_CATALOG_TRANSITION_WARNING_TITLE = "과도기 모드 — 품목 목록 미확인"
+ITEM_CATALOG_TRANSITION_WARNING_MESSAGE = (
+    "중앙 품목 목록을 확인하지 못했지만 과도기 모드라 설치에 들어 있는 품목 목록으로 시작합니다.\n"
+    "이 상태에서 시작한 트레이는 '품목 미확인'으로 기록됩니다.\n\n"
+    "네트워크가 돌아오면 '운영 작업 → 품목 목록 새로 고침'을 누르세요.\n"
+    "오류 코드: {cause_code}"
+)
 ITEM_CATALOG_SETUP_REQUIRED_TITLE = "중앙 연결 설정 필요"
 ITEM_CATALOG_SETUP_REQUIRED_MESSAGE = (
     "이 PC의 현재 Windows 사용자에 중앙 연결 설정이 없어 최신 품목 목록을 받지 않았습니다.\n"
@@ -18719,6 +18934,13 @@ def _show_bootstrap_integrity_warning(report_path: object) -> None:
         )
     except Exception:
         pass
+
+
+def _show_item_catalog_transition_warning(cause_code: str) -> None:
+    messagebox.showwarning(
+        ITEM_CATALOG_TRANSITION_WARNING_TITLE,
+        ITEM_CATALOG_TRANSITION_WARNING_MESSAGE.format(cause_code=cause_code),
+    )
 
 
 def _show_item_catalog_startup_error(cause_code: str) -> None:
@@ -18848,7 +19070,25 @@ def _prepare_gui_startup(*, data_root=None):
                     ).onboarding_report_path
                 )
         try:
-            active_catalog_path = prepare_startup_item_catalog()
+            catalog_unconfirmed = False
+            try:
+                active_catalog_path = prepare_startup_item_catalog()
+            except ItemCatalogSyncError as exc:
+                if not legacy_label_transition_enabled():
+                    raise
+                # Transition mode starts without a trusted catalog: the bundled
+                # list names items and every tray records them as unconfirmed.
+                try:
+                    write_item_catalog_failure_diagnostic(
+                        storage_paths.item_catalog_diagnostic_path,
+                        exc,
+                    )
+                except Exception:
+                    pass
+                os.environ.pop(ACTIVE_PATH_ENV, None)
+                _show_item_catalog_transition_warning(exc.cause_code)
+                catalog_unconfirmed = True
+                active_catalog_path = None
             if active_catalog_path is not None:
                 catalog_context = get_catalog_attempt_context()
                 try:
@@ -18865,6 +19105,8 @@ def _prepare_gui_startup(*, data_root=None):
                 if catalog_context.get("pre_send_rejection_code") == PROFILE_ABSENT:
                     _show_item_catalog_setup_required()
             app = ContainerAudit()
+            if catalog_unconfirmed:
+                app.item_catalog_unconfirmed = True
         except ItemCatalogSyncError as exc:
             try:
                 write_item_catalog_failure_diagnostic(

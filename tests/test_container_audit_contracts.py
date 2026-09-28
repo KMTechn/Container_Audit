@@ -6823,7 +6823,11 @@ def test_process_barcode_starts_tray_from_json_master_label(tmp_path):
     assert isinstance(saved_start_times[0], datetime.datetime)
     assert app.show_tray_image_var.value is True
     assert app.logged[0][0][0] == "MASTER_LABEL_SCANNED_NEW"
-    assert app.logged[0][1]["detail"] == {"CLC": "AAA2270730100", "QT": "2"}
+    # Transition mode also records the label's class at tray start.
+    assert app.logged[0][1]["detail"] == {
+        "CLC": "AAA2270730100", "QT": "2",
+        "transition_class": "LEGACY", "transition_reasons": [],
+    }
     assert app.logged[0][1]["synchronous"] is True
     assert app.logged[0][1]["deduplicate"] is True
     assert app.logged[0][1]["idempotency_key"].startswith("tray-activation:")

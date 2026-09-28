@@ -53,11 +53,19 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 표준 compact PHS2는 중앙 GOOD 구성원 전량 확인을 유지하고 부족 수량의 부분 제출을 차단한다.
 
 <a id="ca-legacy-transition"></a>
-**과도기 모드(`KMTECH_LEGACY_LABEL_TRANSITION`):** 앱 시작 때 HKLM Session Manager Environment 값만 읽어 정확히 `1`이면 켠다. 프로세스·사용자 범위 값은 보지 않고, 읽기 오류는 끔이며 자동 만료는 없다.
-켜짐이면 PHS=2가 아닌 현품표(13자리 품목코드·옛 QR) 트레이를 중앙 조회·lease·봉인·SQLite intent 없이 완료한다. 60개 자동 완료와 부분 `제출` 모두 정상 완료와 같은 contract 저장 → 동기 `TRAY_COMPLETE` → 상태 삭제 순서이며, detail에 `transfer_seal_status=LEGACY_LOCAL_ONLY`·`transfer_seal_intent_id=legacy-local-only-…`·`source_computer_id`·`source_host_name`을 남긴다.
-꺼짐이면 이런 현품표를 트레이 시작에서 거절한다. 보류 트레이의 스캔 복원 등 기존 경로는 그대로다. PHS2 흐름은 두 상태에서 같다.
-켜짐에서 서버 끊김으로 PHS2 현품표가 보류 중이면 13자리 현품표도 옛 QR처럼 [다음 현품표](README.md#ca-04)로 받아 보류를 대기 목록으로 옮긴 뒤 레거시 트레이를 시작한다(13자 입력은 제품이 될 수 없다).
-13자리 코드는 같은 품목의 모든 트레이가 공유하므로 재시작 뒤에도 완료 현품표 집합에 넣지 않는다. [운영 절차](operations.md#ca-legacy-transition-ops), [CA-G17](BACKLOG.md#ca-g17).
+**과도기 모드(`KMTECH_LEGACY_LABEL_TRANSITION`):** 앱 시작 때 HKLM Session Manager Environment 값만 읽어 앞뒤 공백을 뺀 값이 `1`이면 켠다. 프로세스·사용자 범위 값은 보지 않고, 읽기 오류는 끔이며 자동 만료는 없다.
+켜짐이면 모든 현품표를 받고, 완료마다 `TRAY_COMPLETE` detail에 분류(`transition_class`)·사유 코드(`transition_reasons`)·중복(`transition_duplicate`)·`source_computer_id`·`source_host_name`을 남긴다. 분류 이름은 LM과 같다.
+
+| 분류 | 뜻 | 사유 코드 예 | `transfer_seal_status` |
+|---|---|---|---|
+| `LEGACY` | 13자리 품목코드, 옛 QR(v2.0.9 `PHS=1\|CLC\|WID…`처럼 새 시스템 식별값 없음) | `ITEM_UNCONFIRMED`, `DUPLICATE_LABEL`, 옛 QR 형식 결함 | `LEGACY_LOCAL_ONLY` |
+| `PHS2_CENTRAL` | 정상 PHS=2가 중앙 사전조회·lease·봉인 흐름으로 완료(기존 그대로) | 없음 | 기존 값(`ACKED` 등) |
+| `PHS2_LOCAL` | 정상 PHS=2인데 중앙·엄격 검사가 막음 | 사전조회 실패 코드(끊김 `PHS2_PREFLIGHT_UNAVAILABLE` 포함), `OPERATION_LEASE_REQUIRED`, `PARTIAL_TRANSFER`, `DUPLICATE_LABEL`, `ITEM_UNCONFIRMED` | `PHS2_LOCAL_ONLY` |
+| `PHS2_MALFORMED` | 새 시스템 식별값(ITG·LBL·HSH·BND·`SRC=KMTECH_INPUT_TAG` 등)이 있는데 형식이 망가짐 | `PHS_MISSING`, `PHS_EMPTY`, `PHS_NOT_2`, `LINEAGE_MISSING`, `DUPLICATE_KEY`, `FORMAT_INVALID`, 그 밖 PHS=2 형식 오류 코드 | `PHS2_MALFORMED_LOCAL_ONLY` |
+
+로컬 세 분류는 중앙 조회·lease·봉인·SQLite intent 없이 정상 완료와 같은 contract 저장 → 동기 `TRAY_COMPLETE` → 상태 삭제 순서로 끝나고 원장 수량을 바꾸지 않는다. 원문은 `master_label_code`에 남는다. 중앙 확인이 막힌 PHS=2(사전조회 실패·끊김)는 곧바로 로컬 트레이를 시작하고 조회 중 보류 스캔을 그 트레이로 넘긴다. 이미 완료한 현품표를 다시 찍으면 경고 뒤 시작해 `DUPLICATE_LABEL`로 기록하고, PHS=2면 중앙에 다시 묻지 않는다(원장에는 첫 건만). 13자리 코드는 같은 품목의 모든 트레이가 공유하므로 중복 판단과 완료 현품표 집합에서 뺀다. 품목 목록에 없는 품목, 중앙 품목 목록 없이 설치 목록으로 시작한 PC의 품목은 `ITEM_UNCONFIRMED`로 받고, PHS=2는 이때 로컬로 간다. 품목 코드(CLC)가 없는 입력은 트레이를 만들 수 없어 켬에서도 거절한다. 중앙 봉인 명령을 이미 보낸 뒤의 미확인·검토 대기는 원장 일관성 때문에 기존대로 잠근다.
+꺼짐이면 옛 현품표와 새 시스템 식별값이 있는 PHS=2 아닌 현품표를 트레이 시작에서 거절한다(보류 트레이 스캔 복원 등 기존 경로 유지). 완료 현품표 재사용·목록에 없는 품목·PHS=2 부분 제출은 base처럼 막고 PHS2 흐름은 base와 같다.
+서버 끊김으로 PHS2 보류가 이미 있으면(켜기 전 생긴 보류 포함) 켬에서는 13자리 현품표도 [다음 현품표](README.md#ca-04)로 받는다. [운영 절차](operations.md#ca-legacy-transition-ops), [CA-G17](BACKLOG.md#ca-g17).
 
 ## 3. 완료 상태와 관측 지점
 
@@ -190,7 +198,7 @@ Label의 원본 PHS2 한 번→선택 F4→F3 흐름, F4 뒤 새 전자 QR 확�
 
 `TRAY_COMPLETE`는 `TRANSFER_LEGACY`, 스캔·생명주기 사건은 `TRANSFER_ACTIVITY` 분류를 사용한다. `LEGACY`라는 분류명만으로 현재 producer 경로를 폐기 기능이라고 판정하지 않는다. local-only 사건은 relay 비재귀 scan 경계 밖에 두며 시험·복구 플래그와 source scope를 유지한다. [event_stream_policy](../../event_stream_policy.py), [common_projection](../../../WorkerAnalysisGUI-web/common_projection.py).
 
-[과도기](#ca-legacy-transition) `LEGACY_LOCAL_ONLY` 완료도 같은 CSV 통로로 올라가 `TRANSFER_LEGACY`로 투영된다(Web e356a09 판독: `master_label_code`로 식별을 통과하고 seal 상태는 읽지 않는다). CA가 물류 명령을 보내지 않으므로 재고·이적·출고 원장에는 들어가지 않는다. 대시보드는 이 완료를 일반 이적 실적과 구분하지 못하고, `transfer_legacy_projection`은 13자리 트레이를 품목코드 키로 덮어쓴다. [CA-G17](BACKLOG.md#ca-g17).
+[과도기](#ca-legacy-transition)의 로컬 완료(`LEGACY`·`PHS2_LOCAL`·`PHS2_MALFORMED`)도 같은 CSV 통로로 올라가 `TRANSFER_LEGACY`로 투영된다(Web e356a09 판독: `master_label_code`로 식별을 통과하고 seal 상태·`transition_class`는 읽지 않는다). CA가 물류 명령을 보내지 않으므로 재고·이적·출고 원장에는 들어가지 않는다. `PHS2_LOCAL`의 ITG·LBL은 `inspection_product_index`에 들어가지만 출고 검증은 HSH_CORE·HSH_LABEL까지 있는 행만 읽어 영향이 없다. 대시보드는 분류를 구분하지 못하고, `transfer_legacy_projection`은 13자리 트레이를 품목코드 키로 덮어쓴다. [CA-G17](BACKLOG.md#ca-g17).
 
 CA 세션 변환의 `pcs_completed`는 완료 barcode 수에서 계산되고 해당 변환/목록 조회에 seal `ACKED` 필터가 확인되지 않았다. 따라서 이적 처리 실적을 중앙 봉인 확정량으로 표기할 근거가 부족하다. 물류 snapshot의 현재 재고와도 합산하지 않는다. 표준 dashboard는 이적 처리 수량/트레이·대기 수량을 소비하지만 모든 화면의 집계 경로, 배포 flag, 누락/지연 표시까지 확인한 것은 아니다. [_session_row_from_container_audit_projection / list_container_audit_dashboard_sessions](../../../WorkerAnalysisGUI-web/common_projection.py), [period.transfer 렌더링](../../../WorkerAnalysisGUI-web/static/dashboard_standard.source.js).
 

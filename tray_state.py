@@ -72,6 +72,9 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "is_test_tray": tray.is_test_tray,
         "is_partial_submission": tray.is_partial_submission,
     }
+    transition_reasons = list(getattr(tray, "transition_reasons", []) or [])
+    if transition_reasons:
+        state["transition_reasons"] = transition_reasons
     scanned_barcodes = set(state["scanned_barcodes"])
     raw_receipts = getattr(tray, "preflight_scan_receipts", {})
     if isinstance(raw_receipts, Mapping):
@@ -734,6 +737,13 @@ def validate_tray_state(
         raise TrayStateValidationError(
             "preflight_scan_receipts scan ids must be unique"
         )
+    transition_reasons = state.get("transition_reasons", [])
+    if not isinstance(transition_reasons, list) or not all(
+        isinstance(reason, str) and reason.strip() for reason in transition_reasons
+    ):
+        raise TrayStateValidationError(
+            "transition_reasons must be a list of reason codes"
+        )
 
     scan_times = state.get("scan_times")
     if not isinstance(scan_times, list) or not all(isinstance(value, str) for value in scan_times):
@@ -840,7 +850,13 @@ def tray_session_from_state(
     active_label_id = state.get("active_label_id") or str(
         active_fields.get("LBL") or ""
     ).strip()
+    transition = (
+        {"transition_reasons": [str(reason) for reason in state["transition_reasons"]]}
+        if state.get("transition_reasons")
+        else {}
+    )
     return session_factory(
+        **transition,
         master_label_code=state["master_label_code"],
         canonical_input_tag_qr=state.get(
             "canonical_input_tag_qr", state["master_label_code"]

@@ -11,7 +11,13 @@ import tkinter as tk
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from event_payloads import build_tray_complete_detail
+from label_qr import (
+    TRANSITION_LOCAL_SEAL_STATUS,
+    TRANSITION_PHS2_CENTRAL,
+    parse_label_fields_leniently,
+)
 from protected_admin import persistent_operator_name
+from session_history import TRANSITION_CLASS_NAMES, count_transition_completion
 from tk_serial_ui_lane import DRAIN_TO_DURABLE_HANDOFF, LaneTask
 from transfer_seal import SealAttempt, TransferSealError
 from warning_presenter import CompletionOutcome, CompletionOutcomeSnapshot
@@ -122,8 +128,11 @@ def request_complete_tray(
         return False
     master_label = str(self.current_tray.master_label_code or "")
     master_label_fields = self._parse_new_format_qr(master_label) or {}
+    transition_route = self._transition_completion_route()
+    local_only = transition_route is not None
     if (
-        str(master_label_fields.get("PHS") or "").strip() == "2"
+        not local_only
+        and str(master_label_fields.get("PHS") or "").strip() == "2"
         and len(self.current_tray.scanned_barcodes)
         != int(self.current_tray.tray_size or 0)
     ):
@@ -133,7 +142,6 @@ def request_complete_tray(
             duration=0,
         )
         return False
-    legacy_local_only = self._legacy_label_local_only()
     existing_event_contract = self._active_completion_event_contract()
     try:
         if existing_event_contract is not None:
@@ -167,7 +175,7 @@ def request_complete_tray(
             or master_label
         )
         source_label_fields = self._parse_new_format_qr(source_label_payload)
-        if not source_label_fields and not legacy_local_only:
+        if not source_label_fields and not local_only:
             raise TransferSealError(
                 "PHS2_ACTIVE_LABEL_INVALID",
                 "현재 사용 현품표를 중앙 이적 원본으로 확인할 수 없습니다.",
@@ -177,7 +185,8 @@ def request_complete_tray(
             getattr(self.current_tray, "operation_lease_id", "") or ""
         ).strip()
         if (
-            str(source_label_fields.get("PHS") or "").strip() == "2"
+            not local_only
+            and str(source_label_fields.get("PHS") or "").strip() == "2"
             and not operation_lease_id
         ):
             raise TransferSealError(
@@ -196,7 +205,7 @@ def request_complete_tray(
 
     identity = self._completion_lane_identity()
     finish_identity = self._capture_mutation_finish_identity()
-    coordinator = None if legacy_local_only else self._transfer_seal_runtime()
+    coordinator = None if local_only else self._transfer_seal_runtime()
     item_code = str(self.current_tray.item_code or "")
     scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
     operator = persistent_operator_name(self.worker_name)
@@ -208,9 +217,9 @@ def request_complete_tray(
     )
 
     def work() -> bool:
-        # A transition-mode legacy tray has no central seal; the completion
-        # steps record its local-only attempt instead.
-        attempt = None if legacy_local_only else self._prepare_and_attempt_transfer_seal_snapshot(
+        # A transition tray completed on this PC has no central seal; the
+        # completion steps record its local-only attempt instead.
+        attempt = None if local_only else self._prepare_and_attempt_transfer_seal_snapshot(
             coordinator=coordinator,
             source_label_payload=source_label_payload,
             source_label_fields=dict(source_label_fields),
@@ -336,9 +345,14 @@ def complete_tray_steps(
     if not _lane_prechecked and self._transfer_member_exchange_blocks_local_action("이적 봉인 및 완료"):
         return False
     master_label_fields = self._parse_new_format_qr(self.current_tray.master_label_code) or {}
-    requires_central_ack = str(master_label_fields.get("PHS") or "").strip() == "2"
+    transition_route = self._transition_completion_route()
+    local_only = transition_route is not None
+    requires_central_ack = (
+        not local_only and str(master_label_fields.get("PHS") or "").strip() == "2"
+    )
     if (
-        str(master_label_fields.get("PHS") or "").strip() == "2"
+        not local_only
+        and str(master_label_fields.get("PHS") or "").strip() == "2"
         and len(self.current_tray.scanned_barcodes) != int(self.current_tray.tray_size or 0)
     ):
         self.show_status_message(
@@ -354,7 +368,6 @@ def complete_tray_steps(
     is_partial = self.current_tray.is_partial_submission
     is_restored = self.current_tray.is_restored_session
     master_label = self.current_tray.master_label_code
-    legacy_local_only = self._legacy_label_local_only()
     existing_event_contract = self._active_completion_event_contract()
     try:
         if existing_event_contract is not None:
@@ -423,20 +436,21 @@ def complete_tray_steps(
             intent_id=f"test-transfer-seal-skipped-{test_intent_suffix}",
             status="TEST_SKIPPED",
         )
-    elif legacy_local_only:
+    elif local_only:
         # No lease, seal command or ledger intent: the durable TRAY_COMPLETE
         # below is the only record, marked for display-only server use.
-        legacy_intent_suffix = self._stable_hash(
+        local_status = TRANSITION_LOCAL_SEAL_STATUS[transition_route[0]]
+        local_intent_suffix = self._stable_hash(
             {
                 "master_label": master_label,
                 "start_time": log_detail.get("start_time"),
                 "product_barcodes": log_detail.get("product_barcodes") or [],
-                "legacy_local_only": True,
+                "transition_class": transition_route[0],
             }
         )[:24]
         transfer_attempt = SealAttempt(
-            intent_id=f"legacy-local-only-{legacy_intent_suffix}",
-            status="LEGACY_LOCAL_ONLY",
+            intent_id=f"{local_status.lower().replace('_', '-')}-{local_intent_suffix}",
+            status=local_status,
         )
     elif _prepared_transfer_attempt is not None:
         transfer_attempt = _prepared_transfer_attempt
@@ -590,7 +604,13 @@ def complete_tray_steps(
         return False
     base_detail_keys = set(log_detail)
     self._attach_transfer_seal_detail(log_detail, transfer_attempt)
-    if legacy_local_only:
+    transition_class = ""
+    if getattr(self, "legacy_label_transition", False) and not is_test:
+        # Every transition completion carries its class for display and measurement.
+        transition_class, transition_reasons = transition_route or (TRANSITION_PHS2_CENTRAL, [])
+        log_detail["transition_class"] = transition_class
+        log_detail["transition_reasons"] = list(transition_reasons)
+        log_detail["transition_duplicate"] = "DUPLICATE_LABEL" in transition_reasons
         log_detail["source_computer_id"] = str(getattr(self, "computer_id", "") or "")
         log_detail["source_host_name"] = socket.gethostname()
     current_transfer_detail = {
@@ -740,8 +760,11 @@ def complete_tray_steps(
     # v2.0.9 also closed a partially submitted old QR label; transition mode keeps that.
     if (
         not is_test
-        and (not is_partial or legacy_local_only)
-        and self._parse_new_format_qr(master_label)
+        and (not is_partial or local_only)
+        and (
+            self._parse_new_format_qr(master_label)
+            or (local_only and parse_label_fields_leniently(master_label))
+        )
     ):
         self._remember_completed_master_label(master_label)
 
@@ -756,13 +779,18 @@ def complete_tray_steps(
     else:
         self.work_summary[item_code]['count'] += 1
         if not is_partial: self.total_tray_count += 1
-        if legacy_local_only:
-            item_summary = self.work_summary[item_code]
-            item_summary['legacy_count'] = item_summary.get('legacy_count', 0) + 1
+        if transition_class:
+            count_transition_completion(
+                self.work_summary[item_code],
+                transition_class,
+                duplicate=bool(log_detail["transition_duplicate"]),
+            )
+        if local_only:
             self.show_status_message(
                 f"'{self.current_tray.item_name}' "
-                f"{'부분 제출' if is_partial else '1 파렛트'} 완료 · "
-                "과도기 로컬 기록(새 원장 제외)",
+                f"{'부분 제출' if is_partial else '1 파렛트'} 완료 · 과도기 "
+                f"{TRANSITION_CLASS_NAMES[transition_class]} 기록"
+                f"{' · 중복' if log_detail['transition_duplicate'] else ''}(새 원장 제외)",
                 self.COLOR_SUCCESS,
             )
 

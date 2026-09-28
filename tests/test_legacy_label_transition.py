@@ -1,8 +1,11 @@
-"""Transition mode for pre-PHS2 transfer labels (13-digit item code, old QR).
+"""Transition mode: accept every label and record each completion by class.
 
-An administrator-only Machine value accepts them with a local-only
-TRAY_COMPLETE outside the ledger; without it they stop at tray start.
-PHS2 trays behave the same in both modes.
+An administrator-only Machine value turns it on. Old labels (13-digit item
+code, old QR) are LEGACY, new-looking labels in a broken form PHS2_MALFORMED,
+PHS=2 labels the central path blocks PHS2_LOCAL - all completed on this PC
+outside the ledger - and PHS=2 trays that pass it PHS2_CENTRAL, as before.
+Without the switch old and broken labels stop at tray start and PHS2 is
+unchanged.
 """
 import csv
 import datetime
@@ -40,7 +43,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeCoordinator,
     TransferMemberExchangeStore,
 )
-from transfer_seal import SealAttempt
+from transfer_seal import SealAttempt, TransferSealError
 
 pytestmark = pytest.mark.usefixtures("owned_tk_workers")
 
@@ -49,7 +52,10 @@ SWITCH = "KMTECH_LEGACY_LABEL_TRANSITION"
 MACHINE_KEY = r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"
 USER_KEY = "Environment"
 OLD_QR = f"CLC={ITEM}|QT=2"
+# The label CA v2.0.9 printed and read.
+V209_QR = f"PHS=1|CLC={ITEM}|WID=WO-0001|SPC=A14|FPB=A146000306|OBD=2026-09-01|PJT=KMC|QT=2"
 LEGACY_REJECTION_TITLE = "새 시스템 이전 현품표"
+OTHER_ITEM = "BBB0000000001"
 
 
 class _FakeKey:
@@ -203,6 +209,20 @@ def flow(tmp_path):
             "_log_event",
         ):
             vars(app).pop(name, None)
+        # As the real constructor: a member exchange coordinator whose UI
+        # snapshot holds only what startup recovery published (no tray yet).
+        app._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
+        app.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
+            TransferMemberExchangeStore(
+                root / "transfer-seal.db",
+                ui_thread_id_provider=app._transfer_coordinator_ui_thread_id,
+            ),
+            app.transfer_seal_coordinator.client,
+            owner_thread_id_provider=app._transfer_coordinator_owner_thread_id,
+        )
+        app._transfer_member_exchange_attempt_snapshot = {
+            "known": True, "master_label": "", "attempt": None,
+        }
         app.legacy_label_transition = transition
         app.save_folder = str(root)
         app.log_file_path = str(
@@ -317,9 +337,23 @@ def test_off_keeps_resuming_a_parked_old_qr_tray_by_scanning_its_label(flow, mon
     assert app.warnings == []
 
 
+@pytest.mark.parametrize(
+    ("snapshot_label", "expected"),
+    [
+        # Right after start or restore the member snapshot is not yet this tray's.
+        ("", "이적 봉인 및 완료 작업을 할 수 없습니다"),
+        # After restart recovery it is, and the central completion refuses the label.
+        (ITEM, "완료할 수 없습니다"),
+    ],
+)
 @pytest.mark.parametrize("foreground", [False, True])
-def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(flow, foreground):
+def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(
+    flow, foreground, snapshot_label, expected
+):
     app = flow(transition=False)
+    app._transfer_member_exchange_attempt_snapshot = {
+        "known": True, "master_label": snapshot_label, "attempt": None,
+    }
     app.current_tray = TraySession(
         master_label_code=ITEM, item_code=ITEM, item_name="fixture item", tray_size=60,
         scanned_barcodes=[f"{ITEM}-{index:04d}" for index in range(1, 61)],
@@ -333,8 +367,69 @@ def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(flow, 
 
     assert app.current_tray.master_label_code == ITEM
     assert len(app.current_tray.scanned_barcodes) == 60
-    assert "새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 완료할 수 없습니다" in app.statuses[-1][0]
+    message = app.statuses[-1][0]
+    assert "새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는" in message
+    assert expected in message
     assert _rows(app, "TRAY_COMPLETE") == []
+
+
+NEW_SYSTEM_LABELS_WITHOUT_PHS2 = [
+    COMPACT_QR.replace("PHS=2|", ""),
+    COMPACT_QR.replace("PHS=2|", "PHS=|"),
+    f"PHS=1|CLC={ITEM}|BND=BND-TRANSFER-0001|QT=2",
+]
+
+
+@pytest.mark.parametrize("label", NEW_SYSTEM_LABELS_WITHOUT_PHS2)
+def test_off_refuses_a_damaged_new_system_label_at_tray_start(flow, label):
+    app = flow(transition=False)
+
+    app._process_barcode_logic(label)
+
+    assert app.current_tray.master_label_code == ""
+    assert [warning[0] for warning in app.warnings] == ["현품표 정보 확인 필요"]
+    assert _rows(app) == []
+
+
+def _submit(app, monkeypatch):
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+    app.submit_current_tray()
+    _pump_until(app.root, lambda: not app.current_tray.master_label_code)
+
+
+MALFORMED_LABELS = [
+    (COMPACT_QR.replace("PHS=2|", ""), ["PHS_MISSING"]),
+    (COMPACT_QR.replace("PHS=2|", "PHS=|"), ["PHS_EMPTY"]),
+    (f"PHS=1|CLC={ITEM}|BND=BND-TRANSFER-0001|QT=2", ["PHS_NOT_2"]),
+    (COMPACT_QR.replace("|HSH=aaaaaaaaaaaaaaaa", ""), ["LINEAGE_MISSING"]),
+    (COMPACT_QR.replace("ITG=ITAG-COMPACT-001", "ITG="), ["LINEAGE_MISSING"]),
+    (COMPACT_QR + "|LBL=LBL-COMPACT-002", ["DUPLICATE_KEY"]),
+    (COMPACT_QR + "|QT=2", ["PHS2_COMPACT_FORMAT_REQUIRED"]),
+]
+
+
+@pytest.mark.parametrize(("label", "reasons"), MALFORMED_LABELS)
+def test_on_accepts_a_damaged_new_label_as_phs2_malformed_never_as_legacy(
+    flow, monkeypatch, label, reasons
+):
+    client = BlockingClient(_resolved(count=2))
+    app = flow(transition=True, client=client)
+
+    app._process_barcode_logic(label)
+    assert app.current_tray.master_label_code == label
+    _scan_products(app, 2)
+    if app.current_tray.master_label_code:
+        _submit(app, monkeypatch)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == "PHS2_MALFORMED"
+    assert detail["transition_reasons"][: len(reasons)] == reasons
+    assert detail["transfer_seal_status"] == "PHS2_MALFORMED_LOCAL_ONLY"
+    assert detail["master_label_code"] == label  # the raw value
+    assert client.identities == [] and app.seal_calls == []
+    assert _has_seal_intent(app) is False
+    assert app.work_summary[ITEM]["transition_counts"] == {"PHS2_MALFORMED": 1}
 
 
 def test_on_completes_a_full_13_digit_tray_locally_without_seal_or_ledger(flow):
@@ -361,14 +456,29 @@ def test_on_completes_a_full_13_digit_tray_locally_without_seal_or_ledger(flow):
     assert row["worker_name"] == "tester"
     assert datetime.datetime.fromisoformat(row["timestamp"]).date() == datetime.date.today()
     assert detail["transfer_bundle_id"] is None and detail["transfer_seal_receipt_id"] is None
-    assert len(_rows(app, "MASTER_LABEL_SCANNED_OLD")) == 1
-    assert any("과도기 로컬 기록" in status[0] for status in app.statuses)
+    assert detail["transition_class"] == "LEGACY"
+    assert detail["transition_reasons"] == []
+    assert detail["transition_duplicate"] is False
+    [started] = _rows(app, "MASTER_LABEL_SCANNED_OLD")
+    assert _details(started)["transition_class"] == "LEGACY"
+    assert any("과도기 옛 기록(새 원장 제외)" in status[0] for status in app.statuses)
     assert app.seal_calls == []
     assert _has_seal_intent(app) is False
     assert app.current_tray.master_label_code == ""
     assert app.work_summary[ITEM]["count"] == 1
-    assert app.work_summary[ITEM]["legacy_count"] == 1
+    assert app.work_summary[ITEM]["transition_counts"] == {"LEGACY": 1}
     assert app.syncs == ["TRAY_COMPLETE"]
+
+
+def test_on_old_v209_label_is_legacy(flow):
+    app = flow(transition=True)
+
+    app._process_barcode_logic(V209_QR)
+    _scan_products(app, 2)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    assert _details(row)["transition_class"] == "LEGACY"
+    assert _details(row)["transfer_seal_status"] == "LEGACY_LOCAL_ONLY"
 
 
 def test_on_foreground_completion_request_records_the_legacy_tray(flow):
@@ -407,7 +517,7 @@ def test_on_partial_submit_of_a_13_digit_tray_is_recorded_as_partial(flow, monke
     assert app.seal_calls == []
     assert app.current_tray.master_label_code == ""
     assert app.total_tray_count == 0
-    assert app.work_summary[ITEM]["legacy_count"] == 1
+    assert app.work_summary[ITEM]["transition_counts"] == {"LEGACY": 1}
 
 
 def test_on_old_format_qr_tray_completes_locally_instead_of_a_seal_intent(flow):
@@ -424,25 +534,44 @@ def test_on_old_format_qr_tray_completes_locally_instead_of_a_seal_intent(flow):
     assert _has_seal_intent(app) is False
 
 
-def test_on_partial_old_qr_label_is_closed_like_v209_live_and_after_restart(flow, monkeypatch):
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+def test_on_completed_label_is_warned_and_recorded_as_a_duplicate_live_and_after_restart(
+    flow, monkeypatch
+):
     app = flow(transition=True)
     app._process_barcode_logic(OLD_QR)
-    assert app.current_tray.master_label_code == OLD_QR
     _scan_products(app, 1)
-    app.submit_current_tray()
-    [row] = _rows(app, "TRAY_COMPLETE")
-    assert _details(row)["is_partial_submission"] is True
+    _submit(app, monkeypatch)  # a partial old QR closes its label, as in v2.0.9
 
     app._process_barcode_logic(OLD_QR)
-    assert app.current_tray.master_label_code == ""
-    assert app.warnings[-1][0] == "현품표 중복"
+    assert app.current_tray.master_label_code == OLD_QR
+    assert app.warnings[-1][0] == "현품표 중복 · 과도기 기록"
+    _scan_products(app, 2, start=2)
+
+    first, second = [_details(row) for row in _rows(app, "TRAY_COMPLETE")]
+    assert first["transition_duplicate"] is False
+    assert second["transition_duplicate"] is True
+    assert second["transition_reasons"] == ["DUPLICATE_LABEL"]
+    assert second["transfer_seal_intent_id"] != first["transfer_seal_intent_id"]
+    assert app.work_summary[ITEM]["transition_duplicates"] == 1
 
     restarted = flow(transition=True)
+    restarted.worker_name = "tester"
     restarted._load_session_state()
+    assert restarted.work_summary[ITEM]["transition_counts"] == {"LEGACY": 2}
+    assert restarted.work_summary[ITEM]["transition_duplicates"] == 1
     restarted._process_barcode_logic(OLD_QR)
-    assert restarted.current_tray.master_label_code == ""
-    assert restarted.warnings[-1][0] == "현품표 중복"
+    assert restarted.current_tray.transition_reasons == ["DUPLICATE_LABEL"]
+    assert restarted.warnings[-1][0] == "현품표 중복 · 과도기 기록"
+
+
+def test_off_still_refuses_a_completed_label(flow):
+    app = flow(transition=False)
+    app._remember_completed_master_label(COMPACT_QR)
+
+    app._process_barcode_logic(COMPACT_QR)
+
+    assert app.current_tray.master_label_code == ""
+    assert app.warnings[-1][0] == "현품표 중복"
 
 
 def test_legacy_record_survives_restart_and_keeps_a_same_item_tray(flow, monkeypatch):
@@ -461,7 +590,7 @@ def test_legacy_record_survives_restart_and_keeps_a_same_item_tray(flow, monkeyp
     restarted._load_current_tray_state()
 
     assert restarted.work_summary[ITEM]["count"] == 1
-    assert restarted.work_summary[ITEM]["legacy_count"] == 1
+    assert restarted.work_summary[ITEM]["transition_counts"] == {"LEGACY": 1}
     assert restarted.current_tray.master_label_code == ITEM
     assert restarted.current_tray.scanned_barcodes == [
         f"{ITEM}-{index:04d}" for index in range(61, 66)
@@ -529,7 +658,7 @@ def test_relay_rejection_or_outage_does_not_hold_the_next_legacy_tray(
         ("UNKNOWN", "relay_wake_start_failed")
     }
     assert app.current_tray.master_label_code == ""
-    assert app.work_summary[ITEM]["legacy_count"] == 2
+    assert app.work_summary[ITEM]["transition_counts"] == {"LEGACY": 2}
 
 
 def test_on_legacy_label_takes_over_from_a_phs2_label_held_offline(tmp_path, monkeypatch):
@@ -552,20 +681,8 @@ def test_on_legacy_label_takes_over_from_a_phs2_label_held_offline(tmp_path, mon
     assert app.current_tray.scanned_barcodes == []
 
 
-def _phs2_completion(flow, root, *, transition):
+def _phs2_tray(flow, root, *, transition):
     app = flow(transition=transition, client=BlockingClient(_resolved(count=2)), root=root)
-    app._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
-    app.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
-        TransferMemberExchangeStore(
-            root / "transfer-seal.db",
-            ui_thread_id_provider=app._transfer_coordinator_ui_thread_id,
-        ),
-        app.transfer_seal_coordinator.client,
-        owner_thread_id_provider=app._transfer_coordinator_owner_thread_id,
-    )
-    app._transfer_member_exchange_attempt_snapshot = {
-        "known": True, "master_label": "", "attempt": None,
-    }
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(
         app.root,
@@ -573,6 +690,7 @@ def _phs2_completion(flow, root, *, transition):
         and not app._preflight_hold_store().exists()
         and not getattr(app, "_preflight_scan_input_locked", False),
     )
+    assert app.current_tray.operation_lease_id
     app.seal_calls.clear()
     app._prepare_and_attempt_transfer_seal_snapshot = lambda **kwargs: (
         app.seal_calls.append(kwargs["source_label_payload"])
@@ -580,8 +698,11 @@ def _phs2_completion(flow, root, *, transition):
     )
     app.current_tray.scanned_barcodes = [ITEM + "-A"]
     app.current_tray.scan_times = [datetime.datetime.now()]
-    partial = app.submit_current_tray()
-    blocked_partial = app.current_tray.master_label_code == COMPACT_QR
+    return app
+
+
+def _phs2_completion(flow, root, *, transition):
+    app = _phs2_tray(flow, root, transition=transition)
     app.current_tray.scanned_barcodes.append(ITEM + "-B")
     app.current_tray.scan_times.append(datetime.datetime.now())
     completed = []
@@ -594,21 +715,243 @@ def _phs2_completion(flow, root, *, transition):
         if key not in {"start_time", "end_time", "work_time_sec", "total_idle_seconds",
                        "idempotency_key"}
     }
-    return partial, blocked_partial, completed, list(app.seal_calls), stable
+    return completed, list(app.seal_calls), stable, app
+
+
+TRANSITION_KEYS = {
+    "transition_class", "transition_reasons", "transition_duplicate",
+    "source_computer_id", "source_host_name",
+}
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
-def test_phs2_trays_complete_the_same_with_the_switch_on_or_off(flow, tmp_path):
-    off = _phs2_completion(flow, tmp_path / "off", transition=False)
-    on = _phs2_completion(flow, tmp_path / "on", transition=True)
+def test_full_phs2_tray_takes_the_same_central_path_with_the_switch_on_or_off(flow, tmp_path):
+    off_completed, off_seals, off_detail, _off = _phs2_completion(flow, tmp_path / "off", transition=False)
+    on_completed, on_seals, on_detail, on_app = _phs2_completion(flow, tmp_path / "on", transition=True)
 
-    assert on == off
-    partial, blocked_partial, completed, seal_calls, detail = on
-    assert partial is None and blocked_partial is True
-    assert completed == [True]
-    assert seal_calls == [COMPACT_QR]
-    assert detail["transfer_seal_status"] == "ACKED"
-    assert "source_computer_id" not in detail
+    assert (on_completed, on_seals) == (off_completed, off_seals) == ([True], [COMPACT_QR])
+    assert {key: value for key, value in on_detail.items() if key not in TRANSITION_KEYS} == off_detail
+    assert off_detail["transfer_seal_status"] == "ACKED"
+    assert not TRANSITION_KEYS & set(off_detail)
+    assert on_detail["transition_class"] == "PHS2_CENTRAL"
+    assert on_detail["transition_reasons"] == []
+    assert on_app.work_summary[ITEM]["transition_counts"] == {"PHS2_CENTRAL": 1}
+
+
+@pytest.mark.usefixtures("fixed_operation_lease_clock")
+def test_partial_phs2_tray_is_refused_off_and_recorded_locally_on(flow, tmp_path, monkeypatch):
+    off = _phs2_tray(flow, tmp_path / "off", transition=False)
+    assert off.submit_current_tray() is None
+    assert off.current_tray.master_label_code == COMPACT_QR
+    assert "일부 제출할 수 없습니다" in off.statuses[-1][0]
+    assert _rows(off, "TRAY_COMPLETE") == []
+
+    on = _phs2_tray(flow, tmp_path / "on", transition=True)
+    _submit(on, monkeypatch)
+    [row] = _rows(on, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == "PHS2_LOCAL"
+    assert detail["transition_reasons"] == ["PARTIAL_TRANSFER"]
+    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
+    assert detail["is_partial_submission"] is True
+    assert on.seal_calls == []
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (ConnectionError("fixture outage"), "PHS2_PREFLIGHT_UNAVAILABLE"),
+        (TransferSealError("PHS2_SOURCE_NOT_INSPECTED", "fixture refusal"), "PHS2_SOURCE_NOT_INSPECTED"),
+    ],
+    ids=["offline", "refused"],
+)
+def test_on_phs2_label_the_central_check_blocks_becomes_a_local_tray_with_its_held_scans(
+    flow, monkeypatch, error, reason
+):
+    gate = threading.Event()
+    client = BlockingClient(_resolved(count=2), gate=gate, error=error)
+    app = flow(transition=True, client=client)
+    store = app._preflight_hold_store()
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert client.started.wait(timeout=5)
+    for index in (1, 2):
+        app._process_barcode_logic(f"{ITEM}-SERIAL-{index:03d}")
+    _pump_until(app.root, lambda: store.exists() and len(store.load().items) == 2)
+    gate.set()
+    _pump_until(
+        app.root,
+        lambda: len(app.current_tray.scanned_barcodes) == 2 and not store.exists(),
+    )
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.current_tray.operation_lease_id == ""
+    assert app.current_tray.transition_reasons == [reason]
+    assert any(f"중앙 확인 실패({reason})" in status[0] for status in app.statuses)
+    _submit(app, monkeypatch)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == "PHS2_LOCAL"
+    assert detail["transition_reasons"] == [reason, "PARTIAL_TRANSFER"]
+    assert detail["product_barcodes"] == [f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"]
+    assert app.seal_calls == [] and _has_seal_intent(app) is False
+
+
+def test_on_duplicate_phs2_label_goes_local_without_a_central_call(flow, monkeypatch):
+    client = BlockingClient(_resolved(count=2))
+    app = flow(transition=True, client=client)
+    app._remember_completed_master_label(COMPACT_QR)
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert app.warnings[-1][0] == "현품표 중복 · 과도기 기록"
+    _scan_products(app, 2)
+    _submit(app, monkeypatch)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == "PHS2_LOCAL"
+    assert detail["transition_reasons"] == ["DUPLICATE_LABEL", "PARTIAL_TRANSFER"]
+    assert detail["transition_duplicate"] is True
+    assert client.identities == [] and app.seal_calls == []
+
+
+@pytest.mark.parametrize("label", [OTHER_ITEM, f"CLC={OTHER_ITEM}|QT=2"])
+def test_on_label_of_an_unknown_item_starts_and_is_recorded_item_unconfirmed(flow, label):
+    app = flow(transition=True)
+
+    app._process_barcode_logic(label)
+    assert app.current_tray.item_name == "품목 미확인"
+    app.current_tray.tray_size = 2
+    for index in (1, 2):
+        app._process_barcode_logic(f"{OTHER_ITEM}-{index:04d}")
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert detail["transition_class"] == "LEGACY"
+    assert detail["transition_reasons"] == ["ITEM_UNCONFIRMED"]
+    assert detail["item_code"] == OTHER_ITEM
+
+
+def test_off_still_refuses_a_label_of_an_unknown_item(flow):
+    app = flow(transition=False)
+
+    app._process_barcode_logic(COMPACT_QR.replace(ITEM, OTHER_ITEM))
+
+    assert app.current_tray.master_label_code == ""
+    assert app.warnings[-1][0] == "품목 없음"
+
+
+def test_on_unconfirmed_catalog_keeps_phs2_off_the_central_path(flow, monkeypatch):
+    client = BlockingClient(_resolved(count=2))
+    app = flow(transition=True, client=client)
+    app.item_catalog_unconfirmed = True
+
+    app._process_barcode_logic(COMPACT_QR)
+    assert app.current_tray.transition_reasons == ["ITEM_UNCONFIRMED"]
+    _scan_products(app, 2)
+    _submit(app, monkeypatch)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    assert _details(row)["transition_class"] == "PHS2_LOCAL"
+    assert _details(row)["transition_reasons"] == ["ITEM_UNCONFIRMED", "PARTIAL_TRANSFER"]
+    assert client.identities == []
+
+
+class _StartupApp:
+    def __init__(self):
+        self.root = type("Root", (), {"after": lambda *_args: None})()
+        self.ran = False
+
+    def run(self):
+        self.ran = True
+
+
+@pytest.mark.parametrize("transition", [True, False])
+def test_catalog_failure_without_a_cache_starts_only_in_transition_mode(
+    monkeypatch, tmp_path, transition
+):
+    calls = []
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    monkeypatch.delenv("CONTAINER_AUDIT_DATA_ROOT", raising=False)
+    monkeypatch.setenv(container_audit_module.ACTIVE_PATH_ENV, str(tmp_path / "stale.csv"))
+
+    class Lease:
+        def release(self):
+            calls.append("release")
+
+    monkeypatch.setattr(container_audit_module, "acquire_runtime_instance", lambda _root: Lease())
+    monkeypatch.setattr(
+        container_audit_module,
+        "prepare_startup_item_catalog",
+        lambda: (_ for _ in ()).throw(
+            container_audit_module.ItemCatalogSyncError(
+                "offline", cause_code="REQUEST_FAILED_NO_CACHE",
+            )
+        ),
+    )
+    monkeypatch.setattr(container_audit_module, "legacy_label_transition_enabled", lambda: transition)
+    started = []
+    monkeypatch.setattr(
+        container_audit_module, "ContainerAudit", lambda: started.append(_StartupApp()) or started[-1]
+    )
+    for name in ("showerror", "showwarning"):
+        monkeypatch.setattr(
+            container_audit_module.messagebox, name,
+            lambda title, message, _name=name: calls.append((_name, title, message)),
+        )
+
+    result = container_audit_module.main()
+
+    dialogs = [call for call in calls if isinstance(call, tuple)]
+    if transition:
+        assert result == 0
+        [app] = started
+        assert app.ran is True and app.item_catalog_unconfirmed is True
+        assert container_audit_module.ACTIVE_PATH_ENV not in container_audit_module.os.environ
+        assert [(name, title) for name, title, _message in dialogs] == [
+            ("showwarning", container_audit_module.ITEM_CATALOG_TRANSITION_WARNING_TITLE)
+        ]
+        assert "REQUEST_FAILED_NO_CACHE" in dialogs[0][2]
+    else:
+        assert result == container_audit_module.ITEM_CATALOG_STARTUP_EXIT_CODE
+        assert started == []
+        assert dialogs[0][:2] == ("showerror", container_audit_module.ITEM_CATALOG_STARTUP_ERROR_TITLE)
+    assert calls[-1] == "release"
+
+
+def test_on_member_coordinator_leaves_every_local_action_open_after_a_phs2_tray(
+    flow, tmp_path, monkeypatch, fixed_operation_lease_clock
+):
+    # A PHS2 tray publishes its member snapshot; the legacy trays that follow
+    # must still submit, undo, reset and park under the production coordinator.
+    _completed, _seals, _detail, app = _phs2_completion(flow, tmp_path / "pc", transition=True)
+    assert app._transfer_member_exchange_attempt_snapshot["master_label"] == COMPACT_QR
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+
+    app._process_barcode_logic(ITEM)
+    _scan_products(app, 3, start=101)
+    app.undo_last_scan()
+    assert len(app.current_tray.scanned_barcodes) == 2
+    assert app.park_current_tray(confirm=False) is True
+    assert app.current_tray.master_label_code == ""
+
+    app._process_barcode_logic(OLD_QR)
+    _scan_products(app, 1, start=201)
+    app.reset_current_work()
+    assert app.current_tray.master_label_code == ""
+
+    app._process_barcode_logic(ITEM)
+    _scan_products(app, 1, start=301)
+    _submit(app, monkeypatch)
+
+    assert not any("이전 중앙 작업 처리 중" in status[0] for status in app.statuses)
+    classes = [_details(row)["transition_class"] for row in _rows(app, "TRAY_COMPLETE")]
+    assert classes == ["PHS2_CENTRAL", "LEGACY"]
+    assert [row["event"] for row in _rows(app) if row["event"] in {"SCAN_UNDO", "TRAY_PARKED", "TRAY_RESET"}] == [
+        "SCAN_UNDO", "TRAY_PARKED", "TRAY_RESET",
+    ]
 
 
 def test_summary_list_shows_the_daily_transition_count():
@@ -627,10 +970,16 @@ def test_summary_list_shows_the_daily_transition_count():
 
     app = ContainerAudit.__new__(ContainerAudit)
     app.summary_tree = Tree()
-    app.work_summary = {ITEM: {"name": "fixture item", "count": 3, "test_count": 0, "legacy_count": 2}}
+    app.work_summary = {ITEM: {
+        "name": "fixture item", "count": 5, "test_count": 0,
+        "transition_counts": {"PHS2_LOCAL": 1, "LEGACY": 3, "PHS2_MALFORMED": 1},
+        "transition_duplicates": 1,
+    }}
     app._insert_tree_row = lambda tree, *_args, values, **_kwargs: tree.rows.append(values)
     app.root = None
 
     app._update_summary_list()
 
-    assert app.summary_tree.rows == [("fixture item", ITEM, "3 (과도기 2)")]
+    assert app.summary_tree.rows == [
+        ("fixture item", ITEM, "5 (옛 3 · 새 로컬 1 · 새 형식오류 1 · 중복 1)")
+    ]

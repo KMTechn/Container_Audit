@@ -229,7 +229,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 | 배포 진입 | canonical portable 설치 후 [launch-container-audit.cmd](../../portable/launch-container-audit.cmd) | 현재 사용자 onboarding과 relay, 보호된 코드 루트. 소스 실행과 패키지 실행의 동일성은 별도 확인. [운영](operations.md#ca-o01) |
 | 조건부 제품 교체 | 봉인 전 현재 트레이의 교체 UI | capability·버전·동일 품목/UOM·단일 구성원 공여 PHS 조건. [CA-10](#ca-10) |
 | 조건부 현품표 정합 교체 | F8·중앙 후보 선택 | 중앙 journal·Windows 출력·활성화. Shift-F8에는 legacy single fallback 진입이 남아 있다. [CA-11](#ca-11), [ContainerAudit.__init__](../../Container_Audit.py) |
-| 호환·시험 | 비compact 현품표/13자리 품목 코드, 과거 부분 제출·교환 분기 | `_process_barcode_logic`와 `submit_current_tray` 등에 코드가 남아 있다. PHS2 아닌 현품표는 관리자가 켠 [과도기 모드](contracts.md#ca-legacy-transition)에서만 시작·로컬 완료하며 꺼져 있으면 시작에서 거절한다. 이를 표준 PHS2 부분 제출 허용으로 해석하지 않는다. 현장 지원 범위 재확인은 [CA-G03](BACKLOG.md#ca-g03). |
+| 호환·시험 | 비compact 현품표/13자리 품목 코드, 과거 부분 제출·교환 분기 | `_process_barcode_logic`와 `submit_current_tray` 등에 코드가 남아 있다. PHS2 아닌 현품표와 손상된 새 현품표는 관리자가 켠 [과도기 모드](contracts.md#ca-legacy-transition)에서만 시작해 분류별로 로컬 완료하며, 꺼져 있으면 시작에서 거절한다. 이를 표준 PHS2 부분 제출 허용으로 해석하지 않는다. 현장 지원 범위 재확인은 [CA-G03](BACKLOG.md#ca-g03). |
 | 내부 시험 명령 | `enable_internal_test_commands`가 허용된 개발 실행 | 기본 설정 false, frozen 실행에서는 설정을 제거한다. `_RUN_AUTO_TEST_`, `TEST_LOG_…`는 일반 운영 입력이 아니다. [설정 템플릿](../../config/container_audit_settings.json), `_drop_release_disabled_settings` |
 | 관리용 host 모드 | `--container-audit-direct-sync-relay`, `--container-audit-user-relay`, `--onboard-current-user`, `--remove-current-user-setup`, `--restore-current-user-lifecycle-after-replacement` | [dispatch_product_mode](../../container_audit_product_host.py)의 비GUI 경로. 작업자 트레이 기능과 구분한다. |
 | 퇴역 운영 경로 | Syncthing / `C:\Sync` | HTTPS direct-sync 운영 저장소에서 제외하며 해당 data root를 거부한다. `legacy`라는 이름의 모든 코드가 폐기됐다는 뜻은 아니다. [storage_policy](../../storage_policy.py), [전송 정책](../../DIRECT_SYNC_DATA_PLATFORM_NOTES.md) |
@@ -296,7 +296,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **검증·저장·결과:** 품목·UOM·현재 GOOD member와 operation lease를 검증한 결과를 트레이 상태에 연결한다. 목표는 중앙 GOOD 구성원 수이며 60으로 추정하지 않는다. [ContainerAudit._begin_compact_phs2_preflight / _process_barcode_logic](../../Container_Audit.py)
 - **실패·취소·재시작:** 조회 실패면 새 트레이 성공으로 전환하지 않는다. 조회 중 입력은 [CA-04](#ca-04)로 보존하고 같은 현품표로 재시도한다. lease·identity가 맞지 않으면 완료를 허용하지 않는다.
 - **수용 기준:** 잘못된 6필드·다른 label/hash·불일치 구성원을 차단하고, 실제 중앙 GOOD 수가 표시 목표와 완료 대조의 기준이 되어야 한다.
-- **PHS2 아닌 현품표:** 13자리 품목코드·옛 QR은 [과도기 모드](contracts.md#ca-legacy-transition)가 켜진 PC에서만 받는다. 꺼져 있으면 시작에서 `새 시스템 이전 현품표`로 거절하고 제품 스캔 단계로 가지 않는다. 보류 트레이의 스캔 복원은 기존대로다.
+- **PHS2 아닌 현품표:** 13자리 품목코드·옛 QR과 새 시스템 식별값이 있는 손상 현품표는 [과도기 모드](contracts.md#ca-legacy-transition)가 켜진 PC에서만 받는다(`LEGACY`·`PHS2_MALFORMED`). 켜진 PC에서 사전조회가 실패·끊기면 멈추지 않고 `PHS2_LOCAL` 로컬 트레이로 시작해 조회 중 보류 스캔을 넘긴다. 꺼져 있으면 시작에서 `새 시스템 이전 현품표`/`현품표 정보 확인 필요`로 거절하고 제품 스캔 단계로 가지 않는다. 보류 트레이의 스캔 복원은 기존대로다.
 - **연결·남은 일:** [CA-C02](contracts.md#ca-c02), [CA-G03](BACKLOG.md#ca-g03), [CA-G04](BACKLOG.md#ca-g04). [CA-O09](operations.md#ca-o09)의 actual case01은 NG 소유가 포함된 source를 거부했고 case02는 정상 GOOD2 목표를 표시했다. 이는 지정된 Web sourcec04343ce/guest68dd의 관측이며 [preflight 회귀 소스](../../tests/test_phs2_master_preflight.py) 자체는 실행 결과가 아니다.
 
 <a id="ca-04"></a>
@@ -401,7 +401,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **실패·취소·재시작:** local completion ID도 ACK도 없는 트레이는 잠근다. 이미 `LINKED`인 작업의 중앙 지연/검토가 로컬 완료를 취소하지 않는다. 응답 유실은 원 key receipt 조회·재전송, 영구 충돌은 `OPERATOR_REVIEW`, 로컬 이벤트 실패는 `LOCAL_EVENT_RETRY`로 구별한다. [TransferSealCoordinator.attempt](../../transfer_seal.py), `complete_tray`
 - **완료 전 관리자 조치:** 운영 작업의 원 요청 재확인은 원 scope/key의 receipt만 읽고 exact 영수증을 검증한다. 새 요청을 만들지 않는다. ACK가 없거나 검증되지 않으면 review를 유지하고, 관리자 보류 후 다른 현품표를 진행할 수 있다. 로컬 잠금 해제 저장이 실패하면 원 review를 유지한다. 이미 로컬 완료한 건의 별도 관리자 감사 재전송은 위 기존 절차를 따른다.
 - **수용 기준:** lease→intent→checkpoint→중앙 receipt→CSV→화면의 각각을 관측하고, 재시작/응답 유실에서 중앙 이동·로컬 완료가 각각 한 번이며 원 key가 유지되어야 한다. `LINKED`와 `ACKED` 표시/다음 입력 guard가 실제 내구 상태와 일치해야 한다.
-- **과도기 레거시 완료:** 켜진 PC의 PHS2 아닌 트레이는 60개 자동 완료·부분 `제출` 모두 중앙 명령 없이 `LEGACY_LOCAL_ONLY` `TRAY_COMPLETE`만 남긴다. 화면에는 창 제목과 작업자 칸에 `과도기 모드 — 옛 현품표 받음`, 금일 작업 현황에 `(과도기 N)`을 표시한다. 꺼진 PC에서 복원된 13자리 트레이의 완료 차단은 원인을 안내한다. [계약](contracts.md#ca-legacy-transition), [운영](operations.md#ca-legacy-transition-ops).
+- **과도기 완료:** 켜진 PC의 로컬 분류 트레이(`LEGACY`·`PHS2_LOCAL`·`PHS2_MALFORMED`)는 60개 자동 완료·부분 `제출` 모두 중앙 명령 없이 분류·사유 코드를 담은 `TRAY_COMPLETE`만 남긴다. 정상 PHS2는 기존 흐름에 `PHS2_CENTRAL`을 붙인다. 화면에는 창 제목과 작업자 칸에 `과도기 모드 — 옛 현품표 받음`, 금일 작업 현황 품목 행에 분류별 건수를 표시한다. 꺼진 PC에서 복원된 13자리 트레이의 완료 차단은 원인을 안내한다. [계약](contracts.md#ca-legacy-transition), [운영](operations.md#ca-legacy-transition-ops).
 - **연결·남은 일:** [CA-C03](contracts.md#ca-c03), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04). [transfer_seal 테스트](../../tests/test_transfer_seal.py)의 BND offline fixture를 현장 compact PHS2의 lease 복구 증거로 승계하지 않는다.
 - **실제 설치본 후속:** `a7d714f6`/개발 backend `c0c0d51`에서 원 case02의 정상 관리자 감사 재시도는09:21:22Z ACKED/attempt2, 새 case04의 일반 GOOD3 완료는09:25:36Z ACKED/attempt1이다. 각각 로컬 LINKED1이며 원 case02의 기존 review1·명령·완료 시각은 유지됐다. 중앙 case02 receipt1의 독립 조회와 downstream 인계는 [CA-O09](operations.md#ca-o09), 이후 OS/설치 복구는 별도 판정이다.
 
