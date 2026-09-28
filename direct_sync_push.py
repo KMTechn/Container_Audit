@@ -1129,7 +1129,11 @@ def _transition_duplicates_only(plan: SourceFilePlan, receipt: Mapping[str, Any]
         count = entry.get("count")
         if type(count) is not int or count <= 0:
             return False
-        if {key: entry.get(key) for key in TRANSITION_DUPLICATE_RECEIPT_ENTRY} != TRANSITION_DUPLICATE_RECEIPT_ENTRY:
+        # Exact values and types: 0 or 0.0 is not false.
+        if any(
+            type(entry.get(key)) is not type(value) or entry.get(key) != value
+            for key, value in TRANSITION_DUPLICATE_RECEIPT_ENTRY.items()
+        ):
             return False
         observed += count
     row_count = plan.metadata.get("row_count")

@@ -993,9 +993,9 @@ class TraySession:
     # Transition mode: the class this round got with the switch on. It keeps the
     # round on that path through a retry, a restart or the switch turned off.
     transition_class: str = ""
-    # First attempt (timestamp, event file) of an undo/reset whose write may have
-    # landed: its retry, even after a restart on a later day, is the same row.
-    cancel_event_attempts: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # First attempt (timestamp, event file, detail) of an undo/reset whose write may
+    # have landed: its retry, even after a restart on a later day, is the same row.
+    cancel_event_attempts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
 
 class _LocalValueVar:
@@ -13776,7 +13776,9 @@ class ContainerAudit:
             "barcode": last_barcode,
             "scanned_at": last_scan_time.isoformat() if hasattr(last_scan_time, "isoformat") else str(last_scan_time),
         })
-        self._cancel_event_attempt(undo_key, self.current_tray.cancel_event_attempts)
+        self._cancel_event_attempt(
+            undo_key, self.current_tray.cancel_event_attempts, {'undone_barcode': last_barcode},
+        )
         self.scanned_listbox.delete(0)
         if not self._save_current_tray_state():
             self.current_tray.scanned_barcodes.append(last_barcode)
@@ -13841,7 +13843,7 @@ class ContainerAudit:
                 "start_time": self.current_tray.start_time.isoformat() if self.current_tray.start_time else "",
                 "scanned_barcodes": list(self.current_tray.scanned_barcodes),
             })
-            self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts)
+            self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts, reset_detail)
             state_snapshot = self._current_tray_state_snapshot()
             if self._delete_current_tray_state() is False:
                 self._log_event('TRAY_RESET_STATE_DELETE_FAILED', detail=reset_detail)
@@ -16823,14 +16825,17 @@ class ContainerAudit:
         acknowledgement finds its durable row and writes no second one."""
         return f"{kind}:{self._stable_hash(dict(identity))[:40]}"
 
-    def _cancel_event_attempt(self, key: str, attempts: Dict[str, Dict[str, str]]) -> Dict[str, str]:
-        """The first attempt of one cancellation. Its retry - on a later day, when
-        the event file is another - writes the same row to the same file, where
-        the durable row, if any, is found by its event ID."""
+    def _cancel_event_attempt(
+        self, key: str, attempts: Dict[str, Dict[str, Any]], detail: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """The first attempt of one cancellation fixes its row. A retry - for another
+        reason, or on a later day when the event file is another - writes that same
+        row to the same file, where the durable row, if any, is found by its event ID."""
         if key not in attempts:
             attempts[key] = {
                 "timestamp": datetime.datetime.now().isoformat(),
                 "log_file_name": Path(str(getattr(self, "log_file_path", "") or "")).name,
+                "detail": dict(detail),
             }
         return attempts[key]
 
@@ -16839,14 +16844,14 @@ class ContainerAudit:
         event_type: str,
         detail: Dict[str, Any],
         key: str,
-        attempts: Optional[Dict[str, Dict[str, str]]] = None,
+        attempts: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> bool:
         if attempts is None:  # a cancellation not bound to the saved tray
             attempts = vars(self).setdefault("_cancel_event_attempts", {})
-        attempt = self._cancel_event_attempt(key, attempts)
+        attempt = self._cancel_event_attempt(key, attempts, detail)
         logged = self._log_event(
             event_type,
-            detail=detail,
+            detail=dict(attempt["detail"]),
             synchronous=True,
             idempotency_key=key,
             deduplicate=True,
@@ -17696,7 +17701,6 @@ class ContainerAudit:
             detail,
             self._cancel_event_key("historical-replace-cancel", {
                 "session": context.get("replacement_session_id") or "",
-                "detail": detail,
             }),
         )
 
@@ -18755,7 +18759,7 @@ class ContainerAudit:
             if not self._log_cancel_event(
                 "PRODUCT_EXCHANGE_CANCELLED",
                 detail,
-                self._cancel_event_key("product-exchange-cancel", detail),
+                self._cancel_event_key("product-exchange-cancel", {"exchange_id": session.exchange_id}),
             ):
                 messagebox.showerror("교환 취소 기록 실패", "제품 교환 취소 기록 저장에 실패했습니다. 교환 상태를 유지합니다.")
                 return False

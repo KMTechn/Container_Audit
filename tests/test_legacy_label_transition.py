@@ -733,6 +733,45 @@ def test_replacement_and_exchange_cancellations_carry_event_ids_and_retry_as_one
     assert _details(exchange_cancel)["idempotency_key"].startswith("product-exchange-cancel:")
 
 
+@pytest.mark.parametrize("kind", ["replacement", "exchange"])
+def test_session_cancellation_retried_for_another_reason_keeps_its_first_row(flow, monkeypatch, kind):
+    # sub-05 R12: the first cancel landed but its acknowledgement was lost; the
+    # window close that retries it is the same cancellation - one ID, one row.
+    from product_exchange import ProductExchangeSession
+
+    event = "HISTORICAL_REPLACE_CANCEL" if kind == "replacement" else "PRODUCT_EXCHANGE_CANCELLED"
+    app = flow(transition=False)
+    lost = []
+    real = container_audit_module.append_event_log_entry_idempotent
+
+    def losing(path, entry, *args, **kwargs):
+        result = real(path, entry, *args, **kwargs)
+        if entry["event"] == event and not lost:
+            lost.append(entry)
+            raise OSError("write acknowledgement lost")
+        return result
+
+    monkeypatch.setattr(container_audit_module, "append_event_log_entry_idempotent", losing)
+    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
+    if kind == "replacement":
+        app.master_label_replace_state = "awaiting_old_completed"
+        app.replacement_context = {"replacement_session_id": "replace-session-2"}
+        assert app._log_master_label_replacement_cancel(reason="operator_cancel") is False
+        assert app._log_master_label_replacement_cancel(reason="app_close") is True
+    else:
+        app._update_action_button_states = lambda: None
+        app.exchange_dialog = None
+        session = ProductExchangeSession(item_code=ITEM, defective_barcodes=[f"{ITEM}-0001"])
+        app.current_exchange_session = session
+        assert app._finish_exchange_cancel_ui("operator_cancel") is False
+        app.current_exchange_session = session
+        assert app._finish_exchange_cancel_ui("app_close") is True
+
+    [row] = _rows(app, event)
+    assert row["timestamp"] == lost[0]["timestamp"]
+    assert _details(row)["reason"] == "operator_cancel"
+
+
 def test_on_old_v209_label_is_legacy(flow):
     app = flow(transition=True)
 
@@ -1230,6 +1269,25 @@ def test_phs2_round_refused_before_a_command_stays_local_after_a_failed_write_an
     assert detail["idempotency_key"] == json.loads(failed[0]["details"])["idempotency_key"]
     assert row["timestamp"] == failed[0]["timestamp"]
     assert restarted.seal_calls == [] and _has_seal_intent(restarted) is False
+
+
+def test_on_reasons_an_older_build_saved_are_recorded_in_the_code_shape(flow):
+    # sub-05 P2-2: a tray saved before the shape rule completes with shaped codes.
+    app = flow(transition=True)
+    now = datetime.datetime.now()
+    app.current_tray = TraySession(
+        master_label_code=COMPACT_QR, item_code=ITEM, item_name="fixture item", tray_size=2,
+        scanned_barcodes=[f"{ITEM}-0001", f"{ITEM}-0002"], scan_times=[now, now], start_time=now,
+        transition_reasons=["temporary-unavailable"],
+    )
+
+    assert app.complete_tray() is True
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert (detail["transition_class"], detail["transition_reasons"]) == (
+        "PHS2_LOCAL", ["TEMPORARY_UNAVAILABLE"],
+    )
 
 
 def test_transition_reason_codes_keep_the_shared_shape():

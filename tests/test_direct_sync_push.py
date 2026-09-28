@@ -3513,8 +3513,12 @@ def test_raw_legitimate_receipt_of_this_pcs_transition_duplicate_is_accepted(tmp
         ([("SCAN_OK", {"barcode": "AAA2270730100-0001"})], {}),
         # Another PC's row in a shared event folder.
         ([("TRAY_COMPLETE", {**TRANSITION_DUPLICATE[1], "source_host_name": "OTHER-PC"})], {}),
+        # sub-05 P2-1: a number is not false.
+        ([TRANSITION_DUPLICATE], {"projection_required": 0}),
+        ([TRANSITION_DUPLICATE], {"projection_required": 0.0}),
     ],
-    ids=["reason", "projected", "required", "class", "event", "count", "switch-off-row", "other-row", "other-pc"],
+    ids=["reason", "projected", "required", "class", "event", "count", "switch-off-row", "other-row", "other-pc",
+         "required-zero", "required-zero-float"],
 )
 @pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_any_other_raw_legitimate_receipt_still_goes_to_operator_review(tmp_path, rows, receipt_changes):

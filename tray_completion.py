@@ -663,7 +663,10 @@ def complete_tray_steps(
         transition_class, transition_reasons = transition_route or (TRANSITION_PHS2_CENTRAL, [])
         self.current_tray.transition_class = transition_class
         log_detail["transition_class"] = transition_class
-        log_detail["transition_reasons"] = list(transition_reasons)
+        # A reason an older build saved with the tray takes the shared code shape too.
+        log_detail["transition_reasons"] = list(
+            dict.fromkeys(transition_reason_code(reason) for reason in transition_reasons)
+        )
         log_detail["transition_duplicate"] = "DUPLICATE_LABEL" in transition_reasons
         log_detail["source_computer_id"] = str(getattr(self, "computer_id", "") or "")
         log_detail["source_host_name"] = socket.gethostname()

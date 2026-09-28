@@ -86,7 +86,8 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
     cancel_event_attempts = dict(getattr(tray, "cancel_event_attempts", {}) or {})
     if cancel_event_attempts:
         state["cancel_event_attempts"] = {
-            str(key): dict(attempt) for key, attempt in cancel_event_attempts.items()
+            str(key): {**attempt, "detail": dict(attempt["detail"])}
+            for key, attempt in cancel_event_attempts.items()
         }
     scanned_barcodes = set(state["scanned_barcodes"])
     raw_receipts = getattr(tray, "preflight_scan_receipts", {})
@@ -767,7 +768,8 @@ def validate_tray_state(
     if not isinstance(cancel_event_attempts, dict) or not all(
         isinstance(key, str) and key.strip()
         and isinstance(attempt, dict)
-        and set(attempt) == {"timestamp", "log_file_name"}
+        and set(attempt) == {"timestamp", "log_file_name", "detail"}
+        and isinstance(attempt["detail"], dict)
         and isinstance(attempt["timestamp"], str) and attempt["timestamp"].strip()
         and isinstance(attempt["log_file_name"], str)
         and (
@@ -780,7 +782,7 @@ def validate_tray_state(
         for key, attempt in cancel_event_attempts.items()
     ):
         raise TrayStateValidationError(
-            "cancel_event_attempts must map event IDs to a timestamp and event file"
+            "cancel_event_attempts must map event IDs to a timestamp, event file and detail"
         )
 
     scan_times = state.get("scan_times")
@@ -897,7 +899,8 @@ def tray_session_from_state(
         transition["transition_class"] = str(state["transition_class"])
     if state.get("cancel_event_attempts"):
         transition["cancel_event_attempts"] = {
-            key: dict(attempt) for key, attempt in state["cancel_event_attempts"].items()
+            key: {**attempt, "detail": dict(attempt["detail"])}
+            for key, attempt in state["cancel_event_attempts"].items()
         }
     return session_factory(
         **transition,
