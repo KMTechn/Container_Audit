@@ -3443,7 +3443,7 @@ TRANSITION_DUPLICATE = (
 )
 
 
-def _duplicate_receipt(row, server_source_file_id, *, count=1, **entry_changes):
+def _duplicate_receipt(row, server_source_file_id, *, count=1, entries=None, inserted=1, **entry_changes):
     entry = {**direct_sync_push.TRANSITION_DUPLICATE_RECEIPT_ENTRY, "count": count, **entry_changes}
     return {
         "request_id": "request-transition-duplicate",
@@ -3453,10 +3453,10 @@ def _duplicate_receipt(row, server_source_file_id, *, count=1, **entry_changes):
         "committed": True,
         "status": "accepted",
         "projection_disposition": "RAW_LEGITIMATE",
-        "projection_observation": {"event_classifications": [entry]},
+        "projection_observation": {"event_classifications": [entry] if entries is None else entries},
         "retryable": False,
         "next_retry_after": None,
-        "totals": {"inserted": 1, "replayed": 0, "quarantined": 0, "errors": 0},
+        "totals": {"inserted": inserted, "replayed": 0, "quarantined": 0, "errors": 0},
     }
 
 
@@ -3475,7 +3475,7 @@ def _drain_transition_rows(tmp_path, rows, **receipt_changes):
     server_source_file_id = (
         f"{manifest['pc_identity']['source_host_id']}/container_audit/container_audit_events/{row.relative_path}"
     )
-    receipt = _duplicate_receipt(row, server_source_file_id, **receipt_changes)
+    receipt = _duplicate_receipt(row, server_source_file_id, inserted=len(rows), **receipt_changes)
     result = drain_one_relay_batch(
         db_path=db_path,
         credentials=credentials,
@@ -3523,6 +3523,97 @@ def test_raw_legitimate_receipt_of_this_pcs_transition_duplicate_is_accepted(tmp
 @pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
 def test_any_other_raw_legitimate_receipt_still_goes_to_operator_review(tmp_path, rows, receipt_changes):
     result, status = _drain_transition_rows(tmp_path, rows, **receipt_changes)
+
+    assert result.success is False
+    assert result.error_code == "producer_projection_incomplete"
+    assert status == RELAY_STATUS_OPERATOR_REVIEW
+
+
+TRAY_RESET_ROW = (
+    "TRAY_RESET",
+    {
+        "master_label_code": "AAA2270730100",
+        "scan_count_at_reset": 2,
+        "idempotency_key": "tray-reset:0123456789abcdef0123456789abcdef01234567",
+    },
+)
+
+
+def _raw_only(name, count=1, **changes):
+    return {
+        "raw_event_name": name,
+        "projection_required": False,
+        "projection_status": "NOT_PROJECTED",
+        "event_projection_class": "RAW_EVIDENCE_ONLY",
+        "raw_only_reason_code": "NO_STAGE1_REDUCER",
+        "count": count,
+        **changes,
+    }
+
+
+DUPLICATE_ENTRY = {**direct_sync_push.TRANSITION_DUPLICATE_RECEIPT_ENTRY, "count": 1}
+
+
+@pytest.mark.parametrize(
+    ("rows", "entries"),
+    [
+        ([TRAY_RESET_ROW], [_raw_only("TRAY_RESET")]),
+        ([TRANSITION_DUPLICATE, TRAY_RESET_ROW], [DUPLICATE_ENTRY, _raw_only("TRAY_RESET")]),
+    ],
+    ids=["reset-only", "reset-and-duplicate"],
+)
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
+def test_raw_legitimate_receipt_of_raw_only_catalog_rows_is_accepted(tmp_path, rows, entries):
+    # Web sub-02: the server keeps TRAY_RESET as raw evidence (no stage-1
+    # reducer); a delta of nothing else is RAW_LEGITIMATE and must not stop the line.
+    result, status = _drain_transition_rows(tmp_path, rows, entries=entries)
+
+    assert result.success is True and result.error_code == ""
+    assert status == RELAY_STATUS_ACKED
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "CONTAINER_AUDIT_OBSERVED",
+        "MASTER_LABEL_REPLACEMENT_APPLIED",
+        "PHS_RECONCILIATION_ACTION_RESOLVED",
+        "PHS_RECONCILIATION_LABEL_EXCHANGED",
+        "PHS_REPLACEMENT_WAITING_MARKED",
+        "POST_REVIEW_REQUIRED",
+        "TRANSFER_WAITING_OBSERVED",
+        "TRAY_RESET",
+    ],
+)
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
+def test_raw_legitimate_receipt_of_each_raw_only_catalog_event_is_accepted(tmp_path, name):
+    # Web sub-02 catalog run: the server answers these eight catalog events
+    # RAW_LEGITIMATE / NO_STAGE1_REDUCER when a delta holds nothing else.
+    result, status = _drain_transition_rows(
+        tmp_path, [(name, {"master_label_code": "AAA2270730100"})], entries=[_raw_only(name)],
+    )
+
+    assert result.success is True and result.error_code == ""
+    assert status == RELAY_STATUS_ACKED
+
+
+@pytest.mark.parametrize(
+    ("rows", "entries"),
+    [
+        # A projected lifecycle event is never raw evidence.
+        ([("SCAN_UNDO", {"undone_barcode": "AAA2270730100-0001"})], [_raw_only("SCAN_UNDO")]),
+        ([TRAY_RESET_ROW], [_raw_only("TRAY_RESET", raw_only_reason_code="TRANSITION_DUPLICATE_OBSERVED")]),
+        ([TRAY_RESET_ROW], [_raw_only("TRAY_RESET", count=2)]),
+        ([TRAY_RESET_ROW], [_raw_only("TRAY_RESET", projection_required=0)]),
+        # Entries must name the uploaded rows.
+        ([TRAY_RESET_ROW], [_raw_only("POST_REVIEW_REQUIRED")]),
+        ([TRANSITION_DUPLICATE, TRAY_RESET_ROW], [_raw_only("TRAY_RESET", count=2)]),
+    ],
+    ids=["projected-event", "reason", "count", "required-zero", "other-name", "names-differ"],
+)
+@pytest.mark.usefixtures("legacy_relay_without_runtime_lease")
+def test_raw_legitimate_receipt_that_does_not_match_its_raw_only_rows_goes_to_review(tmp_path, rows, entries):
+    result, status = _drain_transition_rows(tmp_path, rows, entries=entries)
 
     assert result.success is False
     assert result.error_code == "producer_projection_incomplete"

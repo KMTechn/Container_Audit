@@ -1109,57 +1109,83 @@ TRANSITION_DUPLICATE_RECEIPT_ENTRY = {
     "event_projection_class": "RAW_EVIDENCE_ONLY",
     "raw_only_reason_code": "TRANSITION_DUPLICATE_OBSERVED",
 }
+# Catalog events the server keeps as raw evidence only (no stage-1 reducer);
+# a delta of nothing else is RAW_LEGITIMATE, as for Label_Match's lifecycle rows.
+RAW_ONLY_EVENT_NAMES = frozenset({
+    "CONTAINER_AUDIT_OBSERVED",
+    "MASTER_LABEL_REPLACEMENT_APPLIED",
+    "PHS_RECONCILIATION_ACTION_RESOLVED",
+    "PHS_RECONCILIATION_LABEL_EXCHANGED",
+    "PHS_REPLACEMENT_WAITING_MARKED",
+    "POST_REVIEW_REQUIRED",
+    "TRANSFER_WAITING_OBSERVED",
+    "TRAY_RESET",
+})
 
 
-def _transition_duplicates_only(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> bool:
-    """A RAW_LEGITIMATE receipt that only records this PC's transition completions.
+def _raw_evidence_only_rows(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> bool:
+    """A RAW_LEGITIMATE receipt whose rows the server rightly keeps as raw evidence.
 
-    Every uploaded row must be a TRAY_COMPLETE carrying transition_class that
-    this host wrote, and every receipt entry the exact duplicate observation,
-    covering all rows. Accepting it keeps the next delta of the same file moving.
+    Every uploaded row must be a raw-only catalog event or a transition
+    TRAY_COMPLETE this host wrote, and the receipt entries must be exactly
+    their raw observations (values and types), name by name and count by
+    count. Accepting it keeps the next delta of the same file moving.
     """
     observation = receipt.get("projection_observation")
     entries = observation.get("event_classifications") if isinstance(observation, Mapping) else None
     if not isinstance(entries, list) or not entries:
         return False
-    observed = 0
+    observed: Dict[str, int] = {}
     for entry in entries:
         if not isinstance(entry, Mapping):
             return False
-        count = entry.get("count")
+        name, count = entry.get("raw_event_name"), entry.get("count")
         if type(count) is not int or count <= 0:
+            return False
+        if name == "TRAY_COMPLETE":
+            expected = TRANSITION_DUPLICATE_RECEIPT_ENTRY
+        elif name in RAW_ONLY_EVENT_NAMES:
+            expected = {**TRANSITION_DUPLICATE_RECEIPT_ENTRY, "raw_event_name": name,
+                        "raw_only_reason_code": "NO_STAGE1_REDUCER"}
+        else:
             return False
         # Exact values and types: 0 or 0.0 is not false.
         if any(
             type(entry.get(key)) is not type(value) or entry.get(key) != value
-            for key, value in TRANSITION_DUPLICATE_RECEIPT_ENTRY.items()
+            for key, value in expected.items()
         ):
             return False
-        observed += count
+        observed[name] = observed.get(name, 0) + count
     row_count = plan.metadata.get("row_count")
-    if type(row_count) is not int or observed != row_count:
+    if type(row_count) is not int or sum(observed.values()) != row_count:
         return False
     try:
+        digest, length = _read_file_digest(Path(plan.source_file_path))
+        if digest.lower() != str(plan.content_sha256).lower() or length != plan.byte_length:
+            return False  # not the snapshot this receipt describes
         with Path(plan.source_file_path).open("r", encoding="utf-8-sig", newline="") as handle:
             rows = [row for row in csv.DictReader(handle) if any(str(cell or "").strip() for cell in row.values())]
     except (OSError, UnicodeDecodeError, csv.Error):
         return False
-    if len(rows) != row_count:
-        return False
+    uploaded: Dict[str, int] = {}
     for row in rows:
-        try:
-            details = json.loads(row.get("details") or "")
-        except ValueError:
+        name = row.get("event")
+        if name == "TRAY_COMPLETE":
+            try:
+                details = json.loads(row.get("details") or "")
+            except ValueError:
+                return False
+            if (
+                not isinstance(details, dict)
+                or not details.get("transition_class")
+                # A shared event folder can hold another PC's rows.
+                or str(details.get("source_host_name") or "").casefold() != socket.gethostname().casefold()
+            ):
+                return False
+        elif name not in RAW_ONLY_EVENT_NAMES:
             return False
-        if (
-            row.get("event") != "TRAY_COMPLETE"
-            or not isinstance(details, dict)
-            or not details.get("transition_class")
-            # A shared event folder can hold another PC's rows.
-            or str(details.get("source_host_name") or "").casefold() != socket.gethostname().casefold()
-        ):
-            return False
-    return True
+        uploaded[name] = uploaded.get(name, 0) + 1
+    return uploaded == observed
 
 
 def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -> tuple[str, str, int, int]:
@@ -1191,7 +1217,7 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
             0,
         )
     if projection_disposition != "COMPLETE" and not (
-        projection_disposition == "RAW_LEGITIMATE" and _transition_duplicates_only(plan, receipt)
+        projection_disposition == "RAW_LEGITIMATE" and _raw_evidence_only_rows(plan, receipt)
     ):
         return (
             "producer_projection_incomplete",
