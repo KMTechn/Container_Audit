@@ -160,6 +160,10 @@ def _validate_phs_label_state(state: Mapping[str, Any]) -> None:
                 "operation_lease_id is only valid for a PHS2 tray"
             )
         return
+    if state.get("transition_reasons") and not operation_lease_id:
+        # A transition-mode tray completes on this PC only and never reaches the
+        # central path, so a damaged PHS=2 label keeps its raw value unanchored.
+        return
     canonical_fields = parse_new_format_qr(canonical)
     active_fields = parse_new_format_qr(active)
     required = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")

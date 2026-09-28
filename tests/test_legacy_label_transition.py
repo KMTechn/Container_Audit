@@ -24,6 +24,7 @@ from Container_Audit import ContainerAudit, TraySession
 from direct_sync_health import RelayHealth
 from label_qr import canonical_master_label_key
 from parked_tray_store import ParkedTrayStore
+from session_history import completed_label_round
 from tests.operation_lease_fixtures import fixed_operation_lease_clock  # noqa: F401 - fixture
 from tests.test_container_audit_contracts import (
     CapturingListbox,
@@ -438,6 +439,14 @@ MALFORMED_LABELS = [
     (COMPACT_QR.replace("ITG=ITAG-COMPACT-001", "ITG="), ["LINEAGE_MISSING"]),
     (COMPACT_QR + "|LBL=LBL-COMPACT-002", ["DUPLICATE_KEY"]),
     (COMPACT_QR + "|QT=2", ["PHS2_COMPACT_FORMAT_REQUIRED"]),
+    # A later duplicate must not hide the new-system value (sub-03 P1-1).
+    (f"SRC=KMTECH_INPUT_TAG|SRC=OLD|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_MISSING"]),
+    (f"PHS=2|PHS=1|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_NOT_2"]),
+    (f"ITG=X|ITG=|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_MISSING"]),
+    # An unusable QT is recorded, never refused or used as a quantity (sub-03 P1-2).
+    (COMPACT_QR + "|QT=abc", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
+    (COMPACT_QR + "|QT=0", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
+    (COMPACT_QR + "|QT=-1", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
 ]
 
 
@@ -501,6 +510,96 @@ def test_on_completes_a_full_13_digit_tray_locally_without_seal_or_ledger(flow):
     assert app.work_summary[ITEM]["count"] == 1
     assert app.work_summary[ITEM]["transition_counts"] == {"LEGACY": 1}
     assert app.syncs == ["TRAY_COMPLETE"]
+
+
+def test_on_old_qr_with_an_unusable_quantity_is_legacy_with_its_reason(flow, monkeypatch):
+    app = flow(transition=True)
+
+    app._process_barcode_logic(f"CLC={ITEM}|QT=abc")
+    assert app.current_tray.tray_size == 60
+    _scan_products(app, 2)
+    _submit(app, monkeypatch)
+
+    [row] = _rows(app, "TRAY_COMPLETE")
+    detail = _details(row)
+    assert (detail["transition_class"], detail["transition_reasons"]) == ("LEGACY", ["QT_INVALID"])
+    assert detail["master_label_code"] == f"CLC={ITEM}|QT=abc"
+
+
+DAMAGED_PHS2_LABELS = [
+    COMPACT_QR.replace("|HSH=aaaaaaaaaaaaaaaa", ""),
+    COMPACT_QR.replace("ITG=ITAG-COMPACT-001", "ITG="),
+    COMPACT_QR.replace("aaaaaaaaaaaaaaaa", "z" * 16),
+    COMPACT_QR + "|QT=2",
+]
+
+
+@pytest.mark.parametrize("label", DAMAGED_PHS2_LABELS)
+def test_on_damaged_phs2_tray_survives_restart_and_parking(flow, tmp_path, monkeypatch, label):
+    # sub-03 P1-3: its state must restore like any tray, current and parked.
+    first = flow(transition=True, root=tmp_path / "pc")
+    first._process_barcode_logic(label)
+    _scan_products(first, 1)
+
+    restarted = flow(transition=True, root=tmp_path / "pc")
+    restarted.worker_name = "tester"
+    restarted._load_session_state()
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
+    restarted._load_current_tray_state()
+    assert restarted.current_tray.master_label_code == label
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001"]
+
+    assert restarted.park_current_tray(confirm=False) is True
+    [parked] = [row.path for row in ParkedTrayStore(restarted.parked_trays_dir).list_for_worker("tester")]
+    restarted.show_validation_screen = lambda: None  # headless: no work screen to draw
+    restarted.restore_parked_tray(str(parked))
+    assert restarted.current_tray.master_label_code == label
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001"]
+
+
+def test_on_duplicate_round_in_progress_survives_restart_and_parking(flow, tmp_path, monkeypatch):
+    # sub-03 P1-5: a knowingly started second round is not the leftover of the first.
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
+    first = flow(transition=True, root=tmp_path / "pc")
+    first._process_barcode_logic(OLD_QR)
+    _scan_products(first, 2)
+    first._process_barcode_logic(OLD_QR)
+    _scan_products(first, 1, start=3)
+    assert first.current_tray.transition_reasons == ["DUPLICATE_LABEL"]
+
+    restarted = flow(transition=True, root=tmp_path / "pc")
+    restarted.worker_name = "tester"
+    restarted._load_session_state()
+    restarted._load_current_tray_state()
+    assert restarted.current_tray.master_label_code == OLD_QR
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0003"]
+
+    assert restarted.park_current_tray(confirm=False) is True
+    [parked] = [row.path for row in ParkedTrayStore(restarted.parked_trays_dir).list_for_worker("tester")]
+    restarted.show_validation_screen = lambda: None  # headless: no work screen to draw
+    restarted.restore_parked_tray(str(parked))
+    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0003"]
+
+
+def test_same_label_completed_twice_with_the_same_products_counts_both_rounds(flow, tmp_path):
+    # sub-03 P1-5: two rounds are two completions after a reload, a replay is one.
+    app = flow(transition=True, root=tmp_path / "pc")
+    for _round in range(2):
+        app._process_barcode_logic(OLD_QR)
+        _scan_products(app, 2)
+    first, second = [_details(row) for row in _rows(app, "TRAY_COMPLETE")]
+    assert first["product_barcodes"] == second["product_barcodes"]
+    assert first["transfer_seal_intent_id"] != second["transfer_seal_intent_id"]
+
+    restarted = flow(transition=True, root=tmp_path / "pc")
+    restarted.worker_name = "tester"
+    restarted._load_session_state()
+
+    assert restarted.work_summary[ITEM]["transition_counts"] == {"LEGACY": 2}
+    assert restarted.work_summary[ITEM]["transition_duplicates"] == 1
+    # A completed round's leftover state is still discarded on restart.
+    assert completed_label_round(OLD_QR, first["start_time"]) in restarted.completed_label_rounds
 
 
 def test_on_old_v209_label_is_legacy(flow):

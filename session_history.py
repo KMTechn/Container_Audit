@@ -32,6 +32,11 @@ TRANSITION_CLASS_NAMES = {
 }
 
 
+def completed_label_round(master_label: str, start_time: str) -> str:
+    """One completion round of a label: a transition duplicate is a new round, a replay is not."""
+    return f"{canonical_master_label_key(master_label)}|{start_time}"
+
+
 def count_transition_completion(
     item_summary: Dict[str, Any], transition_class: str, *, duplicate: bool
 ) -> None:
@@ -59,6 +64,7 @@ def transition_summary_text(item_summary: Dict[str, Any]) -> str:
 class SessionHistory:
     log_file_path: str
     completed_master_labels: Set[str] = field(default_factory=set)
+    completed_label_rounds: Set[str] = field(default_factory=set)
     work_summary: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     total_tray_count: int = 0
     completed_tray_times: List[float] = field(default_factory=list)
@@ -218,6 +224,10 @@ def _completion_replay_identity(details: Dict[str, Any]) -> str | None:
     if not parse_new_format_qr(master_label):
         return None
     label_identity = canonical_master_label_key(master_label)
+    if details.get("transition_class"):
+        # Transition mode completes a label again as a duplicate round; the
+        # round's intent id tells it apart from a replay of the same row.
+        return f"{label_identity}|round:{details.get('transfer_seal_intent_id') or ''}"
     if details.get("is_partial_submission") is True:
         intent_id = str(details.get("transfer_seal_intent_id") or "").strip()
         if not intent_id:
@@ -356,6 +366,10 @@ def load_session_history(
                             )
                         ):
                             _remember_completed_label(history.completed_master_labels, master_label_code)
+                            if details.get("start_time"):
+                                history.completed_label_rounds.add(
+                                    completed_label_round(master_label_code, str(details["start_time"]))
+                                )
                         row_worker_name = _sanitize_worker_name(row.get("worker_name", ""))
                         if is_current_worker_file and row_worker_name == sanitized_name:
                             completion_identity = _completion_replay_identity(details)

@@ -38,6 +38,18 @@ COMPLETION_BLOCK_CAUSES = {
 }
 
 
+def _detail_label_fields(
+    master_label_fields: Dict[str, Any], transition_route: Optional[Any]
+) -> Dict[str, Any]:
+    """A transition label with an unusable QT keeps it only in the raw master_label_code."""
+    if transition_route is not None and "QT_INVALID" in transition_route[1]:
+        return {
+            key: value for key, value in master_label_fields.items()
+            if key not in ("QT", "QTY", "QUANTITY")
+        }
+    return master_label_fields
+
+
 def prepared_completion_contract_steps(
     self,
     prepared_attempt: SealAttempt,
@@ -175,7 +187,7 @@ def request_complete_tray(
             projection_log_path = self._completion_projection_log_path()
         log_detail = build_tray_complete_detail(
             self.current_tray,
-            master_label_fields=master_label_fields,
+            master_label_fields=_detail_label_fields(master_label_fields, transition_route),
             end_time=completion_observed_at,
         )
         log_detail["is_restored_session"] = completion_was_restored
@@ -433,7 +445,7 @@ def complete_tray_steps(
     try:
         log_detail = build_tray_complete_detail(
             self.current_tray,
-            master_label_fields=master_label_fields,
+            master_label_fields=_detail_label_fields(master_label_fields, transition_route),
             end_time=completion_observed_at,
         )
         log_detail["is_restored_session"] = completion_was_restored
@@ -618,7 +630,7 @@ def complete_tray_steps(
     try:
         log_detail = build_tray_complete_detail(
             self.current_tray,
-            master_label_fields=master_label_fields,
+            master_label_fields=_detail_label_fields(master_label_fields, transition_route),
             end_time=completion_observed_at,
         )
         log_detail["is_restored_session"] = completion_was_restored
@@ -799,7 +811,9 @@ def complete_tray_steps(
             or (local_only and parse_label_fields_leniently(master_label))
         )
     ):
-        self._remember_completed_master_label(master_label)
+        self._remember_completed_master_label(
+            master_label, start_time=str(log_detail.get("start_time") or "")
+        )
 
     item_code = self.current_tray.item_code
     if item_code not in self.work_summary: self.work_summary[item_code] = {'name': self.current_tray.item_name, 'spec': self.current_tray.item_spec, 'count': 0, 'test_count': 0}

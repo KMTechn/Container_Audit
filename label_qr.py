@@ -14,6 +14,10 @@ TRANSITION_CLASSES = (
     TRANSITION_PHS2_LOCAL,
     TRANSITION_PHS2_MALFORMED,
 )
+# Values only the new system prints on a label.
+NEW_SYSTEM_IDENTITY_KEYS = (
+    "ITG", "LBL", "HSH", "HSH_CORE", "HSH_LABEL", "BND", "BUNDLE_ID", "SOURCE_BUNDLE_ID",
+)
 # Seal status of a transition completion recorded on this PC only (no lease, seal or ledger).
 TRANSITION_LOCAL_SEAL_STATUS = {
     TRANSITION_LEGACY: "LEGACY_LOCAL_ONLY",
@@ -112,6 +116,41 @@ def parse_label_fields_leniently(qr_data: str) -> Optional[Tuple[Dict[str, str],
         if fields:
             return fields, list(dict.fromkeys(defects))
     return None
+
+
+def is_new_system_label_pair(key: str, value: object) -> bool:
+    """PHS=2, SRC=KMTECH_INPUT_TAG or any new-system identity value."""
+    text = str(value or "").strip()
+    return bool(
+        (key == "PHS" and text == "2")
+        or (key == "SRC" and text.upper() == "KMTECH_INPUT_TAG")
+        or (key in NEW_SYSTEM_IDENTITY_KEYS and text)
+    )
+
+
+def label_carries_new_system_marker(qr_data: str) -> bool:
+    """Whether any key occurrence, including a duplicate a later value hides, marks the new system."""
+    text = str(qr_data or "")
+    stripped = text.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        pairs: List[Tuple[str, object]] = []
+
+        def collect(object_pairs):
+            pairs.extend((str(key).strip(), value) for key, value in object_pairs)
+            return dict(object_pairs)
+
+        try:
+            json.loads(stripped, object_pairs_hook=collect)
+        except json.JSONDecodeError:
+            pairs = []
+        if pairs:
+            return any(is_new_system_label_pair(key, value) for key, value in pairs)
+    if "=" in text and "|" in text:
+        for pair in text.split("|"):
+            key, separator, value = pair.partition("=")
+            if separator and is_new_system_label_pair(key.strip(), value):
+                return True
+    return False
 
 
 def normalize_master_label_input(raw_value: str) -> str:

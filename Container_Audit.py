@@ -106,6 +106,8 @@ from label_qr import (
     TRANSITION_PHS2_MALFORMED,
     canonical_master_label_key,
     inspection_master_item_code,
+    is_new_system_label_pair,
+    label_carries_new_system_marker,
     normalize_master_label_input,
     parse_label_fields_leniently,
     parse_new_format_qr,
@@ -188,7 +190,7 @@ from responsive_layout import (
     worker_login_layout_metrics as calculate_worker_login_layout_metrics,
 )
 from runtime_instance import acquire_runtime_instance
-from session_history import load_session_history, transition_summary_text
+from session_history import completed_label_round, load_session_history, transition_summary_text
 from style_tokens import StyleProfile, build_style_tokens
 from storage_policy import (
     DATA_ROOT_ENV,
@@ -2313,13 +2315,29 @@ class ContainerAudit:
             self._reject_mutation_during_preflight_hold()
         return False
 
-    def _remember_completed_master_label(self, master_label: str) -> None:
+    def _remember_completed_master_label(self, master_label: str, *, start_time: str = "") -> None:
         if not master_label:
             return
         if not hasattr(self, "completed_master_labels"):
             self.completed_master_labels = set()
         self.completed_master_labels.add(master_label)
         self.completed_master_labels.add(canonical_master_label_key(master_label))
+        if start_time:
+            if not hasattr(self, "completed_label_rounds"):
+                self.completed_label_rounds = set()
+            self.completed_label_rounds.add(completed_label_round(master_label, start_time))
+
+    def _is_completed_tray_state(self, state: Mapping[str, Any]) -> bool:
+        """A saved tray of a completed label is that completion's leftover, unless
+        transition mode knowingly started it as a duplicate round not yet completed."""
+        master_label = str(state.get("master_label_code") or "")
+        if not master_label or not self._is_completed_master_label(master_label):
+            return False
+        if "DUPLICATE_LABEL" not in (state.get("transition_reasons") or []):
+            return True
+        return completed_label_round(
+            master_label, str(state.get("start_time") or "")
+        ) in getattr(self, "completed_label_rounds", set())
 
     def _is_completed_master_label(self, master_label: str) -> bool:
         if not master_label:
@@ -2335,15 +2353,8 @@ class ContainerAudit:
     @staticmethod
     def _is_pre_phs2_label(fields: Optional[Mapping[str, Any]]) -> bool:
         """A 13-digit item code, or a QR carrying neither PHS=2 nor any new-system identity."""
-        fields = fields or {}
-        if str(fields.get("PHS") or "").strip() == "2":
-            return False
-        if str(fields.get("SRC") or "").strip().upper() == "KMTECH_INPUT_TAG":
-            return False
         return not any(
-            str(fields.get(name) or "").strip()
-            for name in ("ITG", "LBL", "HSH", "HSH_CORE", "HSH_LABEL",
-                         "BND", "BUNDLE_ID", "SOURCE_BUNDLE_ID")
+            is_new_system_label_pair(key, value) for key, value in (fields or {}).items()
         )
 
     def _transition_label_class(self, raw_label: str) -> Tuple[str, List[str]]:
@@ -2355,7 +2366,8 @@ class ContainerAudit:
         """
         parsed = parse_label_fields_leniently(raw_label)
         fields, reasons = parsed if parsed is not None else ({}, [])
-        if self._is_pre_phs2_label(fields):
+        # A duplicate key must not hide a new-system value behind an old one.
+        if self._is_pre_phs2_label(fields) and not label_carries_new_system_marker(raw_label):
             return TRANSITION_LEGACY, reasons
         phs = fields.get("PHS")
         if phs is None:
@@ -3113,6 +3125,7 @@ class ContainerAudit:
         self.total_tray_count = history.total_tray_count
         self.completed_tray_times = history.completed_tray_times
         self.completed_master_labels = set(history.completed_master_labels)
+        self.completed_label_rounds = set(history.completed_label_rounds)
         self.work_summary = history.work_summary
         self.tray_last_end_time = None
         for error in history.load_errors:
@@ -3965,7 +3978,7 @@ class ContainerAudit:
             saved_completion_event = self._completion_event_contract_from_state(
                 saved_state
             )
-            if saved_master_label and self._is_completed_master_label(saved_master_label):
+            if saved_master_label and self._is_completed_tray_state(saved_state):
                 self.current_tray = TraySession()
                 if not self._delete_current_tray_state():
                     quarantined_path = self._quarantine_current_tray_state("completed tray state delete failed")
@@ -13216,7 +13229,10 @@ class ContainerAudit:
                             and transition_class != TRANSITION_PHS2_MALFORMED
                         ):
                             validate_compact_phs2_fields(qr_data)
-                        elif parse_positive_quantity(qr_data, default=self.TRAY_SIZE) is None:
+                        elif (
+                            parse_positive_quantity(qr_data, default=self.TRAY_SIZE) is None
+                            and not transition
+                        ):
                             raise ValueError("invalid next label quantity")
                         self._queue_offline_preflight_hold(_offline_hold_switch, barcode)
                         return
@@ -13234,6 +13250,10 @@ class ContainerAudit:
                         )
                         return
                     tray_quantity = parse_positive_quantity(qr_data, default=self.TRAY_SIZE)
+                    if tray_quantity is None and transition:
+                        # Recorded, never used as a ledger quantity: the tray takes the default size.
+                        transition_reasons.append("QT_INVALID")
+                        tray_quantity = self.TRAY_SIZE
                     if tray_quantity is None:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드 수량(QT)은 1 이상의 숫자여야 합니다.", self.COLOR_DANGER)
                         return
@@ -17179,7 +17199,7 @@ class ContainerAudit:
                 "관리자 인계 목록에서 확인하세요.",
             )
             return
-        if parked_master_label and self._is_completed_master_label(parked_master_label):
+        if parked_master_label and self._is_completed_tray_state(saved_state):
             try:
                 ParkedTrayStore.delete(filepath)
             except Exception:
