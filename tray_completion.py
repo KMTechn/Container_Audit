@@ -27,6 +27,15 @@ LEGACY_LABEL_COMPLETION_BLOCKED = (
     "이 현품표는 새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는 완료할 수 없습니다. "
     "현재 작업은 보존합니다. 관리자에게 알려 주세요."
 )
+# Completion refusals whose generic notice would hide the cause.
+COMPLETION_BLOCK_CAUSES = {
+    "PHS2_ACTIVE_LABEL_INVALID": LEGACY_LABEL_COMPLETION_BLOCKED,
+    "OPERATION_LEASE_REQUIRED": (
+        "이 트레이에는 중앙 이적 확인 정보(lease)가 없어 완료할 수 없습니다. "
+        "과도기 모드에서 시작한 트레이면 과도기 모드를 켠 PC에서 완료됩니다. "
+        "현재 작업은 보존합니다. 관리자에게 알려 주세요."
+    ),
+}
 
 
 def prepared_completion_contract_steps(
@@ -196,15 +205,17 @@ def request_complete_tray(
     except Exception as exc:
         print(f"트레이 완료 lane 준비 실패: {exc.__class__.__name__}")
         self.show_status_message(
-            LEGACY_LABEL_COMPLETION_BLOCKED
-            if getattr(exc, "code", "") == "PHS2_ACTIVE_LABEL_INVALID"
-            else "완료 요청을 안전하게 준비하지 못했습니다. 현재 작업을 보존합니다.",
+            COMPLETION_BLOCK_CAUSES.get(
+                getattr(exc, "code", ""),
+                "완료 요청을 안전하게 준비하지 못했습니다. 현재 작업을 보존합니다.",
+            ),
             self.COLOR_DANGER,
         )
         return False
 
     identity = self._completion_lane_identity()
     finish_identity = self._capture_mutation_finish_identity()
+    transition = bool(getattr(self, "legacy_label_transition", False))
     coordinator = None if local_only else self._transfer_seal_runtime()
     item_code = str(self.current_tray.item_code or "")
     scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
@@ -217,9 +228,25 @@ def request_complete_tray(
     )
 
     def work() -> bool:
+        # Transition mode: a central check that refuses this tray before any
+        # command (e.g. its scanned membership) completes it locally instead.
+        precommand_block = ""
+        if not local_only and transition and existing_contract_snapshot is None:
+            try:
+                coordinator.preview(
+                    master_label=source_label_payload,
+                    master_label_fields=dict(source_label_fields),
+                    item_id=item_code,
+                    scanned_barcodes=scanned_barcodes,
+                    operation_lease_id=operation_lease_id,
+                )
+            except TransferSealError as exc:
+                if exc.code.startswith("TRANSFER_COORDINATOR_"):
+                    raise  # a local owner/thread fault, not a central refusal
+                precommand_block = exc.code
         # A transition tray completed on this PC has no central seal; the
         # completion steps record its local-only attempt instead.
-        attempt = None if local_only else self._prepare_and_attempt_transfer_seal_snapshot(
+        attempt = None if local_only or precommand_block else self._prepare_and_attempt_transfer_seal_snapshot(
             coordinator=coordinator,
             source_label_payload=source_label_payload,
             source_label_fields=dict(source_label_fields),
@@ -273,6 +300,11 @@ def request_complete_tray(
                 return False
             if self._completion_lane_identity() != identity:
                 return False
+            if precommand_block:
+                tray = self.current_tray
+                tray.transition_reasons = list(
+                    dict.fromkeys([*tray.transition_reasons, precommand_block])
+                )
             return (yield from self._complete_tray_steps(
                 _prepared_transfer_attempt=attempt, _lane_prechecked=True,
             ))
@@ -480,9 +512,10 @@ def complete_tray_steps(
                     error_code="TRAY_COMPLETE_PREPARED_ATTEMPT_FAILED",
                 )
             self.show_status_message(
-                LEGACY_LABEL_COMPLETION_BLOCKED
-                if getattr(e, "code", "") == "PHS2_ACTIVE_LABEL_INVALID"
-                else "이적 정보를 이 PC에 안전하게 저장하지 못해 작업 상태를 유지합니다.",
+                COMPLETION_BLOCK_CAUSES.get(
+                    getattr(e, "code", ""),
+                    "이적 정보를 이 PC에 안전하게 저장하지 못해 작업 상태를 유지합니다.",
+                ),
                 self.COLOR_DANGER,
             )
             return False

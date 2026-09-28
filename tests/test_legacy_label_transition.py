@@ -43,7 +43,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeCoordinator,
     TransferMemberExchangeStore,
 )
-from transfer_seal import SealAttempt, TransferSealError
+from transfer_seal import SealAttempt, TransferSealCoordinator, TransferSealError
 
 pytestmark = pytest.mark.usefixtures("owned_tk_workers")
 
@@ -209,9 +209,16 @@ def flow(tmp_path):
             "_log_event",
         ):
             vars(app).pop(name, None)
-        # As the real constructor: a member exchange coordinator whose UI
-        # snapshot holds only what startup recovery published (no tray yet).
+        # As the real constructor: the seal coordinator over the same store and
+        # lease manager, and a member exchange coordinator whose UI snapshot
+        # holds only what startup recovery published (no tray yet).
         app._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
+        fixture_seal = app.transfer_seal_coordinator
+        app.transfer_seal_coordinator = TransferSealCoordinator(
+            fixture_seal.store,
+            fixture_seal.client,
+            fixture_seal.operation_lease_manager,
+        )
         app.transfer_member_exchange_coordinator = TransferMemberExchangeCoordinator(
             TransferMemberExchangeStore(
                 root / "transfer-seal.db",
@@ -371,6 +378,32 @@ def test_off_restored_13_digit_tray_is_kept_and_the_block_names_its_cause(
     assert "새 시스템 이전 방식이라 과도기 모드가 꺼진 이 PC에서는" in message
     assert expected in message
     assert _rows(app, "TRAY_COMPLETE") == []
+
+
+@pytest.mark.parametrize("foreground", [False, True])
+def test_off_phs2_tray_started_locally_is_kept_and_the_block_names_its_cause(flow, foreground):
+    # A PHS2_LOCAL tray (no lease) restored after the switch was turned off.
+    app = flow(transition=False)
+    app._transfer_member_exchange_attempt_snapshot = {
+        "known": True, "master_label": COMPACT_QR, "attempt": None,
+    }
+    now = datetime.datetime.now()
+    app.current_tray = TraySession(
+        master_label_code=COMPACT_QR, item_code=ITEM, item_name="fixture item", tray_size=2,
+        scanned_barcodes=[f"{ITEM}-0001", f"{ITEM}-0002"], scan_times=[now, now], start_time=now,
+        transition_reasons=["PHS2_PREFLIGHT_UNAVAILABLE"],
+    )
+
+    if foreground:
+        assert app.request_complete_tray() is False
+    else:
+        assert app.complete_tray() is False
+
+    assert app.current_tray.master_label_code == COMPACT_QR
+    assert len(app.current_tray.scanned_barcodes) == 2
+    assert "중앙 이적 확인 정보(lease)가 없어 완료할 수 없습니다" in app.statuses[-1][0]
+    assert _rows(app, "TRAY_COMPLETE") == []
+    assert app.seal_calls == [] and _has_seal_intent(app) is False
 
 
 NEW_SYSTEM_LABELS_WITHOUT_PHS2 = [
@@ -696,14 +729,14 @@ def _phs2_tray(flow, root, *, transition):
         app.seal_calls.append(kwargs["source_label_payload"])
         or SealAttempt("intent-phs2", "ACKED", receipt_id="receipt-phs2")
     )
-    app.current_tray.scanned_barcodes = [ITEM + "-A"]
+    app.current_tray.scanned_barcodes = [f"{ITEM}-SERIAL-001"]  # the lease's members
     app.current_tray.scan_times = [datetime.datetime.now()]
     return app
 
 
-def _phs2_completion(flow, root, *, transition):
+def _phs2_completion(flow, root, *, transition, last=f"{ITEM}-SERIAL-002"):
     app = _phs2_tray(flow, root, transition=transition)
-    app.current_tray.scanned_barcodes.append(ITEM + "-B")
+    app.current_tray.scanned_barcodes.append(last)
     app.current_tray.scan_times.append(datetime.datetime.now())
     completed = []
     assert app.request_complete_tray(completion_callback=completed.append) is True
@@ -736,6 +769,21 @@ def test_full_phs2_tray_takes_the_same_central_path_with_the_switch_on_or_off(fl
     assert on_detail["transition_class"] == "PHS2_CENTRAL"
     assert on_detail["transition_reasons"] == []
     assert on_app.work_summary[ITEM]["transition_counts"] == {"PHS2_CENTRAL": 1}
+
+
+@pytest.mark.usefixtures("fixed_operation_lease_clock")
+def test_on_phs2_tray_the_lease_refuses_before_any_command_completes_locally(flow, tmp_path):
+    # A product outside the inspected members: the real seal coordinator refuses
+    # it before a command; transition mode records it instead of stopping.
+    completed, seal_calls, detail, app = _phs2_completion(
+        flow, tmp_path / "on", transition=True, last=f"{ITEM}-OTHER-999",
+    )
+
+    assert completed == [True] and seal_calls == []
+    assert detail["transition_class"] == "PHS2_LOCAL"
+    assert detail["transition_reasons"] == ["BARCODE_NOT_IN_SOURCE_BUNDLE"]
+    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
+    assert _has_seal_intent(app) is False
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
