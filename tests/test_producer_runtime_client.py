@@ -1139,6 +1139,129 @@ def test_lost_source_ack_retries_exact_metadata_and_idempotency_with_new_hmac_no
     assert first_headers["X-Producer-Nonce"] != second_headers["X-Producer-Nonce"]
 
 
+class _CentralSession(_LeaseSession):
+    """One server token at a time; a committed batch replays its first receipt."""
+
+    def __init__(self):
+        super().__init__()
+        self.source_calls = []
+        self.committed = {}
+        self.token = None
+        self.offline = False
+        self.drop_next_receipt = False
+
+    def post(self, url, **kwargs):
+        if self.offline:
+            raise ConnectionRefusedError(10061, "network adapter disabled")
+        if str(url).endswith(runtime_client.ENDPOINT_PATH):
+            response = super().post(url, **kwargs)
+            self.token = (
+                response.payload["next_request_token"],
+                response.payload["next_request_sequence"],
+            )
+            return response
+        uploaded = json.loads(kwargs["data"]["metadata"])
+        self.source_calls.append(uploaded)
+        batch = uploaded["client_batch_id"]
+        if batch in self.committed:
+            return _Response(200, self.committed[batch], {})
+        presented = (uploaded["runtime_request_token"], uploaded["runtime_request_sequence"])
+        if presented != self.token:
+            return _Response(
+                409,
+                {
+                    "committed": False,
+                    "retryable": False,
+                    "error": {"code": "STALE_RUNTIME_REQUEST_TOKEN", "message": "stale"},
+                },
+                {},
+            )
+        sequence = uploaded["runtime_request_sequence"] + 1
+        self.token = (f"T{sequence}".ljust(43, "x"), sequence)
+        self.committed[batch] = {
+            "request_id": f"request-{batch}",
+            "upload_id": f"request-{batch}",
+            "producer_install_id": "install-test",
+            "client_batch_id": batch,
+            "server_source_file_id": (
+                f"{uploaded['source_host_id']}/{uploaded['producer_role']}/"
+                f"{uploaded['stream_name']}/{uploaded['relative_path']}"
+            ),
+            "committed": True,
+            "status": "accepted",
+            "projection_disposition": "COMPLETE",
+            "retryable": False,
+            "next_retry_after": None,
+            "totals": {"inserted": 0, "replayed": 0, "quarantined": 0, "errors": 0},
+            "runtime_lease": {
+                "contract_version": runtime_client.CONTRACT_VERSION,
+                "validation_status": "consumed",
+                "lease_id": "lease-test",
+                "fence": uploaded["runtime_fence"],
+                "next_request_token": self.token[0],
+                "next_request_sequence": sequence,
+                "expires_at": "2099-08-06T00:00:00Z",
+            },
+        }
+        if self.drop_next_receipt:
+            self.drop_next_receipt = False
+            raise ConnectionResetError(10054, "adapter disabled after the server committed")
+        return _Response(200, self.committed[batch], {})
+
+
+def test_rows_left_behind_a_dead_relays_reserved_token_upload_once_after_restart(tmp_path):
+    db_path = tmp_path / "relay.sqlite3"
+    for relay_id in ("relay-a", "relay-b", "relay-c"):
+        _make_pending_relay(db_path, tmp_path, relay_id)
+    central = _CentralSession()
+
+    def drain(now, target=""):
+        return direct_sync_push.drain_one_relay_batch(
+            db_path=db_path,
+            credentials=_credentials(),
+            worker_id="worker-real",
+            session=central,
+            retry_base_seconds=60,
+            now=now,
+            target_relay_id=target,
+        )
+
+    # The dying relay's row reserves the token; the server commits it and the
+    # adapter drops before the receipt returns (unknown commit).
+    central.drop_next_receipt = True
+    first = drain("2026-08-06T01:47:23Z")
+    assert first is not None and first.retryable is True
+    # App wakes during the outage aim only at their new rows.
+    central.offline = True
+    for relay_id in ("relay-b", "relay-c"):
+        blocked = drain("2026-08-06T01:55:23Z", relay_id)
+        assert blocked is not None and blocked.error_code == "runtime_request_in_flight"
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT assigned_relay_id FROM direct_sync_runtime_authority"
+        ).fetchone() == ("relay-a",)
+
+    # The next relay takes the oldest row first, with its exact metadata.
+    central.offline = False
+    results = [drain("2026-08-06T02:18:00Z") for _ in range(4)]
+
+    assert [result.success for result in results[:3]] == [True, True, True]
+    assert results[3] is None
+    uploads = [call["client_batch_id"] for call in central.source_calls]
+    assert uploads == ["relay-a", "relay-a", "relay-b", "relay-c"]
+    assert central.source_calls[0] == central.source_calls[1]
+    assert sorted(central.committed) == ["relay-a", "relay-b", "relay-c"]
+    with sqlite3.connect(db_path) as connection:
+        statuses = dict(
+            connection.execute("SELECT relay_id, status FROM direct_sync_relay_batches")
+        )
+        authority = connection.execute(
+            "SELECT status, assigned_relay_id FROM direct_sync_runtime_authority"
+        ).fetchone()
+    assert statuses == dict.fromkeys(("relay-a", "relay-b", "relay-c"), "acked")
+    assert authority == ("ACTIVE", None)
+
+
 def test_stale_runtime_token_is_operator_review_and_never_leaks_to_status(tmp_path):
     db_path = tmp_path / "relay.sqlite3"
     _insert_claimed_row(db_path, "relay-a")

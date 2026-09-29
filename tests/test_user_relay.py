@@ -1,5 +1,11 @@
 import json
 from pathlib import Path
+import socket
+import ssl
+
+import pytest
+import requests
+
 import direct_sync_push
 import direct_sync_runtime
 from direct_sync_push import RELAY_STATUS_ACKED, relay_queue_status
@@ -243,4 +249,92 @@ def test_persistent_user_relay_flushes_durable_queue_offline_to_online_once(
     assert result["last_cycle"]["status"] == "acked"
     assert len(offline.calls) == 1
     assert len(online.calls) == 1
+    assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
+
+
+class _FailingSession:
+    def __init__(self, failure):
+        self.failure = failure
+        self.calls = []
+
+    def post(self, url, *, data, files, headers, timeout, allow_redirects):
+        self.calls.append(json.loads(data["metadata"]))
+        raise self.failure
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConnectionRefusedError(10061, "connection refused"),
+        ConnectionResetError(10054, "connection reset by peer"),
+        socket.gaierror(11001, "host not found"),
+        OSError(0, "network is unreachable", None, 10051),
+        OSError(0, "no route to host", None, 10065),
+        ssl.SSLError("EOF occurred in violation of protocol"),
+        requests.exceptions.ConnectionError("network adapter disabled"),
+        requests.exceptions.ReadTimeout("read timed out"),
+    ],
+    ids=[
+        "refused",
+        "reset",
+        "dns",
+        "net-unreachable-10051",
+        "host-unreachable-10065",
+        "ssl",
+        "adapter-off",
+        "read-timeout",
+    ],
+)
+def test_network_failure_leaves_the_same_row_to_the_next_relay_cycle(
+    tmp_path, monkeypatch, failure
+):
+    monkeypatch.delenv("APP_ENV", raising=False)
+    monkeypatch.setattr(
+        direct_sync_push,
+        "prepare_runtime_metadata",
+        lambda **kwargs: RuntimePreparation(metadata=dict(kwargs["metadata"])),
+    )
+    monkeypatch.setattr(
+        direct_sync_push,
+        "client_runtime_lease_mode",
+        lambda _credentials: "observe",
+    )
+    monkeypatch.setattr(
+        direct_sync_runtime,
+        "ensure_runtime_authority",
+        lambda **kwargs: RuntimePreparation(
+            status_code=200,
+            receipt={"status": "ACTIVE", "server_grant_accepted": True},
+        ),
+    )
+    config = _runtime_config(tmp_path / "state")
+    source = tmp_path / "events" / "container.csv"
+    source.parent.mkdir()
+    source.write_text(
+        "timestamp,worker_name,event,details\n"
+        '2026-09-29T10:47:00,worker,SCAN_OK,"{ ""product_barcode"": ""BC-1"" }"\n',
+        encoding="utf-8",
+    )
+    assert enqueue_completed_source_file(config, source_file_path=source)["status"] == "enqueued"
+    offline = _FailingSession(failure)
+    online = _OnlineSession()
+    cycles = []
+
+    def cycle():
+        cycles.append(len(cycles) + 1)
+        if len(cycles) == 1:
+            return run_relay_once(config, session=offline, now="2099-01-01T00:00:00Z")
+        return run_relay_once(config, session=online, now="2999-01-01T00:00:00Z")
+
+    result = user_relay.run_persistent_relay_loop(
+        cycle,
+        status_path=tmp_path / "user-relay-status.json",
+        interval_seconds=0,
+        max_cycles=2,
+    )
+
+    assert result["cycle_count"] == 2
+    assert result["last_cycle"]["status"] == "acked"
+    assert len(offline.calls) == len(online.calls) == 1
+    assert offline.calls[0]["idempotency_key"] == online.calls[0]["idempotency_key"]
     assert relay_queue_status(config.db_path)["counts"][RELAY_STATUS_ACKED] == 1
