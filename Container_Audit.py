@@ -105,15 +105,19 @@ from label_qr import (
     TRANSITION_PHS2_LOCAL,
     TRANSITION_PHS2_MALFORMED,
     TRANSITION_LOCAL_SEAL_STATUS,
+    TRANSITION_LABEL_LEGACY,
+    TRANSITION_LABEL_NEW,
     canonical_master_label_key,
+    classify_transition_label,
+    decode_transition_label,
     inspection_master_item_code,
     is_new_system_label_pair,
-    label_carries_new_system_marker,
     normalize_master_label_input,
     parse_label_fields_leniently,
     parse_new_format_qr,
     parse_positive_quantity,
     transition_reason_code,
+    transition_start_reasons,
 )
 from parked_tray_store import ParkedTrayStore, atomic_temp_target
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore, preserve_stale_bytes
@@ -2370,35 +2374,20 @@ class ContainerAudit:
             is_new_system_label_pair(key, value) for key, value in (fields or {}).items()
         )
 
-    def _transition_label_class(self, raw_label: str) -> Tuple[str, List[str]]:
-        """Classify a label for transition mode, with the reason codes of its defects.
+    def _transition_label_class(self, raw_label: str) -> Tuple[str, List[str], str]:
+        """(class, reasons, item code) of a label in transition mode, by the
+        table shared with Label_Match (label_qr.classify_transition_label).
 
-        LEGACY is a 13-digit item code or an old QR; PHS2_CENTRAL a valid PHS=2
-        label (it still completes locally when the central path blocks it);
-        PHS2_MALFORMED a label carrying new-system identity in a broken form.
+        LEGACY is a 13-digit item code or an old QR; PHS2_CENTRAL the exact
+        compact PHS=2 label (it still completes locally when the central path
+        blocks it); PHS2_MALFORMED any other label with a new-system marker.
         """
-        parsed = parse_label_fields_leniently(raw_label)
-        fields, reasons = parsed if parsed is not None else ({}, [])
-        # A duplicate key must not hide a new-system value behind an old one.
-        if self._is_pre_phs2_label(fields) and not label_carries_new_system_marker(raw_label):
-            return TRANSITION_LEGACY, reasons
-        phs = fields.get("PHS")
-        if phs is None:
-            reasons.append("PHS_MISSING")
-        elif not str(phs).strip():
-            reasons.append("PHS_EMPTY")
-        elif str(phs).strip() != "2":
-            reasons.append("PHS_NOT_2")
-        elif not reasons:
-            try:
-                validate_compact_phs2_fields(fields)
-            except TransferSealError as exc:
-                reasons.append(
-                    "LINEAGE_MISSING"
-                    if exc.code == "PHS2_CANONICAL_EVIDENCE_REQUIRED"
-                    else exc.code
-                )
-        return (TRANSITION_PHS2_MALFORMED if reasons else TRANSITION_PHS2_CENTRAL), reasons
+        kind, reasons, item_code = classify_transition_label(raw_label)
+        label_class = {
+            TRANSITION_LABEL_LEGACY: TRANSITION_LEGACY,
+            TRANSITION_LABEL_NEW: TRANSITION_PHS2_CENTRAL,
+        }.get(kind, TRANSITION_PHS2_MALFORMED)
+        return label_class, list(reasons), item_code
 
     def _in_transition_round(self) -> bool:
         """Transition rules apply while the switch is on, and to a round that got
@@ -2427,7 +2416,7 @@ class ContainerAudit:
         tray = self.current_tray
         if not self._in_transition_round():
             return None
-        label_class, label_reasons = self._transition_label_class(tray.master_label_code)
+        label_class, label_reasons, _item_code = self._transition_label_class(tray.master_label_code)
         reasons = list(dict.fromkeys(
             [*(getattr(tray, "transition_reasons", None) or []), *label_reasons]
         ))
@@ -13172,19 +13161,20 @@ class ContainerAudit:
             qr_data = self._parse_new_format_qr(barcode)
             transition = bool(getattr(self, "legacy_label_transition", False))
             if not qr_data and transition:
-                # Transition mode takes a label the strict parser refuses and records its defects.
+                # Transition mode takes a label the strict parser refuses and records its
+                # defects; scanner Base64 is read as Label_Match reads it.
+                barcode = decode_transition_label(barcode)
                 qr_data = (parse_label_fields_leniently(barcode) or ({}, []))[0]
 
             if qr_data:
-                transition_class, transition_reasons = (
-                    self._transition_label_class(barcode) if transition else ("", [])
+                transition_class, transition_reasons, transition_item = (
+                    self._transition_label_class(barcode) if transition else ("", [], "")
                 )
-                if self._is_completed_master_label(barcode):
-                    if not transition:
-                        self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
-                        return
-                    # Transition mode warns after the start and records the tray as a duplicate.
-                    transition_reasons.append("DUPLICATE_LABEL")
+                # Transition mode warns after the start and records the tray as a duplicate.
+                duplicate_label = self._is_completed_master_label(barcode)
+                if duplicate_label and not transition:
+                    self.show_fullscreen_warning("현품표 중복", f"이미 완료 처리된 현품표입니다.", self.COLOR_DANGER)
+                    return
 
                 waiting = [held for held in self._offline_waiting_preflight_holds()
                            if canonical_master_label_key(held.snapshot.master_raw) == canonical_master_label_key(barcode)]
@@ -13242,15 +13232,26 @@ class ContainerAudit:
                 if self._reject_legacy_master_label(qr_data):
                     return
                 try:
-                    item_code = inspection_master_item_code(qr_data)
+                    # A new-shaped label's item as the shared table reads it (keys in any
+                    # case). Without one no product can pass the item check, so the start
+                    # still stops for that label only.
+                    item_code = (
+                        transition_item
+                        if transition_class == TRANSITION_PHS2_MALFORMED
+                        else inspection_master_item_code(qr_data)
+                    )
                     if not item_code:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드에 고객사 코드(CLC)가 없습니다.", self.COLOR_DANGER)
                         return
                     matched_item = self._item_catalog().find_by_code(item_code)
-                    if transition and (
-                        not matched_item or getattr(self, "item_catalog_unconfirmed", False)
-                    ):
-                        transition_reasons.append("ITEM_UNCONFIRMED")
+                    if transition:
+                        transition_reasons = transition_start_reasons(
+                            transition_reasons,
+                            item_unconfirmed=bool(
+                                not matched_item or getattr(self, "item_catalog_unconfirmed", False)
+                            ),
+                            duplicate=duplicate_label,
+                        )
                         matched_item = matched_item or self.UNCONFIRMED_ITEM
                     if not matched_item:
                         self.show_fullscreen_warning("품목 없음", f"코드 '{item_code}'에 해당하는 품목 정보를 찾을 수 없습니다.", self.COLOR_DANGER)
@@ -13288,8 +13289,8 @@ class ContainerAudit:
                         return
                     tray_quantity = parse_positive_quantity(qr_data, default=self.TRAY_SIZE)
                     if tray_quantity is None and transition:
-                        # Recorded, never used as a ledger quantity: the tray takes the default size.
-                        transition_reasons.append("QT_INVALID")
+                        # The label table records QT_INVALID; never a ledger quantity:
+                        # the tray takes the default size.
                         tray_quantity = self.TRAY_SIZE
                     if tray_quantity is None:
                         self.show_fullscreen_warning("QR코드 오류", "QR코드 수량(QT)은 1 이상의 숫자여야 합니다.", self.COLOR_DANGER)

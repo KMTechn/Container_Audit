@@ -7,6 +7,7 @@ outside the ledger - and PHS=2 trays that pass it PHS2_CENTRAL, as before.
 Without the switch old and broken labels stop at tray start and PHS2 is
 unchanged.
 """
+import base64
 import csv
 import datetime
 import inspect
@@ -443,15 +444,17 @@ MALFORMED_LABELS = [
     (COMPACT_QR.replace("|HSH=aaaaaaaaaaaaaaaa", ""), ["LINEAGE_MISSING"]),
     (COMPACT_QR.replace("ITG=ITAG-COMPACT-001", "ITG="), ["LINEAGE_MISSING"]),
     (COMPACT_QR + "|LBL=LBL-COMPACT-002", ["DUPLICATE_KEY"]),
-    (COMPACT_QR + "|QT=2", ["PHS2_COMPACT_FORMAT_REQUIRED"]),
+    # w9transitalign table: compact defects are the shared FORMAT_INVALID,
+    # not judged beside another defect.
+    (COMPACT_QR + "|QT=2", ["FORMAT_INVALID"]),
     # A later duplicate must not hide the new-system value (sub-03 P1-1).
     (f"SRC=KMTECH_INPUT_TAG|SRC=OLD|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_MISSING"]),
     (f"PHS=2|PHS=1|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_NOT_2"]),
     (f"ITG=X|ITG=|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_MISSING"]),
     # An unusable QT is recorded, never refused or used as a quantity (sub-03 P1-2).
-    (COMPACT_QR + "|QT=abc", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
-    (COMPACT_QR + "|QT=0", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
-    (COMPACT_QR + "|QT=-1", ["PHS2_COMPACT_FORMAT_REQUIRED", "QT_INVALID"]),
+    (COMPACT_QR + "|QT=abc", ["QT_INVALID"]),
+    (COMPACT_QR + "|QT=0", ["QT_INVALID"]),
+    (COMPACT_QR + "|QT=-1", ["QT_INVALID"]),
 ]
 
 
@@ -1481,3 +1484,92 @@ def test_summary_list_shows_the_daily_transition_count():
     assert app.summary_tree.rows == [
         ("fixture item", ITEM, "5 (옛 3 · 새 로컬 1 · 새 형식오류 1 · 중복 1)")
     ]
+
+
+# w9transitalign: Container_Audit and Label_Match record the same class and
+# reasons for the same start label; both repositories carry this vector copy.
+TRANSITION_VECTORS = json.loads(
+    (Path(__file__).with_name("transition_label_vectors.json")).read_text(encoding="utf-8")
+)
+
+
+def _transition_start_text(raw):
+    """The label text the transition start classifies, as _process_barcode_logic reads it."""
+    barcode = label_qr.normalize_master_label_input(raw)
+    return barcode if label_qr.parse_new_format_qr(barcode) else label_qr.decode_transition_label(barcode)
+
+
+@pytest.mark.parametrize(
+    "vector", TRANSITION_VECTORS["vectors"], ids=[row["id"] for row in TRANSITION_VECTORS["vectors"]],
+)
+def test_start_label_matches_the_shared_transition_table(vector):
+    # Label_Match-only lineage shapes ("lm") never reach Container_Audit; the
+    # shared rules classify them here as any other marked label.
+    kind, reasons, item_code = label_qr.classify_transition_label(_transition_start_text(vector["raw"]))
+    assert {"kind": kind, "reasons": list(reasons), "item_code": item_code} == vector["expected"]
+
+
+@pytest.mark.parametrize(
+    "case", TRANSITION_VECTORS["start_cases"], ids=[row["id"] for row in TRANSITION_VECTORS["start_cases"]],
+)
+def test_transition_start_records_the_shared_class_and_reasons(flow, case):
+    client = BlockingClient(_resolved(count=2))
+    app = flow(transition=True, client=client)
+    _kind, _reasons, item_code = label_qr.classify_transition_label(case["raw"])
+    app.items_data = (
+        [{"Item Code": item_code or case["raw"], "Item Name": "item", "Spec": ""}]
+        if case["item_known"] else []
+    )
+    app.item_catalog = None
+    app.item_catalog_unconfirmed = not case["catalog_confirmed"]
+    if case["duplicate"]:
+        app._remember_completed_master_label(case["raw"])
+
+    app._process_barcode_logic(case["raw"])
+
+    if case.get("ca", {}).get("refused"):
+        assert app.current_tray.master_label_code == "" and client.identities == []
+        return
+    assert app.current_tray.master_label_code == case["raw"]
+    assert app.current_tray.transition_class == case["class"]
+    assert app.current_tray.transition_reasons == case["reasons"]
+    assert ("DUPLICATE_LABEL" in app.current_tray.transition_reasons) is case["duplicate"]
+    assert client.identities == [] and app.seal_calls == []
+
+
+def test_on_new_label_without_an_item_code_stops_only_that_label(flow):
+    # No product passes the item check without an item code (missing_item_code),
+    # so the start refuses this label only; Label_Match takes it (w9transitalign 4).
+    client = BlockingClient(_resolved(count=2))
+    app = flow(transition=True, client=client)
+
+    app._process_barcode_logic("PHS=2|QT=2")
+
+    assert app.current_tray.master_label_code == ""
+    assert app.warnings[-1][0] == "QR코드 오류"
+    app._process_barcode_logic(ITEM)
+    assert app.current_tray.master_label_code == ITEM  # the next label starts
+
+
+@pytest.mark.parametrize("encoded", [
+    pytest.param(base64.b64encode(f"PHS=2|CLC={ITEM}|QT=2|PHS=1".encode()).decode(),
+                 id="base64-strict-refused"),
+    pytest.param(base64.b64encode(f"PHS=2|CLC={ITEM}|QT=2|X=??>".encode()).decode()
+                 .replace("+", "-").replace("/", "_"), id="base64-url-safe"),
+])
+def test_on_scanner_base64_the_strict_decoder_leaves_is_read(flow, encoded):
+    app = flow(transition=True)
+
+    app._process_barcode_logic(encoded)
+
+    assert app.current_tray.master_label_code.startswith(f"PHS=2|CLC={ITEM}|QT=2")
+    assert app.current_tray.transition_class == "PHS2_MALFORMED"
+
+
+def test_off_scanner_base64_the_strict_decoder_leaves_is_still_refused(flow):
+    app = flow(transition=False)
+    encoded = base64.b64encode(f"PHS=2|CLC={ITEM}|QT=2|PHS=1".encode()).decode()
+
+    app._process_barcode_logic(encoded)
+
+    assert app.current_tray.master_label_code == ""
