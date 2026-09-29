@@ -3429,50 +3429,19 @@
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1340,
+          "line": 1362,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1350,
-          "operation": "connection.execute",
-          "writer_admission_sources": []
-        }
-      ],
-      "node": "terminal_operation_lease.OperationLeaseStore.record_device_release",
-      "reachable_entrypoints": [],
-      "reachable_from_product_entrypoint": false,
-      "trust_reason": "",
-      "unsunk_entrypoints": [],
-      "unsunk_paths": []
-    },
-    {
-      "caller_guard_reason": "",
-      "caller_guard_sources": [],
-      "coverage_status": "covered",
-      "covered_entrypoints": [],
-      "decorated_source": "terminal_operation_lease",
-      "direct_callers": [],
-      "file": "terminal_operation_lease.py",
-      "kind": "function",
-      "line": 1376,
-      "mutation_sites": [
-        {
-          "category": "sqlite",
-          "line": 1413,
+          "line": 1383,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1434,
-          "operation": "connection.execute",
-          "writer_admission_sources": []
-        },
-        {
-          "category": "sqlite",
-          "line": 1492,
+          "line": 1441,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -3497,11 +3466,11 @@
       ],
       "file": "terminal_operation_lease.py",
       "kind": "function",
-      "line": 1537,
+      "line": 1486,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1559,
+          "line": 1508,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -3522,35 +3491,35 @@
       "direct_callers": [],
       "file": "terminal_operation_lease.py",
       "kind": "function",
-      "line": 1566,
+      "line": 1515,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1659,
+          "line": 1608,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1771,
+          "line": 1720,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1787,
+          "line": 1736,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1813,
+          "line": 1762,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1830,
+          "line": 1779,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -3571,23 +3540,23 @@
       "direct_callers": [],
       "file": "terminal_operation_lease.py",
       "kind": "function",
-      "line": 1864,
+      "line": 1813,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 1911,
+          "line": 1860,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1912,
+          "line": 1861,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 1929,
+          "line": 1878,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -3608,17 +3577,17 @@
       "direct_callers": [],
       "file": "terminal_operation_lease.py",
       "kind": "function",
-      "line": 1988,
+      "line": 1937,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2043,
+          "line": 1992,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2044,
+          "line": 1993,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -3639,17 +3608,17 @@
       "direct_callers": [],
       "file": "terminal_operation_lease.py",
       "kind": "function",
-      "line": 2085,
+      "line": 2034,
       "mutation_sites": [
         {
           "category": "sqlite",
-          "line": 2110,
+          "line": 2059,
           "operation": "connection.execute",
           "writer_admission_sources": []
         },
         {
           "category": "sqlite",
-          "line": 2111,
+          "line": 2060,
           "operation": "connection.execute",
           "writer_admission_sources": []
         }
@@ -5708,7 +5677,7 @@
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 137,
+    "closure_direct_mutation_function_count": 136,
     "closure_module_count": 104,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
@@ -5723,8 +5692,8 @@
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 194,
-    "total_cross_language_sink_count": 195,
+    "sink_function_count": 192,
+    "total_cross_language_sink_count": 193,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -6292,7 +6261,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "f198b477f3df91a03f1217ab7f72ea133e24cb01f508cba87abc25ff3a2b6bd5",
+  "inventory_sha256": "5621d1459241d014ae73f96537aeb6e70e7419696b243287458d8d1b1a49db2e",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18237,7 +18206,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 19703,
+      "line": 19700,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -19053,7 +19022,7 @@
       "direct_mutation_site_count": 1,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore._transition_issue_for_lease",
-      "line": 1537,
+      "line": 1486,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19074,18 +19043,10 @@
       "source": "terminal_operation_lease"
     },
     {
-      "direct_mutation_site_count": 2,
-      "file": "terminal_operation_lease.py",
-      "function": "terminal_operation_lease.OperationLeaseStore.record_device_release",
-      "line": 1325,
-      "marker_kind": "decorator",
-      "source": "terminal_operation_lease"
-    },
-    {
       "direct_mutation_site_count": 3,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore.record_local_completion",
-      "line": 1864,
+      "line": 1813,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19093,7 +19054,7 @@
       "direct_mutation_site_count": 2,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore.record_receipt",
-      "line": 1988,
+      "line": 1937,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19101,7 +19062,7 @@
       "direct_mutation_site_count": 2,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore.record_review",
-      "line": 2085,
+      "line": 2034,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19109,7 +19070,7 @@
       "direct_mutation_site_count": 5,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore.record_rotation",
-      "line": 1566,
+      "line": 1515,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19117,7 +19078,7 @@
       "direct_mutation_site_count": 3,
       "file": "terminal_operation_lease.py",
       "function": "terminal_operation_lease.OperationLeaseStore.save_prefetched",
-      "line": 1376,
+      "line": 1325,
       "marker_kind": "decorator",
       "source": "terminal_operation_lease"
     },
@@ -19213,7 +19174,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.activate_phs_label_exchange",
-      "line": 579,
+      "line": 578,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19221,7 +19182,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.adopt_phs_label",
-      "line": 408,
+      "line": 407,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19229,7 +19190,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.complete_phs_label_print",
-      "line": 542,
+      "line": 541,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19245,7 +19206,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_label_exchange",
-      "line": 436,
+      "line": 435,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19253,15 +19214,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_reconciliation_label_exchange",
-      "line": 463,
-      "marker_kind": "decorator",
-      "source": "transfer_seal"
-    },
-    {
-      "direct_mutation_site_count": 0,
-      "file": "transfer_client.py",
-      "function": "transfer_client.LogisticsTransferClient.release_operation_lease",
-      "line": 253,
+      "line": 462,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19269,7 +19222,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.replace_bundle_members",
-      "line": 680,
+      "line": 679,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19277,7 +19230,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.request_phs_label_print",
-      "line": 516,
+      "line": 515,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -19285,7 +19238,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.seal_transfer",
-      "line": 638,
+      "line": 637,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },

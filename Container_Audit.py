@@ -17067,11 +17067,8 @@ class ContainerAudit:
                 if result.get("status") != "RELEASED" or result.get("lease_id") != lease_id:
                     print(f"작업 권한 해제 응답 확인 실패: {lease_id}")
                     continue
-                try:
-                    manager.store.record_device_release(lease_id=lease_id, release=result)
-                except (OperationLeaseError, sqlite3.Error) as exc:
-                    print(f"작업 권한 해제 기록 실패: {lease_id} {exc.__class__.__name__}")
-                    continue
+                # The local issue attempt learns RELEASED from the server's
+                # authenticated replay when this PC scans the label again.
                 print(f"작업 권한 해제 완료: {lease_id}")
         return len(pending)
 

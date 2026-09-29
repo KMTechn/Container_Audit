@@ -235,27 +235,36 @@ def test_retry_wait_completion_text_says_waiting():
 
 
 class _LeaseServer(BlockingClient):
-    """Issues one stable lease per issue key (server replay) and releases it."""
+    """One stable lease per issue key (the server replays it), a new lease per
+    new key, and device release by the lease's own token."""
 
     def __init__(self, *, issued_at=None):
         super().__init__(_resolved(count=2))
         self.issued_at = issued_at
         self.up = True
-        self.lease_status = "ACTIVE"
+        self.statuses = {}
         self.artifacts = {}
         self.releases = []
         self._wait = _Server()
+
+    @property
+    def lease_status(self):
+        return self.statuses[LEASE_ID]
 
     def issue_operation_lease(self, **kwargs):
         self.identities.append(dict(kwargs))
         key = kwargs["idempotency_key"]
         if key not in self.artifacts:
+            lease_id = f"operation-lease-fixture-{len(self.artifacts) + 1:02d}"
             self.artifacts[key], _claims = signed_transfer_artifact(
                 self.response,
                 scan_payload=kwargs["scan_payload"],
                 issued_at=self.issued_at,
+                lease_id=lease_id,
             )
-        return dict(self.artifacts[key], status=self.lease_status)
+            self.statuses[lease_id] = "ACTIVE"
+        artifact = self.artifacts[key]
+        return dict(artifact, status=self.statuses[artifact["lease_id"]])
 
     def bounded_wait(self, seconds):
         return self._wait.bounded_wait(seconds)
@@ -268,10 +277,15 @@ class _LeaseServer(BlockingClient):
         if not self.up:
             self._wait.no_answer()
             raise requests.ConnectionError("server stopped")
-        self.lease_status = "RELEASED"
+        lease_id = next(
+            artifact["lease_id"]
+            for artifact in self.artifacts.values()
+            if artifact["token"] == kwargs["token"]
+        )
+        self.statuses[lease_id] = "RELEASED"
         return {
             "contract_version": "terminal-operation-lease-release-v1",
-            "lease_id": LEASE_ID,
+            "lease_id": lease_id,
             "status": "RELEASED",
             "fence": 1,
             "resolution": "DEVICE_RELEASED_UNUSED",
@@ -430,8 +444,13 @@ def test_reset_releases_the_prefetched_lease(tmp_path, monkeypatch):
         }
         assert first["idempotency_key"].startswith("container-operation-lease-release:")
         assert client.lease_status == "RELEASED"
-        assert _attempt_status(app) == "RELEASED"
         assert app._operation_lease_releases_waiting == 0
+        # No release record of its own on this PC: scanning the label again
+        # learns RELEASED from the server's replay and takes a new lease.
+        assert _attempt_status(app) == "PREFETCHED"
+        _scan_label(app)
+        assert app.current_tray.operation_lease_id == "operation-lease-fixture-02"
+        assert _attempt_status(app) == "RELEASED"
     finally:
         app._ui_lane.close_idle()
 

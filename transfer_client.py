@@ -249,7 +249,6 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
     def release_operation_lease(
         self,
         *,
