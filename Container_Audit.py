@@ -17371,11 +17371,11 @@ class ContainerAudit:
                     self._parked_store().bind_invalid_label(source, label)
                     if not self._admin_pin_complete(pin_approval, effect):
                         return
-            except ParkedPathTooLong as exc:
+            except ParkedPathTooLong:
                 messagebox.showerror(
                     "보류 기록 대기",
-                    f"{exc} 이 현품표만 계속 보류하고 다른 현품표 작업은 계속할 수 있습니다. "
-                    "보류 폴더 경로를 줄이도록 관리자에게 알리세요.",
+                    "보류 파일 경로가 Windows 경로 길이 한도(259자)를 넘어 기록하지 못했습니다. 원본은 그대로 두었습니다. "
+                    "이 현품표만 계속 보류하고 다른 현품표 작업은 계속할 수 있습니다. 보류 폴더 경로를 줄이도록 관리자에게 알리세요.",
                     parent=self.root,
                 )
                 return
