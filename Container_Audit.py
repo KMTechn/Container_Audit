@@ -249,6 +249,7 @@ from terminal_operation_lease import (
     OperationLeaseStore,
     PinnedOperationLeaseKeyring,
     normalize_keyring,
+    utc_text as operation_lease_utc_text,
 )
 from transfer_seal import (
     SealAttempt,
@@ -1070,6 +1071,10 @@ class ContainerAudit:
     # One limit for all central requests a completion waits on (the local
     # completion is already durable; what is left pending goes out later).
     COMPLETION_SERVER_WAIT_SECONDS = 3.0
+    # Completions left unsent go out again this often while the lane is idle.
+    BACKGROUND_SEAL_RETRY_MS = 30_000
+    # Transition mode looks a label up once more after this before going local.
+    TRANSITION_PREFLIGHT_REQUERY_MS = 3_000
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -1204,6 +1209,14 @@ class ContainerAudit:
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_waiting_for_hold = False
         self._startup_transfer_recovery_task_handle = None
+        self._background_seal_retry_job: Optional[str] = None
+        self._pending_seal_intent_count: Optional[int] = None
+        # Unused leases to give back: requested on the Tk thread, kept and
+        # sent only by the lane owner (in memory; not retried after a restart).
+        self._requested_operation_lease_releases: List[str] = []
+        self._operation_lease_releases_waiting = 0
+        self._pending_operation_lease_releases: Dict[str, Dict[str, str]] = {}
+        self._unaccepted_operation_leases: Dict[str, Dict[str, str]] = {}
         self._member_exchange_reconcile_pending = False
         self._member_exchange_reconcile_inflight = False
         self._direct_sync_bootstrap_thread = start_direct_sync_auto_bootstrap(
@@ -4177,6 +4190,9 @@ class ContainerAudit:
                             messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못했습니다.")
                             return
                         self.current_tray = TraySession()
+                        self._request_operation_lease_release(
+                            str(saved_state.get("operation_lease_id") or "")
+                        )
                         self.show_status_message(f"'{saved_worker_display}'님의 이전 작업이 삭제되었습니다.", self.COLOR_DANGER)
                     else:
                         self.worker_name = ""
@@ -11317,7 +11333,10 @@ class ContainerAudit:
         qr_data: Dict[str, Any],
         matched_item: Dict[str, Any],
         offline_retry: bool = False,
+        transition_requery: bool = False,
     ) -> bool:
+        if not transition_requery:
+            self._transition_preflight_requeried = ""
         try:
             canonical_fields = validate_compact_phs2_fields(qr_data)
         except TransferSealError:
@@ -11342,7 +11361,7 @@ class ContainerAudit:
         self._master_preflight_pending = True
         if offline_retry:
             self._show_preflight_offline_notice()
-        else:
+        elif not transition_requery:
             self._preflight_offline_error_code = ""
             self.show_status_message(
                 "중앙에서 검사 완료 수량과 제품 구성을 확인하고 있습니다.",
@@ -11400,6 +11419,9 @@ class ContainerAudit:
                     ),
                     None,
                 )
+            # The lease issued to this PC by this lookup; a failed lookup
+            # reports it so a transition to a local tray can give it back.
+            unaccepted_lease_id = ""
             try:
                 coordinator = self._transfer_seal_runtime()
                 client = coordinator.client
@@ -11437,6 +11459,11 @@ class ContainerAudit:
                         **issue_request,
                         idempotency_key=issue_key,
                     )
+                    unaccepted_lease_id = (
+                        self._work_remember_unaccepted_operation_lease(
+                            artifact, issue_request
+                        )
+                    )
                     operation_snapshot = artifact.get("operation_snapshot")
                     if not isinstance(operation_snapshot, Mapping):
                         raise OperationLeaseError(
@@ -11464,6 +11491,11 @@ class ContainerAudit:
                                 issue_request=issue_request,
                                 issue_idempotency_key=issue_key,
                             )
+                        )
+                        # The same PC got the same lease back: never give it
+                        # back from an earlier reset (a release is only a wish).
+                        self._work_forget_operation_lease_release(
+                            normalized_artifact["lease_id"]
                         )
                         break
                     normalized_status, _claims = (
@@ -11533,12 +11565,12 @@ class ContainerAudit:
                     ui_snapshot,
                 )
             except TransferSealError as exc:
-                result = (False, None, "", exc, hold_snapshot)
+                result = (False, None, unaccepted_lease_id, exc, hold_snapshot)
             except OperationLeaseError as exc:
                 result = (
                     False,
                     None,
-                    "",
+                    unaccepted_lease_id,
                     TransferSealError(exc.code, exc.message),
                     hold_snapshot,
                 )
@@ -11557,7 +11589,7 @@ class ContainerAudit:
                 result = (
                     False,
                     None,
-                    "",
+                    unaccepted_lease_id,
                     TransferSealError(
                         "PHS2_PREFLIGHT_UNAVAILABLE"
                         if transport
@@ -11708,6 +11740,23 @@ class ContainerAudit:
                 getattr(self, "_preflight_offline_error_code", "")
             )
             if getattr(self, "legacy_label_transition", False):
+                if (
+                    failure.code == "OPERATION_LEASE_NOT_YET_VALID" or offline
+                ) and getattr(self, "_transition_preflight_requeried", "") != barcode:
+                    # Clock skew or no answer is not a verdict on this label:
+                    # look it up once more (same issue key) before going local.
+                    self._transition_preflight_requeried = barcode
+                    self.show_status_message(
+                        "중앙 확인을 잠시 뒤 한 번 더 합니다 · 제품은 계속 스캔하세요.",
+                        self.COLOR_IDLE,
+                        duration=0,
+                    )
+                    self._schedule_transition_preflight_requery(
+                        token, barcode, canonical_fields, matched_item
+                    )
+                    return
+                if str(result[2] or ""):
+                    self._request_operation_lease_release(str(result[2]))
                 self._start_transition_tray_after_preflight_failure(
                     barcode, canonical_fields, matched_item, failure,
                 )
@@ -11960,6 +12009,52 @@ class ContainerAudit:
             )
         except (tk.TclError, AttributeError):
             self._master_preflight_retry_job = None
+
+    def _schedule_transition_preflight_requery(
+        self,
+        token: int,
+        barcode: str,
+        canonical_fields: Dict[str, str],
+        matched_item: Dict[str, Any],
+    ) -> None:
+        try:
+            self._master_preflight_retry_job = self.root.after(
+                self.TRANSITION_PREFLIGHT_REQUERY_MS,
+                self._requery_transition_preflight,
+                token,
+                barcode,
+                canonical_fields,
+                matched_item,
+            )
+        except (tk.TclError, AttributeError):
+            self._master_preflight_retry_job = None
+
+    def _requery_transition_preflight(
+        self,
+        token: int,
+        barcode: str,
+        canonical_fields: Dict[str, str],
+        matched_item: Dict[str, Any],
+    ) -> None:
+        self._master_preflight_retry_job = None
+        if (
+            token != getattr(self, "_master_preflight_epoch", 0)
+            or not getattr(self, "_master_preflight_pending", False)
+            or getattr(self, "_ui_close_requested", False)
+            or getattr(getattr(self, "current_tray", None), "master_label_code", "")
+        ):
+            return
+        if self._ui_task_lane().is_busy():
+            self._schedule_transition_preflight_requery(
+                token, barcode, canonical_fields, matched_item
+            )
+            return
+        self._begin_compact_phs2_preflight(
+            barcode=barcode,
+            qr_data=canonical_fields,
+            matched_item=matched_item,
+            transition_requery=True,
+        )
 
     def _retry_offline_preflight(
         self,
@@ -13993,6 +14088,7 @@ class ContainerAudit:
                 self.show_status_message("초기화 기록 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
                 return
             self._stop_stopwatch(); self._stop_idle_checker(); self.is_idle = False
+            reset_lease_id = str(getattr(self.current_tray, "operation_lease_id", "") or "")
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self.scanned_listbox.delete(0, tk.END)
@@ -14001,6 +14097,7 @@ class ContainerAudit:
             self._reset_ui_to_waiting_state()
             self.show_status_message("현재 작업이 초기화되었습니다.", self.COLOR_DANGER)
             self._schedule_focus_return()
+            self._request_operation_lease_release(reset_lease_id)
 
     def submit_current_tray(self):
         if self._reject_mutation_during_preflight_hold():
@@ -14343,6 +14440,13 @@ class ContainerAudit:
             title = notice.title
             message = notice.message
             severity = notice.severity
+            pending_seal_count = getattr(self, "_pending_seal_intent_count", None)
+            if notice.code == "completion.linked" and isinstance(pending_seal_count, int):
+                if pending_seal_count:
+                    title = f"서버 전송 대기 {pending_seal_count}건(자동으로 다시 보냄)"
+                else:
+                    title = "서버 전송 대기 없음"
+                    message = "완료는 이 PC에 저장했습니다."
 
         palette = {
             NoticeSeverity.INFO: ("#EFF6FF", "#93C5FD", "#1D4ED8", self.COLOR_TEXT),
@@ -14452,7 +14556,14 @@ class ContainerAudit:
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.ACKED:
                     status_value.configure(text="완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.LINKED:
-                    status_value.configure(text="이 PC 저장 완료", foreground=self.COLOR_SUCCESS)
+                    pending_seal_count = getattr(self, "_pending_seal_intent_count", None)
+                    if isinstance(pending_seal_count, int) and pending_seal_count:
+                        status_value.configure(
+                            text=f"서버 전송 대기 {pending_seal_count}건",
+                            foreground=self.COLOR_IDLE,
+                        )
+                    else:
+                        status_value.configure(text="이 PC 저장 완료", foreground=self.COLOR_SUCCESS)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.RETRY_WAIT:
                     status_value.configure(text="서버 확인 대기", foreground=self.COLOR_IDLE)
                 elif state.completion is not None and state.completion.outcome is CompletionOutcome.LOCAL_EVENT_RETRY:
@@ -14734,7 +14845,11 @@ class ContainerAudit:
 
     def _cancel_all_jobs(self):
         self._cancel_master_preflight()
-        for attribute in ("_direct_sync_health_job", "_direct_sync_health_poll_job"):
+        for attribute in (
+            "_direct_sync_health_job",
+            "_direct_sync_health_poll_job",
+            "_background_seal_retry_job",
+        ):
             job = getattr(self, attribute, None)
             if job:
                 try:
@@ -15607,7 +15722,12 @@ class ContainerAudit:
         card = getattr(self, "info_cards", {}).get("direct_sync")
         if not card:
             return
-        model = relay_health_card_model(health)
+        model = relay_health_card_model(
+            health,
+            transfer_pending_count=int(
+                getattr(self, "_pending_seal_intent_count", None) or 0
+            ),
+        )
         attention = model["tone"] == "amber"
         card["frame"].configure(
             style="RelayAttention.TFrame" if attention else "Card.TFrame"
@@ -15731,11 +15851,17 @@ class ContainerAudit:
         seal_coordinator = getattr(self, "transfer_seal_coordinator", None)
         exact_history = False
         precommand_snapshot: Optional[Dict[str, Any]] = None
+        pending_seal_count: Optional[int] = None
         if seal_coordinator is not None:
             exact_history = bool(
                 seal_coordinator.client is not None
                 or seal_coordinator.store.has_exact_history()
             )
+            try:
+                pending_seal_count = len(seal_coordinator.store.pending_ids())
+            except Exception as exc:
+                # Display only: an unread count leaves the rest of the snapshot.
+                print(f"전송 대기 건수 확인 실패: {exc.__class__.__name__}")
             if isinstance(precommand_query, Mapping):
                 row = seal_coordinator.store.precommand_operator_review(
                     master_label=str(
@@ -15788,6 +15914,7 @@ class ContainerAudit:
                 "attempt": member_attempt,
             },
             "precommand": precommand_snapshot,
+            "pending_seal_count": pending_seal_count,
         }
 
     def _apply_transfer_coordinator_ui_snapshot(
@@ -15816,6 +15943,20 @@ class ContainerAudit:
                 if isinstance(precommand, Mapping)
                 else None
             )
+        pending_seal_count = snapshot.get("pending_seal_count")
+        if isinstance(pending_seal_count, int):
+            changed = pending_seal_count != getattr(
+                self, "_pending_seal_intent_count", None
+            )
+            self._pending_seal_intent_count = pending_seal_count
+            self._arm_background_seal_retry()
+            completion = self._warning_state_presenter().state.completion
+            if (
+                changed
+                and completion is not None
+                and completion.outcome is CompletionOutcome.LINKED
+            ):
+                self._render_warning_state()
 
     def _current_transfer_member_exchange_attempt(self):
         tray = getattr(self, "current_tray", None)
@@ -16628,7 +16769,7 @@ class ContainerAudit:
         self._post_review_refresh_required = False
         return False
 
-    def _schedule_startup_transfer_recovery(self) -> bool:
+    def _schedule_startup_transfer_recovery(self, *, background: bool = False) -> bool:
         if (
             not getattr(self, "_startup_transfer_recovery_pending", False)
             or getattr(self, "_startup_transfer_recovery_inflight", False)
@@ -16645,12 +16786,32 @@ class ContainerAudit:
             getattr(tray, "master_label_code", "") or ""
         ).strip()
         precommand_query = self._precommand_operator_review_query()
+        # A background retry holds the lane no longer than a completion does.
+        wait_limit_seconds = (
+            self.COMPLETION_SERVER_WAIT_SECONDS if background else None
+        )
+        release_requests = tuple(
+            getattr(self, "_requested_operation_lease_releases", None) or ()
+        )
+        self._requested_operation_lease_releases = []
+        active_lease_id = str(getattr(tray, "operation_lease_id", "") or "").strip()
+
+        def keep_release_requests() -> None:
+            self._requested_operation_lease_releases = [
+                *release_requests,
+                *(
+                    lease_id
+                    for lease_id in self._requested_operation_lease_releases
+                    if lease_id not in release_requests
+                ),
+            ]
 
         def fail(exc: BaseException) -> None:
             self._startup_transfer_recovery_inflight = False
             self._startup_transfer_recovery_pending = True
             self._startup_transfer_recovery_waiting_for_hold = False
             self._startup_transfer_recovery_task_handle = None
+            keep_release_requests()
             print(f"이적 재시작 복구 lane 실패: {exc.__class__.__name__}")
 
         admission = lane.submit(
@@ -16660,6 +16821,9 @@ class ContainerAudit:
                 work=lambda: self._retry_pending_transfer_seals(
                     master_label=snapshot_master_label,
                     precommand_query=precommand_query,
+                    wait_limit_seconds=wait_limit_seconds,
+                    release_requests=release_requests,
+                    active_lease_id=active_lease_id,
                 ),
                 finish=self._finish_startup_transfer_recovery,
                 fail=fail,
@@ -16668,6 +16832,7 @@ class ContainerAudit:
         )
         if not admission.accepted:
             self._startup_transfer_recovery_inflight = False
+            keep_release_requests()
             return False
         self._startup_transfer_recovery_task_handle = admission.handle
         return True
@@ -16678,6 +16843,9 @@ class ContainerAudit:
     ) -> None:
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_task_handle = None
+        self._operation_lease_releases_waiting = int(
+            outcome.get("lease_releases_waiting") or 0
+        )
         self._apply_transfer_coordinator_ui_snapshot(
             outcome.get("ui_snapshot")
         )
@@ -16700,12 +16868,221 @@ class ContainerAudit:
             blocked_by_hold
             or outcome.get("replacement_projection_failed")
         )
+        self._arm_background_seal_retry()
+
+    def _arm_background_seal_retry(self) -> None:
+        """Send completions left unsent again later, without a new completion or restart."""
+        if (
+            getattr(self, "_background_seal_retry_job", None) is not None
+            or getattr(self, "_ui_close_requested", False)
+            or not (
+                getattr(self, "_pending_seal_intent_count", None)
+                or getattr(self, "_operation_lease_releases_waiting", 0)
+                or getattr(self, "_requested_operation_lease_releases", None)
+            )
+            or getattr(
+                getattr(self, "transfer_seal_coordinator", None), "client", None
+            ) is None
+        ):
+            return
+        try:
+            self._background_seal_retry_job = self.root.after(
+                self.BACKGROUND_SEAL_RETRY_MS,
+                self._run_background_seal_retry,
+            )
+        except (tk.TclError, AttributeError):
+            self._background_seal_retry_job = None
+
+    def _run_background_seal_retry(self) -> None:
+        self._background_seal_retry_job = None
+        if (
+            getattr(self, "_ui_close_requested", False)
+            or getattr(self, "_startup_transfer_recovery_inflight", False)
+            or getattr(self, "_startup_transfer_recovery_waiting_for_hold", False)
+        ):
+            # A running recovery re-arms when it finishes; a hold release
+            # schedules the recovery itself.
+            return
+        was_pending = bool(getattr(self, "_startup_transfer_recovery_pending", False))
+        self._startup_transfer_recovery_pending = True
+        if not self._schedule_startup_transfer_recovery(background=True):
+            self._startup_transfer_recovery_pending = was_pending
+            self._arm_background_seal_retry()
+
+    def _request_operation_lease_release(self, lease_id: str) -> None:
+        """Give an abandoned tray's unused lease back to the server (LOCAL_RESET).
+
+        Best effort in the background: the work never waits for it, and the
+        lane checks again before each send that nothing on this PC uses it.
+        """
+        normalized = str(lease_id or "").strip()
+        if not normalized:
+            return
+        requested = getattr(self, "_requested_operation_lease_releases", None)
+        if not isinstance(requested, list):
+            requested = self._requested_operation_lease_releases = []
+        if normalized not in requested:
+            requested.append(normalized)
+        job = getattr(self, "_background_seal_retry_job", None)
+        if job is not None:
+            try:
+                self.root.after_cancel(job)
+            except (tk.TclError, AttributeError):
+                pass
+            self._background_seal_retry_job = None
+        self._run_background_seal_retry()
+
+    def _work_remember_unaccepted_operation_lease(
+        self,
+        artifact: Mapping[str, Any],
+        issue_request: Mapping[str, Any],
+    ) -> str:
+        """Keep an issued ACTIVE lease until a tray takes it or it is given back."""
+        lease_id, token, expires_at = (
+            artifact.get("lease_id"),
+            artifact.get("token"),
+            artifact.get("expires_at"),
+        )
+        if artifact.get("status") != "ACTIVE" or not all(
+            isinstance(value, str) and value for value in (lease_id, token, expires_at)
+        ):
+            return ""
+        unaccepted = getattr(self, "_unaccepted_operation_leases", None)
+        if not isinstance(unaccepted, dict):
+            unaccepted = self._unaccepted_operation_leases = {}
+        unaccepted[lease_id] = {
+            "authority_scope_id": str(issue_request["authority_scope_id"]),
+            "operation": str(issue_request["operation"]),
+            "token": token,
+            "expires_at": expires_at,
+        }
+        return lease_id
+
+    def _work_forget_operation_lease_release(self, lease_id: str) -> None:
+        for name in ("_unaccepted_operation_leases", "_pending_operation_lease_releases"):
+            entries = getattr(self, name, None)
+            if isinstance(entries, dict):
+                entries.pop(lease_id, None)
+
+    def _work_operation_lease_release_allowed(
+        self,
+        coordinator: Any,
+        lease_id: str,
+        active_lease_id: str,
+    ) -> bool:
+        """Never give back a lease that work on this PC uses: the server would
+        then refuse that work's completion."""
+        if lease_id == active_lease_id:
+            return False
+        manager = coordinator.operation_lease_manager
+        try:
+            attempt = manager.store.issue_attempt_for_lease(lease_id)
+        except OperationLeaseError:
+            attempt = None  # never stored here: no tray could take it
+        if attempt is not None and attempt["status"] != "PREFETCHED":
+            return False
+        if manager.store.completion(lease_id) is not None:
+            return False
+        return not coordinator.store.operation_lease_referenced(lease_id)
+
+    def _work_operation_lease_releases(
+        self,
+        requested: Sequence[str],
+        *,
+        active_lease_id: str,
+    ) -> int:
+        """Send waiting device releases on the lane owner; return how many wait."""
+        pending = getattr(self, "_pending_operation_lease_releases", None)
+        if not isinstance(pending, dict):
+            pending = self._pending_operation_lease_releases = {}
+        if not requested and not pending:
+            return 0
+        coordinator = self._transfer_seal_runtime()
+        client = getattr(coordinator, "client", None)
+        manager = getattr(coordinator, "operation_lease_manager", None)
+        if client is None or manager is None:
+            pending.clear()
+            return 0
+        unaccepted = getattr(self, "_unaccepted_operation_leases", None)
+        if not isinstance(unaccepted, dict):
+            unaccepted = self._unaccepted_operation_leases = {}
+        for lease_id in requested:
+            if lease_id in pending:
+                continue
+            entry = unaccepted.pop(lease_id, None)
+            if entry is None:
+                try:
+                    claims = json.loads(str(manager.store.load(lease_id)["claims_json"]))
+                    entry = {
+                        "authority_scope_id": str(claims["authority_scope_id"]),
+                        "operation": str(claims["operation"]),
+                        "token": str(manager.store.artifact(lease_id)["token"]),
+                        "expires_at": str(claims["expires_at"]),
+                    }
+                except Exception as exc:
+                    print(f"작업 권한 해제 준비 실패: {lease_id} {exc.__class__.__name__}")
+                    continue
+            # One key per lease: every retry sends byte-identical content.
+            pending[lease_id] = {
+                **entry,
+                "reason": "LOCAL_RESET",
+                "idempotency_key": "container-operation-lease-release:"
+                + hashlib.sha256(f"{lease_id}|LOCAL_RESET".encode("utf-8")).hexdigest(),
+            }
+        bounded_wait = getattr(client, "bounded_wait", None)
+        with (
+            bounded_wait(self.COMPLETION_SERVER_WAIT_SECONDS)
+            if callable(bounded_wait)
+            else ExitStack()
+        ):
+            for lease_id, release in list(pending.items()):
+                if not self._work_operation_lease_release_allowed(
+                    coordinator, lease_id, active_lease_id
+                ):
+                    pending.pop(lease_id, None)
+                    print(f"작업 권한 해제 안 함 · 이 PC 작업이 사용: {lease_id}")
+                    continue
+                try:
+                    result = client.release_operation_lease(
+                        authority_scope_id=release["authority_scope_id"],
+                        operation=release["operation"],
+                        token=release["token"],
+                        reason=release["reason"],
+                        idempotency_key=release["idempotency_key"],
+                    )
+                except Exception as exc:
+                    code = str(getattr(exc, "code", "") or exc.__class__.__name__)
+                    if callable(bounded_wait) and client.server_unanswered():
+                        if operation_lease_utc_text() >= release["expires_at"]:
+                            pending.pop(lease_id, None)
+                            print(f"작업 권한 해제 중단 · 만료(관리자 화면에서 해제): {lease_id}")
+                        else:
+                            print(f"작업 권한 해제 대기 · 서버 응답 없음: {lease_id}")
+                        break
+                    # Refused or unsupported (409, 400, 404): recorded, not retried.
+                    pending.pop(lease_id, None)
+                    print(f"작업 권한 해제 안 됨 · {code}: {lease_id}")
+                    continue
+                pending.pop(lease_id, None)
+                if result.get("status") != "RELEASED" or result.get("lease_id") != lease_id:
+                    print(f"작업 권한 해제 응답 확인 실패: {lease_id}")
+                    continue
+                try:
+                    manager.store.record_device_release(lease_id=lease_id, release=result)
+                except (OperationLeaseError, sqlite3.Error) as exc:
+                    print(f"작업 권한 해제 기록 실패: {lease_id} {exc.__class__.__name__}")
+                    continue
+                print(f"작업 권한 해제 완료: {lease_id}")
+        return len(pending)
 
     def _retry_pending_transfer_seals(
         self,
         *,
         master_label: str = "",
         precommand_query: Optional[Mapping[str, Any]] = None,
+        wait_limit_seconds: Optional[float] = None,
+        release_requests: Sequence[str] = (),
+        active_lease_id: str = "",
     ) -> Dict[str, Any]:
         lane = getattr(self, "_ui_lane", None)
         if (
@@ -16719,7 +17096,15 @@ class ContainerAudit:
             "blocked_by_hold": False,
             "replacement_projection_failed": False,
             "ui_snapshot": None,
+            "lease_releases_waiting": 0,
         }
+        try:
+            outcome["lease_releases_waiting"] = self._work_operation_lease_releases(
+                release_requests,
+                active_lease_id=active_lease_id,
+            )
+        except Exception as exc:
+            print(f"작업 권한 해제 처리 실패: {exc.__class__.__name__}")
 
         def can_attempt() -> bool:
             blocked = bool(self._preflight_context_blocks_mutation())
@@ -16755,19 +17140,25 @@ class ContainerAudit:
         try:
             coordinator = self._transfer_seal_runtime()
             outcome["seal_results"] = tuple(
-                coordinator.drain_pending(can_attempt=can_attempt)
+                coordinator.drain_pending(
+                    can_attempt=can_attempt,
+                    wait_limit_seconds=wait_limit_seconds,
+                )
             )
         except Exception as exc:
             print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")
         if not can_attempt():
             return outcome
-        try:
-            exchange_coordinator = self._transfer_member_exchange_runtime()
-            outcome["member_results"] = tuple(
-                exchange_coordinator.drain_pending(can_attempt=can_attempt)
-            )
-        except Exception as exc:
-            print(f"중앙 제품 교체 재시작 복구 실패: {exc.__class__.__name__}")
+        # The background retry sends only completions; a pending member
+        # exchange keeps its own tray-bound recovery.
+        if wait_limit_seconds is None:
+            try:
+                exchange_coordinator = self._transfer_member_exchange_runtime()
+                outcome["member_results"] = tuple(
+                    exchange_coordinator.drain_pending(can_attempt=can_attempt)
+                )
+            except Exception as exc:
+                print(f"중앙 제품 교체 재시작 복구 실패: {exc.__class__.__name__}")
         try:
             outcome["ui_snapshot"] = (
                 self._work_transfer_coordinator_ui_snapshot(

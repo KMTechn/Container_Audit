@@ -912,6 +912,30 @@ class TransferSealStore:
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
 
+    def operation_lease_referenced(self, lease_id: str) -> bool:
+        """Whether a stored completion or member exchange was made with this lease.
+
+        Any status counts: after a device release the server refuses them.
+        """
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            if conn.execute(
+                """SELECT 1 FROM transfer_seal_intents
+                    WHERE operation_lease_id=? LIMIT 1""",
+                (lease_id,),
+            ).fetchone() is not None:
+                return True
+            if conn.execute(
+                """SELECT 1 FROM sqlite_master
+                    WHERE type='table' AND name='transfer_member_exchange_intents'"""
+            ).fetchone() is None:
+                return False
+            return conn.execute(
+                """SELECT 1 FROM transfer_member_exchange_intents
+                    WHERE predecessor_lease_id=? LIMIT 1""",
+                (lease_id,),
+            ).fetchone() is not None
+
     def post_review_case_for_intent(self, intent_id: str) -> sqlite3.Row:
         self._assert_not_ui_thread_read()
         normalized_intent = _normalize_identifier(intent_id, "intent_id")

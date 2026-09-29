@@ -33,6 +33,7 @@ READ_ONLY_ALLOWLIST = {
         "bound_operator_review_for_tray",
         "precommand_operator_review",
         "pending_ids",
+        "operation_lease_referenced",
         "post_review_case_for_intent",
         "post_review_cases",
         "pending_post_review_projections",

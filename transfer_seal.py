@@ -9,6 +9,7 @@ import sqlite3
 import unicodedata
 from contextlib import nullcontext
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 from urllib.parse import unquote
@@ -48,6 +49,7 @@ from transfer_common import (
 from terminal_operation_lease import (
     CONTAINER_PROGRAM,
     LEASE_BINDING_KEYS,
+    LEASE_CLOCK_TOLERANCE,
     TRANSFER_OPERATION,
     OperationLeaseError,
     OperationLeaseManager,
@@ -1817,7 +1819,7 @@ class TransferSealCoordinator:
             completed_at = (
                 str(existing["operation_completed_at"])
                 if existing is not None
-                else operation_lease_utc_text()
+                else self._lease_completion_time(normalized_lease_id)
             )
             try:
                 self._verified_operation_lease(
@@ -1839,6 +1841,34 @@ class TransferSealCoordinator:
                     "오프라인 이적 완료 정보를 안전하게 저장하지 못했습니다.",
                 ) from exc
         return self._attempt_from_row(row)
+
+    def _lease_completion_time(self, lease_id: str) -> str:
+        """This PC's completion time, never before the lease was issued.
+
+        A PC clock up to the tolerance behind the server passes the local check,
+        but a server that allows no time before issue would refuse the seal. The
+        time only moves forward, only within the tolerance and never past expiry.
+        """
+        assert self.operation_lease_manager is not None
+        now = datetime.now(timezone.utc)
+        claims = json.loads(
+            str(self.operation_lease_manager.store.load(lease_id)["claims_json"])
+        )
+        issued_at = operation_lease_parse_utc_text(
+            claims["issued_at"], field="issued_at"
+        )
+        expires_at = operation_lease_parse_utc_text(
+            claims["expires_at"], field="expires_at"
+        )
+        pc_time = now.replace(microsecond=0)
+        if pc_time < issued_at <= now + LEASE_CLOCK_TOLERANCE:
+            corrected = min(issued_at, expires_at)
+            print(
+                "작업 권한 완료 시각 보정: "
+                f"+{int((corrected - pc_time).total_seconds())}초"
+            )
+            return operation_lease_utc_text(corrected)
+        return operation_lease_utc_text(now)
 
     def confirm_completion_checkpoint(self, intent_id: str) -> SealAttempt:
         self._assert_owner()
@@ -3140,13 +3170,31 @@ class TransferSealCoordinator:
         self,
         *,
         can_attempt: Callable[[], bool] | None = None,
+        wait_limit_seconds: float | None = None,
     ) -> list[SealAttempt]:
+        """Retry every pending intent in FIFO order.
+
+        ``wait_limit_seconds`` applies the completion rule of
+        ``drain_pending_through``: one shared limit, and the drain ends at the
+        first intent left pending because the server did not answer.
+        """
+
         self._assert_owner()
+        bounded_wait = getattr(self.client, "bounded_wait", None)
+        bounded = wait_limit_seconds is not None and callable(bounded_wait)
         results: list[SealAttempt] = []
-        for intent_id in self.store.pending_ids():
-            if can_attempt is not None and not bool(can_attempt()):
-                break
-            results.append(self.attempt(intent_id))
+        with bounded_wait(wait_limit_seconds) if bounded else nullcontext():
+            for intent_id in self.store.pending_ids():
+                if can_attempt is not None and not bool(can_attempt()):
+                    break
+                result = self.attempt(intent_id)
+                results.append(result)
+                if (
+                    bounded
+                    and result.status in PENDING_STATUSES
+                    and self.client.server_unanswered()
+                ):
+                    break
         return results
 
     def drain_pending_through(

@@ -249,6 +249,45 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
+    @writer_sink("transfer_seal")
+    def release_operation_lease(
+        self,
+        *,
+        authority_scope_id: str,
+        operation: str,
+        token: str,
+        reason: str,
+        idempotency_key: str,
+    ) -> dict[str, Any]:
+        """Give back this terminal's own unused lease (terminal-operation-lease-release-v1)."""
+
+        scope = str(authority_scope_id or "").strip()
+        operation_name = str(operation or "").strip()
+        lease_token = str(token or "")
+        release_reason = str(reason or "").strip()
+        key = str(idempotency_key or "").strip()
+        if (
+            not scope
+            or operation_name != TRANSFER_OPERATION
+            or not lease_token
+            or release_reason not in {"LOCAL_RESET", "HOLD_CANCELLED"}
+            or not key
+        ):
+            raise ValueError("operation lease release requires exact transfer context")
+        self.assert_authority(scope)
+        result = self._request(
+            "POST",
+            "/logistics/api/v1/operation-leases/release",
+            payload={
+                "authority_scope_id": scope,
+                "operation": operation_name,
+                "token": lease_token,
+                "reason": release_reason,
+            },
+            idempotency_key=key,
+        )
+        return dict(result or {})
+
     def resolve_source(self, identity: Mapping[str, Any]) -> dict[str, Any]:
         params = {
             key: str(identity.get(key) or "").strip()

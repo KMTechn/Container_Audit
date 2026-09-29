@@ -124,7 +124,7 @@ def test_error_and_clear_do_not_erase_last_normal_scan():
     ("outcome", "severity", "blocking", "confirmed"),
     [
         (CompletionOutcome.ACKED, NoticeSeverity.SUCCESS, False, True),
-        (CompletionOutcome.LINKED, NoticeSeverity.SUCCESS, False, False),
+        (CompletionOutcome.LINKED, NoticeSeverity.INFO, False, False),
         (CompletionOutcome.RETRY_WAIT, NoticeSeverity.WARNING, True, False),
         (CompletionOutcome.LOCAL_EVENT_RETRY, NoticeSeverity.ERROR, True, False),
         (CompletionOutcome.OPERATOR_REVIEW, NoticeSeverity.ERROR, True, False),
@@ -146,7 +146,8 @@ def test_completion_outcomes_have_distinct_non_misleading_presentation(outcome, 
         assert "완료 기록 재시도" in notice.message
         assert snapshot.operator_retryable is True
     if outcome is CompletionOutcome.LINKED:
-        assert "이 PC에 이적 정보를 안전하게 저장했습니다." in notice.message
+        assert "완료는 이 PC에 저장했습니다." in notice.message
+        assert "완료" not in notice.title
         assert "원장" not in notice.message
     if outcome is CompletionOutcome.OPERATOR_REVIEW:
         assert notice.message == OPERATOR_REVIEW_CORE

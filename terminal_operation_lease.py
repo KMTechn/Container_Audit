@@ -17,7 +17,7 @@ import secrets
 import sqlite3
 import tempfile
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
@@ -42,6 +42,9 @@ ROTATION_RESULT_CONTRACT_VERSION = "terminal-operation-lease-rotation-result-v1"
 STORE_SCHEMA_VERSION = "container-terminal-operation-lease-store-v1"
 CONTAINER_PROGRAM = "Container_Audit"
 TRANSFER_OPERATION = "SEAL_TRANSFER_BUNDLE"
+# The server accepts a completion up to this long before issue (a PC clock
+# behind the server); this PC's own lease check allows the same.
+LEASE_CLOCK_TOLERANCE = timedelta(seconds=30)
 
 ISSUE_PENDING = "PENDING"
 ISSUE_PREFETCHED = "PREFETCHED"
@@ -633,7 +636,7 @@ def validate_artifact(
     instant = instant.astimezone(timezone.utc)
     issued_at = parse_utc_text(claims["issued_at"], field="issued_at")
     expires_at = parse_utc_text(claims["expires_at"], field="expires_at")
-    if instant < issued_at:
+    if instant < issued_at - LEASE_CLOCK_TOLERANCE:
         raise _error(
             "OPERATION_LEASE_NOT_YET_VALID",
             "operation lease is not valid before issued_at",
@@ -1316,6 +1319,57 @@ class OperationLeaseStore:
             ).fetchone()
             connection.commit()
         assert result is not None
+        return result
+
+    @writer_sink("terminal_operation_lease")
+    def record_device_release(
+        self,
+        *,
+        lease_id: str,
+        release: Mapping[str, Any],
+    ) -> sqlite3.Row | None:
+        """Record the server's release of this PC's unused prefetched lease.
+
+        None: this PC never stored the lease; a later replay of its issue key
+        learns RELEASED from the server.
+        """
+        normalized = _bounded_text(lease_id, field="lease_id", maximum=128)
+        evidence_json = canonical_json_bytes(dict(release)).decode("utf-8")
+        evidence_hash = hashlib.sha256(evidence_json.encode("utf-8")).hexdigest()
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                """SELECT * FROM terminal_operation_lease_issue_attempts
+                    WHERE lease_id=?""",
+                (normalized,),
+            ).fetchone()
+            if row is None:
+                connection.commit()
+                return None
+            if row["status"] == ISSUE_PREFETCHED:
+                connection.execute(
+                    """UPDATE terminal_operation_lease_issue_attempts
+                          SET status=?,terminal_evidence_json=?,
+                              terminal_evidence_hash=?,updated_at=?
+                        WHERE attempt_id=?""",
+                    (
+                        ISSUE_RELEASED,
+                        evidence_json,
+                        evidence_hash,
+                        utc_text(),
+                        row["attempt_id"],
+                    ),
+                )
+            elif row["status"] != ISSUE_RELEASED:
+                raise sqlite3.IntegrityError(
+                    "released lease is no longer an unused prefetched lease"
+                )
+            result = connection.execute(
+                """SELECT * FROM terminal_operation_lease_issue_attempts
+                    WHERE attempt_id=?""",
+                (row["attempt_id"],),
+            ).fetchone()
+            connection.commit()
         return result
 
     @writer_sink("terminal_operation_lease")
@@ -2365,6 +2419,7 @@ __all__ = [
     "KEYRING_CONTRACT_VERSION",
     "LEASE_BINDING_KEYS",
     "LEASE_CLAIM_KEYS",
+    "LEASE_CLOCK_TOLERANCE",
     "LEASE_CONTRACT_VERSION",
     "OperationLeaseError",
     "OperationLeaseManager",

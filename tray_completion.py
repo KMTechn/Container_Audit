@@ -788,9 +788,9 @@ def complete_tray_steps(
             if transfer_attempt.status == "OPERATOR_REVIEW":
                 follow_up = "중앙 반영은 담당자 확인이 필요합니다."
             else:
-                follow_up = "중앙 반영은 저장된 동일 요청으로 자동 재시도합니다."
+                follow_up = "서버 전송 대기(자동으로 다시 보냄)"
             completion_message = (
-                f"'{self.current_tray.item_name}' 완료 · {follow_up}"
+                f"'{self.current_tray.item_name}' 이 PC에 저장 · {follow_up}"
             )
         completion_snapshot = CompletionOutcomeSnapshot(
             outcome=completion_outcome,

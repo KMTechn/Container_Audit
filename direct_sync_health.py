@@ -116,7 +116,12 @@ def _compact_timestamp(value: str) -> str:
     return parsed.astimezone().strftime("%m-%d %H:%M")
 
 
-def relay_health_card_model(health: RelayHealth) -> dict[str, str]:
+def relay_health_card_model(
+    health: RelayHealth,
+    transfer_pending_count: int = 0,
+) -> dict[str, str]:
+    """``transfer_pending_count``: completions stored on this PC and not yet
+    accepted by the server, which the app itself sends again."""
     tone = "amber" if health.operator_attention else "neutral"
     review_count = health.failed_permanent_count + health.operator_review_count
     if health.state == "blocked":
@@ -136,6 +141,12 @@ def relay_health_card_model(health: RelayHealth) -> dict[str, str]:
     else:
         summary = "전송 대기 없음"
         detail = ""
+    if transfer_pending_count > 0:
+        transfer = f"완료 전송 대기 {transfer_pending_count}건"
+        if health.state == "ready":
+            summary, detail = transfer, "자동으로 다시 보냄"
+        else:
+            detail = " · ".join(value for value in (detail, transfer) if value)
     return {
         "summary": summary,
         "detail": detail,

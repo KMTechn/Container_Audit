@@ -1001,7 +1001,7 @@ def test_m7_scene_assertions_cover_controls_members_lease_backlog_and_receipts()
         "OPERATOR_REVIEW",
     ]
     assert [item["notice"]["title"] for item in variants] == [
-        "이적 연계 완료",
+        "서버 전송 대기",
         "서버 이적 확인 완료",
         "서버 이적 확인 대기",
         "완료 기록 저장 재시도",

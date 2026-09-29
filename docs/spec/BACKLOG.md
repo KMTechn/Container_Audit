@@ -12,6 +12,9 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9cap1fix (P1-2·P1-5·P1-3 CA 몫):** 못 보낸 이적 완료를 새 완료·재시작 없이 30초마다 배경에서 다시 보내고(완료와 같은 3초 한도·FIFO·hold 검사), 화면은 완료 대신 `서버 전송 대기 N건(자동으로 다시 보냄)`, `저장 전송` 카드는 `완료 전송 대기 N건`을 보인다([배경 재전송](contracts.md#ca-background-seal-retry)). lease 시각 확인에 서버와 같은 30초 허용, 봉인 완료 시각은 발급 시각 아래로 가지 않게 올리고, 과도기 켬은 발급 전·끊김 조회를 같은 key로 한 번 더 한 뒤에만 로컬로 간다([시계 허용](contracts.md#ca-lease-clock)). 버린 트레이의 쓰지 않은 lease는 서버에 해제 요청한다([기기 해제](contracts.md#ca-lease-release)). [RESULT](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cap1fix/RESULT.md). 실제 화면·서버 해제 API(w9srvp1fix 판)와의 결합은 랩 몫(NOT VERIFIED).
+- <a id="ca-g18"></a>**CA-G18 재시작 뒤 해제 재시도(내구 기록) — 미구현, 담당 CA:** 기기 해제 대기는 메모리에만 있어 앱을 다시 시작하면 재시도하지 않는다. 남은 lease는 만료 뒤 관리자 화면(`/admin-pin` 풀리지 않은 작업 권한)에서 푼다. 저장하지 않고 종료는 해제를 부르지 않는다. 내구 기록이 필요하면 새 저장소 결정이 필요하다.
+
 - **w9caparkpath 1부 (빠른 연속 스캔):** 제품 저장 중 들어온 스캔이 입력창에 남아 다음 스캔과 한 줄로 붙어 제품 1개로 접수되던 결함(w9scanflow F1)을 고쳤다. 저장 중 스캔은 입력창에서 바로 꺼내 순서대로 보관했다가 앞 저장 뒤 처리하고, 처리할 수 없으면(앞 저장 실패·목표 도달 완료·작업 변경·다른 처리 중) 오류음과 `다시 스캔` 안내로 거절한다. `완료 처리 중`에 한 스캔도 오류음과 안내를 낸다(F4). 재검토(w9scanfixrev)가 찾은 정상 종료·ACK 직후 리셋의 조용한 버림도 막아, 보관 스캔을 버리는 모든 경로(작업 전환 12곳·lane 고장·종료)가 오류음과 개수 안내를 낸다. 붙은 값을 제품 검사에서 거절하는 규칙은 넣지 않았다 — 품목 코드 위치가 '어느 위치든'이고 새 판정 정책은 실제 바코드 표본 확정 뒤라는 [제품 admission](product-admission.md) 조건 때문이다. [RED/GREEN·전체 비교](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caparkpath/RESULT.md). 실제 스캐너 속도·화면은 NOT VERIFIED다.
 
 - **w9caparkpath 2부 (보류 파일 경로 260자):** 관리자 보류 표식의 식별 사본 임시 이름이 현장 root(79자)에서 268–302자가 되어 긴 경로가 꺼진 Windows에서 항상 `FileNotFoundError`로 실패하고 그 보류 건이 계속 잠기던 결함, 긴 라벨의 `parked_legacy_` 보류 실패를 고쳤다. 이름의 작업자 16자·라벨 20자 상한과 식별 사본 SHA-256 앞 16자로 모든 새 쓰기가 root 88자까지 들어가고, 이전 이름 파일은 그대로 읽고 이어서 쓴다. 그래도 넘으면 쓰기 전에 평이한 안내로 그 건만 보류한다([이름 길이 규칙](contracts.md#ca-c01)). 현장 PC의 LongPathsEnabled 값은 읽지 않았고 그 설정에 기대지 않는다. [RED/GREEN·전체 비교·같은 부류 조사](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caparkpath/RESULT.md).

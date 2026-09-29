@@ -135,9 +135,9 @@ _COMPLETION_NOTICE_DEFAULTS = {
     ),
     CompletionOutcome.LINKED: (
         "completion.linked",
-        "이적 연계 완료",
-        "이 PC에 이적 정보를 안전하게 저장했습니다.",
-        NoticeSeverity.SUCCESS,
+        "서버 전송 대기",
+        "완료는 이 PC에 저장했습니다. 서버로 자동으로 다시 보냅니다.",
+        NoticeSeverity.INFO,
         False,
     ),
     CompletionOutcome.RETRY_WAIT: (
