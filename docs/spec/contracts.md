@@ -100,7 +100,7 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 - 제품 형식 오류 안내는 길이/제어문자/위험 형식/트레이 설정의 판정 reason에 맞춘 안전한 문구를 일반·held 경로에서 공통 사용한다. [사유별 다음 행동](product-admission.md#형식-오류-안내의-다음-행동)은 라벨·스캐너 설정 확인 또는 담당자 문의이며, 위험 원문은 안내에 삽입하지 않고 기존 reason·hash·길이 진단을 유지한다. 문구 변경은 거부·수량·저장·ACK 조건을 바꾸지 않는다.
 
-- 일반·held 제품의 current JSON atomic write/flush/fsync는 기존 직렬 UI lane worker가 수행한다. Tk는 저장 ACK 뒤에만 목록·수량·receipt·성공음을 한 번 반영하고, 실패하면 이전 목록·파일을 유지한다. 저장 중 다음 입력은 미접수 상태로 입력창에 남고 선행 저장을 추월하지 않는다. held FIFO 제거는 이후 같은 worker의 동기 감사 ACK를 별도로 기다린다. 종료는 진행 중 lane과 held writer를 drain하며, epoch가 바뀐 결과는 새 트레이를 변경하지 않는다.
+- 일반·held 제품의 current JSON atomic write/flush/fsync는 기존 직렬 UI lane worker가 수행한다. Tk는 저장 ACK 뒤에만 목록·수량·receipt·성공음을 한 번 반영하고, 실패하면 이전 목록·파일을 유지한다. 저장 중 들어온 다음 입력은 입력창에서 바로 꺼내 들어온 순서대로 메모리에 보관하고, 선행 저장이 성공으로 끝나면(경고가 떴으면 확인 뒤) 일반 스캔과 같은 검사로 하나씩 처리한다. 선행 저장을 추월하지 않는다. 선행 저장 실패·예외·epoch 변경, 목표 도달 완료, lane 고장·종료, 다른 처리 중이면 보관 입력은 처리하지 않고 오류음과 `다시 스캔` 안내를 낸다. 그 밖에 거절한 입력도 입력창에 남기지 않는다(다음 스캔과 한 줄로 붙지 않음). 예외는 예약된 콜백이 이미 가진 값(스캐너의 두 번째 Enter)뿐이다. 보관 입력은 내구 저장 전이며 성공음·수량은 각자의 저장 ACK 뒤에만 나온다. held FIFO 제거는 이후 같은 worker의 동기 감사 ACK를 별도로 기다린다. 종료는 진행 중 lane과 held writer를 drain하며, epoch가 바뀐 결과는 새 트레이를 변경하지 않는다.
 - 일반 비동기 사건은 원 시각·작업자·대상 CSV·details·멱등 key를 먼저 메모리 FIFO에 보존하고, writer admission을 얻어 `events/_event_outbox/*.json`에 atomic write/flush/fsync한 뒤 접수한다. admission의 5초 mutex timeout·fence 거절 또는 사본 저장 실패는 접수 False이며 원 payload/key를 메모리에 남겨 다음 허가된 쓰기에서 앞 사건부터 재시도한다. admission/fence 규칙은 모든 디스크 쓰기에 그대로 적용된다. writer는 순서대로 동일 key로 내구 CSV append를 재시도하고 성공 뒤 사본을 지운다. append 뒤 응답/정리 실패 및 재시작에도 같은 행을 중복 추가하지 않는다. 실패한 앞 사건을 동기 사건이 추월하지 않으며 완료의 별도 `LOCAL_EVENT_RETRY` 경계는 유지한다.
 - outbox 순번은 남은 사본의 최대 순번을 이어받아 단조 증가하므로 시스템 시계 역행·재시작이 원 사건 순서를 바꾸지 않는다.
 

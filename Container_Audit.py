@@ -1227,6 +1227,9 @@ class ContainerAudit:
         self.completed_master_labels: set = set()
         self.current_tray = TraySession()
         self._scan_callback_epoch = 0
+        # Scans taken out of the entry while a product save runs, in scan order.
+        self._scans_behind_save: list[str] = []
+        self._live_scan_save_pending = False
         self._master_preflight_epoch = 0
         self._master_preflight_pending = False
         self._master_preflight_queue: queue.Queue = queue.Queue(maxsize=1)
@@ -1628,6 +1631,9 @@ class ContainerAudit:
 
     def _handle_ui_lane_fault(self, exc: BaseException) -> None:
         print(f"UI lane failure: {exc.__class__.__name__}")
+        # A broken lane never settles its save; nothing may wait behind it.
+        self._live_scan_save_pending = False
+        self._scans_behind_save = []
         try:
             self.show_status_message(
                 "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요.",
@@ -12909,37 +12915,125 @@ class ContainerAudit:
         self._begin_active_phs_label_refresh(raw_barcode)
         return True
 
-    def _scan_entry_admission_block_reason(self) -> str:
+    def _scan_entry_admission_block_reason(self, *, behind_live_save: bool = False) -> str:
+        """Why a scan cannot run now; a refused value never stays in the entry.
+
+        ``behind_live_save`` asks whether only a running product save stands in
+        the way, so the scan can wait for it in order.
+        """
         if getattr(self, "_ui_close_requested", False):
             return "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다."
         if getattr(self, "_scan_callback_pending", False):
             return "이전 스캔 입력을 접수하는 중입니다. 입력값을 유지합니다."
+        if getattr(self, "_completion_lane_busy", False):
+            return "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
         if getattr(self, "_preflight_scan_input_locked", False):
-            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 입력값을 유지합니다."
+            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 이번 스캔은 받지 않았습니다."
         if (
             getattr(self, "_phs_label_candidate_pending", False)
             or getattr(self, "_phs_reconciliation_resolve_pending", False)
             or getattr(self, "_phs_label_refresh_pending", False)
         ):
-            return "이전 중앙 작업 처리 중입니다. 입력값을 유지합니다."
+            return "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
         if self._preflight_context_blocks_mutation():
-            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 입력값을 유지합니다."
+            return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 이번 스캔은 받지 않았습니다."
         lane = getattr(self, "_ui_lane", None)
         if lane is not None:
             state = str(getattr(lane, "state", "") or "")
-            if lane.is_busy() or state in {
-                LANE_BUSY,
-                LANE_DRAINING,
-                LANE_BROKEN,
-                LANE_CLOSED,
-            }:
-                return "이전 중앙 작업 처리 중입니다. 입력값을 유지합니다."
+            if state in {LANE_DRAINING, LANE_BROKEN, LANE_CLOSED} or (
+                not behind_live_save and (lane.is_busy() or state == LANE_BUSY)
+            ):
+                return "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
         try:
             if self._warning_state_presenter().state.is_blocking:
-                return "현재 경고를 먼저 확인해야 합니다. 입력값을 유지합니다."
+                return "현재 경고를 먼저 확인해야 합니다. 이번 스캔은 받지 않았습니다."
         except (AttributeError, TypeError):
             pass
         return ""
+
+    def _hold_or_refuse_entry_scan(self, raw_barcode: str, block_reason: str) -> None:
+        """Take the value out of the entry so the next scan never joins it.
+
+        While a product save runs, the scan waits in scan order; any other
+        block refuses it with an error sound so the operator rescans it.
+        """
+        if getattr(self, "_scan_callback_pending", False):
+            # A scanner's second Enter: the scheduled callback owns this value.
+            self.show_status_message(block_reason, self.COLOR_DANGER, duration=0)
+            return
+        if not self._clear_consumed_scan_entry(raw_barcode):
+            self._refuse_entry_scan(
+                "스캐너 입력을 확인할 수 없어 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
+            )
+            return
+        held = getattr(self, "_scans_behind_save", None)
+        if held is None:
+            held = self._scans_behind_save = []
+        if (
+            (getattr(self, "_live_scan_save_pending", False) or held)
+            and not self._scan_entry_admission_block_reason(behind_live_save=True)
+        ):
+            if not held:
+                self._scans_behind_save_work = (
+                    int(getattr(self, "_scan_callback_epoch", 0)),
+                    self.current_tray,
+                )
+            held.append(raw_barcode)
+            self.show_status_message(
+                f"앞 스캔 저장 중 · 이어서 처리할 스캔 {len(held)}개",
+                self.COLOR_PRIMARY,
+                duration=0,
+            )
+            return
+        self._refuse_entry_scan(
+            block_reason or "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
+        )
+
+    def _refuse_entry_scan(self, message: str) -> None:
+        # A running warning beep already sounds; a one-shot would stop it.
+        if not getattr(self, "_warning_beep_active", False):
+            sound = getattr(self, "error_sound", None)
+            if sound is not None:
+                try:
+                    sound.play()
+                except Exception:
+                    pass
+        self.show_status_message(message, self.COLOR_DANGER, duration=0)
+
+    def _refuse_scans_behind_save(self, message: str) -> None:
+        held = list(getattr(self, "_scans_behind_save", None) or ())
+        self._scans_behind_save = []
+        if held and not getattr(self, "_ui_close_requested", False):
+            self._refuse_entry_scan(message.format(count=len(held)))
+
+    def _process_next_scan_behind_save(self) -> None:
+        """Run the oldest held scan once the save it waited for has settled."""
+        held = getattr(self, "_scans_behind_save", None)
+        if not held or getattr(self, "_live_scan_save_pending", False):
+            return
+        scan_epoch, scan_tray = getattr(self, "_scans_behind_save_work", (None, None))
+        if (
+            self.current_tray is not scan_tray
+            or int(getattr(self, "_scan_callback_epoch", 0)) != scan_epoch
+        ):
+            self._refuse_scans_behind_save(
+                "작업이 바뀌어 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
+            )
+            return
+        if self._warning_state_presenter().state.is_blocking:
+            # The operator sees the warning first; acknowledging it resumes here.
+            return
+        block_reason = self._scan_entry_admission_block_reason()
+        if block_reason:
+            self._refuse_scans_behind_save(
+                "처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
+            )
+            return
+        self._process_barcode_logic(held.pop(0))
+        if held and not getattr(self, "_live_scan_save_pending", False):
+            self._refuse_scans_behind_save(
+                "처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
+            )
 
     def _set_scan_callback_pending(self, pending: bool) -> None:
         self._scan_callback_pending = bool(pending)
@@ -12985,6 +13079,11 @@ class ContainerAudit:
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
         raw_barcode = self.scan_entry.get().strip()
         if not raw_barcode:
+            if getattr(self, "_completion_lane_busy", False):
+                # The locked entry drops a scan's characters; only its Enter arrives.
+                self._refuse_entry_scan(
+                    "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
+                )
             return
         if getattr(self, "_master_preflight_pending", False):
             self._hold_scan_during_preflight(
@@ -12993,12 +13092,8 @@ class ContainerAudit:
             )
             return
         block_reason = self._scan_entry_admission_block_reason()
-        if block_reason:
-            self.show_status_message(
-                block_reason,
-                self.COLOR_DANGER,
-                duration=0,
-            )
+        if block_reason or getattr(self, "_scans_behind_save", None):
+            self._hold_or_refuse_entry_scan(raw_barcode, block_reason)
             return
         # Keep the raw scanner value until the scheduled callback owns it.
         scan_epoch = getattr(self, "_scan_callback_epoch", 0)
@@ -13007,6 +13102,8 @@ class ContainerAudit:
 
     def _invalidate_pending_scan_callbacks(self) -> None:
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
+        # Held scans belong to the old work, like the pending callback.
+        self._scans_behind_save = []
         self._set_scan_callback_pending(False)
         self._cancel_master_preflight()
 
@@ -13016,12 +13113,8 @@ class ContainerAudit:
             if scan_epoch != getattr(self, "_scan_callback_epoch", 0):
                 return
             block_reason = self._scan_entry_admission_block_reason()
-            if block_reason:
-                self.show_status_message(
-                    block_reason,
-                    self.COLOR_DANGER,
-                    duration=0,
-                )
+            if block_reason or getattr(self, "_scans_behind_save", None):
+                self._hold_or_refuse_entry_scan(raw_barcode, block_reason)
                 return
             if not self._clear_consumed_scan_entry(raw_barcode):
                 self.show_status_message(
@@ -13060,7 +13153,9 @@ class ContainerAudit:
         if live_product:
             scan_epoch = int(getattr(self, "_scan_callback_epoch", 0))
             before_count = len(scan_tray.scanned_barcodes)
+            outcome = []
             def on_idle() -> None:
+                self._live_scan_save_pending = False
                 self._update_action_button_states()
                 if (not _durable_scan_log
                         and self.current_tray is scan_tray
@@ -13069,7 +13164,24 @@ class ContainerAudit:
                         and len(scan_tray.scanned_barcodes) > before_count
                         and len(scan_tray.scanned_barcodes) >= scan_tray.tray_size):
                     self.root.after(0, self.request_complete_tray)
-            return self._submit_scan_steps(steps, on_idle=on_idle)
+                    # After the completion status, so the notice stays visible.
+                    self.root.after(
+                        0,
+                        self._refuse_scans_behind_save,
+                        "완료 처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. "
+                        "완료 뒤 다시 스캔하세요.",
+                    )
+                elif outcome not in ([True], [None]):
+                    # Not saved, failed or stale: later scans never run on an unknown state.
+                    self._refuse_scans_behind_save(
+                        "앞 스캔 저장 확인이 필요해 이어서 들어온 스캔 {count}개는 받지 않았습니다. "
+                        "다시 스캔하세요."
+                    )
+                elif getattr(self, "_scans_behind_save", None):
+                    self.root.after(0, self._process_next_scan_behind_save)
+            admitted = self._submit_scan_steps(steps, finish=outcome.append, on_idle=on_idle)
+            self._live_scan_save_pending = bool(admitted)
+            return admitted
         return self._run_durable_ui_steps(steps)
 
     def _process_barcode_steps(
@@ -14454,6 +14566,9 @@ class ContainerAudit:
                 self._set_preflight_scan_input_locked(False)
                 self.root.after(0, self._process_barcode_logic, snapshot.master_raw)
                 return
+            if getattr(self, "_scans_behind_save", None):
+                # Scans that arrived before the warning showed run after it is seen.
+                self.root.after(0, self._process_next_scan_behind_save)
             self._schedule_focus_return()
 
     def _cancel_status_message_timer(self) -> None:

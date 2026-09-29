@@ -2494,7 +2494,7 @@ def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
     ]
 
 
-def test_scan_entry_is_preserved_until_idle_lane_admits_callback():
+def test_busy_lane_refuses_scan_out_of_entry_until_idle_lane_admits_rescan():
     class Entry:
         def __init__(self, value):
             self.value = value
@@ -2536,10 +2536,16 @@ def test_scan_entry_is_preserved_until_idle_lane_admits_callback():
     app.COLOR_DANGER = "danger"
     app.statuses = []
     app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
+    app.error_sounds = []
+    app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
 
     app.process_barcode()
-    assert app.scan_entry.value == "PRODUCT-A"
+    # Another task holds the lane: the value leaves the entry with a sound, so
+    # the next scan cannot join it (w9scanflow F1).
+    assert app.scan_entry.value == ""
     assert app.root.jobs == []
+    assert app.error_sounds == [1]
+    assert app.statuses[-1][0] == "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
 
     app._ui_lane = None
     app._warning_state_presenter = lambda: SimpleNamespace(
@@ -2547,6 +2553,7 @@ def test_scan_entry_is_preserved_until_idle_lane_admits_callback():
     )
     accepted = []
     app._process_barcode_logic = accepted.append
+    app.scan_entry.value = "PRODUCT-A"
     app.process_barcode()
     assert app.scan_entry.value == "PRODUCT-A"
     assert len(app.root.jobs) == 1

@@ -12,6 +12,8 @@
 
 ## 문서 작성 진행과 제품 준비도
 
+- **w9caparkpath 1부 (빠른 연속 스캔):** 제품 저장 중 들어온 스캔이 입력창에 남아 다음 스캔과 한 줄로 붙어 제품 1개로 접수되던 결함(w9scanflow F1)을 고쳤다. 저장 중 스캔은 입력창에서 바로 꺼내 순서대로 보관했다가 앞 저장 뒤 처리하고, 처리할 수 없으면(앞 저장 실패·목표 도달 완료·작업 변경·다른 처리 중) 오류음과 `다시 스캔` 안내로 거절한다. `완료 처리 중`에 한 스캔도 오류음과 안내를 낸다(F4). 붙은 값을 제품 검사에서 거절하는 규칙은 넣지 않았다 — 품목 코드 위치가 '어느 위치든'이고 새 판정 정책은 실제 바코드 표본 확정 뒤라는 [제품 admission](product-admission.md) 조건 때문이다. [RED/GREEN·전체 비교](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caparkpath/RESULT.md). 실제 스캐너 속도·화면은 NOT VERIFIED다.
+
 - **w9caqueue:** 끊김 표식 `LOOKUP`을 PIN 없이 기존 격리 폴더의 대기 목록으로 옮겨 다음 현품표를 받는다(최대 20개, 승인 효과 없음). 원 작업자 재스캔은 원 FIFO 복원·재조회, 끊김 표식 재시작은 확인창 없이 재조회다. 끊김 중 PIN 격리 메뉴를 끄고 기존 PIN 미확인 복원 거부의 원인·할 일을 바로잡았다. [검증·한계](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9caqueue/RESULT.md), [CA-04](README.md#ca-04).
 
 - **w9cadrain2:** 끊김 뒤 drain 거절 경고에 제품 바코드(형식 오류는 원문 대신 보류 순번)와 할 일(상자에서 빼기·한 개만 있는지 확인)을 넣었다. 통신 예외만 `PHS2_PREFLIGHT_UNAVAILABLE`로 보고, 이 PC의 로컬 예외(sqlite 등)는 `PHS2_PREFLIGHT_LOCAL_ERROR`로 이 현품표만 `LOOKUP_FAILED`('PC 처리 오류', 확인=재조회, 관리자 격리)로 둔다. 첫 시작 캐시 없음+끊김의 시작 오류는 계약대로 두고 설치 뒤 연결 상태 첫 시작 1회를 운영 절차로 삼는다. [RED/GREEN·전체 비교·빌드](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cadrain2/RESULT.md). 보류 시점 CLC 즉시 대조는 후속이고, 여러 현품표 대기는 w9caqueue를 따른다.
