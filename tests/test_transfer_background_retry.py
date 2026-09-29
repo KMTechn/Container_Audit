@@ -11,6 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 import requests
+import time
 
 import Container_Audit as container_module
 from Container_Audit import ContainerAudit, TraySession
@@ -72,10 +73,12 @@ class _Server:
         self._local.unanswered = True
 
 
-def _background_app(tmp_path, *, intents):
+def _background_app(tmp_path, *, intents, members=()):
     server = _Server()
     app, root, lane, hold_store, seal_store, _member_store, calls = (
-        _startup_transfer_recovery_app(tmp_path, seal_intent_ids=intents)
+        _startup_transfer_recovery_app(
+            tmp_path, seal_intent_ids=intents, member_intent_ids=members
+        )
     )
     seal_store.has_exact_history = lambda: True
     coordinator = app.transfer_seal_coordinator
@@ -97,6 +100,20 @@ def _background_app(tmp_path, *, intents):
 
 def _background_jobs(root):
     return [job for job in root.jobs if job[1] == BACKGROUND_MS]
+
+
+def _fire(root, job):
+    root.jobs.remove(job)
+    job[2](*job[3])
+
+
+def _release_hold(app, hold_store):
+    assert hold_store.mark_draining() is None
+    app._preflight_hold_snapshot = None
+    app._preflight_hold_draining = False
+    app._preflight_completion_due = False
+    app._update_action_button_states = lambda: None
+    app._complete_after_preflight_hold_drain()
 
 
 def _close(root, lane):
@@ -175,6 +192,140 @@ def test_background_seal_retry_shares_the_completion_wait_limit(tmp_path):
         # FIFO stops at the first intent the server left unanswered.
         assert [intent for intent, _thread in calls["seal"][2:]] == ["seal-1"]
         assert seal_store.intent_ids == ["seal-1", "seal-2"]
+    finally:
+        _close(root, lane)
+
+
+def test_hold_release_after_the_first_recovery_keeps_the_background_limit(tmp_path):
+    app, root, lane, hold_store, _seal_store, calls, server = _background_app(
+        tmp_path, intents=("seal-1", "seal-2", "seal-3")
+    )
+    try:
+        assert app._schedule_startup_transfer_recovery() is True
+        root.run_until(lambda: not lane.is_busy() and bool(_background_jobs(root)))
+        # A background poll meets a preflight hold.
+        hold_store.start(worker="tester", master_raw="MASTER", scan_epoch=2)
+        root.run_until(
+            lambda: app._startup_transfer_recovery_waiting_for_hold
+            and not lane.is_busy()
+        )
+        limits_before = len(server.limits)
+        calls_before = len(calls["seal"])
+
+        # The hold ends while the server still does not answer: the recovery it
+        # schedules holds the lane no longer than one completion.
+        _release_hold(app, hold_store)
+        root.run_until(lambda: len(calls["seal"]) > calls_before and not lane.is_busy())
+        assert server.limits[limits_before:] == [ContainerAudit.COMPLETION_SERVER_WAIT_SECONDS]
+        assert [intent for intent, _thread in calls["seal"][calls_before:]] == ["seal-1"]
+    finally:
+        _close(root, lane)
+
+
+def test_one_background_poll_shares_one_wait_limit_for_release_and_seal(tmp_path):
+    app, root, lane, _hold, _seal_store, calls, server = _background_app(
+        tmp_path, intents=("seal-1",)
+    )
+    coordinator = app.transfer_seal_coordinator
+    coordinator.operation_lease_manager = SimpleNamespace(
+        store=SimpleNamespace(
+            issue_attempt_for_lease=lambda _lease_id: {"status": "PREFETCHED"},
+            completion=lambda _lease_id: None,
+        )
+    )
+    coordinator.store.operation_lease_referenced = lambda _lease_id: False
+    releases = []
+
+    def release_operation_lease(**kwargs):
+        releases.append(kwargs["idempotency_key"])
+        server.no_answer()
+        raise requests.ConnectionError("no answer")
+
+    server.release_operation_lease = release_operation_lease
+    app._pending_operation_lease_releases = {
+        "lease-A": {
+            "authority_scope_id": "PLANT-01",
+            "operation": "SEAL_TRANSFER_BUNDLE",
+            "token": "fixture-token",
+            "expires_at": "2999-01-01T00:00:00Z",
+            "reason": "LOCAL_RESET",
+            "idempotency_key": "fixture-key",
+        }
+    }
+    try:
+        assert app._schedule_startup_transfer_recovery() is True
+        root.run_until(lambda: not lane.is_busy() and bool(_background_jobs(root)))
+        limits_before = len(server.limits)
+        calls_before = len(calls["seal"])
+        _fire(root, _background_jobs(root)[0])
+        root.run_until(lambda: not lane.is_busy() and bool(_background_jobs(root)))
+        # One limit for the whole poll; the unanswered release ends it.
+        assert server.limits[limits_before:] == [ContainerAudit.COMPLETION_SERVER_WAIT_SECONDS]
+        assert releases == ["fixture-key", "fixture-key"]
+        assert len(calls["seal"]) == calls_before
+        assert app._operation_lease_releases_waiting == 1
+    finally:
+        _close(root, lane)
+
+
+def test_background_poll_waits_while_scans_arrive_but_not_past_the_cap(tmp_path):
+    app, root, lane, _hold, _seal_store, calls, _server = _background_app(
+        tmp_path, intents=("seal-1",)
+    )
+    try:
+        assert app._schedule_startup_transfer_recovery() is True
+        root.run_until(lambda: not lane.is_busy() and bool(_background_jobs(root)))
+        calls_before = len(calls["seal"])
+
+        def poll_jobs():
+            return [job for job in root.jobs if job[2] == app._run_background_seal_retry]
+
+        # A scan just now: the poll would refuse the next scans, so it waits.
+        app.last_activity_time = container_module.datetime.datetime.now()
+        _fire(root, poll_jobs()[0])
+        assert not lane.is_busy() and len(calls["seal"]) == calls_before
+        (retry,) = poll_jobs()
+        assert 0 < retry[1] <= ContainerAudit.BACKGROUND_SEAL_RETRY_SCAN_QUIET_MS
+
+        # Scans still arriving after the cap: the poll runs once anyway.
+        app._background_seal_retry_deferred_since = time.monotonic() - (
+            ContainerAudit.BACKGROUND_SEAL_RETRY_MAX_DEFER_SECONDS + 1
+        )
+        app.last_activity_time = container_module.datetime.datetime.now()
+        _fire(root, retry)
+        root.run_until(lambda: len(calls["seal"]) > calls_before and not lane.is_busy())
+        assert app._background_seal_retry_deferred_since is None
+
+        # After a quiet stretch it runs without waiting.
+        calls_before = len(calls["seal"])
+        app.last_activity_time = container_module.datetime.datetime.now() - (
+            container_module.datetime.timedelta(
+                milliseconds=ContainerAudit.BACKGROUND_SEAL_RETRY_SCAN_QUIET_MS + 1000
+            )
+        )
+        _fire(root, poll_jobs()[0])
+        root.run_until(lambda: len(calls["seal"]) > calls_before and not lane.is_busy())
+    finally:
+        _close(root, lane)
+
+
+def test_a_release_requested_before_the_first_recovery_waits_for_it(tmp_path):
+    app, root, lane, _hold, _seal_store, calls, _server = _background_app(
+        tmp_path, intents=("seal-1",), members=("member-1",)
+    )
+    seen = []
+    app._work_operation_lease_releases = lambda requested, **kwargs: seen.append(
+        (tuple(requested), kwargs.get("shared_limit"), len(calls["member"]))
+    ) or 0
+    try:
+        # e.g. the previous tray deleted while the login restores work
+        app._request_operation_lease_release("lease-A")
+        assert not lane.is_busy() and seen == []
+        # The login's restart recovery takes it, in its own form.
+        assert app._schedule_startup_transfer_recovery() is True
+        root.run_until(lambda: bool(seen) and not lane.is_busy())
+        assert seen[0] == (("lease-A",), False, 0)
+        assert [intent for intent, _thread in calls["member"]] == ["member-1"]
     finally:
         _close(root, lane)
 
@@ -295,6 +446,17 @@ class _LeaseServer(BlockingClient):
         }
 
 
+def _session_app(tmp_path, client):
+    """A run whose first (restart) transfer recovery has finished."""
+    app = _app(tmp_path, client)
+    app._startup_transfer_recovery_done = True
+    return app
+
+
+def _local_events(app, event_type):
+    return [detail for event, detail, _kwargs in app.events if event == event_type]
+
+
 def _scan_label(app):
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(
@@ -349,7 +511,7 @@ def test_lease_issued_one_second_ahead_of_pc_clock_is_accepted(tmp_path):
     assert refused.value.code == "OPERATION_LEASE_NOT_YET_VALID"
 
     # The PC reads one second before the server's issue time at the scan.
-    app = _app(tmp_path, _LeaseServer(issued_at=issued))
+    app = _session_app(tmp_path, _LeaseServer(issued_at=issued))
     try:
         _scan_label(app)
         assert app.current_tray.operation_lease_id == LEASE_ID
@@ -361,7 +523,7 @@ def test_lease_issued_one_second_ahead_of_pc_clock_is_accepted(tmp_path):
 def test_seal_completed_time_is_not_before_lease_issued_when_pc_clock_is_behind(tmp_path):
     issued = FIXED_LEASE_NOW + timedelta(seconds=5)
     client = _LeaseServer(issued_at=issued)
-    app = _app(tmp_path, client)
+    app = _session_app(tmp_path, client)
     try:
         _scan_label(app)
         namespace = app.transfer_seal_coordinator
@@ -371,17 +533,28 @@ def test_seal_completed_time_is_not_before_lease_issued_when_pc_clock_is_behind(
             namespace.operation_lease_manager,
             owner_thread_id_provider=threading.get_ident,
         )
-        coordinator.prepare(
-            master_label=COMPACT_QR,
-            master_label_fields=app._parse_new_format_qr(COMPACT_QR),
-            item_id=ITEM,
+        attempt = app._prepare_and_attempt_transfer_seal_snapshot(
+            coordinator=coordinator,
+            source_label_payload=COMPACT_QR,
+            source_label_fields=app._parse_new_format_qr(COMPACT_QR),
+            item_code=ITEM,
             operator="tester",
-            scanned_barcodes=[f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"],
+            scanned_barcodes=(f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"),
+            relay_log_file_path="",
             operation_lease_id=LEASE_ID,
+            on_prepared=lambda _prepared: None,
         )
         completion = namespace.operation_lease_manager.store.completion(LEASE_ID)
         # PC time is 5 s before issue; a server allowing none would refuse it.
         assert completion["operation_completed_at"] == utc_text(issued)
+        assert _local_events(app, "OPERATION_LEASE_COMPLETION_TIME_RAISED") == [
+            {
+                "terminal_operation_lease_id": LEASE_ID,
+                "transfer_seal_intent_id": attempt.intent_id,
+                "pc_time": utc_text(FIXED_LEASE_NOW),
+                "operation_completed_at": utc_text(issued),
+            }
+        ]
     finally:
         app._ui_lane.close_idle()
 
@@ -389,7 +562,7 @@ def test_seal_completed_time_is_not_before_lease_issued_when_pc_clock_is_behind(
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
 def test_transition_not_yet_valid_retries_same_key_before_local(tmp_path):
     client = _LeaseServer(issued_at=FIXED_LEASE_NOW + timedelta(seconds=40))
-    app = _app(tmp_path, client)
+    app = _session_app(tmp_path, client)
     app.legacy_label_transition = True
     local_starts = []
     release_requests = []
@@ -417,9 +590,38 @@ def test_transition_not_yet_valid_retries_same_key_before_local(tmp_path):
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
+def test_transition_requery_without_answer_gives_back_the_first_lookup_lease(tmp_path):
+    client = _LeaseServer(issued_at=FIXED_LEASE_NOW + timedelta(seconds=40))
+    first_lookup = client.issue_operation_lease
+
+    def issue(**kwargs):
+        if client.identities:  # the requery gets no answer
+            client.identities.append(dict(kwargs))
+            raise requests.ConnectionError("no answer")
+        return first_lookup(**kwargs)
+
+    client.issue_operation_lease = issue
+    app = _session_app(tmp_path, client)
+    app.legacy_label_transition = True
+    local_starts = []
+    release_requests = []
+    app._start_transition_tray_after_preflight_failure = (
+        lambda _barcode, _fields, _item, failure: local_starts.append(failure.code)
+    )
+    app._request_operation_lease_release = release_requests.append
+    try:
+        app._process_barcode_logic(COMPACT_QR)
+        _pump_until(app.root, lambda: bool(local_starts))
+        assert local_starts == ["PHS2_PREFLIGHT_UNAVAILABLE"]
+        assert release_requests == [LEASE_ID]
+    finally:
+        app._ui_lane.close_idle()
+
+
+@pytest.mark.usefixtures("fixed_operation_lease_clock")
 def test_reset_releases_the_prefetched_lease(tmp_path, monkeypatch):
     client = _LeaseServer()
-    app = _app(tmp_path, client)
+    app = _session_app(tmp_path, client)
     try:
         _scan_label(app)
         token = client.artifacts[client.identities[0]["idempotency_key"]]["token"]
@@ -445,6 +647,15 @@ def test_reset_releases_the_prefetched_lease(tmp_path, monkeypatch):
         assert first["idempotency_key"].startswith("container-operation-lease-release:")
         assert client.lease_status == "RELEASED"
         assert app._operation_lease_releases_waiting == 0
+        assert _local_events(app, "OPERATION_LEASE_RELEASE_RESULT") == [
+            {
+                "terminal_operation_lease_id": LEASE_ID,
+                "reason": "LOCAL_RESET",
+                "release_idempotency_key": first["idempotency_key"],
+                "result": "RELEASED",
+                "replayed": True,
+            }
+        ]
         # No release record of its own on this PC: scanning the label again
         # learns RELEASED from the server's replay and takes a new lease.
         assert _attempt_status(app) == "PREFETCHED"
@@ -458,7 +669,7 @@ def test_reset_releases_the_prefetched_lease(tmp_path, monkeypatch):
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
 def test_reset_with_pending_seal_intent_does_not_release_the_lease(tmp_path, monkeypatch):
     client = _LeaseServer()
-    app = _app(tmp_path, client)
+    app = _session_app(tmp_path, client)
     try:
         _scan_label(app)
         # A completion made with this lease is stored (not yet sent).
@@ -479,6 +690,10 @@ def test_reset_with_pending_seal_intent_does_not_release_the_lease(tmp_path, mon
         assert client.releases == []
         assert client.lease_status == "ACTIVE"
         assert _attempt_status(app) == "PREFETCHED"
+        assert [
+            event["result"]
+            for event in _local_events(app, "OPERATION_LEASE_RELEASE_RESULT")
+        ] == ["NOT_SENT_IN_USE"]
     finally:
         app._ui_lane.close_idle()
 
@@ -486,7 +701,7 @@ def test_reset_with_pending_seal_intent_does_not_release_the_lease(tmp_path, mon
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
 def test_reset_then_same_label_on_this_pc_keeps_its_reissued_lease(tmp_path, monkeypatch):
     client = _LeaseServer()
-    app = _app(tmp_path, client)
+    app = _session_app(tmp_path, client)
     try:
         _scan_label(app)
         client.up = False

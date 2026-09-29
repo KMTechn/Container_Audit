@@ -1862,12 +1862,7 @@ class TransferSealCoordinator:
         )
         pc_time = now.replace(microsecond=0)
         if pc_time < issued_at <= now + LEASE_CLOCK_TOLERANCE:
-            corrected = min(issued_at, expires_at)
-            print(
-                "작업 권한 완료 시각 보정: "
-                f"+{int((corrected - pc_time).total_seconds())}초"
-            )
-            return operation_lease_utc_text(corrected)
+            return operation_lease_utc_text(min(issued_at, expires_at))
         return operation_lease_utc_text(now)
 
     def confirm_completion_checkpoint(self, intent_id: str) -> SealAttempt:
@@ -3170,31 +3165,13 @@ class TransferSealCoordinator:
         self,
         *,
         can_attempt: Callable[[], bool] | None = None,
-        wait_limit_seconds: float | None = None,
     ) -> list[SealAttempt]:
-        """Retry every pending intent in FIFO order.
-
-        ``wait_limit_seconds`` applies the completion rule of
-        ``drain_pending_through``: one shared limit, and the drain ends at the
-        first intent left pending because the server did not answer.
-        """
-
         self._assert_owner()
-        bounded_wait = getattr(self.client, "bounded_wait", None)
-        bounded = wait_limit_seconds is not None and callable(bounded_wait)
         results: list[SealAttempt] = []
-        with bounded_wait(wait_limit_seconds) if bounded else nullcontext():
-            for intent_id in self.store.pending_ids():
-                if can_attempt is not None and not bool(can_attempt()):
-                    break
-                result = self.attempt(intent_id)
-                results.append(result)
-                if (
-                    bounded
-                    and result.status in PENDING_STATUSES
-                    and self.client.server_unanswered()
-                ):
-                    break
+        for intent_id in self.store.pending_ids():
+            if can_attempt is not None and not bool(can_attempt()):
+                break
+            results.append(self.attempt(intent_id))
         return results
 
     def drain_pending_through(

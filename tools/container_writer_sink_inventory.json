@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4494,
+      "line": 4500,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4498,
+          "line": 4504,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -6261,7 +6261,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "5621d1459241d014ae73f96537aeb6e70e7419696b243287458d8d1b1a49db2e",
+  "inventory_sha256": "20a7aa3eb4857cfe8e07f3197ebea7f9c0e3612a7687c9fd663adc321ef4bc36",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18198,7 +18198,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1471,
+      "line": 1477,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -18206,7 +18206,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 19700,
+      "line": 19821,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -18214,7 +18214,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4494,
+      "line": 4500,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -18222,7 +18222,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3207,
+      "line": 3213,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -18230,7 +18230,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3607,
+      "line": 3613,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },

@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from tkinter import font as tkfont
 import copy
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 import argparse
 import csv
 import datetime
@@ -1073,6 +1073,10 @@ class ContainerAudit:
     COMPLETION_SERVER_WAIT_SECONDS = 3.0
     # Completions left unsent go out again this often while the lane is idle.
     BACKGROUND_SEAL_RETRY_MS = 30_000
+    # A poll waits while scans arrive this close together, but never longer
+    # than the cap: it holds the lane and would refuse the next scan.
+    BACKGROUND_SEAL_RETRY_SCAN_QUIET_MS = 10_000
+    BACKGROUND_SEAL_RETRY_MAX_DEFER_SECONDS = 120
     # Transition mode looks a label up once more after this before going local.
     TRANSITION_PREFLIGHT_REQUERY_MS = 3_000
     
@@ -1210,6 +1214,8 @@ class ContainerAudit:
         self._startup_transfer_recovery_waiting_for_hold = False
         self._startup_transfer_recovery_task_handle = None
         self._background_seal_retry_job: Optional[str] = None
+        self._background_seal_retry_deferred_since: Optional[float] = None
+        self._startup_transfer_recovery_done = False
         self._pending_seal_intent_count: Optional[int] = None
         # Unused leases to give back: requested on the Tk thread, kept and
         # sent only by the lane owner (in memory; not retried after a restart).
@@ -11337,6 +11343,7 @@ class ContainerAudit:
     ) -> bool:
         if not transition_requery:
             self._transition_preflight_requeried = ""
+            self._transition_preflight_unused_lease = ""
         try:
             canonical_fields = validate_compact_phs2_fields(qr_data)
         except TransferSealError:
@@ -11746,6 +11753,7 @@ class ContainerAudit:
                     # Clock skew or no answer is not a verdict on this label:
                     # look it up once more (same issue key) before going local.
                     self._transition_preflight_requeried = barcode
+                    self._transition_preflight_unused_lease = str(result[2] or "")
                     self.show_status_message(
                         "중앙 확인을 잠시 뒤 한 번 더 합니다 · 제품은 계속 스캔하세요.",
                         self.COLOR_IDLE,
@@ -11755,8 +11763,13 @@ class ContainerAudit:
                         token, barcode, canonical_fields, matched_item
                     )
                     return
-                if str(result[2] or ""):
-                    self._request_operation_lease_release(str(result[2]))
+                # The requery replays the first lookup's issue key; if it got
+                # no answer, the lease the first lookup issued is given back.
+                unused_lease_id = str(result[2] or "") or str(
+                    getattr(self, "_transition_preflight_unused_lease", "") or ""
+                )
+                if unused_lease_id:
+                    self._request_operation_lease_release(unused_lease_id)
                 self._start_transition_tray_after_preflight_failure(
                     barcode, canonical_fields, matched_item, failure,
                 )
@@ -16300,6 +16313,23 @@ class ContainerAudit:
                 "TRANSFER_INTENT_PREVIEW_MISMATCH",
                 "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
             )
+        manager = getattr(coordinator, "operation_lease_manager", None)
+        if operation_lease_id and manager is not None:
+            completion = manager.store.completion(operation_lease_id)
+            pc_time = operation_lease_utc_text()
+            if completion is not None and str(completion["operation_completed_at"]) > pc_time:
+                # The seal carries the lease issue time; this PC read earlier.
+                self._log_event(
+                    "OPERATION_LEASE_COMPLETION_TIME_RAISED",
+                    detail={
+                        "terminal_operation_lease_id": operation_lease_id,
+                        "transfer_seal_intent_id": prepared.intent_id,
+                        "pc_time": pc_time,
+                        "operation_completed_at": str(
+                            completion["operation_completed_at"]
+                        ),
+                    },
+                )
         on_prepared(prepared)
         confirmed = coordinator.confirm_completion_checkpoint(prepared.intent_id)
         drain_through = getattr(coordinator, "drain_pending_through", None)
@@ -16786,9 +16816,12 @@ class ContainerAudit:
             getattr(tray, "master_label_code", "") or ""
         ).strip()
         precommand_query = self._precommand_operator_review_query()
-        # A background retry holds the lane no longer than a completion does.
-        wait_limit_seconds = (
-            self.COMPLETION_SERVER_WAIT_SECONDS if background else None
+        # Only the first recovery of this run keeps the restart form (no limit,
+        # member exchanges too); a later one, e.g. the recovery a hold release
+        # schedules after a blocked background poll, holds the lane no longer
+        # than a completion does.
+        background = bool(
+            background or getattr(self, "_startup_transfer_recovery_done", False)
         )
         release_requests = tuple(
             getattr(self, "_requested_operation_lease_releases", None) or ()
@@ -16821,7 +16854,7 @@ class ContainerAudit:
                 work=lambda: self._retry_pending_transfer_seals(
                     master_label=snapshot_master_label,
                     precommand_query=precommand_query,
-                    wait_limit_seconds=wait_limit_seconds,
+                    background=background,
                     release_requests=release_requests,
                     active_lease_id=active_lease_id,
                 ),
@@ -16868,9 +16901,11 @@ class ContainerAudit:
             blocked_by_hold
             or outcome.get("replacement_projection_failed")
         )
+        if not self._startup_transfer_recovery_pending:
+            self._startup_transfer_recovery_done = True
         self._arm_background_seal_retry()
 
-    def _arm_background_seal_retry(self) -> None:
+    def _arm_background_seal_retry(self, delay_ms: Optional[int] = None) -> None:
         """Send completions left unsent again later, without a new completion or restart."""
         if (
             getattr(self, "_background_seal_retry_job", None) is not None
@@ -16887,7 +16922,7 @@ class ContainerAudit:
             return
         try:
             self._background_seal_retry_job = self.root.after(
-                self.BACKGROUND_SEAL_RETRY_MS,
+                self.BACKGROUND_SEAL_RETRY_MS if delay_ms is None else delay_ms,
                 self._run_background_seal_retry,
             )
         except (tk.TclError, AttributeError):
@@ -16903,6 +16938,30 @@ class ContainerAudit:
             # A running recovery re-arms when it finishes; a hold release
             # schedules the recovery itself.
             return
+        if not getattr(self, "_startup_transfer_recovery_done", False):
+            # Requests wait for the first recovery of this run (restart form).
+            self._arm_background_seal_retry()
+            return
+        last_activity = getattr(self, "last_activity_time", None)
+        quiet_ms = (
+            (datetime.datetime.now() - last_activity).total_seconds() * 1000
+            if isinstance(last_activity, datetime.datetime)
+            else float("inf")
+        )
+        now = time.monotonic()
+        deferred_since = getattr(self, "_background_seal_retry_deferred_since", None)
+        if quiet_ms < self.BACKGROUND_SEAL_RETRY_SCAN_QUIET_MS and (
+            deferred_since is None
+            or now - deferred_since < self.BACKGROUND_SEAL_RETRY_MAX_DEFER_SECONDS
+        ):
+            # Scanning goes on: look again after the next quiet stretch.
+            if deferred_since is None:
+                self._background_seal_retry_deferred_since = now
+            self._arm_background_seal_retry(
+                max(1, int(self.BACKGROUND_SEAL_RETRY_SCAN_QUIET_MS - quiet_ms))
+            )
+            return
+        self._background_seal_retry_deferred_since = None
         was_pending = bool(getattr(self, "_startup_transfer_recovery_pending", False))
         self._startup_transfer_recovery_pending = True
         if not self._schedule_startup_transfer_recovery(background=True):
@@ -16985,11 +17044,31 @@ class ContainerAudit:
             return False
         return not coordinator.store.operation_lease_referenced(lease_id)
 
+    def _log_operation_lease_release(
+        self,
+        release: Mapping[str, str],
+        lease_id: str,
+        result: str,
+        **extra: Any,
+    ) -> None:
+        """Local-only durable record of one release outcome (never the token)."""
+        self._log_event(
+            "OPERATION_LEASE_RELEASE_RESULT",
+            detail={
+                "terminal_operation_lease_id": lease_id,
+                "reason": release["reason"],
+                "release_idempotency_key": release["idempotency_key"],
+                "result": result,
+                **extra,
+            },
+        )
+
     def _work_operation_lease_releases(
         self,
         requested: Sequence[str],
         *,
         active_lease_id: str,
+        shared_limit: bool = False,
     ) -> int:
         """Send waiting device releases on the lane owner; return how many wait."""
         pending = getattr(self, "_pending_operation_lease_releases", None)
@@ -17032,15 +17111,15 @@ class ContainerAudit:
         bounded_wait = getattr(client, "bounded_wait", None)
         with (
             bounded_wait(self.COMPLETION_SERVER_WAIT_SECONDS)
-            if callable(bounded_wait)
-            else ExitStack()
+            if callable(bounded_wait) and not shared_limit
+            else nullcontext()
         ):
             for lease_id, release in list(pending.items()):
                 if not self._work_operation_lease_release_allowed(
                     coordinator, lease_id, active_lease_id
                 ):
                     pending.pop(lease_id, None)
-                    print(f"작업 권한 해제 안 함 · 이 PC 작업이 사용: {lease_id}")
+                    self._log_operation_lease_release(release, lease_id, "NOT_SENT_IN_USE")
                     continue
                 try:
                     result = client.release_operation_lease(
@@ -17054,22 +17133,33 @@ class ContainerAudit:
                     code = str(getattr(exc, "code", "") or exc.__class__.__name__)
                     if callable(bounded_wait) and client.server_unanswered():
                         if operation_lease_utc_text() >= release["expires_at"]:
+                            # Past expiry the administrator screen releases it.
                             pending.pop(lease_id, None)
-                            print(f"작업 권한 해제 중단 · 만료(관리자 화면에서 해제): {lease_id}")
-                        else:
-                            print(f"작업 권한 해제 대기 · 서버 응답 없음: {lease_id}")
+                            self._log_operation_lease_release(
+                                release, lease_id, "EXPIRED_NOT_RETRIED"
+                            )
                         break
                     # Refused or unsupported (409, 400, 404): recorded, not retried.
                     pending.pop(lease_id, None)
-                    print(f"작업 권한 해제 안 됨 · {code}: {lease_id}")
+                    self._log_operation_lease_release(
+                        release,
+                        lease_id,
+                        code,
+                        status_code=int(getattr(exc, "status_code", 0) or 0),
+                    )
                     continue
                 pending.pop(lease_id, None)
-                if result.get("status") != "RELEASED" or result.get("lease_id") != lease_id:
-                    print(f"작업 권한 해제 응답 확인 실패: {lease_id}")
-                    continue
                 # The local issue attempt learns RELEASED from the server's
                 # authenticated replay when this PC scans the label again.
-                print(f"작업 권한 해제 완료: {lease_id}")
+                self._log_operation_lease_release(
+                    release,
+                    lease_id,
+                    "RELEASED"
+                    if result.get("status") == "RELEASED"
+                    and result.get("lease_id") == lease_id
+                    else "RELEASE_RESPONSE_UNEXPECTED",
+                    replayed=result.get("replayed") is True,
+                )
         return len(pending)
 
     def _retry_pending_transfer_seals(
@@ -17077,7 +17167,7 @@ class ContainerAudit:
         *,
         master_label: str = "",
         precommand_query: Optional[Mapping[str, Any]] = None,
-        wait_limit_seconds: Optional[float] = None,
+        background: bool = False,
         release_requests: Sequence[str] = (),
         active_lease_id: str = "",
     ) -> Dict[str, Any]:
@@ -17087,6 +17177,36 @@ class ContainerAudit:
             or threading.get_ident() != getattr(lane, "worker_thread_id", None)
         ):
             raise RuntimeError("startup transfer recovery requires the shared lane worker")
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        bounded_wait = getattr(client, "bounded_wait", None) if background else None
+        # A background poll shares one completion limit across its release and
+        # seal requests; it ends at the first request the server leaves unanswered.
+        with (
+            bounded_wait(self.COMPLETION_SERVER_WAIT_SECONDS)
+            if callable(bounded_wait)
+            else nullcontext()
+        ):
+            return self._work_pending_transfer_recovery(
+                master_label=master_label,
+                precommand_query=precommand_query,
+                background=background,
+                server_unanswered=(
+                    client.server_unanswered if callable(bounded_wait) else None
+                ),
+                release_requests=release_requests,
+                active_lease_id=active_lease_id,
+            )
+
+    def _work_pending_transfer_recovery(
+        self,
+        *,
+        master_label: str,
+        precommand_query: Optional[Mapping[str, Any]],
+        background: bool,
+        server_unanswered: Optional[Callable[[], bool]],
+        release_requests: Sequence[str],
+        active_lease_id: str,
+    ) -> Dict[str, Any]:
         outcome: Dict[str, Any] = {
             "seal_results": (),
             "member_results": (),
@@ -17099,6 +17219,7 @@ class ContainerAudit:
             outcome["lease_releases_waiting"] = self._work_operation_lease_releases(
                 release_requests,
                 active_lease_id=active_lease_id,
+                shared_limit=server_unanswered is not None,
             )
         except Exception as exc:
             print(f"작업 권한 해제 처리 실패: {exc.__class__.__name__}")
@@ -17138,8 +17259,8 @@ class ContainerAudit:
             coordinator = self._transfer_seal_runtime()
             outcome["seal_results"] = tuple(
                 coordinator.drain_pending(
-                    can_attempt=can_attempt,
-                    wait_limit_seconds=wait_limit_seconds,
+                    can_attempt=lambda: can_attempt()
+                    and not (server_unanswered is not None and server_unanswered())
                 )
             )
         except Exception as exc:
@@ -17148,7 +17269,7 @@ class ContainerAudit:
             return outcome
         # The background retry sends only completions; a pending member
         # exchange keeps its own tray-bound recovery.
-        if wait_limit_seconds is None:
+        if not background:
             try:
                 exchange_coordinator = self._transfer_member_exchange_runtime()
                 outcome["member_results"] = tuple(
