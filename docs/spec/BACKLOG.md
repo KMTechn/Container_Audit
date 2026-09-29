@@ -333,6 +333,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **원인(랩 w9labtransit1 09-29 · host 재현):** GUI 시작 전체가 writer 잠금 안에서 돌며 오프라인 품목 경고창(모달)을 띄웠다(10:46:33–10:47:21). 그동안 relay 주기의 상태 쓰기가 5초 대기 뒤 `WRITER_GATE_TIMEOUT`을 루프 밖으로 던져 relay가 끝났다(상태 `RUNNING` 고정, 프로세스 없음). 휴대판 앱 시작은 relay를 다시 띄우지 않았다. 네트워크 오류 자체는 relay를 죽이지 않는다. 기준 4a55e86부터 있던 결함이다.
 - **소스·격리 시험 PROVEN:** 상태 쓰기의 잠금 시간 초과·abandoned에도 루프가 계속 돌고 다음 상태에 남긴다. 앱 시작은 Run 등록·정지 표식 부재·잠금 빔일 때만 relay 시작을 요청한다([운영](operations.md#ca-o01)). 끊김 8종은 같은 행 재시도이고, 죽은 relay의 예약 행은 다음 relay에서 같은 metadata로 1회 간다(서버 행 중복 0). [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9carelay/RESULT.md)
 - **남은 경계(발견, 이번에 고치지 않음):** GUI 시작이 모달 경고창 동안 writer 잠금을 쥐어 그동안 relay·전송 자식이 모두 기다린다([_prepare_gui_startup](../../Container_Audit.py)). 상주 relay도 `--drain-after-scan`이라 새 줄이 계속 생기면 오래된 `retry_wait` 행은 새 줄이 없는 주기에만 재시도된다(지연). 앱이 켜진 채 relay가 다른 이유로 끝나면 다음 앱 시작이나 로그온까지 기다린다.
+- **writer inventory 주입 경로(다음 canonical 업그레이드 주기):** 정적 도구가 주입 호출(onboarding `relay_launcher=start_user_relay_process`, 앱 시작 `launcher or start_user_relay_process`)을 따라가지 못해 GUI 진입점의 `persistent_relay_process_start` 경로가 `known_route_coverage`에 없다. 지금 드러내면 설치본 c3a1230·4a55e86 위 canonical 업그레이드가 `CODE_PRESTATE_WRITER_SEMANTICS_DIFFER`로 거절되므로 유지했다(코디네이터 09-29 판단). 다음 canonical 업그레이드 주기에 도구가 주입 경로를 보게 하고 설치기 전이 pin을 함께 넣는다. 그때까지 이 경로의 근거는 inventory가 아니라 실제 동작 시험(단일 실행 잠금·정지 표식·Run 등록·writer fence)이다.
 - **NOT TESTED:** guest에서 같은 절차(오프라인 재실행·경고창 10초 이상)로 relay 생존과 앱 재시작 복구, 설치본 `pythonw` 시작 명령의 실제 프로세스, 회사 서버.
 
 ## 갱신 기준
