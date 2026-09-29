@@ -293,12 +293,19 @@ def run_direct_sync_auto_bootstrap(
 ) -> dict[str, Any]:
     """Wake one current-user relay cycle; never install or start a SYSTEM task."""
 
+    # user_relay imports this module, so resolve its supervisor at call time.
+    from user_relay import ensure_user_relay_running
+
     result = run_session_direct_sync_once(
         app_root=app_root,
         direct_sync_root=direct_sync_root,
         scan_source_dir=scan_source_dir,
         reason="APP_START",
     )
+    try:
+        resident_relay = ensure_user_relay_running(app_root, direct_sync_root)
+    except Exception as exc:
+        resident_relay = {"status": "UNKNOWN", "error_type": exc.__class__.__name__}
     report = {
         "report_version": "container-audit-direct-sync-auto-bootstrap-v2",
         "captured_at": _now(),
@@ -306,6 +313,7 @@ def run_direct_sync_auto_bootstrap(
         "principal": "current_user",
         "system_scheduled_task": False,
         "persistent_retry": "HKCU_RUN_USER_RELAY",
+        "resident_relay": resident_relay,
         "result": result,
     }
     _write_json(

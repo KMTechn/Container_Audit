@@ -124,6 +124,7 @@ profile, business ledger와 durable queue를 사용자 범위에 만들고 즉�
 relay는 hardened `runtime\pythonw.exe -I -B app\main.py --container-audit-user-relay`를 현재 사용자로
 실행하고 최대 60초 간격으로 durable queue를 다시 확인한다. SYSTEM AtStartup
 task는 설치/실행 계약에 포함되지 않는다.
+앱을 시작할 때 등록된 relay가 없고 정지 표식도 없으면 같은 시작을 다시 요청한다.
 
 일반 제거는 앱 창을 닫은 뒤 설치에 사용한 정확한 packet의 바깥 소스 경로에서
 같은 작업자 계정으로 실행한다. canonical 명령은 설치/소스 무결성과 소유권을

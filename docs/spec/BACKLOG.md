@@ -327,6 +327,14 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **남은 위험:** 같은 제품이 레거시·로컬 기록과 새 체인에 두 번 계수될 수 있다(선반 분리·바코드 대조로 관리). 13자리 현품표는 중복 판단을 못 한다. 중앙 봉인 명령을 보낸 뒤의 미확인·검토 대기는 기존대로 잠근다. 로컬 트레이 도중 사전조회에서 발급된 서버 lease가 있으면 만료까지 남는다. 켜기 전(업그레이드 전)에 시작한 트레이는 분류가 없어 끈 PC에서는 엄격하다. intent 저장 뒤·contract 결속 전의 재검증 거절은 checkpoint 미확인 intent 한 줄을 SQLite에 남긴다(명령으로 만들어지지 않음). 원문 전용 카탈로그 사건 목록은 Web w9webrecv의 CA 분류(`CONTAINER_AUDIT_RAW_LIFECYCLE_EVENTS` 밖)를 따라 적었으므로 웹이 분류를 바꾸면 함께 맞춰야 한다(안 맞으면 검토로 멈춤). `tools/run_container_audit_ui_validation.py`의 기본 `PHS=1` 현품표는 켜짐에서만 시작한다.
 - **NOT TESTED:** 실제 PC의 HKLM 값 설정과 창·경고 표시(1024×768 포함), 실제 서버 끊김·거절, 서버의 실제 수신·대시보드 표시와 `RAW_LEGITIMATE` 영수증·사건 ID 승격, 실제 자정·날짜 넘김, 패키지 설치본 실행, 현장 60개 처리 속도, LM과의 분류 합산.
 
+<a id="ca-g18"></a>
+## CA-G18 상주 relay가 앱 시작 경고창 동안 사라지던 결함의 남은 경계 (w9carelay)
+
+- **원인(랩 w9labtransit1 09-29 · host 재현):** GUI 시작 전체가 writer 잠금 안에서 돌며 오프라인 품목 경고창(모달)을 띄웠다(10:46:33–10:47:21). 그동안 relay 주기의 상태 쓰기가 5초 대기 뒤 `WRITER_GATE_TIMEOUT`을 루프 밖으로 던져 relay가 끝났다(상태 `RUNNING` 고정, 프로세스 없음). 휴대판 앱 시작은 relay를 다시 띄우지 않았다. 네트워크 오류 자체는 relay를 죽이지 않는다. 기준 4a55e86부터 있던 결함이다.
+- **소스·격리 시험 PROVEN:** 상태 쓰기의 잠금 시간 초과·abandoned에도 루프가 계속 돌고 다음 상태에 남긴다. 앱 시작은 Run 등록·정지 표식 부재·잠금 빔일 때만 relay 시작을 요청한다([운영](operations.md#ca-o01)). 끊김 8종은 같은 행 재시도이고, 죽은 relay의 예약 행은 다음 relay에서 같은 metadata로 1회 간다(서버 행 중복 0). [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9carelay/RESULT.md)
+- **남은 경계(발견, 이번에 고치지 않음):** GUI 시작이 모달 경고창 동안 writer 잠금을 쥐어 그동안 relay·전송 자식이 모두 기다린다([_prepare_gui_startup](../../Container_Audit.py)). 상주 relay도 `--drain-after-scan`이라 새 줄이 계속 생기면 오래된 `retry_wait` 행은 새 줄이 없는 주기에만 재시도된다(지연). 앱이 켜진 채 relay가 다른 이유로 끝나면 다음 앱 시작이나 로그온까지 기다린다.
+- **NOT TESTED:** guest에서 같은 절차(오프라인 재실행·경고창 10초 이상)로 relay 생존과 앱 재시작 복구, 설치본 `pythonw` 시작 명령의 실제 프로세스, 회사 서버.
+
 ## 갱신 기준
 
 요구 확정·소스 변경·실행 결과가 생긴 담당자는 연결된 기능/계약/운영 항목과 이 문서의 상태·다음 행동을 같은 작업에서 갱신한다. Main에 중앙 INT-02/03/04/09/10, I02/I04 및 Q01/Q07에 미치는 차이를 알린다. 과거 실패·미실행을 삭제하지 않고 새 버전·환경의 근거를 연결한다. [AGENTS의 지속 관리 규칙](../../AGENTS.md)을 적용한다.

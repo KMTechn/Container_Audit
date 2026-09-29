@@ -1,7 +1,9 @@
 import json
+import os
 from pathlib import Path
 import socket
 import ssl
+import threading
 
 import pytest
 import requests
@@ -16,6 +18,7 @@ from direct_sync_runtime import (
 )
 from producer_runtime_client import RuntimePreparation
 import user_relay
+import writer_session_fence as fence
 
 
 def test_hkcu_autostart_uses_hardened_main_and_exact_readback(tmp_path):
@@ -70,6 +73,173 @@ def test_persistent_loop_maps_missing_cycle_value_to_unknown(tmp_path):
     persisted = json.loads((tmp_path / "status.json").read_text(encoding="utf-8"))
     assert persisted["last_cycle"]["status"] == "UNKNOWN"
     assert persisted["persistent_retry"] is True
+
+
+def test_persistent_loop_outlives_a_status_write_behind_a_held_writer_gate(tmp_path):
+    # GUI start keeps the per-user writer admission while its offline catalog
+    # warning is open (09-29 lab: 10:46:33-10:47:21), and during an outage a
+    # lookup or relay child keeps it across an HTTP timeout. The relay's status
+    # write gives up at the 5 s gate: that may cost one status line, never the
+    # relay.
+    held, release = threading.Event(), threading.Event()
+
+    def startup_dialog():
+        with fence.writer_admission("gui_startup"):
+            held.set()
+            release.wait(30)
+
+    holder = threading.Thread(target=startup_dialog)
+    status_path = tmp_path / "status.json"
+    seen = []
+
+    def cycle():
+        seen.append(len(seen) + 1)
+        if len(seen) == 1:
+            holder.start()
+            assert held.wait(10)
+            return {"status": "UNKNOWN", "reason": "relay process did not return an exit code"}
+        if len(seen) == 2:
+            release.set()
+            holder.join(10)
+        else:
+            seen.append(json.loads(status_path.read_text(encoding="utf-8")))
+        return {"status": "idle"}
+
+    try:
+        result = user_relay.run_persistent_relay_loop(
+            cycle, status_path=status_path, interval_seconds=0, max_cycles=3
+        )
+    finally:
+        release.set()
+        if holder.ident is not None:
+            holder.join(10)
+
+    assert result["cycle_count"] == 3
+    after_the_gate = seen[-1]
+    assert after_the_gate["status"] == "RUNNING"
+    assert after_the_gate["cycle_count"] == 2
+    assert after_the_gate["previous_status_write_error"] == {
+        "cycle_count": 1,
+        "error_type": "WriterFencedError",
+        "error_code": "WRITER_GATE_TIMEOUT",
+    }
+    persisted = json.loads(status_path.read_text(encoding="utf-8"))
+    assert persisted["status"] == "COMPLETED"
+    assert persisted["cycle_count"] == 3
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows named-mutex abandonment")
+def test_persistent_loop_outlives_a_writer_that_ended_holding_admission(tmp_path):
+    # subprocess.run kills a relay child that overruns its budget while it
+    # holds the admission; the next waiter finds the mutex abandoned.
+    def abandoning_writer():
+        name = fence.writer_admission_mutex_name(fence.canonical_control_root())
+        assert fence._acquire_named_mutex(name, 5) is not None
+
+    status_path = tmp_path / "status.json"
+    seen = []
+
+    def cycle():
+        seen.append(len(seen) + 1)
+        if len(seen) == 1:
+            writer = threading.Thread(target=abandoning_writer)
+            writer.start()
+            writer.join(10)
+            return {"status": "UNKNOWN", "reason": "relay process did not return an exit code"}
+        if len(seen) == 3:
+            seen.append(json.loads(status_path.read_text(encoding="utf-8")))
+        return {"status": "idle"}
+
+    result = user_relay.run_persistent_relay_loop(
+        cycle, status_path=status_path, interval_seconds=0, max_cycles=3
+    )
+
+    assert result["cycle_count"] == 3
+    assert seen[-1]["previous_status_write_error"] == {
+        "cycle_count": 1,
+        "error_type": "WriterFencedError",
+        "error_code": "WRITER_GATE_ABANDONED",
+    }
+    assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "COMPLETED"
+
+
+def _app_start(tmp_path, monkeypatch, *, registered="relay command"):
+    import direct_sync_auto_bootstrap as bootstrap
+
+    launches = []
+    monkeypatch.setattr(user_relay, "_registry_get", lambda: registered)
+    monkeypatch.setattr(
+        user_relay,
+        "start_user_relay_process",
+        lambda app_root, *, environ=None: launches.append(Path(app_root))
+        or {"status": "START_REQUESTED", "process_id": 4242},
+    )
+    monkeypatch.setattr(
+        bootstrap,
+        "run_session_direct_sync_once",
+        lambda **kwargs: {"status": "PASS", "returncode": 0, "reason": kwargs["reason"]},
+    )
+    direct_sync_root = tmp_path / "direct-sync"
+
+    def start():
+        return bootstrap.run_direct_sync_auto_bootstrap(
+            app_root=tmp_path / "app",
+            direct_sync_root=direct_sync_root,
+            scan_source_dir=tmp_path / "events",
+        )
+
+    return start, launches, direct_sync_root
+
+
+def test_app_start_requests_the_registered_relay_when_none_holds_its_lease(
+    tmp_path, monkeypatch
+):
+    start, launches, direct_sync_root = _app_start(tmp_path, monkeypatch)
+
+    report = start()
+
+    assert launches == [tmp_path / "app"]
+    assert report["resident_relay"] == {"status": "START_REQUESTED", "process_id": 4242}
+    persisted = json.loads(
+        (direct_sync_root / "status" / "container_audit_direct_sync_auto_bootstrap.json")
+        .read_text(encoding="utf-8")
+    )
+    assert persisted == report
+    lease = user_relay.acquire_runtime_instance(direct_sync_root / "user-relay-instance")
+    assert lease is not None, "the probe must release the relay lease before the launch"
+    lease.release()
+
+
+def test_app_start_leaves_a_live_relay_alone(tmp_path, monkeypatch):
+    start, launches, direct_sync_root = _app_start(tmp_path, monkeypatch)
+    live = user_relay.acquire_runtime_instance(direct_sync_root.resolve() / "user-relay-instance")
+    try:
+        report = start()
+    finally:
+        live.release()
+
+    assert launches == []
+    assert report["resident_relay"] == {"status": "RUNNING"}
+
+
+@pytest.mark.parametrize("state", ["unregistered", "stop_requested"])
+def test_app_start_never_starts_a_relay_that_is_not_meant_to_run(
+    tmp_path, monkeypatch, state
+):
+    start, launches, direct_sync_root = _app_start(
+        tmp_path, monkeypatch, registered="" if state == "unregistered" else "relay command"
+    )
+    if state == "stop_requested":
+        stop = user_relay.user_relay_stop_path(direct_sync_root)
+        stop.parent.mkdir(parents=True)
+        stop.write_text("{}", encoding="utf-8")
+
+    report = start()
+
+    assert launches == []
+    assert report["resident_relay"] == {
+        "status": "NOT_REGISTERED" if state == "unregistered" else "STOP_REQUESTED"
+    }
 
 
 class _Response:

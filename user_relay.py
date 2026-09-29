@@ -243,6 +243,34 @@ def start_user_relay_process(
     return {"status": "START_REQUESTED", "process_id": process.pid}
 
 
+def ensure_user_relay_running(
+    app_root: str | os.PathLike[str],
+    direct_sync_root: str | os.PathLike[str],
+    *,
+    environ: Mapping[str, str] | None = None,
+    getter: Callable[[], str] | None = None,
+    launcher: Callable[..., Mapping[str, Any]] | None = None,
+    lease_factory: Callable[[str | os.PathLike[str]], Any] = acquire_runtime_instance,
+) -> dict[str, Any]:
+    """Request the registered relay at app start when no relay holds its lease.
+
+    Logon and onboarding start the relay, and the frozen app re-requests it on
+    every start through onboarding. The portable app skips onboarding, so a
+    relay that ended mid-session otherwise waits for the next logon.
+    """
+
+    if not (getter or _registry_get)():
+        return {"status": "NOT_REGISTERED"}
+    root = Path(direct_sync_root).expanduser().resolve()
+    if user_relay_stop_path(root).exists():
+        return {"status": "STOP_REQUESTED"}
+    lease = lease_factory(root / "user-relay-instance")
+    if lease is None:
+        return {"status": "RUNNING"}
+    lease.release()
+    return dict((launcher or start_user_relay_process)(app_root, environ=environ))
+
+
 def _wait_with_stop_checks(
     seconds: float,
     stop_requested: Callable[[], bool],
@@ -276,6 +304,7 @@ def run_persistent_relay_loop(
     should_stop = stop_requested or (lambda: False)
     cycle_count = 0
     last_cycle: dict[str, Any] = {"status": "NOT_TESTED"}
+    status_write_error: dict[str, Any] | None = None
     while not should_stop():
         cycle_count += 1
         try:
@@ -302,7 +331,22 @@ def run_persistent_relay_loop(
             "last_cycle": cycle,
             "updated_at": _now(),
         }
-        _write_json_atomic(selected_status_path, report)
+        if status_write_error is not None:
+            report["previous_status_write_error"] = status_write_error
+        try:
+            _write_json_atomic(selected_status_path, report)
+        except Exception as exc:
+            # The status file is evidence, not the relay. A writer that keeps
+            # the per-user admission past the 5 s gate (a GUI start dialog, a
+            # request waiting out an outage) or ends without releasing it
+            # costs this line; the next cycle retries the queue and the write.
+            status_write_error = {
+                "cycle_count": cycle_count,
+                "error_type": exc.__class__.__name__,
+                "error_code": str(getattr(exc, "code", "") or ""),
+            }
+        else:
+            status_write_error = None
         if max_cycles is not None and cycle_count >= int(max_cycles):
             break
         if _wait_with_stop_checks(interval, should_stop, wait):

@@ -5902,6 +5902,7 @@
     ],
     "direct_sync_auto_bootstrap": [
       "storage_policy",
+      "user_relay",
       "writer_session_fence"
     ],
     "direct_sync_health": [
@@ -6259,7 +6260,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "3dda4da1f36ad7b4b10c0a30115c3ad8b92e656c228b136d8e17f80082b51034",
+  "inventory_sha256": "85fa03e042d766dc04d2f636922fd263bc625c15ffbe56f2498f9399f6583cf3",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18516,7 +18517,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 407,
+      "line": 451,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },
