@@ -6260,7 +6260,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "85fa03e042d766dc04d2f636922fd263bc625c15ffbe56f2498f9399f6583cf3",
+  "inventory_sha256": "c39afa16936944055da5c01dbfe2a47fd867e16da3e8e44b4a7a6e3d595fddd1",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18517,7 +18517,7 @@
       "direct_mutation_site_count": 0,
       "file": "user_relay.py",
       "function": "user_relay.main",
-      "line": 451,
+      "line": 459,
       "marker_kind": "decorator",
       "source": "persistent_relay_status"
     },

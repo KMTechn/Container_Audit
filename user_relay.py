@@ -24,7 +24,7 @@ from storage_policy import (
     notify_data_root_error as _notify_data_root_error,
     validate_existing_data_root,
 )
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import WriterFenceError, writer_admission, writer_sink
 
 
 USER_RELAY_MODE = "--container-audit-user-relay"
@@ -257,6 +257,10 @@ def ensure_user_relay_running(
     Logon and onboarding start the relay, and the frozen app re-requests it on
     every start through onboarding. The portable app skips onboarding, so a
     relay that ended mid-session otherwise waits for the next logon.
+
+    START_REQUESTED does not reserve a pending launch. Overlapping starts may
+    request multiple processes before a child acquires the instance lease;
+    main admits one active loop and the other children exit without running it.
     """
 
     if not (getter or _registry_get)():
@@ -336,6 +340,10 @@ def run_persistent_relay_loop(
         try:
             _write_json_atomic(selected_status_path, report)
         except Exception as exc:
+            if isinstance(exc, WriterFenceError) and exc.code not in {
+                "WRITER_GATE_TIMEOUT", "WRITER_GATE_ABANDONED",
+            }:
+                raise
             # The status file is evidence, not the relay. A writer that keeps
             # the per-user admission past the 5 s gate (a GUI start dialog, a
             # request waiting out an outage) or ends without releasing it

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import csv
 import hashlib
 import hmac
+import io
 import json
 import re
 import sqlite3
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -691,20 +694,27 @@ def _make_pending_relay(
     *,
     attempt_count: int = 0,
     runtime_fencing_policy: str = runtime_client.RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED,
+    payload: bytes = b"",
 ) -> None:
+    # Empty by default: those cases exercise queue/token state, not CSV ingestion.
     _insert_claimed_row(db_path, relay_id)
     spool_path = tmp_path / f"{relay_id}.csv"
-    spool_path.write_bytes(b"")
-    empty_sha256 = hashlib.sha256(b"").hexdigest()
+    spool_path.write_bytes(payload)
+    content_sha256 = hashlib.sha256(payload).hexdigest()
+    row_count = len(list(csv.DictReader(io.StringIO(payload.decode("utf-8")))))
     metadata = _metadata(relay_id)
-    metadata["content_sha256"] = empty_sha256
+    metadata.update(
+        content_sha256=content_sha256, byte_length=len(payload), row_count=row_count,
+        first_row_number=2 if row_count else 0,
+        last_row_number=row_count + 1 if row_count else 0,
+    )
     with sqlite3.connect(db_path) as connection:
         connection.execute(
             """
             UPDATE direct_sync_relay_batches
             SET status='pending', attempt_count=?, lease_owner=NULL, lease_expires_at=NULL,
                 next_attempt_at='2000-01-01T00:00:00Z',
-                source_file_path=?, spooled_file_path=?, content_sha256=?,
+                source_file_path=?, spooled_file_path=?, content_sha256=?, byte_length=?,
                 metadata_json=?, runtime_fencing_policy=?
             WHERE relay_id=?
             """,
@@ -712,7 +722,8 @@ def _make_pending_relay(
                 attempt_count,
                 str(spool_path),
                 str(spool_path),
-                empty_sha256,
+                content_sha256,
+                len(payload),
                 canonical_json(metadata),
                 runtime_fencing_policy,
                 relay_id,
@@ -1140,7 +1151,7 @@ def test_lost_source_ack_retries_exact_metadata_and_idempotency_with_new_hmac_no
 
 
 class _CentralSession(_LeaseSession):
-    """One server token at a time; a committed batch replays its first receipt."""
+    """In-memory token/receipt model; this does not ingest CSV or contact a server."""
 
     def __init__(self):
         super().__init__()
@@ -1209,7 +1220,7 @@ class _CentralSession(_LeaseSession):
         return _Response(200, self.committed[batch], {})
 
 
-def test_rows_left_behind_a_dead_relays_reserved_token_upload_once_after_restart(tmp_path):
+def test_empty_batches_behind_a_dead_relays_reserved_token_replay_once_in_model(tmp_path):
     db_path = tmp_path / "relay.sqlite3"
     for relay_id in ("relay-a", "relay-b", "relay-c"):
         _make_pending_relay(db_path, tmp_path, relay_id)
@@ -1226,8 +1237,8 @@ def test_rows_left_behind_a_dead_relays_reserved_token_upload_once_after_restart
             target_relay_id=target,
         )
 
-    # The dying relay's row reserves the token; the server commits it and the
-    # adapter drops before the receipt returns (unknown commit).
+    # The dying relay's empty batch reserves the token; the model commits it
+    # and simulates losing its receipt. Three batch ACKs do not prove event rows.
     central.drop_next_receipt = True
     first = drain("2026-08-06T01:47:23Z")
     assert first is not None and first.retryable is True
@@ -1255,6 +1266,77 @@ def test_rows_left_behind_a_dead_relays_reserved_token_upload_once_after_restart
         statuses = dict(
             connection.execute("SELECT relay_id, status FROM direct_sync_relay_batches")
         )
+        authority = connection.execute(
+            "SELECT status, assigned_relay_id FROM direct_sync_runtime_authority"
+        ).fetchone()
+    assert statuses == dict.fromkeys(("relay-a", "relay-b", "relay-c"), "acked")
+    assert authority == ("ACTIVE", None)
+
+
+def test_three_csv_rows_replay_same_bytes_once_in_model_with_app_overlap(tmp_path):
+    class CsvCentralSession(_CentralSession):
+        def __init__(self):
+            super().__init__()
+            self.payloads = {}
+            self.events = {}
+            self.lock = threading.RLock()
+
+        def post(self, url, **kwargs):
+            with self.lock:
+                if str(url).endswith(runtime_client.ENDPOINT_PATH):
+                    return super().post(url, **kwargs)
+                metadata = json.loads(kwargs["data"]["metadata"])
+                stream = next(iter(kwargs["files"].values()))[1]
+                raw = stream.read()
+                stream.seek(0)
+                rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8"))))
+                assert len(raw) == metadata["byte_length"]
+                assert hashlib.sha256(raw).hexdigest() == metadata["content_sha256"]
+                assert len(rows) == metadata["row_count"] == 1
+                key = metadata["idempotency_key"]
+                assert self.payloads.setdefault(key, raw) == raw
+                drop_receipt = self.drop_next_receipt
+                self.drop_next_receipt = False
+                response = super().post(url, **kwargs)
+                if response.status_code == 200:
+                    self.events.setdefault(key, rows[0]["details"])
+                    response.payload["totals"]["inserted"] = 1
+                if drop_receipt:
+                    raise ConnectionResetError("simulated lost committed receipt")
+                return response
+
+    db_path = tmp_path / "relay.sqlite3"
+    for relay_id in ("relay-a", "relay-b", "relay-c"):
+        payload = (
+            "timestamp,worker_name,event,details\n"
+            f"2026-08-06T01:00:00,w,SCAN_OK,{relay_id}\n"
+        ).encode("utf-8")
+        _make_pending_relay(db_path, tmp_path, relay_id, payload=payload)
+    central = CsvCentralSession()
+
+    def drain(target="", now="2026-08-06T02:18:00Z"):
+        return direct_sync_push.drain_one_relay_batch(
+            db_path=db_path, credentials=_credentials(), worker_id="worker-test",
+            session=central, retry_base_seconds=60, now=now, target_relay_id=target,
+        )
+
+    central.drop_next_receipt = True
+    assert drain(now="2026-08-06T01:47:23Z").retryable
+    assert central.events == {"relay-a": "relay-a"}
+    for relay_id in ("relay-b", "relay-c"):
+        assert drain(relay_id, "2026-08-06T01:48:23Z").error_code == "runtime_request_in_flight"
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futures = [pool.submit(drain, target) for target in ("", "relay-b", "relay-c")]
+        for future in futures:
+            future.result()
+    for _ in range(3):
+        drain(now="2026-08-06T03:18:00Z")
+
+    assert central.source_calls[0] == central.source_calls[1]
+    assert central.events == {name: name for name in ("relay-a", "relay-b", "relay-c")}
+    assert len(central.source_calls) == 4
+    with sqlite3.connect(db_path) as connection:
+        statuses = dict(connection.execute("SELECT relay_id, status FROM direct_sync_relay_batches"))
         authority = connection.execute(
             "SELECT status, assigned_relay_id FROM direct_sync_runtime_authority"
         ).fetchone()

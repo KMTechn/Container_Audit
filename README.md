@@ -125,6 +125,8 @@ relay는 hardened `runtime\pythonw.exe -I -B app\main.py --container-audit-user-
 실행하고 최대 60초 간격으로 durable queue를 다시 확인한다. SYSTEM AtStartup
 task는 설치/실행 계약에 포함되지 않는다.
 앱을 시작할 때 등록된 relay가 없고 정지 표식도 없으면 같은 시작을 다시 요청한다.
+기동 요청이 겹치면 자식 프로세스가 둘 생길 수 있지만 실행 잠금은 활성 relay loop 하나만 허용한다.
+상태 저장의 일시 잠금·파일 오류는 재시도하고, 활성 writer fence·fence 검증 오류는 relay를 종료한다.
 
 일반 제거는 앱 창을 닫은 뒤 설치에 사용한 정확한 packet의 바깥 소스 경로에서
 같은 작업자 계정으로 실행한다. canonical 명령은 설치/소스 무결성과 소유권을

@@ -163,6 +163,32 @@ def test_persistent_loop_outlives_a_writer_that_ended_holding_admission(tmp_path
     assert json.loads(status_path.read_text(encoding="utf-8"))["status"] == "COMPLETED"
 
 
+@pytest.mark.parametrize("invalid_binding", [False, True], ids=["active", "invalid-binding"])
+def test_persistent_loop_stops_when_a_writer_fence_appears(tmp_path, invalid_binding):
+    from tests.test_writer_session_fence import _active_payload, _write_active
+
+    attempts = []
+    payload = _active_payload()
+    if invalid_binding:
+        payload["writer_inventory_sha256"] = "f" * 64
+
+    def cycle():
+        attempts.append(1)
+        if len(attempts) == 1:
+            _write_active(fence.canonical_control_root(), payload)
+        return {"status": "idle"}
+
+    status_path = tmp_path / "status.json"
+    with pytest.raises(fence.WriterFenceError) as error:
+        user_relay.run_persistent_relay_loop(
+            cycle, status_path=status_path, interval_seconds=0, max_cycles=3
+        )
+
+    assert error.value.code == ("FENCE_BINDING_INVALID" if invalid_binding else "ACTIVE_WRITER_FENCE")
+    assert attempts == [1], "fence rejection must end the resident before another cycle"
+    assert not status_path.exists()
+
+
 def _app_start(tmp_path, monkeypatch, *, registered="relay command"):
     import direct_sync_auto_bootstrap as bootstrap
 
@@ -220,6 +246,18 @@ def test_app_start_leaves_a_live_relay_alone(tmp_path, monkeypatch):
 
     assert launches == []
     assert report["resident_relay"] == {"status": "RUNNING"}
+
+
+def test_app_start_can_request_twice_before_a_resident_holds_the_instance_lease(
+    tmp_path, monkeypatch
+):
+    # START_REQUESTED is only a launch request. The child owns the single-loop
+    # guarantee when it acquires its lease; a pending request is not a live relay.
+    start, launches, _ = _app_start(tmp_path, monkeypatch)
+
+    assert start()["resident_relay"]["status"] == "START_REQUESTED"
+    assert start()["resident_relay"]["status"] == "START_REQUESTED"
+    assert launches == [tmp_path / "app", tmp_path / "app"]
 
 
 @pytest.mark.parametrize("state", ["unregistered", "stop_requested"])
