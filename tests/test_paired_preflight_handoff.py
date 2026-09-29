@@ -16,7 +16,7 @@ from Container_Audit import ContainerAudit, TraySession
 from container_admin_pin import fingerprint as admin_pin_fingerprint
 from event_stream_policy import local_only_event_log_path
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore
-from parked_tray_store import ParkedTrayStore
+from parked_tray_store import ParkedPathTooLong, ParkedTrayStore
 from preflight_scan_hold import PreflightScanHoldStore
 from protected_admin import PROTECTED_ADMIN_OPERATOR_ID
 from recovery_file_read import read_recovery_file
@@ -868,7 +868,7 @@ def test_damaged_marker_with_healthy_source_stays_visible_and_can_be_bound(tmp_p
     store.bind_invalid_label(source, label)
     assert marker.read_bytes() == b"\xff damaged marker"
     assert source.read_bytes() == original
-    assert read_recovery_file(marker.with_name(marker.name + ".identified-" + hashlib.sha256(marker.read_bytes()).hexdigest() + ".json"),
+    assert read_recovery_file(marker.with_name(marker.name + ".identified-" + hashlib.sha256(marker.read_bytes()).hexdigest()[:16] + ".json"),
                               "parked_manager_hold").verified
     evidence = store.enumerate_key_evidence()
     assert all(not row.unidentified for row in evidence if row.kind.startswith("parked"))
@@ -877,6 +877,125 @@ def test_damaged_marker_with_healthy_source_stays_visible_and_can_be_bound(tmp_p
     assert len(list(tmp_path.glob(marker.name + ".identified-*.json"))) == 2
     assert all(not row.unidentified for row in store.enumerate_key_evidence()
                if row.kind.startswith("parked"))
+
+
+# w9caparkpath: a field PC parks under C:\Users\<name>\AppData\Local\KMTech\ContainerAudit\parked_trays\
+# (79 characters for a 20-character Windows user); CA never turns on Win32 long paths (259).
+FIELD_PARKED_ROOT = "C:\\Users\\" + "U" * 20 + "\\AppData\\Local\\KMTech\\ContainerAudit\\parked_trays\\"
+ATOMIC_TEMPORARY = "." + "9" * 10 + "." + "f" * 32 + ".tmp"  # atomic_write_json, 10-digit pid
+
+
+def _windows_length(text):
+    return len(text.encode("utf-16-le")) // 2
+
+
+def test_every_new_parked_name_fits_the_windows_limit_under_a_field_root(tmp_path):
+    """The identified copy of a manager hold took 268-302 characters there (always failed)."""
+    assert len(FIELD_PARKED_ROOT) == 79
+    store = ParkedTrayStore(tmp_path)
+    state = _saved_tray_state()
+    names = []
+    for worker in ("Worker_1", "W" * 17, "W" * 200, "\U0001F600" * 40):
+        for label in (state["master_label_code"], "L" * 128, "\U0001F600" * 64):
+            parked = store.save_state(dict(state, master_label_code=label), worker_name=worker, master_label=label)
+            marker = store.manager_hold_path(parked)
+            names += [parked.name, marker.name, store.identified_path(marker, "a" * 64).name,
+                      store.identified_path(marker, "a" * 64, source=True).name]
+        names.append(store.defer_recovery_state(dict(state, worker_name=worker), worker_name=worker,
+                                                computer_id="PC-1").path.name)
+    assert max(_windows_length(FIELD_PARKED_ROOT + name + ATOMIC_TEMPORARY) for name in names) <= 259
+
+
+def test_drifted_marker_identification_is_written_under_a_long_root(tmp_path):
+    """A 20-character worker put this write past 259 at a root the runner fixes at 35+ characters."""
+    store = ParkedTrayStore(tmp_path / "parked")
+    state = _saved_tray_state()
+    label = state["master_label_code"]
+    worker = "W" * 20
+    source = store.save_state(state, worker_name=worker, master_label=label)
+    atomic_write_json(store.manager_hold_path(source), {
+        "schema": "container-audit-parked-manager-hold-v1", "label": label, "source_sha256": "a" * 64,
+    }, ensure_ascii=False)
+    store.bind_invalid_label(source, label)
+    [copy] = list(source.parent.glob(source.name + ".manager-hold.json.identified-source-*.json"))
+    assert read_recovery_file(copy, "parked_manager_hold").value["source_sha256"] == hashlib.sha256(
+        source.read_bytes()).hexdigest()
+    assert all(not row.unidentified for row in store.enumerate_key_evidence() if row.kind.startswith("parked"))
+
+
+def test_parked_files_named_before_the_cap_are_read_and_continued(tmp_path):
+    """Names with the whole worker name or SHA-256 stay where they are and keep working."""
+    store = ParkedTrayStore(tmp_path)
+    state = _saved_tray_state()
+    label = state["master_label_code"]
+    worker = "W" * 20
+    earlier = store.whole_worker_label_path(worker_name=worker, master_label=label)
+    assert earlier != store.deterministic_label_path(worker_name=worker, master_label=label)
+    atomic_write_json(earlier, dict(state, worker_name=worker), ensure_ascii=False)
+    assert store.existing_label_path(worker_name=worker, master_label=label) == earlier
+    with pytest.raises(FileExistsError):
+        store.save_state(state, worker_name=worker, master_label=label)
+    assert [row.path for row in store.scan_for_worker(worker)] == [earlier]
+    # An earlier version could write a whole-SHA identification only where it fit: a short worker.
+    parked = store.save_state(state, worker_name="tester", master_label=label)
+    marker = store.manager_hold_path(parked)
+    marker.write_bytes(b"\xff damaged marker")
+    marker_sha = hashlib.sha256(marker.read_bytes()).hexdigest()
+    whole = marker.with_name(marker.name + ".identified-" + marker_sha + ".json")
+    atomic_write_json(whole, {"schema": "container-audit-parked-manager-hold-v1", "label": label,
+                              "source_sha256": marker_sha}, ensure_ascii=False)
+    originals = {path: path.read_bytes() for path in tmp_path.glob("parked_*")}
+    assert all(not row.unidentified for row in store.enumerate_key_evidence() if row.kind.startswith("parked"))
+    store.bind_invalid_label(parked, label)
+    assert list(tmp_path.glob(marker.name + ".identified-*.json")) == [whole]
+    payload = dict(state, worker_name=worker)
+    recovery = tmp_path / f"parked_recovery_{worker}_{ParkedTrayStore._canonical_state_hash(payload)[:16]}.json"
+    atomic_write_json(recovery, payload, indent=4, ensure_ascii=False)
+    replay = store.defer_recovery_state(payload, worker_name=worker, computer_id="PC-1")
+    assert replay.path == recovery and replay.replayed
+    assert not list(tmp_path.glob("parked_recovery_W*-*.json"))
+    assert all(path.read_bytes() == raw for path, raw in originals.items())
+
+
+def test_parked_write_past_the_windows_limit_is_refused_before_any_file(tmp_path):
+    deep = tmp_path / ("d" * (230 - len(str(tmp_path)) - 1))
+    store = ParkedTrayStore(deep)
+    state = _saved_tray_state()
+    with pytest.raises(ParkedPathTooLong) as refused:
+        store.save_state(state, worker_name="tester", master_label=state["master_label_code"])
+    assert "Windows 경로 길이 한도" in str(refused.value) and "원본은 그대로" in str(refused.value)
+    assert list(deep.iterdir()) == []
+
+
+def test_identification_past_the_path_limit_says_so_and_keeps_only_that_hold(tmp_path, monkeypatch):
+    app, _, current = _app(tmp_path, monkeypatch)
+    label = current["master_label_code"]
+    store = app._parked_store()
+    source = store.deterministic_label_path(worker_name=app.worker_name, master_label=label)
+    archive = source.with_name(source.name + ".bad-abc123")
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_json(archive, current)
+    original = archive.read_bytes()
+    def refuse(_store, _path, _label):
+        raise ParkedPathTooLong("보류 파일 경로가 Windows 경로 길이 한도(259자)를 넘어 (300자) "
+                                "기록하지 못했습니다. 원본은 그대로 두었습니다.")
+    monkeypatch.setattr(ParkedTrayStore, "bind_invalid_label", refuse)
+    errors = []
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno", lambda *_a, **_k: True)
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *_a, **_k: None)
+    monkeypatch.setattr("Container_Audit.messagebox.showerror", lambda title, message, **_k: errors.append((title, message)))
+    app._log_event = lambda *_a, **_k: True
+    app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
+        authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
+    ))
+    tasks = []
+    app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
+    app._show_invalid_parked_tray(str(archive))
+    tasks[0].finish(tasks[0].work())
+    [(title, message)] = errors
+    assert title == "보류 기록 대기"
+    assert "Windows 경로 길이 한도" in message and "이 현품표만 계속 보류" in message
+    assert archive.read_bytes() == original and not store.manager_hold_path(archive).exists()
 
 
 @pytest.mark.parametrize("original,bad,marker,record,released,stale", itertools.product(

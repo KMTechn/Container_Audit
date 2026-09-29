@@ -119,7 +119,7 @@ from label_qr import (
     transition_reason_code,
     transition_start_reasons,
 )
-from parked_tray_store import ParkedTrayStore, atomic_temp_target
+from parked_tray_store import ParkedPathTooLong, ParkedTrayStore, atomic_temp_target
 from paired_preflight_handoff import PairedHandoffError, PairedPreflightHandoffStore, preserve_stale_bytes
 from recovery_file_read import read_recovery_file
 from preflight_scan_hold import (
@@ -17348,6 +17348,14 @@ class ContainerAudit:
                     self._parked_store().bind_invalid_label(source, label)
                     if not self._admin_pin_complete(pin_approval, effect):
                         return
+            except ParkedPathTooLong as exc:
+                messagebox.showerror(
+                    "보류 기록 대기",
+                    f"{exc} 이 현품표만 계속 보류하고 다른 현품표 작업은 계속할 수 있습니다. "
+                    "보류 폴더 경로를 줄이도록 관리자에게 알리세요.",
+                    parent=self.root,
+                )
+                return
             except Exception:
                 messagebox.showerror("보류 기록 대기", "보류 기록을 확인하지 못했습니다. 원본을 계속 보류합니다.", parent=self.root)
                 return

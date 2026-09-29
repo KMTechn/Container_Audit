@@ -28,7 +28,61 @@ def _safe_worker_filename(worker_name: str) -> str:
     return sanitize_filename(persistent_operator_name(worker_name)) or "worker"
 
 
+# Without long-path support a Win32 path holds at most 259 UTF-16 units, and CA
+# never turns long paths on. Name parts that come from a worker or a label are
+# capped, so every parked write - its atomic temporary name included - fits
+# under a parked folder root of up to 88 characters (docs/spec/contracts.md).
+WINDOWS_PATH_LIMIT = 259
+_WORKER_NAME_PART = 16
+_LABEL_NAME_PART = 20
+_IDENTIFIED_DIGEST = 16
+
+
+def _utf16_length(text: str) -> int:
+    return len(text.encode("utf-16-le")) // 2
+
+
+def _utf16_prefix(text: str, limit: int) -> str:
+    units = 0
+    for index, character in enumerate(text):
+        units += 2 if ord(character) > 0xFFFF else 1
+        if units > limit:
+            return text[:index]
+    return text
+
+
+def _bounded_name_part(text: str, limit: int) -> str:
+    """Keep a name part within ``limit``; a longer one keeps its start and a digest.
+
+    The whole worker name and label stay in the file itself.
+    """
+    if _utf16_length(text) <= limit:
+        return text
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:7]
+    return f"{_utf16_prefix(text, limit - 8)}-{digest}"
+
+
+def _worker_name_part(worker_name: str) -> str:
+    return _bounded_name_part(_safe_worker_filename(worker_name), _WORKER_NAME_PART)
+
+
+class ParkedPathTooLong(OSError):
+    """A parked write would pass the Windows path limit; nothing was written."""
+
+
+def _require_windows_path(target: Path) -> None:
+    # atomic_write_json first writes "<name>.<pid>.<uuid32>.tmp" beside the target.
+    length = _utf16_length(os.path.abspath(f"{target}.{os.getpid()}.{'0' * 32}.tmp"))
+    if length > WINDOWS_PATH_LIMIT:
+        raise ParkedPathTooLong(
+            f"보류 파일 경로가 Windows 경로 길이 한도({WINDOWS_PATH_LIMIT}자)를 넘어 "
+            f"({length}자) 기록하지 못했습니다. 원본은 그대로 두었습니다."
+        )
+
+
 _ATOMIC_TEMP_SUFFIX = re.compile(r"\.([0-9]+)\.([0-9a-f]{32})\.tmp$")
+# Identification copies before w9caparkpath carried the whole SHA-256.
+_IDENTIFIED_SUFFIX = r"\.manager-hold\.json\.identified-(?:source-)?(?:[0-9a-f]{64}|[0-9a-f]{16})\.json$"
 
 
 def atomic_temp_target(path: Path) -> Path | None:
@@ -99,6 +153,14 @@ class ParkedTrayStore:
     def deterministic_label_path(self, *, worker_name: str, master_label: str) -> Path | None:
         if not parse_new_format_qr(master_label):
             return None
+        safe_prefix = _utf16_prefix(sanitize_filename(master_label), 16).rstrip("_") or "label"
+        digest = hashlib.sha256(canonical_master_label_key(master_label).encode("utf-8")).hexdigest()[:16]
+        return self.directory / f"parked_qr_{_worker_name_part(worker_name)}_{safe_prefix}_{digest}.json"
+
+    def whole_worker_label_path(self, *, worker_name: str, master_label: str) -> Path | None:
+        """The name before w9caparkpath, with the whole worker name; still read."""
+        if not parse_new_format_qr(master_label):
+            return None
         safe_worker = _safe_worker_filename(worker_name)
         safe_prefix = sanitize_filename(master_label)[:16].rstrip("_") or "label"
         digest = hashlib.sha256(canonical_master_label_key(master_label).encode("utf-8")).hexdigest()[:16]
@@ -113,6 +175,7 @@ class ParkedTrayStore:
     def existing_label_path(self, *, worker_name: str, master_label: str) -> Path | None:
         for path in (
             self.deterministic_label_path(worker_name=worker_name, master_label=master_label),
+            self.whole_worker_label_path(worker_name=worker_name, master_label=master_label),
             self.legacy_deterministic_label_path(worker_name=worker_name, master_label=master_label),
         ):
             if path is not None and (path.exists() or self.manager_hold_path(path).exists()):
@@ -199,7 +262,7 @@ class ParkedTrayStore:
         if self.directory.exists():
             for path in sorted(self.directory.glob("parked_*.json*")):
                 name = path.name
-                identified = re.search(r"\.manager-hold\.json\.identified-(?:source-)?[0-9a-f]{64}\.json$", name) is not None
+                identified = re.search(_IDENTIFIED_SUFFIX, name) is not None
                 marker = name.endswith(".manager-hold.json")
                 bad = re.search(r"\.json\.bad-.+$", name) is not None
                 temporary_target = atomic_temp_target(path)
@@ -208,11 +271,11 @@ class ParkedTrayStore:
                 if not (identified or marker or bad or name.endswith(".json") or temporary_target):
                     continue
                 source_name = (temporary_target.name if temporary_target else
-                               re.sub(r"\.manager-hold\.json\.identified-(?:source-)?[0-9a-f]{64}\.json$", "", name) if identified
+                               re.sub(_IDENTIFIED_SUFFIX, "", name) if identified
                                else name.removesuffix(".manager-hold.json") if marker
                                else re.sub(r"\.bad-.+$", "", name))
                 source = path.with_name(source_name)
-                digest_match = (re.search(r"_([0-9a-f]{16})\.json(?:\.manager-hold\.json(?:\.identified-(?:source-)?[0-9a-f]{64}\.json)?)?$", source_name)
+                digest_match = (re.search(r"_([0-9a-f]{16})\.json(?:\.manager-hold\.json(?:\.identified-(?:source-)?(?:[0-9a-f]{64}|[0-9a-f]{16})\.json)?)?$", source_name)
                                 if source_name.startswith("parked_qr_") else None)
                 digest = digest_match.group(1) if digest_match else ""
                 labels: list[str] = []
@@ -247,9 +310,9 @@ class ParkedTrayStore:
                     binding = read_recovery_file(self.manager_hold_path(path), "parked_manager_hold")
                     if binding.verified and binding.value["source_sha256"] == result.sha256:
                         labels.append(binding.value["label"])
-                if marker and not result.verified:
+                if marker and not result.verified and result.sha256:
                     identified_read = read_recovery_file(
-                        path.with_name(name + f".identified-{result.sha256}.json"), "parked_manager_hold",
+                        self.identified_path(path, result.sha256), "parked_manager_hold",
                     )
                     if (identified_read.verified
                             and identified_read.value["source_sha256"] == result.sha256):
@@ -504,6 +567,19 @@ class ParkedTrayStore:
     def manager_hold_path(path: Path) -> Path:
         return path.with_name(path.name + ".manager-hold.json")
 
+    @staticmethod
+    def identified_path(marker: Path, sha256: str, *, source: bool = False) -> Path:
+        """A manager identification copy beside ``marker``.
+
+        A copy named with the whole SHA-256 before w9caparkpath is continued;
+        a new one is named with its first 16 characters (the file binds all 64).
+        """
+        kind = "identified-source-" if source else "identified-"
+        whole = marker.with_name(f"{marker.name}.{kind}{sha256}.json")
+        if whole.exists():
+            return whole
+        return marker.with_name(f"{marker.name}.{kind}{sha256[:_IDENTIFIED_DIGEST]}.json")
+
     @writer_sink("parked_tray_manager_hold")
     def bind_invalid_label(self, path: Path, label: str) -> None:
         path = Path(path)
@@ -525,14 +601,15 @@ class ParkedTrayStore:
             "label": label,
             "source_sha256": previous.sha256 if damaged_marker else source.sha256,
         }
-        target = (marker.with_name(marker.name + f".identified-{previous.sha256}.json")
-                  if damaged_marker else marker.with_name(marker.name + f".identified-source-{source.sha256}.json")
+        target = (self.identified_path(marker, previous.sha256)
+                  if damaged_marker else self.identified_path(marker, source.sha256, source=True)
                   if marker_drift else marker)
         if target.exists():
             prior = read_recovery_file(target, "parked_manager_hold")
             if not prior.verified or prior.value != payload:
                 raise FileExistsError("parked manager binding differs")
         else:
+            _require_windows_path(target)
             atomic_write_json(target, payload, ensure_ascii=False)
         check = read_recovery_file(target, "parked_manager_hold")
         if not check.verified or check.value != payload:
@@ -575,7 +652,11 @@ class ParkedTrayStore:
         defer_id = "tray-recovery-defer-" + hashlib.sha256(
             f"{host}:{payload['worker_name']}:{state_hash}".encode("utf-8")
         ).hexdigest()[:32]
-        path = self.directory / f"parked_recovery_{safe_worker}_{state_hash[:16]}.json"
+        path = self.directory / f"parked_recovery_{_bounded_name_part(safe_worker, _WORKER_NAME_PART)}_{state_hash[:16]}.json"
+        whole_worker = self.directory / f"parked_recovery_{safe_worker}_{state_hash[:16]}.json"
+        if not path.exists() and whole_worker.exists():
+            # Written before w9caparkpath: a replay keeps that one file.
+            path = whole_worker
         self.directory.mkdir(parents=True, exist_ok=True)
 
         replayed = False
@@ -585,6 +666,7 @@ class ParkedTrayStore:
                 raise FileExistsError("parked recovery identity collision")
             replayed = True
         else:
+            _require_windows_path(path)
             atomic_write_json(path, payload, indent=4, ensure_ascii=False)
 
         readback = self.load(path)
@@ -613,12 +695,15 @@ class ParkedTrayStore:
         if label_path is not None:
             path = label_path
         else:
-            safe_worker = _safe_worker_filename(worker_name)
-            path = self.directory / f"parked_legacy_{safe_worker}_{sanitize_filename(master_label)}_{uuid.uuid4().hex[:8]}.json"
+            label_part = _bounded_name_part(sanitize_filename(master_label), _LABEL_NAME_PART)
+            path = self.directory / (
+                f"parked_legacy_{_worker_name_part(worker_name)}_{label_part}_{uuid.uuid4().hex[:8]}.json"
+            )
         payload = dict(state)
         payload["worker_name"] = persistent_operator_name(
             payload.get("worker_name") or worker_name
         )
+        _require_windows_path(path)
         atomic_write_json(path, payload, indent=4, ensure_ascii=False)
         return path
 
@@ -650,7 +735,8 @@ class ParkedTrayStore:
                 if stored_worker:
                     if stored_worker != requested_worker:
                         continue
-                elif f"_{_safe_worker_filename(requested_worker)}_" not in path.name:
+                elif not any(f"_{part}_" in path.name for part in (
+                        _safe_worker_filename(requested_worker), _worker_name_part(requested_worker))):
                     continue
                 summaries.append(ParkedTraySummary(
                     path=path, item_name=str(data.get("item_name") or "알 수 없음"),
