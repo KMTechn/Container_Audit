@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
+import threading
+import time
 from dataclasses import dataclass, field
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
 from logistics_runtime_profile import (
@@ -43,6 +46,7 @@ class LogisticsTransferClient:
         self.source_host_id = str(source_host_id or "").strip()
         self.device_id = str(device_id or source_host_id or "").strip()
         self.timeout_seconds = max(float(timeout_seconds), 0.1)
+        self._wait_limit = threading.local()
         self.authority_scope_id = str(authority_scope_id or "").strip()
         self.authority_epoch = int(authority_epoch or 0)
         self.authority_plane = str(authority_plane or "").strip().upper()
@@ -103,6 +107,40 @@ class LogisticsTransferClient:
         if self.plane_epoch and plane_epoch is not None and int(plane_epoch) != self.plane_epoch:
             raise TransferSealError("AUTHORITY_PROFILE_MISMATCH", "plane epoch가 설치 프로필과 다릅니다.")
 
+    @contextmanager
+    def bounded_wait(self, seconds: float) -> Iterator[None]:
+        """Let every request of this thread inside share one wait limit.
+
+        Inside, ``server_unanswered()`` tells whether one of them got no server
+        answer: no response in time, no connection, or a 5xx.
+        """
+
+        state = self._wait_limit
+        previous = (getattr(state, "deadline", None), getattr(state, "unanswered", False))
+        state.deadline = time.monotonic() + max(float(seconds), 0.0)
+        state.unanswered = False
+        try:
+            yield
+        finally:
+            state.deadline, state.unanswered = previous
+
+    def server_unanswered(self) -> bool:
+        return bool(getattr(self._wait_limit, "unanswered", False))
+
+    def _request_timeout(self) -> float:
+        deadline = getattr(self._wait_limit, "deadline", None)
+        if deadline is None:
+            return self.timeout_seconds
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TransferSealError(
+                "LOGISTICS_WAIT_LIMIT_REACHED",
+                "대기 한도 안에 물류 서버 요청을 보내지 못했습니다.",
+                retryable=True,
+                committed=False,
+            )
+        return min(self.timeout_seconds, remaining)
+
     def _headers(self, idempotency_key: str = "") -> dict[str, str]:
         headers = {
             "Authorization": f"Bearer {self.token}",
@@ -127,15 +165,21 @@ class LogisticsTransferClient:
         idempotency_key: str = "",
         allow_not_found: bool = False,
     ) -> dict[str, Any] | None:
-        response = self.session.request(
-            method,
-            f"{self.base_url}{path}",
-            headers=self._headers(idempotency_key),
-            json=dict(payload) if payload is not None else None,
-            timeout=self.timeout_seconds,
-            allow_redirects=False,
-        )
+        try:
+            response = self.session.request(
+                method,
+                f"{self.base_url}{path}",
+                headers=self._headers(idempotency_key),
+                json=dict(payload) if payload is not None else None,
+                timeout=self._request_timeout(),
+                allow_redirects=False,
+            )
+        except Exception:
+            self._wait_limit.unanswered = True
+            raise
         status_code = int(getattr(response, "status_code", 0) or 0)
+        if status_code >= 500:
+            self._wait_limit.unanswered = True
         if 300 <= status_code < 400:
             read_only_method = str(method or "").strip().upper() in {
                 "GET",

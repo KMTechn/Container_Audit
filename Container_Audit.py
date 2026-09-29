@@ -1067,6 +1067,9 @@ class ContainerAudit:
     EVENT_LOG_CLOSE_MAX_JOIN_ATTEMPTS = 3
     PREFLIGHT_OFFLINE_RETRY_MS = 30_000
     PREFLIGHT_OFFLINE_WAITING_LIMIT = 20
+    # One limit for all central requests a completion waits on (the local
+    # completion is already durable; what is left pending goes out later).
+    COMPLETION_SERVER_WAIT_SECONDS = 3.0
     
     COLOR_BG = "#F3F6FA"
     COLOR_SIDEBAR_BG = "#FFFFFF"
@@ -16157,13 +16160,18 @@ class ContainerAudit:
                 "저장 전 계산한 이적 의도와 로컬 원장의 의도가 다릅니다.",
             )
         on_prepared(prepared)
-        coordinator.confirm_completion_checkpoint(prepared.intent_id)
+        confirmed = coordinator.confirm_completion_checkpoint(prepared.intent_id)
         drain_through = getattr(coordinator, "drain_pending_through", None)
         if callable(drain_through):
-            results = drain_through(prepared.intent_id)
+            results = drain_through(
+                prepared.intent_id,
+                wait_limit_seconds=self.COMPLETION_SERVER_WAIT_SECONDS,
+            )
             for result in reversed(results):
                 if result.intent_id == prepared.intent_id:
                     return result
+            # An earlier intent got no answer: this one keeps its place behind it.
+            return confirmed
         return coordinator.attempt(prepared.intent_id)
 
     def _prepare_and_attempt_transfer_seal(

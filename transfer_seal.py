@@ -7,6 +7,7 @@ import json
 import os
 import sqlite3
 import unicodedata
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
@@ -3148,20 +3149,40 @@ class TransferSealCoordinator:
             results.append(self.attempt(intent_id))
         return results
 
-    def drain_pending_through(self, intent_id: str) -> list[SealAttempt]:
-        """Retry pending intents in FIFO order through one newly linked intent."""
+    def drain_pending_through(
+        self,
+        intent_id: str,
+        *,
+        wait_limit_seconds: float | None = None,
+    ) -> list[SealAttempt]:
+        """Retry pending intents in FIFO order through one newly linked intent.
+
+        A completion waits for this, so with ``wait_limit_seconds`` every
+        request of the drain shares that one limit, and the first intent left
+        pending because the server did not answer (timeout, no connection, 5xx)
+        ends the drain. It and every later intent keep their durable order for
+        the next completion or recovery. An intent the server answered but kept
+        pending does not hold back the ones after it.
+        """
 
         self._assert_owner()
 
         target = self.store.load(intent_id)
         if target["status"] not in PENDING_STATUSES:
             return [self._attempt_from_row(target)]
+        bounded_wait = getattr(self.client, "bounded_wait", None)
+        bounded = wait_limit_seconds is not None and callable(bounded_wait)
         results: list[SealAttempt] = []
-        for pending_id in self.store.pending_ids():
-            result = self.attempt(pending_id)
-            results.append(result)
-            if pending_id == intent_id:
-                break
+        with bounded_wait(wait_limit_seconds) if bounded else nullcontext():
+            for pending_id in self.store.pending_ids():
+                result = self.attempt(pending_id)
+                results.append(result)
+                if pending_id == intent_id or (
+                    bounded
+                    and result.status in PENDING_STATUSES
+                    and self.client.server_unanswered()
+                ):
+                    break
         return results
 
     @staticmethod

@@ -3,9 +3,11 @@ import hashlib
 import json
 import sqlite3
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
+import requests
 
 from Container_Audit import ContainerAudit
 from transfer_seal import (
@@ -1520,6 +1522,175 @@ def test_restart_replays_fifo_with_original_idempotency_keys(tmp_path):
         "ACKED",
     ]
     assert posted_keys == expected_keys
+
+
+_COMPLETION_FIELDS = {"BND": SOURCE, "ITG": "ITAG-001", "LBL": "INPUT-LABEL-001", "CLC": ITEM}
+
+
+def _completion_label(suffix):
+    return f"PHS=1|BND=PHS-SERVER-001|ITG=ITAG-001|CLC=AAA2270730100|QT=3|LOCAL={suffix}"
+
+
+def _pending_with_command(coordinator, suffix):
+    """A completed tray whose seal command is bound but not yet acknowledged."""
+    prepared = coordinator.prepare(
+        master_label=_completion_label(suffix),
+        master_label_fields=_COMPLETION_FIELDS,
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=("BC-1", "BC-2", "BC-3"),
+        require_completion_checkpoint=True,
+    )
+    coordinator.confirm_completion_checkpoint(prepared.intent_id)
+    assert coordinator.attempt(prepared.intent_id).status == "RETRY_WAIT"
+    return prepared
+
+
+def _complete(coordinator, suffix):
+    """The GUI completion's central step, as the lane runs it."""
+    return ContainerAudit.__new__(ContainerAudit)._prepare_and_attempt_transfer_seal_snapshot(
+        coordinator=coordinator,
+        source_label_payload=_completion_label(suffix),
+        source_label_fields=_COMPLETION_FIELDS,
+        item_code=ITEM,
+        operator="tester",
+        scanned_barcodes=("BC-1", "BC-2", "BC-3"),
+        relay_log_file_path="",
+        operation_lease_id="",
+        on_prepared=lambda attempt: None,
+    )
+
+
+class _LogisticsServer:
+    """Busy (503), stopped (no answer) or answering, with idempotent seals.
+
+    A seal received while stopped still commits although its answer is lost,
+    as on a real server; a later POST with that key replays the same receipt.
+    """
+
+    def __init__(self):
+        self.mode = "busy"
+        self.committed = {}
+        self.answered_posts = []
+
+    def __call__(self, call):
+        key = call["headers"].get("Idempotency-Key", "")
+        if self.mode == "stopped":
+            if call["method"] == "POST":
+                self.committed.setdefault(key, _receipt(call["json"]))
+            time.sleep(call["timeout"])
+            raise requests.exceptions.ReadTimeout("fixture: no answer")
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        if call["method"] == "POST" and self.mode == "busy":
+            return FakeResponse(
+                503, {"ok": False, "retryable": True, "error": {"code": "SERVER_BUSY"}}
+            )
+        if call["method"] == "POST":
+            self.answered_posts.append(key)
+            receipt = self.committed.setdefault(key, _receipt(call["json"]))
+            return FakeResponse(200, {"ok": True, "data": receipt})
+        raise AssertionError(call)
+
+
+def test_completion_waits_one_limit_when_the_server_stops_behind_two_pending_intents(tmp_path):
+    """w9caparkpath 1740: a stopped server held this completion 50 s (5 requests x 10 s)."""
+    server = _LogisticsServer()
+    client, session = _client(server)
+    coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "stopped.db"), client)
+    first = _pending_with_command(coordinator, "FIRST")
+    second = _pending_with_command(coordinator, "SECOND")
+
+    server.mode = "stopped"
+    sent_before = len(session.calls)
+    started = time.monotonic()
+    third = _complete(coordinator, "THIRD")
+    waited = time.monotonic() - started
+
+    assert waited < ContainerAudit.COMPLETION_SERVER_WAIT_SECONDS + 1.0
+    # Only the oldest seal went out; no receipt lookup, no later intent.
+    assert [call["method"] for call in session.calls[sent_before:]] == ["POST"]
+    assert third.status == "PREPARED" and third.local_completion_id
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id, third.intent_id]
+
+    server.mode = "answering"
+    fourth = _complete(coordinator, "FOURTH")
+
+    keys = [attempt.command_id for attempt in (first, second, third, fourth)]
+    assert fourth.status == "ACKED"
+    assert coordinator.store.pending_ids() == []
+    assert server.answered_posts == keys
+    assert sorted(server.committed) == sorted(keys)
+    assert all(
+        coordinator.store.load(attempt.intent_id)["status"] == "ACKED"
+        for attempt in (first, second, third, fourth)
+    )
+
+
+@pytest.mark.parametrize(
+    "unanswered",
+    [
+        requests.exceptions.ConnectionError("fixture: connection refused"),
+        FakeResponse(503, {"ok": False, "retryable": True, "error": {"code": "SERVER_BUSY"}}),
+        FakeResponse(502, "<html>bad gateway</html>"),
+    ],
+    ids=["refused", "5xx", "5xx-not-json"],
+)
+def test_completion_stops_at_the_first_intent_the_server_does_not_answer(tmp_path, unanswered):
+    server = _LogisticsServer()
+    client, session = _client(server)
+    coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "refused.db"), client)
+    first = _pending_with_command(coordinator, "FIRST")
+    second = _pending_with_command(coordinator, "SECOND")
+
+    def handler(call):
+        if isinstance(unanswered, Exception):
+            raise unanswered
+        return unanswered
+
+    session.handler = handler
+    sent_before = len(session.calls)
+    third = _complete(coordinator, "THIRD")
+
+    first_key = first.command_id
+    assert {call["headers"].get("Idempotency-Key") for call in session.calls[sent_before:]} <= {
+        first_key, None,
+    }
+    assert coordinator.store.load(second.intent_id)["attempt_count"] == 1
+    assert third.status == "PREPARED"
+    assert coordinator.store.pending_ids() == [first.intent_id, second.intent_id, third.intent_id]
+
+
+def test_an_answered_but_pending_intent_does_not_hold_back_the_next_completion(tmp_path):
+    resolves = []
+
+    def handler(call):
+        if call["method"] == "GET" and "/bundles/resolve?" in call["url"]:
+            resolves.append(call["url"])
+            if len(resolves) == 1:
+                return FakeResponse(404, {"ok": False, "error": {"code": "NOT_FOUND"}})
+            return FakeResponse(200, {"ok": True, "data": _resolved_bundle()})
+        if call["method"] == "POST":
+            return FakeResponse(200, {"ok": True, "data": _receipt(call["json"])})
+        raise AssertionError(call)
+
+    client, _session = _client(handler)
+    coordinator = TransferSealCoordinator(TransferSealStore(tmp_path / "answered.db"), client)
+    earlier = coordinator.prepare(
+        master_label=_completion_label("EARLIER"),
+        master_label_fields=_COMPLETION_FIELDS,
+        item_id=ITEM,
+        operator="tester",
+        scanned_barcodes=("BC-1", "BC-2", "BC-3"),
+        require_completion_checkpoint=True,
+    )
+    coordinator.confirm_completion_checkpoint(earlier.intent_id)
+
+    completed = _complete(coordinator, "LATER")
+
+    assert completed.status == "ACKED"
+    assert coordinator.store.load(earlier.intent_id)["status"] == "RETRY_WAIT"
+    assert coordinator.store.pending_ids() == [earlier.intent_id]
 
 
 def test_linked_ledger_and_outbox_roll_back_together_on_durable_write_failure(
