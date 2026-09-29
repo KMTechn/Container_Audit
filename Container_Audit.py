@@ -1633,13 +1633,17 @@ class ContainerAudit:
         print(f"UI lane failure: {exc.__class__.__name__}")
         # A broken lane never settles its save; nothing may wait behind it.
         self._live_scan_save_pending = False
-        self._scans_behind_save = []
         try:
-            self.show_status_message(
-                "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요.",
-                self.COLOR_DANGER,
-                duration=0,
+            notice = self._refuse_scans_behind_save(
+                "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요. "
+                "이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
             )
+            if not notice:
+                self.show_status_message(
+                    "처리 실행기를 안전하게 중지했습니다. 현재 작업을 보존하고 관리자에게 문의하세요.",
+                    self.COLOR_DANGER,
+                    duration=0,
+                )
             self._update_action_button_states()
         except (AttributeError, tk.TclError):
             pass
@@ -13000,11 +13004,15 @@ class ContainerAudit:
                     pass
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
 
-    def _refuse_scans_behind_save(self, message: str) -> None:
+    def _refuse_scans_behind_save(self, message: str) -> str:
+        """Drop held scans only out loud: the error sound and how many to rescan."""
         held = list(getattr(self, "_scans_behind_save", None) or ())
         self._scans_behind_save = []
-        if held and not getattr(self, "_ui_close_requested", False):
-            self._refuse_entry_scan(message.format(count=len(held)))
+        if not held:
+            return ""
+        notice = message.format(count=len(held))
+        self._refuse_entry_scan(notice)
+        return notice
 
     def _process_next_scan_behind_save(self) -> None:
         """Run the oldest held scan once the save it waited for has settled."""
@@ -13102,8 +13110,16 @@ class ContainerAudit:
 
     def _invalidate_pending_scan_callbacks(self) -> None:
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
-        # Held scans belong to the old work, like the pending callback.
+        # Held scans belong to the old work and never run in the new one. They are
+        # refused out loud after the caller's own notice (reset, park, handoff...).
+        dropped = len(getattr(self, "_scans_behind_save", None) or ())
         self._scans_behind_save = []
+        if dropped:
+            notice = f"작업이 바뀌어 이어서 들어온 스캔 {dropped}개는 받지 않았습니다. 다시 스캔하세요."
+            try:
+                self.root.after(0, self._refuse_entry_scan, notice)
+            except (AttributeError, tk.TclError):
+                self._refuse_entry_scan(notice)
         self._set_scan_callback_pending(False)
         self._cancel_master_preflight()
 
@@ -14876,6 +14892,13 @@ class ContainerAudit:
             self.root.after(0, lambda: self.on_closing(_confirmed=True))
             return
 
+        held_notice = self._refuse_scans_behind_save(
+            "종료 전에 이어서 들어온 스캔 {count}개는 저장하지 않았습니다. "
+            "다시 실행한 뒤 그 제품을 다시 스캔하세요."
+        )
+        if held_notice:
+            # The window closes next: the operator reads it before it goes.
+            messagebox.showwarning("스캔 다시 필요", held_notice, parent=self.root)
         self._ui_close_requested = True
         self._set_scan_callback_pending(False)
         lane = getattr(self, "_ui_lane", None)
