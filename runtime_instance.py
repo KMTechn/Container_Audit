@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 ERROR_ALREADY_EXISTS = 183
+SYNCHRONIZE = 0x00100000
 
 
 def runtime_mutex_name(data_root: str | os.PathLike[str]) -> str:
@@ -65,13 +66,18 @@ def acquire_runtime_instance(
         return RuntimeInstanceLease(mutex_name=mutex_name, _handle=0)
 
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_wchar_p]
-    kernel32.CreateMutexW.restype = ctypes.c_void_p
+    kernel32.CreateMutexExW.argtypes = [
+        ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong,
+    ]
+    kernel32.CreateMutexExW.restype = ctypes.c_void_p
     kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
     kernel32.CloseHandle.restype = ctypes.c_int
 
     ctypes.set_last_error(0)
-    handle = kernel32.CreateMutexW(None, False, mutex_name)
+    # Keep the creator's default security descriptor. This lease only needs a
+    # live handle; full access would deny an ordinary process opening the same
+    # user's existing mutex after an elevated installer started the relay.
+    handle = kernel32.CreateMutexExW(None, mutex_name, 0, SYNCHRONIZE)
     if not handle:
         error_code = ctypes.get_last_error()
         raise OSError(error_code, "Container_Audit 실행 잠금을 만들 수 없습니다.")
