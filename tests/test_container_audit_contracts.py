@@ -8047,6 +8047,9 @@ def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path
 
     app.submit_current_tray()
 
+    assert not Path(app.log_file_path).exists()
+    assert app._short_confirmation_undo is not None
+    assert app._commit_short_confirmation()
     with open(app.log_file_path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 1

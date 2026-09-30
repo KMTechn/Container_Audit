@@ -821,6 +821,8 @@ def test_on_partial_submit_of_a_13_digit_tray_is_recorded_as_partial(flow, monke
 
     app.submit_current_tray()
 
+    assert _rows(app, "TRAY_COMPLETE") == []
+    assert app._commit_short_confirmation()
     [row] = _rows(app, "TRAY_COMPLETE")
     detail = _details(row)
     assert detail["transfer_seal_status"] == "LEGACY_LOCAL_ONLY"
@@ -1086,8 +1088,9 @@ def test_partial_phs2_tray_is_durable_and_held_with_the_switch_on_or_off(flow, t
     for transition in (False, True):
         app = _phs2_tray(flow, tmp_path / str(transition), transition=transition)
         _submit(app, monkeypatch)
-        [row] = _rows(app, "TRAY_COMPLETE")
-        detail = _details(row)
+        assert _rows(app, "TRAY_COMPLETE") == []
+        held = json.loads(app._short_projection_path(app._short_confirmation_undo["completion_id"]).read_text(encoding="utf-8"))
+        detail = held["detail"]
         assert detail["is_partial_submission"] is True
         assert detail["scan_count"] == 1
         assert app.seal_calls == [COMPACT_QR]

@@ -16376,6 +16376,67 @@ class ContainerAudit:
             return True
         return restore_previous_lock()
 
+    def _short_projection_path(self, completion_id):
+        name = hashlib.sha256(str(completion_id).encode("utf-8")).hexdigest() + ".json"
+        return Path(self.save_folder) / "short_confirmations" / name
+
+    def _persist_short_completion_projection(self, contract, detail, state, intent_id):
+        path = self._short_projection_path(contract["idempotency_key"])
+        record = {"status": "HELD", "contract": dict(contract), "detail": dict(detail),
+                  "state": dict(state), "intent_id": intent_id}
+        if path.exists():
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if existing != record:
+                raise ValueError("short completion projection identity changed")
+            return True
+        atomic_write_json(path, record, ensure_ascii=False)
+        return True
+
+    def _settle_short_completion_projection(self, completion_id, *, coordinator=None):
+        path = self._short_projection_path(completion_id)
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if record["status"] == "CANCELLED":
+            return False
+        contract = record["contract"]
+        if not self._log_event("TRAY_COMPLETE", detail=record["detail"], synchronous=True,
+                idempotency_key=contract["idempotency_key"], event_timestamp=contract["observed_at"],
+                log_file_path_override=str(self._completion_projection_log_path(contract["projection_log_name"])),
+                worker_name_override=contract["projection_worker_name"], deduplicate=True):
+            return False
+        if record["intent_id"]:
+            runtime = coordinator or self._transfer_seal_runtime()
+            runtime.store.mark_scan_completion_projected(record["intent_id"])
+            runtime.store.settle_short_confirmation(record["intent_id"])
+        record["status"] = "SETTLED"
+        atomic_write_json(path, record, ensure_ascii=False)
+        return True
+
+    def _recover_short_completion_projections(self, coordinator):
+        folder = Path(self.save_folder) / "short_confirmations"
+        restored = None
+        for path in sorted(folder.glob("*.json")):
+            record = json.loads(path.read_text(encoding="utf-8"))
+            if record["status"] == "HELD":
+                if not self._settle_short_completion_projection(
+                        record["contract"]["idempotency_key"], coordinator=coordinator):
+                    raise OSError("held short completion CSV could not be persisted")
+            elif record["status"] == "CANCELLED" and not record.get("undo_applied"):
+                if record["intent_id"]:
+                    coordinator.store.settle_short_confirmation(record["intent_id"], undo=True)
+                restored = record["undo_state"]
+                if not self._save_tray_state_snapshot(restored):
+                    raise OSError("short completion undo recovery could not be persisted")
+                record["undo_applied"] = True
+                atomic_write_json(path, record, ensure_ascii=False)
+        return restored
+
+    def _has_short_projection_recovery(self):
+        folder = Path(self.save_folder) / "short_confirmations"
+        return any(record["status"] == "HELD" or
+                   (record["status"] == "CANCELLED" and not record.get("undo_applied"))
+                   for record in (json.loads(path.read_text(encoding="utf-8"))
+                                  for path in folder.glob("*.json")))
+
     def _commit_short_confirmation(self, *, on_settled=None):
         undo = getattr(self, "_short_confirmation_undo", None)
         if undo is None:
@@ -16383,31 +16444,40 @@ class ContainerAudit:
                 on_settled()
             return True
         def steps():
-            if undo["intent_id"]:
-                yield lambda: self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"])
+            if not (yield lambda: self._settle_short_completion_projection(undo["completion_id"])):
+                self.show_status_message("미달 완료 CSV 저장을 다시 시도하세요.", self.COLOR_DANGER)
+                return False
             self._short_confirmation_undo = None
             self._schedule_scanonly_transport()
             return True
         if hasattr(getattr(self, "root", None), "tk") or on_settled:
-            return self._submit_scan_steps(steps(), on_idle=on_settled)
+            return self._submit_scan_steps(steps(), on_idle=lambda:
+                on_settled() if on_settled and self._short_confirmation_undo is None else None)
         return self._run_durable_ui_steps(steps())
 
     def _undo_short_confirmation(self):
         undo = self._short_confirmation_undo
         def steps():
-            if undo["intent_id"]:
-                yield lambda: self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"], undo=True)
             state = dict(undo["state"])
             state.pop(COMPLETION_EVENT_STATE_KEY, None)
             state.pop("scan_completion_context", None)
             state["is_partial_submission"] = False
+            path = self._short_projection_path(undo["completion_id"])
+            def cancel_projection():
+                record = json.loads(path.read_text(encoding="utf-8"))
+                record.update(status="CANCELLED", undo_state=state, undo_applied=False,
+                    undo_event={"event": "TRAY_SHORT_CONFIRMATION_UNDONE",
+                                "completion_id": undo["completion_id"]})
+                atomic_write_json(path, record, ensure_ascii=False)
+                if undo["intent_id"]:
+                    self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"], undo=True)
+                return record
+            record = yield cancel_projection
             if not (yield lambda: self._save_tray_state_snapshot(state)):
                 self.show_status_message("미달 확정 취소 저장을 다시 시도하세요.", self.COLOR_DANGER)
                 return False
-            if not (yield lambda: self._log_event("TRAY_SHORT_CONFIRMATION_UNDONE",
-                detail={"completion_id": undo["completion_id"], "master_label_code": state["master_label_code"]},
-                synchronous=True, idempotency_key="short-undo:" + undo["completion_id"], deduplicate=True)):
-                return False
+            record["undo_applied"] = True
+            yield lambda: atomic_write_json(path, record, ensure_ascii=False)
             self._restore_tray_from_state(state)
             original_log_path = self.log_file_path
             yield lambda: self._load_session_state()
@@ -16495,10 +16565,13 @@ class ContainerAudit:
         active_lease_id = str(getattr(self.current_tray, "operation_lease_id", ""))
         def work():
             coordinator = self._scanonly_transport_runtime()
+            recovered_short_state = None
             if getattr(self, "_scanonly_recover_requested", False):
-                coordinator.store.settle_short_confirmation("")
+                recovered_short_state = self._recover_short_completion_projections(coordinator)
                 self._scanonly_recover_requested = False
             result = {"lookup": lookup, "preflight": None, "pending": 0}
+            if recovered_short_state:
+                result["recovered_short_state"] = recovered_short_state
             exchanges = self._scanonly_exchange_runtime()
             for row in exchanges.store.scan_exchange_rows(unprojected=True):
                 context = json.loads(row["context_json"])
@@ -16554,6 +16627,10 @@ class ContainerAudit:
             result["reviews"] += sum(row["status"] == "OPERATOR_REVIEW" for row in exchanges.store.scan_exchange_rows())
             return result
         def finish(result):
+            if result.get("recovered_short_state"):
+                self._restore_tray_from_state(result["recovered_short_state"])
+                self._update_current_item_label()
+                self._update_center_display()
             recovered_state = result.get("recovered_exchange_state")
             if recovered_state and self.current_tray.master_label_code == recovered_state["master_label_code"]:
                 self._restore_tray_from_state(recovered_state)
@@ -17626,7 +17703,8 @@ class ContainerAudit:
                     and not (server_unanswered is not None and server_unanswered())
                 )
             )
-            outcome["scan_transport_needed"] = (coordinator.store.has_scan_transport_work()
+            outcome["scan_transport_needed"] = (self._has_short_projection_recovery()
+                or coordinator.store.has_scan_transport_work()
                 or bool(self._transfer_member_exchange_runtime().store.scan_exchange_rows()))
         except Exception as exc:
             print(f"이적 seal 재시작 복구 실패: {exc.__class__.__name__}")

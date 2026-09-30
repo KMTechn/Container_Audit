@@ -254,9 +254,11 @@ def test_same_label_rescan_confirms_short_tray_without_dialog(flow, windows, sca
     scan_clock(4)
     app._process_barcode_logic(COMPACT_QR)
     rows = _rows(app, "TRAY_COMPLETE")
-    assert len(rows) == 1, "same master rescan below target must durably complete a partial tray"
-    assert _details(rows[0])["scan_count"] == 1
-    assert _details(rows[0])["is_partial_submission"] is True
+    assert rows == [], "held short completion must not enter the shared CSV"
+    held = json.loads(app._short_projection_path(app._short_confirmation_undo["completion_id"]).read_text(encoding="utf-8"))
+    assert held["status"] == "HELD"
+    assert held["detail"]["scan_count"] == 1
+    assert held["detail"]["is_partial_submission"] is True
     assert app.current_tray.master_label_code == ""
     assert windows == []
 
@@ -359,8 +361,8 @@ def test_product_between_same_labels_confirms_within_three_seconds(flow, windows
     app._process_barcode_logic(f"{ITEM}-SERIAL-001")
     scan_clock(1)
     app._process_barcode_logic(COMPACT_QR)
-    assert len(_rows(app, "TRAY_COMPLETE")) == 1
-    assert _details(_rows(app, "TRAY_COMPLETE")[0])["is_partial_submission"] is True
+    assert _rows(app, "TRAY_COMPLETE") == []
+    assert app._short_confirmation_undo is not None
     assert app.current_tray.master_label_code == ""
     assert windows == []
 
@@ -388,11 +390,57 @@ def test_partial_completion_can_be_undone_before_next_label(flow, windows):
     app._process_barcode_logic(product)
     assert app._complete_current_tray_as_partial()
     original_completion = _rows(app, "TRAY_COMPLETE")
-    assert len(original_completion) == 1
+    assert original_completion == []
+    evidence_path = app._short_projection_path(app._short_confirmation_undo["completion_id"])
     app._process_barcode_logic("KMCMD:UNDO")
     assert app.current_tray.master_label_code == label, "undo must reopen the just-confirmed short tray"
     assert app.current_tray.scanned_barcodes == [product]
-    assert _rows(app, "TRAY_COMPLETE") == original_completion, "undo must preserve the original completion evidence"
+    assert _rows(app, "TRAY_COMPLETE") == []
+    assert _rows(app, "TRAY_SHORT_CONFIRMATION_UNDONE") == []
+    assert json.loads(evidence_path.read_text(encoding="utf-8"))["status"] == "CANCELLED"
+    assert windows == []
+
+
+def test_short_csv_lost_ack_retries_same_row_before_settling(flow, windows, monkeypatch):
+    app = flow(transition=True)
+    app._process_barcode_logic(f"CLC={ITEM}|QT=3")
+    app._process_barcode_logic(f"{ITEM}-SERIAL-001")
+    assert app._complete_current_tray_as_partial()
+    completion_id = app._short_confirmation_undo["completion_id"]
+    path = app._short_projection_path(completion_id)
+    original = app._log_event
+    lost = [True]
+    def append_with_lost_ack(*args, **kwargs):
+        result = original(*args, **kwargs)
+        if lost[0]:
+            lost[0] = False
+            return False
+        return result
+    monkeypatch.setattr(app, "_log_event", append_with_lost_ack)
+    assert not app._commit_short_confirmation()
+    assert app._short_confirmation_undo is not None
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "HELD"
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert app._commit_short_confirmation()
+    assert app._short_confirmation_undo is None
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "SETTLED"
+    assert windows == []
+
+
+def test_short_legacy_restart_projects_held_csv_once(flow, windows):
+    app = flow(transition=True)
+    app._process_barcode_logic(f"CLC={ITEM}|QT=3")
+    app._process_barcode_logic(f"{ITEM}-SERIAL-001")
+    assert app._complete_current_tray_as_partial()
+    assert _rows(app, "TRAY_COMPLETE") == []
+    assert app._has_short_projection_recovery()
+    app._short_confirmation_undo = None
+    app._recover_short_completion_projections(app.transfer_seal_coordinator)
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert not app._has_short_projection_recovery()
+    app._recover_short_completion_projections(app.transfer_seal_coordinator)
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
     assert windows == []
 
 
@@ -421,7 +469,8 @@ def test_partial_confirmation_sound_differs_from_full_completion(flow, windows, 
     partial._process_barcode_logic(f"{ITEM}-SERIAL-001")
     signals.clear()  # observe confirmation feedback separately from product acceptance
     assert partial._complete_current_tray_as_partial()
-    assert len(_rows(partial, "TRAY_COMPLETE")) == 1
+    assert _rows(partial, "TRAY_COMPLETE") == []
+    assert partial._short_confirmation_undo is not None
     assert signals, "a durable partial confirmation must emit a distinct sound"
     assert tuple(signals) != full_signal
     assert windows == []

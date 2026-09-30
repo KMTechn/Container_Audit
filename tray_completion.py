@@ -751,7 +751,13 @@ def complete_tray_steps(
         if completion_projection_is_other_worker
         else {}
     )
-    if not (yield lambda: self._log_event(
+    if is_partial:
+        short_projection_state = self._current_tray_state_snapshot()
+        projection_operation = lambda: self._persist_short_completion_projection(
+            completion_event_contract, log_detail, short_projection_state,
+            transfer_attempt.intent_id if transfer_attempt.local_completion_id else "")
+    else:
+        projection_operation = lambda: self._log_event(
         'TRAY_COMPLETE',
         detail=log_detail,
         synchronous=True,
@@ -760,7 +766,8 @@ def complete_tray_steps(
         log_file_path_override=str(projection_log_path),
         deduplicate=prior_log_attempt,
         **completion_log_overrides,
-    )):
+        )
+    if not (yield projection_operation):
         yield from self._completion_outcome_steps(
             CompletionOutcome.LOCAL_EVENT_RETRY,
             item_name=self.current_tray.item_name,

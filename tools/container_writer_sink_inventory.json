@@ -3165,8 +3165,13 @@
       ],
       "decorated_source": "storage_atomic_json",
       "direct_callers": [
+        "Container_Audit.ContainerAudit._persist_short_completion_projection",
+        "Container_Audit.ContainerAudit._recover_short_completion_projections",
         "Container_Audit.ContainerAudit._save_tray_state_snapshot",
         "Container_Audit.ContainerAudit._save_work_session_state",
+        "Container_Audit.ContainerAudit._settle_short_completion_projection",
+        "Container_Audit.ContainerAudit._undo_short_confirmation.steps",
+        "Container_Audit.ContainerAudit._undo_short_confirmation.steps.cancel_projection",
         "Container_Audit.ContainerAudit.save_settings",
         "best_time_records.BestTimeRecordStore.save",
         "container_admin_pin.AdminPinIntentStore.write",
@@ -6423,7 +6428,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "4b3795f180d0ca028701f99985ae482025203e4f0b879dd583a0e789d70ab933",
+  "inventory_sha256": "385acb8b0bc7eaa06a4fa1f4acba8437f98f28f189a0bb6547f36bd71e065b96",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18379,7 +18384,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 20154,
+      "line": 20232,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
