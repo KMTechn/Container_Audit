@@ -2362,6 +2362,8 @@ $enteredPlacementTry = $true
                 '권한 상승 작업의 결과 기록을 읽지 못했습니다. 기록 폴더 권한을 확인하세요.'
             } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_LOG_WRITE_FAILED') {
                 '권한 상승 작업의 결과 기록을 남기지 못했습니다. 기록 폴더의 쓰기 권한과 저장 공간을 확인하세요.'
+            } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING') {
+                '같은 PC 의 다른 Windows 사용자 세션에서 이적 검사 프로그램이 실행 중입니다. 그 사용자를 로그아웃한 뒤 다시 설치하세요.'
             } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_CHILD_FAILED') {
                 '권한 상승 작업이 결과 기록 없이 비정상 종료됐습니다. 담당자에게 문의 코드를 알려 주세요.'
             } elseif ($failureCode -ceq 'CONTAINER_PLACEMENT_ELEVATION_FAILED') {

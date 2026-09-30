@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 import time
@@ -11,6 +12,34 @@ import pytest
 
 from tests.test_retired_portable_removal import _complete, _retired_fixture
 from tests.test_canonical_portable_uninstall import _ps, _sha, _tree
+
+
+@pytest.fixture(autouse=True)
+def _retain_crashed_controller_handles(monkeypatch):
+    if os.name != 'nt':
+        yield
+        return
+    import _winapi
+
+    handles = []
+    original_init = subprocess.Popen.__init__
+
+    def retain_controller(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        if (kwargs.get('env') or {}).get('CA_RETIREMENT_CRASH') == '1':
+            # Keep the exited fixture's process object alive so its PID cannot be
+            # reused before resume checks. The controller and its mutex still exit.
+            current = _winapi.GetCurrentProcess()
+            handles.append(_winapi.DuplicateHandle(
+                current, self._handle, current, 0, False, _winapi.DUPLICATE_SAME_ACCESS,
+            ))
+
+    monkeypatch.setattr(subprocess.Popen, '__init__', retain_controller)
+    try:
+        yield
+    finally:
+        for handle in handles:
+            _winapi.CloseHandle(handle)
 
 
 def _crash_fixture(tmp_path, phase, *, historical=False, pause_claim=False):

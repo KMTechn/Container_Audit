@@ -320,6 +320,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g15"></a>
 ## CA-G15 별도 관리자 UAC 설치의 현장 확인 (w9cafence)
 
+- **다른 세션 설치 안내(w9nextfix):** 검증된 교체 전 다른 Windows 세션의 CA 프로세스를 `CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING`으로 분류해 해당 사용자를 로그아웃한 뒤 재설치하도록 안내한다([실패 문구](operations.md#ca-o05)). 같은 세션·제거·복원의 기존 거부는 유지한다. 실제 UAC의 분류 로그 전달과 작업자 문구·로그아웃 후 재설치는 **NOT TESTED**이며 랩 수용에 남긴다.
 - **소스·격리 시험 PROVEN:** 작업자 prepared receipt의 SID·LOCALAPPDATA·session/attempt/transaction과 token을 상승 helper가 대조한다. 기본 root의 기존 admission mutex 이름을 계정과 무관하게 사용하며, 잘못된 SID/root·오래된 시도·경쟁 writer를 거부한다. [설치 계약](operations.md#ca-o05)과 [구현 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cafence/RESULT.md)를 따른다.
 - **guest 실물 NOT TESTED:** 정확한 새 packet으로 표준 작업자+별도 관리자 UAC 신규 설치, 같은 관리자 계정 상승, ACL/mutex 교차 계정 접근, 첫 실행의 작업자 HKCU·DPAPI·ledger·relay 소유권을 확인한다. 기존 설치본/기록 보존과 화면 문의 코드도 대조한다. 운영 PC·서버 배포는 별도 권한 범위다.
 

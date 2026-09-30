@@ -106,11 +106,14 @@ def test_operator_profile_mismatch_stops_before_code_and_explains_retry(tmp_path
         assert _tree(install) == before['code']
 
 
-def test_elevation_failure_readback_reaches_canonical_parent_without_real_uac(tmp_path):
+@pytest.mark.parametrize('code', [
+    'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH',
+    'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING',
+])
+def test_elevation_failure_readback_reaches_canonical_parent_without_real_uac(tmp_path, code):
     if ctypes.windll.shell32.IsUserAnAdmin():
         pytest.skip('parent forwarding path requires a non-elevated token')
     log = tmp_path / 'elevated.jsonl'
-    code = 'CONTAINER_OPERATOR_PROFILE_ROOT_MISMATCH'
     log.write_text(json.dumps({
         'captured_at': '2026-09-23T00:00:00Z', 'process_id': 4242,
         'elevated': True, 'status': 'PREFLIGHT_FAILED', 'message': code,
@@ -131,6 +134,104 @@ Invoke-SelfElevated
 ''', values={'CA_FAKE_ELEVATION_LOG': str(log)})
     assert result.returncode == 1
     assert f'code_placement_preflight_failure={code}' in result.stdout
+
+
+@pytest.mark.parametrize(('session_offset', 'code', 'message', 'after_placement'), [
+    (1, 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING',
+     '같은 PC 의 다른 Windows 사용자 세션에서 이적 검사 프로그램이 실행 중입니다. 그 사용자를 로그아웃한 뒤 다시 설치하세요.', False),
+    (0, 'CONTAINER_PLACEMENT_CHILD_FAILED', '권한 상승 작업이 결과 기록 없이 비정상 종료됐습니다.', False),
+    (None, 'CONTAINER_PLACEMENT_CHILD_FAILED', '권한 상승 작업이 결과 기록 없이 비정상 종료됐습니다.', True),
+], ids=['other_session', 'same_session', 'after_placement'])
+def test_replacement_process_session_failure_reaches_operator_and_preserves_code(
+        tmp_path, session_offset, code, message, after_placement):
+    env, source, install, protected = _setup(tmp_path)
+    _distinct_replacement(source)
+    helper = source / 'INSTALL_THIS_PC.ps1'
+    text = helper.read_text(encoding='utf-8-sig')
+    marker = '$testOverride = ('
+    assert text.count(marker) == 1
+    injected = r'''
+function Get-CimInstance {
+    return [pscustomobject]@{
+        ProcessId=($PID + 100000)
+        ExecutablePath=(Join-Path $InstallRoot 'runtime\pythonw.exe')
+        CommandLine='fixture product process'
+        SessionId=([Diagnostics.Process]::GetCurrentProcess().SessionId + SESSION_OFFSET)
+    }
+}
+'''.replace('SESSION_OFFSET', str(session_offset))
+    if after_placement:
+        injected = 'function Get-CimInstance { return @() }\n'
+        placed = "                $bootstrapStatus = 'REPLACED_VERIFIED'"
+        assert text.count(placed) == 1
+        text = text.replace(placed, placed + "\n                throw 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'")
+    # Exercise the real classified-log branch inside the owned test packet;
+    # the layout override still prevents elevation and machine ACL changes.
+    log_branch = "        if (-not $testOverride) {\n            try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode }"
+    has_classified_log_branch = log_branch in text
+    if has_classified_log_branch:
+        assert text.count(log_branch) == 1
+        text = text.replace(log_branch, log_branch.replace('if (-not $testOverride)', 'if ($true)'))
+        failed_log = "    } elseif (-not $testOverride) {\n        Write-ElevationLog 'FAILED' ($_.Exception.GetType().Name)"
+        assert text.count(failed_log) == 1
+        text = text.replace(failed_log, failed_log.replace('elseif (-not $testOverride)', 'elseif ($true)'))
+    helper.write_text(text.replace(marker, injected + marker), encoding='utf-8-sig')
+    _bind_packet(source)
+    with _launch_relay(tmp_path, env) as child:
+        before = _live_preimage(tmp_path, env, source, install, child)
+        result = _install(tmp_path, env, source, install)
+        assert result.returncode != 0
+        assert code in result.stderr, result.stderr
+        assert message in result.stderr, result.stderr
+        assert '문의 코드 CA-' in result.stderr
+        assert '기존 설치본과 기록' in result.stderr and '다른 업무를 계속' in result.stderr
+        audit = json.loads((tmp_path / 'reinstall-audit.json').read_text(encoding='utf-8-sig'))
+        assert audit['code_placement'] == 'NOT_STARTED'
+        assert _tree(install) == before['code']
+        _assert_preserved_and_released(env, protected)
+        if session_offset:
+            logs = list((Path(env['LOCALAPPDATA']) / 'KMTech').rglob('*-elevated.jsonl'))
+            assert len(logs) == 1
+            last = json.loads(logs[0].read_text(encoding='utf-8').splitlines()[-1])
+            assert last['status'] == 'PREFLIGHT_FAILED' and last['message'] == code
+        if after_placement:
+            failed = list(install.parent.glob('.current.failed.*'))
+            assert len(failed) == 1
+            assert (failed[0] / 'app/main.py').read_bytes() == (source / 'app/main.py').read_bytes()
+            logs = list((Path(env['LOCALAPPDATA']) / 'KMTech').rglob('*-elevated.jsonl'))
+            if has_classified_log_branch:
+                assert len(logs) == 1
+                assert json.loads(logs[0].read_text(encoding='utf-8').splitlines()[-1])['status'] == 'FAILED'
+
+
+@pytest.mark.parametrize(('session_offset', 'classify', 'self_process', 'expected'), [
+    (1, True, False, 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'),
+    (0, True, False, 'Replacement restore requires zero Container product processes.'),
+    (1, False, False, 'Replacement restore requires zero Container product processes.'),
+    (None, True, False, 'Replacement restore requires zero Container product processes.'),
+    (1, True, True, 'QUIESCENT'),
+])
+def test_quiescence_classifies_only_other_session_preflight(
+        tmp_path, session_offset, classify, self_process, expected):
+    session = '' if session_offset is None else (
+        f'SessionId=([Diagnostics.Process]::GetCurrentProcess().SessionId + {session_offset});')
+    process_id = '$PID' if self_process else '($PID + 100000)'
+    switch = '-ClassifyOtherSessionPreflight' if classify else ''
+    result = run_functions(
+        tmp_path, Path(__file__).resolve().parents[1] / 'INSTALL_THIS_PC.ps1',
+        ['Assert-ContainerReplacementRestoreQuiescent'], r'''
+function Get-StrictFullPath([string]$Value,[string]$Purpose) { return [IO.Path]::GetFullPath($Value) }
+function Get-CimInstance {
+    return [pscustomobject]@{ ProcessId=PROCESS_ID; ExecutablePath='C:\fixture\current\runtime\pythonw.exe'; CommandLine='fixture'; SESSION }
+}
+try {
+    Assert-ContainerReplacementRestoreQuiescent -CurrentRoot 'C:\fixture\current' -SkipOwnedTaskCheckForGuardedTest CLASSIFY
+    Write-Output 'QUIESCENT'
+} catch { Write-Output $_.Exception.Message }
+'''.replace('PROCESS_ID', process_id).replace('SESSION', session).replace('CLASSIFY', switch),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
 
 
 @pytest.mark.parametrize(('exception', 'code'), [

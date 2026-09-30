@@ -571,7 +571,8 @@ function Test-PathWithin([string]$Candidate, [string]$Root) {
 
 function Assert-ContainerReplacementRestoreQuiescent(
     [string]$CurrentRoot,
-    [switch]$SkipOwnedTaskCheckForGuardedTest
+    [switch]$SkipOwnedTaskCheckForGuardedTest,
+    [switch]$ClassifyOtherSessionPreflight
 ) {
     $rootPrefix = (Get-StrictFullPath $CurrentRoot 'restore process root') + '\'
     try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) }
@@ -592,7 +593,17 @@ function Assert-ContainerReplacementRestoreQuiescent(
             )
         )
     })
-    if ($matches.Count -ne 0) { throw 'Replacement restore requires zero Container product processes.' }
+    if ($matches.Count -ne 0) {
+        if ($ClassifyOtherSessionPreflight.IsPresent) {
+            $currentSessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId
+            $otherSessionMatches = @($matches | Where-Object {
+                $_.PSObject.Properties['SessionId'] -and $null -ne $_.SessionId -and
+                [int]$_.SessionId -ne $currentSessionId
+            })
+            if ($otherSessionMatches.Count -ne 0) { throw 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING' }
+        }
+        throw 'Replacement restore requires zero Container product processes.'
+    }
     if (-not $SkipOwnedTaskCheckForGuardedTest.IsPresent) {
         try { $task = Get-ScheduledTask -TaskName $LegacyRelayTaskName -ErrorAction SilentlyContinue }
         catch { throw 'Replacement restore could not prove scheduled-task quiescence.' }
@@ -987,7 +998,8 @@ try {
             ) { throw 'Replacement receipt must be a new path outside the code parent.' }
             Assert-ContainerReplacementRestoreQuiescent `
                 -CurrentRoot $installRootFull `
-                -SkipOwnedTaskCheckForGuardedTest:$testOverride
+                -SkipOwnedTaskCheckForGuardedTest:$testOverride `
+                -ClassifyOtherSessionPreflight
             [void](Assert-BootstrapIntegrityRecord -Root $installRootFull)
             Assert-NoReparsePoint $installRootFull 'Verified replacement existing code root'
             if ($applyHardenedAcl) { Assert-HardenedCodeAcl $installRootFull -Recursive }
@@ -1105,7 +1117,21 @@ try {
     }
 }
 catch {
-    if (-not $testOverride) {
+    $otherSessionPreflightFailure = (
+        -not $replacementApplied -and
+        $_.Exception.Message -ceq 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
+    )
+    if ($otherSessionPreflightFailure) {
+        $failureCode = 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
+        if (-not $testOverride) {
+            try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode }
+            catch {
+                Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
+                exit 42
+            }
+        }
+        Write-Output "code_placement_preflight_failure=$failureCode"
+    } elseif (-not $testOverride) {
         Write-ElevationLog 'FAILED' ($_.Exception.GetType().Name)
     }
     if (Test-Path -LiteralPath $stagingRoot) {

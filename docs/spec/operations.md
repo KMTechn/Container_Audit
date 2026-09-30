@@ -367,6 +367,17 @@ prepared checkpoint → 기존 중앙 attempt → 완료 계약/CSV ACK → stat
 <a id="ca-o05"></a>
 ## CA-O05 설치·교체·재설치·롤백·백업
 
+| 설치 코드 배치 전 실패 코드 | 작업자 안내·조치 |
+|---|---|
+| `CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING` | 같은 PC 의 다른 Windows 사용자 세션에서 이적 검사 프로그램이 실행 중입니다. 그 사용자를 로그아웃한 뒤 다시 설치하세요. |
+
+검증된 교체의 전 세션 프로세스 확인에서 상승 자식과 다른 Windows 세션의 제품
+프로세스가 확인되면 코드 교체 전에 이 코드로 중단한다. 기존 상승 로그의
+`PREFLIGHT_FAILED`로 부모에게 전달하며 문의 코드·기록 보존·다른 업무 계속 안내를
+유지한다. 같은 세션만 남았거나 세션을 확인하지 못한 경우의 거부와 제거·복원
+경로는 기존대로다. 실제 다른 세션 로그아웃 후 재설치는 [CA-G15](BACKLOG.md#ca-g15)의
+현장 확인에 포함한다.
+
 공개 canonical 설치는 작업자 계정에서 prepared receipt에 작업자 SID·LOCALAPPDATA
 루트와 session/attempt/transaction을 기록한다. 상승 helper는 그 receipt의 SHA와
 등록된 SID 프로필 경로를 대조해 같은 작업자의 fence root를 선택하고, 해당 root의
