@@ -419,7 +419,9 @@ def test_short_csv_lost_ack_retries_same_row_before_settling(flow, windows, monk
     monkeypatch.setattr(app, "_log_event", append_with_lost_ack)
     assert not app._commit_short_confirmation()
     assert app._short_confirmation_undo is not None
-    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "HELD"
+    assert json.loads(path.read_text(encoding="utf-8"))["status"] == "SETTLING"
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert not app._undo_short_confirmation()
     assert len(_rows(app, "TRAY_COMPLETE")) == 1
     assert app._commit_short_confirmation()
     assert app._short_confirmation_undo is None

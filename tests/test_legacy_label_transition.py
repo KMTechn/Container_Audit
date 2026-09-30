@@ -438,10 +438,14 @@ def test_off_refuses_a_damaged_new_system_label_at_tray_start(flow, label):
     assert _rows(app) == []
 
 
-def _submit(app, monkeypatch):
+def _submit(app, monkeypatch, *, settle=True):
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
     app.submit_current_tray()
     _pump_until(app.root, lambda: not app.current_tray.master_label_code)
+    # Completed-history assertions represent the next-label/logout boundary;
+    # explicit HELD tests keep settlement off and inspect local evidence.
+    if settle and getattr(app, "_short_confirmation_undo", None):
+        assert app._commit_short_confirmation()
 
 
 MALFORMED_LABELS = [
@@ -1087,7 +1091,7 @@ def test_partial_phs2_tray_is_durable_and_held_with_the_switch_on_or_off(flow, t
     # Decision 5 and contract 6: both modes hold short completion until next label.
     for transition in (False, True):
         app = _phs2_tray(flow, tmp_path / str(transition), transition=transition)
-        _submit(app, monkeypatch)
+        _submit(app, monkeypatch, settle=False)
         assert _rows(app, "TRAY_COMPLETE") == []
         held = json.loads(app._short_projection_path(app._short_confirmation_undo["completion_id"]).read_text(encoding="utf-8"))
         detail = held["detail"]

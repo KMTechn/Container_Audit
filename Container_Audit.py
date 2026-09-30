@@ -13352,11 +13352,11 @@ class ContainerAudit:
             else:
                 return self._process_inline_exchange_scan(raw_barcode)
         if not tray.master_label_code and getattr(self, "_short_confirmation_undo", None):
-            fields = self._parse_new_format_qr(raw_barcode)
-            if fields and fields.get("CLC"):
+            if is_label:
                 if hasattr(getattr(self, "root", None), "tk"):
                     return self._commit_short_confirmation(on_settled=lambda: self._process_barcode_logic(raw_barcode))
-                self._commit_short_confirmation()
+                if not self._commit_short_confirmation():
+                    return False
         if self._warning_state_presenter().state.is_blocking and not self._operator_review_blocks_mutation():
             self._warning_state_presenter().acknowledge()
             self._stop_warning_beep()
@@ -16397,6 +16397,13 @@ class ContainerAudit:
         record = json.loads(path.read_text(encoding="utf-8"))
         if record["status"] == "CANCELLED":
             return False
+        if record["status"] == "SETTLED":
+            return True
+        # A next-label/logout/close request ends the UNDO window even if a
+        # durable CSV acknowledgement is lost. Retry cannot cancel a row
+        # that may already have been read by the unchanged legacy relay.
+        record["status"] = "SETTLING"
+        atomic_write_json(path, record, ensure_ascii=False)
         contract = record["contract"]
         if not self._log_event("TRAY_COMPLETE", detail=record["detail"], synchronous=True,
                 idempotency_key=contract["idempotency_key"], event_timestamp=contract["observed_at"],
@@ -16416,7 +16423,7 @@ class ContainerAudit:
         restored = None
         for path in sorted(folder.glob("*.json")):
             record = json.loads(path.read_text(encoding="utf-8"))
-            if record["status"] == "HELD":
+            if record["status"] in {"HELD", "SETTLING"}:
                 if not self._settle_short_completion_projection(
                         record["contract"]["idempotency_key"], coordinator=coordinator):
                     raise OSError("held short completion CSV could not be persisted")
@@ -16432,7 +16439,7 @@ class ContainerAudit:
 
     def _has_short_projection_recovery(self):
         folder = Path(self.save_folder) / "short_confirmations"
-        return any(record["status"] == "HELD" or
+        return any(record["status"] in {"HELD", "SETTLING"} or
                    (record["status"] == "CANCELLED" and not record.get("undo_applied"))
                    for record in (json.loads(path.read_text(encoding="utf-8"))
                                   for path in folder.glob("*.json")))
@@ -16445,6 +16452,7 @@ class ContainerAudit:
             return True
         def steps():
             if not (yield lambda: self._settle_short_completion_projection(undo["completion_id"])):
+                self.undo_button["state"] = tk.DISABLED
                 self.show_status_message("미달 완료 CSV 저장을 다시 시도하세요.", self.COLOR_DANGER)
                 return False
             self._short_confirmation_undo = None
@@ -16465,6 +16473,8 @@ class ContainerAudit:
             path = self._short_projection_path(undo["completion_id"])
             def cancel_projection():
                 record = json.loads(path.read_text(encoding="utf-8"))
+                if record["status"] != "HELD":
+                    return None
                 record.update(status="CANCELLED", undo_state=state, undo_applied=False,
                     undo_event={"event": "TRAY_SHORT_CONFIRMATION_UNDONE",
                                 "completion_id": undo["completion_id"]})
@@ -16473,6 +16483,9 @@ class ContainerAudit:
                     self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"], undo=True)
                 return record
             record = yield cancel_projection
+            if record is None:
+                self.show_status_message("다음 현품표 처리로 미달 취소가 끝났습니다. 완료 저장을 재시도하세요.", self.COLOR_DANGER)
+                return False
             if not (yield lambda: self._save_tray_state_snapshot(state)):
                 self.show_status_message("미달 확정 취소 저장을 다시 시도하세요.", self.COLOR_DANGER)
                 return False
