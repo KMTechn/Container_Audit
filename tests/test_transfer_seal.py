@@ -1205,11 +1205,16 @@ def test_work_group_preflight_fails_closed_for_malformed_topology(
     assert exc_info.value.code == expected_code
 
 
-def test_compact_phs2_rejects_qt_even_when_registry_identity_fields_are_present():
-    with pytest.raises(TransferSealError) as exc_info:
-        validate_compact_phs2_fields(_compact_phs2_fields(QT="60"))
+def test_compact_phs2_accepts_qt_with_registry_identity_fields():
+    assert validate_compact_phs2_fields(_compact_phs2_fields(QT="60"))["QT"] == "60"
 
-    assert exc_info.value.code == "PHS2_COMPACT_FORMAT_REQUIRED"
+
+@pytest.mark.parametrize("quantity", ["", "0", "-1", "1.5", "abc"])
+def test_compact_phs2_rejects_invalid_qt(quantity):
+    with pytest.raises(TransferSealError) as exc_info:
+        validate_compact_phs2_fields(_compact_phs2_fields(QT=quantity))
+
+    assert exc_info.value.code == "PHS2_QUANTITY_INVALID"
 
 
 @pytest.mark.parametrize(

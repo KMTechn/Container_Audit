@@ -233,7 +233,7 @@ def transition_label_text_defects(pairs):
 
 
 def _transition_compact_label(text):
-    """The exact central label PHS=2|SRC=KMTECH_INPUT_TAG|ITG|CLC|LBL|HSH."""
+    """Central identity, optionally followed by the printed positive quantity."""
 
     fields = {}
     parts = str(text or "").strip().split("|")
@@ -243,7 +243,11 @@ def _transition_compact_label(text):
             return False
         fields[expected] = value.strip()
     return (
-        len(parts) == len(_TRANSITION_COMPACT_KEYS)
+        (len(parts) == len(_TRANSITION_COMPACT_KEYS) or (
+            len(parts) == len(_TRANSITION_COMPACT_KEYS) + 1
+            and re.fullmatch(r"QT=[0-9]+", parts[-1]) is not None
+            and int(parts[-1][3:]) > 0
+        ))
         and fields["PHS"] == "2"
         and fields["SRC"].upper() == "KMTECH_INPUT_TAG"
         and re.fullmatch(r"[0-9A-Fa-f]{16}", fields["HSH"]) is not None

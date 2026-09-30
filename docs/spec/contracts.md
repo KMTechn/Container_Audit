@@ -27,7 +27,7 @@ CA는 스캔·작업 상태·전송 의도를 소유한다. 중앙 제품 소유
 
 | 항목 | 의미·키·모집단 | 근거 |
 |---|---|---|
-| 원본 PHS2 | 정확히 `PHS/SRC/ITG/CLC/LBL/HSH`; `ITG/LBL/HSH`로 중앙 identity를 조회하고 `CLC` 품목을 대조. `QT`를 덧붙이거나 목표 60을 추정하지 않음. | [compact 검증 / TransferSourcePreflight](../../transfer_seal.py) |
+| 원본 PHS2 | `PHS/SRC/ITG/CLC/LBL/HSH` 6칸 또는 마지막 `QT=<양의 정수>`를 더한 7칸. `ITG/LBL/HSH` identity·`CLC` 품목 대조는 유지하며 QT는 조회 전 로컬 목표로 사용한다. 알려진 현재 구성원 수가 우선이다. | [compact 검증 / TransferSourcePreflight](../../transfer_seal.py) |
 | product barcode / unit ID | 스캐너 문자열과 중앙 단위 ID는 별개. 완료 때 barcode↔unit을 exact 매핑. `normalize_barcode`는 NFKC·strip·대문자 정규화; GUI 입력 단계의 원문 중복 검사와 같은 단계가 아님. | [product_scan](../../product_scan.py), [TransferSealCoordinator._map_scans](../../transfer_seal.py) |
 | bundle / transfer / work group | 중앙 구성원 소유 단위와 이적 묶음·source topology. 단순히 PHS 문자열이나 로컬 tray ID와 같다고 가정하지 않음. | [TransferSealCoordinator._build_command / _build_work_group_command](../../transfer_seal.py), [Web seal service](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py) |
 | intent ID / local_completion_id | CA 내구 처리와 로컬 완료의 식별. 중앙 scope/key receipt와 연결하지만 같은 상태나 같은 ID가 아님. | [TransferSealStore.prepare / _ensure_linked_event](../../transfer_seal.py) |

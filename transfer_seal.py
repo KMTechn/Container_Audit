@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import sqlite3
 import unicodedata
@@ -265,7 +266,7 @@ def _phs2_contract_error(code: str, message: str, **details: Any) -> TransferSea
 
 
 def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict[str, str]:
-    """Validate the compact central PHS=2 QR without trusting a QR quantity."""
+    """Validate six-field identity or identity plus a positive QT scan target."""
 
     fields = {
         unicodedata.normalize("NFKC", str(key)).strip().upper():
@@ -274,7 +275,7 @@ def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict
     }
     required = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
     missing = [key for key in required if not fields.get(key)]
-    unexpected = sorted(set(fields) - set(required))
+    unexpected = sorted(set(fields) - set(required) - {"QT"})
     if missing:
         raise _phs2_contract_error(
             "PHS2_CANONICAL_EVIDENCE_REQUIRED",
@@ -284,7 +285,7 @@ def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict
     if unexpected:
         raise _phs2_contract_error(
             "PHS2_COMPACT_FORMAT_REQUIRED",
-            "중앙 PHS=2 현품표는 QT 없는 compact 식별 형식이어야 합니다.",
+            "중앙 PHS=2 현품표는 compact 식별 형식이어야 합니다.",
             unexpected_fields=unexpected,
         )
     if fields["PHS"] != "2" or fields["SRC"].upper() != "KMTECH_INPUT_TAG":
@@ -309,6 +310,12 @@ def validate_compact_phs2_fields(master_label_fields: Mapping[str, Any]) -> dict
             "중앙 PHS=2 HSH는 16자리 SHA-256 축약값이어야 합니다.",
         )
     fields["HSH"] = hash_prefix
+    if "QT" in fields and (
+        not re.fullmatch(r"[0-9]+", fields["QT"]) or int(fields["QT"]) <= 0
+    ):
+        raise _phs2_contract_error(
+            "PHS2_QUANTITY_INVALID", "현품표 QT는 양의 정수여야 합니다.",
+        )
     return fields
 
 
