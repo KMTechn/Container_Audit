@@ -52,6 +52,8 @@ EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS = frozenset(
         "PRODUCT_EXCHANGE_CANCELLED",
         "PRODUCT_EXCHANGE_COMPLETED",
         "RANDOM_TEST_SESSION_START",
+        "SCAN_COMMAND_UNKNOWN",
+        "TRAY_SHORT_CONFIRMATION_UNDONE",
         "SCAN_FAIL_AMBIGUOUS_ITEM_CODE",
         "SCAN_FAIL_FORMAT",
         "SCAN_FAIL_MISMATCH",
@@ -76,7 +78,7 @@ def test_audited_container_csv_values_have_one_exhaustive_disposition():
         EXPECTED_AUDITED_OUT_OF_CATALOG_EVENTS
     )
     assert len(CONTRACT_CANDIDATE_EVENT_TYPES) == 14
-    assert len(LOCAL_ONLY_EVENT_TYPES) == 39
+    assert len(LOCAL_ONLY_EVENT_TYPES) == 41
     assert not FORBIDDEN_EVENT_TYPES
     assert not (CONTRACT_CANDIDATE_EVENT_TYPES & LOCAL_ONLY_EVENT_TYPES)
 

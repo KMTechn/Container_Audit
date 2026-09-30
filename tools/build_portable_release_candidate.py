@@ -75,7 +75,6 @@ APP_ROOT_FILES = (
     "preflight_scan_hold.py",
     "producer_runtime_client.py",
     "product_exchange.py",
-    "member_exchange_view.py",
     "tray_completion.py",
     "product_identity_port.py",
     "product_scan.py",
@@ -422,6 +421,7 @@ def _assert_portable_import_closure(
         capture_output=True,
         text=True,
         timeout=60,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         check=False,
     )
     if completed.returncode != 0:
@@ -513,6 +513,7 @@ def _git_value(repo_root: Path, expression: str) -> str:
         text=True,
         timeout=30,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
         raise PortableBuildError(f"git identity is unavailable: {expression}")
@@ -527,6 +528,7 @@ def _assert_clean_source(repo_root: Path) -> None:
         text=True,
         timeout=30,
         check=False,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if completed.returncode != 0:
         raise PortableBuildError("git source cleanliness could not be verified")
@@ -578,6 +580,7 @@ def build(
         [sys.executable, "-I", "-B", str(repo_root / "qualification/check_kmtech_shared.py"),
          "--check", "--root", str(repo_root)],
         capture_output=True, text=True, check=False, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
     if shared_check.returncode:
         raise PortableBuildError("shared source pin check failed: " + shared_check.stderr.strip())

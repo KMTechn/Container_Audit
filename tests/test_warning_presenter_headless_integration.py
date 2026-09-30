@@ -205,6 +205,9 @@ def _completion_app(*, save_root, seal_status, ledger_succeeds, events):
         lambda intent_id: events.append(("project_post_review", intent_id))
         or {"review_case_id": "review-case-1"}
     )
+    app._transfer_seal_runtime = lambda: SimpleNamespace(store=SimpleNamespace(
+        mark_scan_completion_projected=lambda intent_id: events.append(("projected", intent_id))))
+    app._schedule_scanonly_transport = lambda **_kwargs: None
     return app
 
 

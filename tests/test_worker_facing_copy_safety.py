@@ -43,13 +43,12 @@ def _assert_worker_safe(text):
 
 
 def test_member_exchange_blocking_dialogs_hide_internal_recovery_terms(monkeypatch):
+    app = ContainerAudit.__new__(ContainerAudit)
     dialogs = []
     monkeypatch.setattr(
-        container_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda title, message, **_kwargs: dialogs.append((title, message)),
     )
-    app = ContainerAudit.__new__(ContainerAudit)
     app.root = None
     app._reconcile_pending_local_member_exchanges = lambda: None
 
@@ -75,13 +74,12 @@ def test_member_exchange_blocking_dialogs_hide_internal_recovery_terms(monkeypat
 
 
 def test_exact_exchange_policy_dialogs_use_worker_language_only(monkeypatch):
+    app = ContainerAudit.__new__(ContainerAudit)
     warnings = []
     monkeypatch.setattr(
-        container_module.messagebox,
-        "showwarning",
+        app, "_show_field_notice",
         lambda title, message, **_kwargs: warnings.append((title, message)),
     )
-    app = ContainerAudit.__new__(ContainerAudit)
     app.worker_name = ""
     app.log_file_path = ""
     app._exact_transfer_exchange_blocked = lambda: True
@@ -139,8 +137,7 @@ def test_central_exchange_failure_keeps_raw_diagnostics_out_of_worker_dialog(
     app, _coordinator = _central_exchange_app(attempt)
     dialogs = []
     monkeypatch.setattr(
-        container_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda title, message, **_kwargs: dialogs.append((title, message)),
     )
 
@@ -170,8 +167,7 @@ def test_central_exchange_prepare_exception_is_not_copied_to_worker_dialog(
     coordinator.prepare = fail_prepare
     dialogs = []
     monkeypatch.setattr(
-        container_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda title, message, **_kwargs: dialogs.append((title, message)),
     )
 

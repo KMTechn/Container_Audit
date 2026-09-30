@@ -535,7 +535,7 @@ def test_close_during_a_save_refuses_the_held_scan_out_loud(app, monkeypatch):
     app._cancel_all_jobs = lambda: None
     warnings = []
     monkeypatch.setattr(module.messagebox, "askyesno", lambda *a, **k: True)
-    monkeypatch.setattr(module.messagebox, "showwarning",
+    monkeypatch.setattr(app, "_show_field_notice",
                         lambda title, message, **kwargs: warnings.append((title, message)))
     entered, release, save = _blocked_save(app)
     try:

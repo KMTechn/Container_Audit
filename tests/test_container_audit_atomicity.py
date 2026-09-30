@@ -168,7 +168,7 @@ def test_load_current_tray_state_reconciles_activation_before_restore_event(
         "askyesnocancel",
         lambda *args, **kwargs: True,
     )
-    restarted._load_current_tray_state()
+    restarted._load_current_tray_state(_recovery_choice=True)
 
     rows = _csv_rows(tmp_path / "events.csv")
     assert [row["event"] for row in rows] == [

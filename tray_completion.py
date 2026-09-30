@@ -20,7 +20,7 @@ from label_qr import (
 from protected_admin import persistent_operator_name
 from session_history import TRANSITION_CLASS_NAMES, count_transition_completion
 from tk_serial_ui_lane import DRAIN_TO_DURABLE_HANDOFF, LaneTask
-from transfer_seal import SealAttempt, TransferSealError
+from transfer_seal import SealAttempt, TransferSealError, validate_compact_phs2_fields
 from warning_presenter import CompletionOutcome, CompletionOutcomeSnapshot
 
 # A pre-PHS2 label reaches the central completion only while transition mode is off.
@@ -156,6 +156,7 @@ def request_complete_tray(
         and str(master_label_fields.get("PHS") or "").strip() == "2"
         and len(self.current_tray.scanned_barcodes)
         != int(self.current_tray.tray_size or 0)
+        and not self.current_tray.is_partial_submission
     ):
         self.show_status_message(
             "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다.",
@@ -209,6 +210,8 @@ def request_complete_tray(
             not local_only
             and str(source_label_fields.get("PHS") or "").strip() == "2"
             and not operation_lease_id
+            and not source_label_fields.get("QT")
+            and not self.current_tray.is_partial_submission
         ):
             raise TransferSealError(
                 "OPERATION_LEASE_REQUIRED",
@@ -233,6 +236,7 @@ def request_complete_tray(
     scanned_barcodes = tuple(log_detail.get("product_barcodes") or ())
     operator = persistent_operator_name(self.worker_name)
     relay_log_path = str(getattr(self, "log_file_path", "") or "")
+    scan_context = self._scanonly_completion_context(completion_observed_at) if not local_only else None
     existing_contract_snapshot = (
         dict(existing_event_contract)
         if existing_event_contract is not None
@@ -273,6 +277,7 @@ def request_complete_tray(
                     relay_log_file_path=relay_log_path,
                     operation_lease_id=operation_lease_id,
                     on_prepared=on_prepared,
+                    scan_context=scan_context,
                 )
             except TransferSealError as exc:
                 # Transition mode: a check that refuses this tray before its completion
@@ -405,6 +410,7 @@ def complete_tray_steps(
         not local_only
         and str(master_label_fields.get("PHS") or "").strip() == "2"
         and len(self.current_tray.scanned_barcodes) != int(self.current_tray.tray_size or 0)
+        and not self.current_tray.is_partial_submission
     ):
         self.show_status_message(
             "PHS=2 현품표에 등록된 제품을 모두 스캔해야 이적할 수 있습니다. "
@@ -503,6 +509,16 @@ def complete_tray_steps(
             intent_id=f"{local_status.lower().replace('_', '-')}-{local_intent_suffix}",
             status=local_status,
         )
+        try:
+            compact_fields = validate_compact_phs2_fields(master_label_fields)
+        except TransferSealError:
+            compact_fields = None
+        if compact_fields is not None and not is_test:
+            queued = yield lambda: self._prepare_and_attempt_transfer_seal(
+                master_label_fields=compact_fields, log_detail=log_detail,
+                on_prepared=persist_prepared_completion_contract)
+            transfer_attempt = SealAttempt(intent_id=queued.intent_id, status=local_status,
+                local_completion_id=queued.local_completion_id, command_id=queued.command_id)
     elif _prepared_transfer_attempt is not None:
         transfer_attempt = _prepared_transfer_attempt
     else:
@@ -803,6 +819,8 @@ def complete_tray_steps(
             error_code=transfer_attempt.error_code,
         )
 
+    short_undo_state = self._current_tray_state_snapshot() if is_partial else None
+    shortage = max(0, self.current_tray.tray_size - len(self.current_tray.scanned_barcodes))
     self._stop_stopwatch(); self._stop_idle_checker(); self.undo_button['state'] = tk.DISABLED
 
     completion_summary_requires_reload = (
@@ -870,7 +888,22 @@ def complete_tray_steps(
         completion_snapshot=completion_snapshot,
         post_review_required=post_review_required, post_review_case=post_review_case,
     )
+    if not is_test and transfer_attempt.local_completion_id:
+        yield lambda: self._transfer_seal_runtime().store.mark_scan_completion_projected(transfer_attempt.intent_id)
     self.tray_last_end_time = clock.datetime.now()
+    if is_partial:
+        self._short_confirmation_undo = {"state": short_undo_state,
+            "intent_id": transfer_attempt.intent_id if transfer_attempt.local_completion_id else "",
+            "completion_id": completion_event_contract["idempotency_key"]}
+        self.undo_button['state'] = tk.NORMAL
+        self.show_status_message(f"부족 {shortage}개로 확정", self.COLOR_DANGER, duration=0)
+        self.show_fullscreen_warning(f"부족 {shortage}개로 확정",
+            "다음 현품표 전 취소 카드로 되돌릴 수 있습니다. 계속하려면 다음 현품표를 스캔하세요.",
+            self.COLOR_DANGER)
+        if getattr(self, "error_sound", None):
+            self.error_sound.play()
+    if transfer_attempt.local_completion_id and not is_test and not is_partial and transfer_attempt.status != "ACKED":
+        self._schedule_scanonly_transport()
     return True
 
 

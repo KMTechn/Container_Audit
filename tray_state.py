@@ -78,6 +78,11 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
         "is_partial_submission": tray.is_partial_submission,
     }
     transition_reasons = list(getattr(tray, "transition_reasons", []) or [])
+    for key in ("known_member_barcodes", "exchange_idempotency_keys"):
+        if getattr(tray, key, None):
+            state[key] = list(getattr(tray, key))
+    if getattr(tray, "scan_completion_context", None):
+        state["scan_completion_context"] = dict(tray.scan_completion_context)
     if transition_reasons:
         state["transition_reasons"] = transition_reasons
     transition_class = str(getattr(tray, "transition_class", "") or "")
@@ -144,7 +149,8 @@ def _validate_master_label_consistency(state: Mapping[str, Any], *, tray_size: i
         raise TrayStateValidationError("master_label_code CLC must match item_code")
 
     parsed_tray_size = parse_positive_quantity(master_label_fields)
-    if parsed_tray_size is not None and parsed_tray_size != tray_size:
+    if (parsed_tray_size is not None and parsed_tray_size != tray_size
+            and str(master_label_fields.get("PHS") or "") != "2"):
         raise TrayStateValidationError("master_label_code QT must match tray_size")
 
 
@@ -183,8 +189,8 @@ def _validate_phs_label_state(state: Mapping[str, Any]) -> None:
     required = ("PHS", "SRC", "ITG", "CLC", "LBL", "HSH")
     if (
         canonical != master_label
-        or set(canonical_fields or {}) != set(required)
-        or set(active_fields or {}) != set(required)
+        or set(canonical_fields or {}) not in (set(required), set(required) | {"QT"})
+        or set(active_fields or {}) not in (set(required), set(required) | {"QT"})
         or any(not str((canonical_fields or {}).get(key) or "").strip() for key in required)
         or any(not str((active_fields or {}).get(key) or "").strip() for key in required)
         or str(canonical_fields.get("PHS") or "").strip() != "2"
@@ -729,6 +735,13 @@ def validate_tray_state(
     _require_non_negative_int(state, "mismatch_error_count")
     _require_non_negative_number(state, "total_idle_seconds")
     _require_non_negative_number(state, "stopwatch_seconds")
+    for key in ("known_member_barcodes", "exchange_idempotency_keys"):
+        values = state.get(key, [])
+        if (not isinstance(values, list) or any(not isinstance(value, str) or not value.strip() for value in values)
+            or len(values) != len(set(values))):
+            raise TrayStateValidationError(f"{key} must contain unique non-empty strings")
+    if not isinstance(state.get("scan_completion_context", {}), Mapping):
+        raise TrayStateValidationError("scan_completion_context must be an object")
 
     tray_size = state.get("tray_size", default_tray_size)
     if not isinstance(tray_size, int) or isinstance(tray_size, bool) or tray_size <= 0:
@@ -902,6 +915,15 @@ def tray_session_from_state(
             key: {**attempt, "detail": dict(attempt["detail"])}
             for key, attempt in state["cancel_event_attempts"].items()
         }
+    for key in ("known_member_barcodes", "exchange_idempotency_keys"):
+        if key in state:
+            if not isinstance(state[key], list) or any(not isinstance(value, str) or not value for value in state[key]):
+                raise TrayStateValidationError(f"{key} must contain nonempty strings")
+            transition[key] = list(state[key])
+    if state.get("scan_completion_context"):
+        if not isinstance(state["scan_completion_context"], dict):
+            raise TrayStateValidationError("scan_completion_context must be an object")
+        transition["scan_completion_context"] = dict(state["scan_completion_context"])
     return session_factory(
         **transition,
         master_label_code=state["master_label_code"],

@@ -98,7 +98,6 @@ M7_CAPTURE_TOOL_PATH = "tools/capture_container_operator_ui.py"
 M7_PRODUCT_TEXT_BLOBS = (
     "Container_Audit.py",
     "warning_presenter.py",
-    "member_exchange_view.py",
     "tray_completion.py",
     "direct_sync_health.py",
     "transfer_seal.py",

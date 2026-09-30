@@ -307,8 +307,29 @@ def load_session_history(
 
     completed_sessions: List[Dict[str, Any]] = []
     seen_current_worker_completion_identities: Set[str] = set()
+    cancelled_short_ids = set()
+    unreadable_undo_paths = set()
+    undo_paths = [path for path, _include in all_log_files]
+    undo_paths.extend((Path(save_folder) / "local_only").glob("이적로컬이벤트로그_*.csv"))
+    for undo_path in undo_paths:
+        try:
+            with undo_path.open("r", encoding="utf-8-sig", newline="") as undo_file:
+                for undo_row in csv.DictReader(undo_file):
+                    if undo_row.get("event") != "TRAY_SHORT_CONFIRMATION_UNDONE":
+                        continue
+                    try:
+                        undo_detail = json.loads(undo_row["details"])
+                        undo_time = datetime.datetime.fromisoformat(undo_row["timestamp"])
+                        completion_id = undo_detail["completion_id"]
+                        if isinstance(completion_id, str) and completion_id and undo_time.date() <= today:
+                            cancelled_short_ids.add(completion_id)
+                    except (KeyError, TypeError, ValueError):
+                        history.load_errors.append(f"로그 파일 '{undo_path}' 미달 확정 취소 기록 오류")
+        except OSError as exc:
+            history.load_errors.append(f"로그 파일 '{undo_path}' 읽기 중 오류: {exc}")
+            unreadable_undo_paths.add(undo_path)
     for log_path, is_current_worker_file in sorted(all_log_files):
-        if not log_path.exists():
+        if not log_path.exists() or log_path in unreadable_undo_paths:
             continue
         try:
             with log_path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -341,6 +362,9 @@ def load_session_history(
                             _remember_completed_label(history.completed_master_labels, _text_field(details, "new_master_label"))
                         except (TypeError, ValueError):
                             history.load_errors.append(f"로그 파일 '{log_path}' {row_number}행 MASTER_LABEL_REPLACEMENT_APPLIED 처리 중 오류")
+                        continue
+                    if (details.get("is_partial_submission") is True
+                        and details.get("idempotency_key") in cancelled_short_ids):
                         continue
                     try:
                         _validate_history_complete_details(details)

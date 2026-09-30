@@ -768,12 +768,10 @@
    "id": "compact-with-qt",
    "raw": "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITG-A1|CLC=AAA2270710000|LBL=LBL-A1|HSH=0123456789abcdef|QT=3",
    "group": "boundary",
-   "note": "an extra valid quantity",
+   "note": "w9scanonly valid seven-field issued quantity",
    "expected": {
-    "kind": "MALFORMED",
-    "reasons": [
-     "FORMAT_INVALID"
-    ],
+    "kind": "NEW",
+    "reasons": [],
     "item_code": "AAA2270710000"
    }
   },

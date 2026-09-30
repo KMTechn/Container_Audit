@@ -90,38 +90,8 @@ def test_container_audit_restored_window_has_operable_minimum_size():
     assert ContainerAudit.MIN_WINDOW_HEIGHT >= 720
 
 
-def test_exchange_dialog_grows_to_natural_dpi_scaled_content_size():
-    assert container_audit_module.calculate_exchange_dialog_size(
-        required_width=860,
-        required_height=735,
-        screen_width=2560,
-        screen_height=1440,
-    ) == (860, 735)
 
 
-def test_exchange_dialog_keeps_default_size_and_stays_screen_bounded():
-    assert container_audit_module.calculate_exchange_dialog_size(
-        required_width=640,
-        required_height=480,
-        screen_width=2560,
-        screen_height=1440,
-    ) == (800, 600)
-    assert container_audit_module.calculate_exchange_dialog_size(
-        required_width=1600,
-        required_height=1200,
-        screen_width=1280,
-        screen_height=800,
-    ) == (1184, 704)
-    # Expanded heading + two rows + input/footer may exceed this cap;
-    # the dialog body must scroll while fixed controls retain their height.
-    assert container_audit_module.calculate_exchange_dialog_size(
-        required_width=1600, required_height=900,
-        screen_width=1024, screen_height=768,
-    ) == (928, 672)
-    assert container_audit_module.calculate_exchange_dialog_size(
-        required_width=500, required_height=420,
-        screen_width=1024, screen_height=768,
-    ) == (800, 600)
 
 
 def test_center_actions_reflow_using_requested_label_width_and_keep_order():
@@ -4205,7 +4175,7 @@ def test_close_save_restore_then_auto_complete_marks_restored_session(tmp_path, 
     )
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
     assert app.current_tray.is_restored_session is True
     assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
 
@@ -4359,7 +4329,7 @@ def test_load_current_tray_state_discards_state_already_completed(tmp_path, monk
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
@@ -4386,7 +4356,7 @@ def test_load_current_tray_state_restores_completed_state_when_discard_audit_fai
         "askyesno",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     storage_utils.atomic_write_json(
         tmp_path / "current.json",
         {
@@ -4408,7 +4378,7 @@ def test_load_current_tray_state_restores_completed_state_when_discard_audit_fai
         },
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     restored_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert restored_state["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
@@ -4437,7 +4407,7 @@ def test_load_current_tray_state_warns_when_completed_state_delete_fails(tmp_pat
         "askyesno",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     storage_utils.atomic_write_json(
         tmp_path / "current.json",
         {
@@ -4459,7 +4429,7 @@ def test_load_current_tray_state_warns_when_completed_state_delete_fails(tmp_pat
         },
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     assert app.current_tray.master_label_code == ""
     assert logged[0]["event"] == "TRAY_STATE_DELETE_FAILED_AFTER_COMPLETION_RESTORE"
@@ -4508,9 +4478,9 @@ def test_load_current_tray_state_same_worker_restore_preserves_state_when_restor
         },
     )
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     saved_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert saved_state["worker_name"] == "홍길동"
@@ -4560,7 +4530,7 @@ def test_load_current_tray_state_decline_clears_stale_memory(tmp_path, monkeypat
     app._log_event = lambda event, detail=None, **kwargs: logged.append({"event": event, "detail": detail}) or True
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=False)
 
     assert not (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
@@ -4606,9 +4576,9 @@ def test_load_current_tray_state_decline_preserves_file_when_discard_log_fails(t
     )
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=False)
 
     assert (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == "STALE"
@@ -4662,7 +4632,7 @@ def test_load_current_tray_state_cancel_preserves_every_copy_and_returns_to_logi
         lambda *args, **kwargs: None,
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=None)
 
     assert (tmp_path / "current.json").exists()
     assert not (tmp_path / "parked").exists()
@@ -4705,9 +4675,9 @@ def test_load_current_tray_state_takeover_rewrites_worker_owner(tmp_path, monkey
         },
     )
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     saved_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert saved_state["worker_name"] == "새작업자"
@@ -4752,9 +4722,9 @@ def test_load_current_tray_state_takeover_rolls_back_owner_when_takeover_log_fai
         },
     )
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     saved_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert saved_state["worker_name"] == "이전작업자"
@@ -4807,9 +4777,9 @@ def test_load_current_tray_state_takeover_aborts_when_owner_rewrite_fails(tmp_pa
         },
     )
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     saved_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert saved_state["worker_name"] == "이전작업자"
@@ -4855,9 +4825,9 @@ def test_load_current_tray_state_takeover_delete_preserves_file_when_discard_log
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=False)
 
     assert (tmp_path / "current.json").exists()
     assert app.current_tray.master_label_code == ""
@@ -5124,9 +5094,9 @@ def test_load_current_tray_state_quarantines_invalid_state_without_deleting_evid
         },
     )
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     assert not (tmp_path / "current.json").exists()
     quarantined = list(tmp_path.glob("current.json.bad-*"))
@@ -5146,7 +5116,7 @@ def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_ma
     app.refreshed = False
     app._update_parked_trays_list = lambda: setattr(app, "refreshed", True)
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     label = "PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-ORIGINAL|CLC=AAA2270730100|LBL=ORIGINAL|HSH=0123456789abcdef"
     store = app._parked_store()
     parked_file = store.deterministic_label_path(worker_name=app.worker_name, master_label=label)
@@ -5191,7 +5161,8 @@ def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_ma
     }
     app._blocked_work_identity_matches = lambda _approval: True
     app._blocked_work_identity_is_current = lambda _approval: True
-    app._blocked_work_audit_identity = lambda _approval: {"actor": "manager"}
+    app._blocked_work_audit_identity = lambda approval: {
+        "actor": "manager", "operation_key": approval.get("operation_key")}
     app._transfer_seal_runtime = lambda: SimpleNamespace(client=SimpleNamespace(
         authority_scope_id="scope", resolve_phs_label=lambda **_kwargs: {"id": "known"},
     ))
@@ -5199,8 +5170,15 @@ def test_restore_parked_tray_preserves_invalid_phs2_and_keeps_key_blocked_for_ma
     app._ui_task_lane = lambda: SimpleNamespace(is_busy=lambda: False, submit=tasks.append)
     audits = []
     app._log_event = lambda event, **kwargs: audits.append((event, kwargs)) or True
+    app._admin_pin_effect_audited = lambda event, key: any(
+        row_event == event and values.get("detail", {}).get("operation_key") == key
+        for row_event, values in audits)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *_args, **_kwargs: None)
+    # R9 retains administrator PIN recovery notices; ordinary scanner errors
+    # above use the inline observer. The original safety/readback gate remains.
+    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_args, **_kwargs: None)
     app._show_invalid_parked_tray(str(parked_file))
     assert len(tasks) == 1
     tasks[0].finish(tasks[0].work())
@@ -5219,7 +5197,7 @@ def test_restore_parked_tray_preserves_invalid_utf8_file_and_keeps_current_state
     app.refreshed = False
     app._update_parked_trays_list = lambda: setattr(app, "refreshed", True)
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_invalid_utf8.json"
     parked_file.write_bytes(b"\xff\xfe\xfa")
 
@@ -5246,7 +5224,7 @@ def test_restore_parked_tray_rejects_valid_file_outside_parked_dir(tmp_path, mon
         AssertionError("outside parked tray should not be restored")
     )
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     outside_file = tmp_path / "outside_parked.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -5286,7 +5264,7 @@ def test_restore_parked_tray_rejects_corrupt_file_outside_parked_dir_without_qua
     app._update_parked_trays_list = lambda: setattr(app, "refreshed", True)
     warnings = []
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
     outside_file = tmp_path / "outside_corrupt.json"
     outside_file.write_text("{", encoding="utf-8")
@@ -5614,7 +5592,7 @@ def test_on_closing_keeps_app_open_when_requested_state_save_fails(monkeypatch):
     app.errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: app.errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: app.errors.append(args))
 
     app.on_closing()
 
@@ -5623,45 +5601,29 @@ def test_on_closing_keeps_app_open_when_requested_state_save_fails(monkeypatch):
     assert app.errors
 
 
-def test_on_closing_logs_discard_when_operator_declines_save(monkeypatch):
+def test_on_closing_saves_without_a_discard_prompt(monkeypatch):
     app = _headless_app()
-    app.worker_name = "홍길동"
-    app.current_tray = TraySession(
-        master_label_code="ACTIVE",
-        item_code="AAA2270730100",
-        item_name="fixture item",
-        scanned_barcodes=["BC-1", "BC-2"],
-    )
-    app.deleted = False
-    app.destroyed = False
-    app.cancelled = False
+    app.worker_name = "tester"
+    app.current_tray = TraySession(master_label_code="ACTIVE", scanned_barcodes=["BC-1", "BC-2"])
+    app.current_exchange_session = ProductExchangeSession()
+    app.root = type("Root", (), {"destroy": lambda root: setattr(app, "destroyed", True)})()
     app.log_queue = queue.Queue()
-    app.log_thread = type("DummyThread", (), {"is_alive": lambda self: False})()
-    app.root = type("DummyRoot", (), {"destroy": lambda root: setattr(app, "destroyed", True)})()
-    app._delete_current_tray_state = lambda: setattr(app, "deleted", True) or True
+    app.log_thread = type("Thread", (), {"is_alive": lambda thread: False})()
+    app._save_current_tray_state = lambda: setattr(app, "saved", True) or True
+    app._delete_current_tray_state = lambda: pytest.fail("close must preserve the saved round")
+    events = []
+    app._log_event = lambda event, **kwargs: events.append(event) or True
     app.save_settings = lambda: None
-    app._cancel_all_jobs = lambda: setattr(app, "cancelled", True)
-    logged = []
-    app._log_event = lambda event, detail=None, synchronous=False, **_kwargs: logged.append(
-        {"event": event, "detail": detail, "synchronous": synchronous}
-    ) or True
-    monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
+    app._cancel_all_jobs = lambda: None
+    monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *a, **k: pytest.fail("no scanner close prompt"))
+    monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *a, **k: pytest.fail("no scanner close prompt"))
     monkeypatch.setattr(container_audit_module, "stop_all_sounds", lambda: None)
-
     app.on_closing()
-
-    assert app.deleted is True
-    assert app.destroyed is True
-    assert logged[0]["event"] == "TRAY_DISCARDED_BY_OPERATOR"
-    assert logged[0]["synchronous"] is True
-    assert logged[0]["detail"]["reason"] == "close_without_saving"
-    assert logged[0]["detail"]["scan_count"] == 2
-    assert logged[1]["event"] == "WORK_END"
-    assert logged[1]["synchronous"] is True
+    assert app.saved and app.destroyed
+    assert events == ["WORK_END"]
 
 
-def test_on_closing_keeps_app_open_when_discard_log_fails(monkeypatch):
+def test_on_closing_keeps_app_open_when_saved_work_end_log_fails(monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100")
@@ -5669,36 +5631,38 @@ def test_on_closing_keeps_app_open_when_discard_log_fails(monkeypatch):
     app._delete_current_tray_state = lambda: (_ for _ in ()).throw(
         AssertionError("current state should not be deleted when discard log fails")
     )
+    app._save_current_tray_state = lambda: False
     app._log_event = lambda *args, **kwargs: False
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
     assert not hasattr(app, "destroyed")
     assert errors
-    assert errors[0][0] == "작업 기록 실패"
+    assert errors[0][0] == "작업 저장 실패"
 
 
-def test_on_closing_keeps_app_open_when_discard_state_delete_fails(monkeypatch):
+def test_on_closing_keeps_app_open_when_automatic_state_save_fails(monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100")
     app.root = type("DummyRoot", (), {"destroy": lambda root: setattr(app, "destroyed", True)})()
     app._delete_current_tray_state = lambda: False
+    app._save_current_tray_state = lambda: False
     app._log_event = lambda *args, **kwargs: True
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
     assert not hasattr(app, "destroyed")
     assert errors
-    assert errors[0][0] == "작업 삭제 실패"
+    assert errors[0][0] == "작업 저장 실패"
 
 
 def test_on_closing_preserves_unclaimed_current_state_on_login_screen(monkeypatch):
@@ -5780,13 +5744,14 @@ def test_on_closing_keeps_app_open_when_exchange_cancel_log_fails(monkeypatch):
         "state_deleted",
         True,
     ) or True
+    app._save_current_tray_state = lambda: True
     app._log_event = lambda event, *args, **kwargs: (
         event != "PRODUCT_EXCHANGE_CANCELLED"
     )
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
@@ -5834,10 +5799,11 @@ def test_on_closing_keeps_app_open_when_replacement_cancel_log_fails(monkeypatch
     app.master_label_replace_state = "awaiting_new_replacement"
     app.replacement_context = {"old_label": "OLD"}
     app.root = type("DummyRoot", (), {"destroy": lambda root: setattr(app, "destroyed", True)})()
+    app._save_current_tray_state = lambda: True
     app._log_event = lambda *args, **kwargs: False
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
@@ -5856,7 +5822,7 @@ def test_on_closing_keeps_app_open_when_work_end_log_fails(monkeypatch):
     app._log_event = lambda *args, **kwargs: False
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
@@ -5864,7 +5830,7 @@ def test_on_closing_keeps_app_open_when_work_end_log_fails(monkeypatch):
     assert errors[0][0] == "작업 종료 기록 실패"
 
 
-def test_on_closing_restores_current_state_when_work_end_log_fails_after_discard(tmp_path, monkeypatch):
+def test_on_closing_preserves_saved_current_state_when_work_end_log_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
@@ -5881,7 +5847,7 @@ def test_on_closing_restores_current_state_when_work_end_log_fails_after_discard
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askokcancel", lambda *args, **kwargs: True)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.on_closing()
 
@@ -5890,7 +5856,7 @@ def test_on_closing_restores_current_state_when_work_end_log_fails_after_discard
     assert restored["master_label_code"] == "ACTIVE"
     assert restored["scanned_barcodes"] == ["AAA2270730100-001"]
     assert errors[0][0] == "작업 종료 기록 실패"
-    assert "복구했습니다" in errors[0][1]
+    assert "종료하지 않습니다" in errors[0][1]
 
 
 def test_mismatch_scan_saves_dirty_current_tray_state(tmp_path):
@@ -6101,44 +6067,16 @@ def test_initiate_replacement_keeps_state_when_start_audit_fails(monkeypatch):
     assert errors[0][0] == "교체 시작 기록 실패"
 
 
-def test_show_exchange_dialog_invalidates_pending_main_scan_when_reusing_dialog(monkeypatch):
+def test_exchange_button_requires_an_active_label_without_opening_a_window(monkeypatch):
     app = _headless_app()
-    app.root = CapturingRoot()
-    app.scan_entry = DummyScanEntry("AAA2270730100-001")
-    app._scan_callback_epoch = 0
     app.current_tray = TraySession()
-    app.current_exchange_session = ProductExchangeSession(defective_barcodes=["AAA2270730100-BAD-1"])
-    processed = []
-    app._process_barcode_logic = lambda raw_barcode: processed.append(raw_barcode)
-
-    class ExistingDialog:
-        def __init__(self):
-            self.calls = []
-
-        def winfo_exists(self):
-            return True
-
-        def lift(self):
-            self.calls.append("lift")
-
-        def focus_force(self):
-            self.calls.append("focus_force")
-
-    dialog = ExistingDialog()
-    app.exchange_dialog = dialog
-    monkeypatch.setattr(
-        container_audit_module.tk,
-        "Toplevel",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("existing exchange dialog should be reused")),
-    )
-
-    app.process_barcode()
-    app.show_exchange_dialog()
-    callback, args = app.root.calls[0]
-    callback(*args)
-
-    assert processed == []
-    assert dialog.calls == ["lift", "focus_force"]
+    statuses = []
+    app.COLOR_DANGER = "danger"
+    app.show_status_message = lambda *args, **kwargs: statuses.append(args)
+    monkeypatch.setattr(container_audit_module.tk, "Toplevel", lambda *a, **k: pytest.fail("exchange uses the embedded surface"))
+    assert app.show_exchange_dialog() is False
+    assert statuses[0][0] == "현품표를 먼저 스캔하세요."
+    assert not getattr(app, "_inline_exchange_mode", "")
 
 
 def test_delayed_scan_highlight_reset_targets_original_row_after_newer_scan():
@@ -6676,7 +6614,7 @@ def test_reset_current_work_preserves_active_tray_when_reset_log_fails(tmp_path,
     errors = []
     app.show_status_message = lambda *args, **kwargs: messages.append(args)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.reset_current_work()
 
@@ -6708,7 +6646,7 @@ def test_reset_current_work_preserves_active_tray_when_state_delete_fails(monkey
     errors = []
     app.show_status_message = lambda *args, **kwargs: messages.append(args)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *args, **kwargs: True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app.reset_current_work()
 
@@ -7240,12 +7178,8 @@ def test_process_barcode_preserves_outbox_state_when_master_label_audit_projecti
     app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
     errors = []
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda *args, **kwargs: errors.append(args),
-    )
-    app.show_fullscreen_warning = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("valid JSON master label should not warn")
     )
 
     app._process_barcode_logic('{"CLC":"AAA2270730100","QT":"2"}')
@@ -7451,6 +7385,7 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
         def confirm_completion_checkpoint(self, intent_id):
             assert intent_id == "intent-physical-label"
             captured["checkpoint_confirmed"] = True
+            return container_audit_module.SealAttempt(intent_id=intent_id, status="PREPARED")
 
         def attempt(self, intent_id):
             assert intent_id == "intent-physical-label"
@@ -7460,6 +7395,9 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
             )
 
     app._transfer_seal_runtime = lambda: Coordinator()
+    # This test covers preserved physical-label selection in the legacy prepare
+    # API; scan-context persistence is exercised by the durable-contract suite.
+    app._scanonly_completion_context = lambda: None
     fields = app._parse_new_format_qr(original)
 
     result = app._prepare_and_attempt_transfer_seal(
@@ -7468,7 +7406,7 @@ def test_prepare_transfer_seal_uses_active_physical_label_with_legacy_fallback(
         on_prepared=lambda _attempt: captured.update(checkpoint_saved=True),
     )
 
-    assert result.status == "ACKED"
+    assert result.status == "PREPARED"
     assert captured["master_label"].split("|LBL=", 1)[1].split("|", 1)[0] == expected_label
     assert captured["master_label_fields"]["LBL"] == expected_label
     assert captured["master_label_fields"]["HSH"] == (
@@ -8027,7 +7965,7 @@ def test_pending_completion_takeover_preserves_original_projection_owner(
         lambda *_args, **_kwargs: True,
     )
 
-    takeover._load_current_tray_state()
+    takeover._load_current_tray_state(_recovery_choice=True)
 
     after_takeover = json.loads(
         (tmp_path / takeover.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8")
@@ -8288,7 +8226,7 @@ def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, 
         AssertionError("parked list should not refresh after failed park")
     )
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     assert app.park_current_tray(confirm=False) is False
 
@@ -8325,7 +8263,7 @@ def test_park_current_tray_rolls_back_when_current_state_delete_fails(tmp_path, 
         AssertionError("park event should not be logged when current state delete fails")
     )
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     assert app.park_current_tray(confirm=False) is False
 
@@ -8358,7 +8296,7 @@ def test_park_current_tray_preserves_current_when_park_audit_log_fails(tmp_path,
     app.show_status_message = lambda *args, **kwargs: setattr(app, "status_message", args)
     app._log_event = lambda *args, **kwargs: False
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     assert app.park_current_tray(confirm=False) is False
 
@@ -8460,7 +8398,7 @@ def test_restore_parked_tray_preserves_outbox_when_restore_audit_log_fails(tmp_p
         {"event": event, "detail": {**(detail or {}), **kwargs}, "synchronous": synchronous}
     ) and False
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8542,7 +8480,7 @@ def test_restore_parked_tray_preserves_outbox_when_parked_delete_fails(tmp_path,
         staticmethod(lambda path: (_ for _ in ()).throw(PermissionError("locked"))),
     )
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8681,7 +8619,7 @@ def test_restore_parked_tray_rejects_other_worker_payload_without_deleting_file(
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("restore prompt should not open")),
     )
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     parked_file = tmp_path / "parked_qr_다른작업자_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8702,7 +8640,7 @@ def test_restore_parked_tray_rejects_other_worker_payload_without_deleting_file(
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=True)
 
     assert parked_file.exists()
     assert not (tmp_path / "current.json").exists()
@@ -8741,7 +8679,7 @@ def test_restore_parked_tray_deletes_completed_label_without_restoring(tmp_path,
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("overwrite prompt should not open")),
     )
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code=label,
@@ -8762,7 +8700,7 @@ def test_restore_parked_tray_deletes_completed_label_without_restoring(tmp_path,
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=True)
 
     assert not parked_file.exists()
     assert not (tmp_path / "current.json").exists()
@@ -8800,7 +8738,7 @@ def test_restore_parked_tray_does_not_overwrite_active_work_if_parking_fails(tmp
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=True)
 
     assert app.current_tray.master_label_code == "ACTIVE"
     assert parked_file.exists()
@@ -8831,7 +8769,7 @@ def test_restore_parked_tray_preserves_discard_outbox_when_discard_log_fails(tmp
     app.show_worker_input_screen = lambda: setattr(app, "showed_worker_input", True)
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8852,7 +8790,7 @@ def test_restore_parked_tray_preserves_discard_outbox_when_discard_log_fails(tmp
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=False)
 
     assert app.current_tray.master_label_code == ""
     assert app.worker_name == ""
@@ -8896,7 +8834,7 @@ def test_restore_parked_tray_keeps_active_work_when_restored_state_save_fails(tm
     )
     errors = []
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *args, **kwargs: False)
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
     parked_file = tmp_path / "parked_qr_홍길동_fixture.json"
     parked_session = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8917,7 +8855,7 @@ def test_restore_parked_tray_keeps_active_work_when_restored_state_save_fails(tm
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=False)
 
     assert logged == []
     assert app.current_tray.master_label_code == "ACTIVE"
@@ -8978,7 +8916,7 @@ def test_restore_parked_tray_logs_current_work_discard_when_overwritten(tmp_path
         ensure_ascii=False,
     )
 
-    app.restore_parked_tray(str(parked_file))
+    app.restore_parked_tray(str(parked_file), _switch_choice=False)
 
     assert logged[0]["event"] == "TRAY_DISCARDED_BY_OPERATOR"
     assert logged[0]["synchronous"] is True
@@ -9288,7 +9226,7 @@ def test_finalize_replacement_logs_applied_synchronously_without_cancel_event(mo
         {"event": event, "detail": detail, "synchronous": synchronous}
     ) or True
     infos = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: infos.append(args))
 
     app._finalize_replacement()
 
@@ -9386,8 +9324,8 @@ def test_finalize_replacement_keeps_state_when_applied_log_fails(monkeypatch):
     app._update_current_item_label = lambda: setattr(app, "item_label_updated", True)
     infos = []
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: infos.append(args))
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app._finalize_replacement()
 
@@ -9402,7 +9340,7 @@ def test_finalize_replacement_keeps_state_when_applied_log_fails(monkeypatch):
 
 def test_exchange_session_honors_quantity_and_item_catalog_spec(monkeypatch):
     app = _headless_app()
-    app.current_exchange_session = ProductExchangeSession()
+    app.current_exchange_session = ProductExchangeSession(item_code="AAA2270730100", item_name="fixture item", item_spec="fixture spec", target_quantity=2, current_step="scan_defective")
     app.exchange_quantity_var = DummyIntVar(2)
     app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
     app.success_sound = None
@@ -9411,8 +9349,7 @@ def test_exchange_session_honors_quantity_and_item_catalog_spec(monkeypatch):
     app._update_exchange_display = lambda: None
     app._update_exchange_status = lambda: None
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("valid exchange scan should not error")),
     )
 
@@ -9427,80 +9364,33 @@ def test_exchange_session_honors_quantity_and_item_catalog_spec(monkeypatch):
     assert session.item_spec == "fixture spec"
     assert session.defective_barcodes == ["PREFIX-AAA2270730100-DEFECT-1", "PREFIX-AAA2270730100-DEFECT-2"]
     assert session.good_barcodes == ["PREFIX-AAA2270730100-GOOD-1", "PREFIX-AAA2270730100-GOOD-2"]
-    assert app.exchange_quantity_spin.config_calls == [{"state": container_audit_module.tk.DISABLED}]
     assert app.exchange_complete_button.config_calls[-1]["state"] == container_audit_module.tk.NORMAL
 
 
-def test_show_exchange_dialog_focuses_existing_dialog_without_resetting_partial_session(monkeypatch):
+def test_exchange_button_restarts_inline_target_admission_without_window_focus(monkeypatch):
     app = _headless_app()
-    app.current_tray = TraySession()
-    session = ProductExchangeSession(
-        item_code="AAA2270730100",
-        item_name="fixture item",
-        target_quantity=2,
-        current_step="scan_good",
-        defective_barcodes=["AAA2270730100-BAD-1"],
-    )
-    app.current_exchange_session = session
-
-    class ExistingDialog:
-        def __init__(self):
-            self.calls = []
-
-        def winfo_exists(self):
-            return True
-
-        def lift(self):
-            self.calls.append("lift")
-
-        def focus_force(self):
-            self.calls.append("focus_force")
-
-    dialog = ExistingDialog()
-    app.exchange_dialog = dialog
-    monkeypatch.setattr(
-        container_audit_module.tk,
-        "Toplevel",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("existing exchange dialog should be reused")),
-    )
-    monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showwarning",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("existing exchange dialog should not warn")),
-    )
-
-    app.show_exchange_dialog()
-
-    assert app.current_exchange_session is session
-    assert app.current_exchange_session.defective_barcodes == ["AAA2270730100-BAD-1"]
-    assert app.exchange_dialog is dialog
-    assert dialog.calls == ["lift", "focus_force"]
+    app.current_tray = TraySession(master_label_code="ACTIVE", scanned_barcodes=["BC-1"], tray_size=3)
+    app._inline_exchange_mode = "new"
+    app._inline_exchange_target = "BC-OLD"
+    app.COLOR_PRIMARY = "primary"
+    app.show_status_message = lambda *a, **k: None
+    monkeypatch.setattr(container_audit_module.tk, "Toplevel", lambda *a, **k: pytest.fail("exchange uses the embedded surface"))
+    assert app.show_exchange_dialog() is True
+    assert (app._inline_exchange_mode, app._inline_exchange_target) == ("old", "")
+    assert app.current_tray.scanned_barcodes == ["BC-1"]
+    assert app.current_tray.tray_size == 3
 
 
 @pytest.mark.parametrize("quantity_var", [DummyIntVar(0), DummyIntVar(11), DummyIntVar("abc"), DummyIntVar(True), RaisingIntVar()])
-def test_exchange_scan_rejects_invalid_quantity_without_starting_session(monkeypatch, quantity_var):
+def test_exchange_button_ignores_removed_quantity_input(monkeypatch, quantity_var):
     app = _headless_app()
-    app.current_exchange_session = ProductExchangeSession()
+    app.current_tray = TraySession(master_label_code="ACTIVE", tray_size=3)
     app.exchange_quantity_var = quantity_var
-    app.exchange_quantity_spin = DummyButton()
-    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
-    app._update_exchange_display = lambda: (_ for _ in ()).throw(
-        AssertionError("display should not update when quantity is invalid")
-    )
-    app._update_exchange_status = lambda: (_ for _ in ()).throw(
-        AssertionError("status should not update when quantity is invalid")
-    )
-    warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
-
-    app._process_exchange_scan("PREFIX-AAA2270730100-DEFECT-1")
-
-    assert app.current_exchange_session.current_step == "not_started"
-    assert app.current_exchange_session.target_quantity == 1
-    assert app.current_exchange_session.defective_barcodes == []
-    assert app.exchange_quantity_spin.config_calls == []
-    assert warnings
-    assert warnings[0][0] == "수량 미설정"
+    app.COLOR_PRIMARY = "primary"
+    app.show_status_message = lambda *a, **k: None
+    assert app.show_exchange_dialog() is True
+    assert app._inline_exchange_mode == "old"
+    assert app.current_tray.tray_size == 3
 
 
 def test_exchange_scan_rejects_invalid_in_progress_state_without_updating_display(monkeypatch):
@@ -9514,7 +9404,7 @@ def test_exchange_scan_rejects_invalid_in_progress_state_without_updating_displa
         AssertionError("status should not update when in-progress exchange state is invalid")
     )
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app._process_exchange_scan("PREFIX-AAA2270730100-DEFECT-1")
 
@@ -9524,20 +9414,19 @@ def test_exchange_scan_rejects_invalid_in_progress_state_without_updating_displa
     assert errors[0][0] == "교환 오류"
 
 
-def test_exchange_scan_rejects_item_code_without_product_suffix(monkeypatch):
+def test_inline_exchange_rejects_item_code_without_product_suffix(monkeypatch):
     app = _headless_app()
-    app.current_exchange_session = ProductExchangeSession()
-    app.exchange_quantity_var = DummyIntVar(1)
-    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture item", "Spec": "fixture spec"}]
-    app._update_exchange_display = lambda: None
-    app._update_exchange_status = lambda: None
-    app.errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: app.errors.append(args))
-
-    app._process_exchange_scan("AAA2270730100")
-
-    assert app.current_exchange_session.item_code == ""
-    assert app.errors
+    app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100")
+    app._inline_exchange_mode = "old"
+    app.ITEM_CODE_LENGTH = 13
+    app.items_data = [{"Item Code": "AAA2270730100", "Item Name": "fixture", "Spec": ""}]
+    app.COLOR_DANGER = "danger"
+    warnings = []
+    app.show_fullscreen_warning = lambda *args: warnings.append(args)
+    assert app._process_inline_exchange_scan("AAA2270730100") is False
+    assert app._inline_exchange_mode == "old"
+    assert app.current_tray.scanned_barcodes == []
+    assert warnings[0][0] == "교환 제품 오류"
 
 
 def test_cancel_exchange_logs_partial_scans_before_resetting_session(monkeypatch):
@@ -9594,7 +9483,7 @@ def test_cancel_exchange_preserves_partial_session_when_cancel_log_fails(monkeyp
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     app._log_event = lambda *args, **kwargs: False
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     assert app._cancel_exchange() is False
 
@@ -9972,7 +9861,7 @@ def test_complete_exchange_rejects_target_quantity_mismatch(monkeypatch):
     app._log_event = lambda *args, **kwargs: setattr(app, "logged", True)
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
     app._complete_exchange()
 
@@ -9994,7 +9883,7 @@ def test_complete_exchange_rejects_cross_item_barcodes_without_logging(monkeypat
     app._log_event = lambda *args, **kwargs: setattr(app, "logged", True)
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
     app._complete_exchange()
 
@@ -10018,7 +9907,7 @@ def test_complete_exchange_rejects_wrong_state_step_without_logging(monkeypatch)
     app._log_event = lambda *args, **kwargs: setattr(app, "logged", True)
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     warnings = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
 
     app._complete_exchange()
 
@@ -10045,8 +9934,8 @@ def test_complete_exchange_stops_when_log_write_fails(monkeypatch):
     app.exchange_complete_button = DummyButton()
     infos = []
     errors = []
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: infos.append(args))
-    monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *args, **kwargs: errors.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: infos.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
     app._complete_exchange()
 
@@ -10078,8 +9967,8 @@ def test_complete_exchange_logs_once_for_completed_session(monkeypatch):
     app.exchange_complete_button = DummyButton()
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
     app.exchange_quantity_spin = DummyButton()
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: None)
-    monkeypatch.setattr(container_audit_module.messagebox, "showwarning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: None)
 
     app._complete_exchange()
     app._complete_exchange()
@@ -10109,7 +9998,7 @@ def test_complete_exchange_resets_session_so_later_cancel_is_not_emitted(monkeyp
     ) or True
     app.exchange_complete_button = DummyButton()
     app.exchange_dialog = type("DummyDialog", (), {"destroy": lambda self: setattr(app, "destroyed", True)})()
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: None)
 
     app._complete_exchange()
     assert app._cancel_exchange(reason="app_close") is True
@@ -10547,21 +10436,7 @@ def test_replacement_scanner_flow_writes_correction_and_direct_sync_plan(tmp_pat
     )
     app._update_current_item_label = lambda *args, **kwargs: None
     app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
-    monkeypatch.setattr(container_audit_module.messagebox, "showinfo", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showwarning",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError(f"valid replacement scanner flow should not warn: {args}")
-        ),
-    )
-    monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showerror",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError(f"valid replacement scanner flow should not error: {args}")
-        ),
-    )
+    monkeypatch.setattr(app, "_show_field_notice", lambda title, *_a, **_k: None if title == "교체 완료" else (_ for _ in ()).throw(AssertionError(title)))
 
     app.initiate_master_label_replacement()
     assert app.master_label_replace_state == "awaiting_old_completed"
@@ -10744,3 +10619,11 @@ def test_transfer_seal_event_detail_hashes_opaque_qr_instead_of_logging_it():
         opaque_qr.encode("utf-8")
     ).hexdigest()
     assert "TOKEN" not in json.dumps(detail, ensure_ascii=False)
+
+
+def test_exchange_handler_enters_inline_mode_without_window_dependency():
+    import inspect
+    source = inspect.getsource(ContainerAudit.show_exchange_dialog)
+    assert "_inline_exchange_mode" in source
+    assert "Toplevel" not in source and "messagebox" not in source
+    assert not hasattr(container_audit_module, "calculate_exchange_dialog_size")

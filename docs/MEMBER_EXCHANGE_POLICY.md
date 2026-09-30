@@ -2,24 +2,18 @@
 
 ## 봉인 전
 
-현재 이적 트레이는 중앙 원장에서 아직 `PHS/AVAILABLE`이다. 제품 1~2개 교체는
-`REPLACE_BUNDLE_MEMBERS` 한 명령으로 처리한다.
+w9scanonly 계약 v1.2의 `SCAN_REGISTER_GOOD` 경로는 카드/단추 → 불량 대상 → 대체품이다.
+중앙 요청 전에 로컬 intent·JSON·교환 감사 기록을 내구 저장하고 트레이를 갱신한다.
+기존에 스캔한 제품은 대체하고, 미스캔 구성원은 대체품이 그 자리를 채운다. 목표는 같다.
 
-- 작업자는 현재 트레이의 교체 대상 제품을 스캔하고 새 양품을 스캔한다.
-- 새 양품 resolver는 제품 바코드 하나를 정확히 하나의 PHS·unit에 매핑하며,
-  그 공여 PHS의 활성 제품도 정확히 1개여야 한다. 여러 제품이 든 PHS는 교체 후
-  기존 인쇄 라벨이 실제 잔량과 달라지므로 중앙 호출 전에 차단한다.
-- 대상 PHS와 모든 양품 원본 PHS의 `entity_version`을 같은 명령에서 CAS한다.
-- 서버 transaction은 기존 제품을 `PROCESS_DAMAGE_HOLD`로 이동하고 새 양품을 대상
-  PHS에 편입한다. 1~2쌍 전체가 성공하거나 전체가 실패한다.
-- 중앙 receipt가 exact membership·hash·pair·version을 모두 증명한 뒤에만 로컬
-  트레이 목록을 한 번에 교체한다.
-- 대상 PHS 현품표는 제품 집합을 인쇄한 라벨이 아니라 `BND/ITG/LBL`로 정본을
-  조회하는 identity 라벨이다. 그래도 서버 receipt가
-  `RETAIN_IDENTITY_LABEL`·`target_label_identity_remains_valid=true`·
-  `target_label_membership_bound=false`를 모두 증명해야 기존 라벨을 계속 사용한다.
-- 중앙 ACK 뒤 로컬 반영 중 종료되어도 SQLite intent와 현재 트레이 상태를 대조해
-  재시작 시 복구한다.
+- 검사 단계의 다른 묶음 제품은 자동 이동한다. singleton 제한을 적용하지 않는다.
+- 미검사·미등록 대체품은 교환 스캔으로 GOOD 등록한다.
+- NG·다른 품목·TRANSFER 봉인/PACKAGE/SHIPPED 구성원은 거절한다.
+- 로컬에서 모르면 접수하고 중앙에서 판정한다. UNKNOWN은 성공이나 실패로 바꾸지 않는다.
+- 배경 `REPLACE_BUNDLE_MEMBERS`는 기존 인증 context와 CAS를 유지한다. 요청 pair는
+  old_barcode/new_barcode, receipt는 server unit/source IDs와 pair별 source kind를 포함한다.
+- exact target membership/hash·불량 이동·version·멱등성 증거를 검증한다.
+- 기존 singleton 명령 및 lease rotation의 저장·복구는 이전 원장 호환 경로로 유지한다.
 
 ## 봉인 후
 

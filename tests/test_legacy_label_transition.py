@@ -47,7 +47,7 @@ from transfer_member_exchange import (
     TransferMemberExchangeCoordinator,
     TransferMemberExchangeStore,
 )
-from transfer_seal import SealAttempt, TransferSealCoordinator, TransferSealError
+from transfer_seal import SealAttempt, TransferSealCoordinator, TransferSealError, TransferSealStore
 
 pytestmark = pytest.mark.usefixtures("owned_tk_workers")
 
@@ -217,9 +217,16 @@ def flow(tmp_path):
         # lease manager, and a member exchange coordinator whose UI snapshot
         # holds only what startup recovery published (no tray yet).
         app._transfer_coordinator_ui_owner_thread_id = threading.get_ident()
+        headless_ui_owner = threading.get_ident()
+        def fixture_owner():
+            # This fixture deliberately supports both synchronous headless
+            # calls and request_complete_tray's worker, without real Tk.
+            worker = getattr(getattr(app, "_ui_lane", None), "worker_thread_id", None)
+            return worker if threading.get_ident() == worker else headless_ui_owner
         fixture_seal = app.transfer_seal_coordinator
         app.transfer_seal_coordinator = TransferSealCoordinator(
-            fixture_seal.store,
+            TransferSealStore(root / "transfer-seal.db",
+                owner_thread_id_provider=fixture_owner),
             fixture_seal.client,
             fixture_seal.operation_lease_manager,
         )
@@ -446,7 +453,7 @@ MALFORMED_LABELS = [
     (COMPACT_QR + "|LBL=LBL-COMPACT-002", ["DUPLICATE_KEY"]),
     # w9transitalign table: compact defects are the shared FORMAT_INVALID,
     # not judged beside another defect.
-    (COMPACT_QR + "|QT=2", ["FORMAT_INVALID"]),
+    (COMPACT_QR + "|EXTRA=2", ["FORMAT_INVALID"]),
     # A later duplicate must not hide the new-system value (sub-03 P1-1).
     (f"SRC=KMTECH_INPUT_TAG|SRC=OLD|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_MISSING"]),
     (f"PHS=2|PHS=1|CLC={ITEM}|QT=2", ["DUPLICATE_KEY", "PHS_NOT_2"]),
@@ -539,7 +546,7 @@ DAMAGED_PHS2_LABELS = [
     COMPACT_QR.replace("|HSH=aaaaaaaaaaaaaaaa", ""),
     COMPACT_QR.replace("ITG=ITAG-COMPACT-001", "ITG="),
     COMPACT_QR.replace("aaaaaaaaaaaaaaaa", "z" * 16),
-    COMPACT_QR + "|QT=2",
+    COMPACT_QR + "|EXTRA=2",
 ]
 
 
@@ -554,7 +561,7 @@ def test_on_damaged_phs2_tray_survives_restart_and_parking(flow, tmp_path, monke
     restarted.worker_name = "tester"
     restarted._load_session_state()
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
-    restarted._load_current_tray_state()
+    restarted._load_current_tray_state(_recovery_choice=True)
     assert restarted.current_tray.master_label_code == label
     assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001"]
 
@@ -580,7 +587,7 @@ def test_on_duplicate_round_in_progress_survives_restart_and_parking(flow, tmp_p
     restarted = flow(transition=True, root=tmp_path / "pc")
     restarted.worker_name = "tester"
     restarted._load_session_state()
-    restarted._load_current_tray_state()
+    restarted._load_current_tray_state(_recovery_choice=True)
     assert restarted.current_tray.master_label_code == OLD_QR
     assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0003"]
 
@@ -892,7 +899,7 @@ def test_legacy_record_survives_restart_and_keeps_a_same_item_tray(flow, monkeyp
     restarted = flow(transition=True)
     restarted.worker_name = "tester"
     restarted._load_session_state()
-    restarted._load_current_tray_state()
+    restarted._load_current_tray_state(_recovery_choice=True)
 
     assert restarted.work_summary[ITEM]["count"] == 1
     assert restarted.work_summary[ITEM]["transition_counts"] == {"LEGACY": 1}
@@ -998,19 +1005,6 @@ def _phs2_tray(flow, root, *, transition):
     assert app.current_tray.operation_lease_id
     app.seal_calls.clear()
 
-    def acked_seal(**kwargs):
-        # The real pre-command checks, then a command the fixture acknowledges.
-        kwargs["coordinator"].preview(
-            master_label=kwargs["source_label_payload"],
-            master_label_fields=kwargs["source_label_fields"],
-            item_id=kwargs["item_code"],
-            scanned_barcodes=kwargs["scanned_barcodes"],
-            operation_lease_id=kwargs["operation_lease_id"],
-        )
-        app.seal_calls.append(kwargs["source_label_payload"])
-        return SealAttempt("intent-phs2", "ACKED", receipt_id="receipt-phs2")
-
-    app._prepare_and_attempt_transfer_seal_snapshot = acked_seal
     app.current_tray.scanned_barcodes = [f"{ITEM}-SERIAL-001"]  # the lease's members
     app.current_tray.scan_times = [datetime.datetime.now()]
     return app
@@ -1046,7 +1040,7 @@ def test_full_phs2_tray_takes_the_same_central_path_with_the_switch_on_or_off(fl
 
     assert (on_completed, on_seals) == (off_completed, off_seals) == ([True], [COMPACT_QR])
     assert {key: value for key, value in on_detail.items() if key not in TRANSITION_KEYS} == off_detail
-    assert off_detail["transfer_seal_status"] == "ACKED"
+    assert off_detail["transfer_seal_status"] == "PREPARED"
     assert not TRANSITION_KEYS & set(off_detail)
     assert on_detail["transition_class"] == "PHS2_CENTRAL"
     assert on_detail["transition_reasons"] == []
@@ -1054,72 +1048,52 @@ def test_full_phs2_tray_takes_the_same_central_path_with_the_switch_on_or_off(fl
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
-def test_on_phs2_tray_the_lease_refuses_before_any_command_completes_locally(flow, tmp_path):
-    # A product outside the inspected members: the real seal coordinator refuses
-    # it before a command; transition mode records it instead of stopping.
+def test_central_member_refusal_preserves_the_local_completion_and_original_intent(flow, tmp_path):
+    # Decision 3: local completion is durable before background membership validation.
     completed, seal_calls, detail, app = _phs2_completion(
-        flow, tmp_path / "on", transition=True, last=f"{ITEM}-OTHER-999",
-    )
-
-    assert completed == [True] and seal_calls == []
-    assert detail["transition_class"] == "PHS2_LOCAL"
-    assert detail["transition_reasons"] == ["BARCODE_NOT_IN_SOURCE_BUNDLE"]
-    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
-    assert _has_seal_intent(app) is False
+        flow, tmp_path / "on", transition=True, last=f"{ITEM}-OTHER-999")
+    assert completed == [True] and seal_calls == [COMPACT_QR]
+    assert detail["transition_class"] == "PHS2_CENTRAL"
+    assert detail["transfer_seal_status"] == "PREPARED"
+    assert _has_seal_intent(app) is True
+    assert detail["product_barcodes"][-1] == f"{ITEM}-OTHER-999"
+    _pump_until(app.root, lambda: getattr(app, "_scanonly_review_count", 0) == 1)
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert app.current_tray.master_label_code == ""
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
-def test_on_phs2_lease_expiring_between_the_checks_still_completes_locally(flow, tmp_path):
-    # sub-04 P2-1: the lease passed the preview but expired before prepare wrote
-    # an intent; the first press completes the tray locally.
+def test_completion_performs_no_foreground_lease_verification(flow, tmp_path, monkeypatch):
+    # Decision 3: even verification belongs to the separate transport owner.
     app = _phs2_tray(flow, tmp_path / "on", transition=True)
-    del app._prepare_and_attempt_transfer_seal_snapshot  # the real seal steps
     app.current_tray.scanned_barcodes.append(f"{ITEM}-SERIAL-002")
     app.current_tray.scan_times.append(datetime.datetime.now())
-    coordinator = app.transfer_seal_coordinator
-    # As the real constructor: the completion lane owns the seal coordinator.
-    coordinator._owner_thread_id_provider = app._transfer_coordinator_owner_thread_id
-    real_verify = coordinator._verified_operation_lease
-    checks = []
-
-    def expiring(**kwargs):
-        checks.append(kwargs["lease_id"])
-        if len(checks) > 1:
-            raise TransferSealError("OPERATION_LEASE_EXPIRED", "fixture expiry")
-        return real_verify(**kwargs)
-
-    coordinator._verified_operation_lease = expiring
+    app._schedule_scanonly_transport = lambda **kwargs: None
+    monkeypatch.setattr(app.transfer_seal_coordinator, "_verified_operation_lease",
+        lambda **kwargs: pytest.fail("foreground completion verified a lease"))
     completed = []
-    assert app.request_complete_tray(completion_callback=completed.append) is True
+    assert app.request_complete_tray(completion_callback=completed.append)
     _pump_until(app.root, lambda: bool(completed))
-
-    assert completed == [True] and len(checks) == 2
+    assert completed == [True]
     [row] = _rows(app, "TRAY_COMPLETE")
-    detail = _details(row)
-    assert (detail["transition_class"], detail["transition_reasons"]) == (
-        "PHS2_LOCAL", ["OPERATION_LEASE_EXPIRED"],
-    )
-    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
-    assert _has_seal_intent(app) is False
+    assert _details(row)["transfer_seal_status"] == "PREPARED"
+    assert _has_seal_intent(app) is True
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
-def test_partial_phs2_tray_is_refused_off_and_recorded_locally_on(flow, tmp_path, monkeypatch):
-    off = _phs2_tray(flow, tmp_path / "off", transition=False)
-    assert off.submit_current_tray() is None
-    assert off.current_tray.master_label_code == COMPACT_QR
-    assert "일부 제출할 수 없습니다" in off.statuses[-1][0]
-    assert _rows(off, "TRAY_COMPLETE") == []
-
-    on = _phs2_tray(flow, tmp_path / "on", transition=True)
-    _submit(on, monkeypatch)
-    [row] = _rows(on, "TRAY_COMPLETE")
-    detail = _details(row)
-    assert detail["transition_class"] == "PHS2_LOCAL"
-    assert detail["transition_reasons"] == ["PARTIAL_TRANSFER"]
-    assert detail["transfer_seal_status"] == "PHS2_LOCAL_ONLY"
-    assert detail["is_partial_submission"] is True
-    assert on.seal_calls == []
+def test_partial_phs2_tray_is_durable_and_held_with_the_switch_on_or_off(flow, tmp_path, monkeypatch):
+    # Decision 5 and contract 6: both modes hold short completion until next label.
+    for transition in (False, True):
+        app = _phs2_tray(flow, tmp_path / str(transition), transition=transition)
+        _submit(app, monkeypatch)
+        [row] = _rows(app, "TRAY_COMPLETE")
+        detail = _details(row)
+        assert detail["is_partial_submission"] is True
+        assert detail["scan_count"] == 1
+        assert app.seal_calls == [COMPACT_QR]
+        assert _has_seal_intent(app) is True
+        assert app._short_confirmation_undo is not None
+        assert app.current_tray.master_label_code == ""
 
 
 @pytest.mark.parametrize(
@@ -1162,7 +1136,7 @@ def test_on_phs2_label_the_central_check_blocks_becomes_a_local_tray_with_its_he
     assert detail["transition_class"] == "PHS2_LOCAL"
     assert detail["transition_reasons"] == [reason, "PARTIAL_TRANSFER"]
     assert detail["product_barcodes"] == [f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"]
-    assert app.seal_calls == [] and _has_seal_intent(app) is False
+    assert app.seal_calls == [COMPACT_QR] and _has_seal_intent(app) is True
 
 
 def _restart(flow, root, monkeypatch, *, transition, client=None):
@@ -1170,7 +1144,7 @@ def _restart(flow, root, monkeypatch, *, transition, client=None):
     app.worker_name = "tester"
     app._load_session_state()
     monkeypatch.setattr(container_audit_module.messagebox, "askyesnocancel", lambda *_a, **_k: True)
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
     return app
 
 
@@ -1200,7 +1174,7 @@ def test_round_started_on_completes_in_its_class_after_the_switch_is_turned_off(
 
 
 @pytest.mark.parametrize("restart_on", [True, False], ids=["restart-on", "restart-off"])
-def test_phs2_round_started_locally_never_reaches_the_central_path_later(
+def test_phs2_round_started_locally_keeps_its_class_and_queues_deferred_reflection(
     flow, tmp_path, monkeypatch, restart_on
 ):
     # Started PHS2_LOCAL during an outage; restarted with the server back (and
@@ -1229,12 +1203,12 @@ def test_phs2_round_started_locally_never_reaches_the_central_path_later(
     detail = _details(row)
     assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_LOCAL", "PHS2_LOCAL_ONLY")
     assert detail["transition_reasons"] == ["PHS2_PREFLIGHT_UNAVAILABLE", "PARTIAL_TRANSFER"]
-    assert online.identities == [] and restarted.seal_calls == []
-    assert _has_seal_intent(restarted) is False
+    assert online.identities == [] and restarted.seal_calls == [COMPACT_QR]
+    assert _has_seal_intent(restarted) is True
 
 
 @pytest.mark.usefixtures("fixed_operation_lease_clock")
-def test_phs2_round_refused_before_a_command_stays_local_after_a_failed_write_and_switch_off(
+def test_phs2_failed_local_write_retries_the_original_event_after_restart_and_switch_off(
     flow, tmp_path, monkeypatch
 ):
     app = _phs2_tray(flow, tmp_path / "pc", transition=True)
@@ -1258,7 +1232,7 @@ def test_phs2_round_refused_before_a_command_stays_local_after_a_failed_write_an
     assert completed == [False] and failed and _rows(app, "TRAY_COMPLETE") == []
 
     restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=False)
-    assert restarted.current_tray.transition_class == "PHS2_LOCAL"
+    assert restarted.current_tray.transition_class == "PHS2_CENTRAL"
     completed = []
     assert restarted.request_complete_tray(completion_callback=completed.append) is True
     _pump_until(restarted.root, lambda: bool(completed))
@@ -1266,12 +1240,12 @@ def test_phs2_round_refused_before_a_command_stays_local_after_a_failed_write_an
     assert completed == [True]
     [row] = _rows(restarted, "TRAY_COMPLETE")
     detail = _details(row)
-    assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_LOCAL", "PHS2_LOCAL_ONLY")
-    assert detail["transition_reasons"] == ["BARCODE_NOT_IN_SOURCE_BUNDLE"]
+    assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_CENTRAL", "PREPARED")
+    assert detail["transition_reasons"] == []
     # The retry is the same event: same ID and timestamp as the failed write.
     assert detail["idempotency_key"] == json.loads(failed[0]["details"])["idempotency_key"]
     assert row["timestamp"] == failed[0]["timestamp"]
-    assert restarted.seal_calls == [] and _has_seal_intent(restarted) is False
+    assert _has_seal_intent(restarted) is True
 
 
 def test_on_reasons_an_older_build_saved_are_recorded_in_the_code_shape(flow):
@@ -1315,7 +1289,8 @@ def test_on_duplicate_phs2_label_goes_local_without_a_central_call(flow, monkeyp
     assert detail["transition_class"] == "PHS2_LOCAL"
     assert detail["transition_reasons"] == ["DUPLICATE_LABEL", "PARTIAL_TRANSFER"]
     assert detail["transition_duplicate"] is True
-    assert client.identities == [] and app.seal_calls == []
+    assert client.identities == [] and app.seal_calls == [COMPACT_QR]
+    assert _has_seal_intent(app) is True
 
 
 @pytest.mark.parametrize("label", [OTHER_ITEM, f"CLC={OTHER_ITEM}|QT=2"])

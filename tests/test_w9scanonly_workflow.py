@@ -212,7 +212,8 @@ def test_target_scan_already_auto_completes_durably_without_dialog(flow, windows
     assert _details(rows[0])["scan_count"] == 2
     assert app.current_tray.master_label_code == ""
     assert app.total_tray_count == 1
-    assert app.transfer_seal_coordinator.client.seal_requests == 1
+    _pump_until(app.root, lambda: app.transfer_seal_coordinator.client.seal_requests == 1,
+                phase="background seal after local completion")
     assert windows == []
 
 
@@ -267,13 +268,22 @@ def test_exchange_card_replaces_one_scan_and_keeps_quantity_offline(flow, window
     app._process_barcode_logic("KMCMD:EXCHANGE")
     app._process_barcode_logic(old)
     app._process_barcode_logic(new)
+    _pump_until(app.root, lambda: app.current_tray.scanned_barcodes == [new],
+                phase="durable inline exchange")
     assert app.current_tray.scanned_barcodes == [new], (
         "exchange card -> damaged scan -> replacement scan must replace, not append"
     )
     assert app.current_tray.tray_size == 3
     # This is a real store read, not a fake expected-intent list.
     store = app.transfer_member_exchange_coordinator.store
-    assert store.pending_ids(), "offline exchange must have a durable intent"
+    from tk_serial_ui_lane import LaneTask
+    pending = []
+    lane = app._ui_task_lane()
+    _pump_until(app.root, lambda: not lane.is_busy())
+    assert lane.submit(LaneTask(name="exchange-evidence-read", generation=app._scan_callback_epoch,
+        work=store.pending_ids, finish=pending.append, fail=lambda error: pytest.fail(str(error)))).accepted
+    _pump_until(app.root, lambda: bool(pending))
+    assert pending[0], "offline exchange must have a durable intent"
     # Coordinator follow-up: an unknown replacement scan registers GOOD;
     # exchange provenance includes the removed defective product.
     exchange_rows = _rows(app, "PRODUCT_EXCHANGE_COMPLETED")
@@ -343,14 +353,15 @@ def test_same_label_with_zero_products_does_not_complete(flow, windows, scan_clo
     assert windows == []
 
 
-def test_same_label_duplicate_within_three_seconds_does_not_complete(flow, windows, scan_clock):
+def test_product_between_same_labels_confirms_within_three_seconds(flow, windows, scan_clock):
     app = _active(flow)
     scan_clock(1)
     app._process_barcode_logic(f"{ITEM}-SERIAL-001")
     scan_clock(1)
     app._process_barcode_logic(COMPACT_QR)
-    assert _rows(app, "TRAY_COMPLETE") == []
-    assert app.current_tray.scanned_barcodes == [f"{ITEM}-SERIAL-001"]
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    assert _details(_rows(app, "TRAY_COMPLETE")[0])["is_partial_submission"] is True
+    assert app.current_tray.master_label_code == ""
     assert windows == []
 
 

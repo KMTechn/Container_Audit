@@ -136,7 +136,7 @@ def test_paired_parked_rejection_keeps_original_bytes_before_worker_normalizatio
     original = parked.read_bytes()
     notices = []
     monkeypatch.setattr(
-        "Container_Audit.messagebox.showwarning",
+        app, "_show_field_notice",
         lambda _title, message, **_kwargs: notices.append(message),
     )
 

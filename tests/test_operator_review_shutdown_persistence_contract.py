@@ -214,8 +214,7 @@ def test_repository_quarantines_malformed_operator_review_metadata(monkeypatch, 
     app = _restore_app(tmp_path, worker_name="review-worker")
     warnings = []
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showwarning",
+        app, "_show_field_notice",
         lambda *args, **_kwargs: warnings.append(args),
     )
     monkeypatch.setattr(
@@ -257,7 +256,7 @@ def test_other_worker_takeover_preserves_operator_review_lock(monkeypatch, tmp_p
         _unexpected_action("permanent delete confirmation during takeover"),
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     assert app.worker_name == "takeover-worker"
     assert app.current_tray.master_label_code == MASTER_LABEL
@@ -298,12 +297,11 @@ def test_other_worker_takeover_audit_exception_rolls_back_review_owner(
         lambda *_args, **_kwargs: True,
     )
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showerror",
+        app, "_show_field_notice",
         lambda *args, **_kwargs: errors.append(args),
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=True)
 
     assert _load_saved_json(tmp_path) == before
     assert app.current_tray.master_label_code == ""
@@ -335,12 +333,11 @@ def test_other_worker_cannot_delete_operator_review_state_when_takeover_declined
         _unexpected_action("permanent delete confirmation"),
     )
     monkeypatch.setattr(
-        container_audit_module.messagebox,
-        "showwarning",
+        app, "_show_field_notice",
         lambda *args, **_kwargs: warnings.append(args),
     )
 
-    app._load_current_tray_state()
+    app._load_current_tray_state(_recovery_choice=False)
 
     assert app.worker_name == ""
     assert app.current_tray.master_label_code == ""

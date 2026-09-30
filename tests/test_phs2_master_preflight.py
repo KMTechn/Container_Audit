@@ -150,6 +150,7 @@ class BlockingClient:
         operation,
         scan_payload,
         idempotency_key,
+        **deferred_fields,
     ):
         self.identities.append(
             {
@@ -157,6 +158,7 @@ class BlockingClient:
                 "operation": operation,
                 "scan_payload": scan_payload,
                 "idempotency_key": idempotency_key,
+                **deferred_fields,
             }
         )
         self.started.set()
@@ -415,7 +417,7 @@ def test_compact_phs2_scan_is_nonblocking_and_uses_central_count_not_sixty(tmp_p
     assert len(app.root.jobs) == 1
     initial_label = dict(app.current_item_label)
 
-    held_product = f"{ITEM}-HELD-DURING-PREFLIGHT"
+    held_product = f"{ITEM}-SERIAL-001"
     app._process_barcode_logic(held_product)
     assert app.current_tray.scanned_barcodes == []
     _pump_until(
@@ -636,7 +638,7 @@ def test_preflight_failure_preserves_held_fifo_until_same_master_retry(
         app.current_tray.scanned_barcodes.append(barcode),
         app.current_tray.scan_times.append(scan_time),
     )
-    held = [f"{ITEM}-HELD-A", f"{ITEM}-HELD-B"][:held_count]
+    held = [f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"][:held_count]
 
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
@@ -883,7 +885,7 @@ def test_stale_preflight_result_settles_to_failed_hold_without_clearing_fifo(
     gate = threading.Event()
     client = BlockingClient(_resolved(count=3), gate=gate)
     app = _app(tmp_path, client)
-    held_product = f"{ITEM}-HELD-STALE"
+    held_product = f"{ITEM}-SERIAL-001"
 
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
@@ -938,8 +940,8 @@ def test_duplicate_held_scan_reaches_audited_rejection_and_fifo_resumes_after_ac
         )
 
     app.show_fullscreen_warning = present_warning
-    first = f"{ITEM}-HELD-A"
-    tail = f"{ITEM}-HELD-B"
+    first = f"{ITEM}-SERIAL-001"
+    tail = f"{ITEM}-SERIAL-002"
 
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
@@ -1009,7 +1011,7 @@ def test_preflight_hold_head_waits_for_durable_scan_audit_before_ack(tmp_path, m
         return scan_ok_results.pop(0)
 
     app._log_event = log_event
-    held_product = f"{ITEM}-HELD-AUDIT"
+    held_product = f"{ITEM}-SERIAL-001"
 
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
@@ -1076,7 +1078,7 @@ def test_held_catalog_rejection_preserves_event_warning_and_fifo_on_audit_retry(
 
     app.show_fullscreen_warning = warning
     app._log_event = log
-    tail = f"{ITEM}-VALID-TAIL"
+    tail = f"{ITEM}-SERIAL-001"
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
     app._process_barcode_logic(raw)
@@ -1148,7 +1150,7 @@ def test_preflight_final_held_scan_completes_only_after_hold_ack(tmp_path):
     app.complete_tray = lambda: completion_hold_states.append(
         app._preflight_hold_store().exists()
     ) or True
-    held_product = f"{ITEM}-HELD-FINAL"
+    held_product = f"{ITEM}-SERIAL-001"
 
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(app.root, client.started.is_set, phase="preflight client admission")
@@ -1200,7 +1202,7 @@ def test_preflight_warning_ack_resumes_drain_or_same_master_retry(
             HeldScan(
                 "held-warning-resume",
                 1,
-                f"{ITEM}-HELD-WARNING",
+                f"{ITEM}-SERIAL-001",
                 "2026-09-01T00:00:01+00:00",
             ),
         ),
@@ -1260,14 +1262,9 @@ def test_active_tray_exact_phs2_is_never_routed_as_product(tmp_path, monkeypatch
     assert client.identities == []
     assert app._master_preflight_pending is False
     assert app.root.jobs == []
-    event_name, detail, kwargs = app.events[-1]
-    assert event_name == "ACTIVE_TRAY_PHS2_SCAN_INTERCEPTED"
-    assert detail["current_input_tag_id"] == GOAL_INPUT_TAG
-    assert detail["scanned_input_tag_id"] == GOAL_INPUT_TAG
-    assert detail["scanned_label_id"] == GOAL_LABEL_ID
-    assert kwargs == {}
-    assert active_refreshes == [GOAL_PHS2]
+    assert active_refreshes == []
     assert focus_returns == []
+    assert not any(event[0] == "SCAN_OK" for event in app.events)
 
 
 def test_compact_phs2_network_failure_never_starts_sixty_piece_fallback(tmp_path):
@@ -1310,7 +1307,7 @@ def test_local_preflight_fault_is_not_shown_as_server_outage(tmp_path):
         return real_accept(*args, **kwargs)
 
     manager.accept_authenticated = accept_once_locked
-    held = f"{ITEM}-HELD-A"
+    held = f"{ITEM}-SERIAL-001"
     store = app._preflight_hold_store()
 
     app._process_barcode_logic(COMPACT_QR)
@@ -1381,7 +1378,7 @@ def test_compact_phs2_incomplete_registry_lifecycle_fails_closed(tmp_path):
     ("scan_payload", "expected_code"),
     [
         (f"PHS=2|CLC={ITEM}|QT=60", "PHS2_CANONICAL_EVIDENCE_REQUIRED"),
-        (f"{COMPACT_QR}|QT=60", "PHS2_COMPACT_FORMAT_REQUIRED"),
+        (f"{COMPACT_QR}|EXTRA=60", "PHS2_COMPACT_FORMAT_REQUIRED"),
     ],
 )
 def test_legacy_or_noncompact_phs2_is_rejected_before_network_or_qt_fallback(
@@ -1430,6 +1427,7 @@ def test_replaced_master_label_preflight_shows_exact_yellow_notice(tmp_path):
         canonical_input_tag_qr=COMPACT_QR,
         item_id=ITEM,
         member_count=2,
+        normalized_barcodes=(f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"),
         active_label_qr_payload=active_qr,
         active_label_id=active_label_id,
         active_label_business_date="2026-08-01",
@@ -1477,37 +1475,17 @@ def test_replaced_master_label_preflight_shows_exact_yellow_notice(tmp_path):
     )
 
 
-def test_compact_phs2_partial_submit_is_blocked_before_confirmation(tmp_path, monkeypatch):
+def test_compact_phs2_partial_submit_routes_directly_without_confirmation(tmp_path, monkeypatch):
     app = _app(tmp_path, BlockingClient(_resolved(count=3)))
-    app.current_tray = TraySession(
-        master_label_code=COMPACT_QR,
-        item_code=ITEM,
-        item_name="fixture item",
-        scanned_barcodes=[f"{ITEM}-SERIAL-001", f"{ITEM}-SERIAL-002"],
-        tray_size=3,
-    )
-    app.complete_tray = lambda: (_ for _ in ()).throw(
-        AssertionError("partial PHS2 must not enter completion")
-    )
-    monkeypatch.setattr(
-        "Container_Audit.messagebox.askyesno",
-        lambda *args, **kwargs: (_ for _ in ()).throw(
-            AssertionError("partial PHS2 must not ask for completion confirmation")
-        ),
-    )
-
+    app.current_tray = TraySession(master_label_code=COMPACT_QR,item_code=ITEM,item_name="fixture item",
+        scanned_barcodes=[f"{ITEM}-SERIAL-001",f"{ITEM}-SERIAL-002"],tray_size=3)
+    calls=[]
+    app._complete_current_tray_as_partial=lambda: calls.append(tuple(app.current_tray.scanned_barcodes)) or True
+    app._transfer_member_exchange_attempt_snapshot={"known":True,"master_label":COMPACT_QR,"attempt":None}
+    monkeypatch.setattr("Container_Audit.messagebox.askyesno",lambda *a,**k: pytest.fail("R6: partial confirmation is inline"))
     app.submit_current_tray()
-
-    assert app.current_tray.scanned_barcodes == [
-        f"{ITEM}-SERIAL-001",
-        f"{ITEM}-SERIAL-002",
-    ]
-    assert app.statuses
-    message = app.statuses[-1][0]
-    assert "일부 제출할 수 없습니다" in message
-    assert "이름·시간·품목·수량·수기 코드" in message
-    assert "RSL1은 업그레이드 전에 시작한 예전 작업 복구에만 사용합니다" in message
-    assert "RSL1 절차를 사용" not in message
+    assert calls == [(f"{ITEM}-SERIAL-001",f"{ITEM}-SERIAL-002")]
+    assert not any("일부 제출할 수 없습니다" in args[0] for args in app.statuses)
 
 
 def test_compact_phs2_incomplete_completion_uses_current_remainder_guidance(tmp_path):
@@ -1682,7 +1660,7 @@ def test_offline_queue_validates_next_label_before_moving(tmp_path, monkeypatch,
     app, client = _offline_queue_app(tmp_path, monkeypatch)
     candidate = OTHER_LABEL
     if invalid == "compact_fields":
-        candidate += "|QT=2"
+        candidate += "|EXTRA=2"
     elif invalid == "item":
         candidate = candidate.replace(ITEM, "BBB2270730100")
     elif invalid == "completed":

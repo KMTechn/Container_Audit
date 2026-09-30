@@ -158,7 +158,7 @@ def test_activation_preserves_actual_pending_exchange_and_blocks_submit(tmp_path
     app = _app(tmp_path, BlockingClient(_resolved(count=2)))
     _bind_member_store(app, tmp_path)
     warnings = []
-    monkeypatch.setattr("Container_Audit.messagebox.showerror", lambda *args, **kwargs: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: warnings.append(args))
     app._process_barcode_logic(COMPACT_QR)
     _pump_until(
         app.root,

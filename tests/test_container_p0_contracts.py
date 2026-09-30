@@ -593,8 +593,14 @@ class _PendingRecoveryStore:
     def __init__(self, intent_ids):
         self.intent_ids = list(intent_ids)
 
-    def pending_ids(self):
+    def pending_ids(self, *, include_scan=True):
         return list(self.intent_ids)
+
+    def has_scan_transport_work(self):
+        return False
+
+    def scan_exchange_rows(self, **_kwargs):
+        return []
 
 
 def _startup_transfer_recovery_app(
@@ -836,12 +842,10 @@ def _exercise_actual_coordinator_lane_ownership(
     app._active_transfer_exchange_intent_id = str(member_rows[0]["intent_id"])
     app.exchange_complete_button = SimpleNamespace(config=lambda **_kwargs: None)
     app.COLOR_DANGER = "danger"
+    app.COLOR_PRIMARY = "primary"
     app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
     app.statuses = []
     app._operator_review_blocks_mutation = lambda: False
-    app._show_exchange_dialog_after_coordinator_admission = (
-        lambda: app.idle_paths.append("dialog")
-    )
     app._finish_exchange_cancel_ui = (
         lambda _reason: app.idle_paths.append("cancel") or True
     )
@@ -882,7 +886,9 @@ def _exercise_actual_coordinator_lane_ownership(
             member.attempt(str(member_rows[0]["intent_id"]))
 
         app._refresh_transfer_post_review_state()
-        assert app._schedule_exchange_dialog_admission() is False
+        # R7: entering inline mode creates no coordinator write, even while recovery is busy.
+        assert app.show_exchange_dialog() is True
+        assert app._inline_exchange_mode == "old"
         assert app._reconcile_pending_local_member_exchanges() is False
         assert app._schedule_exchange_cancel(
             str(member_rows[0]["intent_id"]),
@@ -920,9 +926,9 @@ def _exercise_actual_coordinator_lane_ownership(
         "operator_cancel",
     ) is True
     root.run_until(lambda: not lane.is_busy(), timeout=12.0)
-    assert app._schedule_exchange_dialog_admission() is True
-    root.run_until(lambda: not lane.is_busy(), timeout=12.0)
-    assert app.idle_paths == ["cancel", "dialog"]
+    assert app.show_exchange_dialog() is True
+    assert app._inline_exchange_mode == "old"
+    assert app.idle_paths == ["cancel"]
     assert app._reconcile_pending_local_member_exchanges() is True
     root.run_until(lambda: not lane.is_busy(), timeout=12.0)
     app._complete_exchange()
@@ -934,7 +940,8 @@ def _exercise_actual_coordinator_lane_ownership(
         assert conn.execute(
             "SELECT COUNT(*) FROM transfer_exchange_block_receipts"
         ).fetchone()[0] == 1
-    assert lane._next_op_id == 9
+    # R7: inline exchange admission adds no UI lane operation.
+    assert lane._next_op_id == 8
     assert threading.get_ident() != lane.worker_thread_id
 
     if lane.state != "CLOSED":
@@ -2679,13 +2686,13 @@ def test_completion_local_prepare_precedes_checkpoint_and_any_http_attempt():
         ),
     )
 
-    assert result is acked
+    # R3: foreground persistence enables dispatch but performs no HTTP.
+    assert result is prepared
     assert calls == [
         "preview",
         "local-prepare",
         "durable-checkpoint:PREPARED",
         "checkpoint-dispatch-enabled",
-        "http-attempt",
     ]
 
     calls.clear()
