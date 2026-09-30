@@ -16,9 +16,11 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
+from storage_policy import build_container_audit_storage_paths, current_user_data_home
+
 
 PROFILE_CONTRACT_VERSION = "km-logistics-runtime-profile-v1"
-PROFILE_PATH_ENV = "KM_LOGISTICS_PROFILE_PATH"
+PROFILE_PATH_ENV = "CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"
 REQUIRED_ENV = "KM_LOGISTICS_REQUIRED"
 LEGACY_LABEL_TRANSITION_ENV = "KMTECH_LEGACY_LABEL_TRANSITION"
 TEST1_ISOLATED_LEGACY_OVERRIDE_ENV = (
@@ -318,7 +320,7 @@ def _test1_isolated_legacy_override_enabled() -> bool:
         raise LogisticsRuntimeConfigurationError(
             "TEST1 isolated legacy logistics override requires COMPUTERNAME=TEST1"
         )
-    if any(name in os.environ for name in (PROFILE_PATH_ENV, REQUIRED_ENV)):
+    if any(name in os.environ for name in ("KM_LOGISTICS_PROFILE_PATH", REQUIRED_ENV)):
         raise LogisticsRuntimeConfigurationError(
             "TEST1 isolated legacy logistics override requires process profile "
             "anchors to be absent"
@@ -406,10 +408,8 @@ def _runtime_environment(
 ) -> Mapping[str, str]:
     if environ is not None:
         return environ
-    # Raises on an invalid TEST1 envelope. Neither the Machine KM_LOGISTICS_*
-    # values nor the PC-wide ProgramData profile of the old rollout replace the
-    # values first-run sets for this process: old field programs may still use
-    # them, and they belong to another identity.
+    # Keep the TEST1 envelope validation before ordinary current-user selection.
+    # Shared KM paths may be inherited from Machine scope; they select no profile.
     _test1_isolated_legacy_override_enabled()
     return os.environ
 
@@ -418,8 +418,21 @@ def default_logistics_profile_path(
     environ: Mapping[str, str] | None = None,
 ) -> Path:
     values = _runtime_environment(environ)
-    program_data = str(values.get("PROGRAMDATA") or r"C:\ProgramData").strip()
-    return Path(program_data) / DEFAULT_PROFILE_RELATIVE_PATH
+    explicit = str(values.get(PROFILE_PATH_ENV) or "").strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_absolute():
+            raise LogisticsRuntimeConfigurationError(
+                f"{PROFILE_PATH_ENV} must be an absolute current-user path"
+            )
+        return candidate
+    try:
+        storage = build_container_audit_storage_paths(environ=values)
+        if storage.custom_data_root:
+            return storage.data_root / "logistics-profile" / "runtime-profile.json"
+        return current_user_data_home(values) / DEFAULT_PROFILE_RELATIVE_PATH
+    except ValueError as exc:
+        raise LogisticsRuntimeConfigurationError(str(exc)) from exc
 
 
 default_profile_path = default_logistics_profile_path
@@ -656,7 +669,7 @@ def load_logistics_runtime_profile(
     required_value = logistics_runtime_required(values) if required is None else bool(required)
     explicit_path = profile_path or str(values.get(PROFILE_PATH_ENV) or "").strip()
     path = assert_path_has_no_reparse_components(
-        Path(explicit_path) if explicit_path else default_logistics_profile_path(values),
+        Path(profile_path) if profile_path else default_logistics_profile_path(values),
         label="runtime profile",
     )
     if not path.exists():

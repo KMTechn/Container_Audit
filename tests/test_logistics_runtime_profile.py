@@ -77,7 +77,7 @@ def _profile(tmp_path, **changes):
 
 def _env(monkeypatch, profile_path):
     monkeypatch.setenv("KM_LOGISTICS_REQUIRED", "1")
-    monkeypatch.setenv("KM_LOGISTICS_PROFILE_PATH", str(profile_path))
+    monkeypatch.setenv("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", str(profile_path))
 
 
 def _private_ca_pem() -> bytes:
@@ -101,7 +101,7 @@ def _private_ca_pem() -> bytes:
 
 
 def test_default_profile_path_is_container_audit_scoped(tmp_path):
-    assert default_logistics_profile_path({"PROGRAMDATA": str(tmp_path)}) == (
+    assert default_logistics_profile_path({"LOCALAPPDATA": str(tmp_path)}) == (
         tmp_path
         / "KMTech"
         / "Logistics"
@@ -109,6 +109,44 @@ def test_default_profile_path_is_container_audit_scoped(tmp_path):
         / "Container_Audit"
         / "runtime-profile.json"
     )
+
+
+@pytest.mark.parametrize("selection", ["local", "userprofile", "data_root", "override"])
+def test_loader_onboarding_and_tool_defaults_share_own_path(tmp_path, monkeypatch, selection):
+    from current_user_onboarding import resolve_current_user_onboarding_paths
+    from tools.install_logistics_runtime_profile import build_parser
+    from tools import check_logistics_runtime_profile as checker
+
+    values = {
+        "LOCALAPPDATA": str(tmp_path / "local"),
+        "USERPROFILE": str(tmp_path / "user"),
+        "PROGRAMDATA": str(tmp_path / "old-pc"),
+        "KM_LOGISTICS_PROFILE_PATH": str(tmp_path / "old-pc" / "old.json"),
+    }
+    if selection == "userprofile":
+        values.pop("LOCALAPPDATA")
+    elif selection == "data_root":
+        values["CONTAINER_AUDIT_DATA_ROOT"] = str(tmp_path / "state")
+    elif selection == "override":
+        values["CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"] = str(tmp_path / "override" / "own.json")
+    for name in ("LOCALAPPDATA", "CONTAINER_AUDIT_DATA_ROOT", "CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    expected = default_logistics_profile_path(values)
+    paths = resolve_current_user_onboarding_paths(tmp_path / "code", environ=values)
+    assert paths.logistics_profile_path == expected
+    args = build_parser().parse_args([
+        "--base-url", "https://logistics.example.invalid", "--authority-scope", "own",
+        "--authority-epoch", "1", "--plane-epoch", "1", "--device-id", "own",
+        "--source-host-id", "own",
+    ])
+    assert args.profile_path == str(expected)
+    seen = []
+    monkeypatch.setattr(checker, "load_logistics_runtime_profile",
+                        lambda **kwargs: seen.append(kwargs["profile_path"]))
+    assert checker.main(["--optional"]) == 0
+    assert seen == [str(expected)]
 
 
 def _capabilities():
@@ -595,9 +633,11 @@ def test_process_profile_ignores_hklm_machine_profile(tmp_path, monkeypatch):
         lambda value: tmp_path / "ProgramData"
         if os.fspath(value).casefold() == r"c:\programdata" else Path(value),
     )
+
+
     machine = _profile(tmp_path / "machine-profile")
     process = _profile(tmp_path / "process-profile", base_url="https://current-user.invalid")
-    monkeypatch.setenv("KM_LOGISTICS_PROFILE_PATH", str(process))
+    monkeypatch.setenv("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", str(process))
     monkeypatch.setenv("KM_LOGISTICS_REQUIRED", "0")
     values = {
         "KM_LOGISTICS_PROFILE_PATH": str(machine),

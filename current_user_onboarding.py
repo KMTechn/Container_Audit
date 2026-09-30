@@ -22,6 +22,8 @@ from direct_sync_runtime import load_credentials_from_json
 from logistics_runtime_profile import (
     PROFILE_PATH_ENV,
     REQUIRED_ENV,
+    LogisticsRuntimeConfigurationError,
+    default_logistics_profile_path,
     load_logistics_runtime_profile,
     unprotect_current_user_secret,
 )
@@ -60,7 +62,7 @@ REPLACEMENT_LIFECYCLE_RESTORE_REPORT_VERSION = (
     "container-audit-replacement-lifecycle-restore-v1"
 )
 BOOTSTRAP_INTEGRITY_VERSION = "container-audit-bootstrap-integrity-v1"
-LOGISTICS_PROFILE_PATH_ENV = "CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH"
+LOGISTICS_PROFILE_PATH_ENV = PROFILE_PATH_ENV
 ENROLLMENT_TLS_CA_BUNDLE_PATH_ENV = "CONTAINER_AUDIT_ENROLLMENT_TLS_CA_BUNDLE_PATH"
 ONBOARDING_EXIT_CODE = 4
 SELF_ENROLLMENT_CONTRACT_VERSION = "producer-self-enrollment-v2"
@@ -180,34 +182,17 @@ def resolve_current_user_onboarding_paths(
         ) from exc
     data_root = storage_paths.data_root
     direct_sync_root = storage_paths.direct_sync_root
-    if explicit_data_root:
-        default_logistics_profile = (
-            data_root / "logistics-profile" / "runtime-profile.json"
-        )
-    else:
-        default_logistics_profile = (
-            user_root
+    try:
+        logistics_profile = _resolved(default_logistics_profile_path(values))
+    except LogisticsRuntimeConfigurationError as exc:
+        raise CurrentUserOnboardingError(
+            str(exc),
+            report_path=user_root
             / "KMTech"
-            / "Logistics"
-            / "profiles"
-            / "Container_Audit"
-            / "runtime-profile.json"
-        )
-    explicit_profile = str(values.get(LOGISTICS_PROFILE_PATH_ENV) or "").strip()
-    if explicit_profile:
-        profile_candidate = Path(explicit_profile).expanduser()
-        if not profile_candidate.is_absolute():
-            raise CurrentUserOnboardingError(
-                f"{LOGISTICS_PROFILE_PATH_ENV} must be an absolute current-user path",
-                report_path=user_root
-                / "KMTech"
-                / "ContainerAudit"
-                / "current-user-onboarding-rejected.json",
-                status="FAILED",
-            )
-        logistics_profile = _resolved(profile_candidate)
-    else:
-        logistics_profile = default_logistics_profile
+            / "ContainerAudit"
+            / "current-user-onboarding-rejected.json",
+            status="FAILED",
+        ) from exc
     bootstrap_tls_ca_bundle = (
         data_root / "bootstrap" / "ca-bundle.pem"
         if explicit_data_root
@@ -1222,7 +1207,6 @@ def apply_current_user_runtime_environment(
     values = os.environ if environ is None else environ
     values[PROFILE_PATH_ENV] = str(paths.logistics_profile_path)
     values[REQUIRED_ENV] = "1"
-    values[LOGISTICS_PROFILE_PATH_ENV] = str(paths.logistics_profile_path)
 
 
 @writer_sink("current_user_onboarding")

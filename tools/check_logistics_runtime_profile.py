@@ -1,4 +1,4 @@
-"""Read-only readiness check for the shared central-logistics PC profile."""
+"""Read-only readiness check for the Container_Audit current-user profile."""
 
 from __future__ import annotations
 

@@ -898,7 +898,7 @@ def ensure_runtime_profile_from_enrollment_bundle(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Install the shared KMTech logistics PC profile.")
+    parser = argparse.ArgumentParser(description="Install the Container_Audit current-user logistics profile.")
     parser.add_argument("--profile-path", default=str(default_profile_path()))
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--authority-scope", required=True)

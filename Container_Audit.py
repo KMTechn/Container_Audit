@@ -462,7 +462,7 @@ def apply_startup_geometry(
 
 
 def _current_user_logistics_profile_path() -> str:
-    """Explicit or onboarded current-user profile; "" leaves machine/process selection."""
+    """Explicit or onboarded current-user profile; "" leaves optional own selection."""
 
     explicit_user_profile = os.getenv(LOGISTICS_PROFILE_PATH_ENV, "").strip()
     if not explicit_user_profile and not os.environ.get("PYTEST_CURRENT_TEST"):

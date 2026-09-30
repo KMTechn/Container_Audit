@@ -51,6 +51,7 @@ def launcher(monkeypatch, tmp_path):
     for name in (
         app_module.LOGISTICS_PROFILE_PATH_ENV,
         runtime_module.PROFILE_PATH_ENV,
+        "KM_LOGISTICS_PROFILE_PATH",
         runtime_module.REQUIRED_ENV,
         runtime_module.TEST1_ISOLATED_LEGACY_OVERRIDE_ENV,
         app_module.DATA_ROOT_ENV,
@@ -139,7 +140,7 @@ def test_launcher_start_uses_onboarded_current_user_profile(launcher, monkeypatc
 
 @pytest.mark.parametrize(
     "selector",
-    ["container_audit_explicit", "process_km_logistics", "onboarded_over_machine"],
+    ["container_audit_explicit", "process_container_audit", "onboarded_over_machine"],
 )
 def test_environment_selected_profiles_are_kept(launcher, monkeypatch, tmp_path, selector):
     if selector == "onboarded_over_machine":
@@ -223,3 +224,62 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
     assert diagnostic["profile_present"] is False
     assert diagnostic["pre_send_rejection_code"] == "PROFILE_ABSENT"
     assert diagnostic["catalog_source"] == "BUNDLED"
+
+
+@pytest.mark.parametrize("factory", ["loader", "startup", "catalog", "transfer"])
+@pytest.mark.parametrize(
+    "case", ["inherited_own", "own_override", "pc_default", "own_absent", "own_invalid"]
+)
+def test_clients_never_borrow_old_shared_identity(launcher, monkeypatch, tmp_path, factory, case):
+    """Exercise real consumers with first-run disabled and valid old credentials."""
+    shared = Path(os.environ["PROGRAMDATA"]) / "KMTech" / "Logistics"
+    old_paths = [
+        _install_profile(shared / "runtime-profile.json", MACHINE_ORIGIN),
+        _install_profile(shared / "profiles" / "Container_Audit" / "runtime-profile.json", MACHINE_ORIGIN),
+    ]
+    for path in old_paths:
+        values = json.loads(path.read_text(encoding="utf-8"))
+        values["source_host_id"] = "foreign-old-program"
+        path.write_text(json.dumps(values), encoding="utf-8")
+    old_bytes = {path: path.read_bytes() for path in shared.rglob("*") if path.is_file()}
+    own = resolve_current_user_onboarding_paths(APP_ROOT).logistics_profile_path
+    if case in {"inherited_own", "own_override"}:
+        if case == "own_override":
+            own = tmp_path / "app-override" / "runtime-profile.json"
+            monkeypatch.setenv("CONTAINER_AUDIT_LOGISTICS_PROFILE_PATH", str(own))
+        _install_profile(own, ONBOARDED_ORIGIN)
+    elif case == "own_invalid":
+        own.parent.mkdir(parents=True, exist_ok=True)
+        own.write_text("{broken", encoding="utf-8")
+    if case != "pc_default":
+        monkeypatch.setenv("KM_LOGISTICS_PROFILE_PATH", str(old_paths[0]))
+        monkeypatch.setenv("KM_LOGISTICS_REQUIRED", "1")
+    else:
+        assert "KM_LOGISTICS_PROFILE_PATH" not in os.environ
+        assert "KM_LOGISTICS_REQUIRED" not in os.environ
+    _start_like_launcher(monkeypatch)
+    monkeypatch.setattr(app_module, "_first_run_onboarding_enabled", lambda: False)
+    from transfer_client import logistics_transfer_client_from_env
+
+    factories = {
+        "loader": runtime_module.load_logistics_runtime_profile,
+        "startup": app_module.container_startup_logistics_client,
+        "catalog": sync._load_item_catalog_logistics_profile,
+        "transfer": lambda: logistics_transfer_client_from_env(probe_required=False),
+    }
+    try:
+        if case in {"own_absent", "own_invalid"}:
+            with pytest.raises(runtime_module.LogisticsRuntimeConfigurationError):
+                factories[factory]()
+        else:
+            selected = factories[factory]()
+            if case == "pc_default":
+                assert selected is None
+            else:
+                assert selected.base_url == ONBOARDED_ORIGIN
+                assert selected.source_host_id == "ca-host-w9caprofile"
+                if factory in {"loader", "catalog"}:
+                    assert selected.profile_path == str(own.resolve())
+    finally:
+        assert {path: path.read_bytes() for path in old_bytes} == old_bytes
+        assert launcher == [], "client creation must not contact the network"
