@@ -433,6 +433,9 @@ def test_short_csv_lost_ack_retries_same_row_before_settling(flow, windows, monk
 def test_short_legacy_restart_projects_held_csv_once(flow, windows, tmp_path):
     root = tmp_path / "restart"
     app = flow(transition=True, root=root)
+    # The flow fixture names its CSV with the host day; this module freezes
+    # the PC clock for signed leases, so use that same day for history.
+    app.log_file_path = str(root / f"이적작업이벤트로그_tester_{ca.datetime.date.today():%Y%m%d}.csv")
     app._process_barcode_logic(f"CLC={ITEM}|QT=3")
     app._process_barcode_logic(f"{ITEM}-SERIAL-001")
     assert app._complete_current_tray_as_partial()
