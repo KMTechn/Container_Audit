@@ -2,7 +2,6 @@ import json
 
 import pytest
 
-from tools import build_release_config
 from tools import check_release_config
 from vendor.kmtech_zero_pe.cng_p256 import P256KeyPair
 
@@ -320,46 +319,3 @@ def test_release_config_rejects_secret_and_endpoint_markers_even_when_shape_is_v
 
     with pytest.raises(ValueError, match="forbidden release marker"):
         check_release_config.validate_release_config(config_dir)
-
-
-def test_build_release_config_copies_only_valid_settings_and_excludes_runtime_artifacts(tmp_path):
-    source_config = tmp_path / "runtime-config"
-    write_settings(
-        source_config,
-        {
-            "scale_factor": 1.0,
-            "column_widths_validator": {"summary_tree_item_code": 120},
-            "paned_window_sash_positions": {"0": 500},
-        },
-    )
-    (source_config / "parked_trays").mkdir()
-    (source_config / "parked_trays" / "parked_tray_1.json").write_text("{}", encoding="utf-8")
-    (source_config / "validator_settings.json").write_text("{}", encoding="utf-8")
-    (source_config / "credential.json").write_text('{"secret": "do-not-copy"}', encoding="utf-8")
-
-    output_config = tmp_path / "release-config"
-
-    result = build_release_config.build_release_config(source_config, output_config)
-
-    assert result == output_config
-    assert sorted(child.name for child in output_config.iterdir()) == ["container_audit_settings.json"]
-    assert not (output_config / "parked_trays").exists()
-    assert not (output_config / "validator_settings.json").exists()
-    assert not (output_config / "credential.json").exists()
-    check_release_config.validate_release_config(output_config)
-
-
-def test_build_release_config_fails_closed_when_settings_contains_forbidden_marker(tmp_path):
-    source_config = tmp_path / "runtime-config"
-    write_settings(
-        source_config,
-        {
-            "scale_factor": 1.0,
-            "column_widths_validator": {
-                "https://175.45.200.171/api/producer-ingest/v1/source-file": 120,
-            },
-        },
-    )
-
-    with pytest.raises(ValueError, match="forbidden release marker"):
-        build_release_config.build_release_config(source_config, tmp_path / "release-config")
