@@ -231,6 +231,8 @@ def test_one_background_poll_shares_one_wait_limit_for_release_and_seal(tmp_path
         store=SimpleNamespace(
             issue_attempt_for_lease=lambda _lease_id: {"status": "PREFETCHED"},
             completion=lambda _lease_id: None,
+            pending_releases=lambda: {},
+            settle_release=lambda *_args: None,
         )
     )
     coordinator.store.operation_lease_referenced = lambda _lease_id: False

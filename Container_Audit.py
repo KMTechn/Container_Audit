@@ -14085,6 +14085,13 @@ class ContainerAudit:
             })
             self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts, reset_detail)
             state_snapshot = self._current_tray_state_snapshot()
+            try:
+                self._request_operation_lease_release(
+                    self.current_tray.operation_lease_id, schedule=False,
+                )
+            except Exception:
+                self.show_status_message("잠금 해제 요청 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
+                return
             if self._delete_current_tray_state() is False:
                 self._log_event('TRAY_RESET_STATE_DELETE_FAILED', detail=reset_detail)
                 messagebox.showerror("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못해 현재 작업을 유지합니다.")
@@ -16968,7 +16975,7 @@ class ContainerAudit:
             self._startup_transfer_recovery_pending = was_pending
             self._arm_background_seal_retry()
 
-    def _request_operation_lease_release(self, lease_id: str) -> None:
+    def _request_operation_lease_release(self, lease_id: str, *, schedule: bool = True) -> None:
         """Give an abandoned tray's unused lease back to the server (LOCAL_RESET).
 
         Best effort in the background: the work never waits for it, and the
@@ -16976,6 +16983,13 @@ class ContainerAudit:
         """
         normalized = str(lease_id or "").strip()
         if not normalized:
+            return
+        coordinator = self._transfer_seal_runtime()
+        manager = getattr(coordinator, "operation_lease_manager", None)
+        if manager is not None:
+            evidence = (getattr(self, "_unaccepted_operation_leases", {}) or {}).get(normalized)
+            manager.store.queue_release(normalized, evidence)
+        if not schedule:
             return
         requested = getattr(self, "_requested_operation_lease_releases", None)
         if not isinstance(requested, list):
@@ -17018,6 +17032,9 @@ class ContainerAudit:
         return lease_id
 
     def _work_forget_operation_lease_release(self, lease_id: str) -> None:
+        manager = getattr(self._transfer_seal_runtime(), "operation_lease_manager", None)
+        if manager is not None:
+            manager.store.settle_release(lease_id, "NOT_SENT_IN_USE")
         for name in ("_unaccepted_operation_leases", "_pending_operation_lease_releases"):
             entries = getattr(self, name, None)
             if isinstance(entries, dict):
@@ -17052,6 +17069,9 @@ class ContainerAudit:
         **extra: Any,
     ) -> None:
         """Local-only durable record of one release outcome (never the token)."""
+        manager = getattr(self._transfer_seal_runtime(), "operation_lease_manager", None)
+        if manager is not None:
+            manager.store.settle_release(lease_id, result)
         self._log_event(
             "OPERATION_LEASE_RELEASE_RESULT",
             detail={
@@ -17074,11 +17094,13 @@ class ContainerAudit:
         pending = getattr(self, "_pending_operation_lease_releases", None)
         if not isinstance(pending, dict):
             pending = self._pending_operation_lease_releases = {}
-        if not requested and not pending:
-            return 0
         coordinator = self._transfer_seal_runtime()
         client = getattr(coordinator, "client", None)
         manager = getattr(coordinator, "operation_lease_manager", None)
+        if manager is not None:
+            pending.update(manager.store.pending_releases())
+        if not requested and not pending:
+            return 0
         if client is None or manager is None:
             pending.clear()
             return 0
@@ -17108,6 +17130,7 @@ class ContainerAudit:
                 "idempotency_key": "container-operation-lease-release:"
                 + hashlib.sha256(f"{lease_id}|LOCAL_RESET".encode("utf-8")).hexdigest(),
             }
+            manager.store.queue_release(lease_id, entry)
         bounded_wait = getattr(client, "bounded_wait", None)
         with (
             bounded_wait(self.COMPLETION_SERVER_WAIT_SECONDS)

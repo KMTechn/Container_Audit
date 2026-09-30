@@ -999,6 +999,13 @@ class OperationLeaseStore:
                     rotated_at TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS terminal_operation_lease_releases (
+                    lease_id TEXT PRIMARY KEY,
+                    request_json TEXT NOT NULL,
+                    result TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS terminal_operation_lease_reviews (
                     lease_id TEXT PRIMARY KEY
                         REFERENCES terminal_operation_lease_artifacts(lease_id),
@@ -1074,6 +1081,40 @@ class OperationLeaseStore:
                 raise sqlite3.IntegrityError(
                     "terminal operation lease store schema version differs"
                 )
+            connection.commit()
+
+    @writer_sink("terminal_operation_lease")
+    def queue_release(self, lease_id: str, evidence: Mapping[str, Any] | None = None) -> None:
+        if evidence is None:
+            claims = json.loads(str(self.load(lease_id)["claims_json"]))
+            evidence = {key: str(claims[key]) for key in
+                        ("authority_scope_id", "operation", "expires_at")}
+            evidence["token"] = str(self.artifact(lease_id)["token"])
+        request = {**evidence, "reason": "LOCAL_RESET",
+                   "idempotency_key": "container-operation-lease-release:"
+                   + hashlib.sha256(f"{lease_id}|LOCAL_RESET".encode("utf-8")).hexdigest()}
+        encoded = canonical_json_bytes(request).decode("utf-8")
+        with self._connect() as connection:
+            connection.execute("INSERT OR IGNORE INTO terminal_operation_lease_releases "
+                               "(lease_id,request_json,created_at,updated_at) VALUES(?,?,?,?)",
+                               (lease_id, encoded, utc_text(), utc_text()))
+            row = connection.execute("SELECT request_json FROM terminal_operation_lease_releases "
+                                     "WHERE lease_id=?", (lease_id,)).fetchone()
+            if row["request_json"] != encoded:
+                raise OperationLeaseError("LEASE_RELEASE_REPLAY_CONFLICT", "release request differs")
+            connection.commit()
+
+    def pending_releases(self) -> dict[str, dict[str, str]]:
+        with self._connect() as connection:
+            return {row["lease_id"]: json.loads(row["request_json"]) for row in
+                    connection.execute("SELECT lease_id,request_json FROM terminal_operation_lease_releases "
+                                       "WHERE result='' ORDER BY created_at,rowid")}
+
+    @writer_sink("terminal_operation_lease")
+    def settle_release(self, lease_id: str, result: str) -> None:
+        with self._connect() as connection:
+            connection.execute("UPDATE terminal_operation_lease_releases SET result=?,updated_at=? "
+                               "WHERE lease_id=? AND result=''", (result, utc_text(), lease_id))
             connection.commit()
 
     @writer_sink("terminal_operation_lease")
