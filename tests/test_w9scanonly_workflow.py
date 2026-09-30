@@ -430,19 +430,32 @@ def test_short_csv_lost_ack_retries_same_row_before_settling(flow, windows, monk
     assert windows == []
 
 
-def test_short_legacy_restart_projects_held_csv_once(flow, windows):
-    app = flow(transition=True)
+def test_short_legacy_restart_projects_held_csv_once(flow, windows, tmp_path):
+    root = tmp_path / "restart"
+    app = flow(transition=True, root=root)
     app._process_barcode_logic(f"CLC={ITEM}|QT=3")
     app._process_barcode_logic(f"{ITEM}-SERIAL-001")
     assert app._complete_current_tray_as_partial()
     assert _rows(app, "TRAY_COMPLETE") == []
     assert app._has_short_projection_recovery()
-    app._short_confirmation_undo = None
-    app._recover_short_completion_projections(app.transfer_seal_coordinator)
-    assert len(_rows(app, "TRAY_COMPLETE")) == 1
-    assert not app._has_short_projection_recovery()
-    app._recover_short_completion_projections(app.transfer_seal_coordinator)
-    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    # Crash after the held outbox write, before the completed tray's cleanup.
+    path = app._short_projection_path(app._short_confirmation_undo["completion_id"])
+    state = json.loads(path.read_text(encoding="utf-8"))["state"]
+    assert app._save_tray_state_snapshot(state)
+    restarted = flow(transition=True, root=root)
+    restarted._restore_tray_from_state(state)
+    restarted._load_session_state()
+    assert restarted.work_summary == {}
+    result = restarted._recover_short_completion_projections(restarted.transfer_seal_coordinator)
+    restarted._apply_short_projection_recovery(result)
+    assert restarted.current_tray.master_label_code == ""
+    assert restarted.work_summary[ITEM]["count"] == 1
+    assert not (root / restarted.CURRENT_TRAY_STATE_FILE).exists()
+    assert len(_rows(restarted, "TRAY_COMPLETE")) == 1
+    assert not restarted._has_short_projection_recovery()
+    again = restarted._recover_short_completion_projections(restarted.transfer_seal_coordinator)
+    assert again["history"] is None
+    assert len(_rows(restarted, "TRAY_COMPLETE")) == 1
     assert windows == []
 
 

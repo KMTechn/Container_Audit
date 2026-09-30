@@ -16420,26 +16420,80 @@ class ContainerAudit:
 
     def _recover_short_completion_projections(self, coordinator):
         folder = Path(self.save_folder) / "short_confirmations"
-        restored = None
+        result = {"restored_state": None, "cleared_completion_ids": [], "history": None}
+        changed = False
         for path in sorted(folder.glob("*.json")):
             record = json.loads(path.read_text(encoding="utf-8"))
             if record["status"] in {"HELD", "SETTLING"}:
                 if not self._settle_short_completion_projection(
                         record["contract"]["idempotency_key"], coordinator=coordinator):
                     raise OSError("held short completion CSV could not be persisted")
+                record = json.loads(path.read_text(encoding="utf-8"))
+                changed = True
+            if record["status"] == "SETTLED" and not record.get("checkpoint_cleaned"):
+                current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                if current_path.exists():
+                    recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                    if not recovered.verified:
+                        raise OSError("short completion checkpoint is not verified")
+                    contract = self._completion_event_contract_from_state(recovered.value)
+                    if contract and contract["idempotency_key"] == record["contract"]["idempotency_key"]:
+                        if not self._delete_current_tray_state():
+                            raise OSError("short completion checkpoint cleanup failed")
+                        result["cleared_completion_ids"].append(contract["idempotency_key"])
+                record["checkpoint_cleaned"] = True
+                atomic_write_json(path, record, ensure_ascii=False)
+                changed = True
             elif record["status"] == "CANCELLED" and not record.get("undo_applied"):
                 if record["intent_id"]:
                     coordinator.store.settle_short_confirmation(record["intent_id"], undo=True)
-                restored = record["undo_state"]
-                if not self._save_tray_state_snapshot(restored):
+                current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
+                if current_path.exists():
+                    recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                    if not recovered.verified or recovered.value not in (record["state"], record["undo_state"]):
+                        raise OSError("short undo recovery differs from current checkpoint")
+                result["restored_state"] = record["undo_state"]
+                if not self._save_tray_state_snapshot(result["restored_state"]):
                     raise OSError("short completion undo recovery could not be persisted")
                 record["undo_applied"] = True
                 atomic_write_json(path, record, ensure_ascii=False)
-        return restored
+                changed = True
+        if changed:
+            result["history"] = load_session_history(save_folder=self.save_folder,
+                worker_name=persistent_operator_name(self.worker_name),
+                today=datetime.date.today(), tray_size=self.TRAY_SIZE)
+        return result
+
+    def _apply_short_projection_recovery(self, result):
+        history = result.get("history")
+        if history is not None:
+            self.log_file_path = history.log_file_path
+            self.total_tray_count = history.total_tray_count
+            self.completed_tray_times = list(history.completed_tray_times)
+            self.completed_master_labels = set(history.completed_master_labels)
+            self.completed_label_rounds = set(history.completed_label_rounds)
+            self.work_summary = history.work_summary
+            self.tray_last_end_time = None
+            if history.load_errors:
+                self.show_status_message("작업 기록 확인 필요 · 관리자에게 알려 주세요.", self.COLOR_DANGER)
+        contract = self._active_completion_event_contract()
+        if contract and contract["idempotency_key"] in result.get("cleared_completion_ids", ()):
+            self.current_tray = TraySession()
+            self._pending_completion_event_contract = None
+            self.scanned_listbox.delete(0, tk.END)
+            self._warning_state_presenter().acknowledge()
+            self._reset_ui_to_waiting_state()
+        if result.get("restored_state"):
+            self._restore_tray_from_state(result["restored_state"])
+        if history is not None or result.get("restored_state") or result.get("cleared_completion_ids"):
+            self._update_all_summaries()
+            self._update_current_item_label()
+            self._update_center_display()
 
     def _has_short_projection_recovery(self):
         folder = Path(self.save_folder) / "short_confirmations"
         return any(record["status"] in {"HELD", "SETTLING"} or
+                   (record["status"] == "SETTLED" and not record.get("checkpoint_cleaned")) or
                    (record["status"] == "CANCELLED" and not record.get("undo_applied"))
                    for record in (json.loads(path.read_text(encoding="utf-8"))
                                   for path in folder.glob("*.json")))
@@ -16578,13 +16632,9 @@ class ContainerAudit:
         active_lease_id = str(getattr(self.current_tray, "operation_lease_id", ""))
         def work():
             coordinator = self._scanonly_transport_runtime()
-            recovered_short_state = None
             if getattr(self, "_scanonly_recover_requested", False):
-                recovered_short_state = self._recover_short_completion_projections(coordinator)
                 self._scanonly_recover_requested = False
             result = {"lookup": lookup, "preflight": None, "pending": 0}
-            if recovered_short_state:
-                result["recovered_short_state"] = recovered_short_state
             exchanges = self._scanonly_exchange_runtime()
             for row in exchanges.store.scan_exchange_rows(unprojected=True):
                 context = json.loads(row["context_json"])
@@ -16640,10 +16690,6 @@ class ContainerAudit:
             result["reviews"] += sum(row["status"] == "OPERATOR_REVIEW" for row in exchanges.store.scan_exchange_rows())
             return result
         def finish(result):
-            if result.get("recovered_short_state"):
-                self._restore_tray_from_state(result["recovered_short_state"])
-                self._update_current_item_label()
-                self._update_center_display()
             recovered_state = result.get("recovered_exchange_state")
             if recovered_state and self.current_tray.master_label_code == recovered_state["master_label_code"]:
                 self._restore_tray_from_state(recovered_state)
@@ -17301,6 +17347,8 @@ class ContainerAudit:
     ) -> None:
         self._startup_transfer_recovery_inflight = False
         self._startup_transfer_recovery_task_handle = None
+        if outcome.get("short_projection_recovery"):
+            self._apply_short_projection_recovery(outcome["short_projection_recovery"])
         self._operation_lease_releases_waiting = int(
             outcome.get("lease_releases_waiting") or 0
         )
@@ -17667,6 +17715,11 @@ class ContainerAudit:
             "ui_snapshot": None,
             "lease_releases_waiting": 0,
         }
+        # Restart projection shares the primary persistence owner with scans;
+        # its immutable UI snapshot is applied before central transport starts.
+        if not background and self._has_short_projection_recovery():
+            outcome["short_projection_recovery"] = self._recover_short_completion_projections(
+                self._transfer_seal_runtime())
         try:
             outcome["lease_releases_waiting"] = self._work_operation_lease_releases(
                 release_requests,

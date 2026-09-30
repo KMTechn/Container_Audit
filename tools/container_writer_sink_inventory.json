@@ -14,6 +14,7 @@
       "direct_callers": [
         "Container_Audit.ContainerAudit._defer_saved_recovery_state",
         "Container_Audit.ContainerAudit._load_current_tray_state",
+        "Container_Audit.ContainerAudit._recover_short_completion_projections",
         "Container_Audit.ContainerAudit.park_current_tray",
         "Container_Audit.ContainerAudit.reset_current_work"
       ],
@@ -6428,7 +6429,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "afc13ed9ea33e2cc9077ec2cbfe31b8e858ba103bd5e960aa65fa133f266bb25",
+  "inventory_sha256": "42c4f7cd8e1d25122635bb0d3bde43b6ebc63ada3002cc6bcf2afe87ecffaa66",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -18384,7 +18385,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 20245,
+      "line": 20298,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
