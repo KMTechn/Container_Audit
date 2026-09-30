@@ -596,6 +596,19 @@ def _work_group_receipt(context):
     )
     evidence = context["client_exact_evidence"]
     pairs = list(evidence["member_barcode_pairs"])
+    if payload.get("short_confirmed") is True:
+        pairs = [pair for pair in pairs if pair["unit_id"] in payload["member_ids"]]
+        source_specs = json.loads(json.dumps(source_specs))
+        for source in source_specs:
+            selected = sorted(set(source["source_member_ids"]) & set(payload["member_ids"]))
+            remainder = sorted(set(source["source_member_ids"]) - set(selected))
+            remainder_id = ("PHS-WORK-REMAINDER-" + _sha256({
+                "source_bundle_id": source["bundle_id"], "member_ids": remainder,
+            })[:24].upper()) if remainder else None
+            source.update(selected_member_ids=selected, selected_member_count=len(selected),
+                selected_membership_hash=membership_hash(selected) if selected else _sha256([]), remainder_member_ids=remainder,
+                remainder_member_count=len(remainder), remainder_membership_hash=membership_hash(remainder) if remainder else _sha256([]),
+                remainder_bundle_id=remainder_id)
     normalized_barcodes = sorted(
         value.upper() for value in payload["scanned_barcodes"]
     )
@@ -781,6 +794,9 @@ def _work_group_receipt(context):
             normalized_barcodes
         ),
     }
+    if payload.get("short_confirmed") is True:
+        data["remainder_member_ids"] = sorted({unit for rest in remainders for unit in rest["member_ids"]})
+        data["remainder_bundle_id"] = remainder_ids[0] if len(remainder_ids) == 1 else None
     return {
         "receipt_id": receipt_id,
         "contract_version": "logistics-v1",
@@ -1552,8 +1568,8 @@ def _pending_with_command(coordinator, suffix):
 
 
 def _complete(coordinator, suffix):
-    """The GUI completion's central step, as the lane runs it."""
-    return ContainerAudit.__new__(ContainerAudit)._prepare_and_attempt_transfer_seal_snapshot(
+    """Explicitly drain the background queue after durable local preparation."""
+    prepared = ContainerAudit.__new__(ContainerAudit)._prepare_and_attempt_transfer_seal_snapshot(
         coordinator=coordinator,
         source_label_payload=_completion_label(suffix),
         source_label_fields=_COMPLETION_FIELDS,
@@ -1564,6 +1580,9 @@ def _complete(coordinator, suffix):
         operation_lease_id="",
         on_prepared=lambda attempt: None,
     )
+
+    results = coordinator.drain_pending_through(prepared.intent_id, wait_limit_seconds=ContainerAudit.COMPLETION_SERVER_WAIT_SECONDS)
+    return next((result for result in results if result.intent_id == prepared.intent_id), prepared)
 
 
 class _LogisticsServer:
@@ -2758,7 +2777,7 @@ def test_exact_history_blocks_unsafe_exchange_and_writes_restriction_receipt(tmp
     app.worker_name = ""
     app.log_file_path = ""
     warnings = []
-    monkeypatch.setattr("Container_Audit.messagebox.showwarning", lambda *args: warnings.append(args))
+    monkeypatch.setattr(app, "_show_field_notice", lambda *args: warnings.append(args))
     monkeypatch.setattr(
         "Container_Audit.tk.Toplevel",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -2766,7 +2785,9 @@ def test_exact_history_blocks_unsafe_exchange_and_writes_restriction_receipt(tmp
         ),
     )
 
-    app.show_exchange_dialog()
+    # R7 removes the old dialog admission; retain direct coverage of the
+    # legacy exact-history guard and its durable restriction receipt.
+    assert app._block_unsafe_exact_exchange() is True
 
     assert warnings and warnings[0][0] == "관리자 교체 절차 필요"
     worker_copy = " ".join(warnings[0]).lower()
@@ -2801,7 +2822,7 @@ def test_exact_history_blocks_local_master_label_replacement(tmp_path, monkeypat
     app._update_action_button_states = lambda: None
     warnings = []
     monkeypatch.setattr(
-        "Container_Audit.messagebox.showwarning", lambda *args: warnings.append(args)
+        app, "_show_field_notice", lambda *args: warnings.append(args)
     )
 
     app.initiate_master_label_replacement()

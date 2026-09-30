@@ -188,10 +188,14 @@ class TransferSealStore:
         intent_id: str,
     ) -> sqlite3.Row | None:
         return conn.execute(
-            """SELECT intent.*, linked.completion_id AS local_completion_id
+            """SELECT intent.*, linked.completion_id AS local_completion_id,
+                      scan.context_json AS scan_context_json,
+                      scan.lease_id AS deferred_operation_lease_id,
+                      scan.state AS scan_context_state
                  FROM transfer_seal_intents AS intent
                  LEFT JOIN transfer_completion_ledger AS linked
                    ON linked.intent_id=intent.intent_id
+                 LEFT JOIN transfer_scan_context AS scan ON scan.intent_id=intent.intent_id
                 WHERE intent.intent_id=?""",
             (intent_id,),
         ).fetchone()
@@ -203,6 +207,18 @@ class TransferSealStore:
             conn.execute("PRAGMA synchronous=FULL")
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS transfer_scan_context (
+                    intent_id TEXT PRIMARY KEY,
+                    context_json TEXT NOT NULL,
+                    lease_id TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL CHECK(state IN ('LOCAL_PENDING','HELD','READY','CANCELLED'))
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_scan_context_update
+                BEFORE UPDATE OF intent_id,context_json ON transfer_scan_context
+                BEGIN SELECT RAISE(ABORT, 'scan completion context is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_scan_context_delete
+                BEFORE DELETE ON transfer_scan_context
+                BEGIN SELECT RAISE(ABORT, 'scan completion context is retained'); END;
                 CREATE TABLE IF NOT EXISTS transfer_seal_intents (
                     intent_id TEXT PRIMARY KEY,
                     schema_version TEXT NOT NULL,
@@ -521,6 +537,7 @@ class TransferSealStore:
         relay_log_file_path: str = "",
         operation_lease_id: str = "",
         require_completion_checkpoint: bool = False,
+        scan_context: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
         self._assert_coordinator_owner()
         preview = self.preview_intent(
@@ -595,6 +612,15 @@ class TransferSealStore:
                 ).fetchone()
                 assert row is not None
             self._ensure_linked_event(conn, row)
+            if scan_context is not None:
+                encoded = _canonical_json(dict(scan_context))
+                conn.execute("INSERT OR IGNORE INTO transfer_scan_context(intent_id,context_json,state) "
+                             "VALUES(?,?,?)", (intent_id, encoded,
+                             "LOCAL_PENDING"))
+                saved_context = conn.execute("SELECT context_json FROM transfer_scan_context WHERE intent_id=?",
+                                             (intent_id,)).fetchone()
+                if saved_context["context_json"] != encoded:
+                    raise ValueError("durable scan context differs from retry")
             row = self._load_in_connection(conn, intent_id)
             conn.commit()
         assert row is not None
@@ -662,6 +688,9 @@ class TransferSealStore:
                 raise ValueError(
                     "completion checkpoint must be confirmed before command binding"
                 )
+            scan_state = conn.execute("SELECT state FROM transfer_scan_context WHERE intent_id=?", (intent_id,)).fetchone()
+            if scan_state is not None and scan_state[0] != "READY":
+                raise ValueError("local completion must be projected and settled before command binding")
             if row["idempotency_key"] != command_id:
                 raise ValueError(
                     "server command id differs from durable transfer idempotency key"
@@ -838,7 +867,9 @@ class TransferSealStore:
             "TRANSFER_COMMAND_INTEGRITY_MISMATCH",
             "LOGISTICS_REDIRECT_BLOCKED",
         }
-        terminal_cas_conflict = error.status_code in {409, 412}
+        terminal_cas_conflict = error.status_code in {409, 412} and not (
+            error.code == "UPSTREAM_COMPLETION_PENDING" and error.retryable
+        )
         terminal_client_error = (
             400 <= error.status_code < 500
             and error.status_code != 404
@@ -900,17 +931,75 @@ class TransferSealStore:
         assert row is not None
         return row
 
-    def pending_ids(self) -> list[str]:
+    def pending_ids(self, *, include_scan: bool = True) -> list[str]:
         self._assert_not_ui_thread_read()
         with self._connect() as conn:
             rows = conn.execute(
                 """SELECT intent_id FROM transfer_seal_intents
                     WHERE status IN (?,?,?)
                       AND completion_checkpoint_confirmed=1
+                      AND NOT EXISTS (SELECT 1 FROM transfer_scan_context AS scan
+                          WHERE scan.intent_id=transfer_seal_intents.intent_id AND scan.state!='READY')
+                      AND (?=1 OR NOT EXISTS (SELECT 1 FROM transfer_scan_context AS scan
+                          WHERE scan.intent_id=transfer_seal_intents.intent_id))
                     ORDER BY created_at, rowid""",
-                PENDING_STATUSES,
+                (*PENDING_STATUSES, int(include_scan)),
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
+
+    def has_scan_transport_work(self) -> bool:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            return conn.execute("SELECT 1 FROM transfer_scan_context s JOIN transfer_seal_intents i "
+                "ON i.intent_id=s.intent_id WHERE s.state IN ('READY','HELD') "
+                "AND i.status IN ('PREPARED','COMMAND_READY','RETRY_WAIT') LIMIT 1").fetchone() is not None
+
+    def scan_transport_counts(self) -> tuple[int, int]:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            rows = conn.execute("SELECT i.status, count(*) FROM transfer_scan_context s JOIN transfer_seal_intents i ON i.intent_id=s.intent_id WHERE s.state != 'CANCELLED' GROUP BY i.status").fetchall()
+        counts = dict(rows)
+        return sum(counts.get(status, 0) for status in PENDING_STATUSES), counts.get("OPERATOR_REVIEW", 0)
+
+    @writer_sink("transfer_seal")
+    def bind_scan_lease(self, intent_id: str, lease_id: str) -> sqlite3.Row:
+        self._assert_coordinator_owner()
+        with self._connect() as conn:
+            conn.execute("UPDATE transfer_scan_context SET lease_id=? WHERE intent_id=? AND lease_id=''",
+                         (lease_id, intent_id))
+            row = self._load_in_connection(conn, intent_id)
+            if row is None or row["deferred_operation_lease_id"] != lease_id:
+                raise ValueError("scan completion lease differs from retry")
+            conn.commit()
+            return row
+
+    @writer_sink("transfer_seal")
+    def mark_scan_completion_projected(self, intent_id: str) -> None:
+        self._assert_coordinator_owner()
+        with self._connect() as conn:
+            row = self._load_in_connection(conn, intent_id)
+            if row is not None and row["scan_context_state"] == "LOCAL_PENDING":
+                context = json.loads(row["scan_context_json"])
+                conn.execute("UPDATE transfer_scan_context SET state=? WHERE intent_id=?",
+                             ("HELD" if context.get("short_confirmed") else "READY", intent_id))
+            conn.commit()
+
+    @writer_sink("transfer_seal")
+    def settle_short_confirmation(self, intent_id: str, *, undo: bool = False) -> None:
+        self._assert_coordinator_owner()
+        with self._connect() as conn:
+            if intent_id:
+                row = self._load_in_connection(conn, intent_id)
+                target = "CANCELLED" if undo else "READY"
+                if row is not None and row["scan_context_state"] == target:
+                    return
+                if row is None or row["command_json"] or row["scan_context_state"] != "HELD":
+                    raise ValueError("short confirmation is already settled")
+                conn.execute("UPDATE transfer_scan_context SET state=? WHERE intent_id=?",
+                             (target, intent_id))
+            else:
+                conn.execute("UPDATE transfer_scan_context SET state='READY' WHERE state='HELD'")
+            conn.commit()
 
     def operation_lease_referenced(self, lease_id: str) -> bool:
         """Whether a stored completion or member exchange was made with this lease.
@@ -919,6 +1008,8 @@ class TransferSealStore:
         """
         self._assert_not_ui_thread_read()
         with self._connect() as conn:
+            if conn.execute("SELECT 1 FROM transfer_scan_context WHERE lease_id=? LIMIT 1", (lease_id,)).fetchone():
+                return True
             if conn.execute(
                 """SELECT 1 FROM transfer_seal_intents
                     WHERE operation_lease_id=? LIMIT 1""",

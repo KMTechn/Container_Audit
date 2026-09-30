@@ -1,3 +1,5 @@
+> 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
+
 # 데이터·상태·통합 계약
 
 [제품·기능 카드](README.md) · [운영](operations.md) · [백로그](BACKLOG.md) · [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md) · [공통 용어](../../../Program_Spec_Hub/GLOSSARY.md)
@@ -160,13 +162,9 @@ notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator tran
 
 **API:** `GET /logistics/api/v1/replacements/good-source/resolve`, `POST /logistics/api/v1/bundles/{id}/members/replace`; `REPLACE_BUNDLE_MEMBERS`. [CA client/coordinator](../../transfer_member_exchange.py), [wire client](../../transfer_seal.py), [Web API](../../../WorkerAnalysisGUI-web/blueprints/logistics/api.py), [replace_bundle_members](../../../WorkerAnalysisGUI-web/logistics_ledger/service.py).
 
-정본 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md)는 동일 품목·UOM, 1~2쌍, 대상 및 각 공여 bundle의 expected version을 같은 명령으로 CAS하는 조건을 규정한다. 공여 PHS는 `EXACTLY_ONE_ACTIVE_MEMBER`; 여러 member이면 `REPLACEMENT_SOURCE_NOT_SINGLETON`으로 차단한다. 1~2쌍 전체 성공 또는 전체 실패이며 기존 제품은 `PROCESS_DAMAGE_HOLD`로 이동한다.
+정본 [MEMBER_EXCHANGE_POLICY](../MEMBER_EXCHANGE_POLICY.md)의 현재 스캐너 경로는 `replacement_mode:SCAN_REGISTER_GOOD`이며 pair는 `old_barcode/new_barcode`다. 검사 단계 공여 묶음은 다중 구성원도 이동하고 미등록 대체품은 GOOD 등록한다. NG·다른 품목·봉인/포장/출고는 거절한다. 로컬 intent·상태·CSV를 먼저 저장하고 배경에서 기존 authenticated context/CAS로 반영한다. 요청의 교환 시각·PC·작업자를 보존한다.
 
-receipt는 pair·exact membership/hash·version 및 `RETAIN_IDENTITY_LABEL`, `target_label_identity_remains_valid=true`, `target_label_membership_bound=false`를 증명해야 한다. 이 조건 없이 원래 실물 라벨이 계속 유효하다고 가정하지 않는다. 중앙 ACK 뒤 로컬 적용 중 종료는 intent와 현재 트레이를 대조해 복구한다. 봉인 뒤 CA 수정은 금지하고 Label의 별도 `REPLACE_SEALED_TRANSFER_MEMBERS` 계약으로 넘긴다. 그 계약은 새 seal revision/token/QR을 만들며 Label F4의 새 전자 QR 재확인까지 CA 작업과 혼동하지 않는다. [Label package_logistics](../../../Label_Match/package_logistics.py), [CA-10](README.md#ca-10).
-
-현재 교체 intent의 결과 재확인은 원 intent/key에 한정한다. review의 bound 교체는 receipt 조회만 하며, 중앙 ACK 이후 로컬 적용이 `PENDING`일 때만 기존 재조정을 예약한다. 로컬 `OPERATOR_REVIEW`는 계속 관리자 대조 대상으로 남긴다. 관리자 보류는 현재 트레이만 별도 parked owner로 넘기고 중앙/로컬 교체 결과를 바꾸지 않는다. [CA-G14](BACKLOG.md#ca-g14).
-
-화면 구성·목록/상태·결과 안내는 [member_exchange_view](../../member_exchange_view.py)가 기존 owner의 Tk thread에서 처리한다. admission·스캔 검증·prepare/attempt·ACK 로컬 적용·lease rotation은 원 owner/coordinator에 남는다. [상태·호출 경계](member-exchange-view.md).
+receipt pair의 unit/source IDs·barcode·source kind 및 exact target membership/hash·불량 이동·version을 검증한다. 이전 singleton 및 lease rotation 경로의 durable 전송·복구는 호환 원장용으로 유지한다. [스캐너 흐름과 경계](member-exchange-view.md).
 
 capability의 `max_pairs=2`, `atomic`, `two_bundle_cas` 등은 [logistics_transfer_client_from_env](../../transfer_seal.py)가 대조한다. 실제 설치 서버의 활성 값과 동시 경쟁 결과는 미확인이다. [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05).
 

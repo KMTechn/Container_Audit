@@ -1126,6 +1126,7 @@ class OperationLeaseStore:
         authority_scope_id: str,
         scan_payload: str,
         explicit_new: bool,
+        deferred_completion: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
         """Persist a nonce before network I/O, or replay one unresolved attempt."""
 
@@ -1142,6 +1143,12 @@ class OperationLeaseStore:
             "operation": TRANSFER_OPERATION,
             "scan_payload": scan_payload,
         }
+        if deferred_completion:
+            issue_request.update({
+                "deferred_reflection": True,
+                "local_completion_id": _bounded_text(deferred_completion.get("local_completion_id"), field="local_completion_id"),
+                "local_completed_at": _bounded_text(deferred_completion.get("local_completed_at"), field="local_completed_at"),
+            })
         request_json = canonical_json_bytes(issue_request).decode("utf-8")
         request_hash = canonical_hash(issue_request)
         resource_key = canonical_hash(
@@ -1166,13 +1173,19 @@ class OperationLeaseStore:
                 (resource_key,),
             ).fetchone()
             if unresolved is not None:
+                original_request = json.loads(unresolved["issue_request_json"])
+                # Replay a prefetch begun before local completion with its exact
+                # retained request; never reuse one completed round for another.
+                compatible_prefetch = bool(deferred_completion and
+                    "local_completion_id" not in original_request and
+                    original_request == {k: issue_request[k] for k in ("authority_scope_id", "operation", "scan_payload")})
                 if (
                     unresolved["device_id"] != device
                     or unresolved["source_host_id"] != source_host
                     or unresolved["authority_scope_id"] != scope
                     or unresolved["physical_qr_sha256"] != scan_hash
-                    or unresolved["issue_request_json"] != request_json
-                    or unresolved["issue_request_hash"] != request_hash
+                    or (not compatible_prefetch and unresolved["issue_request_json"] != request_json)
+                    or (not compatible_prefetch and unresolved["issue_request_hash"] != request_hash)
                 ):
                     raise sqlite3.IntegrityError(
                         "unresolved terminal issue attempt identity differs"
@@ -2183,6 +2196,7 @@ class OperationLeaseManager:
         authority_scope_id: str,
         scan_payload: str,
         explicit_new: bool = False,
+        deferred_completion: Mapping[str, Any] | None = None,
     ) -> str:
         row = self.store.begin_issue_attempt(
             device_id=device_id,
@@ -2190,8 +2204,16 @@ class OperationLeaseManager:
             authority_scope_id=authority_scope_id,
             scan_payload=scan_payload,
             explicit_new=explicit_new,
+            deferred_completion=deferred_completion,
         )
         return str(row["issue_idempotency_key"])
+
+    def issue_request_for_key(self, key: str) -> dict[str, Any]:
+        with self.store._connect() as connection:
+            row = connection.execute("SELECT issue_request_json FROM terminal_operation_lease_issue_attempts WHERE issue_idempotency_key=?", (key,)).fetchone()
+        if row is None:
+            raise _error("OPERATION_LEASE_ISSUE_ATTEMPT_NOT_FOUND", "durable issue request was not found")
+        return json.loads(row[0])
 
     def rotation_predecessor_context(
         self,

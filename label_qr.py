@@ -20,7 +20,7 @@ TRANSITION_CLASSES = (
 NEW_SYSTEM_IDENTITY_KEYS = (
     "ITG", "LBL", "HSH", "HSH_CORE", "HSH_LABEL", "BND", "BUNDLE_ID", "SOURCE_BUNDLE_ID",
 )
-# Seal status of a transition completion recorded on this PC only (no lease, seal or ledger).
+# Local CSV classification stays fixed; valid PHS2_LOCAL also queues a deferred seal.
 TRANSITION_LOCAL_SEAL_STATUS = {
     TRANSITION_LEGACY: "LEGACY_LOCAL_ONLY",
     TRANSITION_PHS2_LOCAL: "PHS2_LOCAL_ONLY",
@@ -58,6 +58,12 @@ def parse_new_format_qr(qr_data: str) -> Optional[Dict[str, str]]:
             pass
 
     if "=" in qr_data and "|" in qr_data:
+        if qr_data.startswith("PHS=2|") and "|QT=" in qr_data and len(qr_data.split("|")) == 7:
+            segments = qr_data.split("|")
+            if ([segment.split("=", 1)[0] for segment in segments]
+                != ["PHS", "SRC", "ITG", "CLC", "LBL", "HSH", "QT"]
+                or not re.fullmatch(r"QT=[1-9][0-9]{0,3}", segments[-1])):
+                return None
         parsed_data = {}
         try:
             pairs = qr_data.split("|")
@@ -245,8 +251,7 @@ def _transition_compact_label(text):
     return (
         (len(parts) == len(_TRANSITION_COMPACT_KEYS) or (
             len(parts) == len(_TRANSITION_COMPACT_KEYS) + 1
-            and re.fullmatch(r"QT=[0-9]+", parts[-1]) is not None
-            and int(parts[-1][3:]) > 0
+            and re.fullmatch(r"QT=[1-9][0-9]{0,3}", parts[-1]) is not None
         ))
         and fields["PHS"] == "2"
         and fields["SRC"].upper() == "KMTECH_INPUT_TAG"

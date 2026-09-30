@@ -40,6 +40,8 @@ READ_ONLY_ALLOWLIST = {
         "has_exact_history",
         "replacement_waiting_outbox",
         "pending_replacement_waiting_projections",
+        "has_scan_transport_work",
+        "scan_transport_counts",
     },
     ("transfer_seal.py", "TransferSealCoordinator"): {"preview"},
     ("transfer_member_exchange.py", "TransferMemberExchangeStore"): {
@@ -48,6 +50,10 @@ READ_ONLY_ALLOWLIST = {
         "pending_ids",
         "pending_local_rows",
         "blocking_rows",
+        "scan_exchange_context",
+        "scan_exchange_rows",
+        "scan_exchange_ready",
+        "acknowledged_scan_keys",
     },
     ("transfer_member_exchange.py", "TransferMemberExchangeCoordinator"): {
         "pending_local_attempts",
@@ -711,11 +717,11 @@ def test_transfer_writer_owner_census_includes_explicit_review_retry():
     }
     assert counts == {
         "TransferMemberExchangeCoordinator": 4,
-        "TransferMemberExchangeStore": 7,
-        "TransferSealCoordinator": 7,
-        "TransferSealStore": 9,
+        "TransferMemberExchangeStore": 8,
+        "TransferSealCoordinator": 8,
+        "TransferSealStore": 12,
     }
-    assert len(WRITER_SURFACES) == 27
+    assert len(WRITER_SURFACES) == 32
 
 
 @pytest.mark.parametrize(

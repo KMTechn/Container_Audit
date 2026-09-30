@@ -38,6 +38,7 @@ from transfer_seal import (
     TransferCoordinatorOwnerBindingError,
     TransferCoordinatorUiThreadBindingError,
     TransferSealError,
+    TransferSealCoordinator,
     _assert_not_transfer_coordinator_ui_thread,
     _assert_transfer_coordinator_owner,
     membership_hash,
@@ -353,6 +354,17 @@ class TransferMemberExchangeStore:
             conn.execute("PRAGMA synchronous=FULL")
             conn.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS transfer_scan_exchanges (
+                    intent_id TEXT PRIMARY KEY,
+                    context_json TEXT NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('LOCAL_PENDING','READY'))
+                );
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_scan_exchange_context_update
+                BEFORE UPDATE OF intent_id,context_json ON transfer_scan_exchanges
+                BEGIN SELECT RAISE(ABORT, 'scan exchange context is immutable'); END;
+                CREATE TRIGGER IF NOT EXISTS trg_transfer_scan_exchange_context_delete
+                BEFORE DELETE ON transfer_scan_exchanges
+                BEGIN SELECT RAISE(ABORT, 'scan exchange context is retained'); END;
                 CREATE TABLE IF NOT EXISTS transfer_member_exchange_intents (
                     intent_id TEXT PRIMARY KEY,
                     schema_version TEXT NOT NULL,
@@ -450,6 +462,7 @@ class TransferMemberExchangeStore:
         old_barcodes: Iterable[str],
         new_barcodes: Iterable[str],
         predecessor_lease_evidence: Mapping[str, Any] | None = None,
+        scan_context: Mapping[str, Any] | None = None,
     ) -> sqlite3.Row:
         self._assert_coordinator_owner()
         old_values = tuple(normalize_barcode(value) for value in old_barcodes)
@@ -599,9 +612,46 @@ class TransferMemberExchangeStore:
                     "SELECT * FROM transfer_member_exchange_intents WHERE intent_id=?",
                     (intent_id,),
                 ).fetchone()
+            if scan_context is not None:
+                encoded = _canonical_json(dict(scan_context))
+                conn.execute("INSERT OR IGNORE INTO transfer_scan_exchanges VALUES(?,?,'LOCAL_PENDING')",
+                             (intent_id, encoded))
+                if conn.execute("SELECT context_json FROM transfer_scan_exchanges WHERE intent_id=?",
+                                (intent_id,)).fetchone()[0] != encoded:
+                    raise ValueError("scan exchange context differs from retry")
             conn.commit()
         assert row is not None
         return row
+
+    def scan_exchange_context(self, intent_id: str) -> dict[str, Any] | None:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            row = conn.execute("SELECT context_json FROM transfer_scan_exchanges WHERE intent_id=?",
+                               (intent_id,)).fetchone()
+        return json.loads(row[0]) if row is not None else None
+
+    def scan_exchange_rows(self, *, unprojected=False) -> list[sqlite3.Row]:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            return conn.execute("SELECT i.*, s.context_json, s.state AS scan_state FROM transfer_member_exchange_intents i JOIN transfer_scan_exchanges s ON s.intent_id=i.intent_id" + (" WHERE s.state='LOCAL_PENDING'" if unprojected else "")).fetchall()
+
+    def acknowledged_scan_keys(self) -> set[str]:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            return {"container-member-exchange:" + row[0] for row in conn.execute("SELECT intent_hash FROM transfer_member_exchange_intents WHERE status='ACKED'")}
+
+    def scan_exchange_ready(self, intent_id: str) -> bool:
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            row = conn.execute("SELECT state FROM transfer_scan_exchanges WHERE intent_id=?", (intent_id,)).fetchone()
+        return row is None or row[0] == "READY"
+
+    @writer_sink("transfer_member_exchange")
+    def mark_scan_exchange_projected(self, intent_id: str) -> None:
+        self._assert_coordinator_owner()
+        with self._connect() as conn:
+            conn.execute("UPDATE transfer_scan_exchanges SET state='READY' WHERE intent_id=?", (intent_id,))
+            conn.commit()
 
     def load(self, intent_id: str) -> sqlite3.Row:
         self._assert_not_ui_thread_read()
@@ -713,7 +763,9 @@ class TransferMemberExchangeStore:
             "PHS2_MIXED_MEMBERSHIP",
             "PHS2_MEMBER_NOT_AVAILABLE",
         }
-        terminal_http = error.status_code in {400, 403, 409, 412, 422}
+        terminal_http = error.status_code in {400, 403, 409, 412, 422} and not (
+            error.code == "UPSTREAM_COMPLETION_PENDING" and error.retryable
+        )
         terminal_operation_lease = error.code.upper().startswith(
             "OPERATION_LEASE_"
         ) and error.code.upper() not in {
@@ -826,6 +878,8 @@ class TransferMemberExchangeStore:
             rows = conn.execute(
                 f"""SELECT intent_id FROM transfer_member_exchange_intents i
                       WHERE i.status IN ({placeholders})
+                        AND NOT EXISTS (SELECT 1 FROM transfer_scan_exchanges s
+                            WHERE s.intent_id=i.intent_id AND s.state!='READY')
                         AND NOT EXISTS (
                             SELECT 1 FROM transfer_member_exchange_dismissals d
                              WHERE d.intent_id=i.intent_id
@@ -888,7 +942,8 @@ class TransferMemberExchangeStore:
         self._assert_not_ui_thread_read()
         query = (
             "SELECT * FROM transfer_member_exchange_intents "
-            "WHERE status='ACKED' AND local_apply_status='PENDING'"
+            "WHERE status='ACKED' AND local_apply_status='PENDING' "
+            "AND NOT EXISTS (SELECT 1 FROM transfer_scan_exchanges s WHERE s.intent_id=transfer_member_exchange_intents.intent_id)"
         )
         params: tuple[Any, ...] = ()
         if master_label:
@@ -902,6 +957,7 @@ class TransferMemberExchangeStore:
         self._assert_not_ui_thread_read()
         query = (
             "SELECT * FROM transfer_member_exchange_intents i WHERE "
+            "NOT EXISTS (SELECT 1 FROM transfer_scan_exchanges s WHERE s.intent_id=i.intent_id) AND "
             "(status IN ('PREPARED','COMMAND_READY','RETRY_WAIT','OPERATOR_REVIEW') OR "
             " (status='ACKED' AND local_apply_status!='APPLIED')) "
             "AND NOT EXISTS ("
@@ -1189,7 +1245,130 @@ class TransferMemberExchangeCoordinator:
         source["selected_barcode"] = barcode
         return source
 
+    def _build_scan_exchange_command(self, row, context):
+        self._assert_owner()
+        if self.client is None:
+            raise TransferSealError("LOGISTICS_CLIENT_NOT_CONFIGURED", "중앙 연결 대기", retryable=True)
+        fields = validate_compact_phs2_fields(parse_new_format_qr(row["master_label"]) or {})
+        resolved = self.client.resolve_source(json.loads(row["source_identity_json"]))
+        preflight = validate_compact_phs2_preflight(fields, resolved)
+        old_values = json.loads(row["old_barcodes_json"])
+        new_values = json.loads(row["new_barcodes_json"])
+        source = resolved["work_group_source"]
+        selected = TransferSealCoordinator._map_scans(dict(source), old_values)
+        target_specs = [spec for spec in preflight.source_bundles
+                        if set(selected) <= set(spec["source_member_ids"])]
+        if len(target_specs) != 1:
+            raise TransferSealError("MEMBERSHIP_CONFLICT", "교환 대상 원본을 확정할 수 없습니다.")
+        target = dict(target_specs[0])
+        target_members = [dict(member) for member in source["members"]
+                          if member["unit_id"] in target["source_member_ids"]]
+        # A physical group can cover a subset; obtain the complete target proof.
+        if len(target_members) != len(target["source_member_ids"]):
+            bundle_result = self.client.resolve_source({"bundle_id": target["bundle_id"],
+                "item_id": row["item_id"], "authority_scope_id": preflight.authority_scope_id})
+            bundle = bundle_result.get("bundle") or {}
+            target_members = list(bundle.get("members") or [])
+        if {member.get("unit_id") for member in target_members} != set(target["source_member_ids"]):
+            raise TransferSealError("RESOLVER_CONTRACT_INVALID", "교환 대상 exact membership 증거가 없습니다.")
+        epoch = int(self.client.authority_epoch or resolved.get("authority_epoch") or source.get("authority_epoch") or 0)
+        if epoch < 1:
+            epoch = int(self.client.get_authority(preflight.authority_scope_id)["authority_epoch"])
+        self.client.assert_authority(preflight.authority_scope_id, authority_epoch=epoch,
+            ledger_plane=preflight.ledger_plane, plane_epoch=preflight.plane_epoch)
+        return {
+            "contract_version": CONTRACT_VERSION, "command_type": EXCHANGE_COMMAND_TYPE,
+            "authority_scope_id": preflight.authority_scope_id, "authority_epoch": epoch,
+            "ledger_plane": preflight.ledger_plane, "plane_epoch": preflight.plane_epoch,
+            "idempotency_key": f"container-member-exchange:{row['intent_hash']}",
+            "expected_versions": {"bundle:" + target["bundle_id"]: target["entity_version"]},
+            "payload": {"target_bundle_id": target["bundle_id"], "item_id": row["item_id"],
+                "replacement_mode": "SCAN_REGISTER_GOOD",
+                "pairs": [dict(old_barcode=old, new_barcode=new) for old,new in zip(old_values,new_values)],
+                "scan_payload": row["master_label"], "deferred_reflection": True,
+                "local_completion_id": row["intent_id"], "local_completed_at": context["exchanged_at"],
+                "exchanged_at": context["exchanged_at"], "short_confirmed": False,
+                "exchange_idempotency_keys": list(context.get("predecessor_keys") or [])},
+            "client_exact_evidence": {"target": {**target, "location": "PHS_GOOD", "members": target_members}},
+            "reason": "container_audit_scan_exchange", "evidence_refs": [row["intent_id"],row["intent_hash"]],
+        }
+
+    @staticmethod
+    def _validate_scan_exchange_receipt(command, receipt):
+        payload = command["payload"]
+        data = receipt.get("data") if isinstance(receipt.get("data"), Mapping) else receipt
+        def reject():
+            raise TransferSealError("RECEIPT_MEMBERSHIP_MISMATCH", "교환 receipt의 exact membership/CAS 증거가 일치하지 않습니다.")
+        if (receipt.get("status") != "COMMITTED" or receipt.get("contract_version") != CONTRACT_VERSION
+            or receipt.get("command_type") != EXCHANGE_COMMAND_TYPE
+            or receipt.get("authority_scope_id") != command["authority_scope_id"]
+            or receipt.get("authority_epoch") != command["authority_epoch"]
+            or receipt.get("resolved_ledger_plane") != command["ledger_plane"]
+            or receipt.get("resolved_plane_epoch") != command["plane_epoch"]
+            or not receipt.get("receipt_id") or not receipt.get("committed_at")
+            or not receipt.get("event_ids") or not receipt.get("outbox_ids")):
+            reject()
+        pairs = data.get("pairs")
+        if not isinstance(pairs, list) or len(pairs) != len(payload["pairs"]):
+            reject()
+        before = command["client_exact_evidence"]["target"]
+        before_map = dict(_member_pairs(before["members"]))
+        expected_map = dict(before_map)
+        removed = set()
+        new_ids = set()
+        for requested,actual in zip(payload["pairs"],pairs):
+            if not isinstance(actual, Mapping):
+                reject()
+            old, new = requested["old_barcode"], requested["new_barcode"]
+            old_id, new_id = str(actual.get("old_unit_id") or ""), str(actual.get("new_unit_id") or "")
+            if (actual.get("old_barcode") != old or actual.get("new_barcode") != new
+                or before_map.get(old_id) != normalize_barcode(old) or not new_id
+                or old_id in removed or new_id in new_ids or new_id in before_map):
+                reject()
+            kind = actual.get("new_source_kind")
+            source_id = actual.get("new_source_bundle_id")
+            if kind not in {"INSPECTION_TRANSFER", "EXCHANGE_GOOD_REGISTERED"}:
+                reject()
+            if (kind == "EXCHANGE_GOOD_REGISTERED" and source_id is not None) or (kind == "INSPECTION_TRANSFER" and not source_id):
+                reject()
+            removed.add(old_id)
+            new_ids.add(new_id)
+            expected_map.pop(old_id)
+            expected_map[new_id] = normalize_barcode(new)
+        versions = receipt.get("entity_versions") or data.get("entity_versions") or {}
+        expected_barcodes = sorted(expected_map.values())
+        movement_ids = data.get("movement_ids")
+        if (data.get("target_bundle_id") != payload["target_bundle_id"] or data.get("atomic") is not True
+            or data.get("target_bundle_type") != before["bundle_type"]
+            or data.get("target_location") != before["location"]
+            or _member_pairs(data.get("members")) != tuple(sorted(expected_map.items()))
+            or sorted(data.get("member_ids") or []) != sorted(expected_map)
+            or data.get("member_count") != len(expected_map)
+            or data.get("membership_hash") != membership_hash(expected_map)
+            or sorted(data.get("normalized_barcodes") or []) != expected_barcodes
+            or data.get("barcode_membership_hash") != membership_hash(expected_barcodes)
+            or data.get("pair_count") != len(pairs)
+            or sorted(data.get("damage_member_ids") or []) != sorted(removed)
+            or data.get("damage_location") != "PROCESS_DAMAGE_HOLD"
+            or not data.get("damage_bundle_id")
+            or not isinstance(movement_ids, list) or not movement_ids
+            or len(set(movement_ids)) != len(movement_ids)
+            or any(not isinstance(value, str) or not value.strip() for value in movement_ids)
+            or data.get("requires_reseal") is not False
+            or data.get("target_label_action") != "RETAIN_IDENTITY_LABEL"
+            or data.get("target_label_identity_remains_valid") is not True
+            or data.get("target_label_membership_bound") is not False
+            or any(versions.get(key) != value+1 for key,value in command["expected_versions"].items())
+            or not isinstance(receipt.get("source_membership_changes", data.get("source_membership_changes")), list)
+            or data.get("idempotency_key") != command["idempotency_key"]
+            or _member_pairs(data.get("damage_members")) != tuple(sorted((unit,before_map[unit]) for unit in removed))
+            or data.get("damage_membership_hash") != membership_hash(removed)):
+            reject()
+
     def _build_command(self, row: sqlite3.Row) -> dict[str, Any]:
+        scan_context = self.store.scan_exchange_context(row["intent_id"])
+        if scan_context is not None:
+            return self._build_scan_exchange_command(row, scan_context)
         predecessor_evidence = (
             json.loads(row["predecessor_evidence_json"])
             if row["predecessor_evidence_json"]
@@ -1434,6 +1613,9 @@ class TransferMemberExchangeCoordinator:
     def _validate_receipt(
         command: Mapping[str, Any], receipt: Mapping[str, Any]
     ) -> None:
+        if command.get("payload", {}).get("replacement_mode") == "SCAN_REGISTER_GOOD":
+            TransferMemberExchangeCoordinator._validate_scan_exchange_receipt(command, receipt)
+            return
         TransferMemberExchangeCoordinator._rotation_result(command, receipt)
         data_value = receipt.get("data")
         data = dict(data_value) if isinstance(data_value, Mapping) else dict(receipt)
@@ -2278,6 +2460,8 @@ class TransferMemberExchangeCoordinator:
     def attempt(self, intent_id: str) -> MemberExchangeAttempt:
         self._assert_owner()
         row = self.store.load(intent_id)
+        if not self.store.scan_exchange_ready(intent_id):
+            return self._attempt(row)
         if self.store.has_dismissed_command_fence(intent_id):
             return self._attempt(row)
         if row["status"] == "ACKED":

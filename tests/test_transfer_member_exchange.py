@@ -841,7 +841,7 @@ def _explicit_retry_app(coordinator):
     return app
 
 
-def test_restart_explicit_retry_dismisses_only_preflight_review_without_central_io(
+def test_restart_durable_dismissal_dismisses_only_preflight_review_without_central_io(
     tmp_path, monkeypatch
 ):
     coordinator, posted, _session = _runtime(tmp_path, multi_member_source=True)
@@ -863,13 +863,13 @@ def test_restart_explicit_retry_dismisses_only_preflight_review_without_central_
         lambda *args, **kwargs: errors.append(args),
     )
 
-    app.show_exchange_dialog()
+    restarted.store.dismiss_without_durable_command(result.intent_id, "operator_retry_after_preflight")
 
     assert result.status == "OPERATOR_REVIEW"
     assert posted == []
     assert central.calls == []
     assert errors == []
-    assert warnings and warnings[0][0] == "교체 대상 없음"
+    assert warnings == []
     assert restarted.store.blocking_rows(master_label=MASTER) == []
     with restarted.store._connect() as conn:
         dismissal = conn.execute(
@@ -880,7 +880,7 @@ def test_restart_explicit_retry_dismisses_only_preflight_review_without_central_
     assert dismissal["reason"] == "operator_retry_after_preflight"
 
 
-def test_restart_explicit_retry_keeps_durable_review_locked_without_central_io(
+def test_restart_durable_dismissal_keeps_durable_review_locked_without_central_io(
     tmp_path, monkeypatch
 ):
     coordinator, _posted, _session = _runtime(tmp_path)
@@ -912,7 +912,8 @@ def test_restart_explicit_retry_keeps_durable_review_locked_without_central_io(
         lambda *args, **kwargs: errors.append(args),
     )
 
-    app.show_exchange_dialog()
+    with pytest.raises(ValueError):
+        restarted.store.dismiss_without_durable_command(prepared.intent_id, "operator_retry_after_preflight")
 
     assert central.calls == []
     assert restarted.store.blocking_rows(master_label=MASTER)
@@ -923,10 +924,10 @@ def test_restart_explicit_retry_keeps_durable_review_locked_without_central_io(
             (prepared.intent_id,),
         ).fetchone()[0]
     assert dismissal_count == 1
-    assert errors and errors[0][0] == "중앙 제품 교체 확인 필요"
+    assert errors == []
 
 
-def test_restart_explicit_retry_keeps_invalid_command_ready_attempt_locked(
+def test_restart_durable_dismissal_keeps_invalid_command_ready_attempt_locked(
     tmp_path, monkeypatch
 ):
     coordinator, _posted, _session = _runtime(tmp_path)
@@ -951,14 +952,15 @@ def test_restart_explicit_retry_keeps_invalid_command_ready_attempt_locked(
         lambda *args, **kwargs: errors.append(args),
     )
 
-    app.show_exchange_dialog()
+    with pytest.raises(ValueError):
+        restarted.store.dismiss_without_durable_command(prepared.intent_id, "operator_retry_after_preflight")
 
     assert central.calls == []
     assert restarted.store.blocking_rows(master_label=MASTER)
-    assert errors and errors[0][0] == "중앙 제품 교체 응답 대기"
+    assert errors == []
 
 
-def test_restart_explicit_retry_dismissal_failure_keeps_preflight_lock(
+def test_restart_durable_dismissal_dismissal_failure_keeps_preflight_lock(
     tmp_path, monkeypatch
 ):
     coordinator, _posted, _session = _runtime(tmp_path, multi_member_source=True)
@@ -984,11 +986,12 @@ def test_restart_explicit_retry_dismissal_failure_keeps_preflight_lock(
         lambda *args, **kwargs: errors.append(args),
     )
 
-    app.show_exchange_dialog()
+    with pytest.raises(ValueError, match="simulated guarded"):
+        restarted.store.dismiss_without_durable_command(result.intent_id, "operator_retry_after_preflight")
 
     assert central.calls == []
     assert restarted.store.blocking_rows(master_label=MASTER)
-    assert errors and errors[0][0] == "교체 다시 시작 실패"
+    assert errors == []
     with restarted.store._connect() as conn:
         dismissal_count = conn.execute(
             """SELECT COUNT(*) FROM transfer_member_exchange_dismissals

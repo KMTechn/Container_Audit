@@ -227,6 +227,9 @@ class LogisticsTransferClient:
         operation: str,
         scan_payload: str,
         idempotency_key: str,
+        deferred_reflection: bool = False,
+        local_completion_id: str = "",
+        local_completed_at: str = "",
     ) -> dict[str, Any]:
         """Issue/replay one signed terminal-exclusive physical operation lease."""
 
@@ -237,14 +240,16 @@ class LogisticsTransferClient:
         if not scope or operation_name != TRANSFER_OPERATION or not physical_scan or not key:
             raise ValueError("operation lease issue requires exact transfer context")
         self.assert_authority(scope)
+        payload = {"authority_scope_id": scope, "operation": operation_name, "scan_payload": physical_scan}
+        if deferred_reflection:
+            if not local_completion_id or not local_completed_at:
+                raise ValueError("deferred lease requires durable local completion identity and time")
+            payload.update(deferred_reflection=True, local_completion_id=local_completion_id,
+                           local_completed_at=local_completed_at)
         result = self._request(
             "POST",
             "/logistics/api/v1/operation-leases/issue",
-            payload={
-                "authority_scope_id": scope,
-                "operation": operation_name,
-                "scan_payload": physical_scan,
-            },
+            payload=payload,
             idempotency_key=key,
         )
         return dict(result or {})
