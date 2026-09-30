@@ -14,6 +14,7 @@ import logistics_runtime_profile as runtime_module
 from current_user_onboarding import resolve_current_user_onboarding_paths
 from tests.test_item_catalog_sync import CATALOG, FakeResponse
 from tools.install_logistics_runtime_profile import install_runtime_profile
+from tools import install_logistics_runtime_profile as installer_module
 
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="current-user DPAPI is Windows-only")
@@ -45,7 +46,7 @@ def _install_profile(path: Path, origin: str) -> Path:
 
 @pytest.fixture
 def launcher(monkeypatch, tmp_path):
-    """Environment of launch-container-audit.cmd: no profile variables, no machine profile."""
+    """Launcher state with synthetic credentials and an old Machine configuration."""
 
     for name in (
         app_module.LOGISTICS_PROFILE_PATH_ENV,
@@ -59,12 +60,42 @@ def launcher(monkeypatch, tmp_path):
     ):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "LocalAppData"))
+    program_data = tmp_path / "ProgramData"
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
+    # Redirect the baseline's fixed PC-wide path as well as its process default.
     monkeypatch.setattr(
         runtime_module,
-        "_canonical_machine_profile_path",
-        lambda: tmp_path / "ProgramData" / runtime_module.DEFAULT_PROFILE_RELATIVE_PATH,
+        "Path",
+        lambda value: program_data if os.fspath(value).casefold() == r"c:\programdata"
+        else Path(value),
     )
-    monkeypatch.setattr(runtime_module, "_machine_environment_value", lambda _name: "")
+    machine_reads = []
+
+    def machine_value(name):
+        machine_reads.append(name)
+        return {
+            runtime_module.PROFILE_PATH_ENV: str(
+                program_data / runtime_module.DEFAULT_PROFILE_RELATIVE_PATH
+            ),
+            runtime_module.REQUIRED_ENV: "1",
+        }.get(name, "")
+
+    monkeypatch.setattr(runtime_module, "_machine_environment_value", machine_value)
+    encrypted_token = b"synthetic-current-user-protected-token"
+
+    def decrypt(value):
+        assert value == encrypted_token
+        return TOKEN
+
+    def protect(token):
+        assert token == TOKEN
+        return encrypted_token
+
+    monkeypatch.setattr(installer_module, "protect_current_user_secret", protect)
+    monkeypatch.setattr(installer_module, "unprotect_current_user_secret", decrypt)
+    monkeypatch.setattr(runtime_module, "unprotect_machine_secret", decrypt)
+    monkeypatch.setattr(runtime_module, "unprotect_current_user_secret", decrypt)
+    monkeypatch.setattr(app_module, "unprotect_current_user_secret", decrypt)
     requests = []
 
     def transport(kind):
@@ -75,7 +106,8 @@ def launcher(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sync, "_hardened_get", transport("authenticated"))
     monkeypatch.setattr(sync.requests, "get", transport("anonymous"))
-    return requests
+    yield requests
+    assert machine_reads == [], "current-user startup must not read Machine logistics values"
 
 
 def _start_like_launcher(monkeypatch):
@@ -111,7 +143,10 @@ def test_launcher_start_uses_onboarded_current_user_profile(launcher, monkeypatc
 )
 def test_environment_selected_profiles_are_kept(launcher, monkeypatch, tmp_path, selector):
     if selector == "onboarded_over_machine":
-        _install_profile(runtime_module._canonical_machine_profile_path(), MACHINE_ORIGIN)
+        _install_profile(
+            Path(os.environ["PROGRAMDATA"]) / runtime_module.DEFAULT_PROFILE_RELATIVE_PATH,
+            MACHINE_ORIGIN,
+        )
         onboarded = resolve_current_user_onboarding_paths(APP_ROOT).logistics_profile_path
         _install_profile(onboarded, ONBOARDED_ORIGIN)
         expected_origin = ONBOARDED_ORIGIN

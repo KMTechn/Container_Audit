@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -588,47 +589,101 @@ def test_test1_isolated_legacy_override_rejects_reparse_ca_bundle(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Machine environment trust boundary")
-def test_hklm_machine_profile_ignores_process_path_override(tmp_path, monkeypatch):
+def test_process_profile_ignores_hklm_machine_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        runtime_module, "Path",
+        lambda value: tmp_path / "ProgramData"
+        if os.fspath(value).casefold() == r"c:\programdata" else Path(value),
+    )
     machine = _profile(tmp_path / "machine-profile")
-    process = _profile(tmp_path / "process-profile", base_url="https://attacker.invalid")
+    process = _profile(tmp_path / "process-profile", base_url="https://current-user.invalid")
     monkeypatch.setenv("KM_LOGISTICS_PROFILE_PATH", str(process))
     monkeypatch.setenv("KM_LOGISTICS_REQUIRED", "0")
     values = {
         "KM_LOGISTICS_PROFILE_PATH": str(machine),
         "KM_LOGISTICS_REQUIRED": "1",
     }
-    monkeypatch.setattr(
-        runtime_module,
-        "_machine_environment_value",
-        lambda name: values.get(name, ""),
-    )
+    reads = []
+
+    def machine_value(name):
+        reads.append(name)
+        return values.get(name, "")
+
+    monkeypatch.setattr(runtime_module, "_machine_environment_value", machine_value)
 
     resolved = load_logistics_runtime_profile(decryptor=lambda _value: "machine-secret")
 
     assert resolved is not None
-    assert resolved.base_url == "https://logistics.example.invalid"
-    assert resolved.required is True
+    assert resolved.profile_path == str(process.resolve())
+    assert resolved.base_url == "https://current-user.invalid"
+    assert resolved.required is False
+    assert reads == []
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Machine environment trust boundary")
-def test_scoped_profile_supersedes_legacy_machine_profile_path(tmp_path, monkeypatch):
-    scoped = _profile(tmp_path / "scoped-profile")
+def test_process_profile_precedes_legacy_pc_profile(tmp_path, monkeypatch):
+    program_data = tmp_path / "ProgramData"
+    scoped = program_data / runtime_module.DEFAULT_PROFILE_RELATIVE_PATH
+    source = _profile(tmp_path / "scoped-profile")
+    scoped.parent.mkdir(parents=True)
+    scoped.write_bytes(source.read_bytes())
+    (scoped.parent / "secrets").mkdir()
+    (scoped.parent / "secrets" / "bearer-token.dpapi").write_bytes(b"encrypted-token")
     legacy = _profile(tmp_path / "legacy-profile", base_url="https://legacy.invalid")
-    monkeypatch.setattr(runtime_module, "_canonical_machine_profile_path", lambda: scoped)
+    process = _profile(tmp_path / "process-profile", base_url="https://current-user.invalid")
+    _env(monkeypatch, process)
+    monkeypatch.setenv("PROGRAMDATA", str(program_data))
     monkeypatch.setattr(
         runtime_module,
-        "_machine_environment_value",
-        lambda name: {
+        "Path",
+        lambda value: program_data if os.fspath(value).casefold() == r"c:\programdata"
+        else Path(value),
+    )
+    reads = []
+
+    def machine_value(name):
+        reads.append(name)
+        return {
             "KM_LOGISTICS_PROFILE_PATH": str(legacy),
             "KM_LOGISTICS_REQUIRED": "1",
-        }.get(name, ""),
-    )
+        }.get(name, "")
+
+    monkeypatch.setattr(runtime_module, "_machine_environment_value", machine_value)
 
     resolved = load_logistics_runtime_profile(decryptor=lambda _value: "scoped-secret")
 
     assert resolved is not None
-    assert resolved.profile_path == str(scoped.resolve())
-    assert resolved.base_url == "https://logistics.example.invalid"
+    assert resolved.profile_path == str(process.resolve())
+    assert resolved.base_url == "https://current-user.invalid"
+    assert resolved.required is True
+    assert reads == []
+    assert scoped.read_bytes() == source.read_bytes()
+    assert (scoped.parent / "secrets" / "bearer-token.dpapi").read_bytes() == b"encrypted-token"
+
+
+def test_process_profile_failure_does_not_borrow_machine_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        runtime_module, "Path",
+        lambda value: tmp_path / "ProgramData"
+        if os.fspath(value).casefold() == r"c:\programdata" else Path(value),
+    )
+    machine = _profile(tmp_path / "machine-profile")
+    missing = tmp_path / "current-user" / "missing-profile.json"
+    _env(monkeypatch, missing)
+    reads = []
+
+    def machine_value(name):
+        reads.append(name)
+        return {
+            runtime_module.PROFILE_PATH_ENV: str(machine),
+            runtime_module.REQUIRED_ENV: "1",
+        }.get(name, "")
+
+    monkeypatch.setattr(runtime_module, "_machine_environment_value", machine_value)
+
+    with pytest.raises(LogisticsRuntimeConfigurationError, match="profile is missing"):
+        load_logistics_runtime_profile(decryptor=lambda _value: "machine-secret")
+    assert reads == []
 
 
 def test_required_startup_performs_authenticated_capability_probe(tmp_path, monkeypatch):

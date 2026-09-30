@@ -129,7 +129,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 ## CA-G05 실제 설치 구성·권한·장비 지원 범위
 
 - **유형·우선순위·상태:** 환경/공급자·지원 경로 확인 공백, P1, 미확인. 소스와 설치본이 다른 경로를 선택하면 과거 근거를 적용할 수 없다.
-- **근거:** [운영 설정/공급자](operations.md#ca-o02), [장비](operations.md#ca-o03), [contract.lock.json](../../contract.lock.json), [물류 client 생성/capability 검증](../../transfer_seal.py). 사용자 profile·Machine fallback·legacy 환경, 물류 operation lease와 producer runtime lease, 작업자와 device 권한을 구분한다.
+- **근거:** [운영 설정/공급자](operations.md#ca-o02), [장비](operations.md#ca-o03), [contract.lock.json](../../contract.lock.json), [물류 client 생성/capability 검증](../../transfer_seal.py). 사용자 profile·process 호환 설정·legacy 환경, 물류 operation lease와 producer runtime lease, 작업자와 device 권한을 구분한다. HKLM 물류 두 값과 PC 공용 CA 파일은 first-run이 적용한 사용자 설정보다 우선하지 않으며 옛 자료는 보존한다. 실제 설치본에서의 공존·상속된 process 호환 값만 있는 경로는 별도 확인 범위다.
 - **완료 기준:** 대상 패키지/수정 트리·Python/Tcl·실제 vendor/overlay·선택된 profile/provider 경로·비밀 제외 scope/epoch·서버 flags/capability·장비 모델/드라이버·지원 UI 경로를 기록하고 관련 기존 증거와 일치 여부를 판정한다. 요청하지 않은 credential/OS 보안 변경을 요구하지 않는다.
 - **담당·의존·다음 행동:** CA 배포/운영 담당+Web+Main. 기존 후보 manifest와 보고서부터 확인하고 없는 정보만 후속 확인 범위로 정한다. 구성 대조는 CA-G06 요구 정리와 독립 가능, 실제 현장/VM 접근은 기존 실행 지시에 따른다.
 - **2026-09-11 계획 소비 확인:** [소스 audit](D:/KMTech/optimization-implementation-20260909/Container_Audit/continuation-20260911/PLAN-CONSUMER-AUDIT.md)은 CA의 기존 지시 재조회·version 대조와 `EXCHANGE_DATE`/`SPLIT`/`MERGE` 물리 교환 소비를 확인했다. `ADD`/`RESIZE`/`CANCEL` 계획 적용·게시 경로는 Web 소유이며 CA에는 해당 apply 소비자가 없다. 실제 Web 수정→중앙 지시/version→열린 CA 후보 재조회, 날짜/수량 변경 중 active/completed 보존, 오프라인·응답 유실 복구는 배포 조합에서 UNPROVEN이다. 자동 push나 품목 cache를 계획 반영의 근거로 삼지 않는다.

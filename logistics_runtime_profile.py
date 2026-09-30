@@ -406,31 +406,12 @@ def _runtime_environment(
 ) -> Mapping[str, str]:
     if environ is not None:
         return environ
-    if _test1_isolated_legacy_override_enabled():
-        return os.environ
-    if os.name != "nt":
-        return os.environ
-    machine_path = _machine_environment_value(PROFILE_PATH_ENV)
-    machine_required = _machine_environment_value(REQUIRED_ENV)
-    canonical_path = _canonical_machine_profile_path()
-    if canonical_path.is_file():
-        # Corrective Factory Contract releases use an app-scoped profile.  A
-        # pre-1.0.3 machine-wide path remains a supported read-only fallback
-        # only until the scoped enrollment profile has been installed.
-        machine_path = str(canonical_path)
-    if machine_path or machine_required:
-        # Machine values are an authoritative group. Never borrow a process
-        # override to complete or replace a partial machine configuration.
-        return {
-            PROFILE_PATH_ENV: machine_path,
-            REQUIRED_ENV: machine_required,
-            "PROGRAMDATA": r"C:\ProgramData",
-        }
+    # Raises on an invalid TEST1 envelope. Neither the Machine KM_LOGISTICS_*
+    # values nor the PC-wide ProgramData profile of the old rollout replace the
+    # values first-run sets for this process: old field programs may still use
+    # them, and they belong to another identity.
+    _test1_isolated_legacy_override_enabled()
     return os.environ
-
-
-def _canonical_machine_profile_path() -> Path:
-    return Path(r"C:\ProgramData") / DEFAULT_PROFILE_RELATIVE_PATH
 
 
 def default_logistics_profile_path(
