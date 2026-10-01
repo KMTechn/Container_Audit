@@ -620,11 +620,13 @@ exit 0
     ],
 )
 def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
-    spelling, accepted,
+    spelling, accepted, tmp_path,
 ):
-    executable = r"C:\KMTech\Apps\Container_Audit\current\runtime\pythonw.exe"
+    root = tmp_path / "current"
+    root.mkdir()
+    executable = str(root / "runtime/pythonw.exe")
     arguments = (
-        r" -I -B C:\KMTech\Apps\Container_Audit\current\app\main.py"
+        " -I -B " + str(root / "app/main.py") +
         " --container-audit-user-relay"
     )
     canonical = executable + arguments
@@ -649,6 +651,8 @@ def test_portable_runtime_binding_accepts_only_executable_quote_spelling(
         KMTECH_TEST_INSTALLER_PATH=str(PORTABLE_INSTALLER),
         KMTECH_TEST_RELAY_COMMAND=commands[spelling],
         KMTECH_TEST_RELAY_ACCEPTED=str(int(accepted)),
+        KMTECH_TEST_RELAY_ROOT=str(root),
+        CONTAINER_AUDIT_DATA_ROOT="",
     )
     command = canonical_leaf_prelude(PORTABLE_INSTALLER) + r'''
 $ErrorActionPreference = 'Stop'
@@ -664,8 +668,9 @@ foreach ($definition in $ast.EndBlock.Statements) {
         Invoke-Expression $definition.Extent.Text
     }
 }
-$root = 'C:\KMTech\Apps\Container_Audit\current'
-$expected = Command $root
+$root = $env:KMTECH_TEST_RELAY_ROOT
+$SourceRoot = $root
+$expected = Command $root -Installed
 $before = [ordered]@{ exists=$true; kind='String'; data=$expected }
 $process = New-CimInstance -ClassName Win32_Process -ClientOnly -Property @{
     ExecutablePath=(Join-Path $root 'runtime\pythonw.exe')

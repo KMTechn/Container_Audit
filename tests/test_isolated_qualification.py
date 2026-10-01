@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from tests.powershell_contracts import run_functions
 from cryptography.hazmat.primitives.asymmetric import ec
 
 import direct_sync_push
@@ -224,7 +225,7 @@ def test_packaged_operator_fixture_and_signed_lease_pass_real_client_validation(
     assert claims["item_id"] == authority.QUALIFICATION_ITEM_CODE
 
 
-def test_release_keeps_diagnostic_authority_but_bootstrap_never_starts_it():
+def test_release_keeps_diagnostic_authority_but_bootstrap_never_starts_it(tmp_path):
     required = __import__("update_service").REQUIRED_UPDATE_ARCHIVE_FILES
     assert {
         "Container_Audit/Container_Audit_Qualification_Authority.exe",
@@ -240,9 +241,27 @@ def test_release_keeps_diagnostic_authority_but_bootstrap_never_starts_it():
     assert '"tools/isolated_qualification_authority.py"' in builder
     assert "EnableWindowsSandboxQualification" not in installer
     assert "ServerBaseUrl" not in installer
-    assert "Register-ScheduledTask" not in installer
     assert "New-ScheduledTask" not in installer
     assert "Start-ScheduledTask" not in installer
+    # Startup update owns two registrations; the diagnostic task stays retired.
+    result = run_functions(tmp_path, ROOT / "INSTALL_THIS_PC.ps1", ["Get-ContainerStartupUpdateTaskSpec"], r'''
+$registrations=@($ast.FindAll({param($node)
+    $node -is [Management.Automation.Language.CommandAst] -and
+    $node.GetCommandName() -ceq 'Register-ScheduledTask'
+},$true))
+if ($registrations.Count -ne 2) { throw 'task registration inventory changed' }
+foreach ($registration in $registrations) {
+    $owner=$registration.Parent
+    while ($null -ne $owner -and $owner -isnot [Management.Automation.Language.FunctionDefinitionAst]) { $owner=$owner.Parent }
+    if ($null -eq $owner -or $owner.Name -cnotin @('Restore-ContainerStartupUpdatePreimage','Initialize-ContainerStartupUpdate') -or
+        $owner.Extent.Text.Contains('$LegacyQualificationTaskName') -or
+        $owner.Extent.Text.Contains('container-audit-isolated-qualification-authority')) {
+        throw 'bootstrap registers a diagnostic or unowned task'
+    }
+    if (-not $owner.Extent.Text.Contains('STARTUP_UPDATE_')) { throw 'startup registration lost its guard' }
+}
+''')
+    assert result.returncode == 0, result.stdout + result.stderr
     assert (
         '$LegacyQualificationTaskName = '
         '"container-audit-isolated-qualification-authority"'
