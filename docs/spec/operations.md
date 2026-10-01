@@ -656,3 +656,7 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 ## 관리자 보류 처리 입력
 
 기존 관리자 ID·가린 PIN 한 폼에 원 동작·선택 대상·원 현품표를 함께 표시한다. 원 요청 다시 조회도 저장된 동일 대상/labels를 표시하고, 제출 뒤 PIN 칸을 비운다. 승인/최종 확인·6자리 검증·서버 잠금/역할/철회·원장 CAS·UNKNOWN·건별 보류는 같은 handler로 유지한다. 손상 원본 식별은 중앙 조회 결과가 PIN 필요 여부를 정하고 오프라인 무 PIN 보류와 코드를 공유하므로 기존 입력을 유지한다(2026-10-01 coordinator 답). Python 3.12.10/PS5.1 headless: 새 폼 5 RED→GREEN, 관련 5파일 793 PASS; 처음 broad 90 FAIL은 두 공용 prompt fixture의 인수 불일치로 원본 보존 후 교정했고 마지막 변경 뒤 같은 pack을 다시 실행했다. [결과·미수용 화면 범위](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md).
+
+## w9slim2 소비자 없는 도구
+
+현재 tracked source·명세·빌더·inventory와 다른 저장소의 committed source 및 최근 절차를 대조해 실행 소비자가 없는 `authenticated_o3_gate.py`와 그 전용 시험, `kill_exact_probe.py`를 제거했다. 원본과 SHA는 레인 tmp/logs에 보존한다. `container_atomicity_rest_probe.py`·`sandbox_container_sac/run.ps1`·`scan_portable_pe.ps1`는 절차 참조 또는 근거 불충분으로 보류하며, 촬영·문서·게시 도구는 유지한다. 현재 packet의 curated 목록에는 제거 대상이 없고 패키징 선택자는 바꾸지 않았다. 실제 stock packet gate와 보류 근거는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.
