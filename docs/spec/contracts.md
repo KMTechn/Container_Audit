@@ -368,3 +368,24 @@ claim으로 한 개만 받는다. writer admission 안에서 journal·두 marker
 **최종 d440 별도 대상의 실제 등록 경계:** [CA-O10](operations.md#ca-o10)의 c029 VM은 실제 CA 코드/사용자·identity·relay 부재와 ordinary kmadmin session1/medium 및 PlanOnly0를 확인한 fresh-app 대상이며, 복사 OS의 MachineGuid/SID는 유지했다. 최초 정상 Install01은 실제 `producer_identity_conflict`로 native1 / `FAILED_RUNTIME_RESTORED_CODE_RETAINED`였고 exact d440 코드 배치는 `PASS_NEW_VERIFIED`다. 이 실패와 원본13파일을 보존하며 새 Hyper-V GUID나 빈 폴더를 무지원 중앙 등록 PASS로 해석하지 않는다.
 
 Main의 새 QA 소유 배정 뒤 Web이 발행한 단회 recovery를 기존 지원 등록 명령으로 실행한 Recovery01은 ordinary native/task0 / `ADMIN_RECOVERY_REGISTERED`, epoch8이다. 제품이 이 대상에서 만든 실제 current_user fingerprint `bqMrBqbmdGBJjoPnV-JasvUTsdGnMdQKrdXCZrrc3S4`를 그대로 사용했고 producer/source `container-audit-source-20da23dc1c762b3c1055a10e3e2450c1`·install `container-audit-install-87f6d7d8b6e36067490c1d1146fcebeb`, semantic manifest `27c471d693d0de73377beaeeddbbc93aad90ac676b3b2a6c2fa388c37f4b7538`를 확인했다. [Web의14:06:14Z 독립 확인](E:/KMTech/web-integration-20260908/ca-final-recovery-central-readback-01.json)은 recovery 단회 소모와 기존97 receipt의 ID·full row hash/rowid 보존을 입증한다. 기존 key/identity·token·clock·ledger를 시험 도구로 바꾸지 않았으며 `OPERATION_PENDING`은 등록 성공과 별도 권한 상태다. 실제 상태가 회복된 뒤 Install02는 native/task0 / `PASS`·`REUSED_VERIFIED`로 정상 계속했다. [전체 원본·후속 lifecycle](E:/KMTech/ca-final-qualification-20260908/REPORT.md)을 따르며, 기존 Restore09는 원 receipt/VM 범위에서만 재사용하고 이 대상의 무지원 첫 등록 성공으로 승계하지 않는다.
+# Installation evidence and shared ancestor protection — 2026-10-02
+
+Installer failures preserve the original redacted message, line, inner chain,
+HResult/native error and ordered stage start/end/result. Finite installer children
+retain separate stdout/stderr bytes, capped at1MiB each, with redaction/truncation,
+exit and SHA metadata in operator/SYSTEM/Administrators-only evidence. Detached
+pythonw relay launches retain security/status evidence; their installer stdio
+pipes are not attached. Placement records STARTED_CHILD/FAILED_CHILD or explicit
+PREPLACEMENT_REJECTED_ANCESTORS rather than remaining NOT_STARTED after execution.
+
+Ancestor owners are compared by SID: SYSTEM, Administrators, and the exact
+TrustedInstaller service SID; arbitrary service/user SIDs remain rejected.
+Before code placement, only literal C:\KMTech and C:\KMTech\Apps are admitted for
+non-recursive shared protection. The observed five inherited Allow ACEs with BA
+ownership are converted to explicit protected ACEs; only AU's self mask changes
+0x1301BF→0x1200AF. Its child-only generic mask, owner/group and other entries stay
+unchanged. Both shapes are checked before the first ACL write; exact target shape
+is idempotent, unknown/deny/reparse/partial states are rejected. The actual app
+leaf/ancestor guard runs again, including rejection of user-owned name squatters.
+This protection is intentionally persistent across app rollback/uninstall.
+Its before/after SDDL is evidence, never unbound privileged restore authority.

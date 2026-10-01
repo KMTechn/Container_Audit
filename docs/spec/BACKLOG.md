@@ -442,3 +442,15 @@ G8 기기 인증 진행 현황·60초 배경 갱신·끊김 캐시·스캔 복�
 G10 기존 성공/조합/오류 음원으로 성공·완료·반복 오류를 구별하고 연결·마지막 성공 전송·대기 합계를 기존 카드에 합쳤다. 내구 순서·음원 파일 목록은 유지하며 실제 스피커의 구별과 화면 읽힘은 랩 확인 대상이다.
 
 완료 시험 대역은 `preserve_held_scans` 키워드를 받는 실제 콜백 계약을 따른다. `projected_scan_exchange_keys`는 내구 완료의 교환 키를 SELECT로만 읽는 helper로 분류하며, 기존 writer 32개·owner-first와 읽기 전용/UI-thread 경계 검증은 유지한다.
+
+# CA installation follow-up — 2026-10-02
+
+In progress: preserve original staged/child failure evidence, recognize exact
+TrustedInstaller SID and protect only the two shared ancestors with reviewed B
+self-mask reduction. Fourth lab installation FAILED; historical original cause
+UNPROVEN, current startup-trust rejection PROVEN by read-only reproduction.
+Pending: isolated real ACL A/B results, stable final-source focused/guard/collect,
+rebase on current w9next, final declarations/transition/stock, independent review
+and fifth lab acceptance. Compatibility change E is deferred pending coordinator
+decision. Shared ACL protection is retained after rollback/uninstall; IW/LM
+changes and the central hub belong to their owners/coordinator.

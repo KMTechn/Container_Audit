@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
@@ -58,6 +58,8 @@ function Test-SamePath([string]$Left, [string]$Right) {
         return $leftFull.Equals($rightFull, [StringComparison]::OrdinalIgnoreCase)
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         return $false
     }
 }
@@ -86,6 +88,11 @@ function ConvertTo-ProcessArgument([string]$Value) {
 }
 
 function Get-CodePlacementPreflightFailureCode($Failure) {
+    $candidate=$Failure.Exception
+    for($depth=0;$null -ne $candidate -and $depth -lt 8;$depth++) {
+        if($candidate.Data.Contains('canonical_code') -and [string]$candidate.Data['canonical_code'] -cmatch '^CONTAINER_PLACEMENT_[A-Z_]+$'){return [string]$candidate.Data['canonical_code']}
+        $candidate=$candidate.InnerException
+    }
     $message = [string]$Failure.Exception.Message
     if ($message -cmatch '^CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]+$') { return $message }
     $exception = $Failure.Exception
@@ -125,6 +132,8 @@ function Invoke-SelfElevated {
     try {
         $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
     } catch {
+    Write-InstallationCaughtFailure $_
+
         Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED'
         exit 1
     }
@@ -148,7 +157,9 @@ function Invoke-SelfElevated {
                 } elseif (Test-Path -LiteralPath $logFull -PathType Leaf) {
                     $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE'
                 }
-            } catch { $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
+            } catch {
+    Write-InstallationCaughtFailure $_
+ $failureCode = 'CONTAINER_PLACEMENT_LOG_UNREADABLE' }
         }
         Write-Output "code_placement_preflight_failure=$failureCode"
     }
@@ -267,6 +278,8 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
             ConvertFrom-Json
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         throw "Portable release manifest is invalid."
     }
     if (
@@ -322,7 +335,9 @@ function Assert-RequiredRelease([string]$Root, [bool]$AllowUnsignedPortableForTe
         throw "Writer sink inventory is oversized."
     }
     try { $writerInventory = Get-Content -LiteralPath $writerSinkInventoryPath -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch { throw "Writer sink inventory is invalid." }
+    catch {
+    Write-InstallationCaughtFailure $_
+ throw "Writer sink inventory is invalid." }
     if (
         [string]$writerInventory.schema_version -cne 'container-audit-writer-sink-inventory-v8' -or
         [string]$writerInventory.inventory_sha256 -cne [string]$manifest.writer_sink_inventory_contract_sha256 -or
@@ -463,7 +478,10 @@ function Assert-ProtectedCodeAncestors([string]$Path) {
             $entry = Get-Item -LiteralPath $full -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe update path component.' }
             $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
-            if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544')) {
+            if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @(
+                'S-1-5-18','S-1-5-32-544',
+                'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+            )) {
                 throw 'Update path component owner is not privileged.'
             }
             $mask = if ($leaf) { 0x500D0156 } else { 0x500D0150 }
@@ -495,21 +513,19 @@ function Set-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
             $ownerArgs += '/T'
             $resetArgs += '/T'
         }
-        & $icacls @ownerArgs | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Hardened code owner assignment failed: $Path" }
-        & $icacls @resetArgs | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Hardened code DACL reset failed: $Path" }
-        & $icacls $Path `
-            '/inheritance:r' `
-            '/grant:r' `
-            '*S-1-5-18:(OI)(CI)F' `
-            '*S-1-5-32-544:(OI)(CI)F' `
-            '*S-1-5-32-545:(OI)(CI)RX' `
-            '/L' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Hardened code DACL installation failed: $Path" }
+        $ownerResult = Invoke-InstallationEvidenceChild 'acl-owner' $icacls $ownerArgs
+        if ($ownerResult.ExitCode -ne 0) { throw "Hardened code owner assignment failed: $Path" }
+        $resetResult = Invoke-InstallationEvidenceChild 'acl-reset' $icacls $resetArgs
+        if ($resetResult.ExitCode -ne 0) { throw "Hardened code DACL reset failed: $Path" }
+        $grantResult = Invoke-InstallationEvidenceChild 'acl-grant' $icacls @(
+            $Path,'/inheritance:r','/grant:r','*S-1-5-18:(OI)(CI)F',
+            '*S-1-5-32-544:(OI)(CI)F','*S-1-5-32-545:(OI)(CI)RX','/L')
+        if ($grantResult.ExitCode -ne 0) { throw "Hardened code DACL installation failed: $Path" }
         Assert-HardenedCodeAcl $Path -Recursive:$Recursive.IsPresent
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         Write-Output "acl_readback_status=UNKNOWN"
         throw
     }
@@ -522,6 +538,8 @@ function Get-LegacyTaskByNameFailClosed([string]$Name) {
         })
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         throw "Legacy scheduled task observation failed: $Name/$($_.Exception.GetType().Name)"
     }
     if ($taskMatches.Count -gt 1) {
@@ -558,7 +576,9 @@ function Remove-OwnedLegacyTask([string]$Name, [string]$ExpectedRoot) {
         throw 'Legacy task removal manifest is oversized.'
     }
     try { $installedManifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json }
-    catch { throw 'Legacy task removal manifest is invalid.' }
+    catch {
+    Write-InstallationCaughtFailure $_
+ throw 'Legacy task removal manifest is invalid.' }
     if (
         [string]$installedManifest.writer_fence_helper_sha256 -cnotmatch '^[0-9a-f]{64}$' -or
         (Get-FileSha256 $writerFenceHelperPath) -cne [string]$installedManifest.writer_fence_helper_sha256
@@ -610,7 +630,9 @@ function Assert-ContainerReplacementRestoreQuiescent(
     }
     $rootPrefix = $processRoot + '\'
     try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) }
-    catch { throw 'Replacement restore could not prove process quiescence.' }
+    catch {
+    Write-InstallationCaughtFailure $_
+ throw 'Replacement restore could not prove process quiescence.' }
     $matches = @($processes | Where-Object {
         if ([int]$_.ProcessId -eq $PID) { return $false }
         $command = [string]$_.CommandLine
@@ -651,7 +673,9 @@ function Assert-ContainerReplacementRestoreQuiescent(
             [void](Get-ContainerStartupUpdateTaskPreimage $CurrentRoot)
         }
         try { $task = Get-ScheduledTask -TaskName $LegacyRelayTaskName -ErrorAction SilentlyContinue }
-        catch { throw 'Replacement restore could not prove scheduled-task quiescence.' }
+        catch {
+    Write-InstallationCaughtFailure $_
+ throw 'Replacement restore could not prove scheduled-task quiescence.' }
         if ($null -ne $task -and [string]$task.State -cne 'Disabled') {
             throw 'Replacement restore requires the owned scheduled writer to be disabled or absent.'
         }
@@ -662,8 +686,9 @@ function Get-ContainerStartupUpdateTaskSpec([string]$Root, [string]$Sid) {
     Assert-ContainerStartupUpdateTrust $Root
     $runtime = Join-Path $Root 'runtime\python.exe'
     $implementation = Join-Path $Root 'app\auto_update.py'
-    $output = & $runtime -I -B $implementation --print-logon-task --install-root $Root --operator-sid $Sid
-    if ($LASTEXITCODE -ne 0) { throw 'STARTUP_UPDATE_TASK_SPEC_FAILED' }
+    $child = Invoke-InstallationEvidenceChild 'startup-task-spec' $runtime @('-I','-B',$implementation,'--print-logon-task','--install-root',$Root,'--operator-sid',$Sid)
+    $output = @($child.Stdout)
+    if ($child.ExitCode -ne 0) { throw 'STARTUP_UPDATE_TASK_SPEC_FAILED' }
     $spec = ($output -join "`n") | ConvertFrom-Json
     if ([string]$spec.name -cnotmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$' -or
         $spec.xml -isnot [string]) { throw 'STARTUP_UPDATE_TASK_SPEC_INVALID' }
@@ -795,10 +820,13 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
     if ($testOverride) { Write-Output 'startup_update_status=NOT_TESTED_HOST'; return }
+    Set-InstallationEvidenceStage 'startup.trust' 'startup'
     Assert-ContainerStartupUpdateTrust $Root
+    Set-InstallationEvidenceStage 'startup.save_preimage' 'startup'
     $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed root'
     Assert-NoReparsePoint $managed 'startup update managed root'
+    Set-InstallationEvidenceStage 'startup.prepare_directories' 'startup'
     $control = Join-Path $managed 'update-control'
     $versions = Join-Path $managed 'versions'
     foreach ($directory in @($control,$versions)) {
@@ -811,6 +839,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     if ([string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $manifest.startup_update_protocol -ne 1) {
         throw 'STARTUP_UPDATE_INITIAL_VERSION_INVALID'
     }
+    Set-InstallationEvidenceStage 'startup.initial_version' 'startup'
     $version = Join-Path $versions ([string]$manifest.source_commit)
     if (-not (Test-Path -LiteralPath $version)) {
         Copy-Item -LiteralPath $Root -Destination $version -Recurse
@@ -825,12 +854,15 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
             throw 'STARTUP_UPDATE_VERSION_ALREADY_HAS_DIFFERENT_BYTES'
         }
     }
+    Set-InstallationEvidenceStage 'startup.policy_prerequisites' 'startup'
     $hiberboot = $null
     $hiberbootReadStatus = 'UNPROVEN'
     try {
         $hiberboot = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction Stop).HiberbootEnabled
         $hiberbootReadStatus = 'READ'
-    } catch { $hiberbootReadStatus = 'UNREADABLE' }
+    } catch {
+    Write-InstallationCaughtFailure $_
+ $hiberbootReadStatus = 'UNREADABLE' }
     $policy = [ordered]@{
         schema='container-audit-startup-update-policy-v1'
         feed_url=[string]$settings.feed_url;channel=[string]$settings.channel
@@ -855,13 +887,16 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
         $oldTransition = Get-Content -LiteralPath $oldTransitionPath -Raw -Encoding UTF8 | ConvertFrom-Json
         $failedShas = @($oldTransition.failed_shas)
     }
+    Set-InstallationEvidenceStage 'startup.control_records' 'startup'
     Write-ContainerStartupUpdateRecord (Join-Path $control 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=(Get-Date).ToUniversalTime().ToString('o');reason='canonical installation';failed_shas=$failedShas})
     Write-ContainerStartupUpdateRecord $policyPath $policy
     Write-ContainerStartupUpdateRecord (Join-Path $control 'active.json') ([ordered]@{schema='container-audit-startup-update-v1';sha=[string]$manifest.source_commit;transition_id='CANONICAL_INSTALL'})
+    Set-InstallationEvidenceStage 'startup.task_spec' 'startup'
     $spec = Get-ContainerStartupUpdateTaskSpec $Root $OperatorSid
     $writerFenceHelperFull = Get-StrictFullPath $WriterFenceHelperPath 'startup update writer fence helper'
     if ((Get-FileSha256 $writerFenceHelperFull) -cne $ExpectedWriterFenceHelperSha256) { throw 'STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS' }
     . $writerFenceHelperFull
+    Set-InstallationEvidenceStage 'startup.register_task_sddl' 'startup'
     Invoke-ContainerWriterFenceMutation -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot `
         -SessionId $WriterFenceSessionId -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId -DelegationToken $WriterFenceDelegationToken -Action {
@@ -887,6 +922,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
                 $actual.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
                 $actual.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_TASK_READBACK_FAILED' }
         } | Out-Null
+    Complete-InstallationEvidenceStage 'startup'
     Write-Output 'startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY'
     Write-Output ('startup_update_task=' + $spec.name)
     Write-Output ('hiberboot_enabled=' + $hiberboot)
@@ -942,6 +978,11 @@ if (
         "before removing hardened code."
     )
 }
+if (-not $DryRun.IsPresent -and $ElevationLogPath) {
+    $helperInstallationEvidenceRoot=Initialize-InstallationEvidence $ElevationLogPath $OperatorSid @($WriterFenceDelegationToken)
+    Write-Output "installation_stage_evidence_root=$helperInstallationEvidenceRoot"
+    Set-InstallationEvidenceStage 'placement.writer_fence_preflight'
+}
 $placementWriterFenceLease = $null
 $Script:StartupUpdatePreimage = $null
 if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
@@ -949,15 +990,31 @@ if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
         . $WriterFenceHelperPath
         $Script:ContainerWriterFenceAdmissionProductionRoot = Join-Path $OperatorLocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+        if(-not $testOverride -and -not $Uninstall.IsPresent) {
+            Set-InstallationEvidenceStage 'placement.protect_shared_ancestors'
+            [void](Protect-KmtechCodeAncestors (Split-Path -Parent $installRootFull))
+        }
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         $failureCode = Get-CodePlacementPreflightFailureCode $_
+        Fail-InstallationEvidenceStages $_
+        if($failureCode -ceq 'CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED') {
+            $candidate=$_.Exception
+            for($depth=0;$null -ne $candidate -and $depth -lt 8;$depth++) {
+                if($candidate.Data.Contains('ancestor_trust_failure')){Write-Output ('ancestor_trust_failure='+[string]$candidate.Data['ancestor_trust_failure']);break}
+                $candidate=$candidate.InnerException
+            }
+        }
         $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
         $principal = New-Object Security.Principal.WindowsPrincipal($identity)
         if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
             try {
                 Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode
             } catch {
+    Write-InstallationCaughtFailure $_
+
                 Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
                 exit 42
             }
@@ -1031,6 +1088,8 @@ if ($RestoreVerifiedReplacement.IsPresent) {
         exit 0
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         $failure = [ordered]@{
             schema_version = 'container-audit-verified-replacement-code-restore-v1'
             status = 'ROLLBACK_FAILED'
@@ -1041,7 +1100,9 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             identity_or_credential_copied = $false
             failed_at = (Get-Date).ToUniversalTime().ToString('o')
         }
-        try { Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $failure | Out-Null } catch {}
+        try { Write-BootstrapReplacementReceipt -Path $restoreEvidenceFull -Payload $failure | Out-Null } catch {
+    Write-InstallationCaughtFailure $_
+}
         if (-not $testOverride) { Write-ElevationLog 'FAILED' 'Elevated Container verified replacement restore failed.' }
         Write-Output 'replacement_restore_status=ROLLBACK_FAILED'
         Write-Output "replacement_restore_evidence=$restoreEvidenceFull"
@@ -1049,6 +1110,7 @@ if ($RestoreVerifiedReplacement.IsPresent) {
     }
 }
 if (-not $DryRun.IsPresent -and -not $testOverride) {
+    Set-InstallationEvidenceStage 'placement.source_validation'
     Write-ElevationLog 'STARTED' 'Elevated Container code placement started.'
 }
 
@@ -1140,13 +1202,17 @@ if ($Uninstall.IsPresent) {
         if (Test-Path -LiteralPath $installRootFull) { throw 'Hardened code root removal postcondition failed.' }
         $uninstallMutationStarted = $false
         try { Remove-Item -LiteralPath $uninstallBackup -Recurse -ErrorAction Stop }
-        catch { Write-Output "code_recovery_cleanup_status=RETAINED:$uninstallBackup" }
+        catch {
+    Write-InstallationCaughtFailure $_
+ Write-Output "code_recovery_cleanup_status=RETAINED:$uninstallBackup" }
         if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container code removal completed.' }
         Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'
         Write-Output 'application_root_status=ABSENT'
         Write-Output 'user_state_preserved=true'
     }
     catch {
+    Write-InstallationCaughtFailure $_
+
         $uninstallFailure = $_
         if ($uninstallMutationStarted) {
             Assert-NoReparsePoint $uninstallBackup 'uninstall recovery tree'
@@ -1248,6 +1314,7 @@ if ($applyHardenedAcl) {
     Set-HardenedCodeAcl $applicationParent
 }
 New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
+    Set-InstallationEvidenceStage 'placement.staging_copy'
 try {
     foreach ($directory in @(Get-ChildItem -LiteralPath $sourceRootFull -Directory -Force -Recurse | Sort-Object FullName)) {
         $relative = Get-RelativeCodePath $sourceRootFull $directory.FullName
@@ -1274,9 +1341,11 @@ try {
             throw 'Uninstall recovery staging record readback failed.'
         }
     }
+    Set-InstallationEvidenceStage 'placement.staging_acl'
     if ($applyHardenedAcl) {
         Set-HardenedCodeAcl $stagingRoot -Recursive
     }
+    Set-InstallationEvidenceStage 'placement.old_tree_and_swap'
     if (Test-Path -LiteralPath $installRootFull) {
         $existingRecordPath = Join-Path $installRootFull $IntegrityFileName
         $existingAggregate = ''
@@ -1287,6 +1356,8 @@ try {
                 $existingCodeAggregate = Get-InventoryAggregate @(Get-CodeInventory $installRootFull)
             }
             catch {
+    Write-InstallationCaughtFailure $_
+
                 $existingAggregate = ''
                 $existingCodeAggregate = ''
             }
@@ -1337,6 +1408,8 @@ try {
                 $bootstrapStatus = 'REPLACED_VERIFIED'
             }
             catch {
+    Write-InstallationCaughtFailure $_
+
                 if (
                     -not (Test-Path -LiteralPath $installRootFull) -and
                     (Test-Path -LiteralPath $replacementRollbackRoot -PathType Container)
@@ -1355,14 +1428,17 @@ try {
         Move-Item -LiteralPath $stagingRoot -Destination $installRootFull
         $bootstrapStatus = 'PASS'
     }
+    Set-InstallationEvidenceStage 'placement.installed_acl'
     if ($applyHardenedAcl) {
         Set-HardenedCodeAcl $installRootFull -Recursive
         $aclReadbackStatus = 'PASS'
     }
+    Set-InstallationEvidenceStage 'placement.installed_aggregate'
     $installedAggregate = Get-InventoryAggregate @(Get-CodeInventory $installRootFull)
     if ($installedAggregate -cne $sourceAggregate) {
         throw "Installed code integrity readback failed."
     }
+    Set-InstallationEvidenceStage 'placement.replacement_identity_receipt'
     $replacementReceipt = $null
     if ($replacementApplied) {
         $newIdentity = Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
@@ -1408,12 +1484,15 @@ try {
     Write-Output "code_root=$installRootFull"
     Write-Output "release_layout=$releaseLayout"
     Write-Output "integrity_record=$(Join-Path $installRootFull $IntegrityFileName)"
+    Set-InstallationEvidenceStage 'placement.startup_update'
     Initialize-ContainerStartupUpdate $installRootFull
+    Set-InstallationEvidenceStage 'placement.startup_receipt_binding'
     if ($replacementApplied -and $null -ne $Script:StartupUpdatePreimage) {
         $receiptPayload['startup_update_preimage'] = [string]$Script:StartupUpdatePreimage.path
         $receiptPayload['startup_update_preimage_sha256'] = [string]$Script:StartupUpdatePreimage.sha256
         $replacementReceipt = Write-BootstrapReplacementReceipt -Path $replacementReceiptFull -Payload $receiptPayload
     }
+    Set-InstallationEvidenceStage 'placement.tls_bootstrap'
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
     if ($null -eq $tlsCaBootstrap) { Write-Output "tls_ca_bootstrap_status=ABSENT" }
     else { Write-Output "tls_ca_bootstrap_status=PASS"; Write-Output "tls_ca_bootstrap_path=$tlsCaBootstrap" }
@@ -1431,9 +1510,15 @@ try {
     }
     if (-not $testOverride) {
         Write-ElevationLog 'PASS' "Elevated Container code placement completed: $bootstrapStatus."
+        Complete-InstallationEvidenceStage 'forward'
     }
 }
 catch {
+    Write-InstallationCaughtFailure $_
+
+    $originalPlacementFailure = $_
+    Fail-InstallationEvidenceStages $originalPlacementFailure
+    Set-InstallationEvidenceStage 'rollback.startup_preimage' 'rollback'
     if ($null -ne $Script:StartupUpdatePreimage) {
         Restore-ContainerStartupUpdatePreimage $installRootFull $Script:StartupUpdatePreimage.path $Script:StartupUpdatePreimage.sha256
     }
@@ -1446,6 +1531,8 @@ catch {
         if (-not $testOverride) {
             try { Write-ElevationLog 'PREFLIGHT_FAILED' $failureCode }
             catch {
+    Write-InstallationCaughtFailure $_
+
                 Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_LOG_WRITE_FAILED'
                 exit 42
             }
@@ -1454,6 +1541,7 @@ catch {
     } elseif (-not $testOverride) {
         Write-ElevationLog 'FAILED' ($_.Exception.GetType().Name)
     }
+    Set-InstallationEvidenceStage 'rollback.staging_cleanup' 'rollback'
     if (Test-Path -LiteralPath $stagingRoot) {
         $stagingFull = Get-StrictFullPath $stagingRoot "bootstrap staging root"
         $parentFull = (Get-StrictFullPath $applicationParent "application parent") + '\'
@@ -1462,6 +1550,7 @@ catch {
         }
         Remove-Item -LiteralPath $stagingFull -Recurse -Force -ErrorAction SilentlyContinue
     }
+    Set-InstallationEvidenceStage 'rollback.contain_and_restore_tree' 'rollback'
     if ($replacementApplied) {
         $failedRoot = Join-Path $applicationParent ('.current.failed.' + $ReplacementTransactionId)
         if (Test-Path -LiteralPath $installRootFull -PathType Container) {
@@ -1474,20 +1563,30 @@ catch {
             throw 'Verified replacement rollback source is unavailable.'
         }
         Move-Item -LiteralPath $replacementRollbackRoot -Destination $installRootFull
+    Set-InstallationEvidenceStage 'rollback.old_tree_readback' 'rollback'
         $restoredIdentity = Get-BootstrapReplacementTreeIdentity $installRootFull $installRootFull
         if (-not (Test-BootstrapReplacementTreeIdentity $previousReplacementIdentity $restoredIdentity)) {
             throw 'Verified replacement prior tree restore readback failed.'
         }
+    Set-InstallationEvidenceStage 'rollback.receipt_cleanup' 'rollback'
         if ($replacementReceiptWritten -and (Test-Path -LiteralPath $replacementReceiptFull -PathType Leaf)) {
             Remove-Item -LiteralPath $replacementReceiptFull -Force -ErrorAction SilentlyContinue
         }
-        throw 'Verified replacement failed and the prior canonical tree was restored.'
+        Complete-InstallationEvidenceStage 'rollback'
+        # Preserve the original message/line/chain after recording successful recovery.
+        throw $originalPlacementFailure
     }
     throw
 }
+}
+catch {
+    Fail-InstallationEvidenceStages $_
+    throw
 }
 finally {
     if ($null -ne $placementWriterFenceLease) {
         Exit-ContainerWriterAdmission $placementWriterFenceLease
     }
+    Complete-InstallationEvidenceStage 'forward'
+    Complete-InstallationEvidenceStage 'rollback'
 }

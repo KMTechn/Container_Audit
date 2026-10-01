@@ -2214,6 +2214,77 @@ def _powershell_function_guard_proofs(
     return proofs
 
 
+def _powershell_bootstrap_caller_proofs(
+    root: Path, paths: tuple[Path, ...]
+) -> dict[str, dict[str, Any]]:
+    """Admit shared execution only when every shipped caller is fenced.
+
+    The bootstrap library is byte pinned by both registered installers. A shared
+    function has no script admission of its own, so its direct caller closure
+    must terminate entirely in those installers' proven admission lifetimes.
+    Ambiguous names, unreachable callers and any early/late call fail closed.
+    """
+    library = Path("tools/bootstrap_integrity.ps1")
+    modules = {}
+    definitions: dict[str, list[Path]] = defaultdict(list)
+    for path in paths:
+        lines = (root / path).read_text(encoding="utf-8").splitlines()
+        ranges = _powershell_function_ranges(lines)
+        entry = _powershell_entry_guard(path, lines, ranges)
+        proofs = _powershell_function_guard_proofs(path, lines, ranges, entry)
+        modules[path] = (lines, ranges, entry, proofs)
+        for row in ranges:
+            definitions[str(row["name"])].append(path)
+    if library not in modules:
+        return {}
+    names = {
+        str(row["name"])
+        for row in modules[library][1]
+        if definitions[str(row["name"])] == [library]
+    }
+    callers: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+    for path, (lines, ranges, entry, proofs) in modules.items():
+        for number, line in enumerate(lines, 1):
+            code = _powershell_code_only(line)
+            folded = code.casefold()
+            owner = _powershell_function_at_line(ranges, number)
+            for name in names:
+                if name.casefold() not in folded:
+                    continue
+                if re.match(rf"^\s*function\s+{re.escape(name)}\b", code, re.I):
+                    continue
+                if not _powershell_command_present(code, name):
+                    continue
+                caller = "__script__" if owner is None else str(owner["name"])
+                admitted_installer = path in {
+                    Path("INSTALL_CANONICAL_PORTABLE.ps1"), Path("INSTALL_THIS_PC.ps1")
+                }
+                safe = admitted_installer and bool(entry["valid"]) and (
+                    _powershell_line_in_guard_lifetime(entry, number)
+                    if owner is None else bool(proofs[caller]["guarded"])
+                )
+                callers[name].append({"file": path.as_posix(), "caller": caller,
+                                      "line": number, "installer_guarded": safe})
+    admitted: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for name, sites in callers.items():
+            if name in admitted or not sites:
+                continue
+            if all(site["installer_guarded"] or (
+                site["file"] == library.as_posix() and site["caller"] in admitted
+            ) for site in sites):
+                admitted.add(name)
+                changed = True
+    return {
+        name: {"function": name, "call_sites": callers[name],
+               "guarded": True, "guard_name": "byte_pinned_installer_caller_closure",
+               "guard_line": min(site["line"] for site in callers[name])}
+        for name in sorted(admitted)
+    }
+
+
 def _powershell_target(fragment: str) -> tuple[str, bool]:
     target = fragment.strip().rstrip(";|")
     static = bool(target) and not target.startswith(("$", "(", "@{"))
@@ -2340,7 +2411,9 @@ def _powershell_line_sites(
         r"(?i)\[(?:System\.)?Diagnostics\.Process\]\s*::\s*new\b|"
         r"New-Object\s+(?:System\.)?Diagnostics\.Process\b",
         code,
-    ) or ("processstartinfo" in context_folded and re.search(r"(?i)\.Start\s*\(", code)):
+    ) or ("processstartinfo" in context_folded and re.search(r"(?i)\.Start\s*\(", code)) or re.search(
+        r"(?i)\[KMTechInstallationChildCapture\]\s*::\s*Run\s*\(", code
+    ):
         add("dotnet_process_start", "System.Diagnostics.Process.Start", "", False)
 
     if "schedule.service" in line.casefold() or (
@@ -2498,6 +2571,11 @@ def _powershell_site_guard(
         )
         if site["target"] in approved:
             return True, "byte_pinned_function_library", int(site["line"])
+    proof = function_guards.get(function_name, {})
+    if (relative_path == Path("tools/bootstrap_integrity.ps1")
+        and proof.get("guarded")
+        and proof.get("guard_name") == "byte_pinned_installer_caller_closure"):
+        return True, str(proof["guard_name"]), int(proof["guard_line"])
     if entry_guard["valid"]:
         if function is None and _powershell_line_in_guard_lifetime(
             entry_guard, int(site["line"])
@@ -2520,6 +2598,7 @@ def _powershell_site_guard(
 
 def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
     powershell_paths = _discover_shipped_powershell_paths(root)
+    bootstrap_callers = _powershell_bootstrap_caller_proofs(root, powershell_paths)
     files: list[dict[str, Any]] = []
     all_sites: list[dict[str, Any]] = []
     execution_sites: list[dict[str, Any]] = []
@@ -2538,6 +2617,9 @@ def _collect_powershell_inventory(root: Path) -> dict[str, Any]:
             function_ranges,
             entry_guard,
         )
+        if relative_path == Path("tools/bootstrap_integrity.ps1"):
+            for name, proof in bootstrap_callers.items():
+                function_guards[name] = {**function_guards[name], **proof}
         if relative_path.name == "INSTALL_CANONICAL_PORTABLE.ps1":
             delegated_sources = _extract_ps_delegated_sources(lines)
         per_file_sites: list[dict[str, Any]] = []

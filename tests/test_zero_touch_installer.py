@@ -2229,8 +2229,10 @@ foreach ($name in @('Arg','Product')) {
     Invoke-Expression $functions[0].Extent.Text
 }
 $script:launches = @()
-function Start-Process {
-    param($FilePath, $ArgumentList, $WindowStyle, [switch]$PassThru)
+function Invoke-InstallationEvidenceChild {
+    param($Name, $Executable, $Arguments)
+    $FilePath=$Executable
+    $ArgumentList=($Arguments | ForEach-Object { Arg ([string]$_) }) -join ' '
     $script:launches += [pscustomobject]@{
         FilePath = [string]$FilePath
         ArgumentList = [string]$ArgumentList

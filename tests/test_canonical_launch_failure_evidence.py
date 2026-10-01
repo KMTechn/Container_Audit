@@ -19,8 +19,9 @@ def test_limited_launch_requests_explicit_primary_token_rights_proven_in_guest()
 
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('scenario', ('native_access_denied', 'native_privilege_missing', 'placement', 'unclassified'))
-def test_failure_details_survive_method_wrapper_without_raw_messages(tmp_path, engine, scenario):
+def test_failure_details_survive_method_wrapper_without_credentials(tmp_path, engine, scenario):
     result = run_functions(tmp_path, SOURCE, ['Get-CanonicalFailureDetails'], r'''
+$Script:InstallationEvidenceSensitiveValues=@('sensitive-sentinel-do-not-store')
 Add-Type -TypeDefinition @'
 using System; using System.ComponentModel;
 public static class InjectedLaunchFailure {

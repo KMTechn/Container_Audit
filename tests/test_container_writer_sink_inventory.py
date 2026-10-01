@@ -282,13 +282,14 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 25,
+        "call_operator": 14,
         "com_wmi_process_create": 4,
         "dot_source": 13,
         "native_process_api": 2,
-        "reflective_invocation": 3,
+        "reflective_invocation": 4,
         "scheduler_com": 3,
-        "start_process": 3,
+        "start_process": 2,
+        "dotnet_process_start": 2,
     }
     # The normal-user launch adds one compiled boundary: declaration and call.
     # Both sites must remain visible under canonical session authority.
@@ -302,16 +303,22 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
                and row["guard_name"] == "Enter-ContainerWriterSessionAuthority"
                and "CreateProcessWithTokenW" in source_lines[row["line"] - 1]
                for row in native_starts)
+    capture_proof = next(
+        row for row in payload['powershell_execution_inventory']['function_guard_proofs']
+        if row['file'] == 'tools/bootstrap_integrity.ps1'
+        and row['function'] == 'Invoke-InstallationEvidenceChild'
+    )
     helper_calls = [
-        row for row in payload["powershell_execution_inventory"]["execution_sites"]
-        if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
-        and row["kind"] == "call_operator" and row["target"] == "$winps"
+        row for row in capture_proof['call_sites']
+        if row['file'] == 'INSTALL_CANONICAL_PORTABLE.ps1'
+        and row['caller'] == '__script__'
     ]
     # Five delegated bootstrap invocations (including public late restore) and
     # two read-only integrity probes.
     assert len(helper_calls) == 7
-    assert all(row["guarded"] for row in helper_calls)
-    assert {row["guard_name"] for row in helper_calls} == {"Enter-ContainerWriterSessionAuthority"}
+    assert all(row['installer_guarded'] for row in helper_calls)
+    assert capture_proof['guarded']
+    assert capture_proof['guard_name'] == 'byte_pinned_installer_caller_closure'
     bootstrap_loads = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
@@ -954,6 +961,62 @@ def _fenced_powershell_fixture(injected_line: str) -> str:
         "    Exit-ContainerWriterAdmission $lease\n"
         "}\n"
     )
+
+
+@pytest.mark.parametrize('unsafe_position', ('none', 'before', 'after', 'unknown', 'ambiguous'))
+def test_shared_bootstrap_execution_requires_every_shipped_caller_fenced(
+    tmp_path: Path, unsafe_position: str,
+) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    library = tmp_path / 'tools/bootstrap_integrity.ps1'
+    library.parent.mkdir(exist_ok=True)
+    library.write_text(
+        'function Initialize-SharedCapture {\n'
+        '    Add-Type -TypeDefinition "fixture"\n'
+        '}\n'
+        'function Invoke-SharedCapture {\n'
+        '    Initialize-SharedCapture\n'
+        '}\n', encoding='utf-8',
+    )
+    source = _fenced_powershell_fixture('    Invoke-SharedCapture\n')
+    if unsafe_position == 'before':
+        source = 'Invoke-SharedCapture\n' + source
+    elif unsafe_position == 'after':
+        source += 'Invoke-SharedCapture\n'
+    elif unsafe_position == 'ambiguous':
+        source = 'function Initialize-SharedCapture {}\n' + source
+    elif unsafe_position == 'unknown':
+        (tmp_path / 'tools/unknown.ps1').write_text(
+            'Invoke-SharedCapture\n', encoding='utf-8',
+        )
+        assets = tuple((path.as_posix(), path.as_posix()) for path in module.POWERSHELL_PATHS)
+        assets += (('tools/unknown.ps1', 'tools/unknown.ps1'),)
+        (tmp_path / 'tools/build_portable_release_candidate.py').write_text(
+            'PORTABLE_INSTALL_ASSETS = ' + repr(assets) + '\n', encoding='utf-8',
+        )
+    (tmp_path / 'INSTALL_THIS_PC.ps1').write_text(source, encoding='utf-8')
+    inventory = module._collect_powershell_inventory(tmp_path)
+    shared = [row for row in inventory['all_sites']
+              if row['file'] == library.relative_to(tmp_path).as_posix()
+              and row['kind'] == 'reflective_invocation']
+    assert len(shared) == 1
+    assert shared[0]['guarded'] is (unsafe_position == 'none')
+    rejected = [row for row in inventory['guard_failures']
+                if row['file'] == library.relative_to(tmp_path).as_posix()]
+    assert bool(rejected) is (unsafe_position != 'none')
+
+
+def test_direct_shared_capture_api_before_admission_remains_unfenced(tmp_path: Path) -> None:
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    (tmp_path / 'INSTALL_THIS_PC.ps1').write_text(
+        "[KMTechInstallationChildCapture]::Run('fixture',@(),'fixture')\n"
+        + _fenced_powershell_fixture(''), encoding='utf-8',
+    )
+    inventory = module._collect_powershell_inventory(tmp_path)
+    assert any(row['kind'] == 'dotnet_process_start' and not row['guarded']
+               for row in inventory['guard_failures'])
 
 
 def _run_inventory_release_gate(

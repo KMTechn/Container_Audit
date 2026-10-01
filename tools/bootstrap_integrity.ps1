@@ -1,6 +1,213 @@
 $BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
+function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
+    # Same known-value replacement and message markers as the runtime redactors.
+    $values = [Collections.Generic.List[string]]::new()
+    $known = Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $known) { foreach ($value in $known.Value) { if ($value -is [string] -and $value.Length) { $values.Add($value) } } }
+    foreach ($name in @('CanonicalWriterFenceDelegationToken','WriterFenceDelegationToken')) {
+        $value = Get-Variable -Name $name -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if ($value -is [string] -and $value.Length) { $values.Add($value) }
+    }
+    foreach ($value in $values) { if ($value -is [string] -and $value.Length) { $Text = $Text.Replace($value, '[redacted]') } }
+    $lines = @($Text -split '(?<=\n)' | ForEach-Object {
+        if ($_ -match '(?i)canonical signed request|hmac_key|producer_signature|raw_payload|raw_secret|receipt_json|secret_hex|should-not-leak|source_file_bytes|source_file_text|x-producer-signature') { '[REDACTED]' + "`n" }
+        else { $_ }
+    })
+    $Text = $lines -join ''
+    $Text = [regex]::Replace($Text, '(?i)authorization\s*:\s*[^\r\n]+', '[redacted]')
+    $Text = [regex]::Replace($Text, '(?i)\b([A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*)\s*[=:]\s*[^\r\n,;]+', '$1=[redacted]')
+    $Text = [regex]::Replace($Text, '(?i)("[^"]*(?:secret|token|signature|password|registration|api[_-]?key)[^"]*"\s*:\s*")[^"]*', '$1[redacted]')
+    $Text = [regex]::Replace($Text, '(https?://)[^\s/@]+:[^\s/@]+@', '$1[redacted]@')
+    $Text = [regex]::Replace($Text, '(https?://[^\s?]+)\?[^\s]+', '$1?[redacted]')
+    if ($Limit -ge 0 -and $Text.Length -gt $Limit) { return $Text.Substring(0,$Limit) + '[truncated]' }
+    return $Text
+}
+
+function Get-InstallationFailureDetails($Failure) {
+    $line = 0; $file = ''
+    if ($Failure -is [Exception]) { $exception = $Failure }
+    else {
+        $exception = $Failure.Exception
+        if ($null -ne $Failure.InvocationInfo) {
+            $line = [int]$Failure.InvocationInfo.ScriptLineNumber
+            $file = [IO.Path]::GetFileName([string]$Failure.InvocationInfo.ScriptName)
+        }
+    }
+    $chain = @()
+    for ($depth=0; $null -ne $exception -and $depth -lt 8; $depth++) {
+        $native = $null; if ($exception -is [ComponentModel.Win32Exception]) { $native = $exception.NativeErrorCode }
+        $chain += [ordered]@{type=$exception.GetType().FullName; message=(Protect-InstallationText $exception.Message); hresult=$exception.HResult; win32_error=$native}
+        $exception = $exception.InnerException
+    }
+    return [ordered]@{script_file=$file;script_line=$line;exception_chain=$chain}
+}
+
+function Set-InstallationEvidenceAcl([string]$Path, [string]$Sid, [switch]$Directory) {
+    $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
+    $acl.SetAccessRuleProtection($true,$false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new($Sid))
+    foreach ($identity in @($Sid,'S-1-5-18','S-1-5-32-544') | Select-Object -Unique) {
+        $principal = [Security.Principal.SecurityIdentifier]::new($identity)
+        if ($Directory) { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,'FullControl','ContainerInherit,ObjectInherit','None','Allow') }
+        else { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,'FullControl','Allow') }
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+}
+
+function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,[string[]]$SensitiveValues=@()) {
+    $root = Get-StrictFullPath ($BasePath + '.evidence.' + $PID) 'installation evidence root'
+    $parent=Split-Path -Parent $root
+    $existing=$parent
+    while (-not (Test-Path -LiteralPath $existing)) { $existing=Split-Path -Parent $existing }
+    Assert-BootstrapNoReparsePoint $existing 'installation evidence ancestor' -PathOnly
+    if (Test-Path -LiteralPath $root) { throw 'Installation evidence directory already exists.' }
+    [void][IO.Directory]::CreateDirectory($root)
+    Set-InstallationEvidenceAcl $root $OperatorSid -Directory
+    $Script:InstallationEvidenceRoot = $root
+    $Script:InstallationEvidenceSid = $OperatorSid
+    $Script:InstallationEvidenceSensitiveValues = @($SensitiveValues)
+    $Script:InstallationEvidenceLanes = @{}
+    $Script:InstallationEvidenceSequence = 0
+    $Script:InstallationEvidenceFailed = $false
+    Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=1048576;journal_cap_bytes=1048576;raw_command_recorded=$false})
+    return $root
+}
+
+function Write-InstallationEvidenceEvent($Payload) {
+    $root = Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if (-not $root) { return }
+    try {
+        $path=Join-Path $root 'stages.jsonl'
+        $Payload['captured_at']=[DateTime]::UtcNow.ToString('o')
+        $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Payload | ConvertTo-Json -Depth 12 -Compress)+"`n")
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length + $bytes.Length -gt 1048576) { $Script:InstallationEvidenceFailed=$true; return }
+        $newFile=-not (Test-Path -LiteralPath $path)
+        $stream=[IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+        if ($newFile) { Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid }
+    } catch { $Script:InstallationEvidenceFailed=$true }
+}
+
+function Complete-InstallationEvidenceStage([string]$Lane, $Failure=$null) {
+    if (-not (Get-Variable -Name InstallationEvidenceLanes -Scope Script -ValueOnly -ErrorAction SilentlyContinue)) { return }
+    if (-not $Script:InstallationEvidenceLanes.ContainsKey($Lane)) { return }
+    $stage=$Script:InstallationEvidenceLanes[$Lane]
+    $stage.watch.Stop()
+    $detail=$null; if ($null -ne $Failure) { $detail=Get-InstallationFailureDetails $Failure }
+    Write-InstallationEvidenceEvent ([ordered]@{event='END';sequence=$stage.sequence;lane=$Lane;stage=$stage.name;result=if($null -eq $Failure){'PROVEN'}else{'FAILED'};elapsed_ms=$stage.watch.ElapsedMilliseconds;failure=$detail})
+    $Script:InstallationEvidenceLanes.Remove($Lane)
+}
+
+function Set-InstallationEvidenceStage([string]$Name,[string]$Lane='forward') {
+    if (-not (Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue)) { return }
+    Complete-InstallationEvidenceStage $Lane
+    $Script:InstallationEvidenceSequence++
+    $Script:InstallationEvidenceLanes[$Lane]=@{name=$Name;sequence=$Script:InstallationEvidenceSequence;watch=[Diagnostics.Stopwatch]::StartNew()}
+    Write-InstallationEvidenceEvent ([ordered]@{event='START';sequence=$Script:InstallationEvidenceSequence;lane=$Lane;stage=$Name})
+}
+
+function Write-InstallationCaughtFailure($Failure) {
+    $active=@()
+    $lanes=Get-Variable -Name InstallationEvidenceLanes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $lanes){foreach($lane in $lanes.Keys){$active+=@{lane=$lane;stage=$lanes[$lane].name;sequence=$lanes[$lane].sequence}}}
+    Write-InstallationEvidenceEvent ([ordered]@{event='CAUGHT_FAILURE';active_stages=$active;failure=(Get-InstallationFailureDetails $Failure)})
+}
+
+function Fail-InstallationEvidenceStages($Failure) {
+    Write-InstallationCaughtFailure $Failure
+    $lanes=Get-Variable -Name InstallationEvidenceLanes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if ($null -ne $lanes) { foreach ($lane in @($lanes.Keys)) { Complete-InstallationEvidenceStage $lane $Failure } }
+}
+
+function Initialize-InstallationChildCapture {
+    if ('KMTechInstallationChildCapture' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System; using System.IO; using System.Text; using System.Threading; using System.Diagnostics;
+public static class KMTechInstallationChildCapture {
+ public sealed class Output { public byte[] bytes; public long observed; public bool complete; }
+ public sealed class Result { public int pid, exit_code; public Output stdout, stderr; }
+ sealed class Reader {
+  public MemoryStream saved=new MemoryStream(); public long observed; public bool complete; public object gate=new object();
+  public void Read(Stream stream) { try { byte[] b=new byte[8192]; int n; while((n=stream.Read(b,0,b.Length))>0) { lock(gate) { observed+=n; int keep=(int)Math.Min(n,1048576-saved.Length); if(keep>0) saved.Write(b,0,keep); } } complete=true; } catch(ObjectDisposedException) {} catch(IOException) {} }
+  public Output Snapshot() { lock(gate) { return new Output {bytes=saved.ToArray(),observed=observed,complete=complete}; } }
+ }
+ static string Quote(string value) {
+  StringBuilder b=new StringBuilder("\""); int slashes=0;
+  foreach(char c in value) { if(c=='\\') { slashes++; continue; } if(c=='\"') { b.Append('\\',slashes*2+1); b.Append(c); } else { b.Append('\\',slashes); b.Append(c); } slashes=0; }
+  b.Append('\\',slashes*2); b.Append('"'); return b.ToString();
+ }
+ public static Result Run(string executable,string[] arguments,string directory) {
+  ProcessStartInfo info=new ProcessStartInfo(executable); info.Arguments=String.Join(" ",Array.ConvertAll(arguments,Quote)); info.WorkingDirectory=directory;
+  info.UseShellExecute=false; info.CreateNoWindow=true; info.RedirectStandardOutput=true; info.RedirectStandardError=true;
+  using(Process p=new Process()) { p.StartInfo=info; if(!p.Start()) throw new IOException("Installer child did not start.");
+   Reader output=new Reader(),error=new Reader(); Thread a=new Thread(()=>output.Read(p.StandardOutput.BaseStream)),b=new Thread(()=>error.Read(p.StandardError.BaseStream)); a.IsBackground=b.IsBackground=true; a.Start(); b.Start(); p.WaitForExit();
+   // Wait only for this process. A persistent descendant may retain pipe handles.
+   bool outDone=a.Join(750),errDone=b.Join(750); if(!outDone) p.StandardOutput.Dispose(); if(!errDone) p.StandardError.Dispose();
+   return new Result {pid=p.Id,exit_code=p.ExitCode,stdout=output.Snapshot(),stderr=error.Snapshot()};
+  }
+ }
+}
+'@
+}
+
+function ConvertTo-SafeInstallationOutput($Output) {
+    $bytes=[byte[]]$Output.bytes
+    $truncated=($Output.observed -gt $bytes.Length -or -not $Output.complete)
+    $encoding=[Text.UTF8Encoding]::new($false,$true)
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 255 -and $bytes[1] -eq 254) { $encoding=[Text.UnicodeEncoding]::new($false,$true,$true) }
+    try { $text=$encoding.GetString($bytes) }
+    catch {
+        try { $encoding=[Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage,[Text.EncoderFallback]::ExceptionFallback,[Text.DecoderFallback]::ExceptionFallback); $text=$encoding.GetString($bytes) }
+        catch { return @{bytes=[Text.Encoding]::UTF8.GetBytes('[redacted: undecodable child output]');redacted=$true;truncated=$truncated;encoding='utf-8'} }
+    }
+    if ($truncated) {
+        # Do not retain a partial credential/assignment at the capture boundary.
+        $lastNewline=$text.LastIndexOf("`n")
+        $text=if($lastNewline -ge 0){$text.Substring(0,$lastNewline+1)}else{''}
+        $known=Get-Variable -Name InstallationEvidenceSensitiveValues -Scope Script -ErrorAction SilentlyContinue
+        $values=$known.Value
+        foreach($value in $values) {
+            if ($value -is [string] -and $value.Length) {
+                for($n=[Math]::Min($value.Length-1,$text.Length);$n -gt 0;$n--) {
+                    if($text.EndsWith($value.Substring(0,$n),[StringComparison]::Ordinal)){$text=$text.Substring(0,$text.Length-$n);break}
+                }
+            }
+        }
+    }
+    $safe=Protect-InstallationText $text -1
+    $redacted=($safe -cne $text)
+    $saved=[byte[]]::new(0)
+    if(-not $redacted -and -not $truncated){$saved=$bytes}else{$saved=$encoding.GetBytes($safe)}
+    return @{bytes=[byte[]]$saved;redacted=$redacted;truncated=$truncated;encoding=$encoding.WebName}
+}
+
+function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[string[]]$Arguments,[string]$WorkingDirectory='') {
+    Initialize-InstallationChildCapture
+    if (-not $WorkingDirectory) { $WorkingDirectory=[IO.Path]::GetDirectoryName($Executable) }
+    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_START';stage=$Name;executable_leaf=[IO.Path]::GetFileName($Executable);byte_cap_per_stream=1048576;arguments_recorded=$false})
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $result=[KMTechInstallationChildCapture]::Run($Executable,$Arguments,$WorkingDirectory)
+    $watch.Stop(); $streams=@{}; $texts=@{}
+    foreach ($streamName in @('stdout','stderr')) {
+        $output=$result.$streamName; $safe=ConvertTo-SafeInstallationOutput $output
+        $path=''
+        $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($root) {
+            $path=Join-Path $root ($Name+'-'+$result.pid+'-'+$streamName+'.bin')
+            if(Test-Path -LiteralPath $path){throw 'Installer child evidence target already exists.'}
+            [IO.File]::WriteAllBytes($path,$safe.bytes)
+            Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid
+        }
+        $streams[$streamName]=@{path=$path;observed_bytes=$output.observed;saved_bytes=$safe.bytes.Length;complete=$output.complete;truncated=$safe.truncated;redacted=$safe.redacted;sha256=if($path){Get-FileSha256 $path}else{''};encoding=$safe.encoding}
+        $texts[$streamName]=[Text.Encoding]::GetEncoding($safe.encoding).GetString($safe.bytes)
+    }
+    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EXIT';stage=$Name;pid=$result.pid;exit_code=$result.exit_code;elapsed_ms=$watch.ElapsedMilliseconds;streams=$streams})
+    return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams}
+}
+
 function Get-StrictFullPath([string]$Path, [string]$Purpose) {
     if ([string]::IsNullOrWhiteSpace($Path) -or -not [IO.Path]::IsPathRooted($Path)) {
         throw "$Purpose must be an absolute path."
@@ -13,6 +220,106 @@ function Get-StrictFullPath([string]$Path, [string]$Purpose) {
         throw "$Purpose must not be a filesystem root."
     }
     return $full
+}
+
+function Protect-KmtechCodeAncestors([string]$CodeParent) {
+    # Deliberately persistent, non-recursive protection of these two shared paths.
+    # Never restore their old permissions as part of an app rollback/uninstall.
+    if (-not ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CodeParent))).Equals('C:\KMTech\Apps',[StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Code parent must be a direct application directory under C:\KMTech\Apps.'
+    }
+    $records=@(); $plans=@()
+    foreach ($path in @('C:\KMTech','C:\KMTech\Apps')) {
+        $reason=''
+        if (-not (Test-Path -LiteralPath $path)) {
+            $ancestor=Split-Path -Parent $path
+            $entry=Get-Item -LiteralPath $ancestor -ErrorAction Stop
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason='상위 폴더가 재분석 지점입니다' }
+            else { [void][IO.Directory]::CreateDirectory($path) }
+        }
+        $entry=Get-Item -LiteralPath $path -ErrorAction Stop
+        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason='폴더가 재분석 지점입니다' }
+        $acl=Get-Acl -LiteralPath $path -ErrorAction Stop
+        $before=$acl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
+        $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        $shape=@(
+            'S-1-5-32-544|2032127|3|0', 'S-1-5-18|2032127|3|0',
+            'S-1-5-32-545|1179817|3|0', 'S-1-5-11|-536805376|3|2'
+        )
+        $actual=@(); $allInherited=$true; $allExplicit=$true
+        foreach($rule in $rules) {
+            if ([string]$rule.AccessControlType -cne 'Allow') { $reason='거부 권한 항목이 있습니다' }
+            $actual+=([string]$rule.IdentityReference.Value+'|'+[int64]$rule.FileSystemRights+'|'+[int]$rule.InheritanceFlags+'|'+[int]$rule.PropagationFlags)
+            $allInherited=$allInherited -and $rule.IsInherited
+            $allExplicit=$allExplicit -and -not $rule.IsInherited
+        }
+        $actualKey=(@($actual | Sort-Object) -join ';')
+        $defaultKey=(@(($shape+@('S-1-5-11|1245631|0|0')) | Sort-Object) -join ';')
+        $targetKey=(@(($shape+@('S-1-5-11|1179823|0|0')) | Sort-Object) -join ';')
+        $defaultShape=($rules.Count -eq 5 -and -not $acl.AreAccessRulesProtected -and $allInherited -and $actualKey -ceq $defaultKey)
+        $targetShape=($rules.Count -eq 5 -and $acl.AreAccessRulesProtected -and $allExplicit -and $actualKey -ceq $targetKey)
+        if($owner -cne 'S-1-5-32-544'){$reason='폴더 소유자가 예상과 다릅니다'}
+        if(-not $reason -and -not $defaultShape -and -not $targetShape){$reason='권한 모양이 지원하는 기본값 또는 보호된 값과 다릅니다'}
+        if($reason) {
+            Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_REJECTED';path=$path;reason=$reason;before_sddl=$before;changed=$false})
+            $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $path ($reason). 지원 담당자에게 문의하세요.")
+            $failure.Data['canonical_code']='CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED'
+            $failure.Data['ancestor_trust_failure']=$failure.Message
+            throw $failure
+        }
+        $plans+=@{path=$path;acl=$acl;before=$before;default_shape=$defaultShape;target_shape=$targetShape}
+    }
+    # Both existing shapes are admitted before the first ACL write.
+    foreach($plan in $plans) {
+        $path=$plan.path; $acl=$plan.acl; $before=$plan.before
+        $entry=Get-Item -LiteralPath $path -ErrorAction Stop
+        if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Ancestor became a reparse point before protection.'}
+        $fresh=Get-Acl -LiteralPath $path -ErrorAction Stop
+        $freshSddl=$fresh.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
+        if($freshSddl -cne $before){throw 'Ancestor ACL changed during protection admission.'}
+        Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_BEFORE';path=$path;before_sddl=$before;already_target=$plan.target_shape;intentional_persistent_change=$true})
+        if($plan.default_shape) {
+            $acl.SetAccessRuleProtection($true,$true)
+            # .NET can retain the inherited flag until persistence. Convert each
+            # copied ACE explicitly without remapping its generic/inherit-only mask.
+            $raw=[Security.AccessControl.RawSecurityDescriptor]::new($acl.GetSecurityDescriptorBinaryForm(),0)
+            foreach($ace in $raw.DiscretionaryAcl){$ace.AceFlags=[Security.AccessControl.AceFlags]([int]$ace.AceFlags -band (-bnot [int][Security.AccessControl.AceFlags]::Inherited))}
+            $binary=[byte[]]::new($raw.BinaryLength);$raw.GetBinaryForm($binary,0)
+            $acl.SetSecurityDescriptorBinaryForm($binary,[Security.AccessControl.AccessControlSections]::Access)
+            $self=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | Where-Object {
+                $_.IdentityReference.Value -ceq 'S-1-5-11' -and [int64]$_.FileSystemRights -eq 1245631 -and [int]$_.InheritanceFlags -eq 0 -and [int]$_.PropagationFlags -eq 0
+            })
+            if($self.Count -ne 1){throw 'Ancestor ACL copied self-entry readback failed.'}
+            $acl.RemoveAccessRuleSpecific($self[0])
+            $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new('S-1-5-11'),
+                [Security.AccessControl.FileSystemRights]1179823,'None','None','Allow'))
+            Set-Acl -LiteralPath $path -AclObject $acl -ErrorAction Stop
+        }
+        $afterAcl=Get-Acl -LiteralPath $path -ErrorAction Stop
+        $after=$afterAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
+        $afterRules=@($afterAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        $afterKey=(@($afterRules | ForEach-Object {
+            if($_.IsInherited -or $_.AccessControlType -ne 'Allow'){throw 'Ancestor ACL explicit readback failed.'}
+            [string]$_.IdentityReference.Value+'|'+[int64]$_.FileSystemRights+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags
+        } | Sort-Object) -join ';')
+        if($afterAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne 'S-1-5-32-544' -or -not $afterAcl.AreAccessRulesProtected -or $afterRules.Count -ne 5 -or $afterKey -cne $targetKey){throw 'Ancestor ACL protected readback failed.'}
+        $record=[ordered]@{path=$path;before_sddl=$before;after_sddl=$after;changed=$plan.default_shape;intentional_persistent_change=$true}
+        $records+=$record
+        Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_AFTER';record=$record})
+    }
+    # The app directory is the guarded leaf; Apps/KMTech are higher ancestors,
+    # where direct creation remains allowed. This also rejects user-owned squatters.
+    try { Assert-ProtectedCodeAncestors $CodeParent }
+    catch {
+        Write-InstallationCaughtFailure $_
+        $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $CodeParent (코드 경로의 신뢰 재검사가 실패했습니다). 지원 담당자에게 문의하세요.",$_.Exception)
+        $failure.Data['canonical_code']='CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED'
+        $failure.Data['ancestor_trust_failure']=$failure.Message
+        throw $failure
+    }
+    return [pscustomobject]@{status='VERIFIED';records=$records;rollback_restores_ancestor_permissions=$false}
 }
 
 function Get-FileSha256([string]$Path) {

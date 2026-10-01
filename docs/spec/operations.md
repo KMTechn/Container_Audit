@@ -739,3 +739,23 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 ## R29 중앙 PIN 경계 시험
 
 고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
+# Installation follow-up evidence — 2026-10-02
+
+The2136233 lab fourth installation FAILED_ROLLED_BACK before onboarding/relay.
+The old0d tree/Run and absent CA relay were restored; harmless0x18B child proof
+does not prove an actual CA relay start. Current read-only stage diagnostic V1
+reproduced startup ancestor trust rejection, independently of its lost historical
+exception: lab/TEST1 shared ancestors inherit AU self Modify; C:\ owner is
+TrustedInstaller. V1's empty-preimage failure is a diagnostic defect, preserved
+and corrected only in a new frozen V2.
+
+Shared protection is a one-way pre-placement step on the two declared ancestors;
+rollback comparisons must separate this intentional ACL change from preserved
+code/data/identity/Run state. Uninstall retains protection for other SYSTEM
+consumers; restoration requires the supported coordinated procedure. Unsupported
+ACL shapes stop with a plain Korean path/reason, without broad reset or recursion.
+Source evidence tests:27 checks PASS for finite child bytes/private ACLs/redacted
+failures;34 memory checks PASS for exact privileged owner SIDs and B shape/guard
+behavior. Actual isolated guest ACL effects and fifth installation remain
+NOT TESTED until their separate lab results arrive. No field-wide claim follows
+from the two observed Windows machines or a filtered administrator token.
