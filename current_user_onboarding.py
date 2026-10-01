@@ -39,6 +39,7 @@ from user_relay import (
     USER_RELAY_RUN_VALUE,
     USER_RELAY_MODE,
     install_user_relay_autostart,
+    installation_relay_start_deferred,
     relay_data_root_arguments,
     remove_user_relay_autostart,
     request_user_relay_stop,
@@ -1364,7 +1365,11 @@ def onboard_current_user(
                 report_path=paths.onboarding_report_path,
                 status="UNKNOWN",
             )
-        if relay_start_status != "START_REQUESTED":
+        deferred = (
+            report["relay_start"] == {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
+            and installation_relay_start_deferred()
+        )
+        if relay_start_status != "START_REQUESTED" and not deferred:
             raise ValueError("current-user relay launch was not requested")
         apply_current_user_runtime_environment(
             paths,

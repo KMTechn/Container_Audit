@@ -425,6 +425,7 @@ def test_portable_rollback_product_failure_records_explicit_failure_without_rest
     environment = dict(os.environ)
     environment["KMTECH_TEST_INSTALLER_PATH"] = str(PORTABLE_INSTALLER)
     command = r"""
+. (Join-Path (Split-Path -Parent $env:KMTECH_TEST_INSTALLER_PATH) 'tools\bootstrap_integrity.ps1')
 $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
@@ -1140,14 +1141,11 @@ exit 0
 
 def test_portable_runtime_json_scalar_guards_reject_string_false_and_zero():
     text = PORTABLE_INSTALLER.read_text(encoding="utf-8")
-    assert "if(Test-JsonTrue $relay.persistent_retry){break}" in text
-    assert (
-        "if($null-eq$relay -or -not (Test-JsonTrue "
-        "$relay.persistent_retry)){throw 'Fresh relay status proof failed.'}"
-    ) in text
+    integrity = (ROOT / "tools/bootstrap_integrity.ps1").read_text(encoding="utf-8-sig")
+    assert "$Status.persistent_retry -isnot [bool] -or -not $Status.persistent_retry" in integrity
     assert "[bool]$relay.persistent_retry" not in text
     assert (
-        "Test-JsonPositiveInt32 $onboarding.relay_start.process_id"
+        "Test-BootstrapJsonInteger $onboarding.relay_start.process_id"
     ) in text
     assert (
         "Test-JsonTrue "

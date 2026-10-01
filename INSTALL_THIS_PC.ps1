@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [switch]$DryRun,
     [switch]$Uninstall,
@@ -127,14 +127,18 @@ function Invoke-SelfElevated {
             $arguments += @("-$name", [string]$value)
         }
     }
-    $argumentLine = ($arguments | ForEach-Object { ConvertTo-ProcessArgument ([string]$_) }) -join ' '
-    $powershell = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     try {
-        $process = Start-Process -FilePath $powershell -Verb RunAs -ArgumentList $argumentLine -Wait -PassThru
+        $process=Invoke-InstallationElevationCapture $BootstrapScriptPath $arguments $ElevationLogPath $OperatorSid
+        if($process.HelperStageEvidenceRoot){Write-Output ('installation_stage_evidence_root='+$process.HelperStageEvidenceRoot)}
+        Write-Output ('installation_elevation_result_path='+$process.ResultPath)
     } catch {
     Write-InstallationCaughtFailure $_
 
         Write-Output 'code_placement_preflight_failure=CONTAINER_PLACEMENT_ELEVATION_FAILED'
+        Complete-InstallationEvidenceStage 'forward' $_
+        $summary=Complete-InstallationEvidence
+        Write-Output ('installation_evidence_status='+[string]$summary.status)
+        Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
         exit 1
     }
     if ($process.ExitCode -ne 0) {
@@ -163,6 +167,11 @@ function Invoke-SelfElevated {
         }
         Write-Output "code_placement_preflight_failure=$failureCode"
     }
+    $childFailure=if($process.ExitCode -ne 0){[Exception]::new('CONTAINER_PLACEMENT_CHILD_FAILED')}else{$null}
+    Complete-InstallationEvidenceStage 'forward' $childFailure
+    $summary=Complete-InstallationEvidence
+    Write-Output ('installation_evidence_status='+[string]$summary.status)
+    Write-Output ('installation_evidence_summary_path='+[string]$summary.summary_path)
     exit $process.ExitCode
 }
 
@@ -1589,4 +1598,7 @@ finally {
     }
     Complete-InstallationEvidenceStage 'forward'
     Complete-InstallationEvidenceStage 'rollback'
+    $helperEvidenceSummary=Complete-InstallationEvidence
+    Write-Output ('installation_evidence_status='+[string]$helperEvidenceSummary.status)
+    Write-Output ('installation_evidence_summary_path='+[string]$helperEvidenceSummary.summary_path)
 }

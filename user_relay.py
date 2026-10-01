@@ -224,6 +224,8 @@ def start_user_relay_process(
     environ: Mapping[str, str] | None = None,
     launcher: Callable[[Sequence[str]], Any] | None = None,
 ) -> dict[str, Any]:
+    if installation_relay_start_deferred():
+        return {"status": "DEFERRED_CANONICAL_RELEASE", "process_id": 0}
     command = build_user_relay_command(app_root, environ=environ)
     if launcher is not None:
         launched = launcher(command)
@@ -247,6 +249,20 @@ def start_user_relay_process(
     if process.pid <= 0:
         raise UserRelayError("current-user relay launch did not return a process id")
     return {"status": "START_REQUESTED", "process_id": process.pid}
+
+
+def installation_relay_start_deferred() -> bool:
+    """Only an admitted INSTALLING delegation can defer its initial relay.
+
+    The installer releases the live fence and starts the normal user Run
+    launcher itself; neither an elevated bootstrap nor a temporary launcher
+    PID constitutes resident relay proof.
+    """
+    import writer_session_fence as fence
+
+    with writer_admission("persistent_relay_process_start"):
+        active = fence.active_fence()
+        return active is not None and active["status"] == "INSTALLING"
 
 
 def ensure_user_relay_running(

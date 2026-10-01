@@ -636,6 +636,7 @@ def build(
     manifest = {
         "schema": PORTABLE_SCHEMA,
         "startup_update_protocol": 1,
+        "relay_identity_protocol": 1,
         "startup_update_helper_sha256": _sha256(output / "tools/apply_prepared_update.ps1"),
         "source_commit": _git_value(repo_root, "HEAD^{commit}"),
         "source_tree": _git_value(repo_root, "HEAD^{tree}"),

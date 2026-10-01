@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$SourceRoot = "",
     [string]$InstallRoot = "C:\KMTech\Apps\Container_Audit\current",
@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '163d4a2291338279d2c08dfcaf0f50eee4be84fe78d5a355f160fa9d22d0dd5c'
+$ExpectedBootstrapIntegritySha256 = '50a8a068b8cda651709f869434575676403373ae76edc5bf1c69ab97a50da02f'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -727,31 +727,55 @@ function Confirm-CanonicalRuntimeQuiescence($Removal, [object[]]$ExpectedRelays,
     } while ((Get-Date) -lt $deadline)
     throw 'Verified replacement runtime quiescence failed: process exit timed out.'
 }
-function Stop-CanonicalDelegatedRelay([int]$ProcessId) {
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
-    if (
-        $null -eq $process -or
-        -not (Same ([string]$process.ExecutablePath) (Join-Path $install 'runtime\pythonw.exe')) -or
-        [string]$process.CommandLine -notlike '*--container-audit-user-relay*'
-    ) { throw 'Canonical delegated relay identity changed before writer fence release.' }
-    Stop-Process -Id $ProcessId -Force -ErrorAction Stop
-    $deadline = (Get-Date).AddSeconds(15)
+function Wait-CanonicalRelayReady($Identity,[DateTime]$StartedAt,[string]$PreviousStatusSha256,[int[]]$PreviousProcessIds,[int]$TimeoutSeconds=75) {
+    if($TimeoutSeconds -lt 1 -or $TimeoutSeconds -gt 120){throw 'Canonical relay readiness timeout is invalid.'}
+    $caller=Get-CanonicalRelaySecurity $PID
+    $watch=[Diagnostics.Stopwatch]::StartNew();$lastStatusSha='';$lastStatus=$null
     do {
-        Start-Sleep -Milliseconds 200
-        $remaining = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
-    } while ($null -ne $remaining -and (Get-Date) -lt $deadline)
-    if ($null -ne $remaining) { throw 'Canonical delegated relay quiescence timed out.' }
+        $snapshot=Get-BootstrapRelayReadinessSnapshot $Identity
+        $Identity=$snapshot.identity
+        $processes=@(Relays)
+        $status=$null;$statusSha=''
+        if(Test-Path -LiteralPath $relayPath -PathType Leaf) {
+            Assert-BootstrapNoReparsePoint $relayPath 'relay status' -PathOnly
+            if((Get-Item -LiteralPath $relayPath).Length -gt 65536){throw 'Relay status is oversized.'}
+            $bytes=[IO.File]::ReadAllBytes($relayPath)
+            $hash=[Security.Cryptography.SHA256]::Create()
+            try{$statusSha=([BitConverter]::ToString($hash.ComputeHash($bytes))).Replace('-','').ToLowerInvariant()}finally{$hash.Dispose()}
+            $status=[Text.UTF8Encoding]::new($false,$true).GetString($bytes).TrimStart([char]0xfeff) | ConvertFrom-Json
+            $lastStatus=$status;$lastStatusSha=$statusSha
+        }
+        if($processes.Count -eq 1 -and $PreviousProcessIds -cnotcontains [int]$processes[0].ProcessId) {
+            $process=Get-CimInstance Win32_Process -Filter "ProcessId = $($processes[0].ProcessId)" -ErrorAction SilentlyContinue
+            if($null -ne $process) {
+                $security=Get-CanonicalRelaySecurity ([int]$process.ProcessId)
+                if($snapshot.settled -and (Test-BootstrapRelayReadback $Identity $process $security $caller $status $StartedAt $PreviousStatusSha256 $statusSha)) {
+                    $confirmed=Get-BootstrapRelayReadinessSnapshot $Identity
+                    if(-not $confirmed.settled -or [string]$confirmed.identity.source_commit -cne [string]$Identity.source_commit){continue}
+                    $Script:CanonicalRelayProof=[ordered]@{status='PROVEN';process_id=[int]$process.ProcessId;executable=[string]$process.ExecutablePath;
+                        source_commit=[string]$Identity.source_commit;manifest_sha256=[string]$Identity.manifest_sha256;aggregate_sha256=[string]$Identity.aggregate_sha256;
+                        sid=[string]$security.sid;session_id=[int]$security.session_id;elevated=[bool]$security.elevated;
+                        relay_status=[string]$status.status;persistent_retry=[bool]$status.persistent_retry;runtime_status_sha256=$statusSha;
+                        update_phase=[string]$confirmed.phase;
+                        runtime_status_identity_fields=@($status.PSObject.Properties.Name | Where-Object {$_ -cin @('process_id','source_commit','ordinary_user')})}
+                    Write-InstallationEvidenceEvent ([ordered]@{event='RESIDENT_RELAY_READY';proof=$Script:CanonicalRelayProof;launcher_pid_is_not_resident_proof=$true})
+                    return [int]$process.ProcessId
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }while($watch.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+    Write-InstallationEvidenceEvent ([ordered]@{event='RESIDENT_RELAY_READY_TIMEOUT';status_path=$relayPath;status_sha256=$lastStatusSha;
+        status_present=($null -ne $lastStatus);candidate_count=$processes.Count;expected_source_commit=$Identity.source_commit;started_at=$StartedAt.ToUniversalTime().ToString('o')})
+    throw 'CANONICAL_RELAY_READY_TIMEOUT'
 }
-function Start-CanonicalRelayAfterFenceRelease {
-    $newPid = StartRaw $wanted
-    Start-Sleep -Seconds 3
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
-    if (
-        $null -eq $process -or
-        -not (Same ([string]$process.ExecutablePath) (Join-Path $install 'runtime\pythonw.exe')) -or
-        [string]$process.CommandLine -notlike '*--container-audit-user-relay*'
-    ) { throw 'Canonical relay restart after writer fence release failed.' }
-    return [int]$newPid
+function Start-CanonicalRelayAfterFenceRelease([string]$Root=$install,[string]$RunCommand=$wanted) {
+    $identity=Get-BootstrapRelayExpectedIdentity $Root $RunCommand
+    $previousSha=if(Test-Path -LiteralPath $relayPath -PathType Leaf){Get-FileSha256 $relayPath}else{''}
+    $previousIds=@(Relays | ForEach-Object {[int]$_.ProcessId})
+    $startedAt=[DateTime]::UtcNow
+    [void](StartRaw $RunCommand)
+    return Wait-CanonicalRelayReady $identity $startedAt $previousSha $previousIds
 }
 function Assert-RollbackRelayPreimage([object[]]$ExpectedRelays) {
     $actualRelays = @(Relays)
@@ -796,8 +820,9 @@ function Assert-CanonicalRuntimePreimage(
         -not [string]::IsNullOrEmpty([string]$Before.data)
     ) { throw 'CANONICAL_HKCU_RUN_ABSENCE_CONTRACT_INVALID' }
     if ($items.Count -gt 1) { throw 'CANONICAL_RELAY_CARDINALITY_INVALID' }
-    $expectedExecutable = Join-Path $ExpectedRoot 'runtime\pythonw.exe'
-    $expectedIdentity = Get-CanonicalRelayCommandIdentity $ExpectedCommand $expectedExecutable
+    $identity = if($items.Count){Get-BootstrapRelayExpectedIdentity $ExpectedRoot $ExpectedCommand}else{$null}
+    $expectedExecutable = if($null -ne $identity){[string]$identity.executable}else{Join-Path $ExpectedRoot 'runtime\pythonw.exe'}
+    $expectedIdentity = if($null -ne $identity){Get-CanonicalRelayCommandIdentity ([string]$identity.command) $expectedExecutable}else{''}
     foreach ($item in $items) {
         $commandIdentity = Get-CanonicalRelayCommandIdentity ([string]$item.CommandLine) $expectedExecutable
         if (
@@ -1131,13 +1156,36 @@ public static class ContainerAuditCanonicalUserProcess {
             try { return Inspect(token); } finally { CloseHandle(token); }
         }
     }
+    static IntPtr OverrideEnvironment(IntPtr source,string[] names,string[] values) {
+        if(names==null||values==null||names.Length!=values.Length) throw new InvalidOperationException("Normal-user environment override shape differs.");
+        string[] allowed={"CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN","CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID","CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID","CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID","CONTAINER_AUDIT_DATA_ROOT"};
+        var selected=new System.Collections.Generic.Dictionary<string,string>(StringComparer.OrdinalIgnoreCase);
+        for(int n=0;n<names.Length;n++) {
+            if(Array.IndexOf(allowed,names[n])<0||values[n]==null||values[n].IndexOf('\0')>=0||selected.ContainsKey(names[n])) throw new InvalidOperationException("Normal-user environment override is unsupported.");
+            selected.Add(names[n],values[n]);
+        }
+        var entries=new System.Collections.Generic.List<string>();int offset=0;
+        while(true) {
+            string entry=Marshal.PtrToStringUni(IntPtr.Add(source,offset*2));if(entry.Length==0)break;
+            offset+=entry.Length+1;if(offset>1048576)throw new InvalidOperationException("Normal-user environment block is oversized.");
+            int separator=entry.IndexOf('=',entry.StartsWith("=")?1:0);
+            if(separator<1)throw new InvalidOperationException("Normal-user environment block is malformed.");
+            if(!selected.ContainsKey(entry.Substring(0,separator)))entries.Add(entry);
+        }
+        foreach(var pair in selected)if(pair.Value.Length>0)entries.Add(pair.Key+"="+pair.Value);
+        entries.Sort(StringComparer.OrdinalIgnoreCase);
+        return Marshal.StringToHGlobalUni(String.Join("\0",entries.ToArray())+"\0\0");
+    }
     public static int StartLimited(string command,string sid,int session) {
+        return StartLimitedWithOverrides(command,sid,session,new string[0],new string[0]);
+    }
+    public static int StartLimitedWithOverrides(string command,string sid,int session,string[] names,string[] values) {
         IntPtr shell=GetShellWindow(); int shellPid;
         if (shell==IntPtr.Zero || GetWindowThreadProcessId(shell,out shellPid)==0)
             throw new InvalidOperationException("Canonical interactive shell is unavailable.");
         using (Process shellProcess=Process.GetProcessById(shellPid)) {
             IntPtr token; Check(OpenProcessToken(shellProcess.Handle,10,out token),"OpenProcessToken:shell");
-            IntPtr primary=IntPtr.Zero,environment=IntPtr.Zero;
+            IntPtr primary=IntPtr.Zero,environment=IntPtr.Zero,overridden=IntPtr.Zero;
             try {
                 Security security=Inspect(token);
                 if (security.elevated || security.sid!=sid || security.session_id!=session || session<=0)
@@ -1148,12 +1196,14 @@ public static class ContainerAuditCanonicalUserProcess {
                 if (security.elevated || security.sid!=sid || security.session_id!=session)
                     throw new InvalidOperationException("Canonical normal-user token differs.");
                 Check(CreateEnvironmentBlock(out environment,primary,false),"CreateEnvironmentBlock");
+                if(names.Length>0)overridden=OverrideEnvironment(environment,names,values);
                 Startup startup=new Startup(); startup.cb=Marshal.SizeOf(typeof(Startup)); startup.desktop="winsta0\\default";
                 ProcessInfo child;
-                Check(CreateProcessWithTokenW(primary,0,null,new StringBuilder(command),0x08000400,environment,null,ref startup,out child),"CreateProcessWithTokenW");
+                Check(CreateProcessWithTokenW(primary,0,null,new StringBuilder(command),0x08000400,overridden!=IntPtr.Zero?overridden:environment,null,ref startup,out child),"CreateProcessWithTokenW");
                 try { return child.pid; } finally { CloseHandle(child.thread); CloseHandle(child.process); }
             } finally {
                 if (environment!=IntPtr.Zero) DestroyEnvironmentBlock(environment);
+                if (overridden!=IntPtr.Zero) Marshal.FreeHGlobal(overridden);
                 if (primary!=IntPtr.Zero) CloseHandle(primary);
                 CloseHandle(token);
             }
@@ -1163,8 +1213,7 @@ public static class ContainerAuditCanonicalUserProcess {
 '@
 }
 function Get-CanonicalRelaySecurity([int]$ProcessId) {
-    Initialize-CanonicalUserProcessApi
-    return [ContainerAuditCanonicalUserProcess]::Read($ProcessId)
+    return Get-BootstrapRelaySecurity $ProcessId
 }
 function Start-CanonicalLimitedRelay([string]$Line, [string]$UserSid, [int]$SessionId) {
     Initialize-CanonicalUserProcessApi
@@ -1183,12 +1232,19 @@ function StartRaw([string]$Line) {
         if ([uint32]$created.ReturnValue -ne 0) { throw 'Rollback process start failed.' }
         $newPid = [int]$created.ProcessId
     }
-    $security = Get-CanonicalRelaySecurity $newPid
-    if ([bool]$security.elevated -or [string]$security.sid -cne [string]$caller.sid -or
-        [int]$security.session_id -ne [int]$caller.session_id) {
-        throw 'Canonical relay normal-user security readback failed.'
+    $bootstrapLaunch=$Line -cmatch ' --bootstrap --role relay -- --container-audit-user-relay(?: --data-root .+)?$'
+    if(-not $bootstrapLaunch) {
+        $security = Get-CanonicalRelaySecurity $newPid
+        if ([bool]$security.elevated -or [string]$security.sid -cne [string]$caller.sid -or
+            [int]$security.session_id -ne [int]$caller.session_id) {
+            throw 'Canonical relay normal-user security readback failed.'
+        }
+        Write-InstallationEvidenceEvent ([ordered]@{event='DETACHED_RELAY_LAUNCH';pid=$newPid;sid=$security.sid;session=$security.session_id;elevated=$security.elevated;stream_disposition='NOT_ATTACHED_PYTHONW';installer_pipe=$false;runtime_status_path=$relayPath})
+    }else{
+        # The admitted primary token is checked in StartLimited. A bootstrap
+        # may already have exited; only the resident child is post-start proof.
+        Write-InstallationEvidenceEvent ([ordered]@{event='DETACHED_BOOTSTRAP_REQUEST';launcher_pid=$newPid;resident_security_readback='PENDING';stream_disposition='NOT_ATTACHED_PYTHONW';installer_pipe=$false;runtime_status_path=$relayPath})
     }
-    Write-InstallationEvidenceEvent ([ordered]@{event='DETACHED_RELAY_LAUNCH';pid=$newPid;sid=$security.sid;session=$security.session_id;elevated=$security.elevated;stream_disposition='NOT_ATTACHED_PYTHONW';installer_pipe=$false;runtime_status_path=$relayPath})
     return [int]$newPid
 }
 function ReadReplacementReceipt(
@@ -2394,8 +2450,7 @@ $enteredPlacementTry = $true
         Clear-CanonicalWriterFenceReleaseDelegation
         Stop-CanonicalWriterFenceRelease $releaseAuthorization
         $canonicalWriterFenceActive = $false
-        foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
-        if ($old.Count -gt 0) { Start-Sleep -Seconds 3 }
+        if($old.Count -gt 0){[void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))}
         [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         $audit.status = 'PASS_RESTORED_VERIFIED_DATA_PRESERVED'
         $audit.rollback.applied = $true
@@ -2590,7 +2645,9 @@ $enteredPlacementTry = $true
             $bootstrapOutput = @($bootstrapChild.Stdout -split "`r?`n")
             $bootstrapExitCode = $bootstrapChild.ExitCode
             $audit.code_replacement['child_streams']=$bootstrapChild.Streams
-            $audit.code_replacement['child_stage_evidence_root']=$elevationLogPath+'.evidence.'+$bootstrapChild.ProcessId
+            $binding=Read-InstallationHelperEvidenceBinding $bootstrapOutput $elevationLogPath $bootstrapChild.ProcessId ([string]$sourceManifest.helper_sha256)
+            $audit.code_replacement['child_evidence_binding']=$binding
+            $audit.code_replacement['child_stage_evidence_root']=[string]$binding.stage_evidence_root
         } catch {
     Write-InstallationCaughtFailure $_
 
@@ -2714,34 +2771,22 @@ $enteredPlacementTry = $true
             $boundServerBaseUri.Port -ne $onboardingServerBaseUri.Port
         ) { throw 'Onboarding server endpoint readback failed.' }
     }
-    if (-not (Test-JsonPositiveInt32 $onboarding.relay_start.process_id)) {
-        throw 'Onboarding relay process id type/readback failed.'
+    if([string]$onboarding.relay_start.status -cne 'DEFERRED_CANONICAL_RELEASE' -or
+        -not(Test-BootstrapJsonInteger $onboarding.relay_start.process_id) -or
+        [int64]$onboarding.relay_start.process_id -ne 0 -or -not $canonicalWriterFenceActive){
+        throw 'Onboarding relay release deferral readback failed.'
     }
     Set-InstallationEvidenceStage 'canonical.relay_identity_and_status'
-    $pidValue = [int]$onboarding.relay_start.process_id
-    Start-Sleep -Seconds 5
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $pidValue" -ErrorAction SilentlyContinue
-    if ($null -eq $process -or -not (Same ([string]$process.ExecutablePath) (Join-Path $install 'runtime\pythonw.exe'))) { throw 'Relay process proof failed.' }
-    $deadline=(Get-Date).AddSeconds(75)
-    $relay=$null
-    while((Get-Date)-lt $deadline){
-        if((Test-Path $relayPath) -and (Get-Item $relayPath).LastWriteTimeUtc -ge $started.AddSeconds(-1)){
-            $relay=Get-Content $relayPath -Raw -Encoding UTF8|ConvertFrom-Json
-            if(Test-JsonTrue $relay.persistent_retry){break}
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    if($null-eq$relay -or -not (Test-JsonTrue $relay.persistent_retry)){throw 'Fresh relay status proof failed.'}
+    $pidValue=0
     $audit.status=if ($testMode) { 'TEST_ONLY_PARTIAL' } else { 'PRODUCT_PHASE_PASS' }
     $audit.stop_marker_absent=-not(Test-Path $stop)
     $audit.onboarding=[ordered]@{status=[string]$onboarding.status;action=[string]$onboarding.action;autostart_writer='product_onboarding';server_base_url=$onboardingServerBaseUrlLabel;bound_server_base_url=[string]$onboarding.state_readback.base_url}
-    $audit.exact_launch=[ordered]@{status='PROVEN';process_id=$pidValue;executable=[string]$process.ExecutablePath;relay_status=[string]$relay.status;persistent_retry=$relay.persistent_retry}
+    $audit.exact_launch=[ordered]@{status='PENDING_FENCE_RELEASE';process_id=0;launcher_pid_is_not_resident_proof=$true}
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
 
     if ($writerRestoreNeeded) {
         Set-InstallationEvidenceStage 'canonical.scheduled_writer_restore'
-        Stop-CanonicalDelegatedRelay $pidValue
         $writerEnabled = Enable-CanonicalWriter $install $writerBefore
         $audit.scheduled_writer.restore_readback = $writerEnabled
         $audit.status='WRITER_ENABLED_AWAITING_NATURAL_TRIGGER'
@@ -2760,19 +2805,18 @@ $enteredPlacementTry = $true
         $canonicalWriterFenceActive = $false
         Set-InstallationEvidenceStage 'canonical.normal_relay_after_release'
         $pidValue = Start-CanonicalRelayAfterFenceRelease
+        $audit.exact_launch=$Script:CanonicalRelayProof
         $writerRunning = Confirm-CanonicalWriterRunning $install $writerEnabled
         $audit.scheduled_writer.natural_trigger_proof = $writerRunning
         $audit.rollback.scheduled_writer_restored=$true
         $writerRestoreNeeded=$false
     }
     $terminalStatus=Get-CanonicalInstallSuccessStatus $testMode
-    $audit.status=$terminalStatus
-    $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
+    $audit.status='PRODUCT_AWAITING_RESIDENT_RELAY'
     Save $auditPath $audit
     if ($evidenceFull) { Save $evidenceFull $audit }
     if ($canonicalWriterFenceActive) {
         Set-InstallationEvidenceStage 'canonical.complete_fence_release'
-        Stop-CanonicalDelegatedRelay $pidValue
         $releaseAuthorization = New-CanonicalWriterFenceReleaseAuthorization `
             -Path $productCompleteAuthorizationPath `
             -Phase 'PRODUCT_COMPLETE' `
@@ -2785,7 +2829,13 @@ $enteredPlacementTry = $true
         $canonicalWriterFenceActive = $false
         Set-InstallationEvidenceStage 'canonical.normal_relay_after_release'
         $pidValue = Start-CanonicalRelayAfterFenceRelease
+        $audit.exact_launch=$Script:CanonicalRelayProof
     }
+    if($pidValue -le 0 -or [string]$audit.exact_launch.status -cne 'PROVEN'){throw 'Resident relay acceptance is absent.'}
+    $audit.status=$terminalStatus
+    $audit.completed_at=(Get-Date).ToUniversalTime().ToString('o')
+    Save $auditPath $audit
+    if ($evidenceFull) { Save $evidenceFull $audit }
     "install_status=$terminalStatus"
     "install_root=$install"
     "code_placement_status=$placement"
@@ -2853,8 +2903,7 @@ catch {
         }
         if ($earlyFenceMatches -and $old.Count -gt 0) {
             if (@(Relays).Count -eq 0) {
-                foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
-                Start-Sleep -Seconds 3
+                [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))
             }
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         }
@@ -2957,8 +3006,7 @@ catch {
             -AuthorityLease $canonicalWriterFenceAuthority)
         $canonicalWriterFenceActive = $false
         if (@(Relays).Count -eq 0) {
-            foreach ($item in $old) { [void](StartRaw ([string]$item.CommandLine)) }
-            if ($old.Count -gt 0) { Start-Sleep -Seconds 3 }
+            if($old.Count -gt 0){[void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))}
         }
         [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
         $audit.status = 'FAILED_ROLLED_BACK'
@@ -3179,14 +3227,7 @@ catch {
     try {
         if ($mutated) {
             Set-InstallationEvidenceStage 'rollback.normal_relay_exact_preimage' 'rollback'
-            foreach ($item in $old) {
-                $newPid = StartRaw ([string]$item.CommandLine)
-                Start-Sleep -Seconds 3
-                $p = Get-CimInstance Win32_Process -Filter "ProcessId = $newPid" -ErrorAction SilentlyContinue
-                if ($null -eq $p -or -not (Same ([string]$p.ExecutablePath) ([string]$item.ExecutablePath))) {
-                    throw 'runtime restore failed'
-                }
-            }
+            if($old.Count -gt 0){[void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$before.data))}
             [void](Assert-RollbackRelayPreimage -ExpectedRelays $old)
             $audit.rollback.runtime_restored = $true
         }
@@ -3242,6 +3283,13 @@ finally {
     $evidenceRollbackFailure=$null
     if($null -ne $original -and -not $audit.rollback.runtime_restored){$evidenceRollbackFailure=$original}
     Complete-InstallationEvidenceStage 'rollback' $evidenceRollbackFailure
+    $audit['installation_evidence']=Complete-InstallationEvidence
+    try {
+        Save $auditPath $audit
+        if($evidenceFull){Save $evidenceFull $audit}
+    }catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED'}
+    Write-Output ('installation_evidence_status='+[string]$audit.installation_evidence.status)
+    Write-Output ('installation_evidence_summary_path='+[string]$audit.installation_evidence.summary_path)
     $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
     foreach ($name in $canonicalWriterFenceEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')

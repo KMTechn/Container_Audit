@@ -8,6 +8,41 @@ from tests.powershell_contracts import run_functions
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_shipped_installers_keep_utf8_bom_for_windows_powershell_korean_errors():
+    for relative in ('INSTALL_THIS_PC.ps1', 'INSTALL_CANONICAL_PORTABLE.ps1', 'tools/bootstrap_integrity.ps1'):
+        assert (ROOT / relative).read_bytes().startswith(b'\xef\xbb\xbf'), relative
+
+
+def test_windows_powershell_decodes_actual_shared_rejection_literal(tmp_path):
+    result = run_functions(tmp_path, ROOT/'tools/bootstrap_integrity.ps1', ['Protect-KmtechCodeAncestors'], r'''
+$tokens=$null;$errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_REAL_HELPER,[ref]$tokens,[ref]$errors)
+if($errors.Count){throw 'Actual shipped helper parse failed.'}
+$functions=@($ast.FindAll({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq 'Protect-KmtechCodeAncestors'},$true))
+if($functions.Count -ne 1){throw 'Actual shipped rejection function missing.'}
+. ([scriptblock]::Create($functions[0].Extent.Text))
+function Test-Path {param($LiteralPath) return $true}
+function Get-Item {param($LiteralPath,$ErrorAction) return [pscustomobject]@{Attributes=[IO.FileAttributes]::Directory}}
+function Get-Acl {param($LiteralPath,$ErrorAction)
+ $acl=[Security.AccessControl.DirectorySecurity]::new()
+ $acl.SetSecurityDescriptorSddlForm('O:S-1-5-21-1-2-3-1000G:BAD:AI(A;OICIID;FA;;;BA)(A;OICIID;FA;;;SY)(A;OICIID;0x1200a9;;;BU)(A;ID;0x1301bf;;;AU)(A;OICIIOID;0xe0010000;;;AU)')
+ return $acl
+}
+function Set-Acl {throw 'Rejected shape performed an ACL write.'}
+function Write-InstallationEvidenceEvent {param($Payload)}
+$rejected=$false
+try{[void](Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit')}
+catch{
+ $rejected=$true
+ $expected='설치 폴더 권한을 확인하세요: C:\KMTech (폴더 소유자가 예상과 다릅니다). 지원 담당자에게 문의하세요.'
+ if($_.Exception.Message -cne $expected){throw 'Actual PS5 file decoding changed the Korean rejection.'}
+}
+if(-not $rejected){throw 'User-owned ancestor was admitted.'}
+'PASS'
+''', engine='powershell.exe', values={'CA_REAL_HELPER': str(ROOT/'tools/bootstrap_integrity.ps1')})
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 @pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
 @pytest.mark.parametrize('scenario', ('default', 'target', 'user_owner', 'deny', 'extra_sid', 'partial', 'reparse', 'post_guard_failure'))
 def test_shared_protection_admits_only_reviewed_shapes_and_keeps_creation(tmp_path, engine, scenario):

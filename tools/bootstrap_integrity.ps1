@@ -1,4 +1,4 @@
-$BootstrapIntegrityFileName = "bootstrap-integrity.json"
+﻿$BootstrapIntegrityFileName = "bootstrap-integrity.json"
 $BootstrapIntegritySchema = "container-audit-bootstrap-integrity-v1"
 
 function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
@@ -18,7 +18,7 @@ function Protect-InstallationText([string]$Text, [int]$Limit = 4096) {
     $Text = $lines -join ''
     $Text = [regex]::Replace($Text, '(?i)authorization\s*:\s*[^\r\n]+', '[redacted]')
     $Text = [regex]::Replace($Text, '(?i)\b([A-Za-z0-9_-]*(?:secret|token|signature|password|credential|registration[_-]?(?:value|code)|api[_-]?key)[A-Za-z0-9_-]*)\s*[=:]\s*[^\r\n,;]+', '$1=[redacted]')
-    $Text = [regex]::Replace($Text, '(?i)("[^"]*(?:secret|token|signature|password|registration|api[_-]?key)[^"]*"\s*:\s*")[^"]*', '$1[redacted]')
+    $Text = [regex]::Replace($Text, '(?i)("[^"]*(?:secret|token|signature|password|registration|api[_-]?key|authorization|credential)[^"]*"\s*:\s*")(?:\\.|[^"\\])*', '$1[redacted]')
     $Text = [regex]::Replace($Text, '(https?://)[^\s/@]+:[^\s/@]+@', '$1[redacted]@')
     $Text = [regex]::Replace($Text, '(https?://[^\s?]+)\?[^\s]+', '$1?[redacted]')
     if ($Limit -ge 0 -and $Text.Length -gt $Limit) { return $Text.Substring(0,$Limit) + '[truncated]' }
@@ -72,6 +72,7 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
     $Script:InstallationEvidenceLanes = @{}
     $Script:InstallationEvidenceSequence = 0
     $Script:InstallationEvidenceFailed = $false
+    $Script:InstallationEvidenceFailureCodes = [Collections.Generic.List[string]]::new()
     Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=1048576;journal_cap_bytes=1048576;raw_command_recorded=$false})
     return $root
 }
@@ -83,12 +84,299 @@ function Write-InstallationEvidenceEvent($Payload) {
         $path=Join-Path $root 'stages.jsonl'
         $Payload['captured_at']=[DateTime]::UtcNow.ToString('o')
         $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($Payload | ConvertTo-Json -Depth 12 -Compress)+"`n")
-        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length + $bytes.Length -gt 1048576) { $Script:InstallationEvidenceFailed=$true; return }
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length + $bytes.Length -gt 1048576) {
+            $Script:InstallationEvidenceFailed=$true
+            if(-not $Script:InstallationEvidenceFailureCodes.Contains('JOURNAL_LIMIT')){$Script:InstallationEvidenceFailureCodes.Add('JOURNAL_LIMIT')}
+            return
+        }
         $newFile=-not (Test-Path -LiteralPath $path)
         $stream=[IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::Read)
         try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
         if ($newFile) { Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid }
-    } catch { $Script:InstallationEvidenceFailed=$true }
+    } catch {
+        $Script:InstallationEvidenceFailed=$true
+        if(-not $Script:InstallationEvidenceFailureCodes.Contains('JOURNAL_IO_OR_ACL_FAILURE')){$Script:InstallationEvidenceFailureCodes.Add('JOURNAL_IO_OR_ACL_FAILURE')}
+    }
+}
+
+function Complete-InstallationEvidence {
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $failed=Get-Variable -Name InstallationEvidenceFailed -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $codes=Get-Variable -Name InstallationEvidenceFailureCodes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $summary=[ordered]@{status=if(-not $root){'NOT_CONFIGURED'}elseif($failed){'INCOMPLETE'}else{'COMPLETE'};
+        recording_failed=[bool]$failed;root=[string]$root;journal_cap_bytes=1048576;failure_codes=@($codes);
+        summary_path='';summary_written=$false;business_result_is_separate=$true}
+    if(-not $root){return $summary}
+    $summary.summary_path=Join-Path $root 'evidence-status.json'
+    try {
+        $summary.summary_written=$true
+        [IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
+        Set-InstallationEvidenceAcl $summary.summary_path $Script:InstallationEvidenceSid
+    }catch {
+        $Script:InstallationEvidenceFailed=$true
+        $summary.status='INCOMPLETE';$summary.recording_failed=$true;$summary.summary_written=$false
+        # If writing succeeded before an ACL/readback failure, replace the
+        # success-looking body where possible; stdout still carries INCOMPLETE.
+        try{[IO.File]::WriteAllText($summary.summary_path,($summary|ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))}catch{}
+        $summary.failure_codes+=@('FINAL_SUMMARY_IO_OR_ACL_FAILURE')
+    }
+    return $summary
+}
+
+function Register-InstallationChildEvidenceSummary($Summary) {
+    if($null -eq $Summary -or [string]$Summary.status -cne 'COMPLETE'){
+        $Script:InstallationEvidenceFailed=$true
+        $codes=Get-Variable -Name InstallationEvidenceFailureCodes -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+        if($null -ne $codes -and -not $codes.Contains('CHILD_EVIDENCE_INCOMPLETE')){$codes.Add('CHILD_EVIDENCE_INCOMPLETE')}
+    }
+}
+
+function Read-InstallationEvidenceChildSummary([string]$Root) {
+    $path=Join-Path $Root 'evidence-status.json'
+    if(-not(Test-Path -LiteralPath $path -PathType Leaf)){return [ordered]@{status='INCOMPLETE';recording_failed=$true;summary_path=$path;reason='CHILD_SUMMARY_NOT_RECORDED'}}
+    Assert-BootstrapNoReparsePoint $path 'child evidence summary' -PathOnly
+    if((Get-Item -LiteralPath $path).Length -gt 65536){throw 'Child evidence summary is oversized.'}
+    $record=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-Json
+    if(-not(Test-BootstrapSamePath ([string]$record.root) $Root) -or [string]$record.status -cnotin @('COMPLETE','INCOMPLETE') -or
+        $record.recording_failed -isnot [bool] -or ($record.status -ceq 'COMPLETE' -and $record.recording_failed)){throw 'Child evidence summary binding differs.'}
+    return [ordered]@{status=[string]$record.status;recording_failed=[bool]$record.recording_failed;summary_path=$path;summary_sha256=Get-FileSha256 $path}
+}
+
+function Read-InstallationHelperEvidenceBinding([string[]]$Output,[string]$AuditLogPath,[int]$DirectProcessId,[string]$ExpectedHelperSha256='') {
+    $roots=@($Output | Where-Object {$_ -cmatch '^installation_stage_evidence_root=.+$'} | ForEach-Object {$_.Substring('installation_stage_evidence_root='.Length)})
+    $results=@($Output | Where-Object {$_ -cmatch '^installation_elevation_result_path=.+$'} | ForEach-Object {$_.Substring('installation_elevation_result_path='.Length)})
+    $parentRoot=Get-StrictFullPath ($AuditLogPath+'.evidence.'+$DirectProcessId) 'helper evidence root'
+    if($results.Count) {
+        $path=Get-StrictFullPath ([string]$results[-1]) 'elevation result'
+        if(-not(Test-BootstrapSamePath $path (Join-Path $parentRoot 'elevation-result.json'))){throw 'Elevation result path binding differs.'}
+        Assert-BootstrapNoReparsePoint $path 'elevation result' -PathOnly
+        if((Get-Item -LiteralPath $path).Length -gt 65536){throw 'Elevation result is oversized.'}
+        $result=Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if([string]$result.schema -cne 'container-audit-installation-elevation-capture-v1' -or
+            -not(Test-BootstrapJsonInteger $result.parent_process_id) -or [int64]$result.parent_process_id -ne $DirectProcessId -or
+            -not(Test-BootstrapJsonInteger $result.wrapper_process_id) -or [int64]$result.wrapper_process_id -le 0 -or
+            -not(Test-BootstrapJsonInteger $result.helper_process_id) -or [int64]$result.helper_process_id -lt 0 -or
+            ($ExpectedHelperSha256 -and [string]$result.helper_sha256 -cne $ExpectedHelperSha256)){throw 'Elevation result identity binding differs.'}
+        $expectedCapture=Join-Path $parentRoot ('elevation-capture.evidence.'+[int]$result.wrapper_process_id)
+        if(-not(Test-BootstrapSamePath ([string]$result.capture_root) $expectedCapture)){throw 'Elevation capture root binding differs.'}
+        Assert-BootstrapNoReparsePoint $expectedCapture 'elevation capture root' -PathOnly
+        if([int64]$result.helper_process_id -eq 0) {
+            if([int]$result.helper_exit_code -eq 0 -or $null -eq $result.failure -or $null -ne $result.streams -or [string]$result.helper_stage_evidence_root){throw 'Unstarted helper failure binding differs.'}
+            return [ordered]@{status='CHILD_NOT_STARTED';helper_process_id=0;stage_evidence_root='';outer_stage_evidence_root=$parentRoot;
+                capture_root=$expectedCapture;streams=$null;child_exit_code=[int]$result.helper_exit_code;failure=$result.failure;
+                result_path=$path;result_sha256=Get-FileSha256 $path;evidence_summary=$result.evidence_summary}
+        }
+        foreach($name in @('stdout','stderr')) {
+            $stream=$result.streams.$name
+            $expected=Join-Path $expectedCapture ('elevated-helper-'+[int]$result.helper_process_id+'-'+$name+'.bin')
+            if(-not(Test-BootstrapSamePath ([string]$stream.path) $expected)){throw 'Elevation stream path binding differs.'}
+            Assert-BootstrapNoReparsePoint $expected 'elevation stream' -PathOnly
+            if((Get-Item -LiteralPath $expected).Length -gt 1048576 -or (Get-FileSha256 $expected) -cne [string]$stream.sha256){throw 'Elevation stream hash/size binding differs.'}
+        }
+        $actualRoot=[string]$result.helper_stage_evidence_root
+        if($actualRoot -and -not(Test-BootstrapSamePath $actualRoot ($AuditLogPath+'.evidence.'+[int]$result.helper_process_id))){throw 'Elevated helper journal identity binding differs.'}
+        if($actualRoot){Assert-BootstrapNoReparsePoint $actualRoot 'elevated helper evidence' -PathOnly}
+        $childSummary=if($actualRoot){Read-InstallationEvidenceChildSummary $actualRoot}else{$null}
+        Register-InstallationChildEvidenceSummary $result.evidence_summary
+        Register-InstallationChildEvidenceSummary $childSummary
+        return [ordered]@{status=if($actualRoot){'BOUND_ELEVATED_CHILD'}else{'CHILD_JOURNAL_NOT_RECORDED'};helper_process_id=[int]$result.helper_process_id;
+            stage_evidence_root=$actualRoot;outer_stage_evidence_root=$parentRoot;capture_root=$expectedCapture;streams=$result.streams;
+            child_exit_code=[int]$result.helper_exit_code;failure=$result.failure;result_path=$path;result_sha256=Get-FileSha256 $path;evidence_summary=$result.evidence_summary;child_stage_evidence_summary=$childSummary}
+    }
+    if(-not $roots.Count){return [ordered]@{status='NOT_RECORDED';helper_process_id=$DirectProcessId;stage_evidence_root='';streams=$null}}
+    $root=Get-StrictFullPath ([string]$roots[-1]) 'helper emitted evidence root'
+    if(-not(Test-BootstrapSamePath $root $parentRoot)){throw 'Direct helper evidence root binding differs.'}
+    Assert-BootstrapNoReparsePoint $root 'helper emitted evidence root' -PathOnly
+    $childSummary=Read-InstallationEvidenceChildSummary $root
+    Register-InstallationChildEvidenceSummary $childSummary
+    return [ordered]@{status='BOUND_DIRECT_CHILD';helper_process_id=$DirectProcessId;stage_evidence_root=$root;streams=$null;child_stage_evidence_summary=$childSummary}
+}
+
+function Get-InstallationElevationWrapperSource {
+    # Fixed source only. Invocation arguments, including delegation, remain
+    # in memory/argv and are never embedded in the persisted wrapper.
+    return @'
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+if($args.Count -lt 8){exit 1}
+$target=[string]$args[0];$resultPath=[string]$args[1];$auditBase=[string]$args[2];$sid=[string]$args[3]
+$parentPid=[int]$args[4];$targetSha=[string]$args[5];$librarySha=[string]$args[6]
+$childArgs=[string[]]@($args | Select-Object -Skip 7)
+$library=Join-Path (Split-Path -Parent $target) 'tools\bootstrap_integrity.ps1'
+if((Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $librarySha){exit 1}
+. $library
+$index=[Array]::IndexOf($childArgs,'-WriterFenceDelegationToken')
+$sensitive=@();if($index -ge 0 -and $index+1 -lt $childArgs.Length){$sensitive=@($childArgs[$index+1])}
+$captureRoot=Initialize-InstallationEvidence (Join-Path (Split-Path -Parent $resultPath) 'elevation-capture') $sid $sensitive
+$child=$null;$failure=$null;$helperRoot='';$exitCode=1
+try {
+ if((Get-FileSha256 $target) -cne $targetSha){throw 'Elevated helper source byte pin differs.'}
+ Set-InstallationEvidenceStage 'elevation.helper_capture'
+ $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+ $child=Invoke-InstallationEvidenceChild 'elevated-helper' $winps $childArgs
+ $exitCode=[int]$child.ExitCode
+ $roots=@($child.Stdout -split "`r?`n" | Where-Object {$_ -cmatch '^installation_stage_evidence_root=.+$'} | ForEach-Object {$_.Substring('installation_stage_evidence_root='.Length)})
+ if($roots.Count){
+  $helperRoot=Get-StrictFullPath ([string]$roots[-1]) 'elevated helper emitted root'
+  if(-not(Test-BootstrapSamePath $helperRoot ($auditBase+'.evidence.'+$child.ProcessId))){throw 'Elevated helper emitted journal binding differs.'}
+  Assert-BootstrapNoReparsePoint $helperRoot 'elevated helper journal' -PathOnly
+ }
+ Complete-InstallationEvidenceStage 'forward'
+}catch{$failure=Get-InstallationFailureDetails $_;Fail-InstallationEvidenceStages $_;$exitCode=1}
+$summary=Complete-InstallationEvidence
+$record=[ordered]@{schema='container-audit-installation-elevation-capture-v1';parent_process_id=$parentPid;wrapper_process_id=$PID;
+ helper_process_id=if($null -ne $child){[int]$child.ProcessId}else{0};helper_exit_code=$exitCode;helper_sha256=$targetSha;
+ helper_stage_evidence_root=$helperRoot;capture_root=$captureRoot;streams=if($null -ne $child){$child.Streams}else{$null};
+ evidence_summary=$summary;failure=$failure;raw_arguments_recorded=$false;secret_values_recorded=$false}
+Assert-BootstrapNoReparsePoint (Split-Path -Parent $resultPath) 'elevation result parent' -PathOnly
+if(Test-Path -LiteralPath $resultPath){throw 'Elevation result already exists.'}
+[IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+Set-InstallationEvidenceAcl $resultPath $sid
+exit $exitCode
+'@
+}
+
+function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid) {
+    $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if(-not $root){throw 'Elevation capture requires initialized private evidence.'}
+    Assert-BootstrapNoReparsePoint $root 'elevation capture parent' -PathOnly
+    $wrapper=Join-Path $root 'elevation-capture.ps1';$resultPath=Join-Path $root 'elevation-result.json'
+    if((Test-Path -LiteralPath $wrapper) -or (Test-Path -LiteralPath $resultPath)){throw 'Elevation capture target already exists.'}
+    [IO.File]::WriteAllText($wrapper,(Get-InstallationElevationWrapperSource),[Text.UTF8Encoding]::new($true))
+    Set-InstallationEvidenceAcl $wrapper $OperatorSid
+    $library=Join-Path (Split-Path -Parent $Target) 'tools\bootstrap_integrity.ps1'
+    $targetSha=Get-FileSha256 $Target
+    $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',$wrapper,$Target,$resultPath,$AuditBase,$OperatorSid,
+        [string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments
+    $line=($argv|ForEach-Object {ConvertTo-ProcessArgument ([string]$_)}) -join ' '
+    $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    # Verb RunAs cannot share RedirectStandardOutput/Error parameter sets.
+    # The supported elevated wrapper captures its finite helper internally.
+    $process=Start-Process -FilePath $winps -Verb RunAs -ArgumentList $line -WindowStyle Hidden -Wait -PassThru
+    Assert-BootstrapNoReparsePoint $resultPath 'elevation result' -PathOnly
+    if((Get-Item -LiteralPath $resultPath).Length -gt 65536){throw 'Elevation result is oversized.'}
+    $result=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if([string]$result.schema -cne 'container-audit-installation-elevation-capture-v1' -or
+        -not(Test-BootstrapJsonInteger $result.parent_process_id) -or [int64]$result.parent_process_id -ne $PID -or
+        -not(Test-BootstrapJsonInteger $result.wrapper_process_id) -or [int64]$result.wrapper_process_id -ne [int64]$process.Id -or
+        [int]$result.helper_exit_code -ne [int]$process.ExitCode -or [string]$result.helper_sha256 -cne $targetSha){throw 'Elevated wrapper process/result binding differs.'}
+    Write-InstallationEvidenceEvent ([ordered]@{event='ELEVATED_FINITE_CHILD';wrapper_pid=[int]$process.Id;helper_pid=[int]$result.helper_process_id;exit_code=[int]$process.ExitCode;result_path=$resultPath;result_sha256=Get-FileSha256 $resultPath})
+    return [pscustomobject]@{ExitCode=[int]$process.ExitCode;Id=[int]$result.helper_process_id;WrapperProcessId=[int]$process.Id;ResultPath=$resultPath;
+        HelperStageEvidenceRoot=[string]$result.helper_stage_evidence_root;Streams=$result.streams;EvidenceSummary=$result.evidence_summary}
+}
+
+function Import-BootstrapCanonicalUserProcessApi([string]$VerifiedProducerRoot) {
+    $path=Join-Path $VerifiedProducerRoot 'INSTALL_CANONICAL_PORTABLE.ps1'
+    Assert-BootstrapNoReparsePoint $path 'verified normal-user process API' -PathOnly
+    $manifest=Read-KmtechPortableManifest $VerifiedProducerRoot
+    if([string]$manifest.installer_sha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileSha256 $path) -cne [string]$manifest.installer_sha256){throw 'Normal-user process API byte pin differs.'}
+    $tokens=$null;$errors=$null
+    $tree=[Management.Automation.Language.Parser]::ParseFile($path,[ref]$tokens,[ref]$errors)
+    if($errors.Count){throw 'Normal-user process API source parse failed.'}
+    $functions=@($tree.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.FunctionDefinitionAst] -and $_.Name -ceq 'Initialize-CanonicalUserProcessApi'})
+    if($functions.Count -ne 1){throw 'Normal-user process API definition is ambiguous.'}
+    Invoke-Expression $functions[0].Extent.Text
+    Initialize-CanonicalUserProcessApi
+    if($null -eq [ContainerAuditCanonicalUserProcess].GetMethod('StartLimitedWithOverrides')){throw 'Normal-user finite producer API is unsupported.'}
+}
+
+function Get-InstallationNormalProducerWrapperSource {
+    return @'
+$ErrorActionPreference='Stop';Set-StrictMode -Version Latest
+if($args.Count -lt 7){exit 1}
+$library=[string]$args[0];$librarySha=[string]$args[1];$resultPath=[string]$args[2]
+$parentPid=[int]$args[3];$sid=[string]$args[4];$executable=[string]$args[5]
+$childArgs=[string[]]@($args|Select-Object -Skip 6)
+if((Get-FileHash -LiteralPath $library -Algorithm SHA256).Hash.ToLowerInvariant() -cne $librarySha){exit 1}
+. $library
+$sensitive=@([Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process'))
+$root=Initialize-InstallationEvidence (Join-Path (Split-Path -Parent $resultPath) 'normal-producer-capture') $sid $sensitive
+$child=$null;$failure=$null;$security=$null;$exitCode=1
+try {
+ $security=Get-BootstrapRelaySecurity $PID
+ if($security.elevated -or $security.integrity_level -ne 8192 -or $security.sid -cne $sid -or $security.session_id -le 0){throw 'Finite lifecycle producer wrapper is not the ordinary operator.'}
+ Set-InstallationEvidenceStage 'lifecycle.normal_producer_capture'
+ $child=Invoke-InstallationEvidenceChild 'normal-producer' $executable $childArgs
+ $exitCode=[int]$child.ExitCode
+ Complete-InstallationEvidenceStage 'forward'
+}catch{$failure=Get-InstallationFailureDetails $_;Fail-InstallationEvidenceStages $_}
+$summary=Complete-InstallationEvidence
+$record=[ordered]@{schema='container-audit-normal-producer-capture-v1';parent_process_id=$parentPid;wrapper_process_id=$PID;
+ producer_process_id=if($null -ne $child){[int]$child.ProcessId}else{0};exit_code=$exitCode;security=$security;
+ capture_root=$root;streams=if($null -ne $child){$child.Streams}else{$null};failure=$failure;evidence_summary=$summary;
+ raw_arguments_recorded=$false;secret_values_recorded=$false}
+Assert-BootstrapNoReparsePoint (Split-Path -Parent $resultPath) 'normal producer result parent' -PathOnly
+if(Test-Path -LiteralPath $resultPath){throw 'Normal producer result already exists.'}
+[IO.File]::WriteAllText($resultPath,($record|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+Set-InstallationEvidenceAcl $resultPath $sid
+exit $exitCode
+'@
+}
+
+function Start-BootstrapNormalProducerWrapper([string]$Line,$Caller,[string[]]$EnvironmentNames,[string[]]$EnvironmentValues) {
+    return [ContainerAuditCanonicalUserProcess]::StartLimitedWithOverrides($Line,[string]$Caller.sid,[int]$Caller.session_id,$EnvironmentNames,$EnvironmentValues)
+}
+
+function Invoke-BootstrapNormalFiniteProducer([string]$VerifiedProducerRoot,[string]$Executable,[string[]]$Arguments,[string]$EvidenceBase) {
+    $caller=Get-BootstrapRelaySecurity $PID
+    if([int]$caller.session_id -le 0){throw 'Lifecycle producer requires the operator interactive session.'}
+    $root=Initialize-InstallationEvidence ($EvidenceBase+'.normal') ([string]$caller.sid) @([Environment]::GetEnvironmentVariable('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','Process'))
+    Set-InstallationEvidenceStage 'lifecycle.normal_producer_prepare'
+    try {
+    if(-not $caller.elevated){
+        Set-InstallationEvidenceStage 'lifecycle.normal_producer_capture'
+        $child=Invoke-InstallationEvidenceChild 'lifecycle-producer' $Executable $Arguments
+        Complete-InstallationEvidenceStage 'forward';$summary=Complete-InstallationEvidence
+        return [pscustomobject]@{ExitCode=$child.ExitCode;ProcessId=$child.ProcessId;Stdout=$child.Stdout;Stderr=$child.Stderr;
+            Streams=$child.Streams;EvidenceSummary=$summary;Failure=$null;NormalProducerResultPath=''}
+    }
+    Import-BootstrapCanonicalUserProcessApi $VerifiedProducerRoot
+    $wrapper=Join-Path $root 'normal-producer.ps1';$resultPath=Join-Path $root 'normal-producer-result.json'
+    Assert-BootstrapNoReparsePoint $root 'normal producer private parent' -PathOnly
+    if((Test-Path -LiteralPath $wrapper) -or (Test-Path -LiteralPath $resultPath)){throw 'Normal producer capture target already exists.'}
+    [IO.File]::WriteAllText($wrapper,(Get-InstallationNormalProducerWrapperSource),[Text.UTF8Encoding]::new($true))
+    Set-InstallationEvidenceAcl $wrapper ([string]$caller.sid)
+    $library=Join-Path $VerifiedProducerRoot 'tools\bootstrap_integrity.ps1'
+    $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $argv=@((ConvertTo-BootstrapRelayArgument $winps),'-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File',
+        (ConvertTo-BootstrapRelayArgument $wrapper),(ConvertTo-BootstrapRelayArgument $library),(Get-FileSha256 $library),
+        (ConvertTo-BootstrapRelayArgument $resultPath),[string]$PID,[string]$caller.sid,(ConvertTo-BootstrapRelayArgument $Executable))+
+        @($Arguments|ForEach-Object {ConvertTo-BootstrapRelayArgument ([string]$_)})
+    $names=@('CONTAINER_AUDIT_WRITER_DELEGATION_TOKEN','CONTAINER_AUDIT_WRITER_DELEGATION_SESSION_ID','CONTAINER_AUDIT_WRITER_DELEGATION_ATTEMPT_ID','CONTAINER_AUDIT_WRITER_DELEGATION_TRANSACTION_ID','CONTAINER_AUDIT_DATA_ROOT')
+    $values=[string[]]@($names|ForEach-Object {[string][Environment]::GetEnvironmentVariable($_,'Process')})
+    $wrapperPid=Start-BootstrapNormalProducerWrapper ($argv -join ' ') $caller $names $values
+    $wrapperExit=$null
+    try{$process=[Diagnostics.Process]::GetProcessById($wrapperPid);try{$process.WaitForExit();$wrapperExit=$process.ExitCode}finally{$process.Dispose()}}catch [ArgumentException]{if(-not(Test-Path -LiteralPath $resultPath -PathType Leaf)){throw}}
+    Assert-BootstrapNoReparsePoint $resultPath 'normal producer result' -PathOnly
+    if((Get-Item -LiteralPath $resultPath).Length -gt 65536){throw 'Normal producer result is oversized.'}
+    $result=Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if([string]$result.schema -cne 'container-audit-normal-producer-capture-v1' -or
+        -not(Test-BootstrapJsonInteger $result.parent_process_id) -or [int64]$result.parent_process_id -ne $PID -or
+        -not(Test-BootstrapJsonInteger $result.wrapper_process_id) -or [int64]$result.wrapper_process_id -ne $wrapperPid -or
+        -not(Test-BootstrapJsonInteger $result.producer_process_id) -or [int64]$result.producer_process_id -lt 0 -or
+        -not(Test-BootstrapJsonInteger $result.exit_code) -or ($null -ne $wrapperExit -and [int]$result.exit_code -ne $wrapperExit) -or
+        $result.security.elevated -isnot [bool] -or $result.security.elevated -or
+        [int]$result.security.integrity_level -ne 8192 -or [string]$result.security.sid -cne [string]$caller.sid -or
+        [int]$result.security.session_id -ne [int]$caller.session_id){throw 'Normal producer result/security binding differs.'}
+    $expectedRoot=Join-Path $root ('normal-producer-capture.evidence.'+$wrapperPid)
+    if(-not(Test-BootstrapSamePath ([string]$result.capture_root) $expectedRoot)){throw 'Normal producer capture root binding differs.'}
+    Assert-BootstrapNoReparsePoint $expectedRoot 'normal producer capture root' -PathOnly
+    if([int64]$result.producer_process_id -eq 0 -and ([int]$result.exit_code -eq 0 -or $null -eq $result.failure -or $null -ne $result.streams)){throw 'Unstarted normal producer failure binding differs.'}
+    $texts=@{stdout='';stderr=''}
+    if([int]$result.producer_process_id -gt 0){foreach($name in @('stdout','stderr')){
+        $stream=$result.streams.$name;$path=Join-Path $expectedRoot ('normal-producer-'+[int]$result.producer_process_id+'-'+$name+'.bin')
+        if(-not(Test-BootstrapSamePath ([string]$stream.path) $path)){throw 'Normal producer stream path binding differs.'}
+        Assert-BootstrapNoReparsePoint $path 'normal producer stream' -PathOnly
+        if((Get-Item -LiteralPath $path).Length -gt 1048576 -or (Get-FileSha256 $path) -cne [string]$stream.sha256){throw 'Normal producer stream hash/size binding differs.'}
+        $texts[$name]=[Text.Encoding]::GetEncoding([string]$stream.encoding).GetString([IO.File]::ReadAllBytes($path))
+    }}
+    Write-InstallationEvidenceEvent ([ordered]@{event='NORMAL_FINITE_PRODUCER';wrapper_pid=$wrapperPid;producer_pid=[int]$result.producer_process_id;exit_code=[int]$result.exit_code;result_path=$resultPath;result_sha256=Get-FileSha256 $resultPath})
+    Register-InstallationChildEvidenceSummary $result.evidence_summary
+    Complete-InstallationEvidenceStage 'forward';$summary=Complete-InstallationEvidence
+    return [pscustomobject]@{ExitCode=[int]$result.exit_code;ProcessId=[int]$result.producer_process_id;Stdout=$texts.stdout;Stderr=$texts.stderr;
+        Streams=$result.streams;EvidenceSummary=$summary;Failure=$result.failure;NormalProducerResultPath=$resultPath}
+    }catch{Fail-InstallationEvidenceStages $_;throw}
+    finally{[void](Complete-InstallationEvidence)}
 }
 
 function Complete-InstallationEvidenceStage([string]$Lane, $Failure=$null) {
@@ -511,6 +799,157 @@ function Assert-BootstrapIntegrityRecord([string]$Root) {
 
 function Test-BootstrapJsonInteger($Value) {
     return ($Value -is [int] -or $Value -is [long])
+}
+
+function Assert-BootstrapProtectedRelayPath([string]$Path) {
+    $full=Get-StrictFullPath $Path 'protected relay path';$leaf=$true
+    while($full) {
+        $entry=Get-Item -LiteralPath $full -ErrorAction Stop
+        if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Relay path contains a reparse point.'}
+        $acl=Get-Acl -LiteralPath $full -ErrorAction Stop
+        if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cnotin @(
+            'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+        )){throw 'Relay path owner is not privileged.'}
+        $mask=if($leaf){0x500D0156}else{0x500D0150}
+        foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            if($rule.AccessControlType -eq 'Allow' -and
+                -not($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
+                $rule.IdentityReference.Value -cnotin @('S-1-5-18','S-1-5-32-544') -and
+                ([int64]$rule.FileSystemRights -band $mask)){throw 'Relay path is user mutable.'}
+        }
+        if($full -eq [IO.Path]::GetPathRoot($full)){break}
+        $full=[IO.Path]::GetDirectoryName($full);$leaf=$false
+    }
+}
+
+function ConvertTo-BootstrapRelayArgument([string]$Value) {
+    if($Value.Contains('"')){throw 'Relay path contains a quote.'}
+    if($Value -match '\s'){return '"'+$Value+'"'}
+    return $Value
+}
+
+function Get-BootstrapRelayCommandIdentity([string]$CommandLine,[string]$ExecutablePath) {
+    $quoted='"'+$ExecutablePath+'"'
+    if($CommandLine.StartsWith($quoted+' ',[StringComparison]::Ordinal)){return $ExecutablePath+$CommandLine.Substring($quoted.Length)}
+    return $CommandLine
+}
+
+function Initialize-BootstrapRelaySecurity {
+    if('KMTechBootstrapRelaySecurity' -as [type]){return}
+    Add-Type -TypeDefinition @'
+using System; using System.ComponentModel; using System.Runtime.InteropServices; using System.Security.Principal;
+public static class KMTechBootstrapRelaySecurity {
+ public sealed class Security { public string sid; public int session_id,integrity_level; public bool elevated; }
+ [DllImport("kernel32.dll",SetLastError=true)] static extern IntPtr OpenProcess(uint access,bool inherit,int pid);
+ [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+ [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+ [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr data,int size,out int needed);
+ static void Check(bool ok,string api) { if(!ok) { Win32Exception error=new Win32Exception(Marshal.GetLastWin32Error(),api);error.Data["canonical_api"]=api;throw error; } }
+ static int Integer(IntPtr token,int kind) { IntPtr data=Marshal.AllocHGlobal(4);try{int needed;Check(GetTokenInformation(token,kind,data,4,out needed),"GetTokenInformation:"+kind);return Marshal.ReadInt32(data);}finally{Marshal.FreeHGlobal(data);} }
+ static int Integrity(IntPtr token) { int needed;GetTokenInformation(token,25,IntPtr.Zero,0,out needed);if(needed<=0||needed>65536)throw new InvalidOperationException("Relay integrity record size is invalid.");
+  IntPtr data=Marshal.AllocHGlobal(needed);try{Check(GetTokenInformation(token,25,data,needed,out needed),"GetTokenInformation:integrity");string[] parts=new SecurityIdentifier(Marshal.ReadIntPtr(data)).Value.Split('-');return Int32.Parse(parts[parts.Length-1]);}finally{Marshal.FreeHGlobal(data);} }
+ public static Security Read(int pid) { IntPtr process=OpenProcess(0x1000,false,pid);Check(process!=IntPtr.Zero,"OpenProcess:relay-query");
+  try{IntPtr token;Check(OpenProcessToken(process,8,out token),"OpenProcessToken:relay-query");try{using(WindowsIdentity identity=new WindowsIdentity(token)){return new Security{sid=identity.User.Value,session_id=Integer(token,12),elevated=Integer(token,20)!=0,integrity_level=Integrity(token)};}}finally{CloseHandle(token);}}finally{CloseHandle(process);} }
+}
+'@
+}
+
+function Get-BootstrapRelaySecurity([int]$ProcessId) {
+    Initialize-BootstrapRelaySecurity
+    return [KMTechBootstrapRelaySecurity]::Read($ProcessId)
+}
+
+function Get-BootstrapRelayExpectedIdentity([string]$Root,[string]$RunCommand) {
+    $rootFull=Get-StrictFullPath $Root 'relay install root'
+    $runtime=Join-Path $rootFull 'runtime\pythonw.exe'
+    $prefix=(ConvertTo-BootstrapRelayArgument $runtime)+' -I -B '+(ConvertTo-BootstrapRelayArgument (Join-Path $rootFull 'app\auto_update.py'))+' --bootstrap --role relay --'
+    $managed=$RunCommand.StartsWith($prefix+' --container-audit-user-relay',[StringComparison]::Ordinal)
+    $sha='';$manifestSha='';$aggregate='';$bundle=$rootFull;$command=$RunCommand;$requiresStatusIdentity=$false
+    if($managed) {
+        if([IO.Path]::GetFileName($rootFull) -cne 'current'){throw 'Relay bootstrap is outside the installed current root.'}
+        $control=Join-Path (Split-Path -Parent $rootFull) 'update-control'
+        foreach($path in @((Join-Path $control 'active.json'),(Join-Path $control 'policy.json'))){
+            Assert-BootstrapProtectedRelayPath $path
+            if((Get-Item -LiteralPath $path).Length -gt 65536){throw 'Relay control record is oversized.'}
+        }
+        $policy=Get-Content -LiteralPath (Join-Path $control 'policy.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if($policy.operator_sid -isnot [string] -or $policy.operator_sid -cnotmatch '^S-1-'){throw 'Relay operator SID is invalid.'}
+        $active=Get-Content -LiteralPath (Join-Path $control 'active.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        if([string]$active.schema -cne 'container-audit-startup-update-v1' -or $active.sha -isnot [string] -or $active.sha -cnotmatch '^[0-9a-f]{40}$'){throw 'Relay active version identity is invalid.'}
+        $sha=[string]$active.sha;$bundle=Join-Path (Split-Path -Parent $rootFull) ('versions\'+$sha)
+        foreach($path in @($bundle,(Join-Path $bundle 'portable-manifest.json'),(Join-Path $bundle 'runtime\pythonw.exe'),(Join-Path $bundle 'app\main.py'),(Join-Path $bundle 'bootstrap-integrity.json'))){Assert-BootstrapProtectedRelayPath $path}
+        $manifest=Read-KmtechPortableManifest $bundle
+        if($manifest.source_commit -isnot [string] -or $manifest.source_commit -cne $sha -or
+            -not(Test-BootstrapJsonInteger $manifest.startup_update_protocol) -or [int64]$manifest.startup_update_protocol -ne 1){throw 'Relay active manifest binding differs.'}
+        if(@($manifest.PSObject.Properties.Name) -ccontains 'relay_identity_protocol') {
+            if(-not(Test-BootstrapJsonInteger $manifest.relay_identity_protocol) -or [int64]$manifest.relay_identity_protocol -ne 1){throw 'Relay identity protocol is unsupported.'}
+            $requiresStatusIdentity=$true
+        }
+        $record=Get-Content -LiteralPath (Join-Path $bundle 'bootstrap-integrity.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $integrity=if([string]$record.code_root -ceq '.' -or (Test-BootstrapSamePath ([string]$record.code_root) $bundle)){
+            Assert-BootstrapIntegrityRecord $bundle
+        }else{Assert-BootstrapRelocatedIntegrityRecord $bundle $rootFull}
+        $aggregate=[string]$integrity.aggregate_sha256
+        $manifestSha=Get-FileSha256 (Join-Path $bundle 'portable-manifest.json')
+        $runtime=Join-Path $bundle 'runtime\pythonw.exe'
+        $command=(ConvertTo-BootstrapRelayArgument $runtime)+' -I -B '+(ConvertTo-BootstrapRelayArgument (Join-Path $bundle 'app\main.py'))+$RunCommand.Substring($prefix.Length)
+    }
+    return [pscustomobject]@{root=$bundle;install_root=$rootFull;managed=$managed;source_commit=$sha;manifest_sha256=$manifestSha;aggregate_sha256=$aggregate;executable=$runtime;command=$command;run_command=$RunCommand;requires_status_identity=$requiresStatusIdentity;operator_sid=if($managed){[string]$policy.operator_sid}else{''}}
+}
+
+function Get-BootstrapRelayReadinessSnapshot($Identity) {
+    if(-not $Identity.managed){return [pscustomobject]@{identity=$Identity;settled=$true;phase='UNMANAGED'}}
+    $control=Join-Path (Split-Path -Parent ([string]$Identity.install_root)) 'update-control'
+    $path=Join-Path $control 'active.json'
+    Assert-BootstrapProtectedRelayPath $path
+    if((Get-Item -LiteralPath $path).Length -gt 65536){throw 'Relay active record is oversized.'}
+    $active=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-Json
+    if([string]$active.schema -cne 'container-audit-startup-update-v1' -or $active.sha -isnot [string] -or $active.sha -cnotmatch '^[0-9a-f]{40}$'){throw 'Relay active version identity is invalid.'}
+    if([string]$active.sha -cne [string]$Identity.source_commit){$Identity=Get-BootstrapRelayExpectedIdentity ([string]$Identity.install_root) ([string]$Identity.run_command)}
+    $transitionPath=Join-Path $control 'transition.json';$phase='ABSENT'
+    if(Test-Path -LiteralPath $transitionPath -PathType Leaf){
+        Assert-BootstrapProtectedRelayPath $transitionPath
+        if((Get-Item -LiteralPath $transitionPath).Length -gt 65536){throw 'Relay transition is oversized.'}
+        $transition=Get-Content -LiteralPath $transitionPath -Raw -Encoding UTF8|ConvertFrom-Json
+        $phase=[string]$transition.phase
+    }
+    return [pscustomobject]@{identity=$Identity;settled=($phase -cin @('ABSENT','CONFIRMED','ROLLED_BACK','DEFERRED'));phase=$phase}
+}
+
+function Test-BootstrapRelayReadback($Identity,$Process,$Security,$Caller,$Status=$null,[Nullable[DateTime]]$StartedAt=$null,[string]$PreviousStatusSha256='',[string]$StatusSha256='') {
+    try {
+        if($null -eq $Process -or $null -eq $Security -or $null -eq $Caller -or
+            $Process.ProcessId -isnot [int] -and $Process.ProcessId -isnot [long] -and $Process.ProcessId -isnot [uint32]){return $false}
+        if([int64]$Process.ProcessId -le 0 -or -not(Test-BootstrapSamePath ([string]$Process.ExecutablePath) ([string]$Identity.executable)) -or
+            (Get-BootstrapRelayCommandIdentity ([string]$Process.CommandLine) ([string]$Identity.executable)) -cne
+            (Get-BootstrapRelayCommandIdentity ([string]$Identity.command) ([string]$Identity.executable)) -or
+            $Security.elevated -isnot [bool] -or $Security.elevated -or
+            (@($Security.PSObject.Properties.Name) -ccontains 'integrity_level' -and [int]$Security.integrity_level -ne 8192) -or
+            [string]$Security.sid -cne [string]$Caller.sid -or [int]$Security.session_id -ne [int]$Caller.session_id -or
+            ([string]$Identity.operator_sid -and [string]$Security.sid -cne [string]$Identity.operator_sid) -or
+            [int]$Security.session_id -le 0){return $false}
+        if($null -eq $StartedAt){return $true}
+        if($null -eq $Status -or [string]$Status.report_version -cne 'container-audit-user-relay-v1' -or
+            [string]$Status.status -cne 'RUNNING' -or [string]$Status.principal -cne 'current_user' -or
+            $Status.persistent_retry -isnot [bool] -or -not $Status.persistent_retry -or
+            ($PreviousStatusSha256 -and $PreviousStatusSha256 -ceq $StatusSha256)){return $false}
+        $properties=@($Status.PSObject.Properties.Name)
+        if($Identity.requires_status_identity -and @(@('process_id','source_commit','ordinary_user')|Where-Object {$properties -cnotcontains $_}).Count){return $false}
+        if($properties -ccontains 'process_id' -and (-not(Test-BootstrapJsonInteger $Status.process_id) -or [int64]$Status.process_id -ne [int64]$Process.ProcessId)){return $false}
+        if($properties -ccontains 'source_commit' -and [string]$Status.source_commit -cne [string]$Identity.source_commit){return $false}
+        if($properties -ccontains 'ordinary_user' -and ($Status.ordinary_user -isnot [bool] -or -not $Status.ordinary_user)){return $false}
+        $updated=[DateTimeOffset]::MinValue
+        if($Status.updated_at -is [DateTime]) {
+            # PowerShell 7.5+ converts ISO JSON dates; PS5 retains strings.
+            if($Status.updated_at.Kind -eq [DateTimeKind]::Unspecified){return $false}
+            $updated=[DateTimeOffset]::new($Status.updated_at.ToUniversalTime())
+        }elseif([string]$Status.updated_at -cnotmatch '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)$' -or
+            -not[DateTimeOffset]::TryParse([string]$Status.updated_at,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$updated)){return $false}
+        if($Process.CreationDate -isnot [DateTime]){return $false}
+        $start=([DateTime]$StartedAt).ToUniversalTime();$created=([DateTime]$Process.CreationDate).ToUniversalTime()
+        return $updated.UtcDateTime -ge $start.AddSeconds(-1) -and $updated.UtcDateTime -le [DateTime]::UtcNow.AddSeconds(1) -and
+            $created -ge $start.AddSeconds(-1) -and $created -le $updated.UtcDateTime.AddSeconds(1)
+    }catch{return $false}
 }
 
 function Get-BootstrapStringSha256([string]$Value) {

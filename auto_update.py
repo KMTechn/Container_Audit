@@ -1124,11 +1124,16 @@ def trial_stop_requested(app_root: Path) -> bool:
 
 
 def relay_ready_metadata(app_root: Path) -> dict[str, Any]:
+    control = control_root(app_root)
+    if control is None:
+        return {"process_id": os.getpid()}
+    policy = read_json(control / "policy.json")
+    report = {"process_id": os.getpid(), "source_commit": version_manifest(app_root.parent)["source_commit"],
+              "ordinary_user": ordinary_user_context(policy["operator_sid"])}
     context = trial_context(app_root)
-    if context is None:
-        return {}
-    _, _, state = context
-    return {"process_id": os.getpid(), "source_commit": version_manifest(app_root.parent)["source_commit"], "update_nonce": state["nonce"], "ordinary_user": ordinary_user_context()}
+    if context is not None:
+        report["update_nonce"] = context[2]["nonce"]
+    return report
 
 
 def publish_gui_ready(app_root: Path) -> bool:

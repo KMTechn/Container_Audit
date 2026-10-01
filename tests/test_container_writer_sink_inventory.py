@@ -1019,6 +1019,30 @@ def test_direct_shared_capture_api_before_admission_remains_unfenced(tmp_path: P
                for row in inventory['guard_failures'])
 
 
+@pytest.mark.parametrize('unsafe_position', ('none', 'before', 'unknown', 'ambiguous'))
+def test_shared_normal_user_api_requires_registered_session_caller(tmp_path, unsafe_position):
+    module = _load_module()
+    _write_minimal_inventory_fixture(tmp_path, 'def main():\n    pass\n')
+    library = tmp_path / 'tools/bootstrap_integrity.ps1'
+    library.parent.mkdir(exist_ok=True)
+    library.write_text('function Invoke-SharedNormalProducer {\n'
+                       ' [ContainerAuditCanonicalUserProcess]::StartLimitedWithOverrides("fixture","sid",1,@(),@())\n'
+                       '}\n', encoding='utf-8')
+    source = 'Assert-ContainerWriterPublicInvocation\nInvoke-SharedNormalProducer\n'
+    if unsafe_position == 'before':
+        source = 'Invoke-SharedNormalProducer\n' + source
+    elif unsafe_position == 'ambiguous':
+        source = 'function Invoke-SharedNormalProducer {\n}\n' + source
+    elif unsafe_position == 'unknown':
+        (tmp_path / 'INSTALL_THIS_PC.ps1').write_text('Invoke-SharedNormalProducer\n', encoding='utf-8')
+    (tmp_path / 'tools/container_writer_session.ps1').write_text(source, encoding='utf-8')
+    inventory = module._collect_powershell_inventory(tmp_path)
+    calls = [row for row in inventory['execution_sites'] if row['file'] == 'tools/bootstrap_integrity.ps1'
+             and row['kind'] == 'native_process_api']
+    assert len(calls) == 1
+    assert calls[0]['guarded'] is (unsafe_position == 'none')
+
+
 def _run_inventory_release_gate(
     root: Path,
     payload: dict,

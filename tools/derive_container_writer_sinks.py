@@ -2219,9 +2219,10 @@ def _powershell_bootstrap_caller_proofs(
 ) -> dict[str, dict[str, Any]]:
     """Admit shared execution only when every shipped caller is fenced.
 
-    The bootstrap library is byte pinned by both registered installers. A shared
+    The bootstrap library is byte pinned by the registered installers and the
+    public writer-session adapter. A shared
     function has no script admission of its own, so its direct caller closure
-    must terminate entirely in those installers' proven admission lifetimes.
+    must terminate entirely in their proven admission lifetimes.
     Ambiguous names, unreachable callers and any early/late call fail closed.
     """
     library = Path("tools/bootstrap_integrity.ps1")
@@ -2257,7 +2258,8 @@ def _powershell_bootstrap_caller_proofs(
                     continue
                 caller = "__script__" if owner is None else str(owner["name"])
                 admitted_installer = path in {
-                    Path("INSTALL_CANONICAL_PORTABLE.ps1"), Path("INSTALL_THIS_PC.ps1")
+                    Path("INSTALL_CANONICAL_PORTABLE.ps1"), Path("INSTALL_THIS_PC.ps1"),
+                    Path("tools/container_writer_session.ps1"),
                 }
                 safe = admitted_installer and bool(entry["valid"]) and (
                     _powershell_line_in_guard_lifetime(entry, number)
@@ -2402,6 +2404,8 @@ def _powershell_line_sites(
     )
     if native_process_api:
         add("native_process_api", native_process_api, "", False)
+    if re.search(r"(?i)\[ContainerAuditCanonicalUserProcess\]\s*::\s*StartLimited(?:WithOverrides)?\s*\(", code):
+        add("native_process_api", "ContainerAuditCanonicalUserProcess.StartLimited", "", False)
 
     if re.search(
         r"(?i)(?:System\.)?Diagnostics\.Process\s*\]\s*::\s*Start\b|"

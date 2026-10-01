@@ -111,6 +111,8 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 <a id="ca-g04"></a>
 ## CA-G04 정상·장애·장비·설치 수용 근거 연결
 
+- **w9setupprep sub-85 bootstrap 검토 후속:** 실제 INSTALLING 위임 아래 relay 시작을 해제 뒤로 미루고, launcher PID 대신 보호 active version의 resident PID·fresh status·SID/session/medium token을 확인한다. lifecycle 복구 producer는 승인된 일반 token 경로로 실행하며 위임 네 변수/data root를 메모리에만 전달한다. UAC 안쪽 유한 capture·실제 helper journal/PID binding, escape된 JSON credential 마스킹 및 최종 INCOMPLETE 진단 표기도 교정했다. real-function/native-boundary focused44 PASS와 normal finite wrapper/메모리 환경6 PASS는 host 격리 회귀이며 실제 UAC·token hop·설치5·최종 packet/full suite의 수용을 대신하지 않는다. 독립 재검토·최종 통합 컷 및 랩 결과는 [REPORT](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)에 남긴다.
+
 - **w9cainstallfix3:** trigger/CIM 안전 처리와 직접 script Execute를 유지하며 Python 옵션 앞선 relay runner도 census에 포함한다. 인수의 첫 script는 Python 실행 파일·Windows quoting·옵션 값·정규화 경로와 기존 writer inventory로 판별하고 Notepad/탐색기의 소스 열기는 제외한다. 활성 비정식 writer 차단과 정상 binding hash를 보존한다. P1/P2 RED/GREEN·기존 설치 회귀 및 stock packet/PlanOnly 범위는 [후속 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9cainstallfix3/RESULT.md)에 기록한다. 실제 guest 정식 재설치·UAC·화면 캡처 수용은 후속 캡처 레인에서 확인한다.
 
 - **2026-09-10 일반 복원 창 후속:** accepted `8f7cd08`의 exact 원본 901/902/903은 정상 seal/ACK·보류/닫기/재실행/복원 근거로 수용됐지만, 복원 창 `1944x1182`의 하단 명령 줄 clipping은 별도 실제 관측이다. [고정 수용 기준과 수정 범위](D:/KMTech/optimization-implementation-20260909/Container_Audit/viewport-fix/ACCEPTANCE-BEFORE-EDIT.md)에 따라 일반 복원 rectangle/최소 크기만 실제 monitor 작업 영역에 맞춘다. 기존 startup tests에서 작은 영역·frame·음수 원점의 RED4를 보존했고 영향 검사67 PASS다. 후속 `a97da63`의 일반 복원/최대화 빈 화면은 [실제 GUI 결과](D:/KMTech/optimization-implementation-20260909/Container_Audit/vm-candidate-a97da63/GUI-RESULT.md)로 Main 수용을 받았다. 그 범위를 넘어선 전체 UI와 Goal3 전후 사용자 결과 비교는 아직 UNPROVEN이며 Main이 후속 slot을 배정한다. 완료된 업무를 새 SHA 때문에 반복하지 않는다.
@@ -449,8 +451,10 @@ In progress: preserve original staged/child failure evidence, recognize exact
 TrustedInstaller SID and protect only the two shared ancestors with reviewed B
 self-mask reduction. Fourth lab installation FAILED; historical original cause
 UNPROVEN, current startup-trust rejection PROVEN by read-only reproduction.
-Pending: isolated real ACL A/B results, stable final-source focused/guard/collect,
-rebase on current w9next, final declarations/transition/stock, independent review
-and fifth lab acceptance. Compatibility change E is deferred pending coordinator
+Isolated V5 B is PROVEN under the lab's filtered normal token: creation/legacy
+remain usable, ancestor/sealed rename/delete return native5, repeat is unchanged,
+and user-owned preclaim is rejected. Rebase onto w9next3925d36 is complete.
+Pending: final-source focused/guard/collect, declarations/transition/stock,
+independent review and fifth lab acceptance. Compatibility E remains deferred by coordinator
 decision. Shared ACL protection is retained after rollback/uninstall; IW/LM
 changes and the central hub belong to their owners/coordinator.

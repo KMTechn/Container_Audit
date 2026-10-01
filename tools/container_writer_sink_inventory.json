@@ -20,11 +20,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4621,
+      "line": 4723,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4625,
+          "line": 4727,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -3050,11 +3050,11 @@
       ],
       "file": "paired_preflight_handoff.py",
       "kind": "function",
-      "line": 24,
+      "line": 26,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 30,
+          "line": 32,
           "operation": "target.open",
           "writer_admission_sources": []
         }
@@ -3080,11 +3080,11 @@
       "direct_callers": [],
       "file": "paired_preflight_handoff.py",
       "kind": "function",
-      "line": 358,
+      "line": 380,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 375,
+          "line": 397,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -5171,6 +5171,7 @@
         "transfer_client.LogisticsTransferClient.get_authority",
         "transfer_client.LogisticsTransferClient.get_capabilities",
         "transfer_client.LogisticsTransferClient.get_phs_label_exchange",
+        "transfer_client.LogisticsTransferClient.get_progress",
         "transfer_client.LogisticsTransferClient.get_receipt",
         "transfer_client.LogisticsTransferClient.issue_operation_lease",
         "transfer_client.LogisticsTransferClient.list_phs_work_instruction_candidates",
@@ -5187,11 +5188,11 @@
       ],
       "file": "transfer_client.py",
       "kind": "function",
-      "line": 159,
+      "line": 182,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 169,
+          "line": 195,
           "operation": "self.session.request",
           "writer_admission_sources": []
         }
@@ -6844,6 +6845,7 @@
     ],
     "native_audio": [],
     "paired_preflight_handoff": [
+      "protected_admin",
       "recovery_file_read",
       "storage_utils",
       "writer_session_fence"
@@ -7065,7 +7067,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "8ccd625a03211169668d2c8b0a30ea1776d502df6248fb780222363172ff46ad",
+  "inventory_sha256": "c6e6995322a09431ad8a51b5b06f9f3440f3dbe2fec02c73a891b5fa94d56cae",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -14916,7 +14918,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1480,
+      "line": 1485,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -14924,7 +14926,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 20575,
+      "line": 20907,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -14932,7 +14934,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4621,
+      "line": 4723,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -14940,7 +14942,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3300,
+      "line": 3400,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -14948,7 +14950,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3268,
+      "line": 3368,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -14956,7 +14958,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3218,
+      "line": 3318,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -14964,7 +14966,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3714,
+      "line": 3814,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -15108,7 +15110,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.supersede_changed_record",
-      "line": 287,
+      "line": 309,
       "marker_kind": "decorator",
       "source": "paired_preflight_changed_record"
     },
@@ -15116,7 +15118,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified",
-      "line": 238,
+      "line": 260,
       "marker_kind": "decorator",
       "source": "paired_preflight_manager_hold"
     },
@@ -15124,7 +15126,7 @@
       "direct_mutation_site_count": 1,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.move_original",
-      "line": 358,
+      "line": 380,
       "marker_kind": "decorator",
       "source": "paired_preflight_original_move"
     },
@@ -15132,7 +15134,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.prepare",
-      "line": 329,
+      "line": 351,
       "marker_kind": "decorator",
       "source": "paired_preflight_record"
     },
@@ -15140,7 +15142,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.release",
-      "line": 380,
+      "line": 402,
       "marker_kind": "decorator",
       "source": "paired_preflight_release"
     },
@@ -15148,7 +15150,7 @@
       "direct_mutation_site_count": 1,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.preserve_stale_bytes",
-      "line": 24,
+      "line": 26,
       "marker_kind": "decorator",
       "source": "paired_stale_evidence"
     },
@@ -15156,7 +15158,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.hold_stale_current",
-      "line": 205,
+      "line": 227,
       "marker_kind": "decorator",
       "source": "paired_stale_hold"
     },
@@ -15164,7 +15166,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified_stale",
-      "line": 181,
+      "line": 203,
       "marker_kind": "decorator",
       "source": "paired_stale_manager_hold"
     },
@@ -15844,7 +15846,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient._request",
-      "line": 159,
+      "line": 182,
       "marker_kind": "decorator",
       "source": "transfer_api_request"
     },
@@ -15932,7 +15934,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.activate_phs_label_exchange",
-      "line": 583,
+      "line": 624,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15940,7 +15942,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.adopt_phs_label",
-      "line": 412,
+      "line": 453,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15948,7 +15950,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.complete_phs_label_print",
-      "line": 546,
+      "line": 587,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15956,7 +15958,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.issue_operation_lease",
-      "line": 223,
+      "line": 264,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15964,7 +15966,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_label_exchange",
-      "line": 440,
+      "line": 481,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15972,7 +15974,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_reconciliation_label_exchange",
-      "line": 467,
+      "line": 508,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15980,7 +15982,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.replace_bundle_members",
-      "line": 684,
+      "line": 741,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15988,7 +15990,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.request_phs_label_print",
-      "line": 520,
+      "line": 561,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -15996,7 +15998,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.seal_transfer",
-      "line": 642,
+      "line": 699,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },

@@ -113,12 +113,27 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
+Run이 `current/app/auto_update.py --bootstrap --role relay --`이면 실행 중 relay의
+실제 경로는 보호된 active 포인터와 해당 version의 manifest·bootstrap aggregate에서 구한다.
+bootstrap launcher PID의 생존을 resident relay 증거로 쓰지 않는다. INSTALLING의 유효한
+writer 위임 아래 onboarding은 Run·사용자 상태를 완료하고 `DEFERRED_CANONICAL_RELEASE/PID0`를
+기록한다. fence 해제 뒤 기존 `0x18B` 일반 사용자 launcher로 시작하고, 75초 안에
+새 resident PID·정확한 version argv·SID/세션·비승격·medium token·fresh RUNNING status와
+settled transition을 함께 확인한다. 새 packet의 `relay_identity_protocol=1`은 status의
+실제 PID·source commit·ordinary_user를 필수로 한다. 이전 packet의 부재 필드는 관측 부재로
+기록하며 실제 process/version 관측으로 구별한다. timeout·stale PID/status/commit은 실패 복구로 간다.
+복귀한 코드의 유한 lifecycle producer도 같은 일반 사용자 launcher를 사용한다. 필요한
+writer 위임 네 변수와 data root만 메모리의 user environment block에 전달하며, 일반 사용자
+guard·원 read lock·receipt·inventory 검증을 유지한다. 위임 값을 wrapper 파일이나 journal에 저장하지 않는다.
 후보 설정은 교체 뒤의 새 명령에만 적용하며 실패 복귀는 원 Run 값과 인자를 그대로 복원한다.
 canonical 오류 증거는 최초 `failure`와 각 복구 오류를 구분하며 native 실패의 호출명·
 Win32 번호를 남긴다. 정확한 Run 복원 후 relay 시작 실패는 다음 로그온 복구 가능 상태로
 구분하되 runtime 복구 성공·설치 성공으로 승격하지 않는다.
 SYSTEM이 신뢰하는 bootstrap·control·version은 파일과 모든 조상의 소유자·실효 변경 권한을
-확인한다. 일반 사용자가 바꿀 수 있는 배치는 거절하며 공유 조상의 ACL은 임의 수정하지 않는다.
+확인한다. 일반 사용자가 바꿀 수 있는 배치는 거절한다. 승인된 shared 조상
+`C:\KMTech`와 `C:\KMTech\Apps`는 default/goal 모양을 둘 다 선검사한 뒤 AU self
+권한만 `0x1301BF → 0x1200AF`로 보호한다. owner/group·child-only 상속을 보존하고
+unsupported owner/deny/custom/reparse는 변경 전에 거절한다. 이 보호는 제거·rollback 뒤에도 유지한다.
 READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 복귀를 유지한다.
 원본은 보존하며 atomic JSON 읽기의 일시적 PermissionError만 3회/0.05초 간격으로 재시도한다.
 SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
@@ -389,3 +404,7 @@ is idempotent, unknown/deny/reparse/partial states are rejected. The actual app
 leaf/ancestor guard runs again, including rejection of user-owned name squatters.
 This protection is intentionally persistent across app rollback/uninstall.
 Its before/after SDDL is evidence, never unbound privileged restore authority.
+All three shipped installer/bootstrap PowerShell files keep UTF8 BOM so PS5.1
+decodes bounded Korean path/reason errors consistently. Shared child execution
+is admitted only when every shipped caller terminates in a byte-pinned installer
+admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejected.

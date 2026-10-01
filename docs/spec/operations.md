@@ -124,7 +124,23 @@ relay 복구 실패 뒤 Run 종류/값이 정확하고 stop 표식·relay가 없
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
 설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
 다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
-거절하므로 관리자가 승인한 안전한 배치가 필요하다. 호스트 공유 경로 ACL을 자동 교정하지 않는다.
+거절하므로 관리자가 승인한 안전한 배치가 필요하다. 승인된 두 shared 조상의 정확한
+default/goal ACL 보호 범위는 [자동 갱신 계약](contracts.md#ca-startup-update)을 따른다.
+bootstrap 경유 Run은 active version의 실제 relay PID와 신선한 status로 확인한다.
+설치 중 onboarding의 PID0은 fence 해제 대기이며 성공 proof가 아니다. 해제 뒤 75초의
+resident 확인 실패는 원 status hash·원 오류와 rollback 결과를 보존하고 설치 실패로 남긴다.
+일반 사용자에서 시작한 설치 helper의 UAC wrapper는 안쪽의 유한 child만 capture하고,
+실제 helper PID의 journal과 outer/wrapper PID를 구분해 bind한다. 유한 자식의 stdout/stderr는
+각 1MiB cap·bytes/hash/encoding/redacted/truncated/complete로 기록한다. 이미 일반 사용자로
+호출한 lifecycle producer도 outer journal 유무와 관계없이 자체 private root와 final summary를
+생성한다. 지속 pythonw stdio는 붙지 않는다. JSON authorization/credential와 escape된 값도 마스킹한다.
+유한 lifecycle 진단은 `<lifecycle receipt path>.producer.normal.evidence.<adapterPID>`에 있고,
+Highest hop의 안쪽 capture는 그 아래 `normal-producer-capture.evidence.<wrapperPID>`에 있다.
+native 준비/시작 실패도 최초 exception chain·Win32 code와 final summary를 이 root에 보존한다.
+두 installer의 최종 `installation_evidence_status`와 `evidence-status.json`을 함께 회수한다.
+journal I/O/ACL/limit 실패는 INCOMPLETE이며 business 결과와 구별한다. 원 오류를 덮거나
+부분 진단을 완전한 증거로 수용하지 않는다. 실제 UAC·일반 token lifecycle hop·5차 제품 설치는
+[지정 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)의 환경·결과를 확인한다.
 READY/trial 읽기 경합은 last_ready_error에 종류만 기록하고 정상 종료·코드 복귀 판단을 계속한다.
 형식은 유효해도 UTC로 표현할 수 없는 READY 시각은 미확인으로 처리한다.
 원래 기한과 정상 종료·검증된 이전 코드 복귀를 계속하며 사용자 자료를 되돌리지 않는다.
@@ -756,6 +772,12 @@ consumers; restoration requires the supported coordinated procedure. Unsupported
 ACL shapes stop with a plain Korean path/reason, without broad reset or recursion.
 Source evidence tests:27 checks PASS for finite child bytes/private ACLs/redacted
 failures;34 memory checks PASS for exact privileged owner SIDs and B shape/guard
-behavior. Actual isolated guest ACL effects and fifth installation remain
-NOT TESTED until their separate lab results arrive. No field-wide claim follows
-from the two observed Windows machines or a filtered administrator token.
+behavior. [V5 lab result](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-66/CA-STAGE-ACL-DIAG-V5.md)
+and JSON SHA301aa20353919a85086c2630cf9407d0c5372521974e2626896ed6363d762e08
+prove B's exact SDDL/guard, creation/legacy preservation, six native5 denial
+boundaries, unchanged repeat and user-owned preclaim rejection under the verified
+same-SID/session1/medium filtered token. Actual shared-ancestor repair and fifth
+installation remain NOT TESTED. The frozen diagnostic's no-BOM Korean text
+defect is preserved; shipped installers/bootstrap now retain UTF8 BOM and an
+actual PS5 file-decoding/rejection regression. No field-wide claim follows from
+the two observed Windows machines or this account's filtered administrator token.

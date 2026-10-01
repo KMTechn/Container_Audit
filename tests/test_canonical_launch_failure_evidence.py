@@ -60,7 +60,7 @@ def test_real_rollback_catch_records_next_logon_only_for_exact_safe_preimage(tmp
     result = run_functions(tmp_path, SOURCE, ['Get-CanonicalFailureDetails'], r'''
 $tokens=$null; $errors=$null
 $ast=[Management.Automation.Language.Parser]::ParseFile($env:CA_CONTRACT_SOURCE,[ref]$tokens,[ref]$errors)
-$blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $n.Body.Extent.Text.Contains("throw 'runtime restore failed'") -and $n.CatchClauses.Count -eq 1 -and $n.CatchClauses[0].Body.Extent.Text.Contains("$"+'audit.rollback.runtime_restored=$false')},$true))
+$blocks=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $n.Body.Extent.Text.Contains("rollback.normal_relay_exact_preimage") -and $n.CatchClauses.Count -eq 1 -and $n.CatchClauses[0].Body.Extent.Text.Contains("$"+'audit.rollback.runtime_restored=$false')},$true))
 if ($blocks.Count -ne 1) { throw 'expected actual rollback runtime block' }
 $mutated=$true
 $old=@([pscustomobject]@{CommandLine='exact-old-command';ExecutablePath='old.exe'})
@@ -70,7 +70,7 @@ if ($env:CA_FAILURE_SCENARIO -ceq 'stop_present') { [IO.File]::WriteAllText($sto
 $audit=[ordered]@{failure=@{code='CONTAINER_PLACEMENT_CHILD_FAILED';phase='INSTALL'};rollback=[ordered]@{runtime_restored=$false;scheduled_writer_restored=$true}}
 if ($env:CA_FAILURE_SCENARIO -ceq 'writer_not_restored') { $audit.rollback.scheduled_writer_restored=$false }
 $auditPath=Join-Path $env:CA_CONTRACT_ROOT 'audit.json'; $evidenceFull=''
-function StartRaw { throw ([ComponentModel.Win32Exception]::new(1314)) }
+function Start-CanonicalRelayAfterFenceRelease { throw ([ComponentModel.Win32Exception]::new(1314)) }
 function Start-Sleep {}
 function Save([string]$Path,$Value) { [IO.File]::WriteAllText($Path,($Value | ConvertTo-Json -Depth 8)) }
 function Snapshot {
