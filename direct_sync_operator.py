@@ -1,6 +1,7 @@
 """Local operator controls for the Container_Audit direct-sync relay."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
 
 import hashlib
 import datetime
@@ -720,6 +721,7 @@ def restore_relay_spool_from_server(
     operator = _require_text(operator_id, field_name="operator_id", max_length=128)
     reason_text = _require_text(reason, field_name="reason")
     reason_fields = _reason_evidence(reason_text)
+    attempt = RemoteAttempt.begin(db_path, "operator_restore", discriminator=relay)
 
     def blocked(error_code: str, **extra: Any) -> dict[str, Any]:
         report = {
@@ -732,7 +734,10 @@ def restore_relay_spool_from_server(
             "error_code": error_code,
         }
         report.update(extra)
-        return _with_operator_audit_status(audit_log_path, action="restore-spool-blocked", report=report)
+        with attempt.apply() as current:
+            if not current:
+                return {**report, "superseded": True}
+            return _with_operator_audit_status(audit_log_path, action="restore-spool-blocked", report=report)
 
     if not Path(db_path).is_file():
         return blocked("relay_db_not_initialized")
@@ -813,6 +818,8 @@ def restore_relay_spool_from_server(
         return blocked("relay_upload_metadata_invalid")
 
     def source_unchanged() -> bool:
+        if not attempt.is_current():
+            return False
         conn = sqlite3.connect(str(db_path))
         conn.row_factory = sqlite3.Row
         try:

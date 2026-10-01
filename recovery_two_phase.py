@@ -278,6 +278,9 @@ class RecoveryTwoPhaseJournal:
         next_state: str,
         **updates: Any,
     ) -> dict[str, Any]:
+        attempt = getattr(self, "_remote_attempt", None)
+        if attempt is not None and not attempt.is_current():
+            raise RecoveryTwoPhaseStateError("a newer recovery attempt superseded this response")
         payload = self.load()
         if payload is None:
             raise RecoveryTwoPhaseStateError(
@@ -343,6 +346,9 @@ class RecoveryTwoPhaseJournal:
             raise RecoveryTwoPhaseStateError(
                 "recovery two-phase sealed package is invalid"
             )
+        attempt = getattr(self, "_remote_attempt", None)
+        if attempt is not None and not attempt.is_current():
+            raise RecoveryTwoPhaseStateError("a newer recovery attempt superseded this response")
         payload = self.load()
         if payload is None or (
             self._owner_bindings is not None and payload["bindings"] != self._owner_bindings

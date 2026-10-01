@@ -3,10 +3,50 @@ from __future__ import annotations
 import json
 import os
 import uuid
+import hashlib
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
+
+
+@dataclass(frozen=True)
+class RemoteAttempt:
+    """Durable, per-target generation; application and comparison share admission."""
+
+    marker_path: Path
+    attempt_id: str
+
+    @classmethod
+    @writer_sink("remote_attempt_generation")
+    def begin(cls, owner_path, operation: str, *, discriminator: str = ""):
+        owner = Path(owner_path).expanduser()
+        if owner.is_symlink():
+            raise OSError("remote attempt owner must not be a link")
+        owner = owner.resolve()
+        scope = hashlib.sha256((operation + "\n" + discriminator).encode()).hexdigest()[:16]
+        marker = owner.with_name(owner.name + ".attempt-" + scope + ".json")
+        if marker.is_symlink():
+            raise OSError("remote attempt marker must not be a link")
+        attempt = cls(marker, uuid.uuid4().hex)
+        atomic_write_json(marker, {"schema": "ca-remote-attempt-v1", "attempt_id": attempt.attempt_id})
+        return attempt
+
+    def is_current(self) -> bool:
+        try:
+            if self.marker_path.is_symlink() or self.marker_path.stat().st_size > 4096:
+                return False
+            value = json.loads(self.marker_path.read_bytes())
+            return value == {"schema": "ca-remote-attempt-v1", "attempt_id": self.attempt_id}
+        except (OSError, ValueError, TypeError):
+            return False
+
+    @contextmanager
+    def apply(self):
+        with writer_admission("remote_attempt_generation"):
+            yield self.is_current()
 
 
 @writer_sink("storage_atomic_json")

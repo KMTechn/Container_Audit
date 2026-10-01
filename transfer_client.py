@@ -170,6 +170,8 @@ class LogisticsTransferClient:
         successful_transmission_at: str = "",
     ) -> None:
         with self._connection_observation_lock:
+            if request_sequence != self._connection_request_sequence:
+                return
             if request_sequence > self._connection_observation_sequence:
                 self._connection_observation_sequence = request_sequence
                 if state:

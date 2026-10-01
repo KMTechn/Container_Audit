@@ -530,3 +530,16 @@ def owned_tk_workers(monkeypatch):
         owned_live = [thread.name for _, thread in workers if thread.is_alive()]
         assert not leaked and not owned_live, f"worker leak: {leaked + owned_live}; cleanup: {errors}"
         assert not errors, f"worker cleanup errors: {errors}"
+
+
+@pytest.fixture
+def ca_late_result_adapter_factory(tmp_path, ca_remote_lock_guard):
+    from test_late_result_adapter import RelayLateAdapter
+    adapters = []
+    def factory(transport):
+        adapter = RelayLateAdapter(tmp_path / str(len(adapters)), transport, ca_remote_lock_guard)
+        adapters.append(adapter)
+        return adapter
+    yield factory
+    for adapter in adapters:
+        adapter.close()

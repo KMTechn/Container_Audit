@@ -8,3 +8,4 @@ tools/container_writer_sink_inventory.json -text
 tools/bootstrap_integrity.ps1 -text
 tests/contracts/*.py text eol=lf
 tests/contracts/*.json text eol=lf
+tests/late_result_guard.py -text

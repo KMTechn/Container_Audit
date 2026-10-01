@@ -2,8 +2,10 @@
 """Direct HTTP source-file uploader for Container_Audit CSV logs."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
 
 import csv
+from contextvars import ContextVar
 from email.utils import parsedate_to_datetime
 import hashlib
 import hmac
@@ -778,6 +780,7 @@ def restore_raw_artifact_to_file(
     if destination.exists() and not overwrite:
         raise DirectSyncPushError("destination_path already exists")
     prior_destination = _read_file_digest(destination) if destination.exists() else None
+    attempt = RemoteAttempt.begin(destination, "raw_artifact_restore")
     restore_url = build_raw_artifact_restore_url(
         credentials.endpoint_url,
         content_sha256=expected_digest,
@@ -870,7 +873,10 @@ def restore_raw_artifact_to_file(
             )
         with writer_admission("relay_spool_storage"):
             current_destination = _read_file_digest(destination) if destination.exists() else None
-            if destination.is_symlink() or current_destination != prior_destination:
+            if not attempt.is_current():
+                temp_path.unlink()
+                publish_error = "restore_attempt_superseded"
+            elif destination.is_symlink() or current_destination != prior_destination:
                 temp_path.unlink()
                 publish_error = "restore_destination_changed"
             elif before_publish is not None and not before_publish():
@@ -1262,6 +1268,9 @@ def _committed_receipt_issue(plan: SourceFilePlan, receipt: Mapping[str, Any]) -
     return "", "", errors, quarantined
 
 
+_UPLOAD_STATUS_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar("relay_upload_status_check", default=None)
+
+
 def _with_upload_status_artifact(
     plan: SourceFilePlan,
     result: UploadResult,
@@ -1282,23 +1291,27 @@ def _with_upload_status_artifact(
     status_write_error_code = ""
     status_write_error_message = ""
     try:
-        _write_json_atomic(
-            status_path,
-            {
-                "success": result.success,
-                "status_code": result.status_code,
-                "committed": result.committed,
-                "retryable": result.retryable,
-                "retry_after_seconds": result.retry_after_seconds,
-                "receipt": receipt,
-                "error_code": result.error_code,
-                "error_message": result.error_message,
-                "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
-                "status_context": redact_runtime_secrets(context),
-                "source_file_path": plan.source_file_path,
-                "generated_at": utc_now_text(),
-            },
-        )
+        with writer_admission("relay_upload_status"):
+            before_status_write = _UPLOAD_STATUS_CHECK.get()
+            if before_status_write is not None and not before_status_write():
+                return result
+            _write_json_atomic(
+                status_path,
+                {
+                    "success": result.success,
+                    "status_code": result.status_code,
+                    "committed": result.committed,
+                    "retryable": result.retryable,
+                    "retry_after_seconds": result.retry_after_seconds,
+                    "receipt": receipt,
+                    "error_code": result.error_code,
+                    "error_message": result.error_message,
+                    "metadata": _upload_status_runtime_safe_metadata(plan.metadata),
+                    "status_context": redact_runtime_secrets(context),
+                    "source_file_path": plan.source_file_path,
+                    "generated_at": utc_now_text(),
+                },
+            )
     except OSError as exc:
         local_error_message = f"upload status artifact write failed: {exc.__class__.__name__}"
         if result.error_code:
@@ -2705,6 +2718,17 @@ def _local_relay_upload_result(row: RelayQueueRow, result: UploadResult) -> Uplo
     return replace(result, relay_id=row.relay_id)
 
 
+
+def _relay_claim_is_current(row: RelayQueueRow, *, db_path) -> bool:
+    conn = _connect_relay_db_readonly(db_path)
+    if conn is None:
+        return False
+    try:
+        current = conn.execute("SELECT status, lease_owner, attempt_count FROM direct_sync_relay_batches WHERE relay_id=?", (row.relay_id,)).fetchone()
+        return current is not None and current["status"] == RELAY_STATUS_LEASED and current["lease_owner"] == row.lease_owner and current["attempt_count"] == row.attempt_count
+    finally:
+        conn.close()
+
 def _set_claimed_relay_status(
     row: RelayQueueRow,
     *,
@@ -3024,6 +3048,7 @@ def drain_one_relay_batch(
             expected_attempt_count=row.attempt_count,
             now=now,
         )
+    status_check_context = _UPLOAD_STATUS_CHECK.set(lambda: _relay_claim_is_current(row, db_path=db_path))
     try:
         result = upload_source_file(
             plan,
@@ -3050,6 +3075,8 @@ def drain_one_relay_batch(
         ):
             return _relay_status_update_conflict(row, prior_result=result)
         return _local_relay_upload_result(row, result)
+    finally:
+        _UPLOAD_STATUS_CHECK.reset(status_check_context)
     result = _local_relay_upload_result(row, result)
     if result._runtime_disposition == "dead_fence":
         try:

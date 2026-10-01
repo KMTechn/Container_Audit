@@ -1,6 +1,7 @@
 """First-run current-user state onboarding for Container_Audit."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
 
 import argparse
 import ctypes
@@ -1225,6 +1226,7 @@ def onboard_current_user(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
+    attempt = RemoteAttempt.begin(paths.onboarding_report_path, "current_user_onboarding")
     with writer_admission("current_user_onboarding"):
         for directory in (
             paths.data_root,
@@ -1336,6 +1338,8 @@ def onboard_current_user(
             current_state = inspect_current_user_state(
                 paths, profile_loader=profile_loader, credential_loader=credential_loader,
             )
+            if not attempt.is_current():
+                raise ValueError("a newer onboarding attempt superseded this response")
             if current_state != state:
                 raise ValueError("current-user owner state changed before local onboarding apply")
             if tls_ca_source and not state.get("tls_private_ca_configured"):
@@ -1388,13 +1392,17 @@ def onboard_current_user(
         report["status"] = exc.status
         report["failure"] = str(exc)
         report["error_type"] = exc.__class__.__name__
-        _write_json_atomic(paths.onboarding_report_path, report)
+        with attempt.apply() as current:
+            if current:
+                _write_json_atomic(paths.onboarding_report_path, report)
         raise
     except Exception as exc:
         report["status"] = "FAILED"
         report["failure"] = str(exc)[:500]
         report["error_type"] = exc.__class__.__name__
-        _write_json_atomic(paths.onboarding_report_path, report)
+        with attempt.apply() as current:
+            if current:
+                _write_json_atomic(paths.onboarding_report_path, report)
         raise CurrentUserOnboardingError(
             f"Container_Audit first-run onboarding failed: {exc}",
             report_path=paths.onboarding_report_path,

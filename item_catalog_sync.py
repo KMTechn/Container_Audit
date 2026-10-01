@@ -1,6 +1,9 @@
 """Central-authority startup sync for the shared four-column item catalog."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
+from contextvars import ContextVar
+from functools import wraps
 
 import csv
 import datetime as dt
@@ -142,16 +145,33 @@ def _empty_catalog_attempt_context() -> dict[str, object]:
 
 def _reset_catalog_attempt_context(url: str = "") -> None:
     global _CATALOG_ATTEMPT_CONTEXT
-    _CATALOG_ATTEMPT_CONTEXT = _empty_catalog_attempt_context()
-    _CATALOG_ATTEMPT_CONTEXT["catalog_url"] = _catalog_url_components(url)
+    context = _empty_catalog_attempt_context()
+    context["catalog_url"] = _catalog_url_components(url)
+    call = _CATALOG_CALL.get()
+    if call is None:
+        _CATALOG_ATTEMPT_CONTEXT = context
+    else:
+        call["diagnostic"] = context
+        with call["attempt"].apply() as current:
+            if current:
+                _CATALOG_ATTEMPT_CONTEXT = dict(context)
 
 
 def _update_catalog_attempt_context(**values: object) -> None:
-    _CATALOG_ATTEMPT_CONTEXT.update(values)
+    global _CATALOG_ATTEMPT_CONTEXT
+    call = _CATALOG_CALL.get()
+    if call is None:
+        _CATALOG_ATTEMPT_CONTEXT.update(values)
+    else:
+        call["diagnostic"].update(values)
+        with call["attempt"].apply() as current:
+            if current:
+                _CATALOG_ATTEMPT_CONTEXT = dict(call["diagnostic"])
 
 
 def get_catalog_attempt_context() -> dict[str, object]:
-    context = dict(_CATALOG_ATTEMPT_CONTEXT or _empty_catalog_attempt_context())
+    call = _CATALOG_CALL.get()
+    context = dict((call["diagnostic"] if call else _CATALOG_ATTEMPT_CONTEXT) or _empty_catalog_attempt_context())
     context["catalog_url"] = dict(context["catalog_url"])
     return context
 
@@ -823,7 +843,25 @@ def _hardened_get(url: str, **kwargs: object) -> object:
         return session.get(url, **kwargs)
 
 
+
+_CATALOG_CALL = ContextVar("ca_catalog_call", default=None)
+
+
+def _catalog_attempt_boundary(function):
+    @wraps(function)
+    def wrapped(bundled_path, *args, **kwargs):
+        cache = kwargs.get("cache_path") or default_cache_path()
+        attempt = RemoteAttempt.begin(cache, "item_catalog_refresh")
+        call = {"attempt": attempt, "diagnostic": _empty_catalog_attempt_context()}
+        context = _CATALOG_CALL.set(call)
+        try:
+            return function(bundled_path, *args, **kwargs)
+        finally:
+            _CATALOG_CALL.reset(context)
+    return wrapped
+
 @writer_sink("item_catalog_refresh", probe_only=True)
+@_catalog_attempt_boundary
 def refresh_item_catalog(
     bundled_path: str | Path,
     *,
@@ -838,12 +876,16 @@ def refresh_item_catalog(
     _reset_catalog_attempt_context(url or "")
     _update_cache_attempt_context(cache)
     last_good = _last_good_cache_path(cache)
-    _forget_verified_catalog_snapshot(cache)
-    _forget_verified_catalog_snapshot(last_good)
-    _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.discard(_catalog_snapshot_key(cache))
-    _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.discard(
-        _catalog_snapshot_key(last_good)
-    )
+    with writer_admission("item_catalog_refresh"):
+        call = _CATALOG_CALL.get()
+        if call is not None and not call["attempt"].is_current():
+            return cache if _is_valid_catalog(cache) else bundled
+        _forget_verified_catalog_snapshot(cache)
+        _forget_verified_catalog_snapshot(last_good)
+        _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.discard(_catalog_snapshot_key(cache))
+        _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.discard(
+            _catalog_snapshot_key(last_good)
+        )
     fallback = cache if _is_valid_catalog(cache) else bundled
     try:
         profile = _load_item_catalog_logistics_profile(profile_path)
@@ -860,9 +902,13 @@ def refresh_item_catalog(
         ) from None
     central_enrolled = profile is not None
     if central_enrolled:
-        _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.update(
-            {_catalog_snapshot_key(cache), _catalog_snapshot_key(last_good)}
-        )
+        with writer_admission("item_catalog_refresh"):
+            call = _CATALOG_CALL.get()
+            if call is not None and not call["attempt"].is_current():
+                return cache if _is_valid_catalog(cache) else bundled
+            _REQUIRED_VERIFIED_CATALOG_SNAPSHOT_PATHS.update(
+                {_catalog_snapshot_key(cache), _catalog_snapshot_key(last_good)}
+            )
     profile_catalog_url = (
         f"{str(profile.base_url).rstrip('/')}{CATALOG_PATH}"
         if profile is not None
@@ -953,6 +999,8 @@ def refresh_item_catalog(
         payload = bytes(response.content)
         validate_catalog_bytes(payload)
         with writer_admission("item_catalog_refresh"):
+            if not _CATALOG_CALL.get()["attempt"].is_current():
+                return cache if _is_valid_catalog(cache) else bundled
             if tuple(path.read_bytes() if path.is_file() else None for path in cache_paths) != prior_cache:
                 raise OSError("catalog cache changed during refresh")
             if profile is not None:
@@ -987,66 +1035,69 @@ def refresh_item_catalog(
                 )
         return cache
     except Exception as exc:  # noqa: BLE001 - persist type, never exception text.
-        _update_catalog_attempt_context(exception_type=type(exc).__name__)
-        recovered = cache if _is_valid_catalog(cache) else None
-        if central_enrolled:
-            assert profile is not None
-            bearer_token = str(profile.bearer_token).strip()
-            cache_payload = _read_authenticated_cache_payload(
-                cache,
-                url=effective_url,
-                source_host_id=str(profile.source_host_id),
-                device_id=str(profile.device_id),
-                bearer_token=bearer_token,
-            )
-            if cache_payload is not None:
-                _remember_verified_catalog_snapshot(cache, cache_payload)
-                authenticated_cache = cache
-            else:
-                authenticated_cache = _recover_authenticated_cache(
+        with _CATALOG_CALL.get()["attempt"].apply() as current:
+            if not current:
+                return cache if _is_valid_catalog(cache) else bundled
+            _update_catalog_attempt_context(exception_type=type(exc).__name__)
+            recovered = cache if _is_valid_catalog(cache) else None
+            if central_enrolled:
+                assert profile is not None
+                bearer_token = str(profile.bearer_token).strip()
+                cache_payload = _read_authenticated_cache_payload(
                     cache,
                     url=effective_url,
                     source_host_id=str(profile.source_host_id),
                     device_id=str(profile.device_id),
                     bearer_token=bearer_token,
                 )
-            if authenticated_cache is not None:
+                if cache_payload is not None:
+                    _remember_verified_catalog_snapshot(cache, cache_payload)
+                    authenticated_cache = cache
+                else:
+                    authenticated_cache = _recover_authenticated_cache(
+                        cache,
+                        url=effective_url,
+                        source_host_id=str(profile.source_host_id),
+                        device_id=str(profile.device_id),
+                        bearer_token=bearer_token,
+                    )
+                if authenticated_cache is not None:
+                    _update_cache_attempt_context(cache)
+                    _mark_catalog_source(
+                        authenticated_cache,
+                        source="VERIFIED_CACHE",
+                        cache_state=(
+                            "VALID_AUTHENTICATED"
+                            if authenticated_cache == cache
+                            else "VALID_AUTHENTICATED_RECOVERY"
+                        ),
+                        cache_used=True,
+                    )
+                    logger.warning(
+                        "Central item catalog refresh failed; using the last central cache"
+                    )
+                    return authenticated_cache
                 _update_cache_attempt_context(cache)
-                _mark_catalog_source(
-                    authenticated_cache,
-                    source="VERIFIED_CACHE",
-                    cache_state=(
-                        "VALID_AUTHENTICATED"
-                        if authenticated_cache == cache
-                        else "VALID_AUTHENTICATED_RECOVERY"
-                    ),
-                    cache_used=True,
-                )
-                logger.warning(
-                    "Central item catalog refresh failed; using the last central cache"
-                )
-                return authenticated_cache
-            _update_cache_attempt_context(cache)
-            if (
-                _cache_recovery_path(cache).is_file()
-                and get_catalog_attempt_context()["cache_state"] == "ABSENT"
-            ):
-                _update_catalog_attempt_context(cache_state="RECOVERY_INVALID")
-            raise ItemCatalogSyncError(
-                "central item catalog is unavailable and no last central cache exists",
-                cause_code=REQUEST_FAILED_NO_CACHE,
-            ) from None
-        fallback = recovered or fallback
-        _mark_catalog_source(
-            fallback,
-            source="LOCAL_CACHE" if fallback == cache else "BUNDLED",
-            cache_state=(
-                "VALID_UNAUTHENTICATED" if fallback == cache else "ABSENT"
-            ),
-            cache_used=fallback == cache,
-        )
-        logger.warning("Item catalog sync skipped; using %s", fallback)
-        return fallback
+                if (
+                    _cache_recovery_path(cache).is_file()
+                    and get_catalog_attempt_context()["cache_state"] == "ABSENT"
+                ):
+                    _update_catalog_attempt_context(cache_state="RECOVERY_INVALID")
+                raise ItemCatalogSyncError(
+                    "central item catalog is unavailable and no last central cache exists",
+                    cause_code=REQUEST_FAILED_NO_CACHE,
+                ) from None
+            fallback = recovered or fallback
+            _mark_catalog_source(
+                fallback,
+                source="LOCAL_CACHE" if fallback == cache else "BUNDLED",
+                cache_state=(
+                    "VALID_UNAUTHENTICATED" if fallback == cache else "ABSENT"
+                ),
+                cache_used=fallback == cache,
+            )
+            logger.warning("Item catalog sync skipped; using %s", fallback)
+            return fallback
 
 
 def is_shared_catalog_cache(path: str | Path) -> bool:

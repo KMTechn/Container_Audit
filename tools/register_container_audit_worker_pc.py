@@ -3,6 +3,7 @@
 """Register this PC's local Container_Audit producer identity without storing raw secrets."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
 
 import argparse
 import ctypes
@@ -1145,6 +1146,9 @@ def _registration_artifact_versions(args):
 
 
 def _check_registration_artifacts(args):
+    attempt = getattr(args, "_registration_attempt", None)
+    if attempt is not None and not attempt.is_current():
+        raise EnrollmentAdminRecoveryRequired("a newer registration attempt superseded this response", error_code="registration_attempt_superseded")
     expected = getattr(args, "_registration_expected_artifacts", None)
     if expected is not None and _registration_artifact_versions(args) != expected:
         raise EnrollmentAdminRecoveryRequired(
@@ -1224,6 +1228,7 @@ def _initial_possession_key(
     args: argparse.Namespace,
     identity: dict[str, str],
 ) -> PersistentPossessionKey:
+    _check_registration_artifacts(args)
     existing_contract = str(
         identity.get("existing_enrollment_contract_version") or ""
     )
@@ -1294,12 +1299,13 @@ def _post_enrollment_request(
     timeout: int,
     allow_redirects: bool,
     verify: str | bool,
+    attempt: RemoteAttempt | None = None,
 ):
     with requests.Session() as session:
         # Enrollment trust is an explicit application input.  Environment CA
         # overrides must not silently replace the configured/private CA.
         session.trust_env = False
-        return session.post(
+        response = session.post(
             enrollment_url,
             json=json,
             headers=headers,
@@ -1307,6 +1313,11 @@ def _post_enrollment_request(
             allow_redirects=allow_redirects,
             verify=verify,
         )
+        if attempt is not None:
+            with attempt.apply() as current:
+                if not current:
+                    raise EnrollmentAdminRecoveryRequired("a newer registration attempt superseded this response", error_code="registration_attempt_superseded")
+        return response
 
 
 def _strict_json_value_equal(left, right) -> bool:
@@ -1406,7 +1417,9 @@ def _recovery_two_phase_journal(
         raise DirectSyncPushError(
             "admin recovery two-phase journal must not use the legacy Syncthing folder"
         )
-    return RecoveryTwoPhaseJournal(path)
+    journal = RecoveryTwoPhaseJournal(path)
+    journal._remote_attempt = getattr(args, "_registration_attempt", None)
+    return journal
 
 
 def _seal_recovery_two_phase_package(response_payload: dict) -> bytes:
@@ -1583,6 +1596,7 @@ def _recovery_two_phase_signed_status(
     headers: dict,
     timeout: int,
     verify: str | bool,
+    attempt: RemoteAttempt | None = None,
 ) -> dict:
     bindings = journal_payload["bindings"]
     proof = {
@@ -1611,6 +1625,7 @@ def _recovery_two_phase_signed_status(
         timeout=timeout,
         allow_redirects=False,
         verify=verify,
+        **({"attempt": attempt} if attempt is not None else {}),
     )
     return _recovery_two_phase_response_payload(response, action="status")
 
@@ -1829,6 +1844,7 @@ def _possession_reattach(
             url, json=payload, headers=headers,
             timeout=max(1, int(args.enrollment_timeout_seconds)),
             allow_redirects=False, verify=verify,
+            **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
         )
         try:
             result = response.json()
@@ -1971,6 +1987,7 @@ def _self_enroll(
             timeout=max(1, int(args.enrollment_timeout_seconds)),
             allow_redirects=False,
             verify=enrollment_ca_bundle_path or True,
+            **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
         )
         try:
             response_payload = response.json()
@@ -2195,6 +2212,7 @@ def _admin_recover(
             timeout=max(1, int(args.enrollment_timeout_seconds)),
             allow_redirects=False,
             verify=configured_ca_bundle_path or True,
+            **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
         )
         try:
             response_payload = response.json()
@@ -2347,6 +2365,7 @@ def _admin_recover_two_phase(
                     headers=headers,
                     timeout=timeout,
                     verify=verify,
+                    **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
                 )
                 resume_server_state = (
                     _validate_recovery_two_phase_status_response(
@@ -2511,6 +2530,7 @@ def _admin_recover_two_phase(
                 timeout=timeout,
                 allow_redirects=False,
                 verify=verify,
+                **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
             )
             try:
                 prepared_payload = _recovery_two_phase_response_payload(
@@ -2530,6 +2550,7 @@ def _admin_recover_two_phase(
                             headers=headers,
                             timeout=timeout,
                             verify=verify,
+                            **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
                         )
                         unavailable_state = (
                             _validate_recovery_two_phase_status_response(
@@ -2596,6 +2617,7 @@ def _admin_recover_two_phase(
                     headers=headers,
                     timeout=timeout,
                     verify=verify,
+                    **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
                 )
                 stage_server_state = (
                     _validate_recovery_two_phase_status_response(
@@ -2652,6 +2674,7 @@ def _admin_recover_two_phase(
                     headers=headers,
                     timeout=timeout,
                     verify=verify,
+                    **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
                 )
                 server_state = _validate_recovery_two_phase_status_response(
                     status_payload,
@@ -2702,6 +2725,7 @@ def _admin_recover_two_phase(
                         timeout=timeout,
                         allow_redirects=False,
                         verify=verify,
+                        **({"attempt": args._registration_attempt} if getattr(args, "_registration_attempt", None) is not None else {}),
                     )
                     _recovery_two_phase_cut_point("AFTER_COMMIT_REQUEST")
                     _recovery_two_phase_cut_point(
@@ -2992,6 +3016,7 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         )
         if secret_ref_scheme == "dpapi":
             args._registration_artifact_paths += (storage_paths.direct_sync_root / secret_ref_target,)
+        args._registration_attempt = RemoteAttempt.begin(identity["identity_persist_path"], "worker_registration")
         args._registration_expected_artifacts = _registration_artifact_versions(args)
     registration_action = ""
     if getattr(args, "self_enroll", False):
@@ -3220,8 +3245,13 @@ def main(argv: list[str] | None = None) -> int:
         elif isinstance(exc, RecoveryTwoPhaseResumeRequired):
             blocked_report.update(exc.public_report())
         if fallback_path:
-            _write_registration_json(str(fallback_path), blocked_report, indent=2)
-            print(f"registration_report={fallback_path.resolve()}")
+            with writer_admission("worker_pc_registration"):
+                attempt = getattr(args, "_registration_attempt", None)
+                if attempt is not None and not attempt.is_current():
+                    print("registration_response=superseded")
+                    return 2
+                _write_registration_json(str(fallback_path), blocked_report, indent=2)
+                print(f"registration_report={fallback_path.resolve()}")
         else:
             print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
         return 2

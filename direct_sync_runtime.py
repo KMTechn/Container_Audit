@@ -2,6 +2,9 @@
 """Local runtime wrapper for the Container_Audit direct-sync relay."""
 
 from __future__ import annotations
+from storage_utils import RemoteAttempt
+from contextvars import ContextVar
+from functools import wraps
 
 import hashlib
 import json
@@ -46,7 +49,7 @@ from direct_sync_push import (
 from direct_sync_operator import read_operator_pause
 from producer_runtime_client import ensure_runtime_authority
 from storage_policy import current_user_data_home, is_legacy_syncthing_path
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 
 
 DEFAULT_WORKER_ID = "direct-sync-relay-container-audit"
@@ -702,16 +705,20 @@ def _write_runtime_status(
 
 
 def _write_runtime_payload(config: DirectSyncRuntimeConfig, payload: dict[str, Any]) -> dict[str, Any]:
-    payload["runtime_status_write_status"] = "PASS"
-    payload.pop("runtime_status_write_error_code", None)
-    payload.pop("runtime_status_write_error_message", None)
-    try:
-        _write_json_atomic(config.runtime_status_path, payload)
-    except OSError as exc:
-        payload["runtime_status_write_status"] = "FAIL"
-        payload["runtime_status_write_error_code"] = "runtime_status_write_failed"
-        payload["runtime_status_write_error_message"] = f"runtime status write failed: {exc.__class__.__name__}"
-    return payload
+    attempt = _RELAY_ATTEMPT.get()
+    with writer_admission("direct_sync_runtime_status"):
+        if attempt is not None and not attempt.is_current():
+            return {**payload, "superseded": True}
+        payload["runtime_status_write_status"] = "PASS"
+        payload.pop("runtime_status_write_error_code", None)
+        payload.pop("runtime_status_write_error_message", None)
+        try:
+            _write_json_atomic(config.runtime_status_path, payload)
+        except OSError as exc:
+            payload["runtime_status_write_status"] = "FAIL"
+            payload["runtime_status_write_error_code"] = "runtime_status_write_failed"
+            payload["runtime_status_write_error_message"] = f"runtime status write failed: {exc.__class__.__name__}"
+        return payload
 
 
 def _append_runtime_event(
@@ -748,8 +755,12 @@ def _append_runtime_event_with_status(
     *,
     log_payload: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    status_identity = status.get("source_identity") if isinstance(status.get("source_identity"), Mapping) else None
-    ok, error_message = _append_runtime_event(config, event, log_payload or status, source_identity=status_identity)
+    with writer_admission("direct_sync_runtime_status"):
+        attempt = _RELAY_ATTEMPT.get()
+        if attempt is not None and not attempt.is_current():
+            return {**status, "superseded": True}
+        status_identity = status.get("source_identity") if isinstance(status.get("source_identity"), Mapping) else None
+        ok, error_message = _append_runtime_event(config, event, log_payload or status, source_identity=status_identity)
     if ok:
         return status
     status["runtime_log_write_status"] = "FAIL"
@@ -1018,7 +1029,23 @@ def record_scan_drain_status(
     return _append_runtime_event_with_status(config, "source_scan_drain_status", payload)
 
 
+
+_RELAY_ATTEMPT = ContextVar("ca_relay_attempt", default=None)
+
+
+def _relay_attempt_boundary(function):
+    @wraps(function)
+    def wrapped(config, *args, **kwargs):
+        attempt = RemoteAttempt.begin(config.runtime_status_path, "relay_cycle")
+        context = _RELAY_ATTEMPT.set(attempt)
+        try:
+            return function(config, *args, **kwargs)
+        finally:
+            _RELAY_ATTEMPT.reset(context)
+    return wrapped
+
 @writer_sink("direct_sync_relay_cycle", probe_only=True)
+@_relay_attempt_boundary
 def run_relay_once(
     config: DirectSyncRuntimeConfig,
     *,
