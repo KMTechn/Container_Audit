@@ -640,3 +640,7 @@ Main reply `msg_0b2fc814c41b`에 따라 원래 d440→a7 공개 Restore09와 변
 ## w9slim2 B18 시험 격리
 
 실제 deployment-session 권한을 획득하는 시험은 case/run별 고유 session/transaction을 공유한다. 제품 fence·이름 도출·canonical vector·최소 mutex 권한은 그대로다. 같은 이름 contender 거절 단언과 Python/PowerShell delegation을 유지한다. Python 3.12.10·Windows PowerShell 5.1 headless 영향 3모듈 82 PASS; 동시 실행 근거와 한계는 [레인 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다. 실제 GUI·설치·서버 검증은 이 결과에 포함하지 않는다.
+
+## w9slim2 B01 inventory 표현
+
+PowerShell 분석 결과는 `powershell_execution_inventory` 한 키에 저장한다. 중복 alias `powershell_scheduled_task_guards`를 없애고 두 mutation-site 단언을 정본 키로 옮겼다. detector·schema·source/packet 구분·writer admission·canonical 설치기 의미 projection·old/new/rollback은 유지하며 새 바이트/semantic pin을 세 consumer에 함께 반영한다. 영향 4모듈 115 PASS(Python 3.12.10/PS5.1 headless). 과거 packet byte identity는 달라지므로 새 후보의 stock builder 및 전이 근거는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.

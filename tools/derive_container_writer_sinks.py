@@ -2915,7 +2915,6 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
         "python_external_control_commands": python_external_control,
         "powershell_writer_sinks": powershell["writer_sinks"],
         "powershell_execution_inventory": powershell,
-        "powershell_scheduled_task_guards": powershell,
         "powershell_guard_failures": guard_failures,
         "known_route_coverage": route_rows,
         "detector_limitations": [

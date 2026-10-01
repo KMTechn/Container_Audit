@@ -176,7 +176,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
             }
         },
         "scheduled_task_mutation_site_count": len(
-            payload["powershell_scheduled_task_guards"]["mutation_sites"]
+            payload["powershell_execution_inventory"]["mutation_sites"]
         ),
         "trusted_control_plane_mutation_count": len(
             payload["trusted_control_plane_mutations"]
@@ -330,7 +330,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
     assert trusted_nodes == []
     assert payload["trusted_control_plane_mutations"] == []
 
-    scheduled = payload["powershell_scheduled_task_guards"]["mutation_sites"]
+    scheduled = payload["powershell_execution_inventory"]["mutation_sites"]
     assert scheduled and all(row["guarded"] for row in scheduled)
     assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1"}
     assert {row["wrapper_function"] for row in scheduled} <= {
