@@ -5,6 +5,47 @@ param(
     [string]$CodeRoot = ''
 )
 $ErrorActionPreference = 'Stop'
+function Assert-Protected([string]$Path, [switch]$Recursive, [hashtable]$Verified = $null) {
+    if ($null -eq $Verified) { $Verified = @{} }
+    $full = [IO.Path]::GetFullPath($Path)
+    $leaf = $true
+    while ($full) {
+        if (-not $Verified.ContainsKey($full) -or ($leaf -and -not $Verified[$full])) {
+        $entry = Get-Item -LiteralPath $full -ErrorAction Stop
+        if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Reparse point in update storage.' }
+        $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
+        $owner = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+        if ($owner -notin @('S-1-5-18','S-1-5-32-544')) { throw 'Update storage owner is not privileged.' }
+        $mask = if ($leaf) { 0x500D0156 } else { 0x500D0150 }
+        foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+            if ($rule.AccessControlType -eq 'Allow' -and
+                -not ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
+                $rule.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') -and
+                ([int64]$rule.FileSystemRights -band $mask)) { throw 'Update storage is user mutable.' }
+        }
+        $Verified[$full] = $leaf
+        }
+        if ($full -eq [IO.Path]::GetPathRoot($full)) { break }
+        $full = [IO.Path]::GetDirectoryName($full)
+        $leaf = $false
+    }
+    if ($Recursive) {
+        foreach ($child in Get-ChildItem -LiteralPath $Path -Force) {
+            # Reject redirected children before enumerating their contents.
+            Assert-Protected $child.FullName -Recursive:($child.PSIsContainer) -Verified $Verified
+        }
+    }
+}
+# Validate every executable and data dependency before loading another helper.
+$trustedBootstrap = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$trustedApplication = Split-Path -Parent $trustedBootstrap
+Assert-Protected $trustedApplication
+Assert-Protected $trustedBootstrap -Recursive
+Assert-Protected $PSCommandPath
+foreach ($directory in @('update-control','versions')) {
+    $trustedDirectory = Join-Path $trustedApplication $directory
+    if (Test-Path -LiteralPath $trustedDirectory) { Assert-Protected $trustedDirectory -Recursive }
+}
 $IntegrityHelper = Join-Path $PSScriptRoot 'bootstrap_integrity.ps1'
 . $IntegrityHelper
 $SharedLeaf = Get-BootstrapSharedPortableLeaf $InstallRoot
@@ -118,6 +159,7 @@ public static class KMTechStartupUpdateToken {
 function Assert-StartupUpdateVersion([string]$Root, [string]$Candidate) {
     $managed = Split-Path -Parent $Root
     $full = Get-StrictFullPath $Candidate 'startup update version'
+    Assert-Protected $full -Recursive
     Assert-BootstrapNoReparsePoint $full 'startup update version'
     $versionPrefix = Join-Path $managed 'versions'
     $packetPrefix = Join-Path $managed 'update-control'

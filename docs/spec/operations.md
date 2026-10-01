@@ -108,6 +108,10 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 바꾼다.
 사용자가 바꾼 값·종류·인자와 다른 relay는 거절하며 실패 시 원 Run·relay를 복원한다.
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
+설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
+다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
+거절하므로 관리자가 승인한 안전한 배치가 필요하다. 호스트 공유 경로 ACL을 자동 교정하지 않는다.
+READY/trial 읽기 경합은 last_ready_error에 종류만 기록하고 정상 종료·코드 복귀 판단을 계속한다.
 
 builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
 `approved_transitions`, `profile_auth`, `apply_during_work`를 받는다.

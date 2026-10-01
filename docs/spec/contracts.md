@@ -114,6 +114,10 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 후보 설정은 교체 뒤의 새 명령에만 적용하며 실패 복귀는 원 Run 값과 인자를 그대로 복원한다.
+SYSTEM이 신뢰하는 bootstrap·control·version은 파일과 모든 조상의 소유자·실효 변경 권한을
+확인한다. 일반 사용자가 바꿀 수 있는 배치는 거절하며 공유 조상의 ACL은 임의 수정하지 않는다.
+READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 복귀를 유지한다.
+원본은 보존하며 atomic JSON 읽기의 일시적 PermissionError만 3회/0.05초 간격으로 재시도한다.
 SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
 ES256 검증기로 manifest 서명, ZIP 크기·SHA, portable source SHA와 공개 설정 일치를 다시 확인한다.
 활성 writer 0과 검증된 묶음, 내구 PREPARED 기록이 없으면 포인터를 바꾸지 않는다.

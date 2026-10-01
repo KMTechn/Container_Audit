@@ -455,6 +455,36 @@ function Assert-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
     }
 }
 
+function Assert-ProtectedCodeAncestors([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    $leaf = $true
+    while ($full) {
+        if (Test-Path -LiteralPath $full) {
+            $entry = Get-Item -LiteralPath $full -ErrorAction Stop
+            if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'Unsafe update path component.' }
+            $acl = Get-Acl -LiteralPath $full -ErrorAction Stop
+            if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -notin @('S-1-5-18','S-1-5-32-544')) {
+                throw 'Update path component owner is not privileged.'
+            }
+            $mask = if ($leaf) { 0x500D0156 } else { 0x500D0150 }
+            foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
+                if ($rule.AccessControlType -eq 'Allow' -and
+                    -not ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
+                    $rule.IdentityReference.Value -notin @('S-1-5-18','S-1-5-32-544') -and
+                    ([int64]$rule.FileSystemRights -band $mask)) { throw 'Update path component is user mutable.' }
+            }
+        }
+        if ($full -eq [IO.Path]::GetPathRoot($full)) { break }
+        $full = [IO.Path]::GetDirectoryName($full)
+        $leaf = $false
+    }
+}
+
+function Assert-ContainerStartupUpdateTrust([string]$Root) {
+    Assert-ProtectedCodeAncestors (Split-Path -Parent $Root)
+    Assert-HardenedCodeAcl $Root -Recursive
+}
+
 function Set-HardenedCodeAcl([string]$Path, [switch]$Recursive) {
     try {
         Assert-NoReparsePoint $Path "Hardened code ACL target" -PathOnly:(-not $Recursive)
@@ -629,6 +659,7 @@ function Assert-ContainerReplacementRestoreQuiescent(
 }
 
 function Get-ContainerStartupUpdateTaskSpec([string]$Root, [string]$Sid) {
+    Assert-ContainerStartupUpdateTrust $Root
     $runtime = Join-Path $Root 'runtime\python.exe'
     $implementation = Join-Path $Root 'app\auto_update.py'
     $output = & $runtime -I -B $implementation --print-logon-task --install-root $Root --operator-sid $Sid
@@ -640,6 +671,7 @@ function Get-ContainerStartupUpdateTaskSpec([string]$Root, [string]$Sid) {
 }
 
 function Invoke-ContainerStartupUpdateTaskMutation([scriptblock]$Action) {
+    Assert-ProtectedCodeAncestors (Split-Path -Parent $installRootFull)
     Invoke-ContainerWriterFenceMutation -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot `
         -SessionId $WriterFenceSessionId -AttemptId $WriterFenceAttemptId `
         -ReplacementTransactionId $WriterFenceReplacementTransactionId -DelegationToken $WriterFenceDelegationToken -Action $Action
@@ -686,6 +718,7 @@ public static class KMTechStartupUpdateAtomicFile {
 }
 
 function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {
+    Assert-ContainerStartupUpdateTrust $Root
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed parent'
     $directory = Join-Path $managed ('.startup-update-' + $Purpose + '.' + $WriterFenceAttemptId)
     if (-not (Test-PathWithin $directory $managed) -or (Test-Path -LiteralPath $directory)) { throw 'STARTUP_UPDATE_PREIMAGE_PATH_INVALID' }
@@ -711,6 +744,7 @@ function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {
 }
 
 function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Directory, [string]$ExpectedSha256) {
+    Assert-ContainerStartupUpdateTrust $Root
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update restore parent'
     $full = Get-StrictFullPath $Directory 'startup update preimage'
     if (-not (Test-PathWithin $full $managed) -or (Split-Path -Leaf $full) -cnotmatch '^\.startup-update-(install|uninstall)\.[0-9a-f]{32}$') { throw 'STARTUP_UPDATE_RESTORE_PATH_INVALID' }
@@ -761,6 +795,7 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
     if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
     if ($testOverride) { Write-Output 'startup_update_status=NOT_TESTED_HOST'; return }
+    Assert-ContainerStartupUpdateTrust $Root
     $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
     $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed root'
     Assert-NoReparsePoint $managed 'startup update managed root'

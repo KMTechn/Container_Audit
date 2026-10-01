@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Mapping
@@ -302,10 +303,17 @@ def unique_object(pairs):
 
 def read_json(path: Path, *, maximum: int = 1024 * 1024) -> dict[str, Any]:
     _assert_no_reparse_components(path)
-    if path.stat().st_size > maximum:
-        raise ValueError("update record is oversized")
-    with path.open("r", encoding="utf-8-sig") as source:
-        value = json.load(source, object_pairs_hook=unique_object)
+    for attempt in range(3):
+        try:
+            if path.stat().st_size > maximum:
+                raise ValueError("update record is oversized")
+            with path.open("r", encoding="utf-8-sig") as source:
+                value = json.load(source, object_pairs_hook=unique_object)
+            break
+        except PermissionError:
+            if attempt == 2:
+                raise
+            time.sleep(0.05)
     if not isinstance(value, dict):
         raise ValueError("update record must be an object")
     return value
@@ -712,14 +720,22 @@ def _apply_prepared(control: Path) -> int:
         with update_lock(control, policy["operator_sid"]):
             state = read_json(control / "transition.json")
             rows = process_snapshot(control)
-            claim = optional_record(stage / "trial.json")
+            claim = None
+            receipt = None
+            try:
+                claim = optional_record(stage / "trial.json")
+                receipt = optional_record(stage / "ready.json")
+            except OSError as error:
+                # A contested user proof is unconfirmed; keep the original
+                # journal deadline and normal stop/rollback decision alive.
+                state = {**state, "last_ready_error": type(error).__name__}
+                write_json_durable(control / "transition.json", state)
             sha = state["previous_sha"] if state["phase"] == "ROLLBACK_PENDING_READY" else state["candidate_sha"]
             if state.get("trial_pid") is None and claim and claim.get("nonce") == state["nonce"] and claim.get("transition_id") == state["transition_id"]:
                 row = next((row for row in rows if row.get("pid") == claim.get("pid")), None)
                 if row and process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="gui"):
                     state = bind_trial(state, sha=sha, pid=row["pid"], ordinary_user=True, now=row["created_at"])
                     write_json_durable(control / "transition.json", state)
-            receipt = optional_record(stage / "ready.json")
             gui = next((row for row in rows if row.get("pid") == state.get("trial_pid")), None)
             relays = [row for row in rows if process_matches_trial(row, state=state, sha=sha, sid=policy["operator_sid"], role="relay")]
             process_ok = bool(gui and process_matches_trial(gui, state=state, sha=sha, sid=policy["operator_sid"], role="gui"))
