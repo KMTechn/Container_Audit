@@ -146,5 +146,3 @@ def test_atomic_state_read_keeps_malformed_record_failure(tmp_path):
     with pytest.raises(ValueError, match="duplicate update record field"):
         updates.read_json(path)
     assert path.read_text(encoding="utf-8") == '{"sha":"old","sha":"new"}'
-
-

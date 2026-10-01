@@ -279,6 +279,16 @@ DATA_API_FILES = (
     "event_log_store.py", "transfer_store.py", "transfer_common.py",
     "transfer_client.py", "producer_runtime_client.py", "direct_sync_push.py",
     "logistics_runtime_profile.py", "storage_policy.py", "recovery_two_phase.py",
+    # Actual DDL, serialized commands, state migration and recovery consumers.
+    "transfer_member_exchange.py", "terminal_operation_lease.py",
+    "direct_sync_operator.py", "tools/direct_sync_relay_runner.py",
+    "event_payloads.py", "event_stream_policy.py", "Container_Audit.py",
+    "user_relay.py", "current_user_onboarding.py", "work_session_state.py",
+    "tray_completion.py", "product_exchange.py", "product_scan.py",
+    "parked_tray_store.py", "paired_preflight_handoff.py", "phs_reconciliation_workflow.py",
+    "phs_label_workflow.py", "preflight_scan_hold.py", "session_history.py",
+    "storage_utils.py", "recovery_file_read.py", "legacy_state_migration.py",
+    "worker_registry.py", "protected_admin.py", "container_admin_pin.py", "pin_file_move.py",
 )
 
 
