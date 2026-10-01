@@ -13,6 +13,7 @@ import item_catalog_sync as sync
 import logistics_runtime_profile as runtime_module
 from current_user_onboarding import resolve_current_user_onboarding_paths
 from tests.test_item_catalog_sync import CATALOG, FakeResponse
+from tests.test_container_p0_contracts import _health_card
 from tools.install_logistics_runtime_profile import install_runtime_profile
 from tools import install_logistics_runtime_profile as installer_module
 
@@ -186,13 +187,19 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
             calls.append("after")
 
     class FakeApp:
+        _apply_direct_sync_health = app_module.ContainerAudit._apply_direct_sync_health
+        _consume_direct_sync_wake_results = lambda self: ""
+
         def __init__(self):
             calls.append("app-created")
             self.root = FakeRoot()
+            self.info_cards = {"direct_sync": _health_card()}
+            cards.append(self.info_cards["direct_sync"])
 
         def run(self):
             calls.append("run")
 
+    cards = []
     monkeypatch.setattr(app_module, "_first_run_onboarding_enabled", lambda: False)
     monkeypatch.setattr(app_module, "acquire_runtime_instance", lambda _root: Lease())
     monkeypatch.setattr(app_module, "ContainerAudit", FakeApp)
@@ -207,9 +214,9 @@ def test_no_profile_sends_no_request_and_startup_shows_setup_action(
 
     assert launcher == []
     assert calls == ["app-created", "after", "run", "release"]
-    assert len(dialogs) == 1
-    title, message = dialogs[0]
-    assert title == SETUP_TITLE
+    assert dialogs == []  # DESIGN §0/§1: guidance stays in the work screen.
+    message = cards[0]["value"].options["text"]
+    assert SETUP_TITLE in message
     assert "Windows 사용자" in message and "할 일" in message and "다시 시작" in message
     assert "작업은 계속" in message
     assert os.environ[sync.ACTIVE_PATH_ENV] == app_module.resource_path(

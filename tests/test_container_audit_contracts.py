@@ -880,6 +880,11 @@ def test_main_schedules_update_check_after_app_creation(monkeypatch):
         def __init__(self):
             calls.append("init")
             self.root = FakeRoot()
+            from tests.test_container_p0_contracts import _health_card
+            self.info_cards = {"direct_sync": _health_card()}
+
+        _apply_direct_sync_health = ContainerAudit._apply_direct_sync_health
+        _consume_direct_sync_wake_results = lambda self: ""
 
         def run(self):
             calls.append("run")
@@ -962,6 +967,7 @@ def test_main_completes_current_user_onboarding_before_catalog_and_client(
 def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_path):
     calls = []
     dialogs = []
+    cards = []
     local_app_data = tmp_path / "LocalAppData"
     cache_path = (
         local_app_data
@@ -982,9 +988,15 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
             calls.append(("after", delay_ms))
 
     class FakeApp:
+        _apply_direct_sync_health = ContainerAudit._apply_direct_sync_health
+        _consume_direct_sync_wake_results = lambda self: ""
+
         def __init__(self):
+            from tests.test_container_p0_contracts import _health_card
             calls.append("client-created")
             self.root = FakeRoot()
+            self.info_cards = {"direct_sync": _health_card()}
+            cards.append(self.info_cards["direct_sync"])
 
         def run(self):
             calls.append("run")
@@ -1027,10 +1039,11 @@ def test_main_warns_and_continues_with_verified_catalog_cache(monkeypatch, tmp_p
     assert calls[0] == "catalog"
     assert calls[1][0] == "diagnostic"
     assert calls[2:] == ["client-created", ("after", 500), "run", "release"]
-    assert len(dialogs) == 1
-    assert dialogs[0][0] == container_audit_module.ITEM_CATALOG_CACHE_WARNING_TITLE
-    assert "2026-08-28" in dialogs[0][1]
-    assert "UNKNOWN" not in dialogs[0][1]
+    assert dialogs == []  # DESIGN §0/§1: no acknowledgement before scanning.
+    notice = cards[0]["value"].options["text"]
+    assert container_audit_module.ITEM_CATALOG_CACHE_WARNING_TITLE in notice
+    assert "2026-08-28" in notice
+    assert "UNKNOWN" not in notice
 
 
 def test_main_blocks_duplicate_same_pc_runtime_before_catalog_or_ui(monkeypatch):

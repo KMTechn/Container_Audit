@@ -290,6 +290,8 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 ### CA-02 품목 기준 준비
 
 - **시작·입력:** 시작 시 물류 client와 같은 profile로 중앙 `/inbound/api/item-catalog.csv`를 갱신하고 검증된 snapshot을 사용한다. profile이 없으면 운영 원본에 요청하지 않고 기존 목록으로 계속하며 설정 필요를 안내한다([선택 순서](operations.md#ca-o02)). [refresh_item_catalog](../../item_catalog_sync.py), [ContainerAudit.load_items](../../Container_Audit.py)
+- **시작 안내:** 검증된 캐시 사용(기준 시각 포함), 중앙 연결 설정 필요, 과도기 목록 미확인은 작업 화면의 기존 `저장 전송` 카드에 표시하며 확인 창 없이 입력을 받는다. 연결 복귀 시 캐시 안내는 목록 재확인 가능으로 바뀌고, 수동 품목 갱신 성공 뒤 사라진다. 연결 복귀만으로 목록을 새로 받았다고 표시하지 않는다. 검증 실패의 기존 시작 차단은 유지한다.
+- **최고 기록 읽기 안내:** 읽기 실패·손상 기록 제외는 기존 화면 상태 안내에 표시하며 입력을 막지 않는다. 원본 보존·유효 기록 정리·후속 저장의 `.bad-*` 보존은 같은 저장소 코드가 담당한다. 수량 누락 가능성이 있는 금일 작업 현황 경고는 관리자 확인 요청과 기존 확인 창을 유지한다.
 - **실행 중 갱신:** `운영 작업 ▾ → 품목 목록 새로 고침`은 같은 시작 준비·읽기 경로를 기존 직렬 lane에서 다시 사용한다. 중앙에서 새로 받은 목록만 교체하고 현재 건수를 알린다. 활성 트레이·스캔·조회 보류·제출·교체 중에는 작업을 보호하며, 실패/캐시 fallback은 기존 메모리 목록을 보존하고 연결 확인·재시도를 안내한다. 자동 갱신이나 데이터 루트 재선택은 없다. [조작 순서](operations.md#ca-catalog-refresh).
 - **공유 core:** `item_catalog_sync` facade가 고정 `kmtech_shared.catalog`의 4열 검증·sidecar 이름·canonical JSON·authority/HMAC 판정을 호출한다. CA의 경로·URL 승인·신원·진단·snapshot·내구 write/recovery 순서는 그대로 소유한다. [CA-C08](contracts.md#ca-c08), [pin·패키징](operations.md#ca-o01).
 - **검증·저장·결과:** 검증 캐시와 startup diagnostic을 보존한다. 검증 snapshot이 요구되는 경로에서 snapshot을 잃거나 파싱에 실패하면 오류이며, 무조건 패키지 `assets/Item.csv`로 성공 처리하지 않는다. legacy 파일 경로의 인코딩 fallback과 구분한다.

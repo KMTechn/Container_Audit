@@ -1349,8 +1349,13 @@ def test_on_unconfirmed_catalog_keeps_phs2_off_the_central_path(flow, monkeypatc
 
 
 class _StartupApp:
+    _apply_direct_sync_health = ContainerAudit._apply_direct_sync_health
+    _consume_direct_sync_wake_results = lambda self: ""
+
     def __init__(self):
+        from tests.test_container_p0_contracts import _health_card
         self.root = type("Root", (), {"after": lambda *_args: None})()
+        self.info_cards = {"direct_sync": _health_card()}
         self.ran = False
 
     def run(self):
@@ -1399,10 +1404,10 @@ def test_catalog_failure_without_a_cache_starts_only_in_transition_mode(
         [app] = started
         assert app.ran is True and app.item_catalog_unconfirmed is True
         assert container_audit_module.ACTIVE_PATH_ENV not in container_audit_module.os.environ
-        assert [(name, title) for name, title, _message in dialogs] == [
-            ("showwarning", container_audit_module.ITEM_CATALOG_TRANSITION_WARNING_TITLE)
-        ]
-        assert "REQUEST_FAILED_NO_CACHE" in dialogs[0][2]
+        assert dialogs == []  # DESIGN §0/§1: use the existing work-screen card.
+        notice = app.info_cards["direct_sync"]["value"].options["text"]
+        assert container_audit_module.ITEM_CATALOG_TRANSITION_WARNING_TITLE in notice
+        assert "REQUEST_FAILED_NO_CACHE" in notice
     else:
         assert result == container_audit_module.ITEM_CATALOG_STARTUP_EXIT_CODE
         assert started == []

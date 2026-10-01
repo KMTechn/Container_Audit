@@ -240,6 +240,8 @@ cache migration이나 앱 사이 cache 파일 통합은 없다. factory lock과 
 
 요청 profile은 `prepare_startup_item_catalog`가 물류 client와 같은 선택([CA-O02](operations.md#ca-o02))으로 `refresh_item_catalog(profile_path=)`에 넘긴다. profile이 없으면 운영 원본으로 무인증 요청을 보내지 않고 `PROFILE_ABSENT`로 로컬/패키지 목록을 반환한다.
 
+허용된 캐시·설정 부재·과도기 시작의 안내는 기존 전송 상태 카드에 표시한다. 캐시 기준 시각과 연결 상태를 구별하고, 연결 복귀만으로 snapshot 검증·목록 갱신 성공을 주장하지 않는다. 검증 실패의 시작 차단, 진단 기록과 무결성·서명 판정은 그대로다.
+
 실행 중 수동 갱신도 `prepare_startup_item_catalog → refresh_item_catalog → load_items`를 사용한다. `CENTRAL_REFRESH` 결과의 읽기·색인 구성까지 성공한 뒤 메모리 목록/색인을 함께 교체한다. 실패·기존 cache 반환·작업 세대 변경 시 이전 메모리 목록과 활성 CSV 경로를 유지하며 앱을 종료하지 않는다. 시작 시 기존 오류/캐시 정책, 활성 업무 데이터 루트·relay·영속 루트 선택은 바꾸지 않는다. 기존 lane이 갱신 중 새 스캔/동시 갱신을 거부하고, 기존 조회 보류·완료 guard가 진행 중 작업의 목록 교체를 막는다.
 
 <a id="ca-c09"></a>

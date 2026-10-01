@@ -1417,7 +1417,10 @@ class ContainerAudit:
         self.best_time_store = BestTimeRecordStore(self.best_time_file_path)
         self.best_time_records = self.best_time_store.load()
         if self.best_time_store.load_warning:
-            self.root.after(0, messagebox.showwarning, "최고 기록 확인", self.best_time_store.load_warning)
+            self.root.after(
+                0, self.show_status_message,
+                f"최고 기록 확인: {self.best_time_store.load_warning}", self.COLOR_IDLE, 0,
+            )
 
     def _save_best_time_records(self):
         """현재 최고 기록 데이터를 파일에 저장합니다."""
@@ -1619,6 +1622,10 @@ class ContainerAudit:
                 return
             self.items_data, self.item_catalog = items, catalog
             self.item_catalog_unconfirmed = False
+            self._startup_item_catalog_context = {}
+            health = getattr(self, "_direct_sync_health", None)
+            if isinstance(health, RelayHealth):
+                self._apply_direct_sync_health(health)
             messagebox.showinfo(
                 "품목 목록 새로 고침 완료",
                 f"품목 목록을 새로 받았습니다. 현재 {len(items)}건입니다.",
@@ -16303,7 +16310,32 @@ class ContainerAudit:
             ) + "대기 건수 확인 불가(읽기 실패)"
         connection_summary = f"서버 연결: {connection_text} · {pending_summary}"
         transmission_summary = f"마지막 성공 전송 {last_sent}"
-        attention = model["tone"] == "amber"
+        catalog_context = getattr(self, "_startup_item_catalog_context", {})
+        catalog_notice = ""
+        if catalog_context.get("transition_cause_code"):
+            catalog_notice = (
+                f"{ITEM_CATALOG_TRANSITION_WARNING_TITLE}\n"
+                + ITEM_CATALOG_TRANSITION_WARNING_MESSAGE.format(
+                    cause_code=catalog_context["transition_cause_code"]
+                )
+            )
+        elif catalog_context.get("pre_send_rejection_code") == PROFILE_ABSENT:
+            catalog_notice = (
+                f"{ITEM_CATALOG_SETUP_REQUIRED_TITLE}\n"
+                + ITEM_CATALOG_SETUP_REQUIRED_MESSAGE.format(catalog="기존 품목 목록으로")
+            )
+        elif catalog_context.get("cache_used") and catalog_context.get("catalog_source") == "VERIFIED_CACHE":
+            cache_time = _item_catalog_cache_time_for_display(
+                catalog_context.get("cache_last_modified_utc")
+            )
+            catalog_notice = (
+                f"{ITEM_CATALOG_CACHE_WARNING_TITLE} · 목록 재확인 가능\n캐시 기준 시각: {cache_time}\n"
+                "운영 작업 → 품목 목록 새로 고침"
+                if connection == "normal"
+                else f"{ITEM_CATALOG_CACHE_WARNING_TITLE}\n"
+                + ITEM_CATALOG_CACHE_WARNING_MESSAGE.format(cache_time=cache_time)
+            )
+        attention = model["tone"] == "amber" or bool(catalog_notice)
         card["frame"].configure(
             style="RelayAttention.TFrame" if attention else "Card.TFrame"
         )
@@ -16315,7 +16347,7 @@ class ContainerAudit:
             )
         )
         card["value"].configure(
-            text="\n".join(value for value in (connection_summary, transmission_summary, model['summary'], model['detail']) if value),
+            text="\n".join(value for value in (connection_summary, transmission_summary, model['summary'], model['detail'], catalog_notice) if value),
             style=(
                 "RelayAttention.Value.TLabel"
                 if attention
@@ -20722,9 +20754,9 @@ ITEM_CATALOG_STARTUP_ERROR_MESSAGE = (
 )
 ITEM_CATALOG_CACHE_WARNING_TITLE = "검증된 품목 캐시 사용"
 ITEM_CATALOG_CACHE_WARNING_MESSAGE = (
-    "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n\n"
+    "중앙 품목 목록을 새로 받지 못해 무결성이 검증된 로컬 캐시로 시작합니다.\n"
     "캐시 기준 시각: {cache_time}\n"
-    "네트워크가 복구되면 다음 실행에서 중앙 목록을 다시 확인합니다."
+    "연결 복구 후 운영 작업 → 품목 목록 새로 고침으로 다시 확인할 수 있습니다."
 )
 ITEM_CATALOG_TRANSITION_WARNING_TITLE = "과도기 모드 — 품목 목록 미확인"
 ITEM_CATALOG_TRANSITION_WARNING_MESSAGE = (
@@ -20786,13 +20818,6 @@ def _show_bootstrap_integrity_warning(report_path: object) -> None:
         pass
 
 
-def _show_item_catalog_transition_warning(cause_code: str) -> None:
-    messagebox.showwarning(
-        ITEM_CATALOG_TRANSITION_WARNING_TITLE,
-        ITEM_CATALOG_TRANSITION_WARNING_MESSAGE.format(cause_code=cause_code),
-    )
-
-
 def _show_item_catalog_startup_error(cause_code: str) -> None:
     try:
         messagebox.showerror(
@@ -20814,29 +20839,6 @@ def _item_catalog_cache_time_for_display(value: object) -> str:
     if parsed.tzinfo is None:
         return "UNKNOWN"
     return parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-
-
-def _show_item_catalog_cache_warning(context: Mapping[str, object]) -> None:
-    cache_time = _item_catalog_cache_time_for_display(
-        context.get("cache_last_modified_utc")
-    )
-    try:
-        messagebox.showwarning(
-            ITEM_CATALOG_CACHE_WARNING_TITLE,
-            ITEM_CATALOG_CACHE_WARNING_MESSAGE.format(cache_time=cache_time),
-        )
-    except Exception:
-        pass
-
-
-def _show_item_catalog_setup_required() -> None:
-    try:
-        messagebox.showwarning(
-            ITEM_CATALOG_SETUP_REQUIRED_TITLE,
-            ITEM_CATALOG_SETUP_REQUIRED_MESSAGE.format(catalog="기존 품목 목록으로"),
-        )
-    except Exception:
-        pass
 
 
 def main(argv: list[str] | None = None):
@@ -20921,6 +20923,7 @@ def _prepare_gui_startup(*, data_root=None):
                 )
         try:
             catalog_unconfirmed = False
+            catalog_context = {}
             try:
                 active_catalog_path = prepare_startup_item_catalog()
             except ItemCatalogSyncError as exc:
@@ -20936,7 +20939,7 @@ def _prepare_gui_startup(*, data_root=None):
                 except Exception:
                     pass
                 os.environ.pop(ACTIVE_PATH_ENV, None)
-                _show_item_catalog_transition_warning(exc.cause_code)
+                catalog_context = {"transition_cause_code": exc.cause_code}
                 catalog_unconfirmed = True
                 active_catalog_path = None
             if active_catalog_path is not None:
@@ -20947,16 +20950,19 @@ def _prepare_gui_startup(*, data_root=None):
                     )
                 except Exception:
                     pass
-                if (
-                    catalog_context.get("cache_used")
-                    and catalog_context.get("catalog_source") == "VERIFIED_CACHE"
-                ):
-                    _show_item_catalog_cache_warning(catalog_context)
-                if catalog_context.get("pre_send_rejection_code") == PROFILE_ABSENT:
-                    _show_item_catalog_setup_required()
             app = ContainerAudit()
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True
+            app._startup_item_catalog_context = catalog_context
+            if (
+                catalog_unconfirmed
+                or catalog_context.get("cache_used")
+                or catalog_context.get("pre_send_rejection_code") == PROFILE_ABSENT
+            ):
+                health = getattr(app, "_direct_sync_health", None)
+                if not isinstance(health, RelayHealth):
+                    health = RelayHealth("blocked", 0, 0, 0, "", "", "", "relay_health_not_loaded")
+                app._apply_direct_sync_health(health)
         except ItemCatalogSyncError as exc:
             try:
                 write_item_catalog_failure_diagnostic(
