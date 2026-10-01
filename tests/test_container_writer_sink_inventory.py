@@ -26,13 +26,6 @@ def _load_module():
     return module
 
 
-def test_container_writer_sink_inventory_matches_snapshot() -> None:
-    module = _load_module()
-    expected = module.derive_inventory(ROOT)
-    actual = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
-    assert actual == expected
-
-
 def test_byte_exact_inventory_outputs_disable_checkout_eol_conversion() -> None:
     module = _load_module()
     relative_paths = tuple(
@@ -415,6 +408,7 @@ def test_container_writer_sink_inventory_cli_is_read_only_without_write(
 ) -> None:
     module = _load_module()
     payload = module.derive_inventory(ROOT)
+    assert json.loads(SNAPSHOT.read_text(encoding="utf-8")) == payload
     encoded = module._canonical_json_bytes(payload)
     snapshot_path = tmp_path / "inventory.json"
     snapshot_path.write_text("stale\n", encoding="utf-8")

@@ -10175,14 +10175,6 @@ def test_worker_registry_register_rewrites_sanitized_payload(tmp_path):
     assert registry.list_workers() == ["홍길동"]
 
 
-@pytest.mark.parametrize("name", ["", " ", "bad/name", "bad:name", 'bad"name', "bad|name"])
-def test_worker_registry_rejects_empty_or_path_unsafe_names(tmp_path, name):
-    registry = WorkerRegistry(str(tmp_path / "worker_registry.json"))
-
-    with pytest.raises(ValueError):
-        registry.register(name)
-
-
 def test_parse_new_format_qr_pipe_key_value_payload():
     app = _headless_app()
     payload = "PHS=1|CLC=AAA2270730100|QT=60"
@@ -10210,6 +10202,9 @@ def test_parse_new_format_qr_json_object_payload():
         '{"CLC":"AAA2270730100"," CLC ":"BBB2270730100","QT":"60"}',
         '{"":"AAA2270730100","QT":"60"}',
         '{"  ":"AAA2270730100","QT":"60"}',
+        'CLC=AAA2270730100|BROKEN|QT=60',
+        'CLC=AAA2270730100|=bad|QT=60',
+        'CLC=AAA2270730100|CLC=BBB2270730100|QT=60',
     ],
 )
 def test_parse_new_format_qr_rejects_malformed_json_payloads(payload):
@@ -10543,18 +10538,6 @@ def test_parse_new_format_qr_rejects_unknown_payloads(payload):
     app = _headless_app()
 
     assert app._parse_new_format_qr(payload) is None
-
-
-@pytest.mark.parametrize(
-    "payload",
-    [
-        "CLC=AAA2270730100|BROKEN|QT=60",
-        "CLC=AAA2270730100|=bad|QT=60",
-        "CLC=AAA2270730100|CLC=BBB2270730100|QT=60",
-    ],
-)
-def test_parse_new_format_qr_rejects_malformed_pipe_payloads(payload):
-    assert label_qr.parse_new_format_qr(payload) is None
 
 
 def test_stable_hash_is_deterministic_across_dict_key_order():

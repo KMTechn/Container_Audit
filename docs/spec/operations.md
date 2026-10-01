@@ -648,3 +648,7 @@ PowerShell 분석 결과는 `powershell_execution_inventory` 한 키에 저장�
 ## w9slim2 B05 문서 자산 공유
 
 20260626/27의 바이트 동일 workflow PNG/Mermaid는 20260627 원본을 공유한다. 20260626 문서의 해당 두 링크만 정본으로 바꿨으며 촬영·게시 도구와 다른 화면 자산은 유지했다. 정본 hash·참조 대조는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md); 문서 전용 변경으로 앱 실행은 NOT TESTED.
+
+## w9slim2 B07 시험 통합
+
+CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON/pipe 7개와 공개 parser→None은 남는 행렬로 모두 이관했다. CA-T03의 실제 ROOT 도출=committed snapshot equality는 기존 readonly/help/check/write CLI 노드에 합쳤다(중복 setup만 제거). 대조표와 독립 사본의 의도한 제품 결함 검출 근거는 [레인 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다. 디스크 손상/성공 파싱/QT·legacy/부정 guard·exact bytes 단언은 유지했다.

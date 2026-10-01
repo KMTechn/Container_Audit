@@ -8,6 +8,12 @@ from worker_registry import WorkerRegistry
 @pytest.mark.parametrize(
     "name",
     [
+        "",
+        " ",
+        "bad/name",
+        "bad:name",
+        "bad\"name",
+        "bad|name",
         "=SUM(A1:A2)",
         "+cmd|' /C calc'!A0",
         "-1+2",
