@@ -235,7 +235,7 @@ def _completion_app(tmp_path, *, delete_succeeds, prior_operator_review):
     app._stop_idle_checker = lambda: None
     app._remember_completed_master_label = lambda _label: None
     app._delete_current_tray_state = lambda: delete_succeeds
-    app._invalidate_pending_scan_callbacks = lambda: None
+    app._invalidate_pending_scan_callbacks = lambda *, preserve_held_scans=False: None
     app._update_all_summaries = lambda: None
     app._reset_ui_to_waiting_state = lambda: None
     app._render_warning_state = lambda: None

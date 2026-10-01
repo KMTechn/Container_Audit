@@ -42,6 +42,7 @@ READ_ONLY_ALLOWLIST = {
         "pending_replacement_waiting_projections",
         "has_scan_transport_work",
         "scan_transport_counts",
+        "projected_scan_exchange_keys",
     },
     ("transfer_seal.py", "TransferSealCoordinator"): {"preview"},
     ("transfer_member_exchange.py", "TransferMemberExchangeStore"): {
