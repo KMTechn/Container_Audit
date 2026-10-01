@@ -679,6 +679,44 @@ function Relays {
         [string]$_.ExecutablePath -match '(?i)(pythonw?\.exe|Container_Audit\.exe)$'
     })
 }
+function Confirm-CanonicalRuntimeQuiescence($Removal, [object[]]$ExpectedRelays, [string]$StopRequestPath) {
+    if (
+        [string]$Removal.status -cne 'PASS_DATA_PRESERVED' -or
+        -not (Test-JsonTrue $Removal.data_preserved) -or
+        [string]$Removal.relay_autostart.status -cne 'ABSENT' -or
+        [string]$Removal.relay_process.status -cne 'ABSENT' -or
+        [string]$Removal.relay_process.request_id -cnotmatch '^[0-9a-f]{32}$' -or
+        -not (Same ([string]$Removal.relay_process.stop_request_path) $StopRequestPath)
+    ) { throw 'Verified replacement runtime quiescence failed: removal receipt.' }
+    $deadline = (Get-Date).AddSeconds(15)
+    $observations = 0
+    do {
+        $marker = Get-Content -LiteralPath $StopRequestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$marker.schema_version -cne 'container-audit-user-relay-stop-v1' -or
+            [string]$marker.request_id -cne [string]$Removal.relay_process.request_id -or (Snapshot).exists) {
+            throw 'Verified replacement runtime quiescence failed: stop/Run binding.'
+        }
+        $remaining = @(Relays)
+        $observations++
+        foreach ($process in $remaining) {
+            $matching = @($ExpectedRelays | Where-Object {
+                (Same ([string]$process.ExecutablePath) ([string]$_.ExecutablePath)) -and
+                (Get-CanonicalRelayCommandIdentity ([string]$process.CommandLine) ([string]$_.ExecutablePath)) -ceq
+                (Get-CanonicalRelayCommandIdentity ([string]$_.CommandLine) ([string]$_.ExecutablePath))
+            })
+            if ($matching.Count -ne 1 -or $remaining.Count -gt @($ExpectedRelays).Count) {
+                throw 'Verified replacement runtime quiescence failed: foreign relay.'
+            }
+        }
+        if ($remaining.Count -eq 0) {
+            return [ordered]@{status='ABSENT'; request_id=[string]$Removal.relay_process.request_id; process_observations=$observations}
+        }
+        # The old product releases its runtime lease before interpreter teardown.
+        # Its ABSENT receipt is necessary; actual process absence is a separate proof.
+        Start-Sleep -Milliseconds 200
+    } while ((Get-Date) -lt $deadline)
+    throw 'Verified replacement runtime quiescence failed: process exit timed out.'
+}
 function Stop-CanonicalDelegatedRelay([int]$ProcessId) {
     $process = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
     if (
@@ -2332,12 +2370,13 @@ $enteredPlacementTry = $true
             $mutated = $true
             Product $install '--remove-current-user-setup'
             $removal = Get-Content $removalPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if (
-                (Snapshot).exists -or
-                [string]$removal.status -cne 'PASS_DATA_PRESERVED' -or
-                [string]$removal.relay_process.status -cne 'ABSENT' -or
-                @(Relays).Count -ne 0
-            ) { throw 'Verified replacement runtime quiescence failed.' }
+            # Rollback invokes removal again; preserve this first result before
+            # that supported recovery overwrites the product's status file.
+            $audit.code_replacement.runtime_removal_receipt = $removal
+            Save $auditPath $audit
+            if ($evidenceFull) { Save $evidenceFull $audit }
+            $audit.code_replacement.runtime_quiescence_readback = Confirm-CanonicalRuntimeQuiescence `
+                -Removal $removal -ExpectedRelays $old -StopRequestPath $stop
             $runtimeQuiescedForReplacement = $true
             $audit.code_replacement.status='PRESTATE_VERIFIED_RUNTIME_QUIESCED'
             Save $auditPath $audit

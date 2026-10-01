@@ -385,6 +385,11 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 
 CA 설치 Run 사전 바인딩: 후보 설정이 옛 설치 명령을 바꾸던 결함을 수정했다.
 소스·격리 회귀는 PROVEN이며 실제 옛 packet 4판의 설치/실패 복귀는 guest 수용으로 남는다.
+CA 설치 runtime 종료/복구: 옛 stop receipt 뒤 실제 process exit를 별도로 기다리고
+첫 receipt를 보존한다.
+주입 경계의 종료 지연·잔류/위조 거절은 host 회귀 범위다.
+원 cfd11e4 랩 실패의 최초 조건은 rollback이 receipt를 덮어써 UNPROVEN이고,
+수정판의 옛 4판 설치/복구는 랩 재설치 수용으로 남긴다.
 CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합 복귀를 보완했다.
 동일 계약 예외의 실제 교환 DDL 누락도 수정했고 root/tools DDL 누락을 기계적으로 검사한다.
 합성 경계와 기존 회귀의 증거는 sub-75 보고서이며 실제 안전/위험 배치·SYSTEM·로그온은 NOT TESTED다.

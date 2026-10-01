@@ -107,6 +107,9 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 기존 설치의 사전 Run 값은 설치된 설정 유무로 판정한다. 설정이 없는 옛 판의 정확한
 main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 바꾼다.
 사용자가 바꾼 값·종류·인자와 다른 relay는 거절하며 실패 시 원 Run·relay를 복원한다.
+옛 relay의 제거 receipt는 정지 요청 ID·표식과 함께 확인한다. runtime lease가 풀린 뒤
+인터프리터가 나갈 때까지 최대 15초 기다리며, 정확한 사전 relay 외 프로세스·UNKNOWN·
+실제 잔류를 인정하지 않는다. 첫 제거 receipt는 rollback의 재제거 전에 audit에 보존한다.
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
 설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
 다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
