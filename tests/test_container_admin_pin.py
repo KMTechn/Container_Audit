@@ -238,7 +238,7 @@ def make_headless_app(monkeypatch, tmp_path, server):
     app._admin_pin_login_epoch = uuid.uuid4().hex
     app.parked_trays_dir = str(tmp_path / "parked_trays")
     app._admin_pin_client = make_client(monkeypatch, server)
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     audits = []
     app._log_event = lambda event, **kwargs: audits.append((event, kwargs)) or True
     notices = []
@@ -435,7 +435,7 @@ def test_pin_format_rejection_is_audited_without_saving_secret(monkeypatch, tmp_
                                                                  admin_id, secret):
     server = SignedPinServer()
     app, audits, _notices = make_headless_app(monkeypatch, tmp_path, server)
-    app._prompt_blocked_work_admin_pin = lambda: (admin_id, secret)
+    app._prompt_blocked_work_admin_pin = lambda **_request: (admin_id, secret)
     approval = app._admin_pin_approval_for(
         "CA.TRAY_HOLD", "d" * 64, lambda: {"version": 1}, (), lambda _intent: False)
     assert approval is None and server.calls == []
@@ -450,7 +450,7 @@ def test_cancelled_pin_prompt_does_not_create_retry_or_reopen(monkeypatch, tmp_p
     server = SignedPinServer()
     app, _audits, _notices = make_headless_app(monkeypatch, tmp_path, server)
     calls = []
-    app._prompt_blocked_work_admin_pin = lambda: calls.append("prompt") or None
+    app._prompt_blocked_work_admin_pin = lambda **_request: calls.append("prompt") or None
     assert app._admin_pin_approval_for(
         "CA.TRAY_HOLD", "d" * 64, lambda: {"version": 1}, (),
         lambda _intent: False) is None
@@ -537,7 +537,7 @@ def test_offline_stale_current_pin_hold_releases_other_phs2_and_keeps_key(
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_client = make_client(
         monkeypatch, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     audits = []
     app._log_event = lambda event, **_kwargs: audits.append(event) or True
     app.warning_presenter = WarningPresenter()
@@ -609,7 +609,7 @@ def test_offline_existing_pair_source_keeps_only_pair_keys(monkeypatch, tmp_path
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_client = make_client(
         monkeypatch, lambda *_args: (_ for _ in ()).throw(TimeoutError("offline")))
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     monkeypatch.setattr(messagebox, "askyesno", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(messagebox, "showerror", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(messagebox, "showwarning", lambda *_args, **_kwargs: None)
@@ -763,7 +763,7 @@ def test_paired_handoff_resumes_same_consumed_key_across_writer_boundaries(
     app._log_event = log_event
     server = SignedPinServer()
     app._admin_pin_client = make_client(monkeypatch, server)
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
@@ -824,7 +824,7 @@ def test_changed_paired_current_restores_both_and_retries_new_record(monkeypatch
     changed_bytes = json.dumps(changed_state).encode("utf-8")
     app._admin_pin_login_epoch = uuid.uuid4().hex
     app._admin_pin_client = make_client(monkeypatch, SignedPinServer())
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
     app._log_event = lambda _event, **_kwargs: True
@@ -868,7 +868,7 @@ def test_offline_pair_hold_detaches_active_originals_and_other_item_starts(monke
     def offline(_path, _body, _headers):
         raise TimeoutError("offline")
     app._admin_pin_client = make_client(monkeypatch, offline)
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
@@ -916,7 +916,7 @@ def test_offline_precheck_hold_preserves_bytes_and_releases_busy_slot(monkeypatc
     def offline(_path, _body, _headers):
         raise TimeoutError("offline")
     app._admin_pin_client = make_client(monkeypatch, offline)
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
     monkeypatch.setattr(messagebox, "showwarning", lambda *args, **kwargs: None)
@@ -1067,7 +1067,7 @@ def test_consumed_precheck_quarantine_resumes_after_restart_epoch(monkeypatch, t
     app._set_preflight_scan_input_locked(True)
     server = SignedPinServer()
     app._admin_pin_client = make_client(monkeypatch, server)
-    app._prompt_blocked_work_admin_pin = lambda: ("manager-1", "194826")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("manager-1", "194826")
     app._admin_pin_approval_for = ContainerAudit._admin_pin_approval_for.__get__(app)
     app._admin_pin_complete = ContainerAudit._admin_pin_complete.__get__(app)
     monkeypatch.setattr(messagebox, "askyesno", lambda *args, **kwargs: True)
@@ -1133,3 +1133,59 @@ def test_stale_recheck_recovery_reads_marker_with_json_suffix(monkeypatch, tmp_p
               "source_snapshot": {"marker_sha256": hashlib.sha256(marker.read_bytes()).hexdigest()}}
     assert app._admin_pin_recovered_effect(intent)
     assert not app._admin_pin_target_missing(intent)
+
+
+@pytest.mark.parametrize("action,caption", [
+    ("CA.PRECHECK_HOLD", "검사 대기 보류 처리"),
+    ("CA.PAIR_RETRY", "보류 다시 확인"),
+    ("CA.PAIR_HANDOFF", "접수 보류 인계"),
+    ("CA.TRAY_HOLD", "트레이 보류 처리"),
+])
+def test_admin_pin_form_displays_exact_selected_request_and_clears_pin(monkeypatch, action, caption):
+    import Container_Audit as module
+    labels, entries, bindings = [], [], {}
+
+    class Widget:
+        def __init__(self, *_args, **options):
+            self.options = options
+            if "text" in options:
+                labels.append(options["text"])
+        def __getattr__(self, name):
+            return lambda *_args, **_kwargs: None
+        def bind(self, event, callback):
+            bindings[event] = callback
+
+    class Entry(Widget):
+        def __init__(self, *args, **options):
+            super().__init__(*args, **options)
+            self.value = "manager-1" if not entries else "194826"
+            entries.append(self)
+        def get(self):
+            return self.value
+        def delete(self, *_args):
+            self.value = ""
+
+    monkeypatch.setattr(module.tk, "Toplevel", Widget)
+    for name in ("Frame", "Label", "Button"):
+        monkeypatch.setattr(module.ttk, name, Widget)
+    monkeypatch.setattr(module.ttk, "Entry", Entry)
+    app = object.__new__(module.ContainerAudit)
+    app.root = SimpleNamespace(wait_window=lambda _dialog: bindings["<Return>"]())
+    assert app._prompt_blocked_work_admin_pin(
+        action=action, target_id="selected-record-1", labels=("original-PHS2",)
+    ) == ("manager-1", "194826")
+    detail = "\n".join(labels)
+    assert caption in detail and "selected-record-1" in detail and "original-PHS2" in detail
+    assert entries[1].options["show"] == "●" and entries[1].value == ""
+
+
+def test_admin_pin_prompt_receives_original_action_target_and_labels(monkeypatch, tmp_path):
+    server = SignedPinServer()
+    app, _audits, _notices = make_headless_app(monkeypatch, tmp_path, server)
+    requests = []
+    app._prompt_blocked_work_admin_pin = lambda **request: requests.append(request) or ("manager-1", "194826")
+    assert app._admin_pin_approval_for(
+        "CA.TRAY_HOLD", "selected-record-1", lambda: {"version": 1},
+        ("original-PHS2",), lambda _intent: False
+    ) is not None
+    assert requests == [{"action": "CA.TRAY_HOLD", "target_id": "selected-record-1", "labels": ("original-PHS2",)}]

@@ -380,3 +380,7 @@ PowerShell 분석 결과는 `powershell_execution_inventory` 한 키에 저장�
 ## w9slim2 B07 시험 통합
 
 CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON/pipe 7개와 공개 parser→None은 남는 행렬로 모두 이관했다. CA-T03의 실제 ROOT 도출=committed snapshot equality는 기존 readonly/help/check/write CLI 노드에 합쳤다(중복 setup만 제거). 대조표와 독립 사본의 의도한 제품 결함 검출 근거는 [레인 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다. 디스크 손상/성공 파싱/QT·legacy/부정 guard·exact bytes 단언은 유지했다.
+
+## 관리자 보류 처리 입력
+
+기존 관리자 ID·가린 PIN 한 폼에 원 동작·선택 대상·원 현품표를 함께 표시한다. 원 요청 다시 조회도 저장된 동일 대상/labels를 표시하고, 제출 뒤 PIN 칸을 비운다. 승인/최종 확인·6자리 검증·서버 잠금/역할/철회·원장 CAS·UNKNOWN·건별 보류는 같은 handler로 유지한다. 손상 원본 식별은 중앙 조회 결과가 PIN 필요 여부를 정하고 오프라인 무 PIN 보류와 코드를 공유하므로 기존 입력을 유지한다(2026-10-01 coordinator 답). Python 3.12.10/PS5.1 headless: 새 폼 5 RED→GREEN, 관련 5파일 793 PASS; 처음 broad 90 FAIL은 두 공용 prompt fixture의 인수 불일치로 원본 보존 후 교정했고 마지막 변경 뒤 같은 pack을 다시 실행했다. [결과·미수용 화면 범위](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md).

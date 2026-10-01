@@ -54,7 +54,7 @@ def _linked_test_pin(app, *, reject=False):
     app._admin_pin_login_epoch = "fixture-epoch"
     app.CURRENT_TRAY_STATE_FILE = getattr(app, "CURRENT_TRAY_STATE_FILE", "current.json")
     app._admin_pin_client = Client()
-    app._prompt_blocked_work_admin_pin = lambda: ("fixture-manager", "123456")
+    app._prompt_blocked_work_admin_pin = lambda **_request: ("fixture-manager", "123456")
 
 
 def _transfer_coordinator_owner_error_type():

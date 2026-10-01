@@ -421,3 +421,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **공유 runtime:** `producer_runtime_client`의 25개 leaf/binding/SQL facade가 고정 `kmtech_shared.runtime`을 호출한다. CA의 writer guard·transport·복구 결정과 ACK/token의 동일 transaction은 유지한다. [CA-C05](contracts.md#ca-c05), [pin·패키징](operations.md#ca-o01).
 - **수용 기준:** 같은 snapshot 재전송이 projection 중복을 만들지 않고, receipt의 행 합계·identity·COMPLETE와 UI 상태가 맞아야 한다. 대시보드 반영은 API/화면 readback을 별도로 확인한다.
 - **연결·남은 일:** [CA-C05](contracts.md#ca-c05), [CA-C07](contracts.md#ca-c07), [CA-G01](BACKLOG.md#ca-g01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). 전송 속도·화면 최신성 목표와 운영 측정은 미정이다.
+
+## 관리자 보류 처리 입력
+
+기존 관리자 ID·가린 PIN 한 폼에 원 동작·선택 대상·원 현품표를 함께 표시한다. 원 요청 다시 조회도 저장된 동일 대상/labels를 표시하고, 제출 뒤 PIN 칸을 비운다. 승인/최종 확인·6자리 검증·서버 잠금/역할/철회·원장 CAS·UNKNOWN·건별 보류는 같은 handler로 유지한다. 손상 원본 식별은 중앙 조회 결과가 PIN 필요 여부를 정하고 오프라인 무 PIN 보류와 코드를 공유하므로 기존 입력을 유지한다(2026-10-01 coordinator 답). Python 3.12.10/PS5.1 headless: 새 폼 5 RED→GREEN, 관련 5파일 793 PASS; 처음 broad 90 FAIL은 두 공용 prompt fixture의 인수 불일치로 원본 보존 후 교정했고 마지막 변경 뒤 같은 pack을 다시 실행했다. [결과·미수용 화면 범위](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md).

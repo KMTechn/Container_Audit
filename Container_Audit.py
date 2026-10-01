@@ -7655,20 +7655,30 @@ class ContainerAudit:
         return {"operator": operator, "role": role, "supervisor": "",
                 "login_epoch": getattr(self, "_admin_pin_login_epoch", "")}
 
-    def _prompt_blocked_work_admin_pin(self) -> Optional[tuple[str, str]]:
-        """One visible dialog for the linked web administrator ID and masked PIN."""
+    def _prompt_blocked_work_admin_pin(
+        self, *, action: str = "", target_id: str = "", labels: tuple[str, ...] = (),
+    ) -> Optional[tuple[str, str]]:
+        """Show the original request beside its administrator ID and masked PIN."""
         dialog = tk.Toplevel(self.root)
         dialog.title("관리자 PIN 확인")
         dialog.transient(self.root)
         dialog.resizable(False, False)
         frame = ttk.Frame(dialog, padding=16)
         frame.pack(fill="both", expand=True)
-        ttk.Label(frame, text="관리자 ID").grid(row=0, column=0, sticky="w", pady=4)
+        caption = {
+            "CA.PRECHECK_HOLD": "검사 대기 보류 처리", "CA.PAIR_RETRY": "보류 다시 확인",
+            "CA.PAIR_HANDOFF": "접수 보류 인계", "CA.TRAY_HOLD": "트레이 보류 처리",
+        }.get(action, "보류 처리")
+        detail = (f"처리: {caption}\n대상: {target_id}\n"
+                  f"원 현품표: {', '.join(labels) or '대상 원본 기록 참조'}")
+        ttk.Label(frame, text=detail, wraplength=420, justify="left").grid(
+            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8))
+        ttk.Label(frame, text="관리자 ID").grid(row=1, column=0, sticky="w", pady=4)
         admin_entry = ttk.Entry(frame, width=26)
-        admin_entry.grid(row=0, column=1, pady=4)
-        ttk.Label(frame, text="6자리 PIN").grid(row=1, column=0, sticky="w", pady=4)
+        admin_entry.grid(row=1, column=1, pady=4)
+        ttk.Label(frame, text="6자리 PIN").grid(row=2, column=0, sticky="w", pady=4)
         pin_entry = ttk.Entry(frame, width=26, show="●")
-        pin_entry.grid(row=1, column=1, pady=4)
+        pin_entry.grid(row=2, column=1, pady=4)
         result = []
 
         def submit(_event=None):
@@ -7676,7 +7686,7 @@ class ContainerAudit:
             pin_entry.delete(0, "end")
             dialog.destroy()
 
-        ttk.Button(frame, text="확인", command=submit).grid(row=2, column=1, sticky="e", pady=8)
+        ttk.Button(frame, text="확인", command=submit).grid(row=3, column=1, sticky="e", pady=8)
         dialog.bind("<Return>", submit)
         dialog.grab_set()
         admin_entry.focus_set()
@@ -8289,7 +8299,8 @@ class ContainerAudit:
             source_hash = admin_pin_fingerprint(original)
             target = {"kind": action.split(".", 1)[1].lower(),
                       "id": target_id, "state_fingerprint": source_hash}
-            credentials = self._prompt_blocked_work_admin_pin()
+            credentials = self._prompt_blocked_work_admin_pin(
+                action=action, target_id=target_id, labels=tuple(labels))
             if credentials is None:
                 return None
             admin_id, pin = credentials
@@ -8761,7 +8772,8 @@ class ContainerAudit:
                             store.transition(intent, "SUPERSEDED",
                                              reason="LOGIN_EPOCH_CHANGED")
                         continue
-                    credentials = self._prompt_blocked_work_admin_pin()
+                    credentials = self._prompt_blocked_work_admin_pin(
+                        action=action, target_id=intent["target"]["id"], labels=tuple(labels))
                     if credentials is None:
                         continue
                     admin_id, secret = credentials
