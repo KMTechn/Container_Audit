@@ -6,6 +6,8 @@
 
 일반 보류 직후 다음 현품표 전 UNDO는 기존 parked 상태·복원 감사 outbox를 재사용한다. 새 카드나 event 종류를 추가하지 않으며 `TRAY_PARKED`와 `TRAY_RESTORED_FROM_PARK` 원 기록을 유지한다.
 
+미달 완료 기록은 현재 상태의 pending 감사 전체를 인계한다. 미달 취소는 그 원행과 완료·취소 감사를 병합하며, 재생은 최상위와 중첩 `state`/`undo_state`의 원행을 모두 읽는다(이전 판 기록 포함). CSV 반영 뒤에도 새 감사가 추가된 목록은 덮어쓰지 않는다. 교환 checkpoint 복구 CAS는 `pending_audit_events`의 반영 진행만 비교에서 제외하고 나머지 업무 상태 차이는 계속 거절한다.
+
 [제품·기능 카드](README.md) · [운영](operations.md) · [백로그](BACKLOG.md) · [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md) · [공통 용어](../../../Program_Spec_Hub/GLOSSARY.md)
 
 기준일 2026-09-07, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`와 당시 수정 작업 트리를 대상으로 한다. [정확한 소스·증거 경계](README.md#ca-evidence-scope)를 함께 적용한다. 아래는 소스에서 확인한 계약이며 대상 서버의 활성 설정·설치 provider·실행 성공은 별도 증거가 필요하다. 상대 저장소의 조사 HEAD는 [SOURCE-MAP 및 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md)에 있으며 링크 대상이 이후 바뀌면 재대조한다.

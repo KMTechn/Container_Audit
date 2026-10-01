@@ -279,8 +279,10 @@ def flow(tmp_path):
         try:
             lane = getattr(app, "_ui_lane", None)
             if lane is not None:
-                _pump_until(app.root, lambda: not lane.is_busy())
-                lane.close_idle()
+                try:
+                    _pump_until(app.root, lambda: not lane.is_busy())
+                finally:
+                    lane.close_idle()
         finally:
             app.log_queue.put(None)
             app.log_thread.join(timeout=10)

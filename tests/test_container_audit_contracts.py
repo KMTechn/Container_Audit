@@ -1895,7 +1895,8 @@ def test_test_tray_contract_event_never_enters_direct_sync_csv(tmp_path):
     assert not Path(app.log_file_path).exists()
 
 
-def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_write(tmp_path, monkeypatch):
+@pytest.mark.parametrize('premature_sync', [False, True])
+def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_write(tmp_path, monkeypatch, premature_sync):
     calls = []
     sequence = []
     app = _headless_app()
@@ -1909,7 +1910,9 @@ def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_wr
 
     def tracked_fsync(fd):
         original_fsync(fd)
-        sequence.append("fsync")
+        csv_path = Path(app.log_file_path)
+        is_csv = csv_path.exists() and os.path.samestat(os.fstat(fd), csv_path.stat())
+        sequence.append("csv_fsync" if is_csv else "fsync")
 
     def tracked_session_direct_sync(**kwargs):
         assert Path(app.log_file_path).is_file()
@@ -1919,10 +1922,30 @@ def test_synchronous_tray_complete_triggers_session_direct_sync_after_durable_wr
     monkeypatch.setattr(event_log_store.os, "fsync", tracked_fsync)
     monkeypatch.setattr(container_audit_module, "start_session_direct_sync", tracked_session_direct_sync)
 
+    if premature_sync:
+        # Negative control: an existing CSV must not make sending before its
+        # durable append acceptable, even though the outbox was fsynced first.
+        Path(app.log_file_path).touch()
+        drain = event_log_store.EventLogOutbox.drain
+
+        def send_before_csv(outbox, **kwargs):
+            app._trigger_session_direct_sync('TRAY_COMPLETE')
+            result = drain(outbox, **kwargs)
+            app._trigger_session_direct_sync = lambda reason: None
+            return result
+
+        monkeypatch.setattr(event_log_store.EventLogOutbox, 'drain', send_before_csv)
+
     assert app._log_event("TRAY_COMPLETE", {"scan_count": 1}, synchronous=True) is True
 
     assert Path(app.log_file_path).exists()
-    assert sequence == ["fsync", "direct_sync_trigger"]
+    if premature_sync:
+        with pytest.raises(AssertionError):
+            assert sequence.index('csv_fsync') < sequence.index('direct_sync_trigger')
+    else:
+        assert sequence.index('csv_fsync') < sequence.index('direct_sync_trigger')
+        assert sequence[-1] == 'direct_sync_trigger'
+    assert sequence.count('direct_sync_trigger') == 1
     assert calls == [
         {
             "app_root": app.application_path,

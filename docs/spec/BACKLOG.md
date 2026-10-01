@@ -4,6 +4,8 @@
 
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
+미달 완료·취소의 pending 감사 인계/병합, 이전 중첩 기록 재생, 교환 복구 중 감사 반영 진행과 업무 상태의 구별은 소스 회귀로 확인한다. 전원 중단·실제 GUI 종료 및 중앙 거절 뒤 현장 흐름은 별도 랩 검증에 남는다.
+
 **현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 상세 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 아래 과거 시점의 판단을 보존하며 물리 장비·공장 배포는 별도 범위다. 현재 소스 단순화의 변경·검증·독립 검토는 [CA-G11](#ca-g11)에 기록한다.
 
 기준일 2026-09-07. 아래 우선순위와 담당은 정리 제안/책임 역할이며 새 개발 승인·기한·인력 배정이 아니다. P0는 기존 qualification 실패 처리, P1은 계약/운영 판단에 필요한 공백, P2는 요구 미확정 추가 제안이다. 정적 확인, 기존 실행, 이번 문서 검토의 범위는 [README](README.md#ca-evidence-scope)를 따른다.

@@ -3274,10 +3274,17 @@ class ContainerAudit:
                 continue
             try:
                 state = json.loads(path.read_text(encoding='utf-8'))
-                if state.get('pending_audit_events'):
-                    validate_checkpoint_audit_events(state['pending_audit_events'])
-                    if not self._stage_checkpoint_audit_events(state):
-                        raise OSError('checkpoint audit outbox staging failed')
+                found = False
+                # Short confirmations retain the original checkpoint and, on
+                # cancellation, its restored state. Older records have no
+                # top-level audit list; all three copies remain replay sources.
+                for source in (state, state.get('state'), state.get('undo_state')):
+                    if isinstance(source, dict) and source.get('pending_audit_events'):
+                        validate_checkpoint_audit_events(source['pending_audit_events'])
+                        if not self._stage_checkpoint_audit_events(source):
+                            raise OSError('checkpoint audit outbox staging failed')
+                        found = True
+                if found:
                     staged.append((path, state))
             except (OSError, UnicodeError, ValueError, AttributeError) as exc:
                 # Preserve this source while allowing unrelated CSV rows to drain.
@@ -3294,14 +3301,23 @@ class ContainerAudit:
                 if not path.exists():
                     continue
                 state = json.loads(path.read_text(encoding='utf-8'))
-                events = original['pending_audit_events']
-                # A newer save owns its added rows; never overwrite it.
-                if state.get('pending_audit_events') != events:
+                events = []
+                for name in (None, 'state', 'undo_state'):
+                    source = state if name is None else state.get(name)
+                    saved = original if name is None else original.get(name)
+                    if not isinstance(source, dict) or not isinstance(saved, dict):
+                        continue
+                    projected = saved.get('pending_audit_events')
+                    # A newer save owns its added rows; never overwrite it.
+                    if not projected or source.get('pending_audit_events') != projected:
+                        continue
+                    source.pop('pending_audit_events')
+                    events.extend(projected)
+                if not events:
                     continue
                 if state.get('audit_reset_committed'):
                     path.unlink()
                 else:
-                    state.pop('pending_audit_events', None)
                     atomic_write_json(path, state, indent=4)
                 tray = getattr(self, 'current_tray', None)
                 if tray is not None:
@@ -16509,6 +16525,8 @@ class ContainerAudit:
         path = self._short_projection_path(contract["idempotency_key"])
         record = {"status": "HELD", "contract": dict(contract), "detail": dict(detail),
                   "state": dict(state), "intent_id": intent_id}
+        if state.get('pending_audit_events'):
+            record['pending_audit_events'] = list(state['pending_audit_events'])
         if path.exists():
             existing = json.loads(path.read_text(encoding="utf-8"))
             if existing != record:
@@ -16657,13 +16675,18 @@ class ContainerAudit:
                 if record["status"] != "HELD":
                     return None
                 contract = record['contract']
-                events = [self._checkpoint_audit_event('TRAY_COMPLETE', detail=record['detail'],
+                events = list(record.get('pending_audit_events', []))
+                for source in (record['state'], state):
+                    for event in source.get('pending_audit_events', []):
+                        if event not in events:
+                            events.append(event)
+                events.extend([self._checkpoint_audit_event('TRAY_COMPLETE', detail=record['detail'],
                     idempotency_key=contract['idempotency_key'], event_timestamp=contract['observed_at'],
                     worker_name_override=contract['projection_worker_name'],
                     log_file_path_override=str(self._completion_projection_log_path(contract['projection_log_name']))),
                     self._checkpoint_audit_event('TRAY_SHORT_CONFIRMATION_UNDONE',
                         detail={'completion_id': undo['completion_id']},
-                        idempotency_key='short-undo:' + undo['completion_id'])]
+                        idempotency_key='short-undo:' + undo['completion_id'])])
                 state['pending_audit_events'] = events
                 record.update(status="CANCELLED", undo_state=state, undo_applied=False,
                     pending_audit_events=events,
@@ -16799,7 +16822,10 @@ class ContainerAudit:
                     projected = key in completed_exchange_keys or (
                         same_round and key in (current.get("exchange_idempotency_keys") or []))
                     if not projected:
-                        if current != context["before_state"]:
+                        # CSV replay may clear pending rows after this intent
+                        # was written. Audit progress is not a business change.
+                        without_audit = lambda value: {k: v for k, v in value.items() if k != 'pending_audit_events'}
+                        if without_audit(current) != without_audit(context["before_state"]):
                             result["local_exchange_reviews"] += 1
                             continue
                         if not self._save_tray_state_snapshot(state):

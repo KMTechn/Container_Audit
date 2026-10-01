@@ -63,8 +63,12 @@ def app(tmp_path):
     finally:
         try:
             lane = getattr(instance, "_ui_lane", None)
-            if lane is not None and lane.is_busy():
-                instance.root.run_until(lambda: not lane.is_busy(), timeout=10)
+            if lane is not None:
+                try:
+                    if lane.is_busy():
+                        instance.root.run_until(lambda: not lane.is_busy(), timeout=10)
+                finally:
+                    lane.close_idle()
         finally:
             if instance.log_thread.is_alive():
                 instance.log_queue.put(None)
