@@ -1036,10 +1036,109 @@ function Read-CanonicalRetirementResume {
     }
     return $prior
 }
+function Initialize-CanonicalUserProcessApi {
+    if ('ContainerAuditCanonicalUserProcess' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
+using System.Text;
+public static class ContainerAuditCanonicalUserProcess {
+    public sealed class Security { public string sid; public int session_id; public bool elevated; }
+    [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+    struct Startup {
+        public int cb; public string reserved, desktop, title;
+        public int x,y,cx,cy,xChars,yChars,fill,flags; public short show,reservedBytes;
+        public IntPtr reserved2,input,output,error;
+    }
+    [StructLayout(LayoutKind.Sequential)]
+    struct ProcessInfo { public IntPtr process,thread; public int pid,tid; }
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,IntPtr info,int length,out int needed);
+    [DllImport("advapi32.dll",SetLastError=true)] static extern bool DuplicateTokenEx(IntPtr token,uint access,IntPtr attributes,int level,int type,out IntPtr copy);
+    [DllImport("advapi32.dll",CharSet=CharSet.Unicode,SetLastError=true)]
+    static extern bool CreateProcessWithTokenW(IntPtr token,uint logon,string application,StringBuilder command,uint flags,IntPtr environment,string directory,ref Startup startup,out ProcessInfo process);
+    [DllImport("userenv.dll",SetLastError=true)] static extern bool CreateEnvironmentBlock(out IntPtr environment,IntPtr token,bool inherit);
+    [DllImport("userenv.dll")] static extern bool DestroyEnvironmentBlock(IntPtr environment);
+    [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+    [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out int pid);
+    static void Check(bool success) { if (!success) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    static int Integer(IntPtr token,int kind) {
+        IntPtr data=Marshal.AllocHGlobal(4);
+        try { int needed; Check(GetTokenInformation(token,kind,data,4,out needed)); return Marshal.ReadInt32(data); }
+        finally { Marshal.FreeHGlobal(data); }
+    }
+    static Security Inspect(IntPtr token) {
+        using (WindowsIdentity identity=new WindowsIdentity(token)) {
+            return new Security {sid=identity.User.Value,session_id=Integer(token,12),elevated=Integer(token,20)!=0};
+        }
+    }
+    public static Security Read(int pid) {
+        using (Process process=Process.GetProcessById(pid)) {
+            IntPtr token; Check(OpenProcessToken(process.Handle,8,out token));
+            try { return Inspect(token); } finally { CloseHandle(token); }
+        }
+    }
+    public static int StartLimited(string command,string sid,int session) {
+        IntPtr shell=GetShellWindow(); int shellPid;
+        if (shell==IntPtr.Zero || GetWindowThreadProcessId(shell,out shellPid)==0)
+            throw new InvalidOperationException("Canonical interactive shell is unavailable.");
+        using (Process shellProcess=Process.GetProcessById(shellPid)) {
+            IntPtr token; Check(OpenProcessToken(shellProcess.Handle,10,out token));
+            IntPtr primary=IntPtr.Zero,environment=IntPtr.Zero;
+            try {
+                Security security=Inspect(token);
+                if (security.elevated || security.sid!=sid || security.session_id!=session || session<=0)
+                    throw new InvalidOperationException("Canonical interactive shell security differs.");
+                Check(DuplicateTokenEx(token,11,IntPtr.Zero,2,1,out primary));
+                security=Inspect(primary);
+                if (security.elevated || security.sid!=sid || security.session_id!=session)
+                    throw new InvalidOperationException("Canonical normal-user token differs.");
+                Check(CreateEnvironmentBlock(out environment,primary,false));
+                Startup startup=new Startup(); startup.cb=Marshal.SizeOf(typeof(Startup)); startup.desktop="winsta0\\default";
+                ProcessInfo child;
+                Check(CreateProcessWithTokenW(primary,0,null,new StringBuilder(command),0x08000400,environment,null,ref startup,out child));
+                try { return child.pid; } finally { CloseHandle(child.thread); CloseHandle(child.process); }
+            } finally {
+                if (environment!=IntPtr.Zero) DestroyEnvironmentBlock(environment);
+                if (primary!=IntPtr.Zero) CloseHandle(primary);
+                CloseHandle(token);
+            }
+        }
+    }
+}
+'@
+}
+function Get-CanonicalRelaySecurity([int]$ProcessId) {
+    Initialize-CanonicalUserProcessApi
+    return [ContainerAuditCanonicalUserProcess]::Read($ProcessId)
+}
+function Start-CanonicalLimitedRelay([string]$Line, [string]$UserSid, [int]$SessionId) {
+    Initialize-CanonicalUserProcessApi
+    return [ContainerAuditCanonicalUserProcess]::StartLimited($Line, $UserSid, $SessionId)
+}
 function StartRaw([string]$Line) {
-    $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$Line}
-    if ([uint32]$created.ReturnValue -ne 0) { throw 'Rollback process start failed.' }
-    return [int]$created.ProcessId
+    $caller = Get-CanonicalRelaySecurity $PID
+    if ([int]$caller.session_id -le 0) { throw 'Canonical relay requires an interactive user session.' }
+    if ([bool]$caller.elevated) {
+        # Reuse the same user's existing desktop token. Never fall back to the
+        # installer token, another account, credentials, or a scheduled task.
+        $newPid = Start-CanonicalLimitedRelay $Line ([string]$caller.sid) ([int]$caller.session_id)
+    }
+    else {
+        $created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=$Line}
+        if ([uint32]$created.ReturnValue -ne 0) { throw 'Rollback process start failed.' }
+        $newPid = [int]$created.ProcessId
+    }
+    $security = Get-CanonicalRelaySecurity $newPid
+    if ([bool]$security.elevated -or [string]$security.sid -cne [string]$caller.sid -or
+        [int]$security.session_id -ne [int]$caller.session_id) {
+        throw 'Canonical relay normal-user security readback failed.'
+    }
+    return [int]$newPid
 }
 function ReadReplacementReceipt(
     [string]$Path,

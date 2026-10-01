@@ -110,6 +110,9 @@ main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 �
 옛 relay의 제거 receipt는 정지 요청 ID·표식과 함께 확인한다. runtime lease가 풀린 뒤
 인터프리터가 나갈 때까지 최대 15초 기다리며, 정확한 사전 relay 외 프로세스·UNKNOWN·
 실제 잔류를 인정하지 않는다. 첫 제거 receipt는 rollback의 재제거 전에 audit에 보존한다.
+최종 설치/복구 relay는 같은 SID·대화형 세션의 일반 토큰으로 시작하고 이를 조회한다.
+상승 호출은 기존 desktop shell의 일반 토큰만 사용한다. shell 부재·다른 사용자/세션·
+토큰 조회 실패는 거절하며 installer 토큰이나 자격 증명/임시 task로 우회하지 않는다.
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
 설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
 다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
