@@ -158,6 +158,12 @@ def dispatch_product_mode(argv: Sequence[str]) -> int | None:
     if not arguments or arguments[0] not in PRODUCT_MODES:
         return None
     mode = arguments.pop(0)
+    if mode in {DIRECT_SYNC_RELAY_MODE, USER_RELAY_MODE}:
+        from auto_update import startup_gate
+
+        result = startup_gate(Path(__file__).resolve().parent, [mode, *arguments], role="relay")
+        if result is not None:
+            return result
 
     with _usable_output_streams():
         if mode == DIRECT_SYNC_RELAY_MODE:

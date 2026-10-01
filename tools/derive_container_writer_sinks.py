@@ -25,6 +25,7 @@ POWERSHELL_PATHS = (
     Path("INSTALL_CANONICAL_PORTABLE.ps1"),
     Path("INSTALL_THIS_PC.ps1"),
     Path("tools/container_writer_fence.ps1"),
+    Path("tools/apply_prepared_update.ps1"),
 )
 POWERSHELL_LIBRARY_PATHS = frozenset(
     {
@@ -36,6 +37,12 @@ POWERSHELL_LIBRARY_PATHS = frozenset(
 COMMON_FENCE_GUARD_PREFIX = "Invoke-ContainerWriterFenceMutation"
 POWERSHELL_PLACEMENT_SOURCE = "canonical_code_placement"
 POWERSHELL_ENTRYPOINT_GUARDS: dict[Path, dict[str, Any]] = {
+    Path("tools/apply_prepared_update.ps1"): {
+        "entry_guard": "Enter-ContainerStartupUpdateAuthority",
+        "release_guard": "",
+        "guard_kind": "startup_update_system_authority",
+        "writer_source": "auto_update_control",
+    },
     Path("INSTALL_CANONICAL_PORTABLE.ps1"): {
         "entry_guard": "Enter-ContainerWriterSessionAuthority",
         "release_guard": "Exit-ContainerWriterSessionAuthority",
@@ -64,6 +71,7 @@ POWERSHELL_NON_PRODUCTION_FUNCTION_MODES: dict[Path, dict[str, str]] = {
     },
 }
 POWERSHELL_APPROVED_DOT_SOURCE_SYMBOLS: dict[Path, frozenset[str]] = {
+    Path("tools/apply_prepared_update.ps1"): frozenset({"$IntegrityHelper", "$SharedLeaf"}),
     Path("INSTALL_CANONICAL_PORTABLE.ps1"): frozenset(
         {"$writerFenceHelperPath", "$BootstrapIntegrityFunctions", "$sharedLeaf"}
     ),
@@ -2923,7 +2931,7 @@ def derive_inventory(root: Path | None = None) -> dict[str, Any]:
             "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
             "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
             "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
-            "PowerShell discovery derives the six shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+            "PowerShell discovery derives the shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
             "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
             "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
             "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",

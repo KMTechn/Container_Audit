@@ -45,6 +45,7 @@ RUNTIME_ROOT_FILES = (
 # consumers. Add new runtime modules here explicitly; unrelated root scripts
 # must not enter the packet or seed its tools import closure.
 APP_ROOT_FILES = (
+    "auto_update.py",
     "best_time_records.py",
     "Container_Audit.py",
     "container_admin_pin.py",
@@ -121,6 +122,7 @@ APP_DATA_FILES = (
 )
 EXTERNAL_TOOL_MODULES: tuple[str, ...] = ("tools.direct_sync_relay_operator",)
 PORTABLE_INSTALL_ASSETS = (
+    ("tools/apply_prepared_update.ps1", "tools/apply_prepared_update.ps1"),
     ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
     ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
     ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),
@@ -570,9 +572,18 @@ def build(
     python_home: Path,
     output: Path,
     *,
-    update_manifest_public_key_config: str,
+    update_manifest_public_key_config: str | None = None,
+    auto_update_settings: dict[str, object] | None = None,
 ) -> dict[str, object]:
+    from auto_update import policy_from_settings
+
+    startup_policy = policy_from_settings(auto_update_settings or {})
     repo_root = repo_root.resolve()
+    if update_manifest_public_key_config is None:
+        public_configuration = json.loads((repo_root / UPDATE_KEY_CONFIG_FILENAME).read_text(encoding="utf-8"))
+        if public_configuration.get("schema") != UPDATE_KEY_CONFIG_SCHEMA:
+            raise PortableBuildError("committed update public key schema differs")
+        update_manifest_public_key_config = json.dumps(public_configuration["manifest_public_key"], sort_keys=True)
     python_home = python_home.resolve()
     output = output.resolve()
     _assert_clean_source(repo_root)
@@ -594,6 +605,9 @@ def build(
     update_key_config_sha256 = _write_update_key_config(
         app_root,
         update_manifest_public_key_config,
+    )
+    (app_root / "auto-update-settings.json").write_text(
+        json.dumps(startup_policy, sort_keys=True, indent=2) + "\n", encoding="utf-8",
     )
     site_packages = app_root / "site-packages"
     site_packages.mkdir()
@@ -621,6 +635,8 @@ def build(
     file_count, byte_count = _tree_metrics(output)
     manifest = {
         "schema": PORTABLE_SCHEMA,
+        "startup_update_protocol": 1,
+        "startup_update_helper_sha256": _sha256(output / "tools/apply_prepared_update.ps1"),
         "source_commit": _git_value(repo_root, "HEAD^{commit}"),
         "source_tree": _git_value(repo_root, "HEAD^{tree}"),
         "python_version": ".".join(str(value) for value in EXPECTED_PYTHON),
@@ -680,7 +696,8 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--repo-root", type=Path, default=Path(__file__).resolve().parents[1]
     )
-    parser.add_argument("--update-manifest-public-key-config", required=True)
+    parser.add_argument("--update-manifest-public-key-config")
+    parser.add_argument("--auto-update-settings", type=Path)
     return parser.parse_args(argv)
 
 
@@ -691,6 +708,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         args.python_home,
         args.output,
         update_manifest_public_key_config=args.update_manifest_public_key_config,
+        auto_update_settings=(json.loads(args.auto_update_settings.read_text(encoding="utf-8-sig")) if args.auto_update_settings else None),
     )
     print(json.dumps(result, ensure_ascii=True, sort_keys=True))
     return 0

@@ -107,6 +107,40 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 위 표는 [TransferSealStore / Coordinator](../../transfer_seal.py), [complete_tray](../../Container_Audit.py), [direct_sync_push receipt 검사](../../direct_sync_push.py), [Web projection](../../../WorkerAnalysisGUI-web/common_projection.py)의 경계를 설명한다. 모든 효과가 한 transaction인 것은 아니며 물류 명령과 producer 전송의 도착 순서를 보장하지 않는다.
 
+<a id="ca-startup-update"></a>
+## 로그온 자동 갱신 계약
+
+`auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
+실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
+ES256 검증기로 manifest 서명, ZIP 크기·SHA, portable source SHA와 공개 설정 일치를 다시 확인한다.
+활성 writer 0과 검증된 묶음, 내구 PREPARED 기록이 없으면 포인터를 바꾸지 않는다.
+내구 journal이 포인터보다 먼저 저장되며 중단 후 재시작은 그 기록으로 재개한다.
+
+writer 의미가 달라지는 판은 `from/to commit + from/to writer contract SHA256`의 정확한 방향별
+승인 두 개가 필요하다. 두 승인은 기존 앱 키로 서명한 manifest 안에만 두며,
+현재 설치 SHA→후보 SHA와 정확한 역방향만 허용한다. unsigned 설정이나 다른 키,
+다른 출발점, 역방향 미승인, wildcard, 변조된 계약은 거절한다.
+writer 계약과 데이터/API 계약이 모두 같은 판은 기존 호환 규칙을 유지한다.
+CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를
+보호 policy에 기록한다. 설치 설정의 핀은 관리자 canonical 교체용이며 자동 갱신
+승인을 대신하지 않는다.
+`DATA_API_FILES`의 실제 바이트 해시도 같아야 하며 장부·API migration은 이 기능 범위가 아니다.
+프로토콜 1이 없는 옛 묶음은 자동 전환·READY 복귀 대상으로 허용하지 않는다.
+
+READY는 초기화된 GUI의 nonce·판 SHA·PID·생성 시각과 현재 사용자 identity,
+기존 장부·미완성·outbox 읽기, 같은 판 일반 권한 relay 한 개를 함께 확인한다.
+단순 프로세스 생존·heartbeat는 READY가 아니다. 후보 GUI는 확인 전 스캔을 받지 않는다.
+실패한 trial은 기존 쓰기의 정상 flush/종료를 요청하며, writer 0이 확인된 뒤에만
+보존한 이전 코드로 돌아간다. 정상 종료나 관측이 불명확하면 UNKNOWN으로 남기고
+강제 종료·포인터 변경·업무 데이터 snapshot/복원을 하지 않는다.
+
+설치 설정은 feed 빈 값·허용 전이 빈 목록·`apply_during_work=false`가 기본이다.
+업무 중 전환은 아직 거절한다. 승인된 공개 키는 저장소
+`update-manifest-key-config.json`을 기본 빌드 입력으로 사용하며 기존 서명 계약은 그대로다.
+[결정·실패 주입 시험](../../tests/test_auto_update.py), [운영 경계](operations.md#ca-startup-update),
+[남은 실기 검증](BACKLOG.md#ca-g19).
+
 <a id="ca-c01"></a>
 ## CA-C01 로컬 상태·내구성·소유권
 

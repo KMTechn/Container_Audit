@@ -67,6 +67,11 @@ def _portable_smoke() -> int:
 def main() -> int:
     if "--zero-pe-portable-smoke" in sys.argv[1:]:
         return _portable_smoke()
+    from auto_update import startup_gate
+
+    gate_result = startup_gate(APP_ROOT, list(sys.argv[1:]))
+    if gate_result is not None:
+        return gate_result
     from Container_Audit import main as application_main
 
     result = application_main()

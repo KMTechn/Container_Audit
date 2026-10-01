@@ -244,7 +244,7 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 
 ## 3. 정상 흐름과 중단 지점
 
-1. 시작 계약·단일 인스턴스·현재 사용자 준비·품목 갱신 후 작업자를 선택한다. 미완성 onboarding이나 저장 경로 충돌은 시작 실패로 처리한다. [main / _prepare_gui_startup](../../Container_Audit.py), [current_user_onboarding](../../current_user_onboarding.py)
+1. 설치된 bootstrap은 준비된 새 판과 진행 중 전이를 먼저 확인한다. 시작 계약·단일 인스턴스·현재 사용자 준비·품목 갱신 후 작업자를 선택한다. 미완성 onboarding이나 저장 경로 충돌은 시작 실패로 처리한다. [자동 갱신](operations.md#ca-startup-update), [main / _prepare_gui_startup](../../Container_Audit.py), [current_user_onboarding](../../current_user_onboarding.py)
 2. 원본 PHS2를 입력한다. 중앙 조회 중 먼저 들어온 제품은 내구 FIFO에 보류한다. 조회 실패 시 같은 PHS2로 재시도하며 다른 현품표로 보류를 덮어쓰지 않는다. [CA-03](#ca-03), [CA-04](#ca-04)
 3. 중앙 GOOD 목표만큼 제품을 읽는다. 형식·품목·중복·초과 오류는 증가 완료로 처리하지 않는다. 마지막에는 barcode↔unit 집합과 lease 구성원을 정확히 대조한다. [CA-05](#ca-05), [CA-07](#ca-07)
 4. 완료 intent·로컬 `LINKED`·완료 checkpoint를 보존하고 불변 명령을 중앙에 재전송한다. 로컬 완료 ID가 없는 미확정 트레이와 이미 로컬 완료된 중앙 대기 건은 UI 허용 행동이 다르다. [CA-12](#ca-12)

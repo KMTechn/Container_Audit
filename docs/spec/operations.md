@@ -95,10 +95,46 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 
 **하루 건수(PC·날짜별):** 작업자 화면 `금일 작업 현황`의 품목 행 `(옛 N · 새 중앙 N · 새 로컬 N · 새 형식오류 N · 중복 N)`, 또는 이벤트 CSV(`이적작업이벤트로그_[작업자]_[날짜].csv`)의 `TRAY_COMPLETE` 행 `transition_class`·`transition_reasons`·`transition_duplicate`·`source_computer_id`·`app_version`. `중복 N`은 앞 분류 건수에 이미 든 중복 회차 수이고, 부분 제출도 한 건으로 센다. 재시작하면 CSV로 다시 세며 같은 완료의 재전송·재기록은 한 건이다. 서버 대시보드는 아직 분류를 구분하지 않는다([CA-G17](BACKLOG.md#ca-g17)).
 
+<a id="ca-startup-update"></a>
+## 로그온 자동 갱신 운영
+
+관리자 설치기는 기존 보호 코드 배치와 같은 writer delegation 아래서
+`versions/<source SHA>`·`update-control`을 보호하고, 지정 작업자 SID의 로그온으로
+숨겨진 SYSTEM 작업 `KMTech.ContainerAudit.StartupUpdate.<경로/SID 식별값>`을 등록한다.
+작업 action은 OS 고정 PowerShell과 `current/tools/apply_prepared_update.ps1`뿐이다.
+작업자는 읽기·실행만 하고 action을 바꿀 수 없다. HKCU Run과 GUI launcher는
+고정 일반 권한 bootstrap을 거쳐 준비된 새 판과 진행 중 journal을 먼저 확인한다.
+SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
+
+builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
+`approved_transitions`, `profile_auth`, `apply_during_work`를 받는다.
+설정이 없으면 feed와 승인은 비어 있고 갱신 없이 기존 사용자 동작으로 시작한다.
+`profile_auth=true`는 현재 사용자의 기존 물류 profile을 쓰되 feed와 같은 인증 원본에만
+bearer를 전달한다. redirect·cookie 재사용은 거절한다. 새 credential 저장소를 만들지 않는다.
+실제 feed·인증은 코디네이터가 정한 뒤 보호된 설치 입력으로 제공한다.
+자동 갱신의 양방향 승인은 앱 키로 서명한 manifest 안의 정확한 현재/후보 SHA와
+실제 writer 계약 해시 두 방향에만 둔다. 별도 설정·다른 키·다른 출발점은 거절한다.
+writer 및 데이터/API 계약이 같은 판은 추가 승인 없이 기존 호환 규칙을 따른다.
+확인 전 실패는 policy를 바꾸지 않고, CONFIRMED 뒤 역방향 승인만 보호 감사로 남긴다.
+프로토콜 1 이전 판이나 다른 공개 키의 최초 전환은 관리자 canonical 설치/복구로
+수행하고, 자동 갱신으로 우회하지 않는다.
+옛 releases/latest 경로를 켜지 않는다.
+
+설치 때 HiberbootEnabled를 읽고 policy에 값/읽기 결과만 기록한다.
+켜진 작업자가 이미 있으면 로그온 작업은 DEFERRED로 남기며 업무를 멈추지 않는다.
+수명주기 교체/복구는 진행 중 자동 전이나 실행 중 작업이 있으면 거절한다.
+기존 policy·pointer·journal·task XML/ACL은 보호된 `.startup-update-install.<attempt>`에
+보존하고 교체 실패/정확한 원본 복구에 함께 되돌린다. 제거 시 소유 작업을 등록 해제하고
+versions/control은 `.startup-update-uninstall.<attempt>`에 보존한다. 업무 데이터는 건드리지 않는다.
+
+PROVEN 범위는 순수 결정·핀·내구 쓰기 순서와 명령 생성, 코드 inventory 검사다.
+실제 task 등록/ACL, 일반 사용자 GUI READY, 로그온 경합, 전원 중단·실패 복귀,
+Hiberboot 값 관측은 호스트에서 실행하지 않았다. [CA-G19](BACKLOG.md#ca-g19)가 실기 수용을 관리한다.
+
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
-portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion을 포함한 root Python 57개를 명시한다.
+portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion과 자동 갱신 bootstrap을 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개와 외부 운영 CLI `tools.direct_sync_relay_operator`를 함께 탑재한다.
 CLI의 목적지는 `app/tools/direct_sync_relay_operator.py`다. 새 root 스크립트는 자동 탑재하지 않으며,

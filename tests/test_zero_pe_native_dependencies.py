@@ -399,6 +399,7 @@ def test_portable_builder_requires_empty_native_closure_and_curated_tools():
         "tools/register_container_audit_worker_pc.py",
     }
     assert set(portable_builder.PORTABLE_INSTALL_ASSETS) == {
+        ("tools/apply_prepared_update.ps1", "tools/apply_prepared_update.ps1"),
         ("INSTALL_CANONICAL_PORTABLE.ps1", "INSTALL_CANONICAL_PORTABLE.ps1"),
         ("INSTALL_THIS_PC.ps1", "INSTALL_THIS_PC.ps1"),
         ("tools/bootstrap_integrity.ps1", "tools/bootstrap_integrity.ps1"),

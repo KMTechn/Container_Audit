@@ -187,7 +187,7 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "Path-method mutation detection is conservative and requires static path-like receiver evidence.",
         "HTTP network mutation detection conservatively treats calls named post or request as writer sites.",
         "External process creation is conservatively treated as a writer boundary; static Python literals are also scanned for scheduled-task and service control commands.",
-        "PowerShell discovery derives the six shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
+        "PowerShell discovery derives the shipped portable PowerShell assets from PORTABLE_INSTALL_ASSETS and records dot-source boundaries; it does not execute PowerShell or recursively interpret sourced code.",
         "PowerShell Start-Process/Invoke-Item, Invoke-Expression/IEX, call-operator, direct script/native command, module import, explicit COM/WMI or native process creation, explicit .NET Process.Start, scheduler COM, service-control, runspace/job/event-action, and reflection primitives are conservatively treated as writer boundaries.",
         "A dynamic PowerShell invocation primitive can be detected and denied when unfenced, but its runtime-computed target or decoded payload cannot in general be resolved statically.",
         "PowerShell guard attribution enforces one bounded top-level guard lifetime and direct intra-file function-call reachability, but remains syntactic and does not prove computed or cross-module calls, alias resolution, module dispatch, or every multiline/here-string control-flow relationship.",
@@ -260,9 +260,21 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
                 ]
                 if row["file"] == "INSTALL_THIS_PC.ps1"
             ),
+        },
+        {
+            "file": "tools/apply_prepared_update.ps1",
+            "source": "auto_update_control",
+            "guard_name": "Enter-ContainerStartupUpdateAuthority",
+            "guard_line": next(row["guard_line"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
+            "release_name": "",
+            "release_line": None,
+            "guarded": True,
+            "writer_site_count": next(row["writer_site_count"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
+            "writer_site_kinds": next(row["writer_site_kinds"] for row in payload["powershell_execution_inventory"]["script_entrypoints"] if row["file"] == "tools/apply_prepared_update.ps1"),
         }
     ]
     assert "canonical_code_placement" in payload["writer_sink_sources"]
+    assert "auto_update_control" in payload["writer_sink_sources"]
     assert payload["powershell_execution_inventory"]["asset_derivation"] == (
         "portable_builder.PORTABLE_INSTALL_ASSETS"
     )
@@ -270,9 +282,11 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         path.as_posix() for path in module._discover_shipped_powershell_paths(ROOT)
     ]
     assert payload["coverage_summary"]["powershell_execution_site_counts_by_kind"] == {
-        "call_operator": 22,
-        "com_wmi_process_create": 1,
-        "dot_source": 10,
+        "call_operator": 25,
+        "com_wmi_process_create": 4,
+        "dot_source": 13,
+        "reflective_invocation": 2,
+        "scheduler_com": 3,
         "start_process": 3,
     }
     helper_calls = [

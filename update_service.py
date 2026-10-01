@@ -577,10 +577,15 @@ def verify_update_manifest_signature(manifest: Mapping[str, Any], signature: byt
 
 
 def archive_policy_from_manifest(archive: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+    policy = {
         "top_level": archive.get("top_level"),
         "required_files": list(archive.get("required_files") or []),
     }
+    if "layout" in archive:
+        if archive["layout"] != "canonical_portable":
+            raise ValueError("업데이트 ZIP layout은 canonical_portable이어야 합니다.")
+        policy["layout"] = archive["layout"]
+    return policy
 
 
 def update_candidate_from_private_manifest(
@@ -724,7 +729,26 @@ def validate_update_archive_layout(members: list[str], archive_policy: Mapping[s
     retired = sorted(RETIRED_UPDATE_ARCHIVE_FILES & present_files)
     if retired:
         raise ValueError("업데이트 ZIP에 폐기된 별도 helper 실행 파일이 포함되어 있습니다: " + ", ".join(retired))
-    missing = sorted(REQUIRED_UPDATE_ARCHIVE_FILES - present_files)
+    required = REQUIRED_UPDATE_ARCHIVE_FILES
+    if archive_policy and archive_policy.get("layout") == "canonical_portable":
+        required = {
+            "Container_Audit/portable-manifest.json",
+            "Container_Audit/runtime/python.exe",
+            "Container_Audit/runtime/pythonw.exe",
+            "Container_Audit/app/main.py",
+            "Container_Audit/app/auto_update.py",
+            "Container_Audit/app/update-manifest-key-config.json",
+            "Container_Audit/tools/container_writer_sink_inventory.json",
+            "Container_Audit/tools/container_writer_session_contract.json",
+            "Container_Audit/tools/bootstrap_integrity.ps1",
+            "Container_Audit/tools/apply_prepared_update.ps1",
+            "Container_Audit/INSTALL_CANONICAL_PORTABLE.ps1",
+            "Container_Audit/INSTALL_THIS_PC.ps1",
+            "Container_Audit/launch-container-audit.cmd",
+        }
+        if any(name.casefold().endswith(".exe") and not name.startswith("Container_Audit/runtime/") for name in present_files):
+            raise ValueError("휴대판 업데이트는 runtime 밖 실행 파일을 포함할 수 없습니다.")
+    missing = sorted(required - present_files)
     if missing:
         raise ValueError("업데이트 ZIP에 필수 파일이 없습니다: " + ", ".join(missing))
     if archive_policy:

@@ -359,6 +359,23 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 - **writer inventory 주입 경로(다음 canonical 업그레이드 주기):** 정적 도구가 주입 호출(onboarding `relay_launcher=start_user_relay_process`, 앱 시작 `launcher or start_user_relay_process`)을 따라가지 못해 GUI 진입점의 `persistent_relay_process_start` 경로가 `known_route_coverage`에 없다. 지금 드러내면 설치본 c3a1230·4a55e86 위 canonical 업그레이드가 `CODE_PRESTATE_WRITER_SEMANTICS_DIFFER`로 거절되므로 유지했다(코디네이터 09-29 판단). 다음 canonical 업그레이드 주기에 도구가 주입 경로를 보게 하고 설치기 전이 pin을 함께 넣는다. 그때까지 이 경로의 근거는 inventory가 아니라 실제 동작 시험(단일 실행 잠금·정지 표식·Run 등록·writer fence)이다.
 - **NOT TESTED:** guest에서 같은 절차(오프라인 재실행·경고창 10초 이상)로 relay 생존과 앱 재시작 복구, 설치본 `pythonw` 시작 명령의 실제 프로세스, 회사 서버.
 
+<a id="ca-g19"></a>
+## CA-G19 로그온 자동 갱신 실기 수용
+
+- **구현:** 서명된 HTTPS 묶음 준비, 고정 SYSTEM 적용 작업, protected SHA 판/내구 journal,
+  GUI/relay 시작 gate, 정확한 양방향 핀과 변경 없는 데이터/API 바이트 확인,
+  nonce/SHA/PID/생성 시각과 사용자 저장소·일반 relay READY, 정상 종료 뒤 코드 복귀.
+- **기본 상태:** feed/허용 전이 비어 있음, 업무 중 전환 거절. 프로토콜 없는 옛 현장 판의
+  첫 이동은 기존 정확한 canonical 설치/복구로 수행해야 하며 자동 READY를 소급해서 가정하지 않는다.
+- **PROVEN:** 소스의 순수 결정/변조·역방향·미승인 거절과 flush-before-pointer 실패 주입,
+  scheduler 명령 생성·writer inventory 검사. 실제 수명주기 증거는 아니다.
+- **NOT TESTED:** 랩 guest에서 실제 설치/업그레이드/제거/복구, SYSTEM task ACL·logon race,
+  일반 사용자 GUI/relay 및 미완성/장부/outbox 읽기, 후보 기동 실패 뒤 기존 코드 정상 복귀,
+  전원 중단 후 재개, GUI 경고창 중 UNKNOWN 보존, 실제 서명 feed/인증·Hiberboot 읽기.
+  전체 시험·stock builder와 독립 검토는 코디네이터가 별도 배정한다.
+- **다음 행동:** 실제 이전/후속 출시 SHA와 양방향 writer 계약 핀을 승인한 뒤 guest 수용을 수행한다.
+  현재 실패 증거와 보호된 preimage/이전 판을 보존하고 실기 수용 전 출시하지 않는다.
+
 ## 갱신 기준
 
 요구 확정·소스 변경·실행 결과가 생긴 담당자는 연결된 기능/계약/운영 항목과 이 문서의 상태·다음 행동을 같은 작업에서 갱신한다. Main에 중앙 INT-02/03/04/09/10, I02/I04 및 Q01/Q07에 미치는 차이를 알린다. 과거 실패·미실행을 삭제하지 않고 새 버전·환경의 근거를 연결한다. [AGENTS의 지속 관리 규칙](../../AGENTS.md)을 적용한다.

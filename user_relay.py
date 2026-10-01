@@ -92,6 +92,12 @@ def build_user_relay_command(
 ) -> list[str]:
     root = Path(app_root).expanduser().resolve()
     root_arguments = relay_data_root_arguments(root, environ=environ)
+    from auto_update import control_root
+
+    control = control_root(root)
+    if control is not None:
+        bootstrap = control.parent / "current"
+        return [str(bootstrap / "runtime/pythonw.exe"), "-I", "-B", str(bootstrap / "app/auto_update.py"), "--bootstrap", "--role", "relay", "--", USER_RELAY_MODE, *root_arguments]
     application_exe = root / "Container_Audit.exe"
     if application_exe.is_file():
         return [str(application_exe), USER_RELAY_MODE, *root_arguments]
@@ -335,6 +341,9 @@ def run_persistent_relay_loop(
             "last_cycle": cycle,
             "updated_at": _now(),
         }
+        from auto_update import relay_ready_metadata
+
+        report.update(relay_ready_metadata(Path(__file__).resolve().parent))
         if status_write_error is not None:
             report["previous_status_write_error"] = status_write_error
         try:
@@ -386,6 +395,12 @@ def _runtime_cycle(
         reason="PERSISTENT_USER_RELAY",
         timeout_seconds=45,
     )
+    from auto_update import prepare_feed_packet
+
+    try:
+        update_preparation = prepare_feed_packet(app_root)
+    except Exception as exc:
+        update_preparation = {"status": "FAILED", "error_type": type(exc).__name__}
     runtime_status = _read_json(
         direct_sync_root / "status" / "direct_sync_relay_status.json"
     )
@@ -398,6 +413,7 @@ def _runtime_cycle(
         "process_status": process_status,
         "process_returncode": process_result.get("returncode", "UNKNOWN"),
         "relay_status": relay_status,
+        "auto_update": update_preparation,
     }
 
 
@@ -457,6 +473,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 @writer_sink("persistent_relay_status", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
+    from auto_update import startup_gate, trial_stop_requested
+
+    selected_arguments = list(sys.argv[1:] if argv is None else argv)
+    gate_result = startup_gate(Path(__file__).resolve().parent, [USER_RELAY_MODE, *selected_arguments], role="relay")
+    if gate_result is not None:
+        return gate_result
     args = build_parser().parse_args(argv)
     app_root = Path(
         args.app_root
@@ -516,7 +538,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             status_path=user_relay_status_path(direct_sync_root),
             interval_seconds=args.interval_seconds,
-            stop_requested=stop_path.exists,
+            stop_requested=lambda: stop_path.exists() or trial_stop_requested(app_root),
             max_cycles=1 if args.once else None,
         )
     finally:

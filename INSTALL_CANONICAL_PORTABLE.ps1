@@ -228,6 +228,12 @@ function Command([string]$Root) {
     $command = ('{0} -I -B {1} --container-audit-user-relay' -f
         (Arg (Join-Path $Root 'runtime\pythonw.exe')),
         (Arg (Join-Path $Root 'app\main.py')))
+    if ((Test-Path -LiteralPath (Join-Path $Root 'app\auto-update-settings.json')) -or
+        (Test-Path -LiteralPath (Join-Path $SourceRoot 'app\auto-update-settings.json'))) {
+        $command = ('{0} -I -B {1} --bootstrap --role relay -- --container-audit-user-relay' -f
+            (Arg (Join-Path $Root 'runtime\pythonw.exe')),
+            (Arg (Join-Path $Root 'app\auto_update.py')))
+    }
     if (-not [string]::IsNullOrWhiteSpace($env:CONTAINER_AUDIT_DATA_ROOT)) {
         $dataRoot = Full $env:CONTAINER_AUDIT_DATA_ROOT 'data root'
         $codeRoot = Full $Root 'code root'
@@ -411,6 +417,31 @@ function Get-WriterInventorySemantics($Inventory) {
     }
     Remove-WriterInventoryPositions $copy
     return ($copy | ConvertTo-Json -Depth 40 -Compress)
+}
+function Test-ExactApprovedWriterTransition($Old, $New, [string]$SourceRoot) {
+    $settingsPath = Join-Path $SourceRoot 'app\auto-update-settings.json'
+    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return $false }
+    if ((Get-Item -LiteralPath $settingsPath).Length -gt 65536) { throw 'WRITER_TRANSITION_PIN_INVALID' }
+    $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ($settings.approved_transitions -isnot [array]) { throw 'WRITER_TRANSITION_PIN_INVALID' }
+    $found = $false
+    $seen = @{}
+    foreach ($pin in @($settings.approved_transitions)) {
+        if (-not (Test-ExactPropertySet $pin @('from_commit','to_commit','from_contract_sha256','to_contract_sha256')) -or
+            $pin.from_commit -isnot [string] -or $pin.to_commit -isnot [string] -or
+            $pin.from_contract_sha256 -isnot [string] -or $pin.to_contract_sha256 -isnot [string] -or
+            $pin.from_commit -cnotmatch '^[0-9a-f]{40}$' -or $pin.to_commit -cnotmatch '^[0-9a-f]{40}$' -or
+            $pin.from_contract_sha256 -cnotmatch '^[0-9a-f]{64}$' -or $pin.to_contract_sha256 -cnotmatch '^[0-9a-f]{64}$') {
+            throw 'WRITER_TRANSITION_PIN_INVALID'
+        }
+        $identity = @($pin.from_commit,$pin.to_commit,$pin.from_contract_sha256,$pin.to_contract_sha256) -join ':'
+        if ($seen.ContainsKey($identity)) { throw 'WRITER_TRANSITION_PIN_DUPLICATE' }
+        $seen[$identity] = $true
+        if ($pin.from_commit -ceq $Old.source_commit -and $pin.to_commit -ceq $New.source_commit -and
+            $pin.from_contract_sha256 -ceq $Old.writer_sink_inventory_contract_sha256 -and
+            $pin.to_contract_sha256 -ceq $New.writer_sink_inventory_contract_sha256) { $found = $true }
+    }
+    return $found
 }
 function Sync-CanonicalWriterFenceInventory([string]$InventorySha256) {
     $active = Read-ContainerWriterFence
@@ -1671,7 +1702,8 @@ if (Test-Path -LiteralPath $install -PathType Container) {
         (Join-Path $install 'tools\container_writer_sink_inventory.json') `
         ([string]$preflightCandidate.writer_sink_inventory_sha256) `
         ([string]$preflightCandidate.writer_sink_inventory_contract_sha256)
-    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
+    if ((Get-WriterInventorySemantics $preflightInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory) -and
+        -not (Test-ExactApprovedWriterTransition $preflightCandidate $lifecycleManifest $lifecycleSource)) {
         throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
     }
 }
@@ -2042,14 +2074,15 @@ $enteredPlacementTry = $true
                 (Join-Path $install 'tools\container_writer_sink_inventory.json') `
                 ([string]$candidate.writer_sink_inventory_sha256) `
                 ([string]$candidate.writer_sink_inventory_contract_sha256)
-            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory)) {
+            if ((Get-WriterInventorySemantics $installedInventory) -cne (Get-WriterInventorySemantics $lifecycleWriterInventory) -and
+                -not (Test-ExactApprovedWriterTransition $candidate $lifecycleManifest $lifecycleSource)) {
                 throw 'CODE_PRESTATE_WRITER_SEMANTICS_DIFFER'
             }
             $installedInventorySha256 = [string]$candidate.writer_sink_inventory_contract_sha256
             $currentTreeInventorySha256 = $installedInventorySha256
             $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = $installedInventorySha256
             $audit.code_replacement.installed_writer_inventory_sha256 = $installedInventorySha256
-            $audit.code_replacement.writer_semantics_identical = $true
+            $audit.code_replacement.writer_semantics_identical = ((Get-WriterInventorySemantics $installedInventory) -ceq (Get-WriterInventorySemantics $lifecycleWriterInventory))
             $existingVerified = $true
             $audit.code_replacement.prestate='VERIFIED_REPLACE'
             if (

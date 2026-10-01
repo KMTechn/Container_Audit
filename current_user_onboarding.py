@@ -791,6 +791,13 @@ def _replacement_user_relay_command(
         entrypoint,
         "replacement lifecycle canonical relay entrypoint",
     )
+    from auto_update import control_root
+
+    control = control_root(selected)
+    if control is not None:
+        fixed = control.parent / "current"
+        return [str(fixed / "runtime/pythonw.exe"), "-I", "-B", str(fixed / "app/auto_update.py"), "--bootstrap", "--role", "relay", "--", USER_RELAY_MODE,
+                *relay_data_root_arguments(selected, environ=environ)]
     return [str(pythonw), "-I", "-B", str(entrypoint), USER_RELAY_MODE,
             *relay_data_root_arguments(selected, environ=environ)]
 

@@ -574,7 +574,11 @@ function Assert-ContainerReplacementRestoreQuiescent(
     [switch]$SkipOwnedTaskCheckForGuardedTest,
     [switch]$ClassifyOtherSessionPreflight
 ) {
-    $rootPrefix = (Get-StrictFullPath $CurrentRoot 'restore process root') + '\'
+    $processRoot = Get-StrictFullPath $CurrentRoot 'restore process root'
+    if (Test-Path -LiteralPath (Join-Path (Split-Path -Parent $processRoot) 'update-control\policy.json')) {
+        $processRoot = Split-Path -Parent $processRoot
+    }
+    $rootPrefix = $processRoot + '\'
     try { $processes = @(Get-CimInstance Win32_Process -ErrorAction Stop) }
     catch { throw 'Replacement restore could not prove process quiescence.' }
     $matches = @($processes | Where-Object {
@@ -605,12 +609,253 @@ function Assert-ContainerReplacementRestoreQuiescent(
         throw 'Replacement restore requires zero Container product processes.'
     }
     if (-not $SkipOwnedTaskCheckForGuardedTest.IsPresent) {
+        $policyPath = Join-Path (Split-Path -Parent $CurrentRoot) 'update-control\policy.json'
+        if (Test-Path -LiteralPath $policyPath -PathType Leaf) {
+            $policy = Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ([string]$policy.operator_sid -cne $OperatorSid) { throw 'STARTUP_UPDATE_OPERATOR_DIFFERS' }
+            $transitionPath = Join-Path (Split-Path -Parent $CurrentRoot) 'update-control\transition.json'
+            if (Test-Path -LiteralPath $transitionPath) {
+                $transition = Get-Content -LiteralPath $transitionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if ([string]$transition.phase -cnotin @('CONFIRMED','ROLLED_BACK','DEFERRED')) { throw 'STARTUP_UPDATE_TRANSITION_UNRESOLVED' }
+            }
+            [void](Get-ContainerStartupUpdateTaskPreimage $CurrentRoot)
+        }
         try { $task = Get-ScheduledTask -TaskName $LegacyRelayTaskName -ErrorAction SilentlyContinue }
         catch { throw 'Replacement restore could not prove scheduled-task quiescence.' }
         if ($null -ne $task -and [string]$task.State -cne 'Disabled') {
             throw 'Replacement restore requires the owned scheduled writer to be disabled or absent.'
         }
     }
+}
+
+function Get-ContainerStartupUpdateTaskSpec([string]$Root, [string]$Sid) {
+    $runtime = Join-Path $Root 'runtime\python.exe'
+    $implementation = Join-Path $Root 'app\auto_update.py'
+    $output = & $runtime -I -B $implementation --print-logon-task --install-root $Root --operator-sid $Sid
+    if ($LASTEXITCODE -ne 0) { throw 'STARTUP_UPDATE_TASK_SPEC_FAILED' }
+    $spec = ($output -join "`n") | ConvertFrom-Json
+    if ([string]$spec.name -cnotmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$' -or
+        $spec.xml -isnot [string]) { throw 'STARTUP_UPDATE_TASK_SPEC_INVALID' }
+    return $spec
+}
+
+function Invoke-ContainerStartupUpdateTaskMutation([scriptblock]$Action) {
+    Invoke-ContainerWriterFenceMutation -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot `
+        -SessionId $WriterFenceSessionId -AttemptId $WriterFenceAttemptId `
+        -ReplacementTransactionId $WriterFenceReplacementTransactionId -DelegationToken $WriterFenceDelegationToken -Action $Action
+}
+
+function Get-ContainerStartupUpdateTaskPreimage([string]$Root) {
+    $spec = Get-ContainerStartupUpdateTaskSpec $Root $OperatorSid
+    $existing = Get-ScheduledTask -TaskName $spec.name -ErrorAction SilentlyContinue
+    $result = [ordered]@{name=[string]$spec.name;exists=($null -ne $existing);xml='';sddl=''}
+    if ($null -ne $existing) {
+        if ([string]$existing.State -ceq 'Running') { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
+        $service = New-Object -ComObject 'Schedule.Service'
+        $service.Connect()
+        $registered = $service.GetFolder('\').GetTask($spec.name)
+        if ([int]$registered.GetInstances(0).Count -ne 0) { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
+        $actual = [xml]$registered.Xml
+        $expected = [xml]$spec.xml
+        if ($actual.Task.Actions.Exec.Command -cne $expected.Task.Actions.Exec.Command -or
+            $actual.Task.Actions.Exec.Arguments -cne $expected.Task.Actions.Exec.Arguments -or
+            $actual.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
+            $actual.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
+        $result.xml = [string]$registered.Xml
+        $result.sddl = [string]$registered.GetSecurityDescriptor(7)
+    }
+    return $result
+}
+
+function Write-ContainerStartupUpdateRecord([string]$Path, $Payload) {
+    if (-not ('KMTechStartupUpdateAtomicFile' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System.Runtime.InteropServices;
+public static class KMTechStartupUpdateAtomicFile {
+ [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+ public static extern bool MoveFileExW(string source, string target, uint flags);
+}
+'@
+    }
+    Assert-NoReparsePoint $Path 'startup update record'
+    $temporary = $Path + '.tmp.' + [guid]::NewGuid().ToString('N')
+    $bytes = (New-Object Text.UTF8Encoding($false)).GetBytes(($Payload | ConvertTo-Json -Depth 12) + "`n")
+    $stream = New-Object IO.FileStream($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None,4096,[IO.FileOptions]::WriteThrough)
+    try { $stream.Write($bytes,0,$bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
+    if (-not [KMTechStartupUpdateAtomicFile]::MoveFileExW($temporary,$Path,9)) { throw 'STARTUP_UPDATE_DURABLE_RECORD_FAILED' }
+}
+
+function Save-ContainerStartupUpdatePreimage([string]$Root, [string]$Purpose) {
+    $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed parent'
+    $directory = Join-Path $managed ('.startup-update-' + $Purpose + '.' + $WriterFenceAttemptId)
+    if (-not (Test-PathWithin $directory $managed) -or (Test-Path -LiteralPath $directory)) { throw 'STARTUP_UPDATE_PREIMAGE_PATH_INVALID' }
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    Set-HardenedCodeAcl $directory -Recursive
+    $files = @()
+    foreach ($name in @('policy.json','active.json','transition.json')) {
+        $path = Join-Path $managed ('update-control\' + $name)
+        Assert-NoReparsePoint $path 'startup update control preimage'
+        $exists = Test-Path -LiteralPath $path -PathType Leaf
+        $hash = ''
+        if ($exists) {
+            Copy-Item -LiteralPath $path -Destination (Join-Path $directory $name)
+            $hash = Get-FileSha256 $path
+            if ((Get-FileSha256 (Join-Path $directory $name)) -cne $hash) { throw 'STARTUP_UPDATE_PREIMAGE_READBACK_FAILED' }
+        }
+        $files += [ordered]@{name=$name;exists=[bool]$exists;sha256=$hash}
+    }
+    $task = Get-ContainerStartupUpdateTaskPreimage $Root
+    $payload = [ordered]@{schema='container-audit-startup-update-install-preimage-v1';root=$Root;operator_sid=$OperatorSid;attempt_id=$WriterFenceAttemptId;files=$files;task=$task}
+    Write-ContainerStartupUpdateRecord (Join-Path $directory 'preimage.json') $payload
+    return [pscustomobject]@{path=$directory;sha256=(Get-FileSha256 (Join-Path $directory 'preimage.json'))}
+}
+
+function Restore-ContainerStartupUpdatePreimage([string]$Root, [string]$Directory, [string]$ExpectedSha256) {
+    $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update restore parent'
+    $full = Get-StrictFullPath $Directory 'startup update preimage'
+    if (-not (Test-PathWithin $full $managed) -or (Split-Path -Leaf $full) -cnotmatch '^\.startup-update-(install|uninstall)\.[0-9a-f]{32}$') { throw 'STARTUP_UPDATE_RESTORE_PATH_INVALID' }
+    Assert-NoReparsePoint $full 'startup update preimage'
+    $path = Join-Path $full 'preimage.json'
+    if ($ExpectedSha256 -cnotmatch '^[0-9a-f]{64}$' -or (Get-FileSha256 $path) -cne $ExpectedSha256) { throw 'STARTUP_UPDATE_RESTORE_PREIMAGE_PIN_DIFFERS' }
+    $saved = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$saved.schema -cne 'container-audit-startup-update-install-preimage-v1' -or
+        -not (Test-SamePath ([string]$saved.root) $Root) -or [string]$saved.operator_sid -cne $OperatorSid -or
+        (@($saved.files | ForEach-Object { [string]$_.name }) -join ',') -cne 'policy.json,active.json,transition.json') { throw 'STARTUP_UPDATE_RESTORE_BINDING_DIFFERS' }
+    $currentTask = Get-ScheduledTask -TaskName ([string]$saved.task.name) -ErrorAction SilentlyContinue
+    if ($null -ne $currentTask -and [string]$currentTask.State -ceq 'Running') { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
+    $control = Join-Path $managed 'update-control'
+    foreach ($item in @($saved.files)) {
+        $target = Join-Path $control ([string]$item.name)
+        Assert-NoReparsePoint $target 'startup update restore target'
+        if (Test-Path -LiteralPath $target) {
+            Move-Item -LiteralPath $target -Destination (Join-Path $full ('failed-' + [guid]::NewGuid().ToString('N') + '-' + $item.name))
+        }
+        if ($item.exists -isnot [bool]) { throw 'STARTUP_UPDATE_RESTORE_EXISTENCE_INVALID' }
+        if ($item.exists) {
+            $original = Join-Path $full ([string]$item.name)
+            if ((Get-FileSha256 $original) -cne [string]$item.sha256) { throw 'STARTUP_UPDATE_RESTORE_BYTES_DIFFER' }
+            Copy-Item -LiteralPath $original -Destination $target
+            if ((Get-FileSha256 $target) -cne [string]$item.sha256) { throw 'STARTUP_UPDATE_RESTORE_READBACK_FAILED' }
+        }
+    }
+    Invoke-ContainerStartupUpdateTaskMutation {
+        $name = [string]$saved.task.name
+        if ($name -cnotmatch '^KMTech\.ContainerAudit\.StartupUpdate\.[0-9a-f]{24}$') { throw 'STARTUP_UPDATE_RESTORE_TASK_NAME_INVALID' }
+        $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        if ($null -ne $existing -and [string]$existing.State -ceq 'Running') { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
+        if ($saved.task.exists -isnot [bool]) { throw 'STARTUP_UPDATE_RESTORE_TASK_EXISTENCE_INVALID' }
+        if ($saved.task.exists) {
+            Register-ScheduledTask -TaskName $name -Xml ([string]$saved.task.xml) -Force | Out-Null
+            $service = New-Object -ComObject 'Schedule.Service'; $service.Connect()
+            $registered = $service.GetFolder('\').GetTask($name)
+            $registered.SetSecurityDescriptor([string]$saved.task.sddl,0)
+            if ([string]$registered.GetSecurityDescriptor(7) -cne [string]$saved.task.sddl -or [string]$registered.Xml -cne [string]$saved.task.xml) { throw 'STARTUP_UPDATE_RESTORE_TASK_READBACK_FAILED' }
+        } elseif ($null -ne $existing) {
+            Unregister-ScheduledTask -TaskName $name -Confirm:$false
+            if ($null -ne (Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue)) { throw 'STARTUP_UPDATE_RESTORE_TASK_REMOVAL_FAILED' }
+        }
+    } | Out-Null
+}
+
+function Initialize-ContainerStartupUpdate([string]$Root) {
+    $settingsPath = Join-Path $Root 'app\auto-update-settings.json'
+    if (-not (Test-Path -LiteralPath $settingsPath -PathType Leaf)) { return }
+    if ($testOverride) { Write-Output 'startup_update_status=NOT_TESTED_HOST'; return }
+    $Script:StartupUpdatePreimage = Save-ContainerStartupUpdatePreimage $Root 'install'
+    $managed = Get-StrictFullPath (Split-Path -Parent $Root) 'startup update managed root'
+    Assert-NoReparsePoint $managed 'startup update managed root'
+    $control = Join-Path $managed 'update-control'
+    $versions = Join-Path $managed 'versions'
+    foreach ($directory in @($control,$versions)) {
+        if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory | Out-Null }
+        Assert-NoReparsePoint $directory 'startup update protected directory'
+        Set-HardenedCodeAcl $directory -Recursive
+    }
+    $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath (Join-Path $Root 'portable-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    if ([string]$manifest.source_commit -cnotmatch '^[0-9a-f]{40}$' -or $manifest.startup_update_protocol -ne 1) {
+        throw 'STARTUP_UPDATE_INITIAL_VERSION_INVALID'
+    }
+    $version = Join-Path $versions ([string]$manifest.source_commit)
+    if (-not (Test-Path -LiteralPath $version)) {
+        Copy-Item -LiteralPath $Root -Destination $version -Recurse
+        if ((Get-InventoryAggregate @(Get-CodeInventory $version)) -cne (Get-InventoryAggregate @(Get-CodeInventory $Root))) {
+            throw 'STARTUP_UPDATE_INITIAL_VERSION_READBACK_FAILED'
+        }
+        [void](Write-BootstrapIntegrityRecord -Root $version -CodeRootIdentity $version)
+        Set-HardenedCodeAcl $version -Recursive
+    } else {
+        [void](Assert-BootstrapIntegrityRecord $version)
+        if ((Get-InventoryAggregate @(Get-CodeInventory $version)) -cne (Get-InventoryAggregate @(Get-CodeInventory $Root))) {
+            throw 'STARTUP_UPDATE_VERSION_ALREADY_HAS_DIFFERENT_BYTES'
+        }
+    }
+    $hiberboot = $null
+    $hiberbootReadStatus = 'UNPROVEN'
+    try {
+        $hiberboot = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction Stop).HiberbootEnabled
+        $hiberbootReadStatus = 'READ'
+    } catch { $hiberbootReadStatus = 'UNREADABLE' }
+    $policy = [ordered]@{
+        schema='container-audit-startup-update-policy-v1'
+        feed_url=[string]$settings.feed_url;channel=[string]$settings.channel
+        profile_auth=[bool]$settings.profile_auth
+        approved_transitions=@($settings.approved_transitions);apply_during_work=$false
+        operator_sid=$OperatorSid;operator_local_app_data=$OperatorLocalAppDataRoot
+        staging_root=(Join-Path $OperatorLocalAppDataRoot 'KMTech\ContainerAudit\updates')
+        hiberboot_enabled=$hiberboot;hiberboot_read_status=$hiberbootReadStatus
+    }
+    if ($settings.apply_during_work -isnot [bool] -or $settings.apply_during_work) { throw 'STARTUP_UPDATE_DURING_WORK_FORBIDDEN' }
+    $policyPath = Join-Path $control 'policy.json'
+    if (Test-Path -LiteralPath $policyPath) {
+        $old = Get-Content -LiteralPath $policyPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ([string]$old.operator_sid -cne $OperatorSid -or -not (Test-SamePath ([string]$old.operator_local_app_data) $OperatorLocalAppDataRoot)) {
+            throw 'STARTUP_UPDATE_OPERATOR_BINDING_DIFFERS'
+        }
+        Copy-Item -LiteralPath $policyPath -Destination (Join-Path $control ('policy-before-' + $WriterFenceAttemptId + '.json'))
+    }
+    $failedShas = @()
+    $oldTransitionPath = Join-Path $Script:StartupUpdatePreimage.path 'transition.json'
+    if (Test-Path -LiteralPath $oldTransitionPath) {
+        $oldTransition = Get-Content -LiteralPath $oldTransitionPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $failedShas = @($oldTransition.failed_shas)
+    }
+    Write-ContainerStartupUpdateRecord (Join-Path $control 'transition.json') ([ordered]@{schema='container-audit-startup-update-v1';phase='DEFERRED';deferred_at=(Get-Date).ToUniversalTime().ToString('o');reason='canonical installation';failed_shas=$failedShas})
+    Write-ContainerStartupUpdateRecord $policyPath $policy
+    Write-ContainerStartupUpdateRecord (Join-Path $control 'active.json') ([ordered]@{schema='container-audit-startup-update-v1';sha=[string]$manifest.source_commit;transition_id='CANONICAL_INSTALL'})
+    $spec = Get-ContainerStartupUpdateTaskSpec $Root $OperatorSid
+    $writerFenceHelperFull = Get-StrictFullPath $WriterFenceHelperPath 'startup update writer fence helper'
+    if ((Get-FileSha256 $writerFenceHelperFull) -cne $ExpectedWriterFenceHelperSha256) { throw 'STARTUP_UPDATE_WRITER_HELPER_PIN_DIFFERS' }
+    . $writerFenceHelperFull
+    Invoke-ContainerWriterFenceMutation -ControlRoot $Script:ContainerWriterFenceAdmissionProductionRoot `
+        -SessionId $WriterFenceSessionId -AttemptId $WriterFenceAttemptId `
+        -ReplacementTransactionId $WriterFenceReplacementTransactionId -DelegationToken $WriterFenceDelegationToken -Action {
+            $existing = Get-ScheduledTask -TaskName $spec.name -ErrorAction SilentlyContinue
+            if ($null -ne $existing) {
+                $oldXml = [xml](Export-ScheduledTask -TaskName $spec.name)
+                $newXml = [xml]$spec.xml
+                if ($oldXml.Task.Actions.Exec.Command -cne $newXml.Task.Actions.Exec.Command -or
+                    $oldXml.Task.Actions.Exec.Arguments -cne $newXml.Task.Actions.Exec.Arguments -or
+                    $oldXml.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
+                    $oldXml.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_OWNED_TASK_DIFFERS' }
+                if ([string]$existing.State -ceq 'Running') { throw 'STARTUP_UPDATE_TASK_IS_RUNNING' }
+            }
+            Register-ScheduledTask -TaskName $spec.name -Xml $spec.xml -Force | Out-Null
+            $service = New-Object -ComObject 'Schedule.Service'
+            $service.Connect()
+            $registered = $service.GetFolder('\').GetTask($spec.name)
+            $registered.SetSecurityDescriptor(('D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGX;;;' + $OperatorSid + ')'),0)
+            $actual = [xml]$registered.Xml
+            $expected = [xml]$spec.xml
+            if ($actual.Task.Actions.Exec.Command -cne $expected.Task.Actions.Exec.Command -or
+                $actual.Task.Actions.Exec.Arguments -cne $expected.Task.Actions.Exec.Arguments -or
+                $actual.Task.Principals.Principal.UserId -cne 'S-1-5-18' -or
+                $actual.Task.Triggers.LogonTrigger.UserId -cne $OperatorSid) { throw 'STARTUP_UPDATE_TASK_READBACK_FAILED' }
+        } | Out-Null
+    Write-Output 'startup_update_status=REGISTERED_LOGON_SYSTEM_CODE_ONLY'
+    Write-Output ('startup_update_task=' + $spec.name)
+    Write-Output ('hiberboot_enabled=' + $hiberboot)
+    Write-Output ('hiberboot_read_status=' + $hiberbootReadStatus)
 }
 
 $testOverride = (
@@ -663,6 +908,7 @@ if (
     )
 }
 $placementWriterFenceLease = $null
+$Script:StartupUpdatePreimage = $null
 if (-not $DryRun.IsPresent -and (-not $testOverride -or $Uninstall.IsPresent -or $RestoreUninstallRecordPath)) {
     try {
         $placementWriterFenceLease = Enter-ContainerPlacementWriterFence
@@ -718,6 +964,9 @@ if ($RestoreVerifiedReplacement.IsPresent) {
             -ExpectedTransactionId $ReplacementTransactionId `
             -ExpectedHelperSha256 (Get-FileSha256 $BootstrapScriptPath) `
             -InjectFailureAfterDisplace:$InjectRestoreFailureAfterDisplaceForTest.IsPresent
+        if ($receipt.PSObject.Properties['startup_update_preimage']) {
+            Restore-ContainerStartupUpdatePreimage $installRootFull ([string]$receipt.startup_update_preimage) ([string]$receipt.startup_update_preimage_sha256)
+        }
         if (
             $result.prior_code_exact -isnot [bool] -or
             -not $result.prior_code_exact -or
@@ -827,6 +1076,7 @@ if ($Uninstall.IsPresent) {
     if (-not (Test-PathWithin $uninstallBackup $uninstallParent)) { throw 'Uninstall backup escaped its parent.' }
     if (Test-Path -LiteralPath $uninstallBackup) { throw 'Uninstall recovery tree already exists.' }
     $uninstallMutationStarted = $false
+    $startupUninstallPreimage = $null
     try {
         Copy-Item -LiteralPath $installRootFull -Destination $uninstallBackup -Recurse
         if ($applyHardenedAcl) { Set-HardenedCodeAcl $uninstallBackup -Recursive }
@@ -836,10 +1086,25 @@ if ($Uninstall.IsPresent) {
         }
         Assert-ContainerReplacementRestoreQuiescent -CurrentRoot $installRootFull -SkipOwnedTaskCheckForGuardedTest:$testOverride
         $uninstallMutationStarted = $true
-        Remove-Item -LiteralPath $installRootFull -Recurse -Force -ErrorAction Stop
+        if (-not $testOverride -and (Test-Path -LiteralPath (Join-Path $uninstallParent 'update-control\policy.json'))) {
+            $startupUninstallPreimage = Save-ContainerStartupUpdatePreimage $installRootFull 'uninstall'
+            $savedTask = Get-Content -LiteralPath (Join-Path $startupUninstallPreimage.path 'preimage.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            Invoke-ContainerStartupUpdateTaskMutation {
+                if ($savedTask.task.exists) { Unregister-ScheduledTask -TaskName ([string]$savedTask.task.name) -Confirm:$false }
+                if ($null -ne (Get-ScheduledTask -TaskName ([string]$savedTask.task.name) -ErrorAction SilentlyContinue)) { throw 'STARTUP_UPDATE_UNINSTALL_TASK_STILL_PRESENT' }
+            } | Out-Null
+            foreach ($name in @('update-control','versions')) {
+                $target = Get-StrictFullPath (Join-Path $uninstallParent $name) 'startup update uninstall code target'
+                if (-not (Test-PathWithin $target $uninstallParent)) { throw 'STARTUP_UPDATE_UNINSTALL_PATH_ESCAPED' }
+                Assert-NoReparsePoint $target 'startup update uninstall code target'
+                if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination (Join-Path $startupUninstallPreimage.path $name) }
+            }
+            Write-Output ('startup_update_uninstall_preimage=' + $startupUninstallPreimage.path)
+        }
+        Remove-Item -LiteralPath $installRootFull -Recurse -ErrorAction Stop
         if (Test-Path -LiteralPath $installRootFull) { throw 'Hardened code root removal postcondition failed.' }
         $uninstallMutationStarted = $false
-        try { Remove-Item -LiteralPath $uninstallBackup -Recurse -Force -ErrorAction Stop }
+        try { Remove-Item -LiteralPath $uninstallBackup -Recurse -ErrorAction Stop }
         catch { Write-Output "code_recovery_cleanup_status=RETAINED:$uninstallBackup" }
         if (-not $testOverride) { Write-ElevationLog 'PASS' 'Elevated Container code removal completed.' }
         Write-Output 'uninstall_status=PASS_CODE_REMOVED_STATE_PRESERVED'
@@ -868,6 +1133,17 @@ if ($Uninstall.IsPresent) {
                 throw "UNINSTALL_CODE_RESTORE_FAILED: recovery_tree=$uninstallBackup"
             }
             Write-Output 'code_restore_status=PASS_VERIFIED'
+            if ($null -ne $startupUninstallPreimage) {
+                foreach ($name in @('update-control','versions')) {
+                    $saved = Join-Path $startupUninstallPreimage.path $name
+                    $target = Join-Path $uninstallParent $name
+                    if (Test-Path -LiteralPath $saved) {
+                        if (Test-Path -LiteralPath $target) { throw 'STARTUP_UPDATE_UNINSTALL_RESTORE_TARGET_EXISTS' }
+                        Move-Item -LiteralPath $saved -Destination $target
+                    }
+                }
+                Restore-ContainerStartupUpdatePreimage $installRootFull $startupUninstallPreimage.path $startupUninstallPreimage.sha256
+            }
         }
         throw $uninstallFailure
     }
@@ -1097,6 +1373,12 @@ try {
     Write-Output "code_root=$installRootFull"
     Write-Output "release_layout=$releaseLayout"
     Write-Output "integrity_record=$(Join-Path $installRootFull $IntegrityFileName)"
+    Initialize-ContainerStartupUpdate $installRootFull
+    if ($replacementApplied -and $null -ne $Script:StartupUpdatePreimage) {
+        $receiptPayload['startup_update_preimage'] = [string]$Script:StartupUpdatePreimage.path
+        $receiptPayload['startup_update_preimage_sha256'] = [string]$Script:StartupUpdatePreimage.sha256
+        $replacementReceipt = Write-BootstrapReplacementReceipt -Path $replacementReceiptFull -Payload $receiptPayload
+    }
     $tlsCaBootstrap = Install-CurrentUserTlsCaBootstrap $TlsCaBundlePath $OperatorLocalAppDataRoot
     if ($null -eq $tlsCaBootstrap) { Write-Output "tls_ca_bootstrap_status=ABSENT" }
     else { Write-Output "tls_ca_bootstrap_status=PASS"; Write-Output "tls_ca_bootstrap_path=$tlsCaBootstrap" }
@@ -1117,6 +1399,9 @@ try {
     }
 }
 catch {
+    if ($null -ne $Script:StartupUpdatePreimage) {
+        Restore-ContainerStartupUpdatePreimage $installRootFull $Script:StartupUpdatePreimage.path $Script:StartupUpdatePreimage.sha256
+    }
     $otherSessionPreflightFailure = (
         -not $replacementApplied -and
         $_.Exception.Message -ceq 'CONTAINER_PLACEMENT_OTHER_SESSION_RUNNING'
