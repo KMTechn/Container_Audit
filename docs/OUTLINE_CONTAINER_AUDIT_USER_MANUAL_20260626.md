@@ -14,9 +14,9 @@
 
 ## 전체 워크플로우
 
-![전체 워크플로우](assets/container_audit_user_manual_20260626/00-workflow.png)
+![전체 워크플로우](assets/container_audit_user_manual_20260627/00-workflow.png)
 
-Mermaid 원본은 `docs/assets/container_audit_user_manual_20260626/00-workflow.mmd`에 보관합니다.
+Mermaid 원본은 `docs/assets/container_audit_user_manual_20260627/00-workflow.mmd`에 보관합니다.
 
 ## 1. 꼭 기억할 것
 
@@ -448,9 +448,9 @@ startup 복구와 보류 목록에서 다른 작업을 여는 전환은 서로 �
 
 이미지 자산:
 
-- `docs/assets/container_audit_user_manual_20260626/00-workflow.png`
+- `docs/assets/container_audit_user_manual_20260627/00-workflow.png`
 - `docs/assets/container_audit_user_manual_20260626/00-workflow.svg`
-- `docs/assets/container_audit_user_manual_20260626/00-workflow.mmd`
+- `docs/assets/container_audit_user_manual_20260627/00-workflow.mmd`
 - `docs/assets/container_audit_user_manual_20260626/01-login.png`
 - `docs/assets/container_audit_user_manual_20260626/02-work-start.png`
 - `docs/assets/container_audit_user_manual_20260626/03-master-label.png`

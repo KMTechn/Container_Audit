@@ -372,3 +372,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 ## w9slim2 B01 inventory 표현
 
 PowerShell 분석 결과는 `powershell_execution_inventory` 한 키에 저장한다. 중복 alias `powershell_scheduled_task_guards`를 없애고 두 mutation-site 단언을 정본 키로 옮겼다. detector·schema·source/packet 구분·writer admission·canonical 설치기 의미 projection·old/new/rollback은 유지하며 새 바이트/semantic pin을 세 consumer에 함께 반영한다. 영향 4모듈 115 PASS(Python 3.12.10/PS5.1 headless). 과거 packet byte identity는 달라지므로 새 후보의 stock builder 및 전이 근거는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.
+
+## w9slim2 B05 문서 자산 공유
+
+20260626/27의 바이트 동일 workflow PNG/Mermaid는 20260627 원본을 공유한다. 20260626 문서의 해당 두 링크만 정본으로 바꿨으며 촬영·게시 도구와 다른 화면 자산은 유지했다. 정본 hash·참조 대조는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md); 문서 전용 변경으로 앱 실행은 NOT TESTED.
