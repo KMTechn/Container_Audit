@@ -707,6 +707,52 @@ def test_replace_race_returns_cache_created_before_permission_error(
     assert cache.read_bytes() == CATALOG
 
 
+def test_late_catalog_response_preserves_cache_changed_during_request(
+    monkeypatch, tmp_path, ca_remote_lock_guard
+):
+    bundle, cache = tmp_path / "bundle.csv", tmp_path / "cache.csv"
+    bundle.write_bytes(CATALOG)
+    cache.write_bytes(CATALOG)
+    newer = CATALOG.replace(b"Alpha", b"Newer")
+
+    def get(*args, **kwargs):
+        assert not ca_remote_lock_guard.held()
+        sync._atomic_write(cache, newer)
+        return FakeResponse(CATALOG)
+
+    result = refresh_item_catalog(
+        bundle, cache_path=cache, url=UNAUTHENTICATED_OVERRIDE_URL,
+        get=ca_remote_lock_guard.wrap_transport(get),
+    )
+    assert result == cache
+    assert cache.read_bytes() == newer
+
+
+def test_late_catalog_response_preserves_new_authority_with_identical_csv(tmp_path, ca_remote_lock_guard):
+    import uuid
+    bundle, cache = tmp_path / "bundle.csv", tmp_path / "cache.csv"
+    bundle.write_bytes(CATALOG)
+    cache.write_bytes(CATALOG)
+    authority = sync._cache_authority_path(cache)
+    observed = []
+
+    def get(*args, **kwargs):
+        sync._write_authenticated_cache(
+            cache, CATALOG, url=PROFILE_CATALOG_URL,
+            source_host_id=SOURCE_HOST_ID, device_id=DEVICE_ID,
+            bearer_token=uuid.uuid4().hex,
+        )
+        observed.append(authority.read_bytes())
+        return FakeResponse(CATALOG)
+
+    result = refresh_item_catalog(
+        bundle, cache_path=cache, url=UNAUTHENTICATED_OVERRIDE_URL,
+        get=ca_remote_lock_guard.wrap_transport(get),
+    )
+    assert result == cache and cache.read_bytes() == CATALOG
+    assert authority.read_bytes() == observed[0]
+
+
 def test_central_refresh_success_and_offline_last_good(monkeypatch, tmp_path):
     bundle = tmp_path / "bundle.csv"
     cache = tmp_path / "cache" / "Item.csv"

@@ -27,7 +27,7 @@ from typing import Any, Dict, Mapping
 from urllib.parse import urlparse, urlunparse
 
 from kmtech_shared import runtime as _shared_runtime
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 
 from vendor.kmtech_zero_pe import (
     generate_public_jwk,
@@ -223,7 +223,7 @@ def _response_payload(response: Any) -> Dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
 
 
-@writer_sink("runtime_lease_network")
+@writer_sink("runtime_lease_network", probe_only=True)
 def _post_lease_request(
     *,
     request_value: Mapping[str, Any],
@@ -469,7 +469,7 @@ def _runtime_liveness_receipt(
     )
 
 
-@writer_sink("producer_runtime_storage")
+@writer_sink("producer_runtime_storage", probe_only=True)
 def ensure_runtime_authority(
     *,
     db_path: str | os.PathLike[str],
@@ -513,125 +513,126 @@ def ensure_runtime_authority(
     request_json = ""
     request_value: Dict[str, Any] = {}
     for _ in range(4):
-        conn = _connect(db_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            state = _state_row(conn, authority_scope)
-            if state is None:
-                state = _create_state(conn, scope, now_text)
-            if not _state_scope_matches(state, scope):
-                conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code="runtime_authority_scope_mismatch",
-                    error_message="runtime authority credential scope does not match its database key",
-                )
-            if str(state["status"] or "") == LEGACY_DISABLED_STATUS:
-                if runtime_mode == "observe":
-                    conn.commit()
+        with writer_admission("producer_runtime_storage"):
+            conn = _connect(db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = _state_row(conn, authority_scope)
+                if state is None:
+                    state = _create_state(conn, scope, now_text)
+                if not _state_scope_matches(state, scope):
+                    conn.rollback()
                     return RuntimePreparation(
-                        receipt={
-                            "contract_version": CONTRACT_VERSION,
-                            "status": LEGACY_DISABLED_STATUS,
-                            "server_grant_accepted": False,
-                            "producer_install_id": scope["producer_install_id"],
-                            "request_sent": False,
-                        }
+                        operator_review=True,
+                        error_code="runtime_authority_scope_mismatch",
+                        error_message="runtime authority credential scope does not match its database key",
                     )
-                state = _replace_expired_identity(conn, state, now_text)
-            state, review_error = _operator_review_or_recover_exact_clone(
-                conn,
-                state,
-                now_text=now_text,
-                now_time=now_time,
-                ttl_seconds=ttl_seconds,
-            )
-            if review_error is not None:
-                conn.rollback()
-                return review_error
-            expires_at = _parse_time(state["expires_at"])
-            if (
-                expires_at is not None
-                and expires_at <= now_time
-                and not state["assigned_relay_id"]
-                and not state["pending_request_json"]
-            ):
-                state = _replace_expired_identity(conn, state, now_text)
-                expires_at = None
-            renew_before = now_time + timedelta(seconds=renewal_margin_seconds)
-            active = bool(
-                str(state["status"] or "") == "ACTIVE"
-                and state["lease_id"]
-                and state["fence"]
-                and state["next_request_token"]
-                and state["next_request_sequence"]
-                and expires_at is not None
-                and expires_at > renew_before
-                and not state["pending_request_json"]
-            )
-            if active:
-                receipt = _runtime_liveness_receipt(
+                if str(state["status"] or "") == LEGACY_DISABLED_STATUS:
+                    if runtime_mode == "observe":
+                        conn.commit()
+                        return RuntimePreparation(
+                            receipt={
+                                "contract_version": CONTRACT_VERSION,
+                                "status": LEGACY_DISABLED_STATUS,
+                                "server_grant_accepted": False,
+                                "producer_install_id": scope["producer_install_id"],
+                                "request_sent": False,
+                            }
+                        )
+                    state = _replace_expired_identity(conn, state, now_text)
+                state, review_error = _operator_review_or_recover_exact_clone(
+                    conn,
                     state,
-                    producer_install_id=scope["producer_install_id"],
-                    request_sent=False,
+                    now_text=now_text,
+                    now_time=now_time,
+                    ttl_seconds=ttl_seconds,
                 )
-                conn.commit()
-                return RuntimePreparation(status_code=200, receipt=receipt)
-            if state["assigned_relay_id"]:
-                receipt = _runtime_liveness_receipt(
-                    state,
-                    producer_install_id=scope["producer_install_id"],
-                    request_sent=False,
-                )
-                receipt["server_grant_accepted"] = bool(
+                if review_error is not None:
+                    conn.rollback()
+                    return review_error
+                expires_at = _parse_time(state["expires_at"])
+                if (
+                    expires_at is not None
+                    and expires_at <= now_time
+                    and not state["assigned_relay_id"]
+                    and not state["pending_request_json"]
+                ):
+                    state = _replace_expired_identity(conn, state, now_text)
+                    expires_at = None
+                renew_before = now_time + timedelta(seconds=renewal_margin_seconds)
+                active = bool(
                     str(state["status"] or "") == "ACTIVE"
                     and state["lease_id"]
                     and state["fence"]
-                    and state["expires_at"]
+                    and state["next_request_token"]
+                    and state["next_request_sequence"]
+                    and expires_at is not None
+                    and expires_at > renew_before
+                    and not state["pending_request_json"]
                 )
-                receipt["request_in_flight"] = True
+                if active:
+                    receipt = _runtime_liveness_receipt(
+                        state,
+                        producer_install_id=scope["producer_install_id"],
+                        request_sent=False,
+                    )
+                    conn.commit()
+                    return RuntimePreparation(status_code=200, receipt=receipt)
+                if state["assigned_relay_id"]:
+                    receipt = _runtime_liveness_receipt(
+                        state,
+                        producer_install_id=scope["producer_install_id"],
+                        request_sent=False,
+                    )
+                    receipt["server_grant_accepted"] = bool(
+                        str(state["status"] or "") == "ACTIVE"
+                        and state["lease_id"]
+                        and state["fence"]
+                        and state["expires_at"]
+                    )
+                    receipt["request_in_flight"] = True
+                    conn.commit()
+                    return RuntimePreparation(
+                        status_code=200,
+                        receipt=receipt,
+                    )
+                pending_json = str(state["pending_request_json"] or "")
+                if pending_json:
+                    request_json = pending_json
+                    request_value = json.loads(pending_json)
+                else:
+                    request_value = _lease_request_value(state, ttl_seconds)
+                    request_json = canonical_json(request_value)
+                    cursor = conn.execute(
+                        """
+                        UPDATE direct_sync_runtime_authority
+                        SET pending_request_json=?, pending_issue_idempotency_key=?,
+                            status='PENDING', updated_at=?
+                        WHERE authority_scope=? AND pending_request_json IS NULL
+                          AND assigned_relay_id IS NULL
+                        """,
+                        (
+                            request_json,
+                            request_value["issue_idempotency_key"],
+                            now_text,
+                            authority_scope,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        conn.rollback()
+                        time.sleep(0.01)
+                        continue
                 conn.commit()
-                return RuntimePreparation(
-                    status_code=200,
-                    receipt=receipt,
-                )
-            pending_json = str(state["pending_request_json"] or "")
-            if pending_json:
-                request_json = pending_json
-                request_value = json.loads(pending_json)
-            else:
-                request_value = _lease_request_value(state, ttl_seconds)
-                request_json = canonical_json(request_value)
-                cursor = conn.execute(
-                    """
-                    UPDATE direct_sync_runtime_authority
-                    SET pending_request_json=?, pending_issue_idempotency_key=?,
-                        status='PENDING', updated_at=?
-                    WHERE authority_scope=? AND pending_request_json IS NULL
-                      AND assigned_relay_id IS NULL
-                    """,
-                    (
-                        request_json,
-                        request_value["issue_idempotency_key"],
-                        now_text,
-                        authority_scope,
-                    ),
-                )
-                if cursor.rowcount != 1:
+            except Exception as exc:
+                if conn.in_transaction:
                     conn.rollback()
-                    time.sleep(0.01)
-                    continue
-            conn.commit()
-        except Exception as exc:
-            if conn.in_transaction:
-                conn.rollback()
-            return RuntimePreparation(
-                operator_review=True,
-                error_code="runtime_state_invalid",
-                error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
-            )
-        finally:
-            conn.close()
+                return RuntimePreparation(
+                    operator_review=True,
+                    error_code="runtime_state_invalid",
+                    error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
+                )
+            finally:
+                conn.close()
 
         grant, request_error = _post_lease_request(
             request_value=request_value,
@@ -641,20 +642,21 @@ def ensure_runtime_authority(
         )
         if request_error is not None:
             if request_error.operator_review:
-                conn = _connect(db_path)
-                try:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute(
-                        """
-                        UPDATE direct_sync_runtime_authority
-                        SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
-                        WHERE authority_scope=? AND pending_request_json=?
-                        """,
-                        (request_error.error_code, now_text, authority_scope, request_json),
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
+                with writer_admission("producer_runtime_storage"):
+                    conn = _connect(db_path)
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        conn.execute(
+                            """
+                            UPDATE direct_sync_runtime_authority
+                            SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
+                            WHERE authority_scope=? AND pending_request_json=?
+                            """,
+                            (request_error.error_code, now_text, authority_scope, request_json),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
             if (
                 request_error.error_code == DEAD_RENEWAL_CODE
                 and "runtime_fence" in request_value
@@ -663,70 +665,71 @@ def ensure_runtime_authority(
                 continue
             return request_error
         assert grant is not None
-        conn = _connect(db_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            state = _state_row(conn, authority_scope)
-            if state is None:
-                conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code="runtime_state_missing",
-                    error_message="runtime authority state disappeared during lease acquisition",
-                )
-            grant_error = _grant_error(grant, state=state, scope=scope, request_value=request_value)
-            if grant_error:
-                conn.execute(
+        with writer_admission("producer_runtime_storage"):
+            conn = _connect(db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = _state_row(conn, authority_scope)
+                if state is None:
+                    conn.rollback()
+                    return RuntimePreparation(
+                        operator_review=True,
+                        error_code="runtime_state_missing",
+                        error_message="runtime authority state disappeared during lease acquisition",
+                    )
+                grant_error = _grant_error(grant, state=state, scope=scope, request_value=request_value)
+                if grant_error:
+                    conn.execute(
+                        """
+                        UPDATE direct_sync_runtime_authority
+                        SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
+                        WHERE authority_scope=?
+                        """,
+                        ("runtime_lease_response_invalid", now_text, authority_scope),
+                    )
+                    conn.commit()
+                    return RuntimePreparation(
+                        status_code=200,
+                        operator_review=True,
+                        error_code="runtime_lease_response_invalid",
+                        error_message=grant_error,
+                        receipt=redact_runtime_secrets(grant),
+                    )
+                cursor = conn.execute(
                     """
                     UPDATE direct_sync_runtime_authority
-                    SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
-                    WHERE authority_scope=?
+                    SET lease_id=?, fence=?, next_request_token=?,
+                        next_request_sequence=?, expires_at=?, assigned_relay_id=NULL,
+                        pending_request_json=NULL, pending_issue_idempotency_key=NULL,
+                        status='ACTIVE', last_error_code=NULL, updated_at=?
+                    WHERE authority_scope=? AND pending_request_json=?
+                      AND assigned_relay_id IS NULL
                     """,
-                    ("runtime_lease_response_invalid", now_text, authority_scope),
+                    (
+                        str(grant["lease_id"]),
+                        int(grant["fence"]),
+                        str(grant["next_request_token"]),
+                        int(grant["next_request_sequence"]),
+                        str(grant["expires_at"]),
+                        now_text,
+                        authority_scope,
+                        request_json,
+                    ),
                 )
-                conn.commit()
-                return RuntimePreparation(
-                    status_code=200,
-                    operator_review=True,
-                    error_code="runtime_lease_response_invalid",
-                    error_message=grant_error,
-                    receipt=redact_runtime_secrets(grant),
-                )
-            cursor = conn.execute(
-                """
-                UPDATE direct_sync_runtime_authority
-                SET lease_id=?, fence=?, next_request_token=?,
-                    next_request_sequence=?, expires_at=?, assigned_relay_id=NULL,
-                    pending_request_json=NULL, pending_issue_idempotency_key=NULL,
-                    status='ACTIVE', last_error_code=NULL, updated_at=?
-                WHERE authority_scope=? AND pending_request_json=?
-                  AND assigned_relay_id IS NULL
-                """,
-                (
-                    str(grant["lease_id"]),
-                    int(grant["fence"]),
-                    str(grant["next_request_token"]),
-                    int(grant["next_request_sequence"]),
-                    str(grant["expires_at"]),
-                    now_text,
-                    authority_scope,
-                    request_json,
-                ),
-            )
-            if cursor.rowcount == 1:
-                state = _state_row(conn, authority_scope)
-                assert state is not None
-                receipt = _runtime_liveness_receipt(
-                    state,
-                    producer_install_id=scope["producer_install_id"],
-                    request_sent=True,
-                )
-                conn.commit()
-                return RuntimePreparation(status_code=200, receipt=receipt)
-            conn.rollback()
-            time.sleep(0.01)
-        finally:
-            conn.close()
+                if cursor.rowcount == 1:
+                    state = _state_row(conn, authority_scope)
+                    assert state is not None
+                    receipt = _runtime_liveness_receipt(
+                        state,
+                        producer_install_id=scope["producer_install_id"],
+                        request_sent=True,
+                    )
+                    conn.commit()
+                    return RuntimePreparation(status_code=200, receipt=receipt)
+                conn.rollback()
+                time.sleep(0.01)
+            finally:
+                conn.close()
     return RuntimePreparation(
         retryable=True,
         retry_after_seconds=1,
@@ -735,7 +738,7 @@ def ensure_runtime_authority(
     )
 
 
-@writer_sink("producer_runtime_storage")
+@writer_sink("producer_runtime_storage", probe_only=True)
 def prepare_runtime_metadata(
     *,
     db_path: str | os.PathLike[str],
@@ -800,174 +803,175 @@ def prepare_runtime_metadata(
     request_json = ""
     request_value: Dict[str, Any] = {}
     for _ in range(4):
-        conn = _connect(db_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            live_metadata = _load_live_relay_metadata(conn, relay_id)
-            live_row = conn.execute(
-                "SELECT runtime_fencing_policy FROM direct_sync_relay_batches WHERE relay_id=?",
-                (relay_id,),
-            ).fetchone()
-            if live_row is None or str(live_row["runtime_fencing_policy"] or "") != policy:
-                conn.rollback()
-                return RuntimePreparation(
-                    retryable=True,
-                    error_code="relay_lease_lost",
-                    error_message="relay runtime fencing policy changed before authority reservation",
-                )
-            live_present = [field_name for field_name in METADATA_FIELDS if field_name in live_metadata]
-            live_shape_error = _metadata_shape_error(live_metadata)
-            if live_present:
-                if live_shape_error:
-                    conn.rollback()
-                    return RuntimePreparation(
-                        operator_review=True,
-                        error_code=RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST,
-                        error_message=live_shape_error,
-                    )
-                conn.commit()
-                return RuntimePreparation(metadata=live_metadata)
-            state = _state_row(conn, authority_scope)
-            if state is None:
-                state = _create_state(conn, scope, now_text)
-            if not _state_scope_matches(state, scope):
-                conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code="runtime_authority_scope_mismatch",
-                    error_message="runtime authority credential scope does not match its database key",
-                )
-            if str(state["status"] or "") == LEGACY_DISABLED_STATUS:
-                if runtime_mode == "observe":
-                    conn.commit()
-                    return RuntimePreparation(metadata=live_metadata)
-                state = _replace_expired_identity(conn, state, now_text)
-            state, review_error = _operator_review_or_recover_exact_clone(
-                conn,
-                state,
-                now_text=now_text,
-                now_time=now_time,
-                ttl_seconds=ttl_seconds,
-            )
-            if review_error is not None:
-                conn.rollback()
-                return review_error
-            expires_at = _parse_time(state["expires_at"])
-            if (
-                expires_at is not None
-                and expires_at <= now_time
-                and not state["assigned_relay_id"]
-                and not state["pending_request_json"]
-            ):
-                state = _replace_expired_identity(conn, state, now_text)
-                expires_at = None
-            assigned_relay_id = str(state["assigned_relay_id"] or "")
-            if assigned_relay_id and assigned_relay_id != relay_id:
-                conn.commit()
-                return RuntimePreparation(
-                    retryable=True,
-                    retry_after_seconds=1,
-                    error_code="runtime_request_in_flight",
-                    error_message="another relay row owns the current runtime request authority",
-                )
-            pending_json = str(state["pending_request_json"] or "")
-            renew_before = now_time + timedelta(seconds=max(60, int(timeout) + 30))
-            token_available = bool(
-                state["next_request_token"]
-                and state["next_request_sequence"]
-                and state["fence"]
-                and expires_at is not None
-                and expires_at > renew_before
-                and not pending_json
-            )
-            if token_available:
-                public_jwk = json.loads(str(state["runtime_public_jwk_json"]))
-                attached = dict(live_metadata)
-                attached.update(
-                    {
-                        "runtime_instance_id": str(state["runtime_instance_id"]),
-                        "runtime_public_jwk": public_jwk,
-                        "runtime_fence": int(state["fence"]),
-                        "runtime_request_token": str(state["next_request_token"]),
-                        "runtime_request_sequence": int(state["next_request_sequence"]),
-                    }
-                )
-                cursor = conn.execute(
-                    """
-                    UPDATE direct_sync_relay_batches
-                    SET metadata_json=?, updated_at=?
-                    WHERE relay_id=? AND status='leased' AND lease_owner=?
-                      AND attempt_count=? AND runtime_fencing_policy=?
-                    """,
-                    (
-                        canonical_json(attached),
-                        now_text,
-                        relay_id,
-                        expected_lease_owner,
-                        expected_attempt_count,
-                        RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED,
-                    ),
-                )
-                if cursor.rowcount != 1:
+        with writer_admission("producer_runtime_storage"):
+            conn = _connect(db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                live_metadata = _load_live_relay_metadata(conn, relay_id)
+                live_row = conn.execute(
+                    "SELECT runtime_fencing_policy FROM direct_sync_relay_batches WHERE relay_id=?",
+                    (relay_id,),
+                ).fetchone()
+                if live_row is None or str(live_row["runtime_fencing_policy"] or "") != policy:
                     conn.rollback()
                     return RuntimePreparation(
                         retryable=True,
                         error_code="relay_lease_lost",
-                        error_message="relay lease changed before runtime authority was reserved",
+                        error_message="relay runtime fencing policy changed before authority reservation",
                     )
-                cursor = conn.execute(
-                    """
-                    UPDATE direct_sync_runtime_authority
-                    SET next_request_token=NULL, next_request_sequence=NULL,
-                        assigned_relay_id=?, status='ACTIVE', updated_at=?
-                    WHERE authority_scope=? AND assigned_relay_id IS NULL
-                      AND next_request_token=? AND next_request_sequence=?
-                    """,
-                    (
-                        relay_id,
-                        now_text,
-                        authority_scope,
-                        str(state["next_request_token"]),
-                        int(state["next_request_sequence"]),
-                    ),
-                )
-                if cursor.rowcount != 1:
+                live_present = [field_name for field_name in METADATA_FIELDS if field_name in live_metadata]
+                live_shape_error = _metadata_shape_error(live_metadata)
+                if live_present:
+                    if live_shape_error:
+                        conn.rollback()
+                        return RuntimePreparation(
+                            operator_review=True,
+                            error_code=RUNTIME_LEASE_METADATA_INVALID_BEFORE_SOURCE_POST,
+                            error_message=live_shape_error,
+                        )
+                    conn.commit()
+                    return RuntimePreparation(metadata=live_metadata)
+                state = _state_row(conn, authority_scope)
+                if state is None:
+                    state = _create_state(conn, scope, now_text)
+                if not _state_scope_matches(state, scope):
                     conn.rollback()
-                    time.sleep(0.01)
-                    continue
-                conn.commit()
-                return RuntimePreparation(metadata=attached)
-            if pending_json:
-                request_json = pending_json
-                request_value = json.loads(pending_json)
-            else:
-                request_value = _lease_request_value(state, ttl_seconds)
-                request_json = canonical_json(request_value)
-                conn.execute(
-                    """
-                    UPDATE direct_sync_runtime_authority
-                    SET pending_request_json=?, pending_issue_idempotency_key=?,
-                        status='PENDING', updated_at=?
-                    WHERE authority_scope=? AND pending_request_json IS NULL
-                    """,
-                    (
-                        request_json,
-                        request_value["issue_idempotency_key"],
-                        now_text,
-                        authority_scope,
-                    ),
+                    return RuntimePreparation(
+                        operator_review=True,
+                        error_code="runtime_authority_scope_mismatch",
+                        error_message="runtime authority credential scope does not match its database key",
+                    )
+                if str(state["status"] or "") == LEGACY_DISABLED_STATUS:
+                    if runtime_mode == "observe":
+                        conn.commit()
+                        return RuntimePreparation(metadata=live_metadata)
+                    state = _replace_expired_identity(conn, state, now_text)
+                state, review_error = _operator_review_or_recover_exact_clone(
+                    conn,
+                    state,
+                    now_text=now_text,
+                    now_time=now_time,
+                    ttl_seconds=ttl_seconds,
                 )
-            conn.commit()
-        except Exception as exc:
-            if conn.in_transaction:
-                conn.rollback()
-            return RuntimePreparation(
-                operator_review=True,
-                error_code="runtime_state_invalid",
-                error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
-            )
-        finally:
-            conn.close()
+                if review_error is not None:
+                    conn.rollback()
+                    return review_error
+                expires_at = _parse_time(state["expires_at"])
+                if (
+                    expires_at is not None
+                    and expires_at <= now_time
+                    and not state["assigned_relay_id"]
+                    and not state["pending_request_json"]
+                ):
+                    state = _replace_expired_identity(conn, state, now_text)
+                    expires_at = None
+                assigned_relay_id = str(state["assigned_relay_id"] or "")
+                if assigned_relay_id and assigned_relay_id != relay_id:
+                    conn.commit()
+                    return RuntimePreparation(
+                        retryable=True,
+                        retry_after_seconds=1,
+                        error_code="runtime_request_in_flight",
+                        error_message="another relay row owns the current runtime request authority",
+                    )
+                pending_json = str(state["pending_request_json"] or "")
+                renew_before = now_time + timedelta(seconds=max(60, int(timeout) + 30))
+                token_available = bool(
+                    state["next_request_token"]
+                    and state["next_request_sequence"]
+                    and state["fence"]
+                    and expires_at is not None
+                    and expires_at > renew_before
+                    and not pending_json
+                )
+                if token_available:
+                    public_jwk = json.loads(str(state["runtime_public_jwk_json"]))
+                    attached = dict(live_metadata)
+                    attached.update(
+                        {
+                            "runtime_instance_id": str(state["runtime_instance_id"]),
+                            "runtime_public_jwk": public_jwk,
+                            "runtime_fence": int(state["fence"]),
+                            "runtime_request_token": str(state["next_request_token"]),
+                            "runtime_request_sequence": int(state["next_request_sequence"]),
+                        }
+                    )
+                    cursor = conn.execute(
+                        """
+                        UPDATE direct_sync_relay_batches
+                        SET metadata_json=?, updated_at=?
+                        WHERE relay_id=? AND status='leased' AND lease_owner=?
+                          AND attempt_count=? AND runtime_fencing_policy=?
+                        """,
+                        (
+                            canonical_json(attached),
+                            now_text,
+                            relay_id,
+                            expected_lease_owner,
+                            expected_attempt_count,
+                            RUNTIME_FENCING_POLICY_RUNTIME_REQUIRED,
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        conn.rollback()
+                        return RuntimePreparation(
+                            retryable=True,
+                            error_code="relay_lease_lost",
+                            error_message="relay lease changed before runtime authority was reserved",
+                        )
+                    cursor = conn.execute(
+                        """
+                        UPDATE direct_sync_runtime_authority
+                        SET next_request_token=NULL, next_request_sequence=NULL,
+                            assigned_relay_id=?, status='ACTIVE', updated_at=?
+                        WHERE authority_scope=? AND assigned_relay_id IS NULL
+                          AND next_request_token=? AND next_request_sequence=?
+                        """,
+                        (
+                            relay_id,
+                            now_text,
+                            authority_scope,
+                            str(state["next_request_token"]),
+                            int(state["next_request_sequence"]),
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        conn.rollback()
+                        time.sleep(0.01)
+                        continue
+                    conn.commit()
+                    return RuntimePreparation(metadata=attached)
+                if pending_json:
+                    request_json = pending_json
+                    request_value = json.loads(pending_json)
+                else:
+                    request_value = _lease_request_value(state, ttl_seconds)
+                    request_json = canonical_json(request_value)
+                    conn.execute(
+                        """
+                        UPDATE direct_sync_runtime_authority
+                        SET pending_request_json=?, pending_issue_idempotency_key=?,
+                            status='PENDING', updated_at=?
+                        WHERE authority_scope=? AND pending_request_json IS NULL
+                        """,
+                        (
+                            request_json,
+                            request_value["issue_idempotency_key"],
+                            now_text,
+                            authority_scope,
+                        ),
+                    )
+                conn.commit()
+            except Exception as exc:
+                if conn.in_transaction:
+                    conn.rollback()
+                return RuntimePreparation(
+                    operator_review=True,
+                    error_code="runtime_state_invalid",
+                    error_message=f"runtime authority state is invalid: {exc.__class__.__name__}",
+                )
+            finally:
+                conn.close()
 
         grant, request_error = _post_lease_request(
             request_value=request_value,
@@ -977,20 +981,21 @@ def prepare_runtime_metadata(
         )
         if request_error is not None:
             if request_error.operator_review:
-                conn = _connect(db_path)
-                try:
-                    conn.execute("BEGIN IMMEDIATE")
-                    conn.execute(
-                        """
-                        UPDATE direct_sync_runtime_authority
-                        SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
-                        WHERE authority_scope=? AND pending_request_json=?
-                        """,
-                        (request_error.error_code, now_text, authority_scope, request_json),
-                    )
-                    conn.commit()
-                finally:
-                    conn.close()
+                with writer_admission("producer_runtime_storage"):
+                    conn = _connect(db_path)
+                    try:
+                        conn.execute("BEGIN IMMEDIATE")
+                        conn.execute(
+                            """
+                            UPDATE direct_sync_runtime_authority
+                            SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
+                            WHERE authority_scope=? AND pending_request_json=?
+                            """,
+                            (request_error.error_code, now_text, authority_scope, request_json),
+                        )
+                        conn.commit()
+                    finally:
+                        conn.close()
             if (
                 request_error.error_code == DEAD_RENEWAL_CODE
                 and "runtime_fence" in request_value
@@ -999,61 +1004,62 @@ def prepare_runtime_metadata(
                 continue
             return request_error
         assert grant is not None
-        conn = _connect(db_path)
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            state = _state_row(conn, authority_scope)
-            if state is None:
-                conn.rollback()
-                return RuntimePreparation(
-                    operator_review=True,
-                    error_code="runtime_state_missing",
-                    error_message="runtime authority state disappeared during lease acquisition",
-                )
-            grant_error = _grant_error(grant, state=state, scope=scope, request_value=request_value)
-            if grant_error:
-                conn.execute(
+        with writer_admission("producer_runtime_storage"):
+            conn = _connect(db_path)
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                state = _state_row(conn, authority_scope)
+                if state is None:
+                    conn.rollback()
+                    return RuntimePreparation(
+                        operator_review=True,
+                        error_code="runtime_state_missing",
+                        error_message="runtime authority state disappeared during lease acquisition",
+                    )
+                grant_error = _grant_error(grant, state=state, scope=scope, request_value=request_value)
+                if grant_error:
+                    conn.execute(
+                        """
+                        UPDATE direct_sync_runtime_authority
+                        SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
+                        WHERE authority_scope=?
+                        """,
+                        ("runtime_lease_response_invalid", now_text, authority_scope),
+                    )
+                    conn.commit()
+                    return RuntimePreparation(
+                        status_code=200,
+                        operator_review=True,
+                        error_code="runtime_lease_response_invalid",
+                        error_message=grant_error,
+                        receipt=redact_runtime_secrets(grant),
+                    )
+                cursor = conn.execute(
                     """
                     UPDATE direct_sync_runtime_authority
-                    SET status='OPERATOR_REVIEW', last_error_code=?, updated_at=?
-                    WHERE authority_scope=?
+                    SET lease_id=?, fence=?, next_request_token=?,
+                        next_request_sequence=?, expires_at=?, assigned_relay_id=NULL,
+                        pending_request_json=NULL, pending_issue_idempotency_key=NULL,
+                        status='ACTIVE', last_error_code=NULL, updated_at=?
+                    WHERE authority_scope=? AND pending_request_json=?
+                      AND assigned_relay_id IS NULL
                     """,
-                    ("runtime_lease_response_invalid", now_text, authority_scope),
+                    (
+                        str(grant["lease_id"]),
+                        int(grant["fence"]),
+                        str(grant["next_request_token"]),
+                        int(grant["next_request_sequence"]),
+                        str(grant["expires_at"]),
+                        now_text,
+                        authority_scope,
+                        request_json,
+                    ),
                 )
                 conn.commit()
-                return RuntimePreparation(
-                    status_code=200,
-                    operator_review=True,
-                    error_code="runtime_lease_response_invalid",
-                    error_message=grant_error,
-                    receipt=redact_runtime_secrets(grant),
-                )
-            cursor = conn.execute(
-                """
-                UPDATE direct_sync_runtime_authority
-                SET lease_id=?, fence=?, next_request_token=?,
-                    next_request_sequence=?, expires_at=?, assigned_relay_id=NULL,
-                    pending_request_json=NULL, pending_issue_idempotency_key=NULL,
-                    status='ACTIVE', last_error_code=NULL, updated_at=?
-                WHERE authority_scope=? AND pending_request_json=?
-                  AND assigned_relay_id IS NULL
-                """,
-                (
-                    str(grant["lease_id"]),
-                    int(grant["fence"]),
-                    str(grant["next_request_token"]),
-                    int(grant["next_request_sequence"]),
-                    str(grant["expires_at"]),
-                    now_text,
-                    authority_scope,
-                    request_json,
-                ),
-            )
-            conn.commit()
-            if cursor.rowcount != 1:
-                time.sleep(0.01)
-        finally:
-            conn.close()
+                if cursor.rowcount != 1:
+                    time.sleep(0.01)
+            finally:
+                conn.close()
     return RuntimePreparation(
         retryable=True,
         retry_after_seconds=1,

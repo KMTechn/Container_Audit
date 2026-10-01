@@ -178,7 +178,7 @@ class LogisticsTransferClient:
                 self._successful_transmission_sequence = request_sequence
                 self.last_successful_transmission_at = successful_transmission_at
 
-    @writer_sink("transfer_api_request")
+    @writer_sink("transfer_api_request", probe_only=True)
     def _request(
         self,
         method: str,
@@ -260,7 +260,7 @@ class LogisticsTransferClient:
         )
         return dict(data) if isinstance(data, dict) else {}
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def issue_operation_lease(
         self,
         *,
@@ -449,7 +449,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def adopt_phs_label(
         self,
         *,
@@ -477,7 +477,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def prepare_phs_label_exchange(
         self,
         *,
@@ -504,7 +504,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def prepare_phs_reconciliation_label_exchange(
         self,
         reconciliation_id: str,
@@ -557,7 +557,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def request_phs_label_print(
         self,
         exchange_id: str,
@@ -583,7 +583,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def complete_phs_label_print(
         self,
         print_attempt_id: str,
@@ -620,7 +620,7 @@ class LogisticsTransferClient:
         )
         return dict(result or {})
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def activate_phs_label_exchange(
         self,
         exchange_id: str,
@@ -695,7 +695,7 @@ class LogisticsTransferClient:
             allow_not_found=True,
         )
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def seal_transfer(self, context: Mapping[str, Any]) -> dict[str, Any]:
         scope_id = str(context.get("authority_scope_id") or "").strip()
         idempotency_key = str(context.get("idempotency_key") or "").strip()
@@ -737,7 +737,7 @@ class LogisticsTransferClient:
                 details={"exception_type": exc.__class__.__name__},
             ) from exc
 
-    @writer_sink("transfer_seal")
+    @writer_sink("transfer_seal", probe_only=True)
     def replace_bundle_members(self, context: Mapping[str, Any]) -> dict[str, Any]:
         scope_id = str(context.get("authority_scope_id") or "").strip()
         idempotency_key = str(context.get("idempotency_key") or "").strip()

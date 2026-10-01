@@ -295,6 +295,40 @@ def test_restore_raw_artifact_downloads_verified_payload(tmp_path):
     )
 
 
+def test_restore_stream_preserves_destination_changed_while_receiving(
+    tmp_path, ca_remote_lock_guard
+):
+    _manifest, manifest_path = make_manifest(tmp_path)
+    csv_path = write_csv(tmp_path)
+    credentials = make_credentials()
+    plan = build_source_file_plan(
+        source_file_path=csv_path, producer_manifest_path=manifest_path,
+        credentials=credentials,
+    )
+    destination = tmp_path / "restored.csv"
+    destination.write_bytes(b"original")
+    response = FakeRestoreResponse(200, csv_path.read_bytes(), headers={
+        "X-Content-SHA256": plan.content_sha256,
+        "X-Byte-Length": str(plan.byte_length),
+    })
+
+    def receive(*args, **kwargs):
+        assert not ca_remote_lock_guard.held()
+        destination.write_bytes(b"concurrent operator change")
+        yield csv_path.read_bytes()
+
+    response.iter_content = receive
+    session = FakeRestoreSession(response)
+    session.get = ca_remote_lock_guard.wrap_transport(session.get)
+    result = restore_raw_artifact_to_file(
+        credentials=credentials, metadata=plan.metadata,
+        destination_path=destination, session=session, overwrite=True,
+    )
+    assert not result.success and result.error_code == "restore_destination_changed"
+    assert destination.read_bytes() == b"concurrent operator change"
+    assert not list(tmp_path.glob("restored.csv.tmp.*"))
+
+
 def test_restore_raw_artifact_rejects_string_false_retryable_classification(tmp_path):
     _manifest, manifest_path = make_manifest(tmp_path)
     csv_path = write_csv(tmp_path)

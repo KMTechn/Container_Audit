@@ -41,7 +41,7 @@ from producer_runtime_client import (
     runtime_receipt_result,
     scrub_terminal_runtime_metadata,
 )
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 
 
 CONTRACT_VERSION = "producer-ingest-source-file-v1"
@@ -758,7 +758,7 @@ def _publish_restored_temp_file(temp_path: Path, destination: Path, *, overwrite
     return ""
 
 
-@writer_sink("relay_spool_storage")
+@writer_sink("relay_spool_storage", probe_only=True)
 def restore_raw_artifact_to_file(
     *,
     credentials: ProducerCredentials,
@@ -776,6 +776,7 @@ def restore_raw_artifact_to_file(
         raise DirectSyncPushError("destination_path must not be a symlink")
     if destination.exists() and not overwrite:
         raise DirectSyncPushError("destination_path already exists")
+    prior_destination = _read_file_digest(destination) if destination.exists() else None
     restore_url = build_raw_artifact_restore_url(
         credentials.endpoint_url,
         content_sha256=expected_digest,
@@ -835,20 +836,27 @@ def restore_raw_artifact_to_file(
             error_code="restore_response_identity_mismatch",
             error_message="raw artifact restore response headers do not match requested artifact",
         )
-    destination.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
     byte_count = 0
     try:
-        with temp_path.open("wb") as handle:
+        with writer_admission("relay_spool_storage"):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # Unbuffered writes keep close() from flushing outside admission.
+            handle = temp_path.open("wb", buffering=0)
+        with handle:
             for chunk in _iter_response_content(response):
                 digest.update(chunk)
                 byte_count += len(chunk)
-                handle.write(chunk)
-            handle.flush()
-            os.fsync(handle.fileno())
+                with writer_admission("relay_spool_storage"):
+                    if handle.write(chunk) != len(chunk):
+                        raise OSError("incomplete raw artifact write")
+            with writer_admission("relay_spool_storage"):
+                handle.flush()
+                os.fsync(handle.fileno())
         if digest.hexdigest() != expected_digest or byte_count != expected_byte_length:
             try:
-                temp_path.unlink()
+                with writer_admission("relay_spool_storage"):
+                    temp_path.unlink()
             except OSError:
                 pass
             return _restore_error_result(
@@ -859,7 +867,13 @@ def restore_raw_artifact_to_file(
                 error_code="restore_body_mismatch",
                 error_message="raw artifact restore body does not match requested artifact",
             )
-        publish_error = _publish_restored_temp_file(temp_path, destination, overwrite=overwrite)
+        with writer_admission("relay_spool_storage"):
+            current_destination = _read_file_digest(destination) if destination.exists() else None
+            if destination.is_symlink() or current_destination != prior_destination:
+                temp_path.unlink()
+                publish_error = "restore_destination_changed"
+            else:
+                publish_error = _publish_restored_temp_file(temp_path, destination, overwrite=overwrite)
         if publish_error:
             return _restore_error_result(
                 status_code=status_code,
@@ -871,7 +885,8 @@ def restore_raw_artifact_to_file(
             )
     except OSError as exc:
         try:
-            temp_path.unlink()
+            with writer_admission("relay_spool_storage"):
+                temp_path.unlink()
         except OSError:
             pass
         return _restore_error_result(
@@ -1432,7 +1447,7 @@ def _upload_response_result(
     )
 
 
-@writer_sink("relay_network_upload")
+@writer_sink("relay_network_upload", probe_only=True)
 def upload_source_file(
     plan: SourceFilePlan,
     credentials: ProducerCredentials,
@@ -2799,7 +2814,7 @@ def _relay_credentials_issue(row: RelayQueueRow, credentials: ProducerCredential
     return "", ""
 
 
-@writer_sink("relay_batch_drain")
+@writer_sink("relay_batch_drain", probe_only=True)
 def drain_one_relay_batch(
     *,
     db_path: str | os.PathLike[str],

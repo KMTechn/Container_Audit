@@ -568,13 +568,34 @@ def writer_admission(
 P = ParamSpec("P")
 R = TypeVar("R")
 
-# The only sinks allowed to probe admission and release it before the body
-# runs: the session direct-sync wrapper, its process launcher, and the resident
-# relay entry point that drives them. The relay child takes the same single
-# admission for its own spanning writes, so a parent that held it across
-# subprocess.run would starve the child out. Every one of these releases only
-# after the probe has already denied an active fence, and each keeps its own
-# writes under an explicit admission of its own.
+# Remote orchestration probes the fence before dispatch, releases admission
+# while waiting, and admits each local mutation again when applying a result.
+# These exact functions have no unguarded local writes. Nested admission would
+# retain the caller's mutex, so refuse it before a remote request can escape.
+NETWORK_PROBE_ONLY_WRITER_SINKS = frozenset(
+    {
+        ("transfer_api_request", "transfer_client.LogisticsTransferClient._request"),
+        *(('transfer_seal', 'transfer_client.LogisticsTransferClient.' + name)
+          for name in ('issue_operation_lease', 'adopt_phs_label',
+                       'prepare_phs_label_exchange', 'prepare_phs_reconciliation_label_exchange',
+                       'request_phs_label_print', 'complete_phs_label_print',
+                       'activate_phs_label_exchange', 'seal_transfer', 'replace_bundle_members')),
+        *(('admin_pin_network', 'container_admin_pin.AdminPinClient.' + name)
+          for name in ('post', 'verify', 'status', 'redeem')),
+        ("relay_network_upload", "direct_sync_push.upload_source_file"),
+        ("relay_batch_drain", "direct_sync_push.drain_one_relay_batch"),
+        ("direct_sync_relay_cycle", "direct_sync_runtime.run_relay_once"),
+        ("raw_relay_runner", "tools.direct_sync_relay_runner.main"),
+        ("relay_spool_storage", "direct_sync_push.restore_raw_artifact_to_file"),
+        ("runtime_lease_network", "producer_runtime_client._post_lease_request"),
+        ("producer_runtime_storage", "producer_runtime_client.ensure_runtime_authority"),
+        ("producer_runtime_storage", "producer_runtime_client.prepare_runtime_metadata"),
+        ("item_catalog_refresh", "item_catalog_sync.refresh_item_catalog"),
+        ("gui_startup", "Container_Audit._prepare_gui_startup"),
+    }
+)
+
+# The process wrappers also release before a child can acquire admission.
 PROBE_ONLY_WRITER_SINKS = frozenset(
     {
         (
@@ -587,7 +608,7 @@ PROBE_ONLY_WRITER_SINKS = frozenset(
         ),
         ("persistent_relay_status", "user_relay.main"),
     }
-)
+) | NETWORK_PROBE_ONLY_WRITER_SINKS
 
 
 def writer_sink(
@@ -610,6 +631,18 @@ def writer_sink(
             raise TypeError("writer sinks must execute synchronously inside admission")
 
         sink_id = f"{function.__module__}.{function.__qualname__}"
+        if (
+            sink_id == "__main__._prepare_gui_startup"
+            and Path(function.__globals__.get("__file__", function.__code__.co_filename)).resolve()
+            == Path(__file__).with_name("Container_Audit.py").resolve()
+        ):
+            sink_id = "Container_Audit._prepare_gui_startup"
+        if (
+            sink_id == "__main__.main"
+            and Path(function.__globals__.get("__file__", function.__code__.co_filename)).resolve()
+            == Path(__file__).with_name("tools").joinpath("direct_sync_relay_runner.py").resolve()
+        ):
+            sink_id = "tools.direct_sync_relay_runner.main"
         if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
             raise WriterFencedError(
                 "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED",
@@ -619,8 +652,13 @@ def writer_sink(
         @wraps(function)
         def guarded(*args: P.args, **kwargs: P.kwargs) -> R:
             if probe_only:
-                # Deny under an active fence before the child exists, then
-                # release so the child can take the same admission itself.
+                if (selected_source, sink_id) in NETWORK_PROBE_ONLY_WRITER_SINKS and int(
+                    getattr(_WRITER_LOCAL, "depth", 0)
+                ) > 0:
+                    raise WriterFencedError(
+                        "NETWORK_WRITER_ADMISSION_HELD",
+                        "remote operation cannot run inside a local writer admission",
+                    )
                 with writer_admission(selected_source):
                     pass
                 return function(*args, **kwargs)

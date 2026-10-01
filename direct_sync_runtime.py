@@ -1018,7 +1018,7 @@ def record_scan_drain_status(
     return _append_runtime_event_with_status(config, "source_scan_drain_status", payload)
 
 
-@writer_sink("direct_sync_relay_cycle")
+@writer_sink("direct_sync_relay_cycle", probe_only=True)
 def run_relay_once(
     config: DirectSyncRuntimeConfig,
     *,

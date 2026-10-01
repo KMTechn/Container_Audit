@@ -95,7 +95,7 @@ class AdminPinClient:
                 self.session.trust_env = False
                 self.session.verify = ca_bundle
 
-    @writer_sink("admin_pin_network")
+    @writer_sink("admin_pin_network", probe_only=True)
     def post(self, route: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         path = "/api/admin-pin/v1/" + route
         body = canonical_json(payload).encode("utf-8")
@@ -146,7 +146,7 @@ class AdminPinClient:
             raise AdminPinError(code or "VERIFY_UNAVAILABLE", unknown=not bool(code))
         return answer
 
-    @writer_sink("admin_pin_network")
+    @writer_sink("admin_pin_network", probe_only=True)
     def verify(self, *, request_id: str, admin_id: str, pin: str, action: str,
                target: Mapping[str, str], operator: Mapping[str, str]) -> dict[str, Any]:
         if action not in _ACTIONS or not admin_id.strip() or not re.fullmatch(r"[0-9]{6}", pin):
@@ -180,7 +180,7 @@ class AdminPinClient:
                 and type(answer.get("consumed_at")) is int
                 and answer["consumed_at"] > 0)
 
-    @writer_sink("admin_pin_network")
+    @writer_sink("admin_pin_network", probe_only=True)
     def status(self, verification_id: str, operation_key: str) -> str:
         answer = self.post("redemptions/status", {
             "contract_version": CONTRACT_VERSION, "verification_id": verification_id,
@@ -195,7 +195,7 @@ class AdminPinClient:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
         return state
 
-    @writer_sink("admin_pin_network")
+    @writer_sink("admin_pin_network", probe_only=True)
     def redeem(self, *, verification_id: str, proof: str, operation_key: str,
                action: str, target: Mapping[str, str], operator: Mapping[str, str]) -> None:
         request = {"contract_version": CONTRACT_VERSION, "verification_id": verification_id,

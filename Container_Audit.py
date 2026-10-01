@@ -20868,59 +20868,61 @@ def main(argv: list[str] | None = None):
         instance_lease.release()
 
 
-@writer_sink("gui_startup")
+@writer_sink("gui_startup", probe_only=True)
 def _prepare_gui_startup(*, data_root=None):
     """Guard initialization without holding admission for a resident mode."""
 
-    verify_factory_contract_startup()
-    if getattr(sys, 'frozen', False):
-        application_path = os.path.dirname(sys.executable)
-    else:
-        application_path = os.path.dirname(os.path.abspath(__file__))
-    try:
-        storage_paths = build_container_audit_storage_paths(
-            application_path=application_path, data_root=data_root,
-        )
+    with writer_admission("gui_startup"):
+        verify_factory_contract_startup()
+        if getattr(sys, 'frozen', False):
+            application_path = os.path.dirname(sys.executable)
+        else:
+            application_path = os.path.dirname(os.path.abspath(__file__))
+        try:
+            storage_paths = build_container_audit_storage_paths(
+                application_path=application_path, data_root=data_root,
+            )
+            if storage_paths.custom_data_root:
+                validate_existing_data_root(storage_paths.data_root)
+        except (OSError, ValueError) as exc:
+            raise DataRootUnavailableError("GUI data root is unavailable") from exc
         if storage_paths.custom_data_root:
-            validate_existing_data_root(storage_paths.data_root)
-    except (OSError, ValueError) as exc:
-        raise DataRootUnavailableError("GUI data root is unavailable") from exc
-    if storage_paths.custom_data_root:
-        # Keep onboarding, GUI constructors and subprocesses on this selection.
-        os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
-    try:
-        instance_lease = acquire_runtime_instance(storage_paths.data_root)
-    except OSError:
-        messagebox.showerror(
-            "프로그램 실행 잠금 실패",
-            "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
-            "프로그램을 시작하지 않고 관리자에게 문의합니다.",
-        )
-        return
-    if instance_lease is None:
-        messagebox.showwarning(
-            "프로그램이 이미 실행 중입니다",
-            "같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
-            "열려 있는 창을 사용해 주세요.",
-        )
-        return
+            # Keep onboarding, GUI constructors and subprocesses on this selection.
+            os.environ[DATA_ROOT_ENV] = str(storage_paths.data_root)
+        try:
+            instance_lease = acquire_runtime_instance(storage_paths.data_root)
+        except OSError:
+            messagebox.showerror(
+                "프로그램 실행 잠금 실패",
+                "데이터 충돌 방지를 위한 실행 잠금을 확인하지 못했습니다. "
+                "프로그램을 시작하지 않고 관리자에게 문의합니다.",
+            )
+            return
+        if instance_lease is None:
+            messagebox.showwarning(
+                "프로그램이 이미 실행 중입니다",
+                "같은 PC에서 이적 검사 프로그램을 두 번 실행할 수 없습니다. "
+                "열려 있는 창을 사용해 주세요.",
+            )
+            return
     startup_complete = False
     try:
-        if _first_run_onboarding_enabled():
-            try:
-                onboarding_report = onboard_current_user(
-                    application_path,
-                    require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
-                )
-            except CurrentUserOnboardingError as exc:
-                _show_first_run_onboarding_error(exc)
-                return ONBOARDING_EXIT_CODE
-            if onboarding_report.get("bootstrap_integrity") == "absent":
-                _show_bootstrap_integrity_warning(
-                    resolve_current_user_onboarding_paths(
-                        application_path
-                    ).onboarding_report_path
-                )
+        with writer_admission("gui_startup"):
+            if _first_run_onboarding_enabled():
+                try:
+                    onboarding_report = onboard_current_user(
+                        application_path,
+                        require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+                    )
+                except CurrentUserOnboardingError as exc:
+                    _show_first_run_onboarding_error(exc)
+                    return ONBOARDING_EXIT_CODE
+                if onboarding_report.get("bootstrap_integrity") == "absent":
+                    _show_bootstrap_integrity_warning(
+                        resolve_current_user_onboarding_paths(
+                            application_path
+                        ).onboarding_report_path
+                    )
         try:
             catalog_unconfirmed = False
             catalog_context = {}
@@ -20950,7 +20952,8 @@ def _prepare_gui_startup(*, data_root=None):
                     )
                 except Exception:
                     pass
-            app = ContainerAudit()
+            with writer_admission("gui_startup"):
+                app = ContainerAudit()
             if catalog_unconfirmed:
                 app.item_catalog_unconfirmed = True
             app._startup_item_catalog_context = catalog_context

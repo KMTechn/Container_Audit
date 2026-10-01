@@ -260,6 +260,40 @@ def headless_gui_error_type():
     return HeadlessGuiInvocationError
 
 
+def _tracked_ca_mutex_acquire(guard, acquire):
+    """CA's release() lease adapter; also used by isolated client children."""
+    from types import SimpleNamespace
+
+    def closable_acquire(*args, **kwargs):
+        raw = acquire(*args, **kwargs)
+        if raw is None:
+            return None
+        return SimpleNamespace(abandoned=raw.abandoned, close=raw.release)
+
+    tracked_acquire = guard.wrap_mutex_acquire(closable_acquire)
+
+    def ca_acquire(*args, **kwargs):
+        lease = tracked_acquire(*args, **kwargs)
+        if lease is not None:
+            lease.release = lease.close
+        return lease
+
+    return ca_acquire
+
+
+@pytest.fixture(autouse=True)
+def ca_remote_lock_guard(monkeypatch, isolate_product_state):
+    """Track the real CA admission lease without changing fence decisions."""
+    from tests.lock_remote_guard import LockRemoteGuard
+    import writer_session_fence as fence
+
+    guard = LockRemoteGuard()
+    monkeypatch.setattr(fence, "_acquire_named_mutex", _tracked_ca_mutex_acquire(guard, fence._acquire_named_mutex))
+    guard.instrument_transports(monkeypatch)
+    yield guard
+    guard.assert_clean()
+
+
 @pytest.fixture(autouse=True)
 def owned_tk_workers(monkeypatch):
     """Drain test-owned workers even when an assertion skips the normal close."""

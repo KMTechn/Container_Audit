@@ -737,7 +737,7 @@ def _build_config(args: argparse.Namespace) -> DirectSyncRuntimeConfig:
     )
 
 
-@writer_sink("raw_relay_runner")
+@writer_sink("raw_relay_runner", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Container_Audit direct-sync relay runner")
     parser.add_argument("--db-path", required=True)

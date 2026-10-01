@@ -515,6 +515,24 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
                 "direct_sync_auto_bootstrap._run_command",
             ),
             ("persistent_relay_status", "user_relay.main"),
+            ("transfer_api_request", "transfer_client.LogisticsTransferClient._request"),
+            *(('transfer_seal', 'transfer_client.LogisticsTransferClient.' + name)
+              for name in ('issue_operation_lease', 'adopt_phs_label',
+                           'prepare_phs_label_exchange', 'prepare_phs_reconciliation_label_exchange',
+                           'request_phs_label_print', 'complete_phs_label_print',
+                           'activate_phs_label_exchange', 'seal_transfer', 'replace_bundle_members')),
+            *(('admin_pin_network', 'container_admin_pin.AdminPinClient.' + name)
+              for name in ('post', 'verify', 'status', 'redeem')),
+            ("relay_network_upload", "direct_sync_push.upload_source_file"),
+            ("relay_batch_drain", "direct_sync_push.drain_one_relay_batch"),
+            ("direct_sync_relay_cycle", "direct_sync_runtime.run_relay_once"),
+            ("raw_relay_runner", "tools.direct_sync_relay_runner.main"),
+            ("relay_spool_storage", "direct_sync_push.restore_raw_artifact_to_file"),
+            ("runtime_lease_network", "producer_runtime_client._post_lease_request"),
+            ("producer_runtime_storage", "producer_runtime_client.ensure_runtime_authority"),
+            ("producer_runtime_storage", "producer_runtime_client.prepare_runtime_metadata"),
+            ("item_catalog_refresh", "item_catalog_sync.refresh_item_catalog"),
+            ("gui_startup", "Container_Audit._prepare_gui_startup"),
         }
     )
 
@@ -533,6 +551,53 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
             return None
 
     assert exc_info.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
+
+
+def _network_sink(sink_id):
+    import importlib
+    module_name, *attributes = sink_id.split(".")
+    if module_name == "tools":
+        module_name += "." + attributes.pop(0)
+    function = importlib.import_module(module_name)
+    for attribute in attributes:
+        function = getattr(function, attribute)
+    return function
+
+
+@pytest.mark.parametrize("source,sink_id", sorted(fence.NETWORK_PROBE_ONLY_WRITER_SINKS))
+def test_network_sink_denies_nested_writer_before_dispatch(source, sink_id):
+    function = _network_sink(sink_id)
+    with fence.writer_admission(source):
+        with pytest.raises(fence.WriterFencedError) as error:
+            function()
+    assert error.value.code == "NETWORK_WRITER_ADMISSION_HELD"
+
+
+@pytest.mark.parametrize("source,sink_id", sorted(fence.NETWORK_PROBE_ONLY_WRITER_SINKS))
+def test_network_sink_denies_active_fence_before_dispatch(tmp_path, source, sink_id):
+    function = _network_sink(sink_id)
+    _write_active(fence.canonical_control_root(), _active_payload())
+    with pytest.raises(fence.WriterFencedError) as error:
+        function()
+    assert error.value.code == "ACTIVE_WRITER_FENCE"
+
+
+@pytest.mark.parametrize("source,name,path", [
+    ("gui_startup", "_prepare_gui_startup", "Container_Audit.py"),
+    ("raw_relay_runner", "main", "tools/direct_sync_relay_runner.py"),
+])
+def test_script_probe_binds_runtime_file_after_code_filename_relocation(source, name, path):
+    namespace = {"__name__": "__main__", "__file__": str(ROOT / path), "writer_sink": fence.writer_sink}
+    code = f'@writer_sink({source!r}, probe_only=True)\ndef {name}():\n    raise AssertionError("body must remain fenced")\n'
+    exec(compile(code, "build-time/entry.py", "exec"), namespace)
+    with fence.writer_admission(source):
+        with pytest.raises(fence.WriterFencedError) as error:
+            namespace[name]()
+    assert error.value.code == "NETWORK_WRITER_ADMISSION_HELD"
+    namespace["__file__"] = str(ROOT / "foreign.py")
+    with pytest.raises(fence.WriterFencedError) as error:
+        exec(compile(code, str(ROOT / path), "exec"), namespace)
+    assert error.value.code == "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED"
 
 
 def test_probe_only_session_sink_denies_under_fence_before_any_spawn(

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import requests
 
 from kmtech_shared import catalog as _catalog_core
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 
 
 logger = logging.getLogger(__name__)
@@ -308,6 +308,7 @@ def get_catalog_attempt_context_from_error(
     return _sanitized_catalog_attempt_context(error.diagnostic_context)
 
 
+@writer_sink("item_catalog_cache_write")
 def write_item_catalog_failure_diagnostic(
     path: str | Path,
     error: ItemCatalogSyncError,
@@ -323,6 +324,7 @@ def write_item_catalog_failure_diagnostic(
     return destination
 
 
+@writer_sink("item_catalog_cache_write")
 def write_item_catalog_startup_diagnostic(path: str | Path) -> Path:
     """Persist the latest successful central-refresh or verified-cache decision."""
 
@@ -821,7 +823,7 @@ def _hardened_get(url: str, **kwargs: object) -> object:
         return session.get(url, **kwargs)
 
 
-@writer_sink("item_catalog_refresh")
+@writer_sink("item_catalog_refresh", probe_only=True)
 def refresh_item_catalog(
     bundled_path: str | Path,
     *,
@@ -927,6 +929,8 @@ def refresh_item_catalog(
             if tls_ca_bundle_path:
                 request_kwargs["verify"] = tls_ca_bundle_path
         transport = get or (_hardened_get if central_enrolled else requests.get)
+        cache_paths = (cache, _cache_authority_path(cache), _cache_recovery_path(cache))
+        prior_cache = tuple(path.read_bytes() if path.is_file() else None for path in cache_paths)
         _update_catalog_attempt_context(request_sent=True)
         response = transport(effective_url, **request_kwargs)
         status_code = getattr(response, "status_code", None)
@@ -948,36 +952,39 @@ def refresh_item_catalog(
         response.raise_for_status()
         payload = bytes(response.content)
         validate_catalog_bytes(payload)
-        if profile is not None:
-            _write_authenticated_cache(
-                cache,
-                payload,
-                url=effective_url,
-                source_host_id=str(profile.source_host_id),
-                device_id=str(profile.device_id),
-                bearer_token=str(profile.bearer_token).strip(),
-            )
-            _remember_verified_catalog_snapshot(cache, payload)
-            _update_cache_attempt_context(cache)
-            _mark_catalog_source(
-                cache,
-                source="CENTRAL_REFRESH",
-                cache_state="VALID_AUTHENTICATED",
-                cache_used=False,
-            )
-        else:
-            _cache_authority_path(cache).unlink(missing_ok=True)
-            _cache_recovery_path(cache).unlink(missing_ok=True)
-            last_good.unlink(missing_ok=True)
-            _cache_authority_path(last_good).unlink(missing_ok=True)
-            _atomic_write(cache, payload)
-            _update_cache_attempt_context(cache)
-            _mark_catalog_source(
-                cache,
-                source="CENTRAL_REFRESH",
-                cache_state="VALID_UNAUTHENTICATED",
-                cache_used=False,
-            )
+        with writer_admission("item_catalog_refresh"):
+            if tuple(path.read_bytes() if path.is_file() else None for path in cache_paths) != prior_cache:
+                raise OSError("catalog cache changed during refresh")
+            if profile is not None:
+                _write_authenticated_cache(
+                    cache,
+                    payload,
+                    url=effective_url,
+                    source_host_id=str(profile.source_host_id),
+                    device_id=str(profile.device_id),
+                    bearer_token=str(profile.bearer_token).strip(),
+                )
+                _remember_verified_catalog_snapshot(cache, payload)
+                _update_cache_attempt_context(cache)
+                _mark_catalog_source(
+                    cache,
+                    source="CENTRAL_REFRESH",
+                    cache_state="VALID_AUTHENTICATED",
+                    cache_used=False,
+                )
+            else:
+                _cache_authority_path(cache).unlink(missing_ok=True)
+                _cache_recovery_path(cache).unlink(missing_ok=True)
+                last_good.unlink(missing_ok=True)
+                _cache_authority_path(last_good).unlink(missing_ok=True)
+                _atomic_write(cache, payload)
+                _update_cache_attempt_context(cache)
+                _mark_catalog_source(
+                    cache,
+                    source="CENTRAL_REFRESH",
+                    cache_state="VALID_UNAUTHENTICATED",
+                    cache_used=False,
+                )
         return cache
     except Exception as exc:  # noqa: BLE001 - persist type, never exception text.
         _update_catalog_attempt_context(exception_type=type(exc).__name__)

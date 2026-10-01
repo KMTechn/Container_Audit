@@ -1,5 +1,7 @@
 > 2026-10-01 w9scanonly 현재 계약: 7칸 QT=1–9999 즉시 시작, snapshot 구성원 수 우선, 로컬 intent/checkpoint/TRAY_COMPLETE → 표시 → 독립 배경 교환 ACK/lease/seal. 공통 payload는 scan_payload/local_completion_id/local_completed_at/deferred_reflection/short_confirmed/exchange_idempotency_keys다. short는 전체 topology 증거와 스캔 subset을 보내고 exact 잔량을 검증한다. UPSTREAM_COMPLETION_PENDING 409는 retry, COMPLETION_REVIEW_REQUIRED는 해당 intent review다. 유효 PHS2_LOCAL_ONLY도 같은 대기열로 보내며 옛 13자리 현품표는 기존 과도기 기록만 유지한다.
 
+원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
+
 # 데이터·상태·통합 계약
 
 스캐너 경고는 다음 스캔으로 닫고 그 입력도 처리한다(명령 카드 포함). 저장·완료 중 접수한 입력은 FIFO로 완료 뒤 계속한다. 리셋·종료·저장 실패의 기존 미접수 안내와 보호된 review는 유지한다. 교환 intent의 고정 키는 후속 checkpoint와 완료 context에서도 감사 재투영의 근거이며, CSV 실패로 이미 저장된 대체품을 덮어쓰지 않는다.
