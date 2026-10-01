@@ -372,7 +372,7 @@ def test_consumed_missing_target_closes_unknown_and_keeps_key(monkeypatch, tmp_p
         if not current["present"]:
             raise OSError("original disappeared")
         return {"version": 1}
-    app._preflight_hold_store = lambda: SimpleNamespace(path=tmp_path / "missing-hold.json")
+    app._preflight_hold_store = lambda **_selector: SimpleNamespace(path=tmp_path / "missing-hold.json")
     first = app._admin_pin_approval_for("CA.PRECHECK_HOLD", "a" * 64,
                                         source, (), lambda _intent: False)
     current["present"] = False
