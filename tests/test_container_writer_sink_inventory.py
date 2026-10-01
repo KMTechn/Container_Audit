@@ -339,14 +339,19 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
 
     scheduled = payload["powershell_execution_inventory"]["mutation_sites"]
     assert scheduled and all(row["guarded"] for row in scheduled)
-    assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1"}
-    assert {row["wrapper_function"] for row in scheduled} <= {
+    assert {row["file"] for row in scheduled} == {"tools/container_writer_fence.ps1", "INSTALL_THIS_PC.ps1"}
+    assert {row["wrapper_function"] for row in scheduled if row["file"] == "tools/container_writer_fence.ps1"} <= {
         "Disable-ContainerScheduledTaskUnderWriterFence",
         "Enable-ContainerScheduledTaskUnderWriterFence",
         "Stop-ContainerScheduledTaskUnderWriterFence",
         "DisableAndStop-ContainerScheduledTaskUnderWriterFence",
         "Remove-ContainerScheduledTaskUnderWriterFence",
     }
+    installer_tasks = [row for row in scheduled if row["file"] == "INSTALL_THIS_PC.ps1"]
+    assert {row["wrapper_function"] for row in installer_tasks} == {
+        "Restore-ContainerStartupUpdatePreimage", "Initialize-ContainerStartupUpdate", "",
+    }
+    assert all(row["guard_name"] == "Enter-ContainerPlacementWriterFence" for row in installer_tasks)
 
     lexical_sink = next(
         row

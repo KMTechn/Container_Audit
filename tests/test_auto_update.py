@@ -458,3 +458,14 @@ def test_ready_reads_existing_ledger_and_queue_without_repair(monkeypatch, tmp_p
     assert updates.publish_gui_ready(tmp_path / "app") is (queue_state == "healthy")
     assert (queue.read_bytes() if queue.exists() else None) == before
     assert (tmp_path / "ready.json").exists() is (queue_state == "healthy")
+
+
+def test_disabled_update_preserves_the_existing_relay_cycle_shape(monkeypatch, tmp_path):
+    import user_relay
+
+    monkeypatch.setattr(user_relay, "run_session_direct_sync_once", lambda **_kwargs: {"status": "PASS", "returncode": 0})
+    monkeypatch.setattr(user_relay, "_read_json", lambda _path: {"status": "paused_by_operator"})
+    monkeypatch.setattr(updates, "prepare_feed_packet", lambda _root: {"status": "OFF"})
+    assert user_relay._runtime_cycle(app_root=tmp_path / "app", direct_sync_root=tmp_path / "sync", scan_source_dir=tmp_path / "events") == {
+        "status": "paused_by_operator", "relay_status": "paused_by_operator", "process_status": "PASS", "process_returncode": 0,
+    }

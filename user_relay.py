@@ -408,13 +408,15 @@ def _runtime_cycle(
     relay_status = (
         str((runtime_status or {}).get("status") or "").strip() or "UNKNOWN"
     )
-    return {
+    report = {
         "status": relay_status if process_status == "PASS" else process_status,
         "process_status": process_status,
         "process_returncode": process_result.get("returncode", "UNKNOWN"),
         "relay_status": relay_status,
-        "auto_update": update_preparation,
     }
+    if update_preparation.get("status") != "OFF":
+        report["auto_update"] = update_preparation
+    return report
 
 
 def request_user_relay_stop(
