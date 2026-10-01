@@ -433,6 +433,13 @@ $ast = [Management.Automation.Language.Parser]::ParseFile(
     [ref]$errors
 )
 if ($errors.Count -ne 0) { exit 20 }
+$failureHelper = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -ceq 'Get-CanonicalFailureDetails'
+}, $true)
+if ($null -eq $failureHelper) { exit 29 }
+Invoke-Expression $failureHelper.Extent.Text
 $candidates = @($ast.FindAll({
     param($node)
     $node -is [Management.Automation.Language.TryStatementAst] -and

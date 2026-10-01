@@ -113,6 +113,14 @@ main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 �
 최종 설치/복구 relay는 같은 SID·대화형 세션의 일반 토큰으로 시작하고 이를 조회한다.
 상승 호출은 기존 desktop shell의 일반 토큰만 사용한다. shell 부재·다른 사용자/세션·
 토큰 조회 실패는 거절하며 installer 토큰이나 자격 증명/임시 task로 우회하지 않는다.
+primary 복제 권한은 `0x18B`(ASSIGN_PRIMARY·DUPLICATE·QUERY·ADJUST_DEFAULT·ADJUST_SESSIONID)다.
+실제 랩의 무해한 PowerShell 자식에서 기존 `11`의 Win32 5와 `0x18B`의 같은 SID/세션·일반 토큰·정상 종료를 확인했다.
+제품 시작·복구 수용 범위는 [sub-84/sub-85 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)를 따른다.
+canonical의 `failure`는 최초 설치 오류를 보존하고 `rollback.failure`는 복구 오류를
+별도로 기록한다. 메시지·인수 원문 없이 호출 이름·Win32 번호·예외 종류·분류를 남긴다.
+relay 복구 실패 뒤 Run 종류/값이 정확하고 stop 표식·relay가 없으며 scheduled writer가
+복원됐을 때만 `RUN_RESTORED_RELAY_NEXT_LOGON`을 기록하고 다음 로그온 안내를 낸다.
+`runtime_restored=false`와 실패 종료는 유지하며 즉시 복구 성공으로 처리하지 않는다.
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
 설치 시 SYSTEM 실행 경로의 전체 조상과 코드 ACL을 먼저 검증하고, native helper는
 다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를

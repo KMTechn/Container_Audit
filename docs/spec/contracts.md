@@ -114,6 +114,9 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
 canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
 후보 설정은 교체 뒤의 새 명령에만 적용하며 실패 복귀는 원 Run 값과 인자를 그대로 복원한다.
+canonical 오류 증거는 최초 `failure`와 각 복구 오류를 구분하며 native 실패의 호출명·
+Win32 번호를 남긴다. 정확한 Run 복원 후 relay 시작 실패는 다음 로그온 복구 가능 상태로
+구분하되 runtime 복구 성공·설치 성공으로 승격하지 않는다.
 SYSTEM이 신뢰하는 bootstrap·control·version은 파일과 모든 조상의 소유자·실효 변경 권한을
 확인한다. 일반 사용자가 바꿀 수 있는 배치는 거절하며 공유 조상의 ACL은 임의 수정하지 않는다.
 READY/trial 읽기 I/O 오류는 미확인 증거로 기록하고 원 기한·정상 복귀를 유지한다.

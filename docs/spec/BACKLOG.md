@@ -390,6 +390,10 @@ CA 설치 runtime 종료/복구: 옛 stop receipt 뒤 실제 process exit를 별
 주입 경계의 종료 지연·잔류/위조 거절과 정상 사용자 시작은 host 회귀 범위다.
 원 cfd11e4 랩 실패의 최초 조건은 rollback이 receipt를 덮어써 UNPROVEN이고,
 수정판의 실제 shell 토큰·옛 4판 설치/복구는 랩 재설치 수용으로 남긴다.
+1a630a0 랩 실패는 정지 관문 PASS 뒤 코드 배치 전 원 오류 상세 소실과 rollback relay
+시작의 MethodInvocationException을 각각 보존한다. sub-84는 호출명/Win32 오류 증거와
+정확 Run 복원 뒤 다음 로그온 상태를 분리한다. 호스트 주입/선언/stock 증거와 실제
+native 시작 진단·재설치 수용은 [sub-84 보고](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-84/REPORT.md)를 따른다.
 CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합 복귀를 보완했다.
 극단 offset의 READY 시각도 UTC 표현 가능성을 확인하며, 미확인 증거는 기한/복귀를 중단하지 않는다.
 동일 계약 예외의 실제 교환 DDL 누락도 수정했고 root/tools DDL 누락을 기계적으로 검사한다.

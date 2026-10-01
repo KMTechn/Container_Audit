@@ -1036,6 +1036,35 @@ function Read-CanonicalRetirementResume {
     }
     return $prior
 }
+function Get-CanonicalFailureDetails($Failure, [string]$Phase) {
+    # Error messages, invocation text and arguments can contain delegation or
+    # credentials. Keep only named APIs, numeric errors and bounded classifiers.
+    $detail = [ordered]@{
+        phase=$Phase; code='CANONICAL_UNCLASSIFIED_FAILURE'; api=''; win32_error=$null
+        exception_types=@(); script_line=0
+    }
+    if ($Failure -is [Exception]) { $exception=$Failure }
+    else {
+        $exception=$Failure.Exception
+        if ($null -ne $Failure.InvocationInfo) { $detail.script_line=[int]$Failure.InvocationInfo.ScriptLineNumber }
+    }
+    for ($depth=0; $null -ne $exception -and $depth -lt 8; $depth++) {
+        $detail.exception_types += $exception.GetType().FullName
+        if ($exception -is [ComponentModel.Win32Exception]) {
+            $detail.win32_error=[int]$exception.NativeErrorCode
+            $detail.code='CANONICAL_NATIVE_FAILURE'
+        }
+        if ($exception.Data.Contains('canonical_api') -and
+            [string]$exception.Data['canonical_api'] -cmatch '^[A-Za-z0-9_.:]{1,80}$') {
+            $detail.api=[string]$exception.Data['canonical_api']
+        }
+        $message=[string]$exception.Message
+        if ($message -cmatch '^(?:CONTAINER|CANONICAL|CODE)_[A-Z_]{1,100}$') { $detail.code=$message }
+        elseif ($message -cmatch '\((CONTAINER_(?:OPERATOR|WRITER|PLACEMENT)_[A-Z_]{1,80})\)') { $detail.code=$Matches[1] }
+        $exception=$exception.InnerException
+    }
+    return $detail
+}
 function Initialize-CanonicalUserProcessApi {
     if ('ContainerAuditCanonicalUserProcess' -as [type]) { return }
     Add-Type -TypeDefinition @'
@@ -1065,10 +1094,16 @@ public static class ContainerAuditCanonicalUserProcess {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     [DllImport("user32.dll")] static extern IntPtr GetShellWindow();
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr window,out int pid);
-    static void Check(bool success) { if (!success) throw new Win32Exception(Marshal.GetLastWin32Error()); }
+    static void Check(bool success,string call) {
+        if (success) return;
+        int error=Marshal.GetLastWin32Error();
+        Win32Exception failure=new Win32Exception(error,call);
+        failure.Data["canonical_api"]=call;
+        throw failure;
+    }
     static int Integer(IntPtr token,int kind) {
         IntPtr data=Marshal.AllocHGlobal(4);
-        try { int needed; Check(GetTokenInformation(token,kind,data,4,out needed)); return Marshal.ReadInt32(data); }
+        try { int needed; Check(GetTokenInformation(token,kind,data,4,out needed),"GetTokenInformation:"+kind); return Marshal.ReadInt32(data); }
         finally { Marshal.FreeHGlobal(data); }
     }
     static Security Inspect(IntPtr token) {
@@ -1078,7 +1113,7 @@ public static class ContainerAuditCanonicalUserProcess {
     }
     public static Security Read(int pid) {
         using (Process process=Process.GetProcessById(pid)) {
-            IntPtr token; Check(OpenProcessToken(process.Handle,8,out token));
+            IntPtr token; Check(OpenProcessToken(process.Handle,8,out token),"OpenProcessToken:read");
             try { return Inspect(token); } finally { CloseHandle(token); }
         }
     }
@@ -1087,20 +1122,21 @@ public static class ContainerAuditCanonicalUserProcess {
         if (shell==IntPtr.Zero || GetWindowThreadProcessId(shell,out shellPid)==0)
             throw new InvalidOperationException("Canonical interactive shell is unavailable.");
         using (Process shellProcess=Process.GetProcessById(shellPid)) {
-            IntPtr token; Check(OpenProcessToken(shellProcess.Handle,10,out token));
+            IntPtr token; Check(OpenProcessToken(shellProcess.Handle,10,out token),"OpenProcessToken:shell");
             IntPtr primary=IntPtr.Zero,environment=IntPtr.Zero;
             try {
                 Security security=Inspect(token);
                 if (security.elevated || security.sid!=sid || security.session_id!=session || session<=0)
                     throw new InvalidOperationException("Canonical interactive shell security differs.");
-                Check(DuplicateTokenEx(token,11,IntPtr.Zero,2,1,out primary));
+                // Explicit primary-token rights proven by the lab launch (0x18B).
+                Check(DuplicateTokenEx(token,0x18B,IntPtr.Zero,2,1,out primary),"DuplicateTokenEx:primary");
                 security=Inspect(primary);
                 if (security.elevated || security.sid!=sid || security.session_id!=session)
                     throw new InvalidOperationException("Canonical normal-user token differs.");
-                Check(CreateEnvironmentBlock(out environment,primary,false));
+                Check(CreateEnvironmentBlock(out environment,primary,false),"CreateEnvironmentBlock");
                 Startup startup=new Startup(); startup.cb=Marshal.SizeOf(typeof(Startup)); startup.desktop="winsta0\\default";
                 ProcessInfo child;
-                Check(CreateProcessWithTokenW(primary,0,null,new StringBuilder(command),0x08000400,environment,null,ref startup,out child));
+                Check(CreateProcessWithTokenW(primary,0,null,new StringBuilder(command),0x08000400,environment,null,ref startup,out child),"CreateProcessWithTokenW");
                 try { return child.pid; } finally { CloseHandle(child.thread); CloseHandle(child.process); }
             } finally {
                 if (environment!=IntPtr.Zero) DestroyEnvironmentBlock(environment);
@@ -2527,6 +2563,8 @@ $enteredPlacementTry = $true
             $failureCode = if ($preflightFailure.Count -eq 1) {
                 ([string]$preflightFailure[0]).Split('=')[1]
             } else { 'CONTAINER_PLACEMENT_CHILD_FAILED' }
+            $audit.code_replacement.failure_code=$failureCode
+            $audit.code_replacement.child_exit_code=[int]$bootstrapExitCode
             $reason = if ($failureCode -cmatch 'MUTEX_TIMEOUT$') {
                 '다른 설치 또는 기록 작업이 진행 중입니다.'
             } elseif ($failureCode -cmatch 'DELEGATED_OPERATION_MISMATCH$') {
@@ -2703,6 +2741,12 @@ $enteredPlacementTry = $true
 }
 catch {
     $original=$_
+    if ($enteredPlacementTry) {
+        $audit.failure_type=$original.Exception.GetType().Name
+        $audit.failure=Get-CanonicalFailureDetails $original 'INSTALL'
+        Save $auditPath $audit
+        if ($evidenceFull) { Save $evidenceFull $audit }
+    }
     if (-not $enteredPlacementTry) {
         if ($retirementResume -and $canonicalWriterFenceActive) {
             throw 'RETIREMENT_RESUME_JOURNAL_UNKNOWN_FENCE_RETAINED'
@@ -2925,6 +2969,7 @@ catch {
             $audit.status='CODE_ROLLBACK_FAILED'
             $audit.code_replacement.status='ROLLBACK_FAILED_CONTAINED_OR_STOPPED'
             $audit.code_replacement.restore_failure_type=$codeRollbackFailure
+            $audit.code_replacement.restore_failure=Get-CanonicalFailureDetails $_ 'ROLLBACK_CODE'
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
         }
@@ -2951,6 +2996,7 @@ catch {
         $audit.status = 'AUTOSTART_ROLLBACK_FAILED'
         $audit.rollback.runtime_restored = $false
         $autostartRollbackFailure = $_.Exception.GetType().Name
+        $audit.rollback.failure=Get-CanonicalFailureDetails $_ 'ROLLBACK_AUTOSTART'
         $audit.failure_type = $original.Exception.GetType().Name
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
@@ -3006,6 +3052,7 @@ catch {
             }
             $audit.status='CANONICAL_WRITER_RESTORE_FAILED'
             $audit.scheduled_writer.restore_failure_code='CANONICAL_WRITER_RESTORE_FAILED'
+            $audit.scheduled_writer.restore_failure=Get-CanonicalFailureDetails $restoreFailure 'ROLLBACK_WRITER'
             $audit.failure_type=$original.Exception.GetType().Name
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
@@ -3053,9 +3100,28 @@ catch {
     catch {
         $audit.status='AUTOSTART_ROLLBACK_FAILED'
         $audit.rollback.runtime_restored=$false
+        $audit.rollback.failure=Get-CanonicalFailureDetails $_ 'ROLLBACK_RELAY'
+        $audit.rollback.relay_recovery_status='RELAY_RESTORE_FAILED'
+        # A valid Run entry is durable recovery at the next logon, not proof
+        # that this session's runtime has been restored. Retain failure/exit1.
+        try {
+            $check=Snapshot
+            if ($old.Count -gt 0 -and [bool]$before.exists -and
+                [bool]$check.exists -eq [bool]$before.exists -and
+                [string]$check.kind -ceq [string]$before.kind -and
+                [string]$check.data -ceq [string]$before.data -and
+                [bool]$audit.rollback.scheduled_writer_restored -and
+                -not (Test-Path -LiteralPath $stop) -and @(Relays).Count -eq 0) {
+                $audit.rollback.relay_recovery_status='RUN_RESTORED_RELAY_NEXT_LOGON'
+            }
+        }
+        catch { $audit.rollback.relay_recovery_status='RELAY_RESTORE_STATE_UNVERIFIED' }
         Save $auditPath $audit
         if ($evidenceFull) { Save $evidenceFull $audit }
-        throw "AUTOSTART_ROLLBACK_FAILED: $($_.Exception.GetType().Name)"
+        if ($audit.rollback.relay_recovery_status -ceq 'RUN_RESTORED_RELAY_NEXT_LOGON') {
+            Write-Warning '이전 자동 시작 설정은 복원됐지만 현재 전송 릴레이를 시작하지 못했습니다. 다음 Windows 로그온에서 다시 시작합니다. 기존 기록은 보존됐으며 이번 설치는 실패 상태입니다.'
+        }
+        throw "AUTOSTART_ROLLBACK_FAILED: $($audit.rollback.relay_recovery_status)"
     }
     # A fresh placement has no old code tree to restore. Its verified files
     # remain available even after the current-user runtime preimage is restored.
