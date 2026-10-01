@@ -394,3 +394,5 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 격리된 실제 Web HTTP·SQLite와 CA 내구 intent의 7개 성공/거절 경계가 PASS다. 중앙 잠금+root 철회에서 서버 LOCKED/PIN_LOCKED·CA REJECTED·이전 grant REVOKED 및 원본 보존을 확인했고 제품 인증 코드는 변경하지 않았다. 지원 store API로 준비한 격리 source 시험이며 실제 root UI·production 수용은 NOT TESTED. 원 실패·정확한 입력 SHA와 범위는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.
 
 G6 선택 대기의 다음 현품표·카드는 원본 보류/유지 뒤 공개 입력으로 처리한다. 다른 작업자 preflight 원본은 불변이고 그 현품표만 관리자 PIN 인수·격리 대상으로 남는다. headless 회귀와 실제 화면·스캐너 검증은 구분한다.
+
+G8 기기 인증 진행 현황·60초 배경 갱신·끊김 캐시·스캔 복귀·늦은 응답을 구현했다. 실제 화면/장치와 운영 서버 응답은 미검증이며 브랜치 검증은 focused/collect, 전체는 w9next 통합판 범위다.

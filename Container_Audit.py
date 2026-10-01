@@ -2733,6 +2733,7 @@ class ContainerAudit:
             self.show_worker_input_screen()
 
     def _clear_main_frames(self):
+        self._hide_logistics_progress()
         login_layout_job = getattr(self, "_worker_login_layout_job", None)
         if login_layout_job:
             try:
@@ -4686,6 +4687,123 @@ class ContainerAudit:
             self._reset_ui_to_waiting_state()
         self.scan_entry.focus()
         self.root.after(100, self._schedule_phs_label_exchange_recovery)
+
+    def show_logistics_progress(self):
+        if getattr(self, "_scan_callback_pending", False) or self.scan_entry.get().strip():
+            return
+        if getattr(self, "_progress_visible", False):
+            self._schedule_focus_return()
+            return
+        panel = ttk.Frame(self.root, padding=16)
+        panel.grid_columnconfigure(0, weight=1)
+        panel.grid_rowconfigure(2, weight=1)
+        ttk.Label(panel, text="출고 계획 대비 진행 현황 · 이적", style='Card.Value.TLabel').grid(
+            row=0, column=0, sticky='w')
+        ttk.Button(panel, text="작업 화면", command=self._hide_logistics_progress,
+                   style='Secondary.TButton').grid(row=0, column=1, padx=8)
+        self._progress_status_label = ttk.Label(panel, style='Card.Subtle.TLabel')
+        self._progress_status_label.grid(row=1, column=0, columnspan=2, sticky='w', pady=8)
+        table = ttk.Frame(panel)
+        table.grid(row=2, column=0, columnspan=2, sticky='nsew')
+        table.grid_columnconfigure(0, weight=1)
+        table.grid_rowconfigure(0, weight=1)
+        self._progress_tree = ttk.Treeview(table, columns=('name','plan','done','remaining','boxes'),
+            show='headings', takefocus=False)
+        for column, title in zip(('name','plan','done','remaining','boxes'),
+                ('품목','출고 계획','이적 준비','남은 수량','남은 상자')):
+            self._progress_tree.heading(column, text=title)
+            self._progress_tree.column(column, width=240 if column == 'name' else 120, minwidth=80)
+        scroll = ttk.Scrollbar(table, orient='vertical', command=self._progress_tree.yview)
+        self._progress_tree.configure(yscrollcommand=scroll.set)
+        self._progress_tree.grid(row=0, column=0, sticky='nsew')
+        scroll.grid(row=0, column=1, sticky='ns')
+        self._progress_tree.bind('<ButtonRelease-1>', lambda _event: self._schedule_focus_return())
+        ttk.Label(panel, text="스캔하면 작업 화면으로 돌아가 그대로 처리합니다.").grid(
+            row=3, column=0, columnspan=2, pady=8)
+        self._progress_work_scan_entry = self.scan_entry
+        self.scan_entry = tk.Entry(panel, font=(self.DEFAULT_FONT, int(18*self.scale_factor)), justify='center')
+        self.scan_entry.grid(row=4, column=0, columnspan=2, sticky='ew')
+        self.scan_entry.bind('<Return>', self.process_barcode)
+        self._progress_panel = panel
+        self._progress_visible = True
+        panel.place(x=0, y=0, relwidth=1, relheight=1)
+        self._render_logistics_progress()
+        self._refresh_logistics_progress()
+        self._schedule_focus_return()
+
+    def _hide_logistics_progress(self, raw_barcode=""):
+        if not getattr(self, "_progress_visible", False):
+            return
+        self._progress_visible = False
+        panel = getattr(self, "_progress_panel", None)
+        if panel is not None:
+            panel.place_forget()
+            if hasattr(panel, 'destroy'):
+                panel.destroy()
+            self._progress_panel = None
+        entry = getattr(self, "_progress_work_scan_entry", None)
+        if entry is not None:
+            self.scan_entry = entry
+            self._progress_work_scan_entry = None
+            if raw_barcode:
+                entry.delete(0, tk.END)
+                entry.insert(0, raw_barcode)
+        job = getattr(self, "_progress_refresh_job", None)
+        if job:
+            self.root.after_cancel(job)
+            self._progress_refresh_job = None
+        self._schedule_focus_return()
+
+    def _refresh_logistics_progress(self):
+        self._progress_refresh_job = None
+        if not getattr(self, "_progress_visible", False) or getattr(self, "_ui_close_requested", False):
+            return
+        if getattr(self, "_progress_pending", False):
+            return
+        self._progress_pending = True
+        results = self._progress_results = queue.Queue(maxsize=1)
+        worker = persistent_operator_name(self.worker_name)
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        today = datetime.date.today().isoformat()
+        def read():
+            try:
+                data = client.get_progress(date=today) if client is not None else None
+            except Exception:
+                data = None
+            results.put((data, worker))
+        thread = threading.Thread(target=read, name='container-audit-progress', daemon=True)
+        self._progress_thread = thread
+        thread.start()
+        self._poll_logistics_progress_result()
+
+    def _poll_logistics_progress_result(self):
+        self._progress_poll_job = None
+        try:
+            data, worker = self._progress_results.get_nowait()
+        except queue.Empty:
+            self._progress_poll_job = self.root.after(50, self._poll_logistics_progress_result)
+            return
+        self._progress_pending = False
+        if worker == persistent_operator_name(self.worker_name):
+            self._progress_disconnected = data is None
+            if data is not None:
+                self._progress_data = data
+                self._progress_last_success = datetime.datetime.now().strftime('%m-%d %H:%M:%S')
+            if getattr(self, "_progress_visible", False):
+                self._render_logistics_progress()
+        if getattr(self, "_progress_visible", False) and not getattr(self, "_ui_close_requested", False):
+            self._progress_refresh_job = self.root.after(60000, self._refresh_logistics_progress)
+
+    def _render_logistics_progress(self):
+        data = getattr(self, "_progress_data", None) or {}
+        status = "연결 끊김" if getattr(self, "_progress_disconnected", False) else "서버 연결: 정상" if data else "현황 확인 중"
+        self._progress_status_label.configure(text=f"{data.get('date', datetime.date.today().isoformat())} · {status} · 마지막 성공 수신 {getattr(self, '_progress_last_success', '없음')}")
+        tree = self._progress_tree
+        for row in tree.get_children():
+            tree.delete(row)
+        for item in data.get('items', []):
+            tree.insert('', 'end', values=(item.get('name') or item.get('item_id'), item['plan_qty'],
+                item['transferred_qty'], item['remaining_qty'], item['remaining_boxes']))
 
     def _large_text_pane(self, parent, *, force=False):
         # The existing 2x+ tier deliberately keeps enlarged text. Give its
@@ -11066,6 +11184,8 @@ class ContainerAudit:
             before=self.info_cards['direct_sync']['label'],
             side='right', anchor='n', padx=(4, 0),
         )
+        ttk.Button(parent_frame, text="진행 현황", command=self.show_logistics_progress,
+            style='Secondary.TButton').grid(row=8, column=0, sticky='ew', pady=8)
         for widget in self.info_cards['direct_sync'].values():
             try:
                 widget.bind('<Button-1>', lambda _event: self._show_direct_sync_status_details())
@@ -13379,6 +13499,8 @@ class ContainerAudit:
     def process_barcode(self, event=None):
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
         raw_barcode = self.scan_entry.get().strip()
+        if raw_barcode and getattr(self, "_progress_visible", False):
+            self._hide_logistics_progress(raw_barcode)
         if not raw_barcode:
             if (self._warning_state_presenter().state.is_blocking
                 and not self._operator_review_blocks_mutation()
@@ -15158,11 +15280,16 @@ class ContainerAudit:
 
     def _cancel_all_jobs(self):
         self._cancel_master_preflight()
+        # A request may still finish into its old queue after logout. A new
+        # session must be able to start a fresh read rather than wait forever.
+        self._progress_pending = False
         for attribute in (
             "_direct_sync_health_job",
             "_direct_sync_health_poll_job",
             "_background_seal_retry_job",
             "_scanonly_transport_retry_job",
+            "_progress_refresh_job",
+            "_progress_poll_job",
         ):
             job = getattr(self, attribute, None)
             if job:

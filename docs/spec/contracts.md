@@ -6,6 +6,8 @@
 
 복구·인수 선택 대기의 다음 스캔은 원 작업자·원 상태를 먼저 내구 보류한 뒤 같은 입력을 처리한다. 작업 전환 선택은 현재 작업과 선택한 보류 원본을 그대로 유지하고 다음 입력을 처리한다. 다른 작업자의 preflight 원본은 이동·수정하지 않으며 현재 작업자의 hold 파일을 분리한다. 그 원본 현품표의 인수·격리는 기존 관리자 PIN 경로를 유지하고 다른 현품표·카드는 계속 받는다.
 
+진행 현황은 기존 기기 인증 client의 `GET /logistics/api/v1/progress?authority_scope_id=…&date=YYYY-MM-DD&stage=transfer`를 사용한다(CONTRACT v1.5 §11). 품목별 `plan_qty/transferred_qty/remaining_qty/remaining_boxes`를 표시하고 열린 동안 60초마다 배경 갱신한다. 끊김·잘못된 응답은 마지막 값과 마지막 성공 수신 시각을 보존한다. 현황 중 스캔은 같은 원문을 기존 입력/FIFO에 넘기며 늦은 응답은 작업 화면을 변경하지 않는다.
+
 일반 보류 직후 다음 현품표 전 UNDO는 기존 parked 상태·복원 감사 outbox를 재사용한다. 새 카드나 event 종류를 추가하지 않으며 `TRAY_PARKED`와 `TRAY_RESTORED_FROM_PARK` 원 기록을 유지한다.
 
 미달 완료 기록은 현재 상태의 pending 감사 전체를 인계한다. 미달 취소는 그 원행과 완료·취소 감사를 병합하며, 재생은 최상위와 중첩 `state`/`undo_state`의 원행을 모두 읽는다(이전 판 기록 포함). CSV 반영 뒤에도 새 감사가 추가된 목록은 덮어쓰지 않는다. 교환 checkpoint 복구 CAS는 `pending_audit_events`의 반영 진행만 비교에서 제외하고 나머지 업무 상태 차이는 계속 거절한다.

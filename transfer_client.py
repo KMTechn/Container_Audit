@@ -614,6 +614,22 @@ class LogisticsTransferClient:
         result = self._request("GET", "/logistics/api/v1/capabilities")
         return dict(result or {})
 
+    def get_progress(self, *, date: str) -> dict[str, Any]:
+        """Device-authenticated, read-only progress for today's transfer work."""
+        scope = _normalize_identifier(self.authority_scope_id, "authority_scope_id")
+        self.assert_authority(scope)
+        query = urlencode({"authority_scope_id": scope, "date": date, "stage": "transfer"})
+        result = self._request("GET", f"/logistics/api/v1/progress?{query}")
+        if not isinstance(result, dict) or not isinstance(result.get("items"), list):
+            raise TransferSealError("INVALID_SERVER_RESPONSE", "진행 현황 응답을 확인할 수 없습니다.")
+        for item in result["items"]:
+            if not isinstance(item, dict) or any(
+                type(item.get(key)) is not int or item[key] < 0
+                for key in ("plan_qty", "transferred_qty", "remaining_qty", "remaining_boxes")
+            ):
+                raise TransferSealError("INVALID_SERVER_RESPONSE", "진행 현황 수량을 확인할 수 없습니다.")
+        return result
+
     def resolve_good_source(
         self, *, authority_scope_id: str, barcode: str
     ) -> dict[str, Any]:
