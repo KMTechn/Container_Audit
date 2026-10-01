@@ -6,14 +6,14 @@
 
 ## 프로젝트 목적
 
-`Container_Audit`는 제조 라인의 이적 검사/트레이 검사를 위한 Windows 데스크톱 앱이다. 표준 작업은 검사 전에 발행되어 검사 완료까지 유지된 exact 6필드 PHS2를 중앙 조회하고, 서버가 확정한 GOOD member count만큼 제품 바코드를 순차 스캔한다. PHS2 수량을 기본 60으로 추정하거나 QR에 `QT`를 추가하지 않는다. 배포 전환 기준은 Syncthing 없이 HTTPS direct-sync 릴레이가 로컬 이벤트를 서버로 업로드하는 구조다.
+`Container_Audit`는 제조 라인의 이적 검사/트레이 검사를 위한 Windows 데스크톱 앱이다. 현품표는 PHS2 6칸과 마지막 `QT`가 있는 7칸을 받는다. 목표는 알려진 GOOD 구성원 수를 우선하고, 없으면 QT(1–9999)로 즉시 시작한다. 6칸은 중앙 조회로 목표를 확보한다. 완료는 로컬에 내구 기록한 뒤 중앙 교환·잠금·봉인을 배경에서 전송한다. 배포 전환 기준은 Syncthing 없이 HTTPS direct-sync 릴레이가 로컬 이벤트를 서버로 업로드하는 구조다.
 
 ## 주요 기능
 
-- exact PHS2의 `ITG/LBL/HSH`를 중앙 registry와 대조한 뒤 품목·현재 GOOD 목표 수량을 잡고 제품 바코드를 검증한다.
-- 트레이 완료, 마지막 스캔 취소, 현재 작업 리셋을 처리한다. 부분 제출 코드는 레거시·시험 경로에 남아 있지만, 표준 compact PHS2 작업은 서버가 확정한 GOOD member 전량을 읽기 전에는 부분 제출을 차단한다.
+- PHS2의 `ITG/LBL/HSH`를 유지하며 알려진 GOOD 구성원 목록으로 제품을 즉시 대조하고, 미확인 제품·교환·완료는 중앙에서 재검증한다.
+- 목표 도달 시 자동 완료한다. 제품 1개 이상 뒤 같은 현품표 재스캔으로 미달을 확정하며, 바로 앞 동일 현품표의 3초 이내 중복 읽기만 무시한다. 다음 현품표 전 UNDO로 미달 확정을 되돌릴 수 있다. 경고를 닫는 다음 스캔과 저장·완료 중 접수한 스캔도 순서대로 처리한다.
 - 작업 중인 트레이를 보류/복구하고, 비정상 종료 후 현재 트레이 상태를 복구한다.
-- seal 전 중앙 PHS2 트레이에서 개별 제품 1~2개를 two-bundle CAS로 원자 교체하며, 원래 PHS2 identity는 유지한다.
+- 교환 카드/단추 → 불량 대상 → 대체품 스캔으로 로컬 intent·checkpoint·감사 기록을 남긴다. 검사 단계 묶음의 제품은 자동 이동하고 미검사품은 GOOD 등록하며, 중앙 CAS 검증은 배경에서 한다. 원래 PHS2 identity와 목표 근거를 유지한다.
 - `native_audio.WavSound`의 Windows `winsound` 기반 성공/오류 사운드와 Tkinter GUI를 제공한다. 이미지는 `vendor.kmtech_zero_pe.raster`가 처리한다.
 - 배포본은 서명된 업데이트 후보를 확인해 관리자 배포가 필요하다고 안내한다. 일반 사용자 런타임은 코드 루트를 수정하지 않는다. 공개 설치 진입점은 `INSTALL_CANONICAL_PORTABLE.ps1`이며 관리자 코드 배치는 내부 `INSTALL_THIS_PC.ps1`가 담당한다.
 - 기본 business state 루트는 `%LOCALAPPDATA%\KMTech\ContainerAudit`, DirectSync 루트는 `%LOCALAPPDATA%\KMTech\DirectSync\container_audit`다.

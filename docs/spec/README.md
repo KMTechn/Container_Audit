@@ -369,15 +369,15 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 - **연결·남은 일:** [CA-C01](contracts.md#ca-c01), [CA-G04](BACKLOG.md#ca-g04), [CA-G06](BACKLOG.md#ca-g06). CSV만으로는 이 복구 상태를 재구성할 수 없다.
 
 <a id="ca-10"></a>
-### CA-10 봉인 전 제품 1~2쌍 교체
+### CA-10 스캐너 제품 교환
 
-[화면·명령 경계](member-exchange-view.md)는 교체 화면과 원 coordinator의 소유를 구분한다.
+[스캐너·명령 경계](member-exchange-view.md)는 로컬 교환과 배경 coordinator의 소유를 구분한다.
 
-- **시작·입력:** 중앙 `PHS/AVAILABLE` 대상의 손상 제품과 새 GOOD 제품 1~2쌍. 공여 PHS의 활성 구성원은 정확히 하나여야 한다. [정본 교체 정책](../MEMBER_EXCHANGE_POLICY.md)
-- **검증·저장·결과:** 품목/UOM·대상/공여 버전을 확인하고 한 `REPLACE_BUNDLE_MEMBERS` transaction으로 처리한다. 손상품은 `PROCESS_DAMAGE_HOLD`, 새 GOOD는 대상 PHS로 이동한다. SQLite intent와 exact receipt를 남기고 receipt 확인 뒤 로컬 목록을 한 번에 교체한다. [transfer_member_exchange](../../transfer_member_exchange.py)
-- **실패·취소·재시작:** 충돌·복수 구성원 공여·receipt 불일치는 부분 로컬 교체를 허용하지 않는다. ACK 후 로컬 적용 중 종료하면 저장된 intent와 트레이 상태를 대조한다. 원래 라벨 identity 유지 증거도 필요하다.
-- **미확정 결과:** 운영 작업의 원 요청 재확인은 저장된 교체 intent를 사용한다. 중앙 `OPERATOR_REVIEW`는 receipt 조회만 하고 새 key/명령으로 우회하지 않으며, `ACKED`라도 로컬 `OPERATOR_REVIEW`면 제품 목록을 확정하지 않는다. 관리자 보류는 원 트레이 snapshot과 교체 intent를 남긴다.
-- **수용 기준:** 1~2쌍 전체 성공/실패, 중앙·로컬 exact 집합 일치, 동일 키 재생의 단일 효과, 동시 CAS 경쟁의 한쪽 성공을 확인한다. 봉인 후 CA 로컬 목록 수정은 차단되어야 한다.
+- **시작·입력:** 교환 카드/단추 → 불량 대상 → 대체품. 검사 중/완료 묶음 구성원은 singleton 제한 없이 자동 이동하고 미검사품은 GOOD 등록한다. 알려진 불량·타 품목·봉인/포장/출고 제품은 무시한다.
+- **검증·저장·결과:** 고정 키의 SQLite intent → 현재 checkpoint와 로컬 목록 → 멱등 감사 CSV를 먼저 기록한다. CSV 실패 시 대체품과 키를 보존하고 재투영한다. 중앙 `REPLACE_BUNDLE_MEMBERS` CAS와 exact receipt는 배경에서 검증하며 손상품은 `PROCESS_DAMAGE_HOLD`로 남긴다. [transfer_member_exchange](../../transfer_member_exchange.py)
+- **실패·취소·재시작:** 이후 제품이나 교환이 추가된 checkpoint에서도 intent 키로 감사 기록을 복구하며 새 목록을 덮어쓰지 않는다. 완료 intent의 교환 키도 복구 근거다. 6칸 현품표의 기존 목표/lease 증거는 유지하되 교환 후 봉인은 새 lease를 배경에서 확보한다.
+- **미확정 결과:** UNKNOWN은 원 키로 재시도하고 terminal review는 해당 건만 보존한다. 로컬 교환/완료와 중앙 ACK를 구별한다. 관리자 재확인·보류는 원 snapshot과 intent를 남긴다.
+- **수용 기준:** 로컬 저장·감사 실패·재시작·후속 스캔에서 대체품과 원 키가 유지되고 중앙 효과는 한 번이어야 한다. 봉인 후 CA 로컬 목록 수정은 차단되어야 한다.
 - **연결·남은 일:** [CA-C04](contracts.md#ca-c04), [CA-G04](BACKLOG.md#ca-g04), [CA-G05](BACKLOG.md#ca-g05). [server-contract 테스트](../../tests/test_transfer_member_exchange_server_contract.py)는 저장된 HTTP 응답 재생이며 실제 서버 경쟁 검증과 구별한다.
 
 <a id="ca-11"></a>
