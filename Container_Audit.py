@@ -1743,7 +1743,10 @@ class ContainerAudit:
         worker = persistent_operator_name(getattr(self, "worker_name", ""))
         filename = getattr(self, "PREFLIGHT_SCAN_HOLD_FILE",
             f"_preflight_scan_hold_{getattr(self, 'computer_id', 'host')}.json")
-        root = Path(self.save_folder)
+        save_root = str(getattr(self, "save_folder", "") or "").strip()
+        if not save_root:
+            save_root = str(Path(str(getattr(self, "log_file_path", "") or ".")).parent)
+        root = Path(save_root)
         paths = [root / filename, *root.glob(f"{Path(filename).stem}_*.json")]
         holds = []
         for path in paths:

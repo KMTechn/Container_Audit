@@ -456,8 +456,7 @@ def test_scans_during_a_product_save_stay_separate_products_in_scan_order(app):
 
 
 def test_scans_behind_an_unsaved_product_are_refused_with_a_sound(app):
-    app.error_sounds = []
-    app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
+    _counted_error_sound(app)
     entered, release, _save = _blocked_save(app, result=False)
     try:
         _scanner(app, ITEM + "-1")
@@ -469,7 +468,7 @@ def test_scans_behind_an_unsaved_product_are_refused_with_a_sound(app):
         release.set()
     assert app.current_tray.scanned_barcodes == []
     assert app.scan_entry.get() == "" and app.sounds == []
-    assert app.error_sounds == [1]
+    assert app.error_sounds == [-1]
     assert _refusals(app)[-1] == (
         "앞 스캔 저장 확인이 필요해 이어서 들어온 스캔 1개는 받지 않았습니다. 다시 스캔하세요."
     )
@@ -537,7 +536,10 @@ def test_scan_held_before_a_warning_acknowledges_it_and_runs(app):
 
 def _counted_error_sound(app):
     app.error_sounds = []
-    app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
+    # G10 exercises the real repeating-error adapter through a fake sound,
+    # instead of the fixture's native-audio suppression callback.
+    app._start_warning_beep = module.ContainerAudit._start_warning_beep.__get__(app)
+    app.error_sound = SimpleNamespace(play=lambda loops=0: app.error_sounds.append(loops), stop=lambda: None)
 
 
 def test_close_during_a_save_refuses_the_held_scan_out_loud(app, monkeypatch):
@@ -566,7 +568,7 @@ def test_close_during_a_save_refuses_the_held_scan_out_loud(app, monkeypatch):
     state = json.loads((Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE).read_text(encoding="utf-8"))
     notice = "종료 전에 이어서 들어온 스캔 1개는 저장하지 않았습니다. 다시 실행한 뒤 그 제품을 다시 스캔하세요."
     assert state["scanned_barcodes"] == [ITEM + "-1"]
-    assert app.error_sounds == [1] and notice in _refusals(app)
+    assert app.error_sounds == [-1] and notice in _refusals(app)
     assert warnings == [("스캔 다시 필요", notice)]
 
 
@@ -590,7 +592,7 @@ def test_reset_between_ack_and_queue_drain_refuses_the_held_scan_out_loud(app, m
     finally:
         release.set()
     assert app.current_tray.master_label_code == ""
-    assert app.error_sounds == [1]
+    assert app.error_sounds == [-1]
     assert _refusals(app)[-1] == "작업이 바뀌어 이어서 들어온 스캔 1개는 받지 않았습니다. 다시 스캔하세요."
 
 
@@ -600,5 +602,5 @@ def test_lane_fault_refuses_held_scans_in_its_notice(app):
     app._live_scan_save_pending = True
     app._handle_ui_lane_fault(RuntimeError("fixture fault"))
     assert app._scans_behind_save == [] and app._live_scan_save_pending is False
-    assert app.error_sounds == [1]
+    assert app.error_sounds == [-1]
     assert _refusals(app)[-1].endswith("이어서 들어온 스캔 2개는 받지 않았습니다. 다시 스캔하세요.")
