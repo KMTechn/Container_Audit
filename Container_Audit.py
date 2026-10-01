@@ -1241,6 +1241,7 @@ class ContainerAudit:
         self._load_best_time_records()
         
         self.worker_name = ""
+        self._work_session_identity_bound = False
         self.worker_role = ""
         self._authenticated_protected_admin = False
         self._admin_pin_login_epoch = uuid.uuid4().hex
@@ -2310,8 +2311,15 @@ class ContainerAudit:
             return True
         try:
             store = self._preflight_hold_store()
-            owned = store.exists() and store.load().worker == persistent_operator_name(
-                getattr(self, "worker_name", ""))
+            actor = str(getattr(self, "worker_name", "") or "").strip()
+            bound = bool(actor) and getattr(self, "_work_session_identity_bound", True)
+            if not bound:
+                base = self._preflight_hold_base_path()
+                if store.exists() or base.exists() or any(base.parent.glob(f"{base.stem}_*.json")):
+                    return True
+                paired = self._paired_preflight_store()
+                return paired.pending() or bool(paired.stale_entries())
+            owned = store.exists() and store.load().worker == persistent_operator_name(actor)
             if owned:
                 return True
             paired = self._paired_preflight_store()
@@ -3130,6 +3138,7 @@ class ContainerAudit:
                 messagebox.showerror("작업자 기록 오류", str(exc), parent=self.root)
                 return
             self._refresh_worker_entry_options()
+        self._work_session_identity_bound = False
         self.worker_name = worker_name
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
         self._admin_pin_login_epoch = uuid.uuid4().hex
@@ -3176,9 +3185,6 @@ class ContainerAudit:
             self.worker_role = ""
             self.show_worker_input_screen()
             return
-        # Durable hold ownership is restored before the first shared-lane task
-        # can inspect or mutate either transfer coordinator.
-        self._schedule_startup_transfer_recovery()
         if not self._begin_or_resume_work_session():
             self.current_tray = TraySession()
             self.worker_name = ""
@@ -3191,6 +3197,9 @@ class ContainerAudit:
             )
             self.show_worker_input_screen()
             return
+        self._work_session_identity_bound = True
+        # Recovery only admits work after the login's durable session binding.
+        self._schedule_startup_transfer_recovery()
         if not self._audit_recovered_atomic_temps(startup_evidence):
             self.show_status_message(
                 "원자 저장 중단 파일의 격리 감사 기록을 확인하지 못했습니다. 관리자 목록에서 이 건을 다시 확인하세요.",

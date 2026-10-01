@@ -682,8 +682,9 @@ def _startup_transfer_recovery_app(
     app.current_tray = TraySession()
     app.worker_entry = SimpleNamespace(get=lambda: "tester")
     app.worker_registry = None
-    app.worker_name = ""
-    app.worker_role = ""
+    app.worker_name = "tester"
+    app.worker_role = "WORKER"
+    app._work_session_identity_bound = True
     app._authenticated_protected_admin = False
     app._ensure_worker_login_name = lambda value: value
     app._load_session_state = lambda: None
