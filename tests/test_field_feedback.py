@@ -77,6 +77,54 @@ def test_connection_card_combines_status_send_time_and_existing_queues(flow, win
     assert '완료 전송 대기 2건' in text
 
 
+def test_relay_read_failure_preserves_observed_counts_and_ack_until_read_recovers(flow, windows, monkeypatch):
+    app = flow(transition=True)
+    card = _health_card()
+    app.info_cards = {'direct_sync': card}
+    app.transfer_seal_coordinator.client.connection_state = 'normal'
+    app.transfer_seal_coordinator.client.last_successful_transmission_at = ''
+    app._pending_seal_intent_count = 2
+    prior = RelayHealth('pending', 3, 0, 0, '2026-10-01T01:00:00+00:00', '', '')
+    app._apply_direct_sync_health(prior)
+    last_success_text = card['value'].options['text'].splitlines()[1]
+
+    def unreadable(**kwargs):
+        raise OSError('synthetic relay read failure')
+
+    monkeypatch.setattr(ca, 'read_relay_health', unreadable)
+    monkeypatch.setattr(app, '_schedule_direct_sync_health_refresh', lambda **kwargs: None)
+    app._start_direct_sync_health_refresh()
+    _pump_until(app.root, lambda: not app._direct_sync_health_pending)
+    assert app._direct_sync_health.pending_count == 3
+    assert app._direct_sync_health.last_acked_at == prior.last_acked_at
+    text = card['value'].options['text']
+    assert '서버 연결: 정상' in text
+    assert '보낼 것 5건' in text and '마지막 확인' in text
+    assert '대기 건수 확인 불가(읽기 실패)' in text
+    assert last_success_text in text
+
+    for code in ('relay_db_open_failed', 'relay_db_schema_unavailable'):
+        app._apply_direct_sync_health(RelayHealth('blocked', 0, 0, 0, '', '', '', code))
+        assert app._direct_sync_health.pending_count == 3
+        assert app._direct_sync_health.last_acked_at == prior.last_acked_at
+        assert '대기 건수 확인 불가(읽기 실패)' in card['value'].options['text']
+
+    del app._direct_sync_last_read_health
+    app._apply_direct_sync_health(RelayHealth('blocked', 0, 0, 0, '', '', '', 'relay_health_read_failed'))
+    text = card['value'].options['text']
+    assert '대기 건수 확인 불가(읽기 실패)' in text
+    assert '보낼 것 0건' not in text and '대기 0건' not in text
+    assert '마지막 성공 전송 없음' not in text
+
+    recovered = RelayHealth('pending', 1, 0, 0, '2026-10-01T02:00:00+00:00', '', '')
+    app._apply_direct_sync_health(recovered)
+    assert app._direct_sync_health == recovered
+    text = card['value'].options['text']
+    assert '보낼 것 3건' in text
+    assert '읽기 실패' not in text and '마지막 확인' not in text
+    assert windows == []
+
+
 def test_public_refused_scan_uses_repeating_error_sound(flow, windows):
     app = flow(transition=True)
     sounds = []

@@ -16165,6 +16165,25 @@ class ContainerAudit:
         if not isinstance(health, RelayHealth):
             return
         self._direct_sync_health_apply_thread_id = threading.get_ident()
+        read_failed = health.error_code in {
+            "relay_health_read_failed", "relay_status_unreadable",
+            "relay_db_open_failed", "relay_db_schema_unavailable",
+        }
+        previous_health = getattr(self, "_direct_sync_last_read_health", None)
+        has_previous_read = isinstance(previous_health, RelayHealth)
+        if read_failed and has_previous_read:
+            health = RelayHealth(
+                state="blocked",
+                pending_count=previous_health.pending_count,
+                failed_permanent_count=previous_health.failed_permanent_count,
+                operator_review_count=previous_health.operator_review_count,
+                last_acked_at=previous_health.last_acked_at,
+                oldest_pending_at=previous_health.oldest_pending_at,
+                observed_at=health.observed_at,
+                error_code=health.error_code,
+            )
+        elif not read_failed:
+            self._direct_sync_last_read_health = health
         wake_error = self._consume_direct_sync_wake_results()
         if wake_error:
             health = RelayHealth(
@@ -16175,7 +16194,7 @@ class ContainerAudit:
                 last_acked_at=health.last_acked_at,
                 oldest_pending_at=health.oldest_pending_at,
                 observed_at=health.observed_at,
-                error_code=wake_error,
+                error_code=health.error_code if read_failed else wake_error,
             )
         self._direct_sync_health = health
         card = getattr(self, "info_cards", {}).get("direct_sync")
@@ -16187,6 +16206,10 @@ class ContainerAudit:
                 getattr(self, "_pending_seal_intent_count", None) or 0
             ),
         )
+        if read_failed and not has_previous_read:
+            model["summary"] = "대기 건수 확인 불가(읽기 실패)"
+            completion_pending = int(getattr(self, "_pending_seal_intent_count", None) or 0)
+            model["detail"] = f"완료 전송 대기 {completion_pending}건" if completion_pending else ""
         client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
         connection = getattr(client, "connection_state", "unknown")
         connection_text = {"normal": "정상", "disconnected": "끊김"}.get(connection, "확인 중")
@@ -16196,9 +16219,16 @@ class ContainerAudit:
                 sent_times.append(datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone())
             except (ValueError, AttributeError):
                 pass
-        last_sent = max(sent_times).strftime('%m-%d %H:%M') if sent_times else "없음"
+        last_sent = max(sent_times).strftime('%m-%d %H:%M') if sent_times else (
+            "확인 불가(읽기 실패)" if read_failed and not has_previous_read else "없음"
+        )
         pending = health.pending_count + int(getattr(self, "_pending_seal_intent_count", None) or 0)
-        connection_summary = f"서버 연결: {connection_text} · 보낼 것 {pending}건"
+        pending_summary = f"보낼 것 {pending}건"
+        if read_failed:
+            pending_summary = (
+                f"{pending_summary} (마지막 확인) · " if has_previous_read else ""
+            ) + "대기 건수 확인 불가(읽기 실패)"
+        connection_summary = f"서버 연결: {connection_text} · {pending_summary}"
         transmission_summary = f"마지막 성공 전송 {last_sent}"
         attention = model["tone"] == "amber"
         card["frame"].configure(
