@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4651,
+      "line": 4653,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4655,
+          "line": 4657,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -4590,11 +4590,11 @@
       ],
       "file": "transfer_client.py",
       "kind": "function",
-      "line": 159,
+      "line": 162,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 169,
+          "line": 172,
           "operation": "self.session.request",
           "writer_admission_sources": []
         }
@@ -6430,7 +6430,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "9f2eff1a46ebf39dd6773bd3a63c0e383ffbec8eda8dd754e8532455b10ba7bb",
+  "inventory_sha256": "d977120b73c31bdc281a174f62c4ace986276bd43711ebf650791fc80730487a",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -12864,7 +12864,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1475,
+      "line": 1477,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -12872,7 +12872,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 20723,
+      "line": 20739,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -12880,7 +12880,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4651,
+      "line": 4653,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -12888,7 +12888,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3328,
+      "line": 3330,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12896,7 +12896,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3296,
+      "line": 3298,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12904,7 +12904,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3246,
+      "line": 3248,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12912,7 +12912,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3742,
+      "line": 3744,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -13792,7 +13792,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient._request",
-      "line": 159,
+      "line": 162,
       "marker_kind": "decorator",
       "source": "transfer_api_request"
     },
@@ -13880,7 +13880,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.activate_phs_label_exchange",
-      "line": 583,
+      "line": 591,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13888,7 +13888,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.adopt_phs_label",
-      "line": 412,
+      "line": 420,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13896,7 +13896,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.complete_phs_label_print",
-      "line": 546,
+      "line": 554,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13904,7 +13904,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.issue_operation_lease",
-      "line": 223,
+      "line": 231,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13912,7 +13912,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_label_exchange",
-      "line": 440,
+      "line": 448,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13920,7 +13920,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_reconciliation_label_exchange",
-      "line": 467,
+      "line": 475,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13928,7 +13928,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.replace_bundle_members",
-      "line": 700,
+      "line": 708,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13936,7 +13936,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.request_phs_label_print",
-      "line": 520,
+      "line": 528,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13944,7 +13944,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.seal_transfer",
-      "line": 658,
+      "line": 666,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },

@@ -1146,7 +1146,7 @@ class ContainerAudit:
         except Exception as e:
             print(f"아이콘 로드 실패: {e}")
 
-        self.success_sound = self.error_sound = None
+        self.success_sound = self.error_sound = self.completion_sound = None
         self.audio_feedback_ready = False
         self.audio_feedback_error = ""
         self.audio_feedback_init_started = False
@@ -1384,18 +1384,20 @@ class ContainerAudit:
         self.audio_feedback_init_started = True
 
         def initialize_audio():
-            success_sound = error_sound = None
+            success_sound = error_sound = completion_sound = None
             error_message = ""
             try:
                 success_sound = WavSound(resource_path('assets/success.wav'))
                 error_sound = WavSound(resource_path('assets/error.wav'))
+                completion_sound = WavSound(resource_path('assets/combo.wav'))
             except Exception as exc:
                 error_message = str(exc)
 
             def finish():
                 self.success_sound = success_sound
                 self.error_sound = error_sound
-                self.audio_feedback_ready = success_sound is not None and error_sound is not None
+                self.completion_sound = completion_sound
+                self.audio_feedback_ready = all(sound is not None for sound in (success_sound, error_sound, completion_sound))
                 self.audio_feedback_error = error_message
                 if error_message:
                     print(f"사운드 피드백 초기화 오류: {error_message}")
@@ -13407,14 +13409,7 @@ class ContainerAudit:
         )
 
     def _refuse_entry_scan(self, message: str) -> None:
-        # A running warning beep already sounds; a one-shot would stop it.
-        if not getattr(self, "_warning_beep_active", False):
-            sound = getattr(self, "error_sound", None)
-            if sound is not None:
-                try:
-                    sound.play()
-                except Exception:
-                    pass
+        self._start_warning_beep()
         self.show_status_message(message, self.COLOR_DANGER, duration=0)
 
     def _refuse_scans_behind_save(self, message: str) -> str:
@@ -13632,6 +13627,8 @@ class ContainerAudit:
         if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
             self.show_status_message("교환 상태 저장을 다시 확인하고 있습니다.", self.COLOR_DANGER)
             return False
+        if getattr(self, "_warning_beep_active", False) and not self._operator_review_blocks_mutation():
+            self._stop_warning_beep()
         if self._warning_state_presenter().state.is_blocking and not self._operator_review_blocks_mutation():
             self._warning_state_presenter().acknowledge()
             self._stop_warning_beep()
@@ -13644,8 +13641,7 @@ class ContainerAudit:
                 self.show_exchange_dialog()
             else:
                 self.show_status_message("알 수 없는 명령 카드입니다.", self.COLOR_DANGER)
-                if getattr(self, "error_sound", None):
-                    self.error_sound.play()
+                self._start_warning_beep()
                 self._log_event("SCAN_COMMAND_UNKNOWN", detail={"command": raw_barcode})
             return
         previous = getattr(self, "_last_scan_input", ("", float("-inf")))
@@ -14813,12 +14809,19 @@ class ContainerAudit:
             return
         self._warning_beep_active = True
         if getattr(self, "error_sound", None):
-            self.error_sound.play(loops=-1)
+            try:
+                self.error_sound.play(loops=-1)
+            except Exception as exc:
+                self._warning_beep_active = False
+                print(f"오류음 재생 실패: {exc.__class__.__name__}")
 
     def _stop_warning_beep(self):
         self._warning_beep_active = False
         if getattr(self, "error_sound", None):
-            self.error_sound.stop()
+            try:
+                self.error_sound.stop()
+            except Exception as exc:
+                print(f"오류음 정지 실패: {exc.__class__.__name__}")
 
     def _warning_state_presenter(self) -> WarningPresenter:
         presenter = getattr(self, "warning_presenter", None)
@@ -16168,6 +16171,19 @@ class ContainerAudit:
                 getattr(self, "_pending_seal_intent_count", None) or 0
             ),
         )
+        client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
+        connection = getattr(client, "connection_state", "unknown")
+        connection_text = {"normal": "정상", "disconnected": "끊김"}.get(connection, "확인 중")
+        sent_times = []
+        for value in (health.last_acked_at, getattr(client, "last_successful_transmission_at", "")):
+            try:
+                sent_times.append(datetime.datetime.fromisoformat(value.replace('Z', '+00:00')).astimezone())
+            except (ValueError, AttributeError):
+                pass
+        last_sent = max(sent_times).strftime('%m-%d %H:%M') if sent_times else "없음"
+        pending = health.pending_count + int(getattr(self, "_pending_seal_intent_count", None) or 0)
+        connection_summary = f"서버 연결: {connection_text} · 보낼 것 {pending}건"
+        transmission_summary = f"마지막 성공 전송 {last_sent}"
         attention = model["tone"] == "amber"
         card["frame"].configure(
             style="RelayAttention.TFrame" if attention else "Card.TFrame"
@@ -16180,7 +16196,7 @@ class ContainerAudit:
             )
         )
         card["value"].configure(
-            text="\n".join(value for value in (model['summary'], model['detail']) if value),
+            text="\n".join(value for value in (connection_summary, transmission_summary, model['summary'], model['detail']) if value),
             style=(
                 "RelayAttention.Value.TLabel"
                 if attention

@@ -3067,7 +3067,9 @@ def test_direct_sync_card_keeps_pending_neutral_and_terminal_amber():
     ready = health_module.RelayHealth("ready", 0, 0, 0, "", "", "")
     app._apply_direct_sync_health(ready)
     assert card["frame"].options["style"] == "Card.TFrame"
-    assert card["value"].options["text"] == "전송 대기 없음"
+    # G10 adds observed connection and last successful send beside the queue.
+    # An empty local queue alone supplies no observation of the server link.
+    assert card["value"].options["text"] == "서버 연결: 확인 중 · 보낼 것 0건\n마지막 성공 전송 없음\n전송 대기 없음"
 
 
 def test_gui_completion_is_nonblocking_and_persists_on_worker(tmp_path):

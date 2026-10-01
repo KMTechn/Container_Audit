@@ -8,6 +8,8 @@
 
 진행 현황은 기존 기기 인증 client의 `GET /logistics/api/v1/progress?authority_scope_id=…&date=YYYY-MM-DD&stage=transfer`를 사용한다(CONTRACT v1.5 §11). 품목별 `plan_qty/transferred_qty/remaining_qty/remaining_boxes`를 표시하고 열린 동안 60초마다 배경 갱신한다. 끊김·잘못된 응답은 마지막 값과 마지막 성공 수신 시각을 보존한다. 현황 중 스캔은 같은 원문을 기존 입력/FIFO에 넘기며 늦은 응답은 작업 화면을 변경하지 않는다.
 
+소리는 기존 음원만 사용한다: 스캔의 내구 ACK 뒤 짧은 성공, 완료 내구 투영 뒤 더 긴 완료, 입력 거절·오류는 반복음. 미달 확정은 기존 구별음을 유지한다. 물류 HTTP 응답으로 연결 상태를 관측하며 GET 현황 조회는 마지막 성공 전송 시각을 갱신하지 않는다. 전송 실패에도 앞선 성공 시각을 보존하고 relay ACK와 물류 성공 전송 중 최신 시각을 표시한다. 빈 로컬 큐만으로 정상 연결을 추정하지 않는다.
+
 일반 보류 직후 다음 현품표 전 UNDO는 기존 parked 상태·복원 감사 outbox를 재사용한다. 새 카드나 event 종류를 추가하지 않으며 `TRAY_PARKED`와 `TRAY_RESTORED_FROM_PARK` 원 기록을 유지한다.
 
 미달 완료 기록은 현재 상태의 pending 감사 전체를 인계한다. 미달 취소는 그 원행과 완료·취소 감사를 병합하며, 재생은 최상위와 중첩 `state`/`undo_state`의 원행을 모두 읽는다(이전 판 기록 포함). CSV 반영 뒤에도 새 감사가 추가된 목록은 덮어쓰지 않는다. 교환 checkpoint 복구 CAS는 `pending_audit_events`의 반영 진행만 비교에서 제외하고 나머지 업무 상태 차이는 계속 거절한다.

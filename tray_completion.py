@@ -950,6 +950,12 @@ def present_completed_tray(
     post_review_case: Optional[Dict[str, Any]],
 ) -> None:
     """Present the already applied completion using the owner's existing UI."""
+    sound = getattr(self, "completion_sound", None)
+    if sound is not None:
+        try:
+            sound.play()
+        except Exception as exc:
+            print(f"완료음 재생 실패: {exc.__class__.__name__}")
     self.scanned_listbox.delete(0, tk.END)
     self._update_all_summaries()
     self._reset_ui_to_waiting_state()

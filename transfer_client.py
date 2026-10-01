@@ -7,6 +7,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Iterator, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
@@ -85,6 +86,8 @@ class LogisticsTransferClient:
                 session.trust_env = False
                 session.verify = self.tls_ca_bundle_path
         self.session = session
+        self.connection_state = "unknown"
+        self.last_successful_transmission_at = ""
 
     def assert_authority(
         self,
@@ -176,8 +179,10 @@ class LogisticsTransferClient:
             )
         except Exception:
             self._wait_limit.unanswered = True
+            self.connection_state = "disconnected"
             raise
         status_code = int(getattr(response, "status_code", 0) or 0)
+        self.connection_state = "normal" if 200 <= status_code < 500 else "disconnected"
         if status_code >= 500:
             self._wait_limit.unanswered = True
         if 300 <= status_code < 400:
@@ -196,6 +201,7 @@ class LogisticsTransferClient:
         try:
             body = response.json()
         except Exception as exc:
+            self.connection_state = "disconnected"
             raise TransferSealError(
                 "INVALID_SERVER_RESPONSE",
                 "물류 서버가 JSON 응답을 반환하지 않았습니다.",
@@ -217,6 +223,8 @@ class LogisticsTransferClient:
                 details=error.get("details") if isinstance(error.get("details"), dict) else {},
             )
         data = body.get("data")
+        if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
+            self.last_successful_transmission_at = datetime.now(timezone.utc).isoformat()
         return dict(data) if isinstance(data, dict) else {}
 
     @writer_sink("transfer_seal")
