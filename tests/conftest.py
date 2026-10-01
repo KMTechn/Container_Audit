@@ -289,9 +289,202 @@ def ca_remote_lock_guard(monkeypatch, isolate_product_state):
 
     guard = LockRemoteGuard()
     monkeypatch.setattr(fence, "_acquire_named_mutex", _tracked_ca_mutex_acquire(guard, fence._acquire_named_mutex))
+    _instrument_ca_thread_and_sqlite_locks(guard, monkeypatch)
     guard.instrument_transports(monkeypatch)
     yield guard
     guard.assert_clean()
+
+
+def _instrument_ca_thread_and_sqlite_locks(guard, monkeypatch):
+    """Observe real locks/transactions, including objects created during imports."""
+    import gc
+    import sqlite3
+
+    raw_factories = {name: getattr(threading, name) for name in ("Lock", "RLock")}
+    raw_types = tuple(type(factory()) for factory in raw_factories.values())
+    raw_connect = sqlite3.connect
+    wrapped = {}
+
+    class Cursor:
+        def __init__(self, raw, connection):
+            self.raw, self.connection = raw, connection
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
+        def __iter__(self):
+            return iter(self.raw)
+
+        def execute(self, *args, **kwargs):
+            try:
+                self.raw.execute(*args, **kwargs)
+                return self
+            finally:
+                self.connection.update_tracking()
+
+        def executemany(self, *args, **kwargs):
+            try:
+                self.raw.executemany(*args, **kwargs)
+                return self
+            finally:
+                self.connection.update_tracking()
+
+        def executescript(self, *args, **kwargs):
+            try:
+                self.raw.executescript(*args, **kwargs)
+                return self
+            finally:
+                self.connection.update_tracking()
+
+    class Connection:
+        def __init__(self, raw):
+            object.__setattr__(self, "raw", raw)
+            object.__setattr__(self, "tracked", False)
+            self.update_tracking()
+
+        def __getattr__(self, name):
+            return getattr(self.raw, name)
+
+        def __setattr__(self, name, value):
+            if name in {"raw", "tracked"}:
+                object.__setattr__(self, name, value)
+            else:
+                setattr(self.raw, name, value)
+
+        def update_tracking(self):
+            if self.raw.in_transaction and not self.tracked:
+                guard.enter(id(self), "sqlite transaction")
+                self.tracked = True
+            elif not self.raw.in_transaction and self.tracked:
+                guard.leave(id(self))
+                self.tracked = False
+
+        def cursor(self, *args, **kwargs):
+            return Cursor(self.raw.cursor(*args, **kwargs), self)
+
+        def execute(self, *args, **kwargs):
+            return self.cursor().execute(*args, **kwargs)
+
+        def executemany(self, *args, **kwargs):
+            return self.cursor().executemany(*args, **kwargs)
+
+        def executescript(self, *args, **kwargs):
+            return self.cursor().executescript(*args, **kwargs)
+
+        def commit(self):
+            try:
+                return self.raw.commit()
+            finally:
+                self.update_tracking()
+
+        def rollback(self):
+            try:
+                return self.raw.rollback()
+            finally:
+                self.update_tracking()
+
+        def backup(self, target, *args, **kwargs):
+            raw_target = target.raw if isinstance(target, Connection) else target
+            try:
+                return self.raw.backup(raw_target, *args, **kwargs)
+            finally:
+                self.update_tracking()
+                if isinstance(target, Connection):
+                    target.update_tracking()
+
+        def close(self):
+            try:
+                return self.raw.close()
+            finally:
+                guard.leave(id(self))
+                self.tracked = False
+
+        def __enter__(self):
+            self.raw.__enter__()
+            self.update_tracking()
+            return self
+
+        def __exit__(self, *args):
+            try:
+                return self.raw.__exit__(*args)
+            finally:
+                self.update_tracking()
+
+    def wrap(value):
+        if isinstance(value, raw_types):
+            if id(value) not in wrapped:
+                wrapped[id(value)] = guard.wrap_lock(value)
+            return wrapped[id(value)]
+        if isinstance(value, sqlite3.Connection):
+            try:
+                value.in_transaction
+            except sqlite3.ProgrammingError:
+                return value  # Closed import/fixture artifacts cannot hold a transaction.
+            if id(value) not in wrapped:
+                wrapped[id(value)] = Connection(value)
+            return wrapped[id(value)]
+        return value
+
+    def connect(*args, **kwargs):
+        return wrap(raw_connect(*args, **kwargs))
+
+    factories = {}
+    for name, raw_factory in raw_factories.items():
+        def factory(*args, _raw=raw_factory, **kwargs):
+            return wrap(_raw(*args, **kwargs))
+        factories[name] = factory
+        monkeypatch.setattr(threading, name, factory)
+    monkeypatch.setattr(sqlite3, "connect", connect)
+
+    root = Path(__file__).resolve().parents[1]
+    owners = []
+    modules = set()
+    for module in list(sys.modules.values()):
+        filename = getattr(module, "__file__", None)
+        if filename and Path(filename).resolve().is_relative_to(root):
+            modules.add(module.__name__)
+            owners.append(module)
+            owners.extend(value for value in vars(module).values()
+                          if isinstance(value, type) and value.__module__ == module.__name__)
+    for value in gc.get_objects():
+        if type(value).__module__ in modules and hasattr(value, "__dict__"):
+            owners.append(value)
+    for owner in owners:
+        for name, value in list(vars(owner).items()):
+            replacement = wrap(value)
+            for factory_name, raw_factory in raw_factories.items():
+                if value is raw_factory:
+                    replacement = factories[factory_name]
+            if value is raw_connect:
+                replacement = connect
+            if replacement is not value:
+                monkeypatch.setattr(owner, name, replacement)
+
+    # The application supports injected HTTP clients. Register those boundaries
+    # too, so a fake response cannot hide a product lock/HTTP overlap.
+    import requests.sessions
+    from container_admin_pin import AdminPinClient
+    from transfer_client import LogisticsTransferClient
+
+    def register_injected_transport(instance):
+        transport = getattr(instance, "transport", None)
+        if callable(transport):
+            monkeypatch.setattr(instance, "transport", guard.wrap_transport(transport, "PIN HTTP"))
+        session = getattr(instance, "session", None)
+        if session is not None and not isinstance(session, requests.sessions.Session):
+            request = getattr(session, "request", None)
+            if callable(request):
+                monkeypatch.setattr(session, "request", guard.wrap_transport(request, "injected HTTP"))
+
+    for cls in (AdminPinClient, LogisticsTransferClient):
+        original = cls.__init__
+        def initialize(instance, *args, _init=original, **kwargs):
+            _init(instance, *args, **kwargs)
+            register_injected_transport(instance)
+        monkeypatch.setattr(cls, "__init__", initialize)
+    for owner in owners:
+        if isinstance(owner, (AdminPinClient, LogisticsTransferClient)):
+            register_injected_transport(owner)
 
 
 @pytest.fixture(autouse=True)

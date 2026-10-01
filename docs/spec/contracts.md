@@ -2,6 +2,8 @@
 
 원격 전송은 fence probe 뒤 mutex 밖에서 수행한다. 결과의 로컬 저장은 admission을 다시 받고 기존 identity/version/CAS를 재확인한다. 스캔의 로컬 durable → 표시 → 같은 key의 배경 전송 순서는 유지한다. runtime lease는 HTTP 전 DB transaction을 닫고 적용 transaction에서 pending request와 row 소유를 다시 확인한다.
 
+운영자 spool 복구는 publish 직전 ACKED row의 상태·metadata·신원 결속을 다시 비교한다. 등록 응답은 신원·manifest·credential·profile 원본의 fingerprint와 possession key를 재확인한 뒤 적용하며, two-phase 복구는 요청을 만든 journal binding과 현재 binding이 같을 때만 전이·sealed package를 저장한다. 대기 중 바뀐 원본은 늦은 응답으로 덮어쓰지 않는다.
+
 # 데이터·상태·통합 계약
 
 스캐너 경고는 다음 스캔으로 닫고 그 입력도 처리한다(명령 카드 포함). 저장·완료 중 접수한 입력은 FIFO로 완료 뒤 계속한다. 리셋·종료·저장 실패의 기존 미접수 안내와 보호된 review는 유지한다. 교환 intent의 고정 키는 후속 checkpoint와 완료 context에서도 감사 재투영의 근거이며, CSV 실패로 이미 저장된 대체품을 덮어쓰지 않는다.

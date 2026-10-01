@@ -18133,8 +18133,20 @@ class ContainerAudit:
     ) -> int:
         lock = self.__dict__.setdefault("_operation_lease_release_lock", threading.RLock())
         with lock:
-            return self._work_operation_lease_releases_serial(requested,
-                active_lease_id=active_lease_id, shared_limit=shared_limit)
+            queued = self.__dict__.setdefault("_operation_lease_release_requested", set())
+            queued.update(requested)
+            if getattr(self, "_operation_lease_release_inflight", False):
+                return max(1, len(queued))
+            requested = tuple(queued)
+            queued.clear()
+            self._operation_lease_release_inflight = True
+        try:
+            return self._work_operation_lease_releases_serial(
+                requested, active_lease_id=active_lease_id, shared_limit=shared_limit,
+            )
+        finally:
+            with lock:
+                self._operation_lease_release_inflight = False
 
     def _work_operation_lease_releases_serial(
         self,
@@ -20907,22 +20919,21 @@ def _prepare_gui_startup(*, data_root=None):
             return
     startup_complete = False
     try:
-        with writer_admission("gui_startup"):
-            if _first_run_onboarding_enabled():
-                try:
-                    onboarding_report = onboard_current_user(
-                        application_path,
-                        require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
-                    )
-                except CurrentUserOnboardingError as exc:
-                    _show_first_run_onboarding_error(exc)
-                    return ONBOARDING_EXIT_CODE
-                if onboarding_report.get("bootstrap_integrity") == "absent":
-                    _show_bootstrap_integrity_warning(
-                        resolve_current_user_onboarding_paths(
-                            application_path
-                        ).onboarding_report_path
-                    )
+        if _first_run_onboarding_enabled():
+            try:
+                onboarding_report = onboard_current_user(
+                    application_path,
+                    require_bootstrap_integrity=bool(getattr(sys, "frozen", False)),
+                )
+            except CurrentUserOnboardingError as exc:
+                _show_first_run_onboarding_error(exc)
+                return ONBOARDING_EXIT_CODE
+            if onboarding_report.get("bootstrap_integrity") == "absent":
+                _show_bootstrap_integrity_warning(
+                    resolve_current_user_onboarding_paths(
+                        application_path
+                    ).onboarding_report_path
+                )
         try:
             catalog_unconfirmed = False
             catalog_context = {}

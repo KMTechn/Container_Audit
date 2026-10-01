@@ -767,6 +767,7 @@ def restore_raw_artifact_to_file(
     session: Any = None,
     timeout: int = DEFAULT_TIMEOUT_SECONDS,
     overwrite: bool = False,
+    before_publish: Callable[[], bool] | None = None,
 ) -> RawArtifactRestoreResult:
     restore_metadata = restore_metadata_from_upload_metadata(metadata)
     expected_digest = str(restore_metadata["content_sha256"])
@@ -872,6 +873,9 @@ def restore_raw_artifact_to_file(
             if destination.is_symlink() or current_destination != prior_destination:
                 temp_path.unlink()
                 publish_error = "restore_destination_changed"
+            elif before_publish is not None and not before_publish():
+                temp_path.unlink()
+                publish_error = "restore_source_changed"
             else:
                 publish_error = _publish_restored_temp_file(temp_path, destination, overwrite=overwrite)
         if publish_error:

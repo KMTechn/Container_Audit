@@ -533,6 +533,10 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
             ("producer_runtime_storage", "producer_runtime_client.prepare_runtime_metadata"),
             ("item_catalog_refresh", "item_catalog_sync.refresh_item_catalog"),
             ("gui_startup", "Container_Audit._prepare_gui_startup"),
+            ("operator_spool_restore", "direct_sync_operator.restore_relay_spool_from_server"),
+            ("worker_enrollment_network", "tools.register_container_audit_worker_pc._post_enrollment_request"),
+            ("worker_pc_registration", "tools.register_container_audit_worker_pc.main"),
+            ("current_user_onboarding", "current_user_onboarding.onboard_current_user"),
         }
     )
 
@@ -585,6 +589,8 @@ def test_network_sink_denies_active_fence_before_dispatch(tmp_path, source, sink
 @pytest.mark.parametrize("source,name,path", [
     ("gui_startup", "_prepare_gui_startup", "Container_Audit.py"),
     ("raw_relay_runner", "main", "tools/direct_sync_relay_runner.py"),
+    ("worker_pc_registration", "main", "tools/register_container_audit_worker_pc.py"),
+    ("worker_enrollment_network", "_post_enrollment_request", "tools/register_container_audit_worker_pc.py"),
 ])
 def test_script_probe_binds_runtime_file_after_code_filename_relocation(source, name, path):
     namespace = {"__name__": "__main__", "__file__": str(ROOT / path), "writer_sink": fence.writer_sink}

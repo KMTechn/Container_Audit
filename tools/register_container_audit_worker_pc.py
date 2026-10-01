@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from writer_session_fence import writer_sink  # noqa: E402
+from writer_session_fence import writer_admission, writer_sink  # noqa: E402
 
 import requests  # noqa: E402
 
@@ -670,6 +670,7 @@ def _load_producer_identity_file(path: Path) -> dict[str, str]:
     return identity
 
 
+@writer_sink("worker_pc_registration")
 def _persist_producer_identity_file(
     path: Path,
     *,
@@ -683,7 +684,7 @@ def _persist_producer_identity_file(
         raise DirectSyncPushError(
             "server-verified possession key fingerprint is invalid"
         )
-    atomic_write_json(
+    _write_registration_json(
         str(path),
         {
             "schema_version": PRODUCER_IDENTITY_SCHEMA_VERSION,
@@ -1117,6 +1118,42 @@ def _dpapi_unprotect_current_user(protected: bytes) -> str:
 
 
 @writer_sink("worker_pc_registration")
+def _write_registration_json(path, payload, *, indent=2):
+    atomic_write_json(path, payload, indent=indent)
+
+
+def _registration_artifact_versions(args):
+    versions = {}
+    for path in getattr(args, "_registration_artifact_paths", ()):
+        resolved = path.resolve()
+        if path.is_symlink():
+            raise DirectSyncPushError("registration owner artifact became a link")
+        if path.exists():
+            before = path.stat()
+            if not path.is_file() or before.st_size > 4 * 1024 * 1024:
+                raise DirectSyncPushError("registration owner artifact is invalid")
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            after = path.stat()
+            if (before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_ino, after.st_size, after.st_mtime_ns
+            ):
+                raise DirectSyncPushError("registration owner artifact changed during readback")
+            versions[path] = (str(resolved), digest, after.st_ino, after.st_mtime_ns)
+        else:
+            versions[path] = (str(resolved), None)
+    return versions
+
+
+def _check_registration_artifacts(args):
+    expected = getattr(args, "_registration_expected_artifacts", None)
+    if expected is not None and _registration_artifact_versions(args) != expected:
+        raise EnrollmentAdminRecoveryRequired(
+            "local registration owner state changed while awaiting the server; response was not applied",
+            error_code="registration_owner_state_changed",
+        )
+
+
+@writer_sink("worker_pc_registration")
 def _write_dpapi_secret(
     data_dir: str | os.PathLike[str],
     target_name: str,
@@ -1182,6 +1219,7 @@ def _bootstrap_secret_ref(
     raise DirectSyncPushError("self-enroll secret bootstrap requires dpapi: or wincred: secret_ref")
 
 
+@writer_sink("worker_pc_registration")
 def _initial_possession_key(
     args: argparse.Namespace,
     identity: dict[str, str],
@@ -1247,7 +1285,7 @@ def _initial_possession_key(
         ) from exc
 
 
-@writer_sink("worker_enrollment_network")
+@writer_sink("worker_enrollment_network", probe_only=True)
 def _post_enrollment_request(
     enrollment_url: str,
     *,
@@ -1596,6 +1634,13 @@ def _finalize_server_registration(
     non_exportability,
     extra_report: dict | None = None,
 ) -> tuple[dict, dict]:
+    _check_registration_artifacts(args)
+    with PersistentPossessionKey.open_existing(scope=possession_descriptor.scope) as current_key:
+        if current_key.descriptor().fingerprint != possession_descriptor.fingerprint:
+            raise EnrollmentAdminRecoveryRequired(
+                "possession key changed while awaiting registration response",
+                error_code="possession_key_binding_mismatch",
+            )
     expected_manifest_hash = manifest_hash(manifest)
     active_manifest_hashes = response_payload.get("active_manifest_hashes")
     if (
@@ -1747,6 +1792,7 @@ def _finalize_server_registration(
         ),
     }
     report.update(extra_report or {})
+    args._registration_expected_artifacts = _registration_artifact_versions(args)
     return credential, report
 
 
@@ -2101,9 +2147,11 @@ def _admin_recover(
     identity = manifest["pc_identity"]
     expected_manifest_hash = manifest_hash(manifest)
     try:
-        possession_key_context = PersistentPossessionKey.provision_initial(
-            scope=SCOPE_CURRENT_USER
-        )
+        with writer_admission("worker_pc_registration"):
+            _check_registration_artifacts(args)
+            possession_key_context = PersistentPossessionKey.provision_initial(
+                scope=SCOPE_CURRENT_USER
+            )
     except PossessionKeyAdminRecoveryRequired as exc:
         raise EnrollmentAdminRecoveryRequired(
             "audited recovery possession key is unavailable or policy-invalid; automatic replacement is forbidden",
@@ -2270,9 +2318,11 @@ def _admin_recover_two_phase(
     expected_manifest_hash = manifest_hash(manifest)
 
     try:
-        possession_key_context = PersistentPossessionKey.provision_initial(
-            scope=SCOPE_CURRENT_USER
-        )
+        with writer_admission("worker_pc_registration"):
+            _check_registration_artifacts(args)
+            possession_key_context = PersistentPossessionKey.provision_initial(
+                scope=SCOPE_CURRENT_USER
+            )
     except PossessionKeyAdminRecoveryRequired as exc:
         raise EnrollmentAdminRecoveryRequired(
             "audited recovery possession key is unavailable or policy-invalid; automatic replacement is forbidden",
@@ -2813,14 +2863,15 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         raise DirectSyncPushError(
             "--admin-recovery-two-phase requires --admin-recovery-secret-file"
         )
-    hostname = args.hostname or socket.gethostname()
-    storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
-    ensure_container_audit_storage_dirs(storage_paths)
-    identity = _resolve_producer_identity(
-        args,
-        storage_paths,
-        hostname=hostname,
-    )
+    with writer_admission("worker_pc_registration"):
+        hostname = args.hostname or socket.gethostname()
+        storage_paths = build_container_audit_storage_paths(application_path=args.app_root)
+        ensure_container_audit_storage_dirs(storage_paths)
+        identity = _resolve_producer_identity(
+            args,
+            storage_paths,
+            hostname=hostname,
+        )
     source_host_id = identity["source_host_id"]
     producer_install_id = identity["producer_install_id"]
     producer_id = identity["producer_id"]
@@ -2930,6 +2981,18 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
             "and provision the matching secret into the referenced Windows credential target."
         ),
     }
+    with writer_admission("worker_pc_registration"):
+        profile_path = Path(str(getattr(args, "logistics_profile_path", "") or default_profile_path())).expanduser()
+        args._registration_artifact_paths = (
+            Path(identity["identity_persist_path"]).expanduser(),
+            *_registration_target_paths(args, storage_paths),
+            profile_path,
+            profile_path.parent / "secrets" / "bearer-token.dpapi",
+            profile_path.parent / TLS_CA_BUNDLE_RELATIVE_PATH,
+        )
+        if secret_ref_scheme == "dpapi":
+            args._registration_artifact_paths += (storage_paths.direct_sync_root / secret_ref_target,)
+        args._registration_expected_artifacts = _registration_artifact_versions(args)
     registration_action = ""
     if getattr(args, "self_enroll", False):
         registration_action = "initial_enrollment"
@@ -2973,22 +3036,25 @@ def build_registration_payloads(args: argparse.Namespace) -> tuple[dict, dict, d
         )
         report["registration_action"] = registration_action
         report["next_required_external_step"] = "Run direct-sync relay and verify upload receipt."
-        persist_path = Path(identity["identity_persist_path"]).expanduser()
-        _persist_producer_identity_file(
-            persist_path,
-            producer_id=str(report["producer_id"]),
-            source_host_id=source_host_id,
-            producer_install_id=producer_install_id,
-            possession_key_fingerprint=str(
-                report["possession_key_fingerprint"]
-            ),
-        )
-        report["producer_identity_path"] = str(persist_path.resolve())
-        report["producer_identity_persisted"] = True
+        with writer_admission("worker_pc_registration"):
+            _check_registration_artifacts(args)
+            persist_path = Path(identity["identity_persist_path"]).expanduser()
+            _persist_producer_identity_file(
+                persist_path,
+                producer_id=str(report["producer_id"]),
+                source_host_id=source_host_id,
+                producer_install_id=producer_install_id,
+                possession_key_fingerprint=str(
+                    report["possession_key_fingerprint"]
+                ),
+            )
+            report["producer_identity_path"] = str(persist_path.resolve())
+            report["producer_identity_persisted"] = True
+            args._registration_expected_artifacts = _registration_artifact_versions(args)
     return manifest, credential, report
 
 
-@writer_sink("worker_pc_registration")
+@writer_sink("worker_pc_registration", probe_only=True)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Register local Container_Audit producer identity for this PC")
     parser.add_argument("--app-root", default=_default_app_root())
@@ -3073,7 +3139,7 @@ def main(argv: list[str] | None = None) -> int:
         report_path_blocked = any(item["field"] == "report_path" for item in output_path_policy["unsafe_paths"])
         if args.report_path and not report_path_blocked:
             fallback_path = Path(args.report_path).expanduser()
-            atomic_write_json(str(fallback_path), blocked_report, indent=2)
+            _write_registration_json(str(fallback_path), blocked_report, indent=2)
             print(f"registration_report={fallback_path.resolve()}")
         else:
             print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
@@ -3129,14 +3195,15 @@ def main(argv: list[str] | None = None) -> int:
                 and completed_report.get("recovery_two_phase_prepare_id")
                 == completed["prepare_id"]
             ):
-                completed_report["recovery_two_phase_state"] = STATE_COMPLETE
-                completed_report["recovery_two_phase_complete"] = True
-                atomic_write_json(
-                    str(completed_report_path), completed_report, indent=2
-                )
-                resume_journal.remove_sealed_package_after_complete()
-                print(f"registration_report={completed_report_path.resolve()}")
-                return 0
+                with writer_admission("worker_pc_registration"):
+                    completed_report["recovery_two_phase_state"] = STATE_COMPLETE
+                    completed_report["recovery_two_phase_complete"] = True
+                    _write_registration_json(
+                        str(completed_report_path), completed_report, indent=2
+                    )
+                    resume_journal.remove_sealed_package_after_complete()
+                    print(f"registration_report={completed_report_path.resolve()}")
+                    return 0
 
     try:
         manifest, credential, report = build_registration_payloads(args)
@@ -3153,7 +3220,7 @@ def main(argv: list[str] | None = None) -> int:
         elif isinstance(exc, RecoveryTwoPhaseResumeRequired):
             blocked_report.update(exc.public_report())
         if fallback_path:
-            atomic_write_json(str(fallback_path), blocked_report, indent=2)
+            _write_registration_json(str(fallback_path), blocked_report, indent=2)
             print(f"registration_report={fallback_path.resolve()}")
         else:
             print(json.dumps(blocked_report, ensure_ascii=False, sort_keys=True))
@@ -3171,125 +3238,127 @@ def main(argv: list[str] | None = None) -> int:
         }
     )
 
-    two_phase_journal = None
-    if report.get("recovery_two_phase") is True:
-        two_phase_journal = RecoveryTwoPhaseJournal(
-            str(report["recovery_two_phase_journal_path"]),
-            sealed_package_path=str(
-                report["recovery_two_phase_sealed_package_path"]
-            ),
+    with writer_admission("worker_pc_registration"):
+        _check_registration_artifacts(args)
+        two_phase_journal = None
+        if report.get("recovery_two_phase") is True:
+            two_phase_journal = RecoveryTwoPhaseJournal(
+                str(report["recovery_two_phase_journal_path"]),
+                sealed_package_path=str(
+                    report["recovery_two_phase_sealed_package_path"]
+                ),
+            )
+        _write_registration_json(str(manifest_path), manifest, indent=2)
+        _write_registration_json(str(credential_path), credential, indent=2)
+        persisted_credential = load_json_no_duplicate_keys(
+            credential_path.read_bytes()
         )
-    atomic_write_json(str(manifest_path), manifest, indent=2)
-    atomic_write_json(str(credential_path), credential, indent=2)
-    persisted_credential = load_json_no_duplicate_keys(
-        credential_path.read_bytes()
-    )
-    if not _strict_json_value_equal(persisted_credential, credential):
-        report.update(
-            {
-                "status": "RESUME_TWO_PHASE_RECOVERY"
-                if two_phase_journal is not None
-                else "BLOCKED",
-                "blocked_reason": "persisted credential exact readback differs from the prepared credential",
-                "persisted_credential_verified": False,
-                "recovery_action": "RESUME_TWO_PHASE_RECOVERY"
-                if two_phase_journal is not None
-                else report.get("recovery_action", ""),
-                "administrator_required": False
-                if two_phase_journal is not None
-                else None,
-            }
-        )
-        atomic_write_json(str(report_path), report, indent=2)
-        print(f"registration_report={report_path.resolve()}")
-        return 3 if two_phase_journal is not None else 2
-    report["persisted_credential_verified"] = True
-    persisted_manifest_hash = manifest_hash(
-        load_json_no_duplicate_keys(manifest_path.read_bytes())
-    )
-    expected_manifest_hash = str(report.get("manifest_hash") or "")
-    if bool(report.get("server_registration_verified")):
-        if not expected_manifest_hash or persisted_manifest_hash != expected_manifest_hash:
+        if not _strict_json_value_equal(persisted_credential, credential):
             report.update(
                 {
-                    "status": "BLOCKED",
-                    "blocked_reason": "persisted manifest hash differs from the server-authorized manifest hash",
-                    "persisted_manifest_hash_verified": False,
+                    "status": "RESUME_TWO_PHASE_RECOVERY"
+                    if two_phase_journal is not None
+                    else "BLOCKED",
+                    "blocked_reason": "persisted credential exact readback differs from the prepared credential",
+                    "persisted_credential_verified": False,
+                    "recovery_action": "RESUME_TWO_PHASE_RECOVERY"
+                    if two_phase_journal is not None
+                    else report.get("recovery_action", ""),
+                    "administrator_required": False
+                    if two_phase_journal is not None
+                    else None,
                 }
             )
-            atomic_write_json(str(report_path), report, indent=2)
+            _write_registration_json(str(report_path), report, indent=2)
             print(f"registration_report={report_path.resolve()}")
-            return 2
-        report["persisted_manifest_hash_verified"] = True
-    if two_phase_journal is not None:
-        journal_payload = two_phase_journal.load() or {}
-        if journal_payload.get("state") == STATE_SERVER_COMMITTED:
-            journal_payload = two_phase_journal.mark_local_persisted()
-        elif journal_payload.get("state") not in {
-            STATE_LOCAL_PERSISTED,
-            STATE_CLEANUP_INTENT_DURABLE,
-            STATE_COMPLETE,
-        }:
-            raise RecoveryTwoPhaseStateError(
-                "local persistence completed from an invalid two-phase state"
-            )
-        report["recovery_two_phase_state"] = journal_payload["state"]
-        report["recovery_two_phase_local_persisted"] = True
-        _recovery_two_phase_cut_point("AFTER_ALL_LOCAL_PERSISTENCE")
-    if report.get("admin_recovery_secret_cleanup_required") is True:
+            return 3 if two_phase_journal is not None else 2
+        report["persisted_credential_verified"] = True
+        persisted_manifest_hash = manifest_hash(
+            load_json_no_duplicate_keys(manifest_path.read_bytes())
+        )
+        expected_manifest_hash = str(report.get("manifest_hash") or "")
+        if bool(report.get("server_registration_verified")):
+            if not expected_manifest_hash or persisted_manifest_hash != expected_manifest_hash:
+                report.update(
+                    {
+                        "status": "BLOCKED",
+                        "blocked_reason": "persisted manifest hash differs from the server-authorized manifest hash",
+                        "persisted_manifest_hash_verified": False,
+                    }
+                )
+                _write_registration_json(str(report_path), report, indent=2)
+                print(f"registration_report={report_path.resolve()}")
+                return 2
+            report["persisted_manifest_hash_verified"] = True
         if two_phase_journal is not None:
             journal_payload = two_phase_journal.load() or {}
-            if journal_payload.get("state") == STATE_LOCAL_PERSISTED:
-                journal_payload = two_phase_journal.mark_cleanup_intent()
+            if journal_payload.get("state") == STATE_SERVER_COMMITTED:
+                journal_payload = two_phase_journal.mark_local_persisted()
             elif journal_payload.get("state") not in {
+                STATE_LOCAL_PERSISTED,
                 STATE_CLEANUP_INTENT_DURABLE,
                 STATE_COMPLETE,
             }:
                 raise RecoveryTwoPhaseStateError(
-                    "authorization cleanup started from an invalid two-phase state"
+                    "local persistence completed from an invalid two-phase state"
                 )
             report["recovery_two_phase_state"] = journal_payload["state"]
-        recovery_secret_path = Path(
-            str(report.get("admin_recovery_secret_file") or "")
-        )
-        try:
-            recovery_secret_path.unlink(missing_ok=True)
-        except OSError as exc:
-            report.update(
-                {
-                    "status": "BLOCKED",
-                    "blocked_reason": (
-                        "admin recovery succeeded but the consumed protected "
-                        f"authorization file could not be deleted: {exc.__class__.__name__}"
-                    ),
-                    "admin_recovery_secret_file_deleted": False,
-                }
+            report["recovery_two_phase_local_persisted"] = True
+            _recovery_two_phase_cut_point("AFTER_ALL_LOCAL_PERSISTENCE")
+        if report.get("admin_recovery_secret_cleanup_required") is True:
+            if two_phase_journal is not None:
+                journal_payload = two_phase_journal.load() or {}
+                if journal_payload.get("state") == STATE_LOCAL_PERSISTED:
+                    journal_payload = two_phase_journal.mark_cleanup_intent()
+                elif journal_payload.get("state") not in {
+                    STATE_CLEANUP_INTENT_DURABLE,
+                    STATE_COMPLETE,
+                }:
+                    raise RecoveryTwoPhaseStateError(
+                        "authorization cleanup started from an invalid two-phase state"
+                    )
+                report["recovery_two_phase_state"] = journal_payload["state"]
+            recovery_secret_path = Path(
+                str(report.get("admin_recovery_secret_file") or "")
             )
-            atomic_write_json(str(report_path), report, indent=2)
-            print(f"registration_report={report_path.resolve()}")
-            return 2
-        report["admin_recovery_secret_file_deleted"] = (
-            not recovery_secret_path.exists()
-        )
-        report["admin_recovery_secret_cleanup_required"] = False
-    if two_phase_journal is None:
-        atomic_write_json(str(report_path), report, indent=2)
-    else:
-        atomic_write_json(str(report_path), report, indent=2)
-        journal_payload = two_phase_journal.load() or {}
-        if journal_payload.get("state") == STATE_CLEANUP_INTENT_DURABLE:
-            journal_payload = two_phase_journal.mark_complete()
-        elif journal_payload.get("state") != STATE_COMPLETE:
-            raise RecoveryTwoPhaseStateError(
-                "two-phase recovery could not enter COMPLETE"
+            try:
+                recovery_secret_path.unlink(missing_ok=True)
+            except OSError as exc:
+                report.update(
+                    {
+                        "status": "BLOCKED",
+                        "blocked_reason": (
+                            "admin recovery succeeded but the consumed protected "
+                            f"authorization file could not be deleted: {exc.__class__.__name__}"
+                        ),
+                        "admin_recovery_secret_file_deleted": False,
+                    }
+                )
+                _write_registration_json(str(report_path), report, indent=2)
+                print(f"registration_report={report_path.resolve()}")
+                return 2
+            report["admin_recovery_secret_file_deleted"] = (
+                not recovery_secret_path.exists()
             )
-        _recovery_two_phase_cut_point("AFTER_COMPLETE_JOURNAL")
-        report["recovery_two_phase_state"] = journal_payload["state"]
-        report["recovery_two_phase_complete"] = True
-        atomic_write_json(str(report_path), report, indent=2)
-        two_phase_journal.remove_sealed_package_after_complete()
-    print(f"registration_report={report_path.resolve()}")
-    return 0
+            report["admin_recovery_secret_cleanup_required"] = False
+        if two_phase_journal is None:
+            _write_registration_json(str(report_path), report, indent=2)
+        else:
+            _write_registration_json(str(report_path), report, indent=2)
+            journal_payload = two_phase_journal.load() or {}
+            if journal_payload.get("state") == STATE_CLEANUP_INTENT_DURABLE:
+                journal_payload = two_phase_journal.mark_complete()
+            elif journal_payload.get("state") != STATE_COMPLETE:
+                raise RecoveryTwoPhaseStateError(
+                    "two-phase recovery could not enter COMPLETE"
+                )
+            _recovery_two_phase_cut_point("AFTER_COMPLETE_JOURNAL")
+            report["recovery_two_phase_state"] = journal_payload["state"]
+            report["recovery_two_phase_complete"] = True
+            _write_registration_json(str(report_path), report, indent=2)
+            two_phase_journal.remove_sealed_package_after_complete()
+        print(f"registration_report={report_path.resolve()}")
+        return 0
 
 
 if __name__ == "__main__":

@@ -1209,7 +1209,7 @@ def apply_current_user_runtime_environment(
     values[REQUIRED_ENV] = "1"
 
 
-@writer_sink("current_user_onboarding")
+@writer_sink("current_user_onboarding", probe_only=True)
 def onboard_current_user(
     app_root: str | os.PathLike[str],
     *,
@@ -1225,17 +1225,18 @@ def onboard_current_user(
 ) -> dict[str, Any]:
     paths = resolve_current_user_onboarding_paths(app_root, environ=environ)
     tls_ca_source = _configured_tls_ca_bundle_source(paths, environ)
-    for directory in (
-        paths.data_root,
-        paths.events_dir,
-        paths.direct_sync_root,
-        paths.queue_dir,
-        paths.spool_dir,
-        paths.status_dir,
-        paths.logs_dir,
-        paths.logistics_profile_path.parent,
-    ):
-        directory.mkdir(parents=True, exist_ok=True)
+    with writer_admission("current_user_onboarding"):
+        for directory in (
+            paths.data_root,
+            paths.events_dir,
+            paths.direct_sync_root,
+            paths.queue_dir,
+            paths.spool_dir,
+            paths.status_dir,
+            paths.logs_dir,
+            paths.logistics_profile_path.parent,
+        ):
+            directory.mkdir(parents=True, exist_ok=True)
     require_integrity = (
         bool(getattr(sys, "frozen", False))
         if require_bootstrap_integrity is None
@@ -1257,48 +1258,49 @@ def onboard_current_user(
         "failure": "",
     }
     try:
-        bootstrap_integrity_detail = verify_bootstrap_integrity(
-            paths,
-            required=require_integrity,
-        )
-        report["bootstrap_integrity"] = str(
-            bootstrap_integrity_detail.get("status") or "UNKNOWN"
-        ).lower()
-        report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
-        state = inspect_current_user_state(
-            paths,
-            profile_loader=profile_loader,
-            credential_loader=credential_loader,
-        )
-        report["initial_state"] = state
-        if state["status"] == "READY" and tls_ca_source:
-            from tools.install_logistics_runtime_profile import (
-                install_tls_ca_bundle_for_existing_profile,
+        with writer_admission("current_user_onboarding"):
+            bootstrap_integrity_detail = verify_bootstrap_integrity(
+                paths,
+                required=require_integrity,
             )
-
-            report["tls_ca_bundle_upgrade"] = (
-                install_tls_ca_bundle_for_existing_profile(
-                    profile_path=paths.logistics_profile_path,
-                    tls_ca_bundle_path=tls_ca_source,
-                    credential_scope="current_user",
-                )
-            )
+            report["bootstrap_integrity"] = str(
+                bootstrap_integrity_detail.get("status") or "UNKNOWN"
+            ).lower()
+            report["bootstrap_integrity_detail"] = bootstrap_integrity_detail
             state = inspect_current_user_state(
                 paths,
                 profile_loader=profile_loader,
                 credential_loader=credential_loader,
             )
-        if state["status"] == "RECOVERY_REQUIRED":
-            if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
-                raise CurrentUserOnboardingError(
-                    str(
-                        state.get("reason")
-                        or "audited administrator recovery is required"
-                    ),
-                    report_path=paths.onboarding_report_path,
-                    status=ADMIN_RECOVERY_ACTION,
+            report["initial_state"] = state
+            if state["status"] == "READY" and tls_ca_source:
+                from tools.install_logistics_runtime_profile import (
+                    install_tls_ca_bundle_for_existing_profile,
                 )
-            raise ValueError(str(state.get("reason") or "partial current-user state"))
+
+                report["tls_ca_bundle_upgrade"] = (
+                    install_tls_ca_bundle_for_existing_profile(
+                        profile_path=paths.logistics_profile_path,
+                        tls_ca_bundle_path=tls_ca_source,
+                        credential_scope="current_user",
+                    )
+                )
+                state = inspect_current_user_state(
+                    paths,
+                    profile_loader=profile_loader,
+                    credential_loader=credential_loader,
+                )
+            if state["status"] == "RECOVERY_REQUIRED":
+                if state.get("recovery_action") == ADMIN_RECOVERY_ACTION:
+                    raise CurrentUserOnboardingError(
+                        str(
+                            state.get("reason")
+                            or "audited administrator recovery is required"
+                        ),
+                        report_path=paths.onboarding_report_path,
+                        status=ADMIN_RECOVERY_ACTION,
+                    )
+                raise ValueError(str(state.get("reason") or "partial current-user state"))
         if state["status"] in {"ABSENT", "ABSENT_RETRYABLE"}:
             if registration_runner is None:
                 return_code = _registration_runner(
@@ -1330,52 +1332,58 @@ def onboard_current_user(
             report["action"] = "CREATED"
         else:
             report["action"] = "REUSED"
-        if tls_ca_source and not state.get("tls_private_ca_configured"):
-            raise ValueError(
-                "configured TLS CA bundle was not persisted in the logistics profile"
+        with writer_admission("current_user_onboarding"):
+            current_state = inspect_current_user_state(
+                paths, profile_loader=profile_loader, credential_loader=credential_loader,
             )
-        ledger_factory(paths.ledger_path)
-        if not paths.ledger_path.is_file():
-            raise ValueError("current-user business ledger readback failed")
-        stop_path = user_relay_stop_path(paths.direct_sync_root)
-        stop_path.unlink(missing_ok=True)
-        report["relay_autostart"] = dict(autostart_installer(paths.app_root, environ=environ))
-        autostart_status = str(report["relay_autostart"].get("status") or "")
-        if autostart_status in {"", "UNKNOWN"}:
-            raise CurrentUserOnboardingError(
-                "current-user relay autostart result is UNKNOWN",
-                report_path=paths.onboarding_report_path,
-                status="UNKNOWN",
+            if current_state != state:
+                raise ValueError("current-user owner state changed before local onboarding apply")
+            if tls_ca_source and not state.get("tls_private_ca_configured"):
+                raise ValueError(
+                    "configured TLS CA bundle was not persisted in the logistics profile"
+                )
+            ledger_factory(paths.ledger_path)
+            if not paths.ledger_path.is_file():
+                raise ValueError("current-user business ledger readback failed")
+            stop_path = user_relay_stop_path(paths.direct_sync_root)
+            stop_path.unlink(missing_ok=True)
+            report["relay_autostart"] = dict(autostart_installer(paths.app_root, environ=environ))
+            autostart_status = str(report["relay_autostart"].get("status") or "")
+            if autostart_status in {"", "UNKNOWN"}:
+                raise CurrentUserOnboardingError(
+                    "current-user relay autostart result is UNKNOWN",
+                    report_path=paths.onboarding_report_path,
+                    status="UNKNOWN",
+                )
+            if autostart_status != "PASS":
+                raise ValueError("current-user relay autostart was not proven")
+            report["relay_start"] = dict(relay_launcher(paths.app_root, environ=environ))
+            relay_start_status = str(report["relay_start"].get("status") or "")
+            if relay_start_status in {"", "UNKNOWN"}:
+                raise CurrentUserOnboardingError(
+                    "current-user relay launch result is UNKNOWN",
+                    report_path=paths.onboarding_report_path,
+                    status="UNKNOWN",
+                )
+            if relay_start_status != "START_REQUESTED":
+                raise ValueError("current-user relay launch was not requested")
+            apply_current_user_runtime_environment(
+                paths,
+                environ=environ,
             )
-        if autostart_status != "PASS":
-            raise ValueError("current-user relay autostart was not proven")
-        report["relay_start"] = dict(relay_launcher(paths.app_root, environ=environ))
-        relay_start_status = str(report["relay_start"].get("status") or "")
-        if relay_start_status in {"", "UNKNOWN"}:
-            raise CurrentUserOnboardingError(
-                "current-user relay launch result is UNKNOWN",
-                report_path=paths.onboarding_report_path,
-                status="UNKNOWN",
+            report.update(
+                {
+                    "status": "READY",
+                    "state_readback": state,
+                    "server_registration_verified": True,
+                    "ledger_status": "READY",
+                    "persistent_relay_principal": "current_user",
+                    "system_scheduled_task_required": False,
+                    "completed_at": _now(),
+                }
             )
-        if relay_start_status != "START_REQUESTED":
-            raise ValueError("current-user relay launch was not requested")
-        apply_current_user_runtime_environment(
-            paths,
-            environ=environ,
-        )
-        report.update(
-            {
-                "status": "READY",
-                "state_readback": state,
-                "server_registration_verified": True,
-                "ledger_status": "READY",
-                "persistent_relay_principal": "current_user",
-                "system_scheduled_task_required": False,
-                "completed_at": _now(),
-            }
-        )
-        _write_json_atomic(paths.onboarding_report_path, report)
-        return report
+            _write_json_atomic(paths.onboarding_report_path, report)
+            return report
     except CurrentUserOnboardingError as exc:
         report["status"] = exc.status
         report["failure"] = str(exc)

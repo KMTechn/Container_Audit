@@ -592,6 +592,10 @@ NETWORK_PROBE_ONLY_WRITER_SINKS = frozenset(
         ("producer_runtime_storage", "producer_runtime_client.prepare_runtime_metadata"),
         ("item_catalog_refresh", "item_catalog_sync.refresh_item_catalog"),
         ("gui_startup", "Container_Audit._prepare_gui_startup"),
+        ("operator_spool_restore", "direct_sync_operator.restore_relay_spool_from_server"),
+        ("worker_enrollment_network", "tools.register_container_audit_worker_pc._post_enrollment_request"),
+        ("worker_pc_registration", "tools.register_container_audit_worker_pc.main"),
+        ("current_user_onboarding", "current_user_onboarding.onboard_current_user"),
     }
 )
 
@@ -643,6 +647,12 @@ def writer_sink(
             == Path(__file__).with_name("tools").joinpath("direct_sync_relay_runner.py").resolve()
         ):
             sink_id = "tools.direct_sync_relay_runner.main"
+        if function.__module__ == "__main__" and Path(
+            function.__globals__.get("__file__", function.__code__.co_filename)
+        ).resolve() == Path(__file__).with_name("tools").joinpath(
+            "register_container_audit_worker_pc.py"
+        ).resolve():
+            sink_id = "tools.register_container_audit_worker_pc." + function.__qualname__
         if probe_only and (selected_source, sink_id) not in PROBE_ONLY_WRITER_SINKS:
             raise WriterFencedError(
                 "WRITER_PROBE_ONLY_SINK_NOT_ALLOWED",

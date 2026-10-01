@@ -146,6 +146,7 @@ class RecoveryTwoPhaseJournal:
             if sealed_package_path is not None
             else self.path.with_name(f"{self.path.stem}.prepared-package.dpapi")
         )
+        self._owner_bindings = None
 
     def load(self) -> dict[str, Any] | None:
         if not self.path.is_file():
@@ -221,6 +222,7 @@ class RecoveryTwoPhaseJournal:
                         "recovery two-phase journal binding mismatch"
                     )
         if existing is not None:
+            self._owner_bindings = normalized
             return existing
         now = _utc_now()
         payload: dict[str, Any] = {
@@ -252,6 +254,7 @@ class RecoveryTwoPhaseJournal:
             ],
         }
         self._write(payload)
+        self._owner_bindings = normalized
         return payload
 
     def assert_bindings(self, expected: Mapping[str, str]) -> dict[str, Any]:
@@ -265,8 +268,10 @@ class RecoveryTwoPhaseJournal:
             raise RecoveryTwoPhaseStateError(
                 "recovery two-phase journal binding mismatch"
             )
+        self._owner_bindings = normalized
         return payload
 
+    @writer_sink("recovery_two_phase")
     def transition(
         self,
         expected_states: set[str] | frozenset[str],
@@ -278,6 +283,8 @@ class RecoveryTwoPhaseJournal:
             raise RecoveryTwoPhaseStateError(
                 "recovery two-phase journal is absent"
             )
+        if self._owner_bindings is not None and payload["bindings"] != self._owner_bindings:
+            raise RecoveryTwoPhaseStateError("recovery two-phase owner changed while awaiting the server")
         current = str(payload["state"])
         if current == next_state:
             for key, value in updates.items():
@@ -330,11 +337,23 @@ class RecoveryTwoPhaseJournal:
             ),
         )
 
+    @writer_sink("recovery_two_phase")
     def stage_sealed_package(self, sealed_payload: bytes) -> dict[str, Any]:
         if not isinstance(sealed_payload, bytes) or not sealed_payload:
             raise RecoveryTwoPhaseStateError(
                 "recovery two-phase sealed package is invalid"
             )
+        payload = self.load()
+        if payload is None or (
+            self._owner_bindings is not None and payload["bindings"] != self._owner_bindings
+        ):
+            raise RecoveryTwoPhaseStateError("recovery two-phase package owner changed")
+        if payload["state"] == STATE_LOCAL_PACKAGE_DURABLE:
+            if self.read_sealed_package() != sealed_payload:
+                raise RecoveryTwoPhaseStateError("recovery two-phase idempotent package mismatch")
+            return payload
+        if payload["state"] != STATE_PREPARED:
+            raise RecoveryTwoPhaseStateError("recovery two-phase package state changed")
         _atomic_write_bytes(self.sealed_package_path, sealed_payload)
         readback = self.sealed_package_path.read_bytes()
         if readback != sealed_payload:

@@ -10,7 +10,7 @@ import re
 import sqlite3
 import uuid
 
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -704,7 +704,7 @@ def operator_status(
     return report
 
 
-@writer_sink("operator_spool_restore")
+@writer_sink("operator_spool_restore", probe_only=True)
 def restore_relay_spool_from_server(
     *,
     db_path: str | os.PathLike[str],
@@ -742,8 +742,7 @@ def restore_relay_spool_from_server(
     try:
         row = conn.execute(
             """
-            SELECT relay_id, status, spooled_file_path, content_sha256, byte_length,
-                   metadata_json, producer_id, key_id, endpoint_url
+            SELECT *
             FROM direct_sync_relay_batches
             WHERE relay_id = ?
             """,
@@ -812,12 +811,27 @@ def restore_relay_spool_from_server(
         return blocked("relay_upload_metadata_invalid")
     if not isinstance(metadata, dict):
         return blocked("relay_upload_metadata_invalid")
+
+    def source_unchanged() -> bool:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            current = conn.execute(
+                """SELECT *
+                   FROM direct_sync_relay_batches WHERE relay_id = ?""",
+                (relay,),
+            ).fetchone()
+            return current is not None and dict(current) == dict(row)
+        finally:
+            conn.close()
+
     try:
         result = restore_raw_artifact_to_file(
             credentials=credentials,
             metadata=metadata,
             destination_path=spool_path,
             session=session,
+            before_publish=source_unchanged,
         )
     except DirectSyncPushError:
         return blocked("relay_restore_input_invalid")
@@ -847,7 +861,10 @@ def restore_relay_spool_from_server(
             byte_length=expected_bytes,
         ),
     }
-    return _with_operator_audit_status(audit_log_path, action="restore-spool", report=report)
+    with writer_admission("operator_spool_restore"):
+        if not source_unchanged():
+            return blocked("restore_source_changed")
+        return _with_operator_audit_status(audit_log_path, action="restore-spool", report=report)
 
 
 @writer_sink("operator_dead_retry")
