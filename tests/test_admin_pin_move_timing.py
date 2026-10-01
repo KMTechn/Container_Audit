@@ -30,7 +30,7 @@ def _approval(app, action, original, target_id):
     )
 
 
-def _business_case(monkeypatch, tmp_path, action, transport=None):
+def _business_case(monkeypatch, tmp_path, action, transport=None, *, separate_owner_file=False):
     """Keep real PIN, durable stores and handlers; replace only UI/remote adapters."""
     import csv
     import json
@@ -43,6 +43,15 @@ def _business_case(monkeypatch, tmp_path, action, transport=None):
 
     if action == "CA.PAIR_HANDOFF":
         app, hold, state = _app(tmp_path, monkeypatch)
+        if separate_owner_file:
+            from preflight_scan_hold import PreflightScanHoldStore
+            base = hold.path
+            suffix = hashlib.sha256(hold.load().worker.encode("utf-8")).hexdigest()[:16]
+            slot = base.with_name(f"{base.stem}_{suffix}.json")
+            base.rename(slot)
+            foreign = PreflightScanHoldStore(base, capacity=4)
+            foreign.start(worker="unrelated worker", master_raw="UNRELATED-HOLD", scan_epoch=2)
+            hold = PreflightScanHoldStore(slot, capacity=4)
     else:
         _, app, hold = _preflight_hold_ownership_app(tmp_path, monkeypatch)
         state = _saved_tray_state()
@@ -80,6 +89,9 @@ def _business_case(monkeypatch, tmp_path, action, transport=None):
     current = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
     label = state["master_label_code"]
     if action == "CA.PRECHECK_HOLD":
+        if separate_owner_file:
+            hold.start(worker="unrelated worker", master_raw="UNRELATED-HOLD", scan_epoch=2)
+            hold = app._preflight_hold_store(new_work=True)
         hold.start(worker=app.worker_name, master_raw=label, scan_epoch=1)
         hold.append("PRODUCT-A")
         hold.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
@@ -110,14 +122,23 @@ def _business_case(monkeypatch, tmp_path, action, transport=None):
     return app, server, audits, original, label, invoke
 
 
-@pytest.mark.parametrize("action,source_name,held_name", ACTIONS)
+@pytest.mark.parametrize("action,source_name,held_name,separate_owner_file", [
+    *(pytest.param(*row, False, id="-".join(row)) for row in ACTIONS),
+    pytest.param("CA.PRECHECK_HOLD", "hold.json", "hold.quarantine.json", True,
+                 id="owner-slot-CA.PRECHECK_HOLD"),
+    pytest.param("CA.PAIR_HANDOFF", "paired-current.json", "current.original", True,
+                 id="owner-slot-CA.PAIR_HANDOFF"),
+])
 @pytest.mark.parametrize("timing", ("redemption", "after_audit", "before_move"))
 def test_changed_bytes_need_new_pin_at_each_boundary(
-        monkeypatch, tmp_path, action, source_name, held_name, timing):
+        monkeypatch, tmp_path, action, source_name, held_name, separate_owner_file, timing):
     import json
     from tests.test_container_admin_pin import make_client
 
-    app, server, audits, original, _label, invoke = _business_case(monkeypatch, tmp_path, action)
+    app, server, audits, original, _label, invoke = _business_case(
+        monkeypatch, tmp_path, action, separate_owner_file=separate_owner_file)
+    foreign = original.parent / "hold.json"
+    foreign_bytes = foreign.read_bytes() if separate_owner_file else None
     # A valid document for the same label, not a malformed sentinel.
     changed = json.loads(original.read_text(encoding="utf-8"))
     changed["worker" if action in {"CA.PRECHECK_HOLD", "CA.PAIR_HANDOFF"} else "worker_name"] = "changed-worker"
@@ -169,6 +190,11 @@ def test_changed_bytes_need_new_pin_at_each_boundary(
     assert Path(moved["target"]).read_bytes() == changed
     assert not original.exists() and audits.count("ADMIN_PIN_APPLIED") == 1
     assert len([path for path, _ in server.calls if path.endswith("/redemptions")]) == 2
+    if foreign_bytes is not None:
+        assert foreign.read_bytes() == foreign_bytes
+        app._preflight_hold_snapshot = None
+        app._preflight_hold_store_instance = None
+        assert app._admin_pin_recovered_effect(fresh)
 
 
 @pytest.mark.parametrize("action,source_name,held_name", ACTIONS)

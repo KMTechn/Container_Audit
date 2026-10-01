@@ -190,6 +190,8 @@ def _set_durable_preflight_hold(app, *, active):
     app._preflight_hold_snapshot = None
     app._preflight_hold_store = lambda: SimpleNamespace(
         exists=lambda: active,
+        load=lambda: SimpleNamespace(worker=container_module.persistent_operator_name(
+            getattr(app, "worker_name", ""))),
     )
 
 
@@ -1410,7 +1412,7 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     if separate_owner_file:
         app._preflight_hold_store().start(worker="base-owner", master_raw="OTHER", scan_epoch=2)
     app.worker_name = "tester"
-    store = app._preflight_hold_store()
+    store = app._preflight_hold_store(new_work=True)
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
     store.append("PRODUCT-B")
@@ -2029,6 +2031,8 @@ def test_show_validation_screen_defers_automatic_phs_recovery_during_active_hold
     hold = {"active": True}
     app._preflight_hold_store = lambda: SimpleNamespace(
         exists=lambda: hold["active"],
+        load=lambda: SimpleNamespace(worker=container_module.persistent_operator_name(
+            getattr(app, "worker_name", ""))),
     )
     live_tray = app.current_tray
     monkeypatch.setattr(container_module.threading, "Thread", ImmediateThread)
@@ -2328,6 +2332,8 @@ def test_reconciliation_resolve_finish_discards_when_hold_appears_on_real_lane(
     app._preflight_hold_snapshot = None
     app._preflight_hold_store = lambda: SimpleNamespace(
         exists=lambda: hold["active"],
+        load=lambda: SimpleNamespace(worker=container_module.persistent_operator_name(
+            getattr(app, "worker_name", ""))),
     )
     app._parse_new_format_qr = lambda _payload: {"PHS": "2"}
     app._set_phs_reconciliation_context = lambda value: setattr(
@@ -2430,6 +2436,8 @@ def test_active_refresh_finish_discards_when_hold_appears_on_real_lane(
     app._preflight_hold_snapshot = None
     app._preflight_hold_store = lambda: SimpleNamespace(
         exists=lambda: hold["active"],
+        load=lambda: SimpleNamespace(worker=container_module.persistent_operator_name(
+            getattr(app, "worker_name", ""))),
     )
     app._phs_label_exchange_transition_pending = lambda: False
     app._parse_new_format_qr = lambda _payload: {

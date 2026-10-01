@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4683,
+      "line": 4711,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4687,
+          "line": 4715,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -2503,11 +2503,11 @@
       ],
       "file": "paired_preflight_handoff.py",
       "kind": "function",
-      "line": 24,
+      "line": 26,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 30,
+          "line": 32,
           "operation": "target.open",
           "writer_admission_sources": []
         }
@@ -2532,11 +2532,11 @@
       "direct_callers": [],
       "file": "paired_preflight_handoff.py",
       "kind": "function",
-      "line": 358,
+      "line": 380,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 375,
+          "line": 397,
           "operation": "os.replace",
           "writer_admission_sources": []
         }
@@ -6211,6 +6211,7 @@
     ],
     "native_audio": [],
     "paired_preflight_handoff": [
+      "protected_admin",
       "recovery_file_read",
       "storage_utils",
       "writer_session_fence"
@@ -6430,7 +6431,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "40b016eab92e2f974d25a3a081133e60693656f1839261a771af0c22da8e986d",
+  "inventory_sha256": "629743179ef55d40f0f65c0071d2be18d4dad1c9f40333392bb96854ab2d68a7",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -12872,7 +12873,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 20816,
+      "line": 20870,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -12880,7 +12881,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4683,
+      "line": 4711,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -12888,7 +12889,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3360,
+      "line": 3388,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12896,7 +12897,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3328,
+      "line": 3356,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12904,7 +12905,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3278,
+      "line": 3306,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12912,7 +12913,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3774,
+      "line": 3802,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -13056,7 +13057,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.supersede_changed_record",
-      "line": 287,
+      "line": 309,
       "marker_kind": "decorator",
       "source": "paired_preflight_changed_record"
     },
@@ -13064,7 +13065,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified",
-      "line": 238,
+      "line": 260,
       "marker_kind": "decorator",
       "source": "paired_preflight_manager_hold"
     },
@@ -13072,7 +13073,7 @@
       "direct_mutation_site_count": 1,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.move_original",
-      "line": 358,
+      "line": 380,
       "marker_kind": "decorator",
       "source": "paired_preflight_original_move"
     },
@@ -13080,7 +13081,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.prepare",
-      "line": 329,
+      "line": 351,
       "marker_kind": "decorator",
       "source": "paired_preflight_record"
     },
@@ -13088,7 +13089,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.release",
-      "line": 380,
+      "line": 402,
       "marker_kind": "decorator",
       "source": "paired_preflight_release"
     },
@@ -13096,7 +13097,7 @@
       "direct_mutation_site_count": 1,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.preserve_stale_bytes",
-      "line": 24,
+      "line": 26,
       "marker_kind": "decorator",
       "source": "paired_stale_evidence"
     },
@@ -13104,7 +13105,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.hold_stale_current",
-      "line": 205,
+      "line": 227,
       "marker_kind": "decorator",
       "source": "paired_stale_hold"
     },
@@ -13112,7 +13113,7 @@
       "direct_mutation_site_count": 0,
       "file": "paired_preflight_handoff.py",
       "function": "paired_preflight_handoff.PairedPreflightHandoffStore.bind_unidentified_stale",
-      "line": 181,
+      "line": 203,
       "marker_kind": "decorator",
       "source": "paired_stale_manager_hold"
     },

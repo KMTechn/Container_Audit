@@ -471,8 +471,19 @@ def test_mismatched_draining_hold_allows_normal_close_handoff(tmp_path, monkeypa
     assert (hold_store.path.parent / "current.json").exists()
 
 
-def test_pending_pair_after_first_move_blocks_both_labels_on_restart(tmp_path, monkeypatch):
+@pytest.mark.parametrize("separate_owner_file", [False, True])
+def test_pending_pair_after_first_move_blocks_both_labels_on_restart(tmp_path, monkeypatch, separate_owner_file):
     app, hold_store, _ = _app(tmp_path, monkeypatch)
+    foreign_bytes = None
+    base = hold_store.path
+    if separate_owner_file:
+        suffix = hashlib.sha256(b"hold worker").hexdigest()[:16]
+        slot = base.with_name(f"{base.stem}_{suffix}.json")
+        base.rename(slot)
+        hold_store = PreflightScanHoldStore(slot, capacity=4)
+        foreign = PreflightScanHoldStore(base, capacity=4)
+        foreign.start(worker="unrelated worker", master_raw="UNRELATED-HOLD", scan_epoch=2)
+        foreign_bytes = base.read_bytes()
     paired = app._paired_preflight_store()
     path = paired.prepare(hold_store.path, hold_store.path.parent / "current.json")
     paired.move_original(path, "hold")
@@ -487,6 +498,9 @@ def test_pending_pair_after_first_move_blocks_both_labels_on_restart(tmp_path, m
     assert not restarted._paired_preflight_blocks_label("UNRELATED-MASTER")
     assert not restarted._preflight_context_blocks_mutation()
     assert restarted._preserve_preflight_hold_for_close() == (True, False)
+    if foreign_bytes is not None:
+        assert base.read_bytes() == foreign_bytes
+        assert restarted._paired_preflight_store().read(path)["hold"]["path"] == str(hold_store.path.resolve())
 
 
 def test_manager_handoff_list_shows_both_originals(tmp_path, monkeypatch):

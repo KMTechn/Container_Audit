@@ -6,12 +6,14 @@ import base64
 import hashlib
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from dataclasses import dataclass
 
 from recovery_file_read import RecoveryRead, read_recovery_file
+from protected_admin import persistent_operator_name
 from storage_utils import atomic_write_json
 from writer_session_fence import writer_sink
 
@@ -54,10 +56,29 @@ class PairInspection:
 
 class PairedPreflightHandoffStore:
     def __init__(self, directory: Path, *, hold_path: Path | None = None,
-                 current_path: Path | None = None) -> None:
+                 current_path: Path | None = None, hold_base_path: Path | None = None) -> None:
         self.directory = Path(directory)
         self.hold_path = Path(hold_path) if hold_path is not None else None
         self.current_path = Path(current_path) if current_path is not None else None
+        self.hold_base_path = Path(hold_base_path) if hold_base_path is not None else None
+
+    def _hold_slots(self, worker: str) -> tuple[Path, ...]:
+        if self.hold_base_path is None:
+            return (self.hold_path,) if self.hold_path is not None else ()
+        base = self.hold_base_path.resolve()
+        suffix = hashlib.sha256(persistent_operator_name(worker).encode("utf-8")).hexdigest()[:16]
+        return base, base.with_name(f"{base.stem}_{suffix}.json")
+
+    def _record_hold_path(self, record: dict[str, Any]) -> Path | None:
+        if self.hold_base_path is None:
+            return self.hold_path
+        base = self.hold_base_path.resolve()
+        recorded = Path(record["hold"]["path"])
+        # The physical slot remains fixed when valid bytes (including worker)
+        # change for a fresh PIN. Accept only this computer's exact slot family.
+        pattern = rf"{re.escape(base.stem)}(?:_[0-9a-f]{{16}})?{re.escape(base.suffix)}"
+        return (recorded if recorded.parent == base.parent and re.fullmatch(pattern, recorded.name)
+                else base)
 
     def paths(self) -> tuple[Path, ...]:
         if not self.directory.exists():
@@ -91,7 +112,7 @@ class PairedPreflightHandoffStore:
             record = None
         if record is not None and any(
             expected is not None and Path(record[name]["path"]) != expected.resolve()
-            for name, expected in (("hold", self.hold_path), ("current", self.current_path))
+            for name, expected in (("hold", self._record_hold_path(record)), ("current", self.current_path))
         ):
             problems.append("인계 원본 경로가 현재 슬롯과 다름")
             record = None
@@ -126,11 +147,12 @@ class PairedPreflightHandoffStore:
             if self.hold_path is None or self.current_path is None:
                 identified_parts = 0
             else:
-                identity = hashlib.sha256((
-                    str(self.hold_path.resolve()) + archived_reads["hold"].sha256
+                identities = {hashlib.sha256((
+                    str(slot.resolve()) + archived_reads["hold"].sha256
                     + str(self.current_path.resolve()) + archived_reads["current"].sha256
                 ).encode("utf-8")).hexdigest()
-                if identity != path.parent.name:
+                    for slot in self._hold_slots(archived_reads["hold"].value["worker"])}
+                if path.parent.name not in identities:
                     identified_parts = 0
                     problems.append("남은 원본의 SHA256이 인계 쌍 식별자와 다름")
         marker = read_recovery_file(path.parent / "released.json", "released")
@@ -320,7 +342,7 @@ class PairedPreflightHandoffStore:
         result = read_recovery_file(path, "record")
         if not result.verified or result.value["id"] != Path(path).parent.name:
             raise PairedHandoffError("paired record cannot be verified")
-        for name, expected in (("hold", self.hold_path), ("current", self.current_path)):
+        for name, expected in (("hold", self._record_hold_path(result.value)), ("current", self.current_path)):
             if expected is not None and Path(result.value[name]["path"]) != expected.resolve():
                 raise PairedHandoffError("paired original path differs from active slot")
         return result.value
