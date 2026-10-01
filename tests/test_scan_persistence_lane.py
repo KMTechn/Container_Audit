@@ -61,17 +61,26 @@ def app(tmp_path):
     try:
         yield instance
     finally:
-        lane = getattr(instance, "_ui_lane", None)
-        if lane is not None and lane.is_busy():
-            instance.root.run_until(lambda: not lane.is_busy(), timeout=10)
-        if instance.log_thread.is_alive():
-            instance.log_queue.put(None)
-            instance.log_thread.join(timeout=10)
-        assert not instance.log_thread.is_alive()
+        try:
+            lane = getattr(instance, "_ui_lane", None)
+            if lane is not None and lane.is_busy():
+                instance.root.run_until(lambda: not lane.is_busy(), timeout=10)
+        finally:
+            if instance.log_thread.is_alive():
+                instance.log_queue.put(None)
+                instance.log_thread.join(timeout=10)
+            assert not instance.log_thread.is_alive()
 
 
 def pump(app, predicate):
-    app.root.run_until(predicate, timeout=10)
+    def ready():
+        complete = predicate()
+        if not complete:
+            # FakeTkRoot ignores after() delays; yield as Tk's real event wait
+            # does, so its polling callbacks cannot starve the durable worker.
+            time.sleep(0.002)
+        return complete
+    app.root.run_until(ready, timeout=10)
 
 
 def rows(app):
@@ -459,15 +468,17 @@ def test_scans_behind_an_unsaved_product_are_refused_with_a_sound(app):
     )
 
 
-def test_scan_behind_the_last_product_is_refused_while_the_tray_completes(app):
-    """w9scanflow F4: a scan after the last product is refused out loud, not dropped."""
+def test_scan_behind_the_last_product_is_retained_while_the_tray_completes(app):
+    """DESIGN §1: local completion preserves the already admitted next scan."""
     app.error_sounds = []
     app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
     app.current_tray.tray_size = 1
     completions = []
-    app.request_complete_tray = lambda **kwargs: completions.append(
-        tuple(app.current_tray.scanned_barcodes)
-    ) or True
+    def completing(**kwargs):
+        completions.append(tuple(app.current_tray.scanned_barcodes))
+        app._set_completion_lane_busy(True)
+        return True
+    app.request_complete_tray = completing
     entered, release, save = _blocked_save(app)
     try:
         _scanner(app, ITEM + "-1")
@@ -475,31 +486,30 @@ def test_scan_behind_the_last_product_is_refused_while_the_tray_completes(app):
         _scanner(app, "PHS=1|CLC=AAA2270730100|QT=1")
         app._save_tray_state_snapshot = save
         release.set()
-        settle(app)
+        pump(app, lambda: not app._ui_lane.is_busy() and _only_lane_pump_pending(app))
     finally:
         release.set()
     assert completions == [(ITEM + "-1",)]
+    assert app._completion_lane_busy is True
     assert app.current_tray.scanned_barcodes == [ITEM + "-1"]
-    assert app.error_sounds == [1]
-    assert _refusals(app)[-1] == (
-        "완료 처리 중이라 이어서 들어온 스캔 1개는 받지 않았습니다. 완료 뒤 다시 스캔하세요."
-    )
+    assert app._scans_behind_save == ["PHS=1|CLC=AAA2270730100|QT=1"]
+    assert app.error_sounds == [] and _refusals(app) == []
 
 
-def test_scan_while_completion_locks_the_entry_gets_a_notice_and_sound(app):
-    """w9scanflow F4: the locked entry dropped the scan without any notice."""
+def test_scan_while_completion_runs_is_queued_from_the_enabled_entry(app):
+    """DESIGN §1: completion writes leave the scanner entry ready for FIFO input."""
     app.error_sounds = []
     app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
     app._set_completion_lane_busy(True)
-    assert app.scan_entry.state == "disabled"
+    assert app.scan_entry.state == "normal"
     _scanner(app, ITEM + "-9")
     assert app.scan_entry.get() == "" and not app.root.jobs
-    assert app.error_sounds == [1]
-    assert _refusals(app)[-1] == "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
+    assert app._scans_behind_save == [ITEM + "-9"]
+    assert app.error_sounds == [] and _refusals(app) == []
     assert app.current_tray.scanned_barcodes == []
 
 
-def test_scan_held_before_a_warning_runs_after_the_operator_sees_it(app):
+def test_scan_held_before_a_warning_acknowledges_it_and_runs(app):
     from warning_presenter import Notice, NoticeSeverity
 
     app.show_fullscreen_warning = lambda title, message, color: app._warning_state_presenter().present(
@@ -512,11 +522,8 @@ def test_scan_held_before_a_warning_runs_after_the_operator_sees_it(app):
     app.root.run_one()  # the scan callback submits the save; its first UI step waits
     _scanner(app, product)
     assert app._scans_behind_save == [product]
-    pump(app, lambda: not app._ui_lane.is_busy() and _only_lane_pump_pending(app))
-    assert app._warning_state_presenter().state.is_blocking
-    assert app.current_tray.scanned_barcodes == [] and app._scans_behind_save == [product]
-    app._acknowledge_active_notice()
     settle(app)
+    assert not app._warning_state_presenter().state.is_blocking
     assert app.current_tray.scanned_barcodes == [product]
     assert app.scan_entry.get() == ""
 

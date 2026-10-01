@@ -1,5 +1,7 @@
 # 남은 요구·검증·문서·추가 제안
 
+스캐너 경고 뒤 UNDO/다음 현품표, 완료 중 FIFO, 교환 CSV 실패/후속 checkpoint 복구, 6칸 교환 완료와 자동 보류 복원 안내는 소스 회귀 범위다. 실제 스캐너·소리·화면·중앙 서버 결합은 랩 검증에 남는다.
+
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
 **현재 상태 — 2026-09-09 S05:** 선택된 여섯 프로그램 qualification은 Main의 독립 composition 검토로 마감됐다. 최종 frozen `d440b1f7`의 요청 범위 native 수용은 **완료(지원 recovery 포함)**이며, 상세 범위는 [CA-G10](#ca-g10)과 [CA-O10](operations.md#ca-o10)을 따른다. 최초 fresh 등록 실패와 아래 과거 시점의 판단을 보존하며 물리 장비·공장 배포는 별도 범위다. 현재 소스 단순화의 변경·검증·독립 검토는 [CA-G11](#ca-g11)에 기록한다.

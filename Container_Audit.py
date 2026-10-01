@@ -210,7 +210,7 @@ from tk_serial_ui_lane import (
     LaneTask,
     TkSerialUiLane,
 )
-from writer_session_fence import writer_sink
+from writer_session_fence import writer_admission, writer_sink
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
     ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
@@ -2194,7 +2194,6 @@ class ContainerAudit:
             return
         should_disable = bool(
             locked
-            or getattr(self, "_completion_lane_busy", False)
             or getattr(self, "_ui_close_requested", False)
         )
         try:
@@ -3195,7 +3194,7 @@ class ContainerAudit:
         if lock is None:
             lock = threading.RLock()
             self._tray_state_persist_lock = lock
-        with lock:
+        with writer_admission("gui_tray_state_save"), lock:
             if not self.current_tray.master_label_code:
                 return False
             state = self._current_tray_state_snapshot()
@@ -4225,14 +4224,20 @@ class ContainerAudit:
                 "이전 작업 상태를 불러오지 못했습니다. 관리자에게 문의하세요.",
             )
 
-    def _restore_tray_from_state(self, state: Dict[str, Any]):
+    def _restore_tray_from_state(self, state: Dict[str, Any], *, preserve_held_scans: bool = False):
         self.current_tray = tray_session_from_state(
             state,
             session_factory=TraySession,
             default_tray_size=self.TRAY_SIZE,
         )
         restored_operator_review = self._restore_operator_review_from_state(state)
-        self._invalidate_pending_scan_callbacks()
+        if preserve_held_scans:
+            # An exchange updates this same work round while its durable lane
+            # is still running; invalidating that generation aborts its audit.
+            self._scans_behind_save_work = (
+                int(getattr(self, "_scan_callback_epoch", 0)), self.current_tray)
+        else:
+            self._invalidate_pending_scan_callbacks()
         if not restored_operator_review:
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
 
@@ -5207,6 +5212,11 @@ class ContainerAudit:
     def _update_action_button_states(self) -> None:
         active_tray = bool(getattr(getattr(self, "current_tray", None), "master_label_code", ""))
         scanned_count = len(getattr(getattr(self, "current_tray", None), "scanned_barcodes", []) or [])
+        parked_undo = getattr(self, "_parked_tray_undo", None)
+        waiting_undo = not active_tray and bool(
+            getattr(self, "_short_confirmation_undo", None)
+            or (parked_undo and parked_undo["worker"] == persistent_operator_name(self.worker_name))
+        )
         blocking_completion = self._active_blocking_completion_snapshot()
         operator_review = blocking_completion is not None
         retryable_completion = bool(
@@ -5273,7 +5283,7 @@ class ContainerAudit:
         self._configure_widget_options(
             getattr(self, "undo_button", None),
             text=labels["undo"],
-            state=mutation_state if scanned_count else tk.DISABLED,
+            state=mutation_state if scanned_count or waiting_undo else tk.DISABLED,
         )
         self._configure_widget_options(
             getattr(self, "submit_tray_button", None),
@@ -12685,16 +12695,18 @@ class ContainerAudit:
             snapshot.state == HOLD_DRAINING
             and not self._preflight_hold_matches_current_tray(snapshot)
         ):
-            if self._is_preflight_hold_supervisor() and messagebox.askyesno(
-                "다른 작업자 보류 묶음",
-                "다른 작업자의 중앙 조회 보류 묶음이 남아 있습니다. 복원 가능한 "
-                "격리 목록으로 옮겨 새 작업을 허용하시겠습니까?",
-                parent=getattr(self, "root", None),
-            ):
-                return self._quarantine_preflight_hold_for_supervisor(
-                    reason="supervisor_worker_boundary",
-                    confirm=False,
+            if self._is_preflight_hold_supervisor():
+                self._preflight_hold_snapshot = snapshot
+                self._set_preflight_scan_input_locked(True)
+                self._request_inline_choice(
+                    "다른 작업자 보류 묶음",
+                    "다른 작업자의 보류 기록을 보존하고 새 작업을 시작할 수 있습니다.",
+                    [("보류하고 새 작업", lambda: self._quarantine_preflight_hold_for_supervisor(
+                        reason="supervisor_worker_boundary", confirm=False)),
+                     ("기록 유지", lambda: self.show_status_message(
+                         "보류 기록을 유지합니다. 운영 작업에서 다시 확인하세요.", self.COLOR_PRIMARY))],
                 )
+                return True
             self._show_field_notice(
                 "보류 스캔 작업자 확인",
                 "다른 작업자의 중앙 조회 보류 묶음이 남아 있어 작업자를 변경할 수 없습니다.",
@@ -13064,11 +13076,14 @@ class ContainerAudit:
         """
         if getattr(self, "_inline_scan_choices", None):
             return "화면에서 이전 작업 처리 방법을 선택하세요. 이번 스캔은 미접수입니다."
+        pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
+        if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
+            return "교환 상태 저장을 다시 확인하고 있습니다. 현재 트레이를 보존합니다."
         if getattr(self, "_ui_close_requested", False):
             return "종료 정리 중입니다. 이번 스캔은 접수되지 않았습니다."
         if getattr(self, "_scan_callback_pending", False):
             return "이전 스캔 입력을 접수하는 중입니다. 입력값을 유지합니다."
-        if getattr(self, "_completion_lane_busy", False):
+        if getattr(self, "_completion_lane_busy", False) and not behind_live_save:
             return "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
         if getattr(self, "_preflight_scan_input_locked", False):
             return "중앙 조회 보류 묶음을 먼저 해결해야 합니다. 이번 스캔은 받지 않았습니다."
@@ -13088,7 +13103,8 @@ class ContainerAudit:
             ):
                 return "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
         try:
-            if self._warning_state_presenter().state.is_blocking:
+            if (self._warning_state_presenter().state.is_blocking
+                    and self._operator_review_blocks_mutation()):
                 return "현재 경고를 먼저 확인해야 합니다. 이번 스캔은 받지 않았습니다."
         except (AttributeError, TypeError):
             pass
@@ -13097,8 +13113,8 @@ class ContainerAudit:
     def _hold_or_refuse_entry_scan(self, raw_barcode: str, block_reason: str) -> None:
         """Take the value out of the entry so the next scan never joins it.
 
-        While a product save runs, the scan waits in scan order; any other
-        block refuses it with an error sound so the operator rescans it.
+        Product saves and completion retain scans in order; protected holds
+        refuse them with an error sound so the operator rescans them.
         """
         if getattr(self, "_scan_callback_pending", False):
             # A scanner's second Enter: the scheduled callback owns this value.
@@ -13113,7 +13129,8 @@ class ContainerAudit:
         if held is None:
             held = self._scans_behind_save = []
         if (
-            (getattr(self, "_live_scan_save_pending", False) or held)
+            (getattr(self, "_live_scan_save_pending", False)
+             or getattr(self, "_completion_lane_busy", False) or held)
             and not self._scan_entry_admission_block_reason(behind_live_save=True)
         ):
             if not held:
@@ -13167,20 +13184,21 @@ class ContainerAudit:
                 "작업이 바뀌어 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
             )
             return
-        if self._warning_state_presenter().state.is_blocking:
-            # The operator sees the warning first; acknowledging it resumes here.
+        if getattr(self, "_master_preflight_pending", False):
+            if self._hold_scan_during_preflight(held[0]):
+                held.pop(0)
+                if held:
+                    self.root.after(0, self._process_next_scan_behind_save)
             return
         block_reason = self._scan_entry_admission_block_reason()
         if block_reason:
-            self._refuse_scans_behind_save(
-                "처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
-            )
+            # Completion and durable local tasks resume this FIFO on idle.
             return
         self._process_barcode_logic(held.pop(0))
         if held and not getattr(self, "_live_scan_save_pending", False):
-            self._refuse_scans_behind_save(
-                "처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. 다시 스캔하세요."
-            )
+            self._scans_behind_save_work = (
+                int(getattr(self, "_scan_callback_epoch", 0)), self.current_tray)
+            self.root.after(0, self._process_next_scan_behind_save)
 
     def _set_scan_callback_pending(self, pending: bool) -> None:
         self._scan_callback_pending = bool(pending)
@@ -13190,7 +13208,6 @@ class ContainerAudit:
         disabled = bool(
             pending
             or getattr(self, "_preflight_scan_input_locked", False)
-            or getattr(self, "_completion_lane_busy", False)
             or getattr(self, "_phs_label_candidate_pending", False)
             or getattr(self, "_phs_reconciliation_resolve_pending", False)
             or getattr(self, "_phs_label_refresh_pending", False)
@@ -13226,8 +13243,13 @@ class ContainerAudit:
         """UI의 스캔 엔트리에서 바코드를 읽어 로직을 실행합니다."""
         raw_barcode = self.scan_entry.get().strip()
         if not raw_barcode:
+            if (self._warning_state_presenter().state.is_blocking
+                and not self._operator_review_blocks_mutation()
+                and not getattr(self, "_inline_scan_choices", None)):
+                self._acknowledge_active_notice()
+                return
             if getattr(self, "_completion_lane_busy", False):
-                # The locked entry drops a scan's characters; only its Enter arrives.
+                # Empty Enter carries no barcode to retain during completion.
                 self._refuse_entry_scan(
                     "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
                 )
@@ -13247,12 +13269,16 @@ class ContainerAudit:
         self._set_scan_callback_pending(True)
         self.root.after(0, self._process_barcode_if_current, raw_barcode, scan_epoch)
 
-    def _invalidate_pending_scan_callbacks(self) -> None:
+    def _invalidate_pending_scan_callbacks(self, *, preserve_held_scans: bool = False) -> None:
         self._scan_callback_epoch = int(getattr(self, "_scan_callback_epoch", 0)) + 1
-        # Held scans belong to the old work and never run in the new one. They are
-        # refused out loud after the caller's own notice (reset, park, handoff...).
+        # Successful completion/UNDO explicitly rebases retained scanner input;
+        # reset, park and handoff refuse old-work input after their own notice.
         dropped = len(getattr(self, "_scans_behind_save", None) or ())
-        self._scans_behind_save = []
+        if preserve_held_scans:
+            self._scans_behind_save_work = (self._scan_callback_epoch, self.current_tray)
+            dropped = 0
+        else:
+            self._scans_behind_save = []
         if dropped:
             notice = f"작업이 바뀌어 이어서 들어온 스캔 {dropped}개는 받지 않았습니다. 다시 스캔하세요."
             try:
@@ -13315,6 +13341,13 @@ class ContainerAudit:
         if getattr(self, "_inline_scan_choices", None):
             self.show_status_message("화면에서 이전 작업 처리 방법을 선택하세요.", self.COLOR_DANGER)
             return
+        pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
+        if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
+            self.show_status_message("교환 상태 저장을 다시 확인하고 있습니다.", self.COLOR_DANGER)
+            return False
+        if self._warning_state_presenter().state.is_blocking and not self._operator_review_blocks_mutation():
+            self._warning_state_presenter().acknowledge()
+            self._stop_warning_beep()
         if raw_barcode.startswith("KMCMD:"):
             self._inline_exchange_target = ""
             self._inline_exchange_mode = ""
@@ -13344,6 +13377,8 @@ class ContainerAudit:
             return
         fields = self._parse_new_format_qr(raw_barcode) or {}
         is_label = bool(fields.get("CLC") or (raw_barcode.isdigit() and len(raw_barcode) == self.ITEM_CODE_LENGTH))
+        if is_label:
+            self._parked_tray_undo = None
         if getattr(self, "_inline_exchange_mode", ""):
             if is_label:
                 self._inline_exchange_mode = ""
@@ -13392,13 +13427,6 @@ class ContainerAudit:
                         and len(scan_tray.scanned_barcodes) > before_count
                         and len(scan_tray.scanned_barcodes) >= scan_tray.tray_size):
                     self.root.after(0, self.request_complete_tray)
-                    # After the completion status, so the notice stays visible.
-                    self.root.after(
-                        0,
-                        self._refuse_scans_behind_save,
-                        "완료 처리 중이라 이어서 들어온 스캔 {count}개는 받지 않았습니다. "
-                        "완료 뒤 다시 스캔하세요.",
-                    )
                 elif outcome not in ([True], [None]):
                     # Not saved, failed or stale: later scans never run on an unknown state.
                     self._refuse_scans_behind_save(
@@ -13853,6 +13881,12 @@ class ContainerAudit:
 
     def _submit_scan_steps(self, steps, *, finish=None, on_idle=None):
         lane = self._ui_task_lane()
+        def idle():
+            self._live_scan_save_pending = False
+            if on_idle is not None:
+                on_idle()
+            if getattr(self, "_scans_behind_save", None) and not lane.is_busy():
+                self.root.after(0, self._process_next_scan_behind_save)
         def fail(exc):
             print(f"스캔 내구 처리 실패: {exc.__class__.__name__}")
             self.show_status_message(
@@ -13864,7 +13898,7 @@ class ContainerAudit:
             generation=int(getattr(self, "_scan_callback_epoch", 0)),
             work=lambda: self._run_durable_ui_steps(steps, lane=lane),
             finish=finish or (lambda result: None), fail=fail,
-            on_idle=on_idle,
+            on_idle=idle,
             shutdown_policy=DRAIN_TO_TERMINAL,
         ))
         if not admission.accepted:
@@ -13872,6 +13906,7 @@ class ContainerAudit:
             self.show_status_message("이전 스캔 저장 중입니다. 입력값을 유지합니다.", self.COLOR_DANGER)
             return False
         self._scan_persistence_task_handle = admission.handle
+        self._live_scan_save_pending = True
         self._update_action_button_states()
         return True
 
@@ -14025,8 +14060,7 @@ class ContainerAudit:
                 entry.configure(
                     state=(
                         tk.DISABLED
-                        if busy
-                        or getattr(self, "_preflight_scan_input_locked", False)
+                        if getattr(self, "_preflight_scan_input_locked", False)
                         or getattr(self, "_ui_close_requested", False)
                         else tk.NORMAL
                     )
@@ -14115,6 +14149,10 @@ class ContainerAudit:
     def undo_last_scan(self):
         if not self.current_tray.master_label_code and getattr(self, "_short_confirmation_undo", None):
             return self._undo_short_confirmation()
+        parked_undo = getattr(self, "_parked_tray_undo", None)
+        if (not self.current_tray.master_label_code and parked_undo
+            and parked_undo["worker"] == persistent_operator_name(self.worker_name)):
+            return self.restore_parked_tray(parked_undo["path"], _scan_undo=True)
         if self._reject_mutation_during_preflight_hold():
             return
         if self._operator_review_blocks_mutation():
@@ -14227,6 +14265,7 @@ class ContainerAudit:
                 return
             self._stop_stopwatch(); self._stop_idle_checker(); self.is_idle = False
             reset_lease_id = str(getattr(self.current_tray, "operation_lease_id", "") or "")
+            self._parked_tray_undo = None
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self.scanned_listbox.delete(0, tk.END)
@@ -14948,7 +14987,9 @@ class ContainerAudit:
             self._render_warning_state()
             acknowledge_button = getattr(self, "notice_ack_button", None)
             try:
-                if changed and acknowledge_button is not None:
+                if (changed and acknowledge_button is not None
+                    and (self._operator_review_blocks_mutation()
+                         or getattr(self, "_inline_scan_choices", None))):
                     acknowledge_button.focus_set()
             except (tk.TclError, AttributeError):
                 pass
@@ -16545,7 +16586,7 @@ class ContainerAudit:
                 return False
             record["undo_applied"] = True
             yield lambda: atomic_write_json(path, record, ensure_ascii=False)
-            self._restore_tray_from_state(state)
+            self._restore_tray_from_state(state, preserve_held_scans=True)
             original_log_path = self.log_file_path
             yield lambda: self._load_session_state()
             self.log_file_path = original_log_path
@@ -16629,34 +16670,61 @@ class ContainerAudit:
         if lane.is_busy():
             return False
         lookup = jobs.pop(0) if jobs else None
-        active_lease_id = str(getattr(self.current_tray, "operation_lease_id", ""))
+        active_lease_id = ("" if self.current_tray.exchange_idempotency_keys else
+                           str(getattr(self.current_tray, "operation_lease_id", "")))
+        if getattr(self, "_tray_state_persist_lock", None) is None:
+            self._tray_state_persist_lock = threading.RLock()
         def work():
             coordinator = self._scanonly_transport_runtime()
             if getattr(self, "_scanonly_recover_requested", False):
                 self._scanonly_recover_requested = False
-            result = {"lookup": lookup, "preflight": None, "pending": 0}
+            result = {"lookup": lookup, "preflight": None, "pending": 0, "local_exchange_reviews": 0}
             exchanges = self._scanonly_exchange_runtime()
-            for row in exchanges.store.scan_exchange_rows(unprojected=True):
+            unprojected_exchanges = exchanges.store.scan_exchange_rows(unprojected=True)
+            completed_exchange_keys = (coordinator.store.projected_scan_exchange_keys()
+                                       if unprojected_exchanges else set())
+            for row in unprojected_exchanges:
                 context = json.loads(row["context_json"])
                 state = dict(context["after_state"])
                 key = "container-member-exchange:" + row["intent_hash"]
                 state["exchange_idempotency_keys"] = [*context.get("predecessor_keys", []), key]
                 current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-                recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
-                if not recovered.verified or recovered.value not in (context["before_state"], state):
-                    continue
-                if not self._save_tray_state_snapshot(state):
-                    continue
+                # The immutable key proves projection even after later scans,
+                # exchanges or completion. Never rewrite a newer checkpoint.
+                # Match GUI saves: writer admission precedes the checkpoint
+                # lock, so recovery cannot deadlock an already admitted save.
+                with writer_admission("gui_tray_state_save"), self._tray_state_persist_lock:
+                    recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
+                    current = recovered.value if recovered.verified else {}
+                    same_round = bool(current) and all(current.get(field) == state.get(field)
+                        for field in ("master_label_code", "start_time"))
+                    projected = key in completed_exchange_keys or (
+                        same_round and key in (current.get("exchange_idempotency_keys") or []))
+                    if not projected:
+                        if current != context["before_state"]:
+                            result["local_exchange_reviews"] += 1
+                            continue
+                        if not self._save_tray_state_snapshot(state):
+                            continue
+                        result["recovered_exchange_state"] = state
+                        result["recovered_exchange_before"] = context["before_state"]
+                projection_log_name = context.get("projection_log_name")
+                if not projection_log_name:
+                    worker = re.sub(r'[\\/*?:"<>|]', "", row["operator"])
+                    day = datetime.datetime.fromisoformat(context["exchanged_at"]).strftime('%Y%m%d')
+                    projection_log_name = f"이적작업이벤트로그_{worker}_{day}.csv"
+                projection_log_path = str(self._completion_projection_log_path(projection_log_name))
                 if not self._log_event("PRODUCT_EXCHANGE_COMPLETED", detail={
                     "defective_barcodes": json.loads(row["old_barcodes_json"]),
                     "good_barcodes": json.loads(row["new_barcodes_json"]),
                     "item_code": row["item_id"], "exchange_intent_id": row["intent_id"],
                     "exchange_idempotency_key": key, "exchanged_at": context["exchanged_at"],
                     "device_id": context["device_id"]}, synchronous=True,
-                    idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True):
+                    idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
+                    event_timestamp=context["exchanged_at"], worker_name_override=row["operator"],
+                    log_file_path_override=projection_log_path):
                     continue
                 exchanges.store.mark_scan_exchange_projected(row["intent_id"])
-                result["recovered_exchange_state"] = state
             result["releases"] = self._work_operation_lease_releases((), active_lease_id=active_lease_id)
             for exchange_id in exchanges.store.pending_ids():
                 if exchanges.store.scan_exchange_context(exchange_id) is None:
@@ -16667,7 +16735,8 @@ class ContainerAudit:
                 exchanges.store.mark_local_applied(exchange_id, {"scan_exchange_locally_projected": True})
             pending_exchanges = [key for key in exchanges.store.pending_ids()
                                 if exchanges.store.scan_exchange_context(key) is not None]
-            result["exchange_pending"] = len(pending_exchanges)
+            result["exchange_pending"] = len(pending_exchanges) + len(
+                exchanges.store.scan_exchange_rows(unprojected=True))
             if lookup is not None and not pending_exchanges:
                 try:
                     result["preflight"] = coordinator.prefetch_scan_label(lookup[0], lookup[1])
@@ -16688,13 +16757,31 @@ class ContainerAudit:
                     break
             result["pending"], result["reviews"] = coordinator.store.scan_transport_counts()
             result["reviews"] += sum(row["status"] == "OPERATOR_REVIEW" for row in exchanges.store.scan_exchange_rows())
+            result["reviews"] += result["local_exchange_reviews"]
             return result
         def finish(result):
             recovered_state = result.get("recovered_exchange_state")
-            if recovered_state and self.current_tray.master_label_code == recovered_state["master_label_code"]:
-                self._restore_tray_from_state(recovered_state)
+            before = result.get("recovered_exchange_before") or {}
+            def apply_recovered_exchange():
+                if self._ui_task_lane().is_busy():
+                    self.root.after(10, apply_recovered_exchange)
+                    return
+                current = self._current_tray_state_snapshot()
+                if not all(current.get(field) == before.get(field) for field in
+                           ("master_label_code", "start_time", "worker_name", "scanned_barcodes", "exchange_idempotency_keys")):
+                    return
+                self._restore_tray_from_state(recovered_state, preserve_held_scans=True)
+                self._local_exchange_checkpoint_pending = False
+                self._inline_exchange_mode = ""
+                self._inline_exchange_target = ""
                 self._update_current_item_label()
                 self._update_center_display()
+                if len(self.current_tray.scanned_barcodes) >= self.current_tray.tray_size:
+                    self.root.after(0, self.request_complete_tray)
+                if getattr(self, "_scans_behind_save", None):
+                    self.root.after(0, self._process_next_scan_behind_save)
+            if recovered_state:
+                apply_recovered_exchange()
             preflight_result = result.get("preflight")
             if preflight_result is not None:
                 artifact, preflight = preflight_result
@@ -18198,6 +18285,8 @@ class ContainerAudit:
                 self._show_field_notice("오류", message)
                 return False
 
+            self._parked_tray_undo = {"path": str(parked_path),
+                "worker": persistent_operator_name(self.worker_name)}
             self.current_tray = TraySession()
             self._invalidate_pending_scan_callbacks()
             self.scanned_listbox.delete(0, tk.END)
@@ -18207,7 +18296,11 @@ class ContainerAudit:
 
             self._update_parked_trays_list()
             self._show_left_sidebar_view("parked")
+            if getattr(self, "undo_button", None) is not None:
+                self._update_action_button_states()
             self.show_status_message("작업을 보류 처리했습니다. 새 현품표를 스캔하세요.", self.COLOR_PRIMARY)
+            if getattr(self, "success_sound", None):
+                self.success_sound.play()
             return True
 
         except Exception as e:
@@ -18424,7 +18517,7 @@ class ContainerAudit:
             return False
         return candidate_path.is_relative_to(parked_dir)
 
-    def restore_parked_tray(self, filepath: str, *, _switch_choice="pending"):
+    def restore_parked_tray(self, filepath: str, *, _switch_choice="pending", _scan_undo: bool = False):
         if _switch_choice != "pending":
             self._inline_scan_choices = []
         """파일 경로를 받아 보류된 트레이를 복원합니다."""
@@ -18568,10 +18661,29 @@ class ContainerAudit:
                 if hasattr(self, "show_worker_input_screen"):
                     self.show_worker_input_screen()
                 return
+            self._parked_tray_undo = None
             self.current_tray = restored_tray
             self._restore_operator_review_from_state(saved_state)
-            self._invalidate_pending_scan_callbacks()
+            self._invalidate_pending_scan_callbacks(preserve_held_scans=_scan_undo)
             self.show_status_message("이전 트레이 작업을 복구했습니다.", self.COLOR_PRIMARY)
+
+            if _scan_undo:
+                self._update_current_item_label()
+                self.scanned_listbox.delete(0, tk.END)
+                for index, barcode in enumerate(self.current_tray.scanned_barcodes, start=1):
+                    self.scanned_listbox.insert(0, self._format_scanned_list_row(index, barcode))
+                if self.current_tray.scanned_barcodes:
+                    self.undo_button['state'] = tk.NORMAL
+                self._sync_last_normal_scan_from_active_tray()
+                self._start_stopwatch(resume=True)
+                self._update_center_display()
+                self._update_all_summaries()
+                self._update_parked_trays_list()
+                self._show_left_sidebar_view("summary")
+                self._schedule_focus_return()
+                if getattr(self, "success_sound", None):
+                    self.success_sound.play()
+                return True
 
             self._left_sidebar_view = "summary"
             self.show_validation_screen()
@@ -19174,20 +19286,28 @@ class ContainerAudit:
             values[old_index] = barcode
         after["scanned_barcodes"] = values
         after["scan_times"] = times
-        after["operation_lease_id"] = ""
+        # Retain the resolved target/lease as local evidence. Deferred completion
+        # never binds this old lease after exchange; transport issues a new one.
         after.pop("scan_completion_context", None)
         after["has_error_or_reset"] = True
         if tray.known_member_barcodes:
             after["known_member_barcodes"] = [barcode if normalize_barcode(value) == normalize_barcode(old) else value
                                              for value in tray.known_member_barcodes]
         timestamp = datetime.datetime.now().isoformat()
+        projection_log_path = self._completion_projection_log_path()
         coordinator = self._transfer_member_exchange_runtime()
+        def settled():
+            self._schedule_scanonly_transport()
+            if (self.current_tray.master_label_code
+                and len(self.current_tray.scanned_barcodes) >= self.current_tray.tray_size):
+                self.root.after(0, self.request_complete_tray)
         def steps():
             row = yield lambda: coordinator.store.prepare(master_label=tray.master_label_code,
                 source_identity={**source_identity_from_label(self._parse_new_format_qr(tray.master_label_code) or {}),
                     "replacement_mode": "SCAN_REGISTER_GOOD", "local_exchange_round": timestamp},
                 item_id=tray.item_code, operator=persistent_operator_name(self.worker_name),
                 old_barcodes=[old], new_barcodes=[barcode], scan_context={"exchanged_at": timestamp,
+                    "projection_log_name": projection_log_path.name,
                     "device_id": str(getattr(self, "computer_id", "")), "before_state": state,
                     "after_state": after, "predecessor_keys": list(tray.exchange_idempotency_keys)})
             key = "container-member-exchange:" + str(row["intent_hash"])
@@ -19196,26 +19316,29 @@ class ContainerAudit:
             if lease_id:
                 yield lambda: self._request_operation_lease_release(lease_id, schedule=False)
             if not (yield lambda: self._save_tray_state_snapshot(after)):
+                self._local_exchange_checkpoint_pending = tray
                 self.show_status_message("교환 상태 저장을 다시 확인하세요.", self.COLOR_DANGER)
                 return False
-            if not (yield lambda: self._log_event("PRODUCT_EXCHANGE_COMPLETED", detail={
-                "defective_barcodes": [old], "good_barcodes": [barcode], "item_code": tray.item_code,
-                "exchange_intent_id": row["intent_id"], "exchange_idempotency_key": key,
-                "exchanged_at": timestamp, "device_id": str(getattr(self, "computer_id", ""))},
-                synchronous=True, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True)):
-                return False
-            yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])
-            self._restore_tray_from_state(after)
+            # The intent and checkpoint already own this replacement. A later
+            # audit retry must not leave the scanner in replacement-input mode.
+            self._restore_tray_from_state(after, preserve_held_scans=True)
             self._inline_exchange_mode = ""
             self._inline_exchange_target = ""
             self._update_current_item_label()
             self._update_center_display()
+            if not (yield lambda: self._log_event("PRODUCT_EXCHANGE_COMPLETED", detail={
+                "defective_barcodes": [old], "good_barcodes": [barcode], "item_code": tray.item_code,
+                "exchange_intent_id": row["intent_id"], "exchange_idempotency_key": key,
+                "exchanged_at": timestamp, "device_id": str(getattr(self, "computer_id", ""))},
+                synchronous=True, idempotency_key="scan-exchange:" + row["intent_id"], deduplicate=True,
+                event_timestamp=timestamp, worker_name_override=row["operator"],
+                log_file_path_override=str(projection_log_path))):
+                self.show_status_message("교환은 저장되었습니다. 기록 전송을 다시 확인합니다.", self.COLOR_PRIMARY)
+                return False
+            yield lambda: coordinator.store.mark_scan_exchange_projected(row["intent_id"])
             self.show_status_message("제품을 교환했습니다. 계속 스캔하세요.", self.COLOR_SUCCESS)
-            self._schedule_scanonly_transport()
-            if len(values) >= self.current_tray.tray_size:
-                self.root.after(0, self.request_complete_tray)
             return True
-        return self._submit_scan_steps(steps())
+        return self._submit_scan_steps(steps(), on_idle=settled)
 
 
 

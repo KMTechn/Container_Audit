@@ -276,13 +276,15 @@ def flow(tmp_path):
 
     yield make
     for app in apps:
-        lane = getattr(app, "_ui_lane", None)
-        if lane is not None:
-            _pump_until(app.root, lambda: not lane.is_busy())
-            lane.close_idle()
-        app.log_queue.put(None)
-        app.log_thread.join(timeout=10)
-        assert not app.log_thread.is_alive()
+        try:
+            lane = getattr(app, "_ui_lane", None)
+            if lane is not None:
+                _pump_until(app.root, lambda: not lane.is_busy())
+                lane.close_idle()
+        finally:
+            app.log_queue.put(None)
+            app.log_thread.join(timeout=10)
+            assert not app.log_thread.is_alive()
 
 
 def _rows(app, event=None):

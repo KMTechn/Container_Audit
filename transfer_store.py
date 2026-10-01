@@ -947,6 +947,18 @@ class TransferSealStore:
             ).fetchall()
         return [str(row["intent_id"]) for row in rows]
 
+    def projected_scan_exchange_keys(self) -> set[str]:
+        """Exchange projection proof from durable full or held short completions."""
+        self._assert_not_ui_thread_read()
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT s.context_json FROM transfer_scan_context s "
+                "JOIN transfer_seal_intents i ON i.intent_id=s.intent_id "
+                "WHERE i.completion_checkpoint_confirmed=1 AND s.state IN ('READY','HELD')"
+            ).fetchall()
+        return {key for row in rows for key in
+                (json.loads(row["context_json"]).get("exchange_idempotency_keys") or [])}
+
     def has_scan_transport_work(self) -> bool:
         self._assert_not_ui_thread_read()
         with self._connect() as conn:

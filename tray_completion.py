@@ -352,10 +352,12 @@ def request_complete_tray(
     def on_idle() -> None:
         current_generation = int(getattr(self, "_scan_callback_epoch", 0)) == identity[-1]
         if completed and current_generation:
-            self._invalidate_pending_scan_callbacks()
+            self._invalidate_pending_scan_callbacks(preserve_held_scans=True)
         self._set_completion_lane_busy(False)
         if current_generation and completion_callback is not None:
             completion_callback(completed)
+        if completed and getattr(self, "_scans_behind_save", None):
+            self.root.after(0, self._process_next_scan_behind_save)
 
     self._set_completion_lane_busy(True)
     admission = lane.submit(
@@ -926,7 +928,7 @@ def apply_completed_tray_state_steps(
     self._pending_completion_event_contract = None
     self.current_tray = session_factory()
     if not _lane_prechecked:
-        self._invalidate_pending_scan_callbacks()
+        self._invalidate_pending_scan_callbacks(preserve_held_scans=True)
     state_delete_failed = (yield self._delete_current_tray_state) is False
     if state_delete_failed:
         yield lambda: self._log_event(

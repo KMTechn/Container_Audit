@@ -2,6 +2,10 @@
 
 # 데이터·상태·통합 계약
 
+스캐너 경고는 다음 스캔으로 닫고 그 입력도 처리한다(명령 카드 포함). 저장·완료 중 접수한 입력은 FIFO로 완료 뒤 계속한다. 리셋·종료·저장 실패의 기존 미접수 안내와 보호된 review는 유지한다. 교환 intent의 고정 키는 후속 checkpoint와 완료 context에서도 감사 재투영의 근거이며, CSV 실패로 이미 저장된 대체품을 덮어쓰지 않는다.
+
+일반 보류 직후 다음 현품표 전 UNDO는 기존 parked 상태·복원 감사 outbox를 재사용한다. 새 카드나 event 종류를 추가하지 않으며 `TRAY_PARKED`와 `TRAY_RESTORED_FROM_PARK` 원 기록을 유지한다.
+
 [제품·기능 카드](README.md) · [운영](operations.md) · [백로그](BACKLOG.md) · [중앙 통합](../../../Program_Spec_Hub/INTEGRATIONS.md) · [공통 용어](../../../Program_Spec_Hub/GLOSSARY.md)
 
 기준일 2026-09-07, CA HEAD `2e7d9f70341015dacfc3495cb2c4aac027cbcb3e`와 당시 수정 작업 트리를 대상으로 한다. [정확한 소스·증거 경계](README.md#ca-evidence-scope)를 함께 적용한다. 아래는 소스에서 확인한 계약이며 대상 서버의 활성 설정·설치 provider·실행 성공은 별도 증거가 필요하다. 상대 저장소의 조사 HEAD는 [SOURCE-MAP 및 연구](E:/KMTech/spec-hub-research-20260907/Container_Audit/RESEARCH.md)에 있으며 링크 대상이 이후 바뀌면 재대조한다.
