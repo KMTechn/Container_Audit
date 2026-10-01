@@ -1712,6 +1712,20 @@ class ContainerAudit:
                 Path(str(getattr(self, "log_file_path", "") or ".")).parent
             )
         path = Path(save_root) / filename
+        # Keep another worker's original in place. This worker gets a separate
+        # hold file; ownership and PIN rules still apply to the original label.
+        if getattr(self, "worker_name", ""):
+            worker = persistent_operator_name(self.worker_name)
+            suffix = hashlib.sha256(worker.encode("utf-8")).hexdigest()[:16]
+            worker_path = path.with_name(f"{path.stem}_{suffix}.json")
+            try:
+                original = PreflightScanHoldStore.load_path(path) if path.is_file() else None
+            except PreflightHoldError:
+                original = None
+            if original is not None and original.worker != worker:
+                path = worker_path
+            elif original is None and not path.exists() and worker_path.exists():
+                path = worker_path
         capacity = max(1, int(getattr(self, "TRAY_SIZE", 60) or 60) + 8)
         store = getattr(self, "_preflight_hold_store_instance", None)
         if (
@@ -1722,6 +1736,24 @@ class ContainerAudit:
             store = PreflightScanHoldStore(path, capacity=capacity)
             self._preflight_hold_store_instance = store
         return store
+
+    def _other_worker_preflight_holds(self):
+        worker = persistent_operator_name(getattr(self, "worker_name", ""))
+        filename = getattr(self, "PREFLIGHT_SCAN_HOLD_FILE",
+            f"_preflight_scan_hold_{getattr(self, 'computer_id', 'host')}.json")
+        root = Path(self.save_folder)
+        paths = [root / filename, *root.glob(f"{Path(filename).stem}_*.json")]
+        holds = []
+        for path in paths:
+            if not path.is_file():
+                continue
+            try:
+                snapshot = PreflightScanHoldStore.load_path(path)
+            except PreflightHoldError:
+                continue
+            if snapshot.worker != worker:
+                holds.append(snapshot)
+        return holds
 
     def _preflight_hold_quarantine_directory(self) -> Path:
         return Path(str(getattr(self, "parked_trays_dir", "") or ".")) / (
@@ -4170,7 +4202,8 @@ class ContainerAudit:
                         ("이어서 작업", lambda: self._load_current_tray_state(_recovery_choice=True)),
                         ("보류하고 새 작업", lambda: self._load_current_tray_state(_recovery_choice=False)),
                         ("로그인 화면", lambda: self._load_current_tray_state(_recovery_choice=None)),
-                    ])
+                    ], on_scan=lambda: self._defer_saved_recovery_state(
+                        saved_state, reason="scanner_continues_after_recovery_choice"))
                     return
                 recovery_choice = True if restore_required else _recovery_choice
                 if recovery_choice is None:
@@ -4216,7 +4249,8 @@ class ContainerAudit:
                     self._request_inline_choice("작업 인수 확인", msg, [
                         ("이어서 작업", lambda: self._load_current_tray_state(_recovery_choice=True)),
                         ("원본 보존", lambda: self._load_current_tray_state(_recovery_choice=None)),
-                    ])
+                    ], on_scan=lambda: self._defer_saved_recovery_state(
+                        saved_state, reason="scanner_continues_after_takeover_choice"))
                     return
                 response = _recovery_choice
                 if response is True:
@@ -12784,6 +12818,10 @@ class ContainerAudit:
             return True
         if not store.exists():
             self._preflight_hold_snapshot = None
+            foreign = self._other_worker_preflight_holds()
+            if foreign:
+                self.show_status_message(f"다른 작업자 보류 {len(foreign)}건 있음 · 다른 현품표를 스캔하세요.",
+                    self.COLOR_PRIMARY, duration=0)
             return True
         try:
             snapshot = store.load()
@@ -12808,23 +12846,11 @@ class ContainerAudit:
             snapshot.state == HOLD_DRAINING
             and not self._preflight_hold_matches_current_tray(snapshot)
         ):
-            if self._is_preflight_hold_supervisor():
-                self._preflight_hold_snapshot = snapshot
-                self._set_preflight_scan_input_locked(True)
-                self._request_inline_choice(
-                    "다른 작업자 보류 묶음",
-                    "다른 작업자의 보류 기록을 보존하고 새 작업을 시작할 수 있습니다.",
-                    [("보류하고 새 작업", lambda: self._quarantine_preflight_hold_for_supervisor(
-                        reason="supervisor_worker_boundary", confirm=False)),
-                     ("기록 유지", lambda: self.show_status_message(
-                         "보류 기록을 유지합니다. 운영 작업에서 다시 확인하세요.", self.COLOR_PRIMARY))],
-                )
-                return True
-            self._show_field_notice(
-                "보류 스캔 작업자 확인",
-                "다른 작업자의 중앙 조회 보류 묶음이 남아 있어 작업자를 변경할 수 없습니다.",
-            )
-            return False
+            self._preflight_hold_snapshot = None
+            self._set_preflight_scan_input_locked(False)
+            self.show_status_message("다른 작업자 보류 1건 있음 · 다른 현품표를 스캔하세요.",
+                self.COLOR_PRIMARY, duration=0)
+            return True
         self._preflight_hold_snapshot = snapshot
         self._set_preflight_scan_input_locked(True)
         if snapshot.state == HOLD_DRAINING:
@@ -13187,8 +13213,6 @@ class ContainerAudit:
         ``behind_live_save`` asks whether only a running product save stands in
         the way, so the scan can wait for it in order.
         """
-        if getattr(self, "_inline_scan_choices", None):
-            return "화면에서 이전 작업 처리 방법을 선택하세요. 이번 스캔은 미접수입니다."
         pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
         if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
             return "교환 상태 저장을 다시 확인하고 있습니다. 현재 트레이를 보존합니다."
@@ -13367,6 +13391,11 @@ class ContainerAudit:
                     "완료 처리 중이라 이번 스캔은 받지 않았습니다. 완료 뒤 다시 스캔하세요."
                 )
             return
+        if getattr(self, "_inline_scan_choices", None):
+            if not self._continue_after_inline_choice():
+                self._hold_or_refuse_entry_scan(raw_barcode,
+                    "이전 작업 보류 저장을 확인하지 못했습니다. 원본을 보존합니다. 다시 스캔하세요.")
+                return
         if getattr(self, "_master_preflight_pending", False):
             self._hold_scan_during_preflight(
                 raw_barcode,
@@ -13424,8 +13453,9 @@ class ContainerAudit:
     def _show_field_notice(self, title, message, **options):
         self.show_fullscreen_warning(str(title), str(message), getattr(self, "COLOR_DANGER", "#DC2626"))
 
-    def _request_inline_choice(self, title, message, choices):
+    def _request_inline_choice(self, title, message, choices, *, on_scan):
         self._inline_scan_choices = list(choices)
+        self._inline_choice_on_scan = on_scan
         self.show_fullscreen_warning(title, message, getattr(self, "COLOR_PRIMARY", "#2563EB"))
         frame = getattr(self, "notice_frame", None)
         if frame is None:
@@ -13438,6 +13468,7 @@ class ContainerAudit:
         self._inline_choice_frame = buttons
         def choose(callback):
             self._inline_scan_choices = []
+            self._inline_choice_on_scan = None
             buttons.destroy()
             self._inline_choice_frame = None
             self._warning_state_presenter().acknowledge()
@@ -13446,6 +13477,25 @@ class ContainerAudit:
         for column, (text, callback) in enumerate(choices):
             tk.Button(buttons, text=text, command=lambda cb=callback: choose(cb)).grid(row=0,column=column,padx=5)
 
+    def _continue_after_inline_choice(self):
+        callback = getattr(self, "_inline_choice_on_scan", None)
+        try:
+            continued = callback is not None and callback()
+        except Exception as exc:
+            print(f"선택 대기 보류 실패: {exc.__class__.__name__}")
+            continued = False
+        if not continued:
+            return False
+        self._inline_scan_choices = []
+        self._inline_choice_on_scan = None
+        frame = getattr(self, "_inline_choice_frame", None)
+        if frame is not None:
+            frame.destroy()
+            self._inline_choice_frame = None
+        self._warning_state_presenter().acknowledge()
+        self._stop_warning_beep()
+        return True
+
     def _process_barcode_logic(
         self, raw_barcode: str, *, _durable_scan_log: bool = False,
         _durable_scan_id: str = "", _catalog_decision=None,
@@ -13453,8 +13503,9 @@ class ContainerAudit:
     ):
         self._flush_pending_event_logs()
         if getattr(self, "_inline_scan_choices", None):
-            self.show_status_message("화면에서 이전 작업 처리 방법을 선택하세요.", self.COLOR_DANGER)
-            return
+            if not self._continue_after_inline_choice():
+                self._refuse_entry_scan("이전 작업 보류 저장을 확인하지 못했습니다. 원본을 보존합니다.")
+                return False
         pending_exchange = getattr(self, "_local_exchange_checkpoint_pending", None)
         if pending_exchange is not None and pending_exchange is getattr(self, "current_tray", None):
             self.show_status_message("교환 상태 저장을 다시 확인하고 있습니다.", self.COLOR_DANGER)
@@ -13491,6 +13542,11 @@ class ContainerAudit:
             return
         fields = self._parse_new_format_qr(raw_barcode) or {}
         is_label = bool(fields.get("CLC") or (raw_barcode.isdigit() and len(raw_barcode) == self.ITEM_CODE_LENGTH))
+        if is_label and any(canonical_master_label_key(held.master_raw) == canonical_master_label_key(raw_barcode)
+                            for held in self._other_worker_preflight_holds()):
+            self._show_field_notice("다른 작업자 보류 현품표",
+                "원본을 보존합니다. 인수·격리는 운영 작업의 관리자 PIN 경로에서 확인하세요. 다른 현품표는 계속 스캔할 수 있습니다.")
+            return False
         if is_label:
             self._parked_tray_undo = None
         if getattr(self, "_inline_exchange_mode", ""):
@@ -18714,7 +18770,7 @@ class ContainerAudit:
                 self._request_inline_choice("작업 전환 확인", "현재 작업을 보류하고 선택한 작업을 이어갈 수 있습니다.", (
                     ("보류하고 이어서 작업", lambda: self.restore_parked_tray(filepath, _switch_choice=True)),
                     ("현재 작업 유지", lambda: self.restore_parked_tray(filepath, _switch_choice=None)),
-                ))
+                ), on_scan=lambda: True)
                 return
             res = _switch_choice
             if res is True:

@@ -301,9 +301,11 @@ def test_automatic_other_worker_restore_uses_inline_notice(flow, windows, monkey
     monkeypatch.setattr(app, '_quarantine_preflight_hold_for_supervisor', lambda **kwargs: quarantined.append(kwargs) or True)
     assert app._restore_preflight_scan_hold() is True
     assert quarantined == []
-    assert app._inline_scan_choices and app._preflight_scan_input_locked
-    app._inline_scan_choices[0][1]()
-    assert quarantined == [{'reason': 'supervisor_worker_boundary', 'confirm': False}]
+    # G6 coordinator decision: preserve foreign bytes in place and keep input
+    # open for other labels; operating on this hold still uses the PIN path.
+    assert not getattr(app, '_inline_scan_choices', None)
+    assert not app._preflight_scan_input_locked
+    assert app._preflight_hold_snapshot is None
     assert windows == [], windows
 
 
