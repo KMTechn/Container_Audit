@@ -388,3 +388,7 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 ## w9slim2 도구 정리
 
 소비자 0을 확인한 두 도구와 전용 시험만 제거했다. 절차에서 참조하는 atomicity probe·sandbox 및 일회성 PE scanner는 보류하고 촬영·문서·게시 도구는 보존한다. 소비자 조사 범위·보존 SHA·stock gate·NOT VERIFIED는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.
+
+## R29 중앙 PIN 잠금과 root 철회
+
+격리된 실제 Web HTTP·SQLite와 CA 내구 intent의 7개 성공/거절 경계가 PASS다. 중앙 잠금+root 철회에서 서버 LOCKED/PIN_LOCKED·CA REJECTED·이전 grant REVOKED 및 원본 보존을 확인했고 제품 인증 코드는 변경하지 않았다. 지원 store API로 준비한 격리 source 시험이며 실제 root UI·production 수용은 NOT TESTED. 원 실패·정확한 입력 SHA와 범위는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.

@@ -660,3 +660,7 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 ## w9slim2 소비자 없는 도구
 
 현재 tracked source·명세·빌더·inventory와 다른 저장소의 committed source 및 최근 절차를 대조해 실행 소비자가 없는 `authenticated_o3_gate.py`와 그 전용 시험, `kill_exact_probe.py`를 제거했다. 원본과 SHA는 레인 tmp/logs에 보존한다. `container_atomicity_rest_probe.py`·`sandbox_container_sac/run.ps1`·`scan_portable_pe.ps1`는 절차 참조 또는 근거 불충분으로 보류하며, 촬영·문서·게시 도구는 유지한다. 현재 packet의 curated 목록에는 제거 대상이 없고 패키징 선택자는 바꾸지 않았다. 실제 stock packet gate와 보류 근거는 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다.
+
+## R29 중앙 PIN 경계 시험
+
+고정 Web committed source `56c32028ce6b30ccf774e7cc635e3e4b377266ed`의 실제 Flask 서명 HTTP 진입점·SQLite 저장소와 CA 승인 진입점·내구 intent를 함께 사용했다. 성공 2건과 틀린 PIN·중앙 ADMIN 잠금·root 철회·역할 없음·잠금+root 철회 5건의 7 PASS를 확인했다. ADMIN 잠금은 서로 다른 3장치에서 5회씩 실패하여 실제 15회 한계를 충족하며 새 장치에서도 서버 `PIN_LOCKED` 감사와 CA REJECTED를 확인한다. 철회된 이전 grant는 REVOKED로 남고 redeem 거절, 원 recovery 파일 보존·PIN 미저장을 단언한다. 권한 상태 준비는 지원 store API를 이용한 격리 fixture이며 실제 root UI·production·네트워크 배포 수용은 NOT TESTED. 초기 fixture/입력 실패와 잘못된 10회 oracle을 지우지 않고 [결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)에 연결한다.

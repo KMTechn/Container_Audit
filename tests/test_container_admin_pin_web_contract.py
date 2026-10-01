@@ -13,14 +13,15 @@ import pytest
 import container_admin_pin as pin
 
 
-def test_pinned_web_383e6c4_issues_and_consumes_ca_proof(monkeypatch, tmp_path):
+@pytest.mark.parametrize("scenario", ["allowed", "ca_allowed", "wrong_pin", "admin_locked", "root_revoked", "role_absent", "locked_root_revoked"])
+def test_pinned_web_ca_authorization_has_durable_boundaries(monkeypatch, tmp_path, scenario):
     root_text = os.environ.get("CA_PIN_WEB_SNAPSHOT_ROOT", "")
     if not root_text:
         pytest.skip("pinned Web source archive is supplied only for the PIN integration gate")
     if os.environ.get("CA_PIN_WEB_CHILD") != "1":
         result = subprocess.run(
             [sys.executable, "-B", "-m", "pytest", "-q", "-p", "no:cacheprovider",
-             f"{__file__}::test_pinned_web_383e6c4_issues_and_consumes_ca_proof",
+             f"{__file__}::test_pinned_web_ca_authorization_has_durable_boundaries[{scenario}]",
              "--basetemp", str(tmp_path / "child")],
             env={**os.environ, "CA_PIN_WEB_CHILD": "1"},
             capture_output=True, text=True, timeout=90, check=False,
@@ -53,16 +54,86 @@ def test_pinned_web_383e6c4_issues_and_consumes_ca_proof(monkeypatch, tmp_path):
         client = pin.AdminPinClient("pinned-web-fixture", transport=transport)
         target = {"kind": "pair", "id": "PAIR-1", "state_fingerprint": "a" * 64}
         operator = {"local_id": "worker-1", "login_epoch": uuid.uuid4().hex}
-        issued = client.verify(
-            request_id=str(uuid.uuid4()), admin_id="A1", pin="582714",
-            action="CA.PAIR_RETRY", target=target, operator=operator,
-        )
-        operation_key = str(uuid.uuid4())
-        client.redeem(
-            verification_id=issued["verification_id"], proof=issued["proof"],
-            operation_key=operation_key, action="CA.PAIR_RETRY",
-            target=target, operator=operator,
-        )
-        assert client.status(issued["verification_id"], operation_key) == "CONSUMED"
+        store = app.extensions["admin_pin_store"]
+        arguments = {"admin_id": "A1", "pin": "582714", "action": "CA.PAIR_RETRY",
+                     "target": target, "operator": operator}
+        if scenario == "allowed":
+            issued = client.verify(request_id=str(uuid.uuid4()), **arguments)
+            operation_key = str(uuid.uuid4())
+            client.redeem(
+                verification_id=issued["verification_id"], proof=issued["proof"],
+                operation_key=operation_key, action="CA.PAIR_RETRY", target=target, operator=operator,
+            )
+            assert client.status(issued["verification_id"], operation_key) == "CONSUMED"
+            with store.connect() as conn:
+                assert conn.execute("SELECT status,operation_key FROM admin_pin_grants").fetchone()[:] == ("CONSUMED", operation_key)
+            return
+
+        prior = None
+        if scenario in {"root_revoked", "role_absent", "locked_root_revoked"}:
+            prior = client.verify(request_id=str(uuid.uuid4()), **arguments)
+        if scenario in {"admin_locked", "locked_root_revoked"}:
+            # Fifteen signed failures across three devices reach the ADMIN limit;
+            # a fresh device below has no ADMIN_DEVICE lock of its own.
+            for device in ("isolated-hostile-1", "isolated-hostile-2", "isolated-hostile-3"):
+                monkeypatch.setenv("PRODUCER_INGEST_TEST_INSTALL_ID", device)
+                for _ in range(5):
+                    with pytest.raises(pin.AdminPinError) as rejected:
+                        client.verify(request_id=str(uuid.uuid4()), **dict(arguments, pin="000000"))
+                    assert rejected.value.code == "PIN_INVALID" and not rejected.value.unknown
+            monkeypatch.setenv("PRODUCER_INGEST_TEST_INSTALL_ID", "isolated-clean-device")
+            with store.connect() as conn:
+                lock = conn.execute("SELECT failures,locked_until FROM admin_pin_limits WHERE scope='ADMIN' AND identity='A1'").fetchone()
+                assert lock[0] == 15 and lock[1] > 0
+        if scenario in {"root_revoked", "locked_root_revoked"}:
+            store.disable_admin("A1", actor_id="isolated-root", reason="isolated root revocation", reason_code="ROOT_REVOKED")
+            with store.connect() as conn:
+                assert conn.execute("SELECT status FROM desktop_admin_links WHERE admin_id='A1'").fetchone()[0] == "DISABLED"
+        if scenario == "role_absent":
+            from auth_identity import AuthIdentityStore
+            AuthIdentityStore(app.config["WORKER_ANALYSIS_DB_PATH"]).provision_role(
+                principal["principal_id"], "desktop_admin", assigned_by="isolated-root",
+                reason="isolated role revocation", active=False)
+
+        # Use the actual CA approval entry used by manager recovery handlers, and
+        # inspect its durable local intent as well as the public HTTP server.
+        from tests.test_container_admin_pin import make_headless_app, SignedPinServer
+        ca, _audits, _notices = make_headless_app(monkeypatch, tmp_path / "ca", SignedPinServer())
+        ca._admin_pin_client = client
+        ca._prompt_blocked_work_admin_pin = lambda **_request: ("A1", "000000" if scenario == "wrong_pin" else "582714")
+        source = tmp_path / "original-recovery.json"
+        source.write_bytes(b'{"version":1}\n')
+        before = source.read_bytes()
+        approval = ca._admin_pin_approval_for(
+            "CA.PAIR_RETRY", "PAIR-1", lambda: {"bytes": source.read_text()},
+            ("PHS=2|SRC=KMTECH_INPUT_TAG|ITG=ITAG-PIN|CLC=AAA2270730100|LBL=PIN|HSH=0123456789abcdef",), lambda _intent: False)
+        assert (approval is not None) == (scenario == "ca_allowed")
+        assert source.read_bytes() == before
+        intents = ca._admin_pin_store().pending("CA.PAIR_RETRY", "PAIR-1", include_applied=True)
+        # Rejected intents remain on disk but are excluded from pending selection.
+        persisted = list(ca._admin_pin_store().directory.glob("*.json"))
+        assert len(persisted) == 1
+        import json
+        intent = json.loads(persisted[0].read_text())
+        if scenario == "ca_allowed":
+            assert intent["state"] == "CONSUMED" and len(intents) == 1
+            with store.connect() as conn:
+                assert conn.execute("SELECT status FROM admin_pin_grants").fetchone()[0] == "CONSUMED"
+            return
+        assert intent["state"] == "REJECTED" and intent["reason"] == "PIN_INVALID" and not intents
+        if scenario in {"admin_locked", "locked_root_revoked"}:
+            with store.connect() as conn:
+                assert conn.execute("SELECT outcome,reason_code FROM admin_pin_audit WHERE event_type='VERIFY' ORDER BY rowid DESC LIMIT 1").fetchone()[:] == ("LOCKED", "PIN_LOCKED")
+        assert "582714" not in persisted[0].read_text() and "000000" not in persisted[0].read_text()
+        if prior is not None:
+            monkeypatch.setenv("PRODUCER_INGEST_TEST_INSTALL_ID", "test-install")
+            with pytest.raises(pin.AdminPinError) as rejected:
+                client.redeem(verification_id=prior["verification_id"], proof=prior["proof"],
+                              operation_key=str(uuid.uuid4()), action="CA.PAIR_RETRY",
+                              target=target, operator=operator)
+            assert rejected.value.code == "PROOF_EXPIRED" and not rejected.value.unknown
+        with store.connect() as conn:
+            statuses = [r[0] for r in conn.execute("SELECT status FROM admin_pin_grants")]
+            assert statuses == (["REVOKED"] if prior is not None else [])
     finally:
         sys.path.remove(str(root))
