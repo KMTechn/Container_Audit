@@ -29,6 +29,13 @@ class EventLogOutbox:
         self.directory = Path(directory)
         self._lock = threading.RLock()
         self._unstaged: deque[dict[str, Any]] = deque()
+        self._staged_payloads = set()
+        for path in self.directory.glob('*.json'):
+            try:
+                self._staged_payloads.add(json.dumps(json.loads(path.read_text(encoding='utf-8')), sort_keys=True))
+            except FileNotFoundError:
+                pass  # Another admitted writer finished this projection.
+        self._projection_results = {}
         self._sequence = max(
             (int(path.name[:20]) for path in self.directory.glob("*.json")
              if path.name[:20].isdigit()), default=0,
@@ -50,20 +57,27 @@ class EventLogOutbox:
     def _persist_unstaged(self) -> None:
         with self._lock:
             while self._unstaged:
+                encoded = json.dumps(self._unstaged[0], sort_keys=True)
+                if encoded in self._staged_payloads:
+                    self._unstaged.popleft()
+                    continue
                 self._sequence = max(self._sequence + 1, time.time_ns())
                 path = self.directory / f"{self._sequence:020d}-{uuid.uuid4().hex}.json"
                 atomic_write_json(path, self._unstaged[0])
+                self._staged_payloads.add(encoded)
                 self._unstaged.popleft()
 
     @writer_sink("event_outbox_project")
-    def drain(self) -> None:
+    def drain(self, *, append=None) -> dict[tuple[str, str, str], bool]:
+        projected = {}
+        append = append or append_event_log_entry_idempotent
         with self._lock:
             self._persist_unstaged()
             for path in sorted(self.directory.glob("*.json")):
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 entry = payload["log_entry"]
                 detail = json.loads(entry["details"])
-                appended = append_event_log_entry_idempotent(
+                appended = append(
                     payload["log_file_path"], entry,
                     event_type=entry["event"], idempotency_key=detail["idempotency_key"],
                     durable=True,
@@ -74,6 +88,17 @@ class EventLogOutbox:
                         handle.flush()
                         os.fsync(handle.fileno())
                 path.unlink()
+                self._staged_payloads.discard(json.dumps(payload, sort_keys=True))
+                projected[(payload["log_file_path"], entry["event"], detail["idempotency_key"])] = appended
+            self._projection_results.update(projected)
+            while len(self._projection_results) > 256:
+                self._projection_results.pop(next(iter(self._projection_results)))
+        return projected
+
+    def take_projection_result(self, log_file_path, log_entry):
+        key = (log_file_path, log_entry['event'], json.loads(log_entry['details'])['idempotency_key'])
+        with self._lock:
+            return self._projection_results.pop(key, True)
 
 
 def _lock_for_path(log_file_path: str) -> threading.Lock:

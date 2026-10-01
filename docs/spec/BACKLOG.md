@@ -1,6 +1,6 @@
 # 남은 요구·검증·문서·추가 제안
 
-스캐너 경고 뒤 UNDO/다음 현품표, 완료 중 FIFO, 교환 CSV 실패/후속 checkpoint 복구, 6칸 교환 완료와 자동 보류 복원 안내는 소스 회귀 범위다. 실제 스캐너·소리·화면·중앙 서버 결합은 랩 검증에 남는다.
+스캐너 경고 뒤 UNDO/다음 현품표, 완료 중 FIFO, 교환 CSV 실패/후속 checkpoint 복구, 6칸 교환 완료와 자동 보류 복원 안내와 동기 감사 outbox·checkpoint 결속·CSV 실패/재시작 멱등 재생은 소스 회귀 범위다. 실제 스캐너·소리·화면·중앙 서버 결합은 랩 검증에 남는다.
 
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 

@@ -185,7 +185,7 @@ def test_held_append_ack_loss_replays_csv_content_once_before_fifo_tail(app, mon
     store = app._preflight_hold_store()
     store.start(worker=app.worker_name, master_raw=app.current_tray.master_label_code, scan_epoch=1)
     first = store.append(ITEM + "-1")
-    store.append(ITEM + "-2")
+    second = store.append(ITEM + "-2")
     app._preflight_hold_snapshot = store.mark_draining()
     app._preflight_hold_draining = True
     original = module.append_event_log_entry_idempotent
@@ -199,7 +199,7 @@ def test_held_append_ack_loss_replays_csv_content_once_before_fifo_tail(app, mon
     monkeypatch.setattr(module, "append_event_log_entry_idempotent", lose_ack)
     app._drain_preflight_hold_head()
     pump(app, lambda: not app._ui_lane.is_busy())
-    assert store.load().items[0].scan_id == first.scan_id
+    assert store.load().items[0].scan_id == second.scan_id  # durable outbox ACK advances the FIFO
     assert app.current_tray.scanned_barcodes == [ITEM + "-1"]
     assert len(rows(app)) == 1
     if restart:
@@ -215,7 +215,10 @@ def test_held_append_ack_loss_replays_csv_content_once_before_fifo_tail(app, mon
     assert app.current_tray.scanned_barcodes == [ITEM + "-1", ITEM + "-2"]
     assert [json.loads(row["details"])["product_barcode"] for row in rows(app)] == [ITEM + "-1", ITEM + "-2"]
     assert len(app.sounds) == 2
-    assert [key for key, _ in calls] == [f"preflight-held-scan:{first.scan_id}"] * 2 + [calls[-1][0]]
+    keys = [key for key, _ in calls]
+    assert keys[0] == f"preflight-held-scan:{first.scan_id}"
+    assert keys[-1] == f"preflight-held-scan:{second.scan_id}"
+    assert set(keys) == {f"preflight-held-scan:{first.scan_id}", f"preflight-held-scan:{second.scan_id}"}
     assert all(thread != threading.get_ident() for _, thread in calls)
 
 

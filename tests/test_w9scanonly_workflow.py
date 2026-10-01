@@ -395,8 +395,14 @@ def test_partial_completion_can_be_undone_before_next_label(flow, windows):
     app._process_barcode_logic("KMCMD:UNDO")
     assert app.current_tray.master_label_code == label, "undo must reopen the just-confirmed short tray"
     assert app.current_tray.scanned_barcodes == [product]
-    assert _rows(app, "TRAY_COMPLETE") == []
-    assert _rows(app, "TRAY_SHORT_CONFIRMATION_UNDONE") == []
+    assert len(_rows(app, "TRAY_COMPLETE")) == 1
+    undo_path, = (Path(app.save_folder) / "local_only").glob("*.csv")
+    import csv
+    with undo_path.open(encoding="utf-8-sig", newline="") as handle:
+        undone = [row for row in csv.DictReader(handle) if row["event"] == "TRAY_SHORT_CONFIRMATION_UNDONE"]
+    assert len(undone) == 1
+    assert json.loads(undone[0]["details"])["completion_id"] == app._completion_event_contract_from_state(json.loads(evidence_path.read_text(encoding="utf-8"))["state"])["idempotency_key"]
+    assert app.total_tray_count == 0
     assert json.loads(evidence_path.read_text(encoding="utf-8"))["status"] == "CANCELLED"
     assert windows == []
 

@@ -224,6 +224,7 @@ from tray_state import (
     quarantine_tray_state_file,
     tray_session_from_state,
     tray_session_to_state,
+    validate_checkpoint_audit_events,
     validate_tray_state,
 )
 from work_session_state import (
@@ -997,6 +998,7 @@ class TraySession:
     # First attempt (timestamp, event file, detail) of an undo/reset whose write may
     # have landed: its retry, even after a restart on a later day, is the same row.
     cancel_event_attempts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    pending_audit_events: List[Dict[str, Any]] = field(default_factory=list)
 
 
 class _LocalValueVar:
@@ -3219,11 +3221,91 @@ class ContainerAudit:
                     self.save_folder,
                     self.CURRENT_TRAY_STATE_FILE,
                 )
+                if Path(state_path).exists():
+                    try:
+                        prior = json.loads(Path(state_path).read_text(encoding='utf-8'))
+                    except (UnicodeError, json.JSONDecodeError):
+                        prior = {}  # Preserve the existing explicit-save behavior.
+                    pending = list(state.get('pending_audit_events', []))
+                    for event in prior.get('pending_audit_events', []):
+                        if event not in pending:
+                            pending.append(event)
+                    if pending:
+                        state['pending_audit_events'] = pending
                 atomic_write_json(state_path, state, indent=4)
+                self._stage_checkpoint_audit_events(state)
                 return True
             except Exception as e:
                 print(f"현재 트레이 상태 저장 실패: {e}")
                 return False
+
+    def _checkpoint_audit_event(self, event_type: str, **kwargs) -> Dict[str, Any]:
+        payload = self._prepare_event_log_entry(event_type, synchronous=True, **kwargs)
+        if not payload:
+            raise ValueError('checkpoint audit payload is invalid')
+        return {'log_file_name': Path(kwargs.get('log_file_path_override') or self.log_file_path).name,
+                'local_only': payload['local_only'], 'log_entry': payload['log_entry']}
+
+    def _stage_checkpoint_audit_events(self, state: Mapping[str, Any]) -> bool:
+        try:
+            for event in state.get('pending_audit_events', []):
+                path = self._completion_projection_log_path(event['log_file_name'])
+                if event['local_only']:
+                    path = local_only_event_log_path(
+                        path, local_events_dir=getattr(self, 'local_events_folder', ''))
+                self._event_log_outbox(str(path)).stage(str(path), event['log_entry'])
+            return True
+        except Exception as exc:
+            self._record_log_write_error(f'checkpoint 감사 재시도: {exc.__class__.__name__}')
+            return False
+
+    @writer_sink('gui_tray_state_save')
+    def _recover_checkpoint_audit_events(self):
+        """Read original rows before a subsequent scan can replace its checkpoint."""
+        current_name = getattr(self, 'CURRENT_TRAY_STATE_FILE', '')
+        paths = [Path(self.save_folder) / current_name] if current_name else []
+        parked = getattr(self, 'parked_trays_dir', '')
+        if parked:
+            paths.extend(sorted(Path(parked).glob('*.json')))
+        paths.extend(sorted((Path(self.save_folder) / 'short_confirmations').glob('*.json')))
+        staged = []
+        for path in paths:
+            if not path.exists():
+                continue
+            try:
+                state = json.loads(path.read_text(encoding='utf-8'))
+                if state.get('pending_audit_events'):
+                    validate_checkpoint_audit_events(state['pending_audit_events'])
+                    if not self._stage_checkpoint_audit_events(state):
+                        raise OSError('checkpoint audit outbox staging failed')
+                    staged.append((path, state))
+            except (OSError, UnicodeError, ValueError, AttributeError) as exc:
+                # Preserve this source while allowing unrelated CSV rows to drain.
+                self._record_log_write_error(f'checkpoint 감사 원본 확인 필요: {path.name}: {exc.__class__.__name__}')
+        return staged
+
+    @writer_sink('gui_tray_state_save')
+    def _clear_projected_checkpoint_audits(self, staged) -> None:
+        lock = getattr(self, '_tray_state_persist_lock', None)
+        if lock is None:
+            lock = self._tray_state_persist_lock = threading.RLock()
+        with lock:
+            for path, original in staged:
+                if not path.exists():
+                    continue
+                state = json.loads(path.read_text(encoding='utf-8'))
+                events = original['pending_audit_events']
+                # A newer save owns its added rows; never overwrite it.
+                if state.get('pending_audit_events') != events:
+                    continue
+                if state.get('audit_reset_committed'):
+                    path.unlink()
+                else:
+                    state.pop('pending_audit_events', None)
+                    atomic_write_json(path, state, indent=4)
+                tray = getattr(self, 'current_tray', None)
+                if tray is not None:
+                    tray.pending_audit_events = [e for e in getattr(tray, 'pending_audit_events', []) if e not in events]
 
     @staticmethod
     def _activation_event_contract_from_state(
@@ -3940,6 +4022,9 @@ class ContainerAudit:
             if not state_read.verified:
                 raise TrayStateValidationError(state_read.reason)
             saved_state = state_read.value
+            if saved_state.get('audit_reset_committed'):
+                self._flush_pending_event_logs()
+                return
             saved_master_label = str(saved_state.get('master_label_code') or '')
             if saved_master_label and self._paired_preflight_blocks_label(saved_master_label):
                 original_bytes = state_read.raw
@@ -13338,6 +13423,7 @@ class ContainerAudit:
         _durable_scan_id: str = "", _catalog_decision=None,
         _defer_persistence: bool = False, _offline_hold_switch: Optional[PreflightHoldSnapshot] = None,
     ):
+        self._flush_pending_event_logs()
         if getattr(self, "_inline_scan_choices", None):
             self.show_status_message("화면에서 이전 작업 처리 방법을 선택하세요.", self.COLOR_DANGER)
             return
@@ -14172,11 +14258,18 @@ class ContainerAudit:
             "barcode": last_barcode,
             "scanned_at": last_scan_time.isoformat() if hasattr(last_scan_time, "isoformat") else str(last_scan_time),
         })
-        self._cancel_event_attempt(
+        undo_attempt = self._cancel_event_attempt(
             undo_key, self.current_tray.cancel_event_attempts, {'undone_barcode': last_barcode},
         )
+        undo_event = self._checkpoint_audit_event('SCAN_UNDO',
+            detail=dict(undo_attempt['detail']), idempotency_key=undo_key,
+            event_timestamp=undo_attempt['timestamp'],
+            worker_name_override=undo_attempt.get('worker_name', self.worker_name),
+            log_file_path_override=str(self._completion_projection_log_path(undo_attempt['log_file_name'])))
+        self.current_tray.pending_audit_events.append(undo_event)
         self.scanned_listbox.delete(0)
         if not self._save_current_tray_state():
+            self.current_tray.pending_audit_events.remove(undo_event)
             self.current_tray.scanned_barcodes.append(last_barcode)
             self.current_tray.scan_times.append(last_scan_time)
             row_text = self._format_scanned_list_row(len(self.current_tray.scanned_barcodes), last_barcode)
@@ -14193,21 +14286,7 @@ class ContainerAudit:
             'SCAN_UNDO', {'undone_barcode': last_barcode}, undo_key,
             self.current_tray.cancel_event_attempts,
         ):
-            self.current_tray.scanned_barcodes.append(last_barcode)
-            self.current_tray.scan_times.append(last_scan_time)
-            row_text = self._format_scanned_list_row(len(self.current_tray.scanned_barcodes), last_barcode)
-            self.scanned_listbox.insert(0, row_text)
-            if hasattr(self.scanned_listbox, 'itemconfig'):
-                self.scanned_listbox.itemconfig(0, {'bg': self.COLOR_SUCCESS, 'fg': 'white'})
-            restore_saved = self._save_current_tray_state()
-            self._update_center_display()
-            self._update_current_item_label()
-            self.undo_button['state'] = tk.NORMAL
-            if not restore_saved:
-                self._show_field_notice("작업 기록 실패", "스캔 취소 기록을 남기지 못했고 기존 스캔 상태 복원 저장에도 실패했습니다. 상태 파일을 확인하세요.")
-            self.show_status_message("스캔 취소 기록 저장에 실패했습니다. 기존 스캔을 유지합니다.", self.COLOR_DANGER)
-            self._schedule_focus_return()
-            return
+            self.show_status_message('스캔 취소는 저장되었습니다. 감사 기록을 재시도합니다.', self.COLOR_DANGER)
         cancelled_display = compact_scan_value(
             last_barcode,
             item_code=self.current_tray.item_code,
@@ -14239,8 +14318,14 @@ class ContainerAudit:
                 "start_time": self.current_tray.start_time.isoformat() if self.current_tray.start_time else "",
                 "scanned_barcodes": list(self.current_tray.scanned_barcodes),
             })
-            self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts, reset_detail)
+            reset_attempt = self._cancel_event_attempt(reset_key, self.current_tray.cancel_event_attempts, reset_detail)
             state_snapshot = self._current_tray_state_snapshot()
+            state_snapshot.setdefault('pending_audit_events', []).append(
+                self._checkpoint_audit_event('TRAY_RESET', detail=reset_detail,
+                    idempotency_key=reset_key, event_timestamp=reset_attempt['timestamp'],
+                    worker_name_override=reset_attempt.get('worker_name', self.worker_name),
+                    log_file_path_override=str(self._completion_projection_log_path(reset_attempt['log_file_name']))))
+            state_snapshot['audit_reset_committed'] = True
             try:
                 self._request_operation_lease_release(
                     self.current_tray.operation_lease_id, schedule=False,
@@ -14248,21 +14333,10 @@ class ContainerAudit:
             except Exception:
                 self.show_status_message("잠금 해제 요청 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
                 return
-            if self._delete_current_tray_state() is False:
-                self._log_event('TRAY_RESET_STATE_DELETE_FAILED', detail=reset_detail)
-                self._show_field_notice("작업 삭제 실패", "현재 트레이 상태 파일을 삭제하지 못해 현재 작업을 유지합니다.")
-                self.show_status_message("현재 작업 상태 파일 삭제에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
+            if not self._save_tray_state_snapshot(state_snapshot):
+                self.show_status_message('초기화 상태 저장에 실패했습니다. 현재 작업을 유지합니다.', self.COLOR_DANGER)
                 return
-            if not self._log_cancel_event(
-                'TRAY_RESET', reset_detail, reset_key, self.current_tray.cancel_event_attempts,
-            ):
-                restore_ok = self._save_tray_state_snapshot(state_snapshot)
-                message = "초기화 기록을 남기지 못해 현재 작업을 유지합니다."
-                if not restore_ok:
-                    message += "\n현재 작업 상태 파일 복구에도 실패했습니다. 프로그램을 종료하기 전에 작업 상태를 다시 확인하세요."
-                self._show_field_notice("작업 기록 실패", message)
-                self.show_status_message("초기화 기록 저장에 실패했습니다. 현재 작업을 유지합니다.", self.COLOR_DANGER)
-                return
+            self._flush_pending_event_logs()
             self._stop_stopwatch(); self._stop_idle_checker(); self.is_idle = False
             reset_lease_id = str(getattr(self.current_tray, "operation_lease_id", "") or "")
             self._parked_tray_undo = None
@@ -15374,11 +15448,14 @@ class ContainerAudit:
         return store
 
     def _flush_pending_event_logs(self) -> bool:
-        store = getattr(self, "_event_log_outbox_instance", None)
-        if store is None:
-            return True
         try:
+            store = getattr(self, '_event_log_outbox_instance', None)
+            if not getattr(self, 'save_folder', '') and store is None:
+                return True
+            staged = self._recover_checkpoint_audit_events() if getattr(self, 'save_folder', '') else []
+            store = store or self._event_log_outbox(str(getattr(self, 'log_file_path', '') or ''))
             store.drain()
+            self._clear_projected_checkpoint_audits(staged)
         except Exception as exc:
             message = f"로그 파일 쓰기 오류: {exc.__class__.__name__}"
             if message != getattr(self, "last_log_write_error", None):
@@ -15623,7 +15700,7 @@ class ContainerAudit:
         self._render_warning_state()
         self._update_action_button_states()
 
-    def _log_event(
+    def _prepare_event_log_entry(
         self,
         event_type: str,
         detail: Optional[Dict] = None,
@@ -15645,7 +15722,7 @@ class ContainerAudit:
         if not target_log_file_path: return False
         normalized_idempotency_key = str(idempotency_key or "").strip()
         raw_detail = dict(detail or {})
-        if not synchronous and not normalized_idempotency_key:
+        if not normalized_idempotency_key:
             normalized_idempotency_key = str(raw_detail.get("idempotency_key") or uuid.uuid4().hex)
         local_only = (
             str(event_type or "").strip() in LOCAL_ONLY_EVENT_TYPES
@@ -15695,29 +15772,40 @@ class ContainerAudit:
             'event': safe_event_type,
             'details': details_json,
         }
+        return {'log_file_path': target_log_file_path, 'log_entry': log_entry,
+                'local_only': local_only}
+
+    def _log_event(
+        self, event_type: str, detail: Optional[Dict] = None,
+        synchronous: bool = False, canonical_event_name: Optional[str] = None,
+        idempotency_key: str = '', event_timestamp: str = '',
+        log_file_path_override: str = '', deduplicate: bool = False,
+        worker_name_override: str = '',
+    ) -> bool:
+        payload = self._prepare_event_log_entry(
+            event_type, detail, synchronous, canonical_event_name,
+            idempotency_key, event_timestamp, log_file_path_override,
+            deduplicate, worker_name_override,
+        )
+        if not payload:
+            return False
+        target_log_file_path, log_entry = payload['log_file_path'], payload['log_entry']
+        # Acceptance means the original row is durable. CSV is a projection;
+        # its failure must never roll back an already saved operator action.
+        try:
+            store = self._event_log_outbox(target_log_file_path)
+            store.stage(target_log_file_path, log_entry)
+        except Exception as exc:
+            self._record_log_write_error(f"로그 재시도 사본 저장 오류: {exc.__class__.__name__}")
+            self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
+            return False
         if synchronous:
             try:
                 if hasattr(self, "log_queue") and hasattr(self.log_queue, "join"):
                     self.log_queue.join()
-                if not self._flush_pending_event_logs():
-                    return False
-                if normalized_idempotency_key and deduplicate:
-                    appended = append_event_log_entry_idempotent(
-                        target_log_file_path,
-                        log_entry,
-                        event_type=safe_event_type,
-                        idempotency_key=normalized_idempotency_key,
-                        durable=True,
-                    )
-                    self._last_log_event_was_replay = not appended
-                else:
-                    append_event_log_entry(
-                        target_log_file_path,
-                        log_entry,
-                        durable=True,
-                    )
-                    self._last_log_event_was_replay = False
-                if not local_only and event_type in {
+                store.drain(append=append_event_log_entry_idempotent)
+                self._last_log_event_was_replay = not store.take_projection_result(target_log_file_path, log_entry)
+                if not payload['local_only'] and event_type in {
                     "TRAY_COMPLETE",
                     "PRODUCT_EXCHANGE_COMPLETED",
                     "PHS_REPLACEMENT_WAITING_MARKED",
@@ -15728,13 +15816,9 @@ class ContainerAudit:
                 error_message = f"로그 파일 쓰기 오류: {e}"
                 self._record_log_write_error(error_message)
                 print(error_message)
-                return False
-        try:
-            self._event_log_outbox(target_log_file_path).stage(target_log_file_path, log_entry)
-        except Exception as exc:
-            self._record_log_write_error(f"로그 재시도 사본 저장 오류: {exc.__class__.__name__}")
-            self._event_log_notice = "로그 저장 실패 · 재시도 중입니다. 저장 공간을 확인하고 이 PC를 종료하지 마세요."
-            return False
+                self._event_log_notice = "감사 CSV 저장 재시도 중 · 저장된 작업은 계속할 수 있습니다."
+                self._last_log_event_was_replay = False
+                return True
         self.log_queue.put({'log_file_path': target_log_file_path, 'log_entry': log_entry})
         return True
 
@@ -16491,7 +16575,9 @@ class ContainerAudit:
                 current_path = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
                 if current_path.exists():
                     recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
-                    if not recovered.verified or recovered.value not in (record["state"], record["undo_state"]):
+                    without_audit = lambda value: {k: v for k, v in value.items() if k != 'pending_audit_events'}
+                    if not recovered.verified or without_audit(recovered.value) not in (
+                            without_audit(record['state']), without_audit(record['undo_state'])):
                         raise OSError("short undo recovery differs from current checkpoint")
                 result["restored_state"] = record["undo_state"]
                 if not self._save_tray_state_snapshot(result["restored_state"]):
@@ -16570,10 +16656,21 @@ class ContainerAudit:
                 record = json.loads(path.read_text(encoding="utf-8"))
                 if record["status"] != "HELD":
                     return None
+                contract = record['contract']
+                events = [self._checkpoint_audit_event('TRAY_COMPLETE', detail=record['detail'],
+                    idempotency_key=contract['idempotency_key'], event_timestamp=contract['observed_at'],
+                    worker_name_override=contract['projection_worker_name'],
+                    log_file_path_override=str(self._completion_projection_log_path(contract['projection_log_name']))),
+                    self._checkpoint_audit_event('TRAY_SHORT_CONFIRMATION_UNDONE',
+                        detail={'completion_id': undo['completion_id']},
+                        idempotency_key='short-undo:' + undo['completion_id'])]
+                state['pending_audit_events'] = events
                 record.update(status="CANCELLED", undo_state=state, undo_applied=False,
+                    pending_audit_events=events,
                     undo_event={"event": "TRAY_SHORT_CONFIRMATION_UNDONE",
                                 "completion_id": undo["completion_id"]})
                 atomic_write_json(path, record, ensure_ascii=False)
+                self._stage_checkpoint_audit_events(record)
                 if undo["intent_id"]:
                     self._transfer_seal_runtime().store.settle_short_confirmation(undo["intent_id"], undo=True)
                 return record
@@ -16586,6 +16683,7 @@ class ContainerAudit:
                 return False
             record["undo_applied"] = True
             yield lambda: atomic_write_json(path, record, ensure_ascii=False)
+            yield self._flush_pending_event_logs
             self._restore_tray_from_state(state, preserve_held_scans=True)
             original_log_path = self.log_file_path
             yield lambda: self._load_session_state()
@@ -18088,6 +18186,7 @@ class ContainerAudit:
                 "timestamp": datetime.datetime.now().isoformat(),
                 "log_file_name": Path(str(getattr(self, "log_file_path", "") or "")).name,
                 "detail": dict(detail),
+                "worker_name": persistent_operator_name(getattr(self, 'worker_name', '')),
             }
         return attempts[key]
 
@@ -18108,14 +18207,15 @@ class ContainerAudit:
             idempotency_key=key,
             deduplicate=True,
             event_timestamp=attempt["timestamp"],
+            worker_name_override=attempt.get('worker_name', getattr(self, 'worker_name', '')),
             log_file_path_override=(
                 str(self._completion_projection_log_path(attempt["log_file_name"]))
                 if attempt["log_file_name"]
                 else None
             ),
         )
-        if logged:
-            attempts.pop(key, None)
+        # Keep the first-attempt binding for this round/session. A repeated
+        # cancel callback is the same event even after durable acceptance.
         return logged
 
     def show_status_message(self, message: str, color: Optional[str] = None, duration: int = 4000):
@@ -18244,6 +18344,12 @@ class ContainerAudit:
 
         try:
             state_snapshot = self._current_tray_state_snapshot()
+            state_snapshot.setdefault('pending_audit_events', []).append(
+                self._checkpoint_audit_event('TRAY_PARKED', detail={
+                    'master_label_code': master_label, 'item_code': self.current_tray.item_code,
+                    'item_name': self.current_tray.item_name,
+                    'scan_count': len(self.current_tray.scanned_barcodes),
+                    'tray_capacity': self.current_tray.tray_size}))
             parked_path = self._parked_store().save_state(
                 state_snapshot,
                 worker_name=persistent_operator_name(self.worker_name),
@@ -18257,33 +18363,8 @@ class ContainerAudit:
                 self._show_field_notice("오류", "현재 작업 상태 파일을 삭제하지 못해 보류 처리를 중단했습니다.")
                 return False
 
-            try:
-                parked_logged = self._log_event(
-                    'TRAY_PARKED',
-                    detail={
-                        'master_label_code': self.current_tray.master_label_code,
-                        'item_code': self.current_tray.item_code,
-                        'item_name': self.current_tray.item_name,
-                        'scan_count': len(self.current_tray.scanned_barcodes),
-                        'tray_capacity': self.current_tray.tray_size,
-                    },
-                    synchronous=True,
-                )
-            except Exception as log_error:
-                print(f"보류 감사 로그 기록 실패: {log_error}")
-                parked_logged = False
-
-            if not parked_logged:
-                try:
-                    ParkedTrayStore.delete(parked_path)
-                except Exception as rollback_error:
-                    print(f"보류 파일 롤백 실패: {rollback_error}")
-                restore_ok = self._save_tray_state_snapshot(state_snapshot)
-                message = "보류 기록을 남기지 못해 보류 처리를 중단했습니다."
-                if not restore_ok:
-                    message += "\n현재 작업 상태 파일 복구에도 실패했습니다. 프로그램을 종료하기 전에 작업 상태를 다시 확인하세요."
-                self._show_field_notice("오류", message)
-                return False
+            self._stage_checkpoint_audit_events(state_snapshot)
+            self._flush_pending_event_logs()
 
             self._parked_tray_undo = {"path": str(parked_path),
                 "worker": persistent_operator_name(self.worker_name)}

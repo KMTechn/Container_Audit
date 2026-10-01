@@ -2038,21 +2038,28 @@ def test_async_event_retry_keeps_original_key_payload_and_order_after_restart(tm
     assert app._log_event("SCAN_OK", {"barcode": "BC-2", "scan_position": 2})
     pending = sorted((tmp_path / "_event_outbox").glob("*.json"))
     originals = [json.loads(path.read_text(encoding="utf-8"))["log_entry"] for path in pending]
-    original_append = event_log_store.append_event_log_entry_idempotent
+    original_append = event_log_store._append_event_log_entry_unlocked
 
     def fail_append(*args, **kwargs):
         if append_before_failure:
             original_append(*args, **kwargs)
         raise OSError("synthetic interrupted append")
 
-    monkeypatch.setattr(event_log_store, "append_event_log_entry_idempotent", fail_append)
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", fail_append)
     assert app._flush_pending_event_logs() is False
     assert [json.loads(path.read_text(encoding="utf-8"))["log_entry"] for path in pending] == originals
     # A synchronous completion must not overtake the failed earlier event.
     app.log_queue = queue.Queue()
-    assert app._log_event("TRAY_COMPLETE", {"barcode_count": 2}, synchronous=True) is False
+    assert app._log_event("TRAY_COMPLETE", {"barcode_count": 2}, synchronous=True) is True
+    complete, = [json.loads(path.read_text(encoding="utf-8"))["log_entry"]
+                 for path in (tmp_path / "_event_outbox").glob("*.json")
+                 if json.loads(path.read_text(encoding="utf-8"))["log_entry"]["event"] == "TRAY_COMPLETE"]
+    originals.append(complete)
+    if Path(app.log_file_path).exists():
+        with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
+            assert all(row["event"] != "TRAY_COMPLETE" for row in csv.DictReader(handle))
 
-    monkeypatch.setattr(event_log_store, "append_event_log_entry_idempotent", original_append)
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", original_append)
     restarted = _headless_app()
     restarted.worker_name = "next-worker"
     restarted.log_file_path = str(tmp_path / "next-day.csv")
@@ -6138,8 +6145,10 @@ def test_delayed_scan_highlight_reset_ignores_stale_epoch():
     assert app.scanned_listbox.configs == [(0, {"bg": "success", "fg": "white"})]
 
 
-def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails():
+def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails(tmp_path):
     app = _headless_app()
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
     scan_time_1 = datetime.datetime(2026, 6, 22, 9, 1, 0)
     scan_time_2 = datetime.datetime(2026, 6, 22, 9, 2, 0)
     app.current_tray = TraySession(
@@ -6181,8 +6190,10 @@ def test_undo_last_scan_rolls_back_memory_and_ui_when_state_save_fails():
     assert messages[0][0].startswith("스캔 취소 상태 저장에 실패")
 
 
-def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero():
+def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero(tmp_path):
     app = _headless_app()
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
     scan_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
     raw_barcode = "AAA2270730100|SERIAL=SERIAL-0001|TRACE=TRACE-0001"
     app.current_tray = TraySession(
@@ -6222,8 +6233,10 @@ def test_undo_last_scan_saves_before_logging_success_and_disables_at_zero():
     assert "|" not in messages[-1][0] and "=" not in messages[-1][0]
 
 
-def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
+def test_undo_last_scan_keeps_saved_undo_when_audit_projection_fails(tmp_path, monkeypatch):
     app = _headless_app()
+    app.worker_name = "tester"
+    app.log_file_path = str(tmp_path / "events.csv")
     scan_time = datetime.datetime(2026, 6, 22, 9, 1, 0)
     app.current_tray = TraySession(
         master_label_code="ACTIVE",
@@ -6254,16 +6267,17 @@ def test_undo_last_scan_restores_scan_when_undo_log_fails(monkeypatch):
 
     app.undo_last_scan()
 
-    assert saved == [[], ["AAA2270730100-001"]]
+    assert saved == [[]]
     assert logged == [{"event": "SCAN_UNDO", "detail": {"undone_barcode": "AAA2270730100-001"}, "synchronous": True}]
-    assert app.current_tray.scanned_barcodes == ["AAA2270730100-001"]
-    assert app.current_tray.scan_times == [scan_time]
-    assert app.scanned_listbox.rows == [expected_row]
-    assert app.undo_button["state"] == container_audit_module.tk.NORMAL
+    assert app.current_tray.scanned_barcodes == []
+    assert app.current_tray.pending_audit_events[0]["log_entry"]["event"] == "SCAN_UNDO"
+    assert app.current_tray.scan_times == []
+    assert app.scanned_listbox.rows == []
+    assert app.undo_button["state"] == container_audit_module.tk.DISABLED
     assert app.center_updated is True
     assert app.item_label_updated is True
     assert app.focus_scheduled is True
-    assert messages[0][0].startswith("스캔 취소 기록 저장에 실패")
+    assert messages[0][0].startswith("스캔 취소는 저장되었습니다")
     assert errors == []
 
 
@@ -6596,17 +6610,19 @@ def test_product_scan_rejects_catalog_resolved_different_overlapping_item_code()
     assert app.warning[0] == "품목 코드 불일치!"
 
 
-def test_reset_current_work_preserves_active_tray_when_reset_log_fails(tmp_path, monkeypatch):
+def test_reset_current_work_preserves_active_tray_when_reset_checkpoint_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
     app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.log_file_path = str(tmp_path / "events.csv")
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100", scanned_barcodes=["BC-1"])
     app.scanned_listbox = DummyListbox()
     app.COLOR_DANGER = "danger"
     app._update_last_activity_time = lambda: setattr(app, "activity_updated", True)
     app._log_event = lambda *args, **kwargs: False
     assert app._save_current_tray_state() is True
+    app._save_tray_state_snapshot = lambda state: False
     app._stop_stopwatch = lambda: (_ for _ in ()).throw(
         AssertionError("stopwatch should not stop when reset log fails")
     )
@@ -6623,13 +6639,15 @@ def test_reset_current_work_preserves_active_tray_when_reset_log_fails(tmp_path,
     assert app.scanned_listbox.deleted is False
     restored_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
     assert restored_state["master_label_code"] == "ACTIVE"
-    assert errors
-    assert messages[0][0].startswith("초기화 기록 저장에 실패")
+    assert errors == []
+    assert messages[0][0].startswith("초기화 상태 저장에 실패")
 
 
-def test_reset_current_work_preserves_active_tray_when_state_delete_fails(monkeypatch):
+def test_reset_current_work_keeps_active_tray_when_tombstone_save_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events.csv")
+    app._save_tray_state_snapshot = lambda state: False
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100", scanned_barcodes=["BC-1"])
     app.scanned_listbox = DummyListbox()
     app.COLOR_DANGER = "danger"
@@ -6650,22 +6668,20 @@ def test_reset_current_work_preserves_active_tray_when_state_delete_fails(monkey
 
     app.reset_current_work()
 
-    assert logged == [
-        {
-            "event": "TRAY_RESET_STATE_DELETE_FAILED",
-            "detail": {"master_label_code": "ACTIVE", "scan_count_at_reset": 1},
-            "synchronous": False,
-        }
-    ]
+    assert logged == []
     assert app.current_tray.master_label_code == "ACTIVE"
     assert app.scanned_listbox.deleted is False
-    assert errors
-    assert messages[0][0].startswith("현재 작업 상태 파일 삭제에 실패")
+    assert errors == []
+    assert messages[0][0].startswith("초기화 상태 저장에 실패")
 
 
-def test_reset_current_work_logs_sync_and_clears_after_state_delete(monkeypatch):
+def test_reset_current_work_clears_after_durable_audit_checkpoint(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
+    app.log_file_path = str(tmp_path / "events.csv")
+    checkpoints = []
+    app._save_tray_state_snapshot = lambda state: checkpoints.append(state) or True
+    app._flush_pending_event_logs = lambda: True
     app.current_tray = TraySession(master_label_code="ACTIVE", item_code="AAA2270730100", scanned_barcodes=["BC-1"])
     app.scanned_listbox = DummyListbox()
     app.undo_button = {"state": "normal"}
@@ -6687,13 +6703,13 @@ def test_reset_current_work_logs_sync_and_clears_after_state_delete(monkeypatch)
 
     app.reset_current_work()
 
-    assert logged == [
-        {
-            "event": "TRAY_RESET",
-            "detail": {"master_label_code": "ACTIVE", "scan_count_at_reset": 1},
-            "synchronous": True,
-        }
-    ]
+    assert logged == []
+    assert checkpoints[0]["audit_reset_committed"] is True
+    row, = checkpoints[0]["pending_audit_events"]
+    assert row["log_entry"]["event"] == "TRAY_RESET"
+    detail = json.loads(row["log_entry"]["details"])
+    assert detail["master_label_code"] == "ACTIVE"
+    assert detail["scan_count_at_reset"] == 1
     assert app.current_tray.master_label_code == ""
     assert app.scanned_listbox.deleted is True
     assert app.undo_button["state"] == container_audit_module.tk.DISABLED
@@ -7848,7 +7864,8 @@ def test_completion_append_ack_loss_restarts_without_duplicate_tray_complete(
         receipt_id="receipt-transfer-ack-loss",
     )
     app._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
-    original_append = container_audit_module.append_event_log_entry
+    app._delete_current_tray_state = ContainerAudit._delete_current_tray_state.__get__(app)
+    original_append = event_log_store._append_event_log_entry_unlocked
     append_calls = []
 
     def append_then_lose_ack(log_file_path, log_entry, *, durable=False):
@@ -7856,57 +7873,24 @@ def test_completion_append_ack_loss_restarts_without_duplicate_tray_complete(
         original_append(log_file_path, log_entry, durable=durable)
         raise OSError("simulated acknowledgement loss after fsync")
 
-    monkeypatch.setattr(
-        container_audit_module,
-        "append_event_log_entry",
-        append_then_lose_ack,
-    )
-
-    assert app.complete_tray() is False
-
-    state_path = tmp_path / app.CURRENT_TRAY_STATE_FILE
-    persisted = json.loads(state_path.read_text(encoding="utf-8"))
-    tray_state.validate_tray_state(persisted, default_tray_size=60)
-    assert persisted[tray_state.OPERATOR_REVIEW_STATE_KEY]["outcome"] == (
-        "LOCAL_EVENT_RETRY"
-    )
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", append_then_lose_ack)
+    assert app.complete_tray() is True
+    assert app.current_tray.master_label_code == ""
     assert len(append_calls) == 1
-
-    with Path(app.log_file_path).open(newline="", encoding="utf-8-sig") as f_handle:
-        first_rows = list(csv.DictReader(f_handle))
-    assert [row["event"] for row in first_rows].count("TRAY_COMPLETE") == 1
+    state_path = tmp_path / app.CURRENT_TRAY_STATE_FILE
+    assert not state_path.exists()
+    assert list((tmp_path / "_event_outbox").glob("*.json"))
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", original_append)
 
     restarted = _completion_app(tmp_path)
     restarted.log_file_path = app.log_file_path
     restarted.current_tray = TraySession()
-    restarted._render_warning_state = lambda: None
-    restarted._update_action_button_states = lambda: None
-    restarted._restore_tray_from_state(persisted)
-    assert restarted._restore_operator_review_from_state(persisted) is True
-    restarted._prepare_and_attempt_transfer_seal = lambda **_kwargs: attempt
-    restarted._delete_current_tray_state = (
-        container_audit_module.ContainerAudit._delete_current_tray_state.__get__(
-            restarted
-        )
-    )
-    monkeypatch.setattr(
-        container_audit_module,
-        "append_event_log_entry",
-        original_append,
-    )
-
-    assert restarted.complete_tray() is True
-
-    with Path(restarted.log_file_path).open(
-        newline="", encoding="utf-8-sig"
-    ) as f_handle:
-        rows = list(csv.DictReader(f_handle))
-    completion_rows = [row for row in rows if row["event"] == "TRAY_COMPLETE"]
+    assert restarted._flush_pending_event_logs() is True
+    restarted._load_session_state()
+    with Path(restarted.log_file_path).open(newline="", encoding="utf-8-sig") as handle:
+        completion_rows = [row for row in csv.DictReader(handle) if row["event"] == "TRAY_COMPLETE"]
     assert len(completion_rows) == 1
-    completion_detail = json.loads(completion_rows[0]["details"])
-    assert completion_detail["idempotency_key"] == (
-        "tray-complete:intent-transfer-ack-loss"
-    )
+    assert json.loads(completion_rows[0]["details"])["idempotency_key"] == "tray-complete:intent-transfer-ack-loss"
     assert restarted.work_summary["AAA2270730100"]["count"] == 1
     assert restarted.total_tray_count == 1
     assert not state_path.exists()
@@ -7956,7 +7940,7 @@ def test_pending_completion_takeover_preserves_original_projection_owner(
     takeover.log_file_path = str(next_log)
     takeover.current_tray = TraySession()
     takeover.completed_master_labels = set()
-    takeover._invalidate_pending_scan_callbacks = lambda: None
+    takeover._invalidate_pending_scan_callbacks = lambda **_kwargs: None
     takeover._render_warning_state = lambda: None
     takeover._update_action_button_states = lambda: None
     monkeypatch.setattr(
@@ -8121,6 +8105,8 @@ def test_worker_scanner_partial_submit_writes_completion_and_relay_plan(tmp_path
 
 def test_park_current_tray_logs_identifying_detail(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
     app.current_tray = TraySession(
@@ -8149,6 +8135,9 @@ def test_park_current_tray_logs_identifying_detail(tmp_path):
 
     assert app.park_current_tray(confirm=False) is True
 
+    with open(app.log_file_path, encoding="utf-8-sig", newline="") as handle:
+        row, = csv.DictReader(handle)
+    logged = [{"event": row["event"], "detail": json.loads(row["details"]), "synchronous": True}]
     assert logged[0]["event"] == "TRAY_PARKED"
     assert logged[0]["detail"]["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
     assert logged[0]["detail"]["item_code"] == "AAA2270730100"
@@ -8161,6 +8150,8 @@ def test_park_current_tray_logs_identifying_detail(tmp_path):
 
 def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
     app = _headless_app()
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
     app.current_tray = TraySession(
@@ -8194,6 +8185,8 @@ def test_park_current_tray_snapshot_includes_live_idle_duration(tmp_path):
 def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, monkeypatch, capsys):
     label = "PHS=1|CLC=AAA2270730100|QT=60"
     app = _headless_app()
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
     app.save_folder = str(tmp_path)
@@ -8246,6 +8239,8 @@ def test_park_current_tray_does_not_overwrite_existing_qr_parked_file(tmp_path, 
 
 def test_park_current_tray_rolls_back_when_current_state_delete_fails(tmp_path, monkeypatch):
     app = _headless_app()
+    app.save_folder = str(tmp_path)
+    app.log_file_path = str(tmp_path / "events.csv")
     app.worker_name = "홍길동"
     app.parked_trays_dir = str(tmp_path / "parked")
     app.current_tray = TraySession(
@@ -8277,11 +8272,12 @@ def test_park_current_tray_rolls_back_when_current_state_delete_fails(tmp_path, 
     assert errors
 
 
-def test_park_current_tray_preserves_current_when_park_audit_log_fails(tmp_path, monkeypatch):
+def test_park_current_tray_keeps_parked_checkpoint_when_csv_fails(tmp_path, monkeypatch):
     app = _headless_app()
     app.worker_name = "홍길동"
     app.save_folder = str(tmp_path)
     app.CURRENT_TRAY_STATE_FILE = "current.json"
+    app.log_file_path = str(tmp_path / "events.csv")
     app.parked_trays_dir = str(tmp_path / "parked")
     app.current_tray = TraySession(
         master_label_code="PHS=1|CLC=AAA2270730100|QT=60",
@@ -8297,20 +8293,22 @@ def test_park_current_tray_preserves_current_when_park_audit_log_fails(tmp_path,
     app._update_all_summaries = lambda: setattr(app, "summaries_updated", True)
     app._update_parked_trays_list = lambda: setattr(app, "parked_list_updated", True)
     app.show_status_message = lambda *args, **kwargs: setattr(app, "status_message", args)
-    app._log_event = lambda *args, **kwargs: False
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("synthetic park CSV failure")))
     errors = []
     monkeypatch.setattr(app, "_show_field_notice", lambda *args, **kwargs: errors.append(args))
 
-    assert app.park_current_tray(confirm=False) is False
+    assert app.park_current_tray(confirm=False) is True
 
-    assert app.current_tray.master_label_code == "PHS=1|CLC=AAA2270730100|QT=60"
-    assert list((tmp_path / "parked").glob("parked_*.json")) == []
-    restored_state = json.loads((tmp_path / "current.json").read_text(encoding="utf-8"))
+    assert app.current_tray.master_label_code == ""
+    parked, = (tmp_path / "parked").glob("parked_*.json")
+    restored_state = json.loads(parked.read_text(encoding="utf-8"))
+    assert restored_state["pending_audit_events"][0]["log_entry"]["event"] == "TRAY_PARKED"
     assert restored_state["master_label_code"] == "PHS=1|CLC=AAA2270730100|QT=60"
-    assert app.scanned_listbox.deleted is False
-    assert not hasattr(app, "ui_reset")
-    assert not hasattr(app, "summaries_updated")
-    assert errors and "보류 기록" in errors[0][1]
+    assert app.scanned_listbox.deleted is True
+    assert app.ui_reset is True
+    assert app.summaries_updated is True
+    assert errors == []
 
 
 def test_restore_parked_tray_saves_current_state_before_deleting_parked_file(tmp_path, monkeypatch):

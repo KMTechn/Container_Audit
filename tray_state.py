@@ -18,6 +18,25 @@ class TrayStateValidationError(ValueError):
 
 
 FUTURE_TIMESTAMP_SKEW_SECONDS = 300.0
+
+
+def validate_checkpoint_audit_events(events) -> None:
+    if not isinstance(events, list):
+        raise TrayStateValidationError('pending_audit_events must be a list')
+    for event in events:
+        try:
+            name, row = event['log_file_name'], event['log_entry']
+            if (not isinstance(name, str) or name != Path(name).name
+                or '/' in name or '\\' in name or not name.lower().endswith('.csv')
+                or not isinstance(event['local_only'], bool)
+                or set(row) != {'timestamp', 'worker_name', 'event', 'details'}
+                or not all(isinstance(value, str) and value for value in row.values())
+                or not json.loads(row['details']).get('idempotency_key')):
+                raise ValueError('invalid original audit row')
+            datetime.datetime.fromisoformat(row['timestamp'])
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise TrayStateValidationError('pending_audit_events contains an invalid row') from exc
+
 OPERATOR_REVIEW_STATE_KEY = "pending_operator_review"
 OPERATOR_REVIEW_STATE_SCHEMA_VERSION = 1
 COMPLETION_EVENT_STATE_KEY = "pending_completion_event"
@@ -89,6 +108,8 @@ def tray_session_to_state(tray: Any, *, worker_name: str) -> Dict[str, Any]:
     if transition_class:
         state["transition_class"] = transition_class
     cancel_event_attempts = dict(getattr(tray, "cancel_event_attempts", {}) or {})
+    if getattr(tray, 'pending_audit_events', None):
+        state['pending_audit_events'] = list(tray.pending_audit_events)
     if cancel_event_attempts:
         state["cancel_event_attempts"] = {
             str(key): {**attempt, "detail": dict(attempt["detail"])}
@@ -777,11 +798,16 @@ def validate_tray_state(
         )
     if state.get("transition_class", "") not in ("", *TRANSITION_CLASSES):
         raise TrayStateValidationError("transition_class must be a transition class")
+    validate_checkpoint_audit_events(state.get('pending_audit_events', []))
+    if not isinstance(state.get('audit_reset_committed', False), bool):
+        raise TrayStateValidationError('audit_reset_committed must be a boolean')
     cancel_event_attempts = state.get("cancel_event_attempts", {})
     if not isinstance(cancel_event_attempts, dict) or not all(
         isinstance(key, str) and key.strip()
         and isinstance(attempt, dict)
-        and set(attempt) == {"timestamp", "log_file_name", "detail"}
+        and {"timestamp", "log_file_name", "detail"} <= set(attempt)
+        and set(attempt) <= {"timestamp", "log_file_name", "detail", "worker_name"}
+        and isinstance(attempt.get('worker_name', ''), str)
         and isinstance(attempt["detail"], dict)
         and isinstance(attempt["timestamp"], str) and attempt["timestamp"].strip()
         and isinstance(attempt["log_file_name"], str)
@@ -915,6 +941,9 @@ def tray_session_from_state(
             key: {**attempt, "detail": dict(attempt["detail"])}
             for key, attempt in state["cancel_event_attempts"].items()
         }
+    if state.get('pending_audit_events'):
+        validate_checkpoint_audit_events(state['pending_audit_events'])
+        transition['pending_audit_events'] = list(state['pending_audit_events'])
     for key in ("known_member_barcodes", "exchange_idempotency_keys"):
         if key in state:
             if not isinstance(state[key], list) or any(not isinstance(value, str) or not value for value in state[key]):

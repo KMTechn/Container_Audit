@@ -216,11 +216,9 @@ def test_append_ack_loss_restart_deduplicates_before_clearing_outbox(
         append_then_lose_ack,
     )
     first_restart = _activation_app(tmp_path)
-    assert first_restart._reconcile_activation_event_from_state(pending) is False
+    assert first_restart._reconcile_activation_event_from_state(pending) is True
     assert len(_csv_rows(tmp_path / "events.csv")) == 1
-    assert tray_state.ACTIVATION_EVENT_STATE_KEY in json.loads(
-        state_path.read_text(encoding="utf-8")
-    )
+    assert list((tmp_path / "_event_outbox").glob("*.json")), "accepted row must remain replayable"
 
     monkeypatch.setattr(
         container_audit_module,

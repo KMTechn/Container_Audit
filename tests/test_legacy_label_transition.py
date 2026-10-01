@@ -648,15 +648,17 @@ def test_cancellation_retried_after_a_lost_write_ack_leaves_one_row_with_its_eve
             return result
         return append
 
-    for name in ("append_event_log_entry", "append_event_log_entry_idempotent"):
-        monkeypatch.setattr(container_audit_module, name, losing(getattr(container_audit_module, name)))
+    import event_log_store
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", losing(event_log_store._append_event_log_entry_unlocked))
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
     cancel = app.undo_last_scan if action == "undo" else app.reset_current_work
 
     cancel()
-    assert lost and app.current_tray.master_label_code == ITEM  # kept: the app saw a failure
-    cancel()
+    assert lost
+    assert app.current_tray.master_label_code == (ITEM if action == "undo" else "")
+    assert app.current_tray.scanned_barcodes == ([f"{ITEM}-0001"] if action == "undo" else [])
+    assert app._flush_pending_event_logs()
 
     [row] = _rows(app, event)
     assert _details(row)["idempotency_key"].startswith(key_prefix)
@@ -679,7 +681,8 @@ def test_cancellation_retried_after_a_restart_on_a_later_day_finds_its_first_row
     first._process_barcode_logic(ITEM)
     _scan_products(first, 2)
     lost = []
-    real = container_audit_module.append_event_log_entry_idempotent
+    import event_log_store
+    real = event_log_store._append_event_log_entry_unlocked
 
     def losing(path, entry, *args, **kwargs):
         result = real(path, entry, *args, **kwargs)
@@ -688,17 +691,18 @@ def test_cancellation_retried_after_a_restart_on_a_later_day_finds_its_first_row
             raise OSError("write acknowledgement lost")
         return result
 
-    monkeypatch.setattr(container_audit_module, "append_event_log_entry_idempotent", losing)
+    monkeypatch.setattr(event_log_store, "_append_event_log_entry_unlocked", losing)
     monkeypatch.setattr(container_audit_module.messagebox, "askyesno", lambda *_a, **_k: True)
     monkeypatch.setattr(container_audit_module.messagebox, "showerror", lambda *_a, **_k: None)
     (first.undo_last_scan if action == "undo" else first.reset_current_work)()
-    assert lost and first.current_tray.master_label_code == ITEM
+    assert lost
+    assert first.current_tray.master_label_code == (ITEM if action == "undo" else "")
     day_one = first.log_file_path
 
     restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=True)
-    assert restarted.current_tray.scanned_barcodes == [f"{ITEM}-0001", f"{ITEM}-0002"]
+    assert restarted.current_tray.scanned_barcodes == ([f"{ITEM}-0001"] if action == "undo" else [])
     restarted.log_file_path = str(tmp_path / "pc" / "이적작업이벤트로그_tester_20991231.csv")
-    (restarted.undo_last_scan if action == "undo" else restarted.reset_current_work)()
+    assert restarted._flush_pending_event_logs()
 
     [row] = _rows_in(day_one, event)
     assert row["timestamp"] == lost[0]["timestamp"]
@@ -735,7 +739,7 @@ def test_replacement_and_exchange_cancellations_carry_event_ids_and_retry_as_one
     app.exchange_dialog = None
     session = ProductExchangeSession(item_code=ITEM, defective_barcodes=[f"{ITEM}-0001"])
     app.current_exchange_session = session
-    assert app._finish_exchange_cancel_ui("operator_cancel") is False  # kept for the retry
+    assert app._finish_exchange_cancel_ui("operator_cancel") is True  # durable outbox owns retry
     first_file = app.log_file_path
     app.log_file_path = str(Path(first_file).with_name("이적작업이벤트로그_tester_20991231.csv"))  # a later day
     app.current_exchange_session = session
@@ -772,14 +776,14 @@ def test_session_cancellation_retried_for_another_reason_keeps_its_first_row(flo
     if kind == "replacement":
         app.master_label_replace_state = "awaiting_old_completed"
         app.replacement_context = {"replacement_session_id": "replace-session-2"}
-        assert app._log_master_label_replacement_cancel(reason="operator_cancel") is False
+        assert app._log_master_label_replacement_cancel(reason="operator_cancel") is True
         assert app._log_master_label_replacement_cancel(reason="app_close") is True
     else:
         app._update_action_button_states = lambda: None
         app.exchange_dialog = None
         session = ProductExchangeSession(item_code=ITEM, defective_barcodes=[f"{ITEM}-0001"])
         app.current_exchange_session = session
-        assert app._finish_exchange_cancel_ui("operator_cancel") is False
+        assert app._finish_exchange_cancel_ui("operator_cancel") is True
         app.current_exchange_session = session
         assert app._finish_exchange_cancel_ui("app_close") is True
 
@@ -1238,15 +1242,13 @@ def test_phs2_failed_local_write_retries_the_original_event_after_restart_and_sw
     completed = []
     assert app.request_complete_tray(completion_callback=completed.append) is True
     _pump_until(app.root, lambda: bool(completed))
-    assert completed == [False] and failed and _rows(app, "TRAY_COMPLETE") == []
+    assert completed == [True] and failed
+    assert app.current_tray.master_label_code == ""
+    assert app._flush_pending_event_logs()
 
     restarted = _restart(flow, tmp_path / "pc", monkeypatch, transition=False)
-    assert restarted.current_tray.transition_class == "PHS2_CENTRAL"
-    completed = []
-    assert restarted.request_complete_tray(completion_callback=completed.append) is True
-    _pump_until(restarted.root, lambda: bool(completed))
-
-    assert completed == [True]
+    assert restarted.current_tray.master_label_code == ""
+    assert restarted._flush_pending_event_logs()
     [row] = _rows(restarted, "TRAY_COMPLETE")
     detail = _details(row)
     assert (detail["transition_class"], detail["transfer_seal_status"]) == ("PHS2_CENTRAL", "PREPARED")
