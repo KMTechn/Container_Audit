@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import uuid
 
 import pytest
 
@@ -29,10 +30,10 @@ def _utc(offset_seconds: int = 0) -> str:
 
 def _active_payload(*, token: str = "", sources: list[str] | None = None) -> dict[str, object]:
     selected_sources = sorted(sources or [])
-    session_id = "0" * 32
+    session_id = uuid.uuid4().hex
     attempt_id = "1" * 32
     orchestrator_sha256 = "2" * 64
-    transaction_id = "3" * 32
+    transaction_id = uuid.uuid4().hex
     contract_sha256 = "4" * 64
     return {
         "schema": fence.ACTIVE_SCHEMA,
@@ -368,6 +369,8 @@ def test_delegation_requires_exact_source_token_tuple_and_live_authority(tmp_pat
         fence.DELEGATION_TRANSACTION_ENV: payload["replacement_transaction_id"],
     }
     try:
+        # A contender must use the holder's exact identity, even in parallel runs.
+        assert fence._acquire_named_mutex(payload["session_authority_mutex_name"], 0.05) is None
         with fence.writer_admission(
             "delegated_sink", control_root=root, environ=environment
         ):
@@ -876,7 +879,7 @@ $ErrorActionPreference = 'Stop'
 $naiveRejected = $false
 try {{ [void](ConvertTo-ContainerWriterFenceUtc '2026-08-30T01:02:03') }} catch {{ $naiveRejected = $true }}
 if (-not $naiveRejected) {{ throw 'NAIVE_TIMESTAMP_ACCEPTED' }}
-$sid='0'*32; $aid='1'*32; $tx='3'*32; $orch='2'*64; $contract='4'*64
+$sid='{uuid.uuid4().hex}'; $aid='1'*32; $tx='{uuid.uuid4().hex}'; $orch='2'*64; $contract='4'*64
 $prepared='{str(prepared).replace("'", "''")}'
 $preparedSha=Get-ContainerWriterFenceFileSha256 $prepared
 $authority = Enter-ContainerWriterSessionAuthority -SessionId $sid -AttemptId $aid -OrchestratorSha256 $orch -ReplacementTransactionId $tx -WriterContractSha256 $contract
@@ -909,7 +912,7 @@ $ErrorActionPreference = 'Stop'
 . '{str(PS_HELPER).replace("'", "''")}'
 $root='{str(control).replace("'", "''")}'
 $authorization='{str(authorization).replace("'", "''")}'
-$sid='5'*32; $aid='6'*32; $tx='7'*32; $orch='8'*64; $contract='9'*64
+$sid='{uuid.uuid4().hex}'; $aid='6'*32; $tx='{uuid.uuid4().hex}'; $orch='8'*64; $contract='9'*64
 $authorizationSha=Get-ContainerWriterFenceFileSha256 $authorization
 $authority=Enter-ContainerWriterSessionAuthority -SessionId $sid -AttemptId $aid -OrchestratorSha256 $orch -ReplacementTransactionId $tx -WriterContractSha256 $contract
 try {{
@@ -956,7 +959,7 @@ $ErrorActionPreference='Stop'
 . '{str(PS_HELPER).replace("'", "''")}'
 $root='{str(control).replace("'", "''")}'
 $authorization='{str(authorization).replace("'", "''")}'
-$sid='a'*32; $aid='b'*32; $tx='c'*32; $orch='d'*64; $contract='e'*64
+$sid='{uuid.uuid4().hex}'; $aid='b'*32; $tx='{uuid.uuid4().hex}'; $orch='d'*64; $contract='e'*64
 $script:enabled=$true; $script:state='Ready'; $script:mutations=0
 function Disable-ScheduledTask {{ param($TaskName,$TaskPath,$ErrorAction); $script:mutations++; $script:enabled=$false }}
 function Enable-ScheduledTask {{ param($TaskName,$TaskPath,$ErrorAction); $script:mutations++; $script:enabled=$true }}

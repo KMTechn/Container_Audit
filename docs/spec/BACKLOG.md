@@ -364,3 +364,7 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
 로컬 QT 시작/완료·미달/UNDO·교환, lease 해제 내구 재전송과 계약 v1.2 요청/receipt를 구현했다.
 실제 GUI·서버·VM은 이 레인 권한 밖이므로 미수용이다. 관리자 복구 창은 보존했고
 작업자 스캔 흐름의 창은 inline 안내/선택으로 대체했다. 전체 pytest 결과는 구현 보고서를 따른다.
+
+## w9slim2 B18 시험 격리
+
+실제 deployment-session 권한을 획득하는 시험은 case/run별 고유 session/transaction을 공유한다. 제품 fence·이름 도출·canonical vector·최소 mutex 권한은 그대로다. 같은 이름 contender 거절 단언과 Python/PowerShell delegation을 유지한다. Python 3.12.10·Windows PowerShell 5.1 headless 영향 3모듈 82 PASS; 동시 실행 근거와 한계는 [레인 결과](D:/KMTech/program-improvement-20260912/work/Container_Audit/w9slim2/RESULT.md)를 따른다. 실제 GUI·설치·서버 검증은 이 결과에 포함하지 않는다.

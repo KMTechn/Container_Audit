@@ -131,7 +131,7 @@ def _production_arguments(mode: str, tmp_path: Path, *, session_id: str) -> list
         "-ExpectedContractSha256",
         _contract_sha256(),
         "-ReplacementTransactionId",
-        "f" * 32,
+        hashlib.sha256(str(tmp_path.resolve()).encode("utf-8")).hexdigest()[:32],
         "-ReplacementReceiptPath",
         str(tmp_path / "missing-replacement.json"),
         "-ReplacementReceiptSha256",

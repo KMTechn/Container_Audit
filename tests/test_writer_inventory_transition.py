@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 $root = $env:CA_TEST_CONTROL
 $env:CA_TEST_MUTEX = Get-ContainerWriterAdmissionMutexName $root
 if ($env:CA_TEST_MUTEX -ceq $Script:ContainerWriterFenceAdmissionMutexName) { throw 'not isolated' }
-$s = '0'*32; $a = '1'*32; $t = '3'*32
+$s = [Guid]::NewGuid().ToString('N'); $a = '1'*32; $t = [Guid]::NewGuid().ToString('N')
 $authority = Enter-ContainerWriterSessionAuthority $s $a ('2'*64) $t ('4'*64)
 $token = 'test-delegation-token'*4
 $prepared = Join-Path $env:CA_TEST_TMP 'prepared.json'
