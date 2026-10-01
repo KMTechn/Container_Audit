@@ -96,3 +96,36 @@ def test_failed_recovery_park_keeps_original_and_does_not_accept_next_label(flow
     assert windows == []
 
 
+@pytest.mark.parametrize('change', ['pending_audit', 'business_state'])
+def test_recovery_choice_preserves_newer_source_before_next_scan(flow, windows, change, monkeypatch):
+    app = flow(transition=True)
+    public_scan(app, f'CLC={ITEM}|QT=3')
+    public_scan(app, ITEM + '-SERIAL-001')
+    path = Path(app.save_folder) / app.CURRENT_TRAY_STATE_FILE
+    app.current_tray = ca.TraySession()
+    app._load_current_tray_state()
+    state = json.loads(path.read_text(encoding='utf-8'))
+    if change == 'business_state':
+        state['tray_size'] = 4
+    else:
+        event = app._checkpoint_audit_event('SCAN_UNDO', detail={'g6_late_audit': True},
+            idempotency_key='g6-late-audit')
+        state.setdefault('pending_audit_events', []).append(event)
+    assert app._save_tray_state_snapshot(state)
+    original = path.read_bytes()
+    if change == 'pending_audit':
+        # Keep projection unavailable through the next input: a crash after
+        # deferral must recover the new audit from the parked durable owner.
+        monkeypatch.setattr(app, '_flush_pending_event_logs', lambda: None)
+    public_scan(app, f'CLC={ITEM}|QT=5')
+    if change == 'business_state':
+        assert app._inline_scan_choices
+        assert path.read_bytes() == original
+        assert not app.current_tray.master_label_code
+    else:
+        parked = [json.loads(p.read_text(encoding='utf-8')) for p in Path(app.parked_trays_dir).glob('*.json')]
+        assert any(event in p.get('pending_audit_events', []) for p in parked)
+        assert app.current_tray.tray_size == 5
+    assert windows == []
+
+

@@ -4205,7 +4205,7 @@ class ContainerAudit:
                         ("이어서 작업", lambda: self._load_current_tray_state(_recovery_choice=True)),
                         ("보류하고 새 작업", lambda: self._load_current_tray_state(_recovery_choice=False)),
                         ("로그인 화면", lambda: self._load_current_tray_state(_recovery_choice=None)),
-                    ], on_scan=lambda: self._defer_saved_recovery_state(
+                    ], on_scan=lambda: self._defer_scan_recovery_state(
                         saved_state, reason="scanner_continues_after_recovery_choice"))
                     return
                 recovery_choice = True if restore_required else _recovery_choice
@@ -4252,7 +4252,7 @@ class ContainerAudit:
                     self._request_inline_choice("작업 인수 확인", msg, [
                         ("이어서 작업", lambda: self._load_current_tray_state(_recovery_choice=True)),
                         ("원본 보존", lambda: self._load_current_tray_state(_recovery_choice=None)),
-                    ], on_scan=lambda: self._defer_saved_recovery_state(
+                    ], on_scan=lambda: self._defer_scan_recovery_state(
                         saved_state, reason="scanner_continues_after_takeover_choice"))
                     return
                 response = _recovery_choice
@@ -15717,6 +15717,19 @@ class ContainerAudit:
             self.log_write_errors = []
         self.last_log_write_error = error_message
         self.log_write_errors.append(error_message)
+
+    def _defer_scan_recovery_state(self, expected_state, *, reason):
+        current = read_recovery_file(Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE,
+            "current", tray_size=self.TRAY_SIZE)
+        if not current.verified:
+            return False
+        # A notice's captured state can lag audit projection. Preserve the
+        # newest audit rows, but never park/delete a different business state.
+        business = lambda state: {key: value for key, value in state.items()
+                                  if key != 'pending_audit_events'}
+        if business(current.value) != business(expected_state):
+            return False
+        return self._defer_saved_recovery_state(current.value, reason=reason)
 
     def _defer_saved_recovery_state(
         self, saved_state: Dict[str, Any], *, reason: str = "restore_declined_same_worker",
