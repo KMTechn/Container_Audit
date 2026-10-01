@@ -285,10 +285,23 @@ def test_container_writer_sink_inventory_has_expected_current_findings() -> None
         "call_operator": 25,
         "com_wmi_process_create": 4,
         "dot_source": 13,
-        "reflective_invocation": 2,
+        "native_process_api": 2,
+        "reflective_invocation": 3,
         "scheduler_com": 3,
         "start_process": 3,
     }
+    # The normal-user launch adds one compiled boundary: declaration and call.
+    # Both sites must remain visible under canonical session authority.
+    native_starts = [
+        row for row in payload["powershell_execution_inventory"]["execution_sites"]
+        if row["kind"] == "native_process_api"
+    ]
+    assert len(native_starts) == 2
+    source_lines = (ROOT / "INSTALL_CANONICAL_PORTABLE.ps1").read_text(encoding="utf-8").splitlines()
+    assert all(row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1" and row["guarded"]
+               and row["guard_name"] == "Enter-ContainerWriterSessionAuthority"
+               and "CreateProcessWithTokenW" in source_lines[row["line"] - 1]
+               for row in native_starts)
     helper_calls = [
         row for row in payload["powershell_execution_inventory"]["execution_sites"]
         if row["file"] == "INSTALL_CANONICAL_PORTABLE.ps1"
