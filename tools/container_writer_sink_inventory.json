@@ -4590,11 +4590,11 @@
       ],
       "file": "transfer_client.py",
       "kind": "function",
-      "line": 162,
+      "line": 182,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 172,
+          "line": 195,
           "operation": "self.session.request",
           "writer_admission_sources": []
         }
@@ -6430,7 +6430,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "e6d1f1b7a1aa749c6a5acd204781513038691a80bf02ac7fc66f7bbe0d3e227d",
+  "inventory_sha256": "0adc4e7f3cdfcdb6cf7c5561c20b850bfb01303263fedb1805dd1d425d1b3e15",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -13792,7 +13792,7 @@
       "direct_mutation_site_count": 1,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient._request",
-      "line": 162,
+      "line": 182,
       "marker_kind": "decorator",
       "source": "transfer_api_request"
     },
@@ -13880,7 +13880,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.activate_phs_label_exchange",
-      "line": 591,
+      "line": 624,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13888,7 +13888,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.adopt_phs_label",
-      "line": 420,
+      "line": 453,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13896,7 +13896,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.complete_phs_label_print",
-      "line": 554,
+      "line": 587,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13904,7 +13904,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.issue_operation_lease",
-      "line": 231,
+      "line": 264,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13912,7 +13912,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_label_exchange",
-      "line": 448,
+      "line": 481,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13920,7 +13920,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.prepare_phs_reconciliation_label_exchange",
-      "line": 475,
+      "line": 508,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13928,7 +13928,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.replace_bundle_members",
-      "line": 708,
+      "line": 741,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13936,7 +13936,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.request_phs_label_print",
-      "line": 528,
+      "line": 561,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },
@@ -13944,7 +13944,7 @@
       "direct_mutation_site_count": 0,
       "file": "transfer_client.py",
       "function": "transfer_client.LogisticsTransferClient.seal_transfer",
-      "line": 666,
+      "line": 699,
       "marker_kind": "decorator",
       "source": "transfer_seal"
     },

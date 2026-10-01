@@ -2,6 +2,8 @@
 
 스캐너 경고 뒤 UNDO/다음 현품표, 완료 중 FIFO, 교환 CSV 실패/후속 checkpoint 복구, 6칸 교환 완료와 자동 보류 복원 안내와 동기 감사 outbox·checkpoint 결속·CSV 실패/재시작 멱등 재생은 소스 회귀 범위다. 실제 스캐너·소리·화면·중앙 서버 결합은 랩 검증에 남는다.
 
+G10 연결 정상 표시는 성공 envelope 검증 뒤로 옮겼다. 끊김 뒤 redirect·401·403·404·409·`ok:false`·JSON list의 7종은 끊김을 유지한다. 진행 현황·receipt·lease·봉인 공통 경로와 마지막 성공 전송 시각의 소스 회귀를 검증하며 실제 서버 연결/끊김 화면은 랩 검증에 남는다.
+
 [제품·카드](README.md) · [계약](contracts.md) · [운영](operations.md) · [중앙 백로그](../../../Program_Spec_Hub/BACKLOG.md) · [실제 준비도](../../../Program_Spec_Hub/READINESS.md)
 
 미달 완료·취소의 pending 감사 인계/병합, 이전 중첩 기록 재생, 교환 복구 중 감사 반영 진행과 업무 상태의 구별은 소스 회귀로 확인한다. 전원 중단·실제 GUI 종료 및 중앙 거절 뒤 현장 흐름은 별도 랩 검증에 남는다.

@@ -14,6 +14,7 @@ from tests.test_w9scanonly_workflow import (
 from tests.test_observed_scanner_completion import ScannerEntry
 from tests.test_transfer_seal import FakeSession, FakeResponse
 from transfer_client import LogisticsTransferClient
+from terminal_operation_lease import TRANSFER_OPERATION
 
 pytestmark = pytest.mark.usefixtures('fixed_operation_lease_clock', 'owned_tk_workers')
 
@@ -66,6 +67,157 @@ def test_progress_rejects_malformed_counts_instead_of_replacing_last_values():
         authority_scope_id='scope', session=session)
     with pytest.raises(ca.TransferSealError, match='진행 현황 수량'):
         client.get_progress(date='2026-10-01')
+
+
+@pytest.mark.parametrize('status,body', [
+    (302, {'ok': True, 'data': {'items': []}}),
+    (401, {'ok': False, 'error': {'code': 'UNAUTHORIZED'}}),
+    (403, {'ok': False, 'error': {'code': 'FORBIDDEN'}}),
+    (404, {'ok': False, 'error': {'code': 'NOT_FOUND'}}),
+    (409, {'ok': False, 'error': {'code': 'CONFLICT'}}),
+    (200, {'ok': False, 'error': {'code': 'REJECTED'}}),
+    (200, ['invalid-shape']),
+])
+def test_rejected_progress_keeps_observed_disconnection(status, body):
+    def offline(_request):
+        raise ConnectionError('synthetic offline')
+
+    session = FakeSession(offline)
+    client = LogisticsTransferClient('https://fixture.invalid', 'synthetic', 'host',
+        authority_scope_id='scope', session=session)
+    with pytest.raises(ConnectionError):
+        client.get_progress(date='2026-10-01')
+    assert client.connection_state == 'disconnected'
+    session.handler = lambda _: FakeResponse(status, body)
+    with pytest.raises(ca.TransferSealError):
+        client.get_progress(date='2026-10-01')
+    assert client.last_successful_transmission_at == ''
+    assert client.connection_state == 'disconnected'
+
+
+@pytest.mark.parametrize('operation', ['progress', 'receipt', 'lease', 'seal'])
+def test_connection_recovers_only_after_valid_response_and_preserves_send_time(operation, monkeypatch):
+    observed = ca.datetime.datetime.fromisoformat('2026-10-01T01:00:00+00:00')
+    monkeypatch.setattr('transfer_client.datetime', SimpleNamespace(now=lambda _: observed))
+    session = FakeSession(lambda _: FakeResponse(403, {'ok': False}))
+    client = LogisticsTransferClient('https://fixture.invalid', 'synthetic', 'host',
+        authority_scope_id='scope', session=session)
+
+    def request():
+        if operation == 'progress':
+            return client.get_progress(date='2026-10-01')
+        if operation == 'receipt':
+            return client.get_receipt('scope', 'synthetic-key')
+        if operation == 'lease':
+            return client.issue_operation_lease(authority_scope_id='scope',
+                operation=TRANSFER_OPERATION, scan_payload='synthetic-label',
+                idempotency_key='synthetic-key')
+        return client.seal_transfer({'authority_scope_id': 'scope',
+            'idempotency_key': 'synthetic-key'})
+
+    with pytest.raises(ca.TransferSealError):
+        request()
+    assert client.connection_state == 'unknown'
+    assert client.last_successful_transmission_at == ''
+    session.handler = lambda _: FakeResponse(200, {'ok': True, 'data': progress_data()})
+    request()
+    assert client.connection_state == 'normal'
+    sent_at = observed.isoformat() if operation in {'lease', 'seal'} else ''
+    assert client.last_successful_transmission_at == sent_at
+
+    def offline(_request):
+        raise ConnectionError('synthetic offline')
+
+    session.handler = offline
+    with pytest.raises(ConnectionError):
+        client.get_progress(date='2026-10-01')
+    session.handler = lambda _: FakeResponse(403, {'ok': False})
+    with pytest.raises(ca.TransferSealError):
+        request()
+    assert client.connection_state == 'disconnected'
+    assert client.last_successful_transmission_at == sent_at
+
+    observed = ca.datetime.datetime.fromisoformat('2026-10-01T02:00:00+00:00')
+    response_time = observed.isoformat()
+
+    def decode():
+        nonlocal observed
+        assert client.connection_state == 'disconnected'
+        assert client.last_successful_transmission_at == sent_at
+        observed = ca.datetime.datetime.fromisoformat('2026-10-01T03:00:00+00:00')
+        return {'ok': True, 'data': progress_data()}
+
+    session.handler = lambda _: SimpleNamespace(status_code=200, json=decode)
+    request()
+    assert client.connection_state == 'normal'
+    assert client.last_successful_transmission_at == (
+        response_time if operation in {'lease', 'seal'} else sent_at)
+
+
+@pytest.mark.parametrize('state', ['unknown', 'disconnected', 'normal'])
+def test_missing_receipt_does_not_invent_success(state):
+    session = FakeSession(lambda _: FakeResponse(404, {'ok': False}))
+    client = LogisticsTransferClient('https://fixture.invalid', 'synthetic', 'host',
+        authority_scope_id='scope', session=session)
+    client.connection_state = state
+    client.last_successful_transmission_at = '2026-10-01T01:00:00+00:00'
+    assert client.get_receipt('scope', 'synthetic-key') is None
+    assert client.connection_state == state
+    assert client.last_successful_transmission_at == '2026-10-01T01:00:00+00:00'
+
+
+@pytest.mark.parametrize('old_result,new_result', [
+    ('offline', 'success'), ('invalid_json', 'success'), ('5xx', 'success'),
+    ('success', 'offline'), ('success', 'reject'), ('success', 'success'),
+])
+def test_late_old_request_cannot_overwrite_newer_connection_observation(old_result, new_result, monkeypatch):
+    old_time = ca.datetime.datetime.fromisoformat('2026-10-01T03:00:00+00:00')
+    new_time = ca.datetime.datetime.fromisoformat('2026-10-01T02:00:00+00:00')
+    prior_time = '2026-10-01T01:00:00+00:00'
+    observed = new_time
+    new_failures = []
+
+    def response(result):
+        if result == 'offline':
+            raise ConnectionError('synthetic offline')
+        if result == 'invalid_json':
+            def invalid_json():
+                raise ValueError('synthetic invalid JSON')
+            return SimpleNamespace(status_code=200, json=invalid_json)
+        if result in {'5xx', 'reject'}:
+            return FakeResponse(503 if result == '5xx' else 403, {'ok': False})
+        return FakeResponse(200, {'ok': True, 'data': {}})
+
+    def handler(request):
+        nonlocal observed
+        if request['url'].endswith('/old'):
+            # Nest the later request in the fake transport to order responses
+            # deterministically while keeping real writer admission enabled.
+            try:
+                client._request('POST', '/new')
+            except Exception as exc:
+                new_failures.append(exc)
+            observed = old_time
+            return response(old_result)
+        return response(new_result)
+
+    client = LogisticsTransferClient('https://fixture.invalid', 'synthetic', 'host',
+        authority_scope_id='scope', session=FakeSession(handler))
+    client.connection_state = 'disconnected'
+    client.last_successful_transmission_at = prior_time
+
+    monkeypatch.setattr('transfer_client.datetime', SimpleNamespace(now=lambda _: observed))
+    if old_result == 'success':
+        client._request('POST', '/old')
+    else:
+        with pytest.raises(ConnectionError if old_result == 'offline' else ca.TransferSealError):
+            client._request('POST', '/old')
+    assert len(new_failures) == (new_result != 'success')
+    assert all(isinstance(exc, (ConnectionError, ca.TransferSealError)) for exc in new_failures)
+    assert client.connection_state == ('normal' if new_result == 'success' else 'disconnected')
+    expected_time = (new_time.isoformat() if new_result == 'success' else
+        old_time.isoformat() if old_result == 'success' else prior_time)
+    assert client.last_successful_transmission_at == expected_time
 
 
 def test_late_progress_response_keeps_work_screen_and_refresh_is_background(flow, windows, monkeypatch):

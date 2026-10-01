@@ -86,6 +86,10 @@ class LogisticsTransferClient:
                 session.trust_env = False
                 session.verify = self.tls_ca_bundle_path
         self.session = session
+        self._connection_observation_lock = threading.Lock()
+        self._connection_request_sequence = 0
+        self._connection_observation_sequence = 0
+        self._successful_transmission_sequence = 0
         self.connection_state = "unknown"
         self.last_successful_transmission_at = ""
 
@@ -158,6 +162,22 @@ class LogisticsTransferClient:
             headers["Idempotency-Key"] = idempotency_key
         return headers
 
+    def _observe_connection(
+        self,
+        request_sequence: int,
+        state: str = "",
+        *,
+        successful_transmission_at: str = "",
+    ) -> None:
+        with self._connection_observation_lock:
+            if request_sequence > self._connection_observation_sequence:
+                self._connection_observation_sequence = request_sequence
+                if state:
+                    self.connection_state = state
+            if successful_transmission_at and request_sequence > self._successful_transmission_sequence:
+                self._successful_transmission_sequence = request_sequence
+                self.last_successful_transmission_at = successful_transmission_at
+
     @writer_sink("transfer_api_request")
     def _request(
         self,
@@ -168,6 +188,9 @@ class LogisticsTransferClient:
         idempotency_key: str = "",
         allow_not_found: bool = False,
     ) -> dict[str, Any] | None:
+        with self._connection_observation_lock:
+            self._connection_request_sequence += 1
+            request_sequence = self._connection_request_sequence
         try:
             response = self.session.request(
                 method,
@@ -179,13 +202,16 @@ class LogisticsTransferClient:
             )
         except Exception:
             self._wait_limit.unanswered = True
-            self.connection_state = "disconnected"
+            self._observe_connection(request_sequence, "disconnected")
             raise
+        observed_at = datetime.now(timezone.utc)
         status_code = int(getattr(response, "status_code", 0) or 0)
-        self.connection_state = "normal" if 200 <= status_code < 500 else "disconnected"
+        if not 200 <= status_code < 500:
+            self._observe_connection(request_sequence, "disconnected")
         if status_code >= 500:
             self._wait_limit.unanswered = True
         if 300 <= status_code < 400:
+            self._observe_connection(request_sequence)
             read_only_method = str(method or "").strip().upper() in {
                 "GET",
                 "HEAD",
@@ -201,7 +227,7 @@ class LogisticsTransferClient:
         try:
             body = response.json()
         except Exception as exc:
-            self.connection_state = "disconnected"
+            self._observe_connection(request_sequence, "disconnected")
             raise TransferSealError(
                 "INVALID_SERVER_RESPONSE",
                 "물류 서버가 JSON 응답을 반환하지 않았습니다.",
@@ -210,8 +236,10 @@ class LogisticsTransferClient:
                 committed=None,
             ) from exc
         if allow_not_found and status_code == 404:
+            self._observe_connection(request_sequence)
             return None
         if not 200 <= status_code < 300 or not isinstance(body, dict) or body.get("ok") is not True:
+            self._observe_connection(request_sequence)
             error = body.get("error") if isinstance(body, dict) else {}
             error = error if isinstance(error, dict) else {}
             raise TransferSealError(
@@ -223,8 +251,13 @@ class LogisticsTransferClient:
                 details=error.get("details") if isinstance(error.get("details"), dict) else {},
             )
         data = body.get("data")
-        if method.upper() not in {"GET", "HEAD", "OPTIONS"}:
-            self.last_successful_transmission_at = datetime.now(timezone.utc).isoformat()
+        self._observe_connection(
+            request_sequence,
+            "normal",
+            successful_transmission_at=(
+                observed_at.isoformat() if method.upper() not in {"GET", "HEAD", "OPTIONS"} else ""
+            ),
+        )
         return dict(data) if isinstance(data, dict) else {}
 
     @writer_sink("transfer_seal")
