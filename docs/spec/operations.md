@@ -104,6 +104,9 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 작업 action은 OS 고정 PowerShell과 `current/tools/apply_prepared_update.ps1`뿐이다.
 작업자는 읽기·실행만 하고 action을 바꿀 수 없다. HKCU Run과 GUI launcher는
 고정 일반 권한 bootstrap을 거쳐 준비된 새 판과 진행 중 journal을 먼저 확인한다.
+기존 설치의 사전 Run 값은 설치된 설정 유무로 판정한다. 설정이 없는 옛 판의 정확한
+main.py relay 명령은 인정하고 설치 성공 뒤 bootstrap 명령으로 바꾼다.
+사용자가 바꾼 값·종류·인자와 다른 relay는 거절하며 실패 시 원 Run·relay를 복원한다.
 SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 않는다.
 
 builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,

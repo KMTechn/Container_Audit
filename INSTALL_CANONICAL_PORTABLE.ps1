@@ -224,12 +224,12 @@ function Arg([string]$Value) {
     if ($Value -match '\s') { return '"' + $Value + '"' }
     return $Value
 }
-function Command([string]$Root) {
+function Command([string]$Root, [switch]$Installed) {
     $command = ('{0} -I -B {1} --container-audit-user-relay' -f
         (Arg (Join-Path $Root 'runtime\pythonw.exe')),
         (Arg (Join-Path $Root 'app\main.py')))
     if ((Test-Path -LiteralPath (Join-Path $Root 'app\auto-update-settings.json')) -or
-        (Test-Path -LiteralPath (Join-Path $SourceRoot 'app\auto-update-settings.json'))) {
+        (-not $Installed -and (Test-Path -LiteralPath (Join-Path $SourceRoot 'app\auto-update-settings.json')))) {
         $command = ('{0} -I -B {1} --bootstrap --role relay -- --container-audit-user-relay' -f
             (Arg (Join-Path $Root 'runtime\pythonw.exe')),
             (Arg (Join-Path $Root 'app\auto_update.py')))
@@ -1807,6 +1807,7 @@ if ($CompleteRetiredRemoval) {
 }
 $before = Snapshot
 $old = @(Relays)
+$installedCommand = Command $install -Installed
 if ($retirementResume) {
     if ($retirementResumeBeforeRemoval) {
         if ([bool]$before.exists -ne [bool]$retirementResume.preimage.exists -or
@@ -1893,7 +1894,7 @@ else {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
         -Before $before `
         -Processes $old `
-        -ExpectedCommand $wanted `
+        -ExpectedCommand $installedCommand `
         -ExpectedRoot $install `
         -StopMarkerExists (Test-Path -LiteralPath $stop)
 }

@@ -112,6 +112,8 @@ CA 이벤트는 `timestamp,worker_name,event,details` CSV에 JSON details를 싣
 
 `auto_update.py`의 프로토콜 1은 `PREPARED → APPLIED_PENDING_READY → CONFIRMED`와
 실패 시 `ROLLBACK_PENDING → ROLLBACK_PENDING_READY → ROLLED_BACK`을 기록한다.
+canonical 교체 전 HKCU Run·실행 중 relay는 설치된 판의 정확한 명령으로 검증한다.
+후보 설정은 교체 뒤의 새 명령에만 적용하며 실패 복귀는 원 Run 값과 인자를 그대로 복원한다.
 SYSTEM은 사용자 staging의 고정 세 파일을 보호된 작업 폴더로 복사한 다음 기존
 ES256 검증기로 manifest 서명, ZIP 크기·SHA, portable source SHA와 공개 설정 일치를 다시 확인한다.
 활성 writer 0과 검증된 묶음, 내구 PREPARED 기록이 없으면 포인터를 바꾸지 않는다.
