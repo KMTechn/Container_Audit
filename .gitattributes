@@ -6,5 +6,6 @@ kmtech_shared.lock.json text eol=lf
 vendor/kmtech_zero_pe/** text eol=lf
 tools/container_writer_sink_inventory.json -text
 tools/bootstrap_integrity.ps1 -text
+update-manifest-key-config.json -text
 tests/contracts/*.py text eol=lf
 tests/contracts/*.json text eol=lf
