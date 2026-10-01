@@ -118,6 +118,12 @@ writer 및 데이터/API 계약이 같은 판은 추가 승인 없이 기존 호
 확인 전 실패는 policy를 바꾸지 않고, CONFIRMED 뒤 역방향 승인만 보호 감사로 남긴다.
 프로토콜 1 이전 판이나 다른 공개 키의 최초 전환은 관리자 canonical 설치/복구로
 수행하고, 자동 갱신으로 우회하지 않는다.
+writer 의미가 바뀌는 첫 지원 설치에는 실제 old packet의 `source_commit`과
+`writer_sink_inventory_contract_sha256`, 새 source SHA와 새 inventory 계약 해시로 만든
+정방향·역방향 `approved_transitions`를 builder 입력에 제공한다. 새 SHA를 wildcard로
+대체하지 않으며 기본 빌드는 빈 목록을 유지한다. 정확한 사후 코드 복원은 같은 successor
+packet의 역방향 승인과 원 replacement receipt를 함께 사용한다. 핀은 코드 전이만 허용하며
+사용자 자료·신원·장부를 과거 snapshot으로 되돌리지 않는다.
 옛 releases/latest 경로를 켜지 않는다.
 
 설치 때 HiberbootEnabled를 읽고 policy에 값/읽기 결과만 기록한다.

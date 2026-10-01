@@ -5,11 +5,111 @@ import re
 import subprocess
 import sys
 
+import pytest
+
 import writer_session_fence as fence
 
 
 ROOT = Path(__file__).resolve().parents[1]
 WINPS = Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'
+
+
+def _canonical_functions():
+    return r'''
+$ErrorActionPreference='Stop'
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $env:CA_TEST_SOURCE 'INSTALL_CANONICAL_PORTABLE.ps1'),[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw 'parse errors' }
+foreach ($name in @('Test-ExactPropertySet','Test-ExactApprovedWriterTransition','Read-CanonicalReplacementRestore')) {
+    $functions=@($ast.FindAll({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -ceq $name},$true))
+    if ($functions.Count -ne 1) { throw "canonical function missing: $name" }
+    Invoke-Expression $functions[0].Extent.Text
+}
+$source=$env:CA_TEST_PACKET
+$oldManifest=[pscustomobject]@{source_commit=('1'*40);writer_sink_inventory_contract_sha256=('a'*64)}
+$sourceManifest=[pscustomobject]@{source_commit=('2'*40);writer_sink_inventory_contract_sha256=('b'*64)}
+'''
+
+
+def _run_canonical(tmp_path, approvals, command):
+    import json
+
+    packet = tmp_path / 'packet'
+    (packet / 'app').mkdir(parents=True)
+    (packet / 'app/auto-update-settings.json').write_text(
+        json.dumps({'approved_transitions': approvals}), encoding='utf-8',
+    )
+    completed = subprocess.run(
+        [str(WINPS), '-NoProfile', '-NonInteractive', '-Command',
+         _canonical_functions() + command + "\n'CANONICAL_PIN_PASS'; exit 0\n"],
+        env=dict(os.environ, CA_TEST_SOURCE=str(ROOT), CA_TEST_PACKET=str(packet)),
+        capture_output=True, text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def _manual_pin(reverse=False):
+    return dict(from_commit=('2' if reverse else '1') * 40,
+                to_commit=('1' if reverse else '2') * 40,
+                from_contract_sha256=('b' if reverse else 'a') * 64,
+                to_contract_sha256=('a' if reverse else 'b') * 64)
+
+
+@pytest.mark.parametrize('mutation', ['valid', 'unlisted', 'contract', 'wildcard', 'range', 'duplicate'])
+def test_manual_writer_transition_requires_exact_packet_pair(tmp_path, mutation):
+    approvals = [_manual_pin(), _manual_pin(reverse=True)]
+    if mutation == 'unlisted':
+        approvals[0]['from_commit'] = '3' * 40
+    elif mutation == 'contract':
+        approvals[0]['from_contract_sha256'] = 'c' * 64
+    elif mutation == 'wildcard':
+        approvals[0]['from_commit'] = '*'
+    elif mutation == 'range':
+        approvals[0]['from_commit'] = '1' * 40 + '..' + '2' * 40
+    elif mutation == 'duplicate':
+        approvals.append(dict(approvals[0]))
+    if mutation in ('wildcard', 'range', 'duplicate'):
+        expected = 'WRITER_TRANSITION_PIN_DUPLICATE' if mutation == 'duplicate' else 'WRITER_TRANSITION_PIN_INVALID'
+        command = r'''
+try { [void](Test-ExactApprovedWriterTransition $oldManifest $sourceManifest $source); throw 'accepted malformed pin' }
+catch { if ($_.Exception.Message -cne '%s') { throw } }
+''' % expected
+    else:
+        command = r'''
+if ((Test-ExactApprovedWriterTransition $oldManifest $sourceManifest $source) -ne $%s) { throw 'forward decision differs' }
+if (-not (Test-ExactApprovedWriterTransition $sourceManifest $oldManifest $source)) { throw 'reverse pin lost' }
+''' % ('true' if mutation == 'valid' else 'false')
+    _run_canonical(tmp_path, approvals, command)
+
+
+@pytest.mark.parametrize('reverse_approved', [False, True])
+def test_canonical_exact_restore_checks_reverse_pin_after_verified_receipt(tmp_path, reverse_approved):
+    approvals = [_manual_pin()]
+    if reverse_approved:
+        approvals.append(_manual_pin(reverse=True))
+    command = r'''
+$restoreReceiptFull='isolated-receipt'; $RestoreReceiptSha256='c'*64
+$sourceWriterInventory=[pscustomobject]@{semantics='new'}
+$receipt=[pscustomobject]@{transaction_id=('d'*32)}
+function Read-BootstrapReplacementReceipt { return $receipt }
+function ReadReplacementReceipt { return $receipt }
+function Sha { return $RestoreReceiptSha256 }
+function Get-BootstrapVerifiedReplacementRestoreState { return [pscustomobject]@{status='PENDING';rollback_root='isolated-old'} }
+function InstalledManifest { return $oldManifest }
+function Assert-WriterSinkInventory { return [pscustomobject]@{semantics='old'} }
+function Get-WriterInventorySemantics($inventory) { return $inventory.semantics }
+'''
+    if reverse_approved:
+        command += r'''
+$result=Read-CanonicalReplacementRestore
+if ($result.state -cne 'PENDING' -or $result.old_inventory_sha256 -cne ('a'*64)) { throw 'wrong restored inventory identity' }
+'''
+    else:
+        command += r'''
+try { [void](Read-CanonicalReplacementRestore); throw 'accepted missing reverse approval' }
+catch { if ($_.Exception.Message -cne 'CODE_RESTORE_WRITER_SEMANTICS_DIFFER') { throw } }
+'''
+    _run_canonical(tmp_path, approvals, command)
 
 
 def _exercise_transition(tmp_path, old_root):

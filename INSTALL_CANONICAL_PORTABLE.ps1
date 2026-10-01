@@ -1157,7 +1157,8 @@ function Read-CanonicalReplacementRestore {
         (Join-Path $oldRoot 'tools\container_writer_sink_inventory.json') `
         ([string]$oldManifest.writer_sink_inventory_sha256) `
         ([string]$oldManifest.writer_sink_inventory_contract_sha256)
-    if ((Get-WriterInventorySemantics $oldInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory)) {
+    if ((Get-WriterInventorySemantics $oldInventory) -cne (Get-WriterInventorySemantics $sourceWriterInventory) -and
+        -not (Test-ExactApprovedWriterTransition $sourceManifest $oldManifest $source)) {
         throw 'CODE_RESTORE_WRITER_SEMANTICS_DIFFER'
     }
     return [pscustomobject]@{

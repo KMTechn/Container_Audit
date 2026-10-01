@@ -369,6 +369,11 @@ relay의 변경 없는 ACK 완료 source는 300초 내용 검증 주기 사이�
   첫 이동은 기존 정확한 canonical 설치/복구로 수행해야 하며 자동 READY를 소급해서 가정하지 않는다.
 - **PROVEN:** 소스의 순수 결정/변조·역방향·미승인 거절과 flush-before-pointer 실패 주입,
   scheduler 명령 생성·writer inventory 검사. 실제 수명주기 증거는 아니다.
+- **지원 전이 후보(w9setupprep sub-68):** 자동 갱신을 재설계 기준 `ca6ab8f` 위로 옮기고
+  canonical 사후 복원에도 successor packet의 정확한 역방향 writer 핀을 적용한다.
+  실제 old packet(랩 `0d6aec4`, TEST1 `8928228`, 옛 `c3a1230`·`4a55e86`)에서 SHA/계약을
+  읽어 새 빌드 입력을 만든다. 호스트에서는 PlanOnly·순수 전이 판정만 확인하며 실제
+  설치·코드 복귀·현재 현장 설치 판 식별은 guest/현장 수용으로 남긴다.
 - **NOT TESTED:** 랩 guest에서 실제 설치/업그레이드/제거/복구, SYSTEM task ACL·logon race,
   일반 사용자 GUI/relay 및 미완성/장부/outbox 읽기, 후보 기동 실패 뒤 기존 코드 정상 복귀,
   전원 중단 후 재개, GUI 경고창 중 UNKNOWN 보존, 실제 서명 feed/인증·Hiberboot 읽기.

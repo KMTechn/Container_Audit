@@ -125,6 +125,10 @@ writer 계약과 데이터/API 계약이 모두 같은 판은 기존 호환 규�
 CONFIRMED 전 실패는 원래 policy를 보존하고, 확인 뒤에만 역방향 승인 감사를
 보호 policy에 기록한다. 설치 설정의 핀은 관리자 canonical 교체용이며 자동 갱신
 승인을 대신하지 않는다.
+관리자 첫 교체는 검증된 packet의 실제 출발/도착 SHA와 writer 계약 해시를 설치 설정에
+방향별로 넣는다. `RestoreVerifiedReplacement`도 검증된 successor packet의 정확한
+역방향 핀을 요구하며, 원 교체 receipt·이전 코드/record/ACL·새 writer fence 검증을 유지한다.
+목록 밖 출발 판·계약 변조·wildcard·범위·중복 핀은 허용하지 않는다.
 `DATA_API_FILES`의 실제 바이트 해시도 같아야 하며 장부·API migration은 이 기능 범위가 아니다.
 프로토콜 1이 없는 옛 묶음은 자동 전환·READY 복귀 대상으로 허용하지 않는다.
 
