@@ -391,6 +391,7 @@ CA 설치 runtime 종료/복구: 옛 stop receipt 뒤 실제 process exit를 별
 원 cfd11e4 랩 실패의 최초 조건은 rollback이 receipt를 덮어써 UNPROVEN이고,
 수정판의 실제 shell 토큰·옛 4판 설치/복구는 랩 재설치 수용으로 남긴다.
 CA 자동 업데이트 경계: 조상/코드 사전검증과 READY 읽기 경합 복귀를 보완했다.
+극단 offset의 READY 시각도 UTC 표현 가능성을 확인하며, 미확인 증거는 기한/복귀를 중단하지 않는다.
 동일 계약 예외의 실제 교환 DDL 누락도 수정했고 root/tools DDL 누락을 기계적으로 검사한다.
 합성 경계와 기존 회귀의 증거는 sub-75 보고서이며 실제 안전/위험 배치·SYSTEM·로그온은 NOT TESTED다.
 

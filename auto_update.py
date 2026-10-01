@@ -43,7 +43,10 @@ def _utc(value: Any) -> datetime:
     result = datetime.fromisoformat(value.replace("Z", "+00:00"))
     if result.tzinfo is None or result.utcoffset() is None:
         raise ValueError("update time must include an offset")
-    return result.astimezone(timezone.utc)
+    try:
+        return result.astimezone(timezone.utc)
+    except OverflowError as error:
+        raise ValueError("update time is outside the representable UTC range") from error
 
 
 def startup_action(

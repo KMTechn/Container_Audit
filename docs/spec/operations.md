@@ -118,6 +118,8 @@ SYSTEM은 credential/profile을 읽거나 작업자 프로세스를 띄우지 �
 다른 helper를 읽기 전에 bootstrap·control·version 경계를 검증한다. 위험한 조상은 설치를
 거절하므로 관리자가 승인한 안전한 배치가 필요하다. 호스트 공유 경로 ACL을 자동 교정하지 않는다.
 READY/trial 읽기 경합은 last_ready_error에 종류만 기록하고 정상 종료·코드 복귀 판단을 계속한다.
+형식은 유효해도 UTC로 표현할 수 없는 READY 시각은 미확인으로 처리한다.
+원래 기한과 정상 종료·검증된 이전 코드 복귀를 계속하며 사용자 자료를 되돌리지 않는다.
 
 builder `--auto-update-settings <JSON>`은 HTTPS `feed_url`, `channel`,
 `approved_transitions`, `profile_auth`, `apply_during_work`를 받는다.
