@@ -16165,10 +16165,7 @@ class ContainerAudit:
         if not isinstance(health, RelayHealth):
             return
         self._direct_sync_health_apply_thread_id = threading.get_ident()
-        read_failed = health.error_code in {
-            "relay_health_read_failed", "relay_status_unreadable",
-            "relay_db_open_failed", "relay_db_schema_unavailable",
-        }
+        read_failed = health.read_failed
         previous_health = getattr(self, "_direct_sync_last_read_health", None)
         has_previous_read = isinstance(previous_health, RelayHealth)
         if read_failed and has_previous_read:
@@ -16263,7 +16260,10 @@ class ContainerAudit:
                 observed_at="",
                 error_code="relay_health_not_loaded",
             )
-        detail = relay_health_detail_model(health)
+        detail = relay_health_detail_model(
+            health,
+            last_read_health=getattr(self, "_direct_sync_last_read_health", None),
+        )
         messagebox.showinfo(
             "전송 상태 상세",
             "\n".join(f"{label}: {value}" for label, value in detail.items()),

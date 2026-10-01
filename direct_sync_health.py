@@ -46,6 +46,14 @@ class RelayHealth:
     def operator_attention(self) -> bool:
         return self.state in {"review", "blocked", "isolated"}
 
+    @property
+    def read_failed(self) -> bool:
+        return self.error_code in {
+            "relay_health_read_failed", "relay_status_unreadable",
+            "relay_db_open_failed", "relay_db_schema_unavailable",
+            "relay_health_not_loaded",
+        }
+
 
 def read_relay_health(
     *,
@@ -154,16 +162,35 @@ def relay_health_card_model(
     }
 
 
-def relay_health_detail_model(health: RelayHealth) -> dict[str, str]:
-    return {
-        "대기": str(health.pending_count),
-        "영구 실패": str(health.failed_permanent_count),
-        "담당자 확인": str(health.operator_review_count),
-        "가장 오래된 대기": _compact_timestamp(health.oldest_pending_at),
-        "마지막 ACK": _compact_timestamp(health.last_acked_at),
+def relay_health_detail_model(
+    health: RelayHealth,
+    *,
+    last_read_health: RelayHealth | None = None,
+) -> dict[str, str]:
+    has_previous_read = isinstance(last_read_health, RelayHealth)
+    values = last_read_health if health.read_failed and has_previous_read else health
+    detail = {
+        "대기": str(values.pending_count),
+        "영구 실패": str(values.failed_permanent_count),
+        "담당자 확인": str(values.operator_review_count),
+        "가장 오래된 대기": _compact_timestamp(values.oldest_pending_at),
+        "마지막 ACK": _compact_timestamp(values.last_acked_at),
         "상태": health.state,
         "진단 코드": health.error_code or "없음",
     }
+    if health.read_failed:
+        if has_previous_read:
+            detail["확인 상태"] = "읽기 실패 · 마지막 확인값"
+            detail["마지막 확인 시각"] = _compact_timestamp(last_read_health.observed_at)
+        else:
+            for label in ("대기", "영구 실패", "담당자 확인", "가장 오래된 대기", "마지막 ACK"):
+                detail[label] = "미확인"
+            detail["확인 상태"] = (
+                "미확인 · 아직 읽지 못함"
+                if health.error_code == "relay_health_not_loaded"
+                else "미확인 · 읽기 실패"
+            )
+    return detail
 
 
 __all__ = [
