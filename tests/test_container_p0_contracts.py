@@ -1359,9 +1359,17 @@ def test_preflight_hold_quarantine_and_restore_transfer_exactly_one_owner(
     assert quarantined.path.exists() is False
 
 
+@pytest.mark.parametrize("separate_owner_file", [False, True])
+@pytest.mark.parametrize("acting_worker", [container_module.PROTECTED_ADMIN_OPERATOR_ID, "other-worker", "tester"])
+@pytest.mark.parametrize("restore_as_supervisor", [False, True])
+@pytest.mark.parametrize("resume_after_move", [False, True])
 def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
     tmp_path,
     monkeypatch,
+    separate_owner_file,
+    acting_worker,
+    restore_as_supervisor,
+    resume_after_move,
 ):
     module, _PreflightScanHoldStore = _hold_symbols()
     app = ContainerAudit.__new__(ContainerAudit)
@@ -1399,30 +1407,54 @@ def test_supervisor_quarantine_is_audited_and_restorable_by_original_worker(
         lambda *args, **kwargs: None,
     )
 
+    if separate_owner_file:
+        app._preflight_hold_store().start(worker="base-owner", master_raw="OTHER", scan_epoch=2)
+    app.worker_name = "tester"
     store = app._preflight_hold_store()
     store.start(worker="tester", master_raw="MASTER", scan_epoch=1)
     store.append("PRODUCT-A")
+    store.append("PRODUCT-B")
     store.mark_failed(error_code="PHS2_PREFLIGHT_UNAVAILABLE")
+    original = store.path.read_bytes()
+    app._preflight_hold_snapshot = store.load() if separate_owner_file and acting_worker != "tester" else None
+    app.worker_name = acting_worker
+    app.worker_role = "ADMIN" if acting_worker == container_module.PROTECTED_ADMIN_OPERATOR_ID else "WORKER"
+    app._authenticated_protected_admin = app.worker_role == "ADMIN"
     _linked_test_pin(app)
 
-    assert app._quarantine_preflight_hold_for_supervisor(
-        reason="supervisor_new_work_required",
-        confirm=False,
-    ) is True
+    # Enter through the same callback as the administrator operations menu.
+    assert app._quarantine_preflight_hold_from_operations() is True
+    app.worker_role = "ADMIN"
     quarantined = app._quarantined_preflight_holds()
     assert len(quarantined) == 1
     assert store.exists() is False
+    assert quarantined[0].path.read_bytes() == original
     quarantine_audit = next(row for row in audits if row[0] == "PHS2_PREFLIGHT_HOLD_QUARANTINED")
-    assert quarantine_audit[1]["held_scan_count"] == 1
+    assert quarantine_audit[1]["held_scan_count"] == 2
+    assert quarantine_audit[1]["worker"] == "tester"
+    assert quarantine_audit[1]["acting_worker"] == container_module.persistent_operator_name(acting_worker)
     assert quarantine_audit[2]["synchronous"] is True
 
-    app.worker_role = "WORKER"
-    app._authenticated_protected_admin = False
-    app.worker_name = "tester"
+    app.worker_role = "ADMIN" if restore_as_supervisor else "WORKER"
+    app._authenticated_protected_admin = restore_as_supervisor
+    app.worker_name = container_module.PROTECTED_ADMIN_OPERATOR_ID if restore_as_supervisor else "tester"
+    monkeypatch.setattr("Container_Audit.messagebox.showinfo", lambda *args, **kwargs: None)
+    if resume_after_move:
+        restore = _PreflightScanHoldStore.restore_quarantined
+        with monkeypatch.context() as interrupted:
+            def after_move(hold_store, filepath):
+                restore(hold_store, filepath)
+                raise KeyboardInterrupt("owned restore interruption")
+            interrupted.setattr(_PreflightScanHoldStore, "restore_quarantined", after_move)
+            with pytest.raises(KeyboardInterrupt):
+                app.restore_quarantined_preflight_hold(str(quarantined[0].path))
+        app._preflight_hold_snapshot = None
+        app._preflight_hold_store_instance = None
     assert app.restore_quarantined_preflight_hold(str(quarantined[0].path)) is True
     assert store.exists() is True
     assert store.load().state == module.HOLD_LOOKUP_FAILED
-    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A"]
+    assert store.load().worker == "tester"
+    assert [item.raw_barcode for item in store.load().items] == ["PRODUCT-A", "PRODUCT-B"]
     assert quarantined[0].path.exists() is False
     assert any(row[0] == "PHS2_PREFLIGHT_HOLD_RESTORED" for row in audits)
 
@@ -2501,7 +2533,8 @@ def test_close_hands_draining_hold_and_current_tray_to_restart_without_delete(
     ]
 
 
-def test_busy_lane_refuses_scan_out_of_entry_until_idle_lane_admits_rescan():
+@pytest.mark.parametrize("busy_flag", ["_live_scan_save_pending", "_completion_lane_busy"])
+def test_busy_lane_preserves_scans_fifo_until_idle_exactly_once(busy_flag):
     class Entry:
         def __init__(self, value):
             self.value = value
@@ -2541,33 +2574,49 @@ def test_busy_lane_refuses_scan_out_of_entry_until_idle_lane_admits_rescan():
     app._scan_callback_pending = False
     app._scan_callback_epoch = 1
     app.COLOR_DANGER = "danger"
+    app.COLOR_PRIMARY = "primary"
+    app.current_tray = TraySession()
+    setattr(app, busy_flag, True)
     app.statuses = []
     app.show_status_message = lambda *args, **kwargs: app.statuses.append(args)
     app.error_sounds = []
     app.error_sound = SimpleNamespace(play=lambda: app.error_sounds.append(1))
+    app._start_warning_beep = app.error_sound.play
+    accepted = []
+    app._process_barcode_logic = accepted.append
 
     app.process_barcode()
-    # Another task holds the lane: the value leaves the entry with a sound, so
-    # the next scan cannot join it (w9scanflow F1).
     assert app.scan_entry.value == ""
     assert app.root.jobs == []
-    assert app.error_sounds == [1]
-    assert app.statuses[-1][0] == "처리 중이라 이번 스캔은 받지 않았습니다. 다시 스캔하세요."
+    app.scan_entry.value = "PRODUCT-B"
+    app.process_barcode()
+    assert app.scan_entry.value == ""
+    assert app._scans_behind_save == ["PRODUCT-A", "PRODUCT-B"]
+    app._process_next_scan_behind_save()
+    assert accepted == []
+    assert app._scans_behind_save == ["PRODUCT-A", "PRODUCT-B"]
+    assert app.error_sounds == []
 
     app._ui_lane = None
+    setattr(app, busy_flag, False)
     app._warning_state_presenter = lambda: SimpleNamespace(
         state=SimpleNamespace(is_blocking=False)
     )
-    accepted = []
-    app._process_barcode_logic = accepted.append
-    app.scan_entry.value = "PRODUCT-A"
+    # A scan arriving at idle must stay behind both retained scans.
+    app.scan_entry.value = "PRODUCT-C"
     app.process_barcode()
-    assert app.scan_entry.value == "PRODUCT-A"
+    assert app.scan_entry.value == ""
+    assert app._scans_behind_save == ["PRODUCT-A", "PRODUCT-B", "PRODUCT-C"]
+    app._process_next_scan_behind_save()
     assert len(app.root.jobs) == 1
 
-    callback, args = app.root.jobs.pop(0)
-    callback(*args)
-    assert accepted == ["PRODUCT-A"]
+    while app.root.jobs:
+        callback, args = app.root.jobs.pop(0)
+        callback(*args)
+    app._process_next_scan_behind_save()
+    assert accepted == ["PRODUCT-A", "PRODUCT-B", "PRODUCT-C"]
+    assert app._scans_behind_save == []
+    assert app.error_sounds == []
     assert app.scan_entry.value == ""
 
 

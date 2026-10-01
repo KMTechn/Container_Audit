@@ -1700,7 +1700,9 @@ class ContainerAudit:
             self._ui_lane = lane
         return lane
 
-    def _preflight_hold_store(self) -> PreflightScanHoldStore:
+    def _preflight_hold_store(
+        self, *, owner_worker: Optional[str] = None, preflight_id: str = "",
+    ) -> PreflightScanHoldStore:
         filename = str(
             getattr(
                 self,
@@ -1716,8 +1718,18 @@ class ContainerAudit:
         path = Path(save_root) / filename
         # Keep another worker's original in place. This worker gets a separate
         # hold file; ownership and PIN rules still apply to the original label.
-        if getattr(self, "worker_name", ""):
-            worker = persistent_operator_name(self.worker_name)
+        worker_name = getattr(self, "worker_name", "") if owner_worker is None else owner_worker
+        if preflight_id:
+            for candidate in (path, *path.parent.glob(f"{path.stem}_*.json")):
+                try:
+                    held = PreflightScanHoldStore.load_path(candidate)
+                except PreflightHoldError:
+                    continue
+                if held.preflight_id == preflight_id:
+                    path, worker_name = candidate, ""
+                    break
+        if worker_name:
+            worker = persistent_operator_name(worker_name)
             suffix = hashlib.sha256(worker.encode("utf-8")).hexdigest()[:16]
             worker_path = path.with_name(f"{path.stem}_{suffix}.json")
             try:
@@ -1859,6 +1871,8 @@ class ContainerAudit:
         if not isinstance(snapshot, PreflightHoldSnapshot):
             store = self._preflight_hold_store()
             try:
+                if not store.exists():
+                    store = self._preflight_hold_store(owner_worker="")
                 snapshot = store.load() if store.exists() else None
             except PreflightHoldError:
                 return False
@@ -1894,8 +1908,15 @@ class ContainerAudit:
         confirm: bool = True,
         approval: Optional[Dict[str, str]] = None,
     ) -> bool:
-        store = self._preflight_hold_store()
+        # An explicit PIN action owns the selected original, rather than the
+        # acting worker's separate field-work file. Without a selection, use
+        # this worker's hold if present, then the original computer hold.
+        selected = getattr(self, "_preflight_hold_snapshot", None)
+        store = (self._preflight_hold_store(owner_worker=selected.worker)
+                 if selected is not None else self._preflight_hold_store())
         try:
+            if selected is None and not store.exists():
+                store = self._preflight_hold_store(owner_worker="")
             snapshot = store.load()
         except PreflightHoldError:
             messagebox.showerror(
@@ -2042,11 +2063,17 @@ class ContainerAudit:
                 parent=getattr(self, "root", None),
             )
             return False
-        store = self._preflight_hold_store()
+        store = self._preflight_hold_store(owner_worker=getattr(
+            getattr(self, "_preflight_hold_snapshot", None), "worker", ""))
         try:
             path = Path(filepath).resolve()
             original_present = path.is_file()
+            if not original_present:
+                identity = re.match(r"^preflight_hold_(preflight-[0-9a-f]{32})_", path.name)
+                if identity:
+                    store = self._preflight_hold_store(preflight_id=identity[1])
             snapshot = PreflightScanHoldStore.load_path(path if original_present else store.path)
+            store = self._preflight_hold_store(owner_worker=snapshot.worker)
             digest = file_sha256(path if original_present else store.path)
             pin_store = self._admin_pin_store()
             target_id = hashlib.sha256(canonical_master_label_key(snapshot.master_raw).encode("utf-8")).hexdigest()
@@ -8057,7 +8084,7 @@ class ContainerAudit:
         startup = bool(getattr(self, "_admin_pin_detach_startup", False))
         clear_active = False
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
-            hold = self._preflight_hold_store()
+            hold = self._preflight_hold_store(preflight_id=source.get("preflight_id", ""))
             if hold.path.is_file():
                 if hashlib.sha256(hold.path.read_bytes()).hexdigest() != source["hold_sha256"]:
                     return False
@@ -8580,7 +8607,7 @@ class ContainerAudit:
         action = intent.get("action")
         key = intent.get("operation_key")
         if action == "CA.PRECHECK_HOLD":
-            hold = self._preflight_hold_store()
+            hold = self._preflight_hold_store(preflight_id=source.get("preflight_id", ""))
             if hold.path.exists():
                 return False
             for path in self._preflight_hold_quarantine_directory().glob(
@@ -8700,7 +8727,8 @@ class ContainerAudit:
                 or (action == "CA.TRAY_HOLD" and isinstance(source.get("tray"), dict))):
             return
         current = Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE
-        hold = self._preflight_hold_store()
+        hold = (self._preflight_hold_store(preflight_id=source.get("preflight_id", ""))
+                if action == "CA.PRECHECK_HOLD" else self._preflight_hold_store())
         if hold.path.exists() or current.exists():
             return
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
@@ -8770,7 +8798,7 @@ class ContainerAudit:
                 return False
             return self._admin_pin_recovered_effect(intent)
         if action == "CA.PRECHECK_HOLD" and source.get("hold_sha256"):
-            hold = self._preflight_hold_store()
+            hold = self._preflight_hold_store(preflight_id=source.get("preflight_id", ""))
             if hold.path.exists():
                 return False
             for path in self._preflight_hold_quarantine_directory().glob(
@@ -8835,7 +8863,7 @@ class ContainerAudit:
             return True
         action = intent.get("action")
         if action == "CA.PRECHECK_HOLD":
-            return not self._preflight_hold_store().path.is_file()
+            return not self._preflight_hold_store(preflight_id=source.get("preflight_id", "")).path.is_file()
         if source.get("handoff_id"):
             return not (self._paired_preflight_store().directory
                         / str(source["handoff_id"]) / "record.json").is_file()
@@ -18597,6 +18625,9 @@ class ContainerAudit:
     def park_current_tray(self, *, confirm: bool = True) -> bool:
         """현재 진행 중인 트레이를 보류 목록으로 이동시킵니다."""
         hold_store = self._preflight_hold_store()
+        if not self.current_tray.master_label_code and not hold_store.exists():
+            hold_store = self._preflight_hold_store(owner_worker=getattr(
+                getattr(self, "_preflight_hold_snapshot", None), "worker", ""))
         if hold_store.exists() or self._preflight_context_blocks_mutation():
             if not getattr(self.current_tray, "master_label_code", ""):
                 return self._quarantine_preflight_hold_for_supervisor(
