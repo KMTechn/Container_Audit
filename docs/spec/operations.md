@@ -763,7 +763,20 @@ CA-T01의 이름 14개와 실제 register→ValueError, CA-T02의 malformed JSON
 독점 보유하지 않는다. 높은 권한의 stage journal·stream·summary·placement log·
 replacement/restore 결과는 `C:\KMTech\Apps\Container_Audit\update-control\installation-evidence\run-<guid>`에 둔다.
 폴더 소유자는 Administrators, SYSTEM/Administrators만 쓰며 operator는 읽기만 한다.
-상위 폴더가 사용자 소유·쓰기 가능·재분석 지점이면 한국어 한 줄로 거절한다.
+일반 부모의 사전 검사는 앱 부모 부재와 두 공유 조상의 검토된 기본 ACL 모양을
+지원 상승 단계로 넘긴다. 사용자 소유·재분석 지점·지원 모양 밖의 쓰기 권한은
+한국어 한 줄로 거절한다. 높은 권한 단계는 증거 생성 전에 두 조상
+`C:\KMTech`·`C:\KMTech\Apps`에만 비재귀 강화 B를 적용하고, 앱 부모를
+보호된 DACL로 생성·신뢰 재검사한 뒤 control/store/run을 만든다. 이미 목표
+모양이면 확인만 하며 뒤의 writer-fence 획득 후 B도 ACL을 다시 바꾸지 않는다.
+공유 조상 보호는 제거·되돌리기로 원래 권한에 복귀하지 않는다.
+준비 중 메모리에 모은 단계 경계·전후 SDDL은 run 생성 직후 `preparation.json`에
+내구 기록한다. run 생성 전 실패는 높은 권한의 사용자 쓰기 가능 대체 경로를
+만들지 않고 종료 코드 61(지원 밖 ACL), 62(재분석), 63(소유자), 64(앱 부모 생성),
+65(control/증거 생성), 66(기타)로 돌아온다. 일반 부모가 자신의 journal에
+`PREPARATION_FAILED`와 `INSTALLATION_PREPARATION_*` 한국어 진단을 기록하며,
+이 경우 원 ErrorRecord는 회수하지 못했다고 표시한다. 기존 보호 경로 검사
+실패는 원 ErrorRecord를 먼저 가림·상한 적용해 기록하고 inner exception을 보존한다.
 관리자 단계가 시작할 때 최근 5회만 남긴다. 일반 부모가 보호된 원본을 읽고
 자신의 operator evidence/결과 경로에 요약·필요한 결과 사본을 쓴다.
 

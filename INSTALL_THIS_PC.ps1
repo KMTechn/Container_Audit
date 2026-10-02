@@ -1035,7 +1035,14 @@ if (
 $helperInstallationEvidenceRoot=''
 if (-not $DryRun.IsPresent -and ($ElevationLogPath -or (Test-InstallationEvidencePrivileged))) {
     if(-not $ElevationLogPath){$ElevationLogPath='helper-audit'}
-    $helperInstallationEvidenceRoot=Initialize-InstallationEvidence $ElevationLogPath $OperatorSid @($WriterFenceDelegationToken)
+    try{
+        # Prepare shared ancestors and the protected app/control/run before
+        # evidence creation or delegated writer-fence acquisition.
+        $helperInstallationEvidenceRoot=Initialize-InstallationEvidence $ElevationLogPath $OperatorSid @($WriterFenceDelegationToken)
+    }catch{
+        if(Test-InstallationEvidencePrivileged){exit (Get-InstallationPreparationExitCode $_)}
+        throw
+    }
     if(Test-InstallationEvidencePrivileged){
         $ElevationLogPath=Join-Path $helperInstallationEvidenceRoot 'placement-result.jsonl'
         if($ReplaceExistingVerifiedPortable -and $ReplacementReceiptPath){$ReplacementReceiptPath=Join-Path $helperInstallationEvidenceRoot 'replacement-receipt.json'}

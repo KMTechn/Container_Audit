@@ -464,3 +464,12 @@ Pending: final-source focused/guard/collect, declarations/transition/stock,
 independent review and fifth lab acceptance. Compatibility E remains deferred by coordinator
 decision. Shared ACL protection is retained after rollback/uninstall; IW/LM
 changes and the central hub belong to their owners/coordinator.
+
+First-run preparation ordering is implemented: ordinary preflight admits missing
+app parents/reviewed default ancestor ACLs; the elevated path protects the two
+shared ancestors before protected app/control/run creation. Pre-run failures use
+codes 61–66 and ordinary Korean diagnostics; protected path refusals retain their
+original exception chain. Source/memory-ACL regression evidence is recorded in
+`D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-111/REPORT.md`.
+Native folder creation/ACL application, declarations/stock/packet transition and
+fifth lab installation remain NOT TESTED by this subtask.

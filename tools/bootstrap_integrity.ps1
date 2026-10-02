@@ -44,7 +44,7 @@ function Get-InstallationFailureDetails($Failure) {
     return [ordered]@{script_file=$file;script_line=$line;exception_chain=$chain}
 }
 
-function Set-InstallationEvidenceAcl([string]$Path, [string]$Sid, [switch]$Directory) {
+function Set-InstallationEvidenceAcl([string]$Path, [string]$Sid, [switch]$Directory, [switch]$PrepareOnly) {
     $acl = if ($Directory) { New-Object Security.AccessControl.DirectorySecurity } else { New-Object Security.AccessControl.FileSecurity }
     $acl.SetAccessRuleProtection($true,$false)
     $privileged=Test-InstallationEvidencePrivileged
@@ -57,6 +57,7 @@ function Set-InstallationEvidenceAcl([string]$Path, [string]$Sid, [switch]$Direc
         else { $rule=[Security.AccessControl.FileSystemAccessRule]::new($principal,$rights,'Allow') }
         $acl.AddAccessRule($rule)
     }
+    if($PrepareOnly){return $acl}
     Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
 }
 
@@ -71,45 +72,120 @@ function Get-InstallationEvidenceControlRoot {
     return 'C:\KMTech\Apps\Container_Audit\update-control'
 }
 
-function Assert-InstallationEvidenceProtectedPath([string]$Path) {
-    try { Assert-BootstrapProtectedRelayPath $Path }
-    catch { throw ('설치 증거 폴더를 사용할 수 없습니다: '+$Path+' (상위 폴더 소유자·쓰기 권한·재분석 지점을 확인하세요)') }
+function Assert-InstallationEvidenceProtectedPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    try {
+        if($AllowSupportedPreparation){Assert-BootstrapProtectedRelayPath $Path -AllowSupportedPreparation}
+        else{Assert-BootstrapProtectedRelayPath $Path}
+    }
+    catch {
+        Write-InstallationCaughtFailure $_
+        throw [InvalidOperationException]::new(('설치 증거 폴더를 사용할 수 없습니다: '+$Path+' (상위 폴더 소유자·쓰기 권한·재분석 지점을 확인하세요)'),$_.Exception)
+    }
+}
+
+function Get-InstallationPreparationExitCode($Failure) {
+    $exception=if($Failure -is [Exception]){$Failure}else{$Failure.Exception}
+    for($depth=0;$null -ne $exception -and $depth -lt 8;$depth++){
+        if($exception.Data.Contains('installation_preparation_exit_code')){return [int]$exception.Data['installation_preparation_exit_code']}
+        $exception=$exception.InnerException
+    }
+    return 66
+}
+
+function Get-InstallationPreparationDiagnostic([int]$ExitCode) {
+    $diagnostics=@{
+        61=@('UNSUPPORTED_ACL','상위 폴더 권한이 지원하는 기본값 또는 보호된 값과 다릅니다.')
+        62=@('REPARSE_POINT','설치 경로에 재분석 지점이 있어 바탕을 준비할 수 없습니다.')
+        63=@('UNTRUSTED_OWNER','설치 폴더 소유자를 신뢰할 수 없어 바탕을 준비할 수 없습니다.')
+        64=@('APP_PARENT_CREATE','보호된 앱 폴더를 만들지 못했습니다.')
+        65=@('CONTROL_CREATE','보호된 설치 제어·증거 폴더를 만들지 못했습니다.')
+        66=@('OTHER','설치 바탕 준비 중 오류가 발생했습니다.')
+    }
+    $entry=$diagnostics[$ExitCode]
+    if($null -eq $entry){return $null}
+    return [pscustomobject]@{code=('INSTALLATION_PREPARATION_'+$entry[0]);message=($entry[1]+' 지원 담당자에게 문의하세요.');exit_code=$ExitCode}
+}
+
+function New-InstallationProtectedDirectory([string]$Path,[string]$Sid) {
+    $parent=Split-Path -Parent $Path
+    if($parent -ieq 'C:\KMTech\Apps'){Assert-InstallationEvidenceProtectedPath $Path -AllowSupportedPreparation}
+    else{Assert-InstallationEvidenceProtectedPath $parent}
+    if(-not(Test-Path -LiteralPath $Path)){
+        # Apply the protected DACL at creation, before inheritable child-write
+        # rights from the shared Apps directory can reach this application.
+        $acl=Set-InstallationEvidenceAcl $Path $Sid -Directory -PrepareOnly
+        if($PSVersionTable.PSEdition -ceq 'Core'){[IO.FileSystemAclExtensions]::Create([IO.DirectoryInfo]::new($Path),$acl)}
+        else{[void][IO.Directory]::CreateDirectory($Path,$acl)}
+    }
+    Assert-InstallationEvidenceProtectedPath $Path
+}
+
+function Initialize-InstallationProtectedBase([string]$Sid) {
+    $control=Get-InstallationEvidenceControlRoot
+    $appParent=Split-Path -Parent $control
+    # Admit all existing paths before changing either shared ancestor. Missing
+    # reviewed paths/default ancestor ACLs are supported only for preparation.
+    Assert-InstallationEvidenceProtectedPath $(if(Test-Path -LiteralPath $control){$control}else{$appParent}) -AllowSupportedPreparation
+    $Script:InstallationPreparationEvents=[Collections.Generic.List[object]]::new()
+    Write-InstallationEvidenceEvent ([ordered]@{event='PREPARATION_START';stage='shared_ancestors';captured_at=[DateTime]::UtcNow.ToString('o')})
+    [void](Protect-KmtechCodeAncestors $appParent -BeforeAppCreation)
+    Write-InstallationEvidenceEvent ([ordered]@{event='PREPARATION_STAGE';stage='app_parent';captured_at=[DateTime]::UtcNow.ToString('o')})
+    try{New-InstallationProtectedDirectory $appParent $Sid}
+    catch{
+        if((Get-InstallationPreparationExitCode $_) -eq 66){$_.Exception.Data['installation_preparation_exit_code']=64}
+        throw
+    }
+    Assert-InstallationEvidenceProtectedPath $appParent
+    Write-InstallationEvidenceEvent ([ordered]@{event='PREPARATION_STAGE';stage='control';captured_at=[DateTime]::UtcNow.ToString('o')})
 }
 
 function New-InstallationProtectedEvidenceRun([string]$Sid,[string]$RunRoot='') {
     try{[void][Security.Principal.SecurityIdentifier]::new($Sid)}catch{throw 'Installation evidence operator SID is invalid.'}
+    Initialize-InstallationProtectedBase $Sid
     $control=Get-InstallationEvidenceControlRoot
-    if(-not(Test-Path -LiteralPath $control)) {
-        Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $control)
-        [void][IO.Directory]::CreateDirectory($control)
-        Assert-InstallationEvidenceProtectedPath $control
-        Set-InstallationEvidenceAcl $control $Sid -Directory
-    }
-    Assert-InstallationEvidenceProtectedPath $control
     $store=Join-Path $control 'installation-evidence'
-    if(-not(Test-Path -LiteralPath $store)) {
-        [void][IO.Directory]::CreateDirectory($store)
-        Assert-InstallationEvidenceProtectedPath $store
-        Set-InstallationEvidenceAcl $store $Sid -Directory
+    try{
+        New-InstallationProtectedDirectory $control $Sid
+        New-InstallationProtectedDirectory $store $Sid
+    }catch{
+        if((Get-InstallationPreparationExitCode $_) -eq 66){$_.Exception.Data['installation_preparation_exit_code']=65}
+        throw
     }
-    Assert-InstallationEvidenceProtectedPath $store
     if(-not $RunRoot){$RunRoot=Join-Path $store ('run-'+[Guid]::NewGuid().ToString('N'))}
     $RunRoot=Get-StrictFullPath $RunRoot 'protected installation run'
     if(-not(Test-BootstrapSamePath (Split-Path -Parent $RunRoot) $store) -or
         [IO.Path]::GetFileName($RunRoot) -cnotmatch '^run-[0-9a-f]{32}$'){throw 'Protected installation run binding differs.'}
-    if(Test-Path -LiteralPath $RunRoot){Assert-InstallationEvidenceProtectedPath $RunRoot;return $RunRoot}
-    # Check inherited owner/rights before setting the explicit evidence ACL.
-    # Never repair a user-owned or user-writable preclaimed directory.
+    if(Test-Path -LiteralPath $RunRoot){
+        Assert-InstallationEvidenceProtectedPath $RunRoot
+        # The wrapper already persisted this run's initial preparation proof.
+        $Script:InstallationPreparationEvents=$null
+        return $RunRoot
+    }
+    # Creation supplies the protected DACL atomically; existing directories are
+    # checked as-is and never repaired when user-owned or user-writable.
     $prior=@(Get-ChildItem -LiteralPath $store -Directory -Force | Where-Object {$_.Name -cmatch '^run-[0-9a-f]{32}$'} | Sort-Object CreationTimeUtc -Descending)
     foreach($old in @($prior | Select-Object -Skip 4)) {
         Assert-InstallationEvidenceProtectedPath $old.FullName
         Assert-BootstrapNoReparsePoint $old.FullName 'expired installation evidence'
         Remove-Item -LiteralPath $old.FullName -Recurse -ErrorAction Stop
     }
-    [void][IO.Directory]::CreateDirectory($RunRoot)
-    Assert-InstallationEvidenceProtectedPath $RunRoot
-    Set-InstallationEvidenceAcl $RunRoot $Sid -Directory
-    Assert-InstallationEvidenceProtectedPath $RunRoot
+    try{New-InstallationProtectedDirectory $RunRoot $Sid}
+    catch{
+        if((Get-InstallationPreparationExitCode $_) -eq 66){$_.Exception.Data['installation_preparation_exit_code']=65}
+        throw
+    }
+    $pending=Get-Variable -Name InstallationPreparationEvents -Scope Script -ErrorAction SilentlyContinue
+    if($null -ne $pending -and $null -ne $pending.Value){
+        Write-InstallationEvidenceEvent ([ordered]@{event='PREPARATION_END';stage='protected_run';captured_at=[DateTime]::UtcNow.ToString('o')})
+        $path=Join-Path $RunRoot 'preparation.json'
+        Assert-InstallationEvidenceProtectedPath $RunRoot
+        $bytes=[Text.UTF8Encoding]::new($false).GetBytes((Protect-InstallationText ($pending.Value.ToArray() | ConvertTo-Json -Depth 12) -Limit 1048576))
+        if($bytes.Length -gt 1048576 -or (Test-Path -LiteralPath $path)){throw 'Installation preparation evidence is invalid.'}
+        $stream=[IO.FileStream]::new($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::Read)
+        try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+        Set-InstallationEvidenceAcl $path $Sid
+        $Script:InstallationPreparationEvents=$null
+    }
     return $RunRoot
 }
 
@@ -150,6 +226,11 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
 }
 
 function Write-InstallationEvidenceEvent($Payload) {
+    $pending=Get-Variable -Name InstallationPreparationEvents -Scope Script -ErrorAction SilentlyContinue
+    if($null -ne $pending -and $null -ne $pending.Value){
+        $Payload['captured_at']=[DateTime]::UtcNow.ToString('o')
+        $pending.Value.Add($Payload);return
+    }
     $root = Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if (-not $root) { return }
     try {
@@ -332,14 +413,19 @@ $target=[string]$args[0];$resultPath=[string]$args[1];$auditBase=[string]$args[2
 $parentPid=[int]$args[4];$targetSha=[string]$args[5];$librarySha=[string]$args[6]
 $childArgs=[string[]]@($args | Select-Object -Skip 7)
 $library=Join-Path (Split-Path -Parent $target) 'tools\bootstrap_integrity.ps1'
-$libraryBlock=Get-InstallationVerifiedScript $library $librarySha
-. $libraryBlock
-$Script:InstallationEvidencePrivileged=$true
-$Script:InstallationProtectedRunRoot=Split-Path -Parent $resultPath
-[void](New-InstallationProtectedEvidenceRun $sid $Script:InstallationProtectedRunRoot)
 $index=[Array]::IndexOf($childArgs,'-WriterFenceDelegationToken')
 $sensitive=@();if($index -ge 0 -and $index+1 -lt $childArgs.Length){$sensitive=@($childArgs[$index+1])}
-$captureRoot=Initialize-InstallationEvidence (Join-Path $Script:InstallationProtectedRunRoot 'elevation-capture') $sid $sensitive
+try{
+ $libraryBlock=Get-InstallationVerifiedScript $library $librarySha
+ . $libraryBlock
+ $Script:InstallationEvidencePrivileged=$true
+ $Script:InstallationProtectedRunRoot=Split-Path -Parent $resultPath
+ $captureRoot=Initialize-InstallationEvidence (Join-Path $Script:InstallationProtectedRunRoot 'elevation-capture') $sid $sensitive
+}catch{
+ # No privileged fallback to an operator-writable path before the run exists.
+ if(Get-Command Get-InstallationPreparationExitCode -ErrorAction SilentlyContinue){exit (Get-InstallationPreparationExitCode $_)}
+ exit 66
+}
 $child=$null;$failure=$null;$helperRoot='';$exitCode=1
 try {
  Set-InstallationEvidenceStage 'elevation.helper_capture'
@@ -382,9 +468,9 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     if(Test-Path -LiteralPath $resultPath){throw 'Elevation capture target already exists.'}
     $control=Get-InstallationEvidenceControlRoot
     $ancestor=if(Test-Path -LiteralPath $control){$control}else{Split-Path -Parent $control}
-    # Return the supported Korean refusal to the ordinary caller before UAC;
-    # the elevated creator repeats the same trust check before any write.
-    Assert-InstallationEvidenceProtectedPath $ancestor
+    # Missing app/shared folders and the reviewed default ancestor shape are
+    # prepared by the supported elevated creator; all other paths still refuse.
+    Assert-InstallationEvidenceProtectedPath $ancestor -AllowSupportedPreparation
     $protectedRun=Join-Path (Join-Path $control 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
     $protectedResult=Join-Path $protectedRun 'elevation-result.json'
     $library=Join-Path (Split-Path -Parent $Target) 'tools\bootstrap_integrity.ps1'
@@ -396,6 +482,14 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     # Verb RunAs cannot share RedirectStandardOutput/Error parameter sets.
     # The supported elevated wrapper captures its finite helper internally.
     $process=Start-Process -FilePath $winps -Verb RunAs -ArgumentList $line -WindowStyle Hidden -Wait -PassThru
+    $preparationFailure=Get-InstallationPreparationDiagnostic ([int]$process.ExitCode)
+    if($null -ne $preparationFailure -and -not(Test-Path -LiteralPath $protectedResult)){
+        Write-InstallationEvidenceEvent ([ordered]@{event='PREPARATION_FAILED';wrapper_pid=[int]$process.Id;exit_code=[int]$process.ExitCode;
+            diagnostic_code=$preparationFailure.code;message=$preparationFailure.message;protected_run_root=$protectedRun;original_failure_available=$false})
+        $failure=[InvalidOperationException]::new($preparationFailure.message+' ['+$preparationFailure.code+']')
+        $failure.Data['installation_preparation_exit_code']=[int]$process.ExitCode
+        throw $failure
+    }
     Assert-InstallationEvidenceProtectedPath $protectedResult
     if((Get-Item -LiteralPath $protectedResult).Length -gt 65536){throw 'Elevation result is oversized.'}
     $resultText=Get-Content -LiteralPath $protectedResult -Raw -Encoding UTF8
@@ -675,7 +769,7 @@ function Get-StrictFullPath([string]$Path, [string]$Purpose) {
     return $full
 }
 
-function Protect-KmtechCodeAncestors([string]$CodeParent) {
+function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,[switch]$BeforeAppCreation) {
     # Deliberately persistent, non-recursive protection of these two shared paths.
     # Never restore their old permissions as part of an app rollback/uninstall.
     if (-not ([IO.Path]::GetDirectoryName([IO.Path]::GetFullPath($CodeParent))).Equals('C:\KMTech\Apps',[StringComparison]::OrdinalIgnoreCase)) {
@@ -685,6 +779,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent) {
     foreach ($path in @('C:\KMTech','C:\KMTech\Apps')) {
         $reason=''
         if (-not (Test-Path -LiteralPath $path)) {
+            if($AdmissionOnly){continue}
             $ancestor=Split-Path -Parent $path
             $entry=Get-Item -LiteralPath $ancestor -ErrorAction Stop
             if ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint) { $reason='상위 폴더가 재분석 지점입니다' }
@@ -719,10 +814,12 @@ function Protect-KmtechCodeAncestors([string]$CodeParent) {
             $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $path ($reason). 지원 담당자에게 문의하세요.")
             $failure.Data['canonical_code']='CONTAINER_PLACEMENT_ANCESTOR_TRUST_FAILED'
             $failure.Data['ancestor_trust_failure']=$failure.Message
+            $failure.Data['installation_preparation_exit_code']=if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){62}elseif($owner -cne 'S-1-5-32-544'){63}else{61}
             throw $failure
         }
         $plans+=@{path=$path;acl=$acl;before=$before;default_shape=$defaultShape;target_shape=$targetShape}
     }
+    if($AdmissionOnly){return}
     # Both existing shapes are admitted before the first ACL write.
     foreach($plan in $plans) {
         $path=$plan.path; $acl=$plan.acl; $before=$plan.before
@@ -764,7 +861,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent) {
     }
     # The app directory is the guarded leaf; Apps/KMTech are higher ancestors,
     # where direct creation remains allowed. This also rejects user-owned squatters.
-    try { Assert-ProtectedCodeAncestors $CodeParent }
+    try { if(-not $BeforeAppCreation){Assert-ProtectedCodeAncestors $CodeParent} }
     catch {
         Write-InstallationCaughtFailure $_
         $failure=[InvalidOperationException]::new("설치 폴더 권한을 확인하세요: $CodeParent (코드 경로의 신뢰 재검사가 실패했습니다). 지원 담당자에게 문의하세요.",$_.Exception)
@@ -966,21 +1063,36 @@ function Test-BootstrapJsonInteger($Value) {
     return ($Value -is [int] -or $Value -is [long])
 }
 
-function Assert-BootstrapProtectedRelayPath([string]$Path) {
+function Assert-BootstrapProtectedRelayPath([string]$Path,[switch]$AllowSupportedPreparation) {
+    if($AllowSupportedPreparation){Protect-KmtechCodeAncestors 'C:\KMTech\Apps\Container_Audit' -AdmissionOnly}
     $full=Get-StrictFullPath $Path 'protected relay path';$leaf=$true
     while($full) {
+        $shared=$full -in @('C:\KMTech','C:\KMTech\Apps')
+        if($AllowSupportedPreparation -and -not(Test-Path -LiteralPath $full) -and
+            ($shared -or $full -ieq 'C:\KMTech\Apps\Container_Audit')){
+            $full=[IO.Path]::GetDirectoryName($full);$leaf=$false;continue
+        }
         $entry=Get-Item -LiteralPath $full -ErrorAction Stop
-        if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Relay path contains a reparse point.'}
+        if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){
+            $failure=[InvalidOperationException]::new('Relay path contains a reparse point.')
+            $failure.Data['installation_preparation_exit_code']=62;throw $failure
+        }
         $acl=Get-Acl -LiteralPath $full -ErrorAction Stop
         if($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cnotin @(
             'S-1-5-18','S-1-5-32-544','S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
-        )){throw 'Relay path owner is not privileged.'}
+        )){
+            $failure=[InvalidOperationException]::new('Relay path owner is not privileged.')
+            $failure.Data['installation_preparation_exit_code']=63;throw $failure
+        }
         $mask=if($leaf){0x500D0156}else{0x500D0150}
         foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
             if($rule.AccessControlType -eq 'Allow' -and
                 -not($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
                 $rule.IdentityReference.Value -cnotin @('S-1-5-18','S-1-5-32-544') -and
-                ([int64]$rule.FileSystemRights -band $mask)){throw 'Relay path is user mutable.'}
+                ([int64]$rule.FileSystemRights -band $mask) -and -not($AllowSupportedPreparation -and $shared)){
+                $failure=[InvalidOperationException]::new('Relay path is user mutable.')
+                $failure.Data['installation_preparation_exit_code']=61;throw $failure
+            }
         }
         if($full -eq [IO.Path]::GetPathRoot($full)){break}
         $full=[IO.Path]::GetDirectoryName($full);$leaf=$false

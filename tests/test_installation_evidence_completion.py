@@ -69,6 +69,12 @@ $fixtureOverrides=@'
 function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_CONTRACT_ROOT 'update-control')}
 function Set-InstallationEvidenceAcl {}
 function Assert-BootstrapProtectedRelayPath {param($Path) Assert-BootstrapNoReparsePoint $Path 'owned synthetic protected folder' -PathOnly}
+function Initialize-InstallationProtectedBase {param($Sid) Assert-InstallationEvidenceProtectedPath (Split-Path -Parent (Get-InstallationEvidenceControlRoot))}
+function New-InstallationProtectedDirectory {param($Path,$Sid)
+ Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $Path)
+ [void][IO.Directory]::CreateDirectory($Path)
+ Assert-InstallationEvidenceProtectedPath $Path
+}
 '@
 [IO.File]::AppendAllText((Join-Path $fixture 'tools\bootstrap_integrity.ps1'),("`n"+$fixtureOverrides))
 function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_CONTRACT_ROOT 'update-control')}

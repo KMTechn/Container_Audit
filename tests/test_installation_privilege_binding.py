@@ -116,6 +116,12 @@ def test_privileged_run_retention_write_roots_and_untrusted_parent(tmp_path, eng
 $Script:InstallationEvidencePrivileged=$true
 function Get-InstallationEvidenceControlRoot {return (Join-Path $env:CA_CONTRACT_ROOT 'update-control')}
 function Set-InstallationEvidenceAcl {}
+function Initialize-InstallationProtectedBase {param($Sid) Assert-InstallationEvidenceProtectedPath (Split-Path -Parent (Get-InstallationEvidenceControlRoot))}
+function New-InstallationProtectedDirectory {param($Path,$Sid)
+ Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $Path)
+ [void][IO.Directory]::CreateDirectory($Path)
+ Assert-InstallationEvidenceProtectedPath $Path
+}
 # The actual native trust reader sees the ordinary owner of this owned tmp.
 try{[void](New-InstallationProtectedEvidenceRun 'S-1-5-21-111-222-333-1001');throw 'untrusted parent admitted'}catch{
  if($_.Exception.Message -notlike '설치 증거 폴더를 사용할 수 없습니다:*' -or $_.Exception.Message -match "`r|`n"){throw}
