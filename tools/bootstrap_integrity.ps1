@@ -246,8 +246,7 @@ function Read-InstallationOwnedParentRepair([string]$InstallRoot,[string]$LocalA
     $saved=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
     try{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$old.writer_sink_inventory_contract_sha256;$active=Read-ContainerWriterFence $root}
     finally{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$saved}
-    if([string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer' -or
-        -not(Test-ContainerWriterSessionAuthorityHeldByOther ([string]$active.session_authority_mutex_name))){throw 'Owned repair authority is not held.'}
+    if([string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer'){throw 'Owned repair state differs.'}
     $prepared=Get-Content -LiteralPath $active.prepared_receipt_path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
     if([string]$prepared.operator_sid -cne $Sid -or [string]$prepared.source_manifest_sha256 -cne $script:OwnedRepairManifestSha256){throw 'Owned repair prepared source differs.'}
     return [pscustomobject]@{active=$active}
@@ -615,7 +614,7 @@ exit $exitCode
 '@)
 }
 
-function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid) {
+function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Arguments,[string]$AuditBase,[string]$OperatorSid,$AuthorityLease=$null) {
     if(Test-InstallationEvidencePrivileged){throw 'Elevation capture requires the ordinary operator caller.'}
     $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
     if(-not $root){throw 'Elevation capture requires initialized private evidence.'}
@@ -634,7 +633,10 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
             $Script:OwnedRepairManifestSha256=Get-FileSha256 (Join-Path (Split-Path -Parent $Target) 'portable-manifest.json')
             $prior=Read-InstallationOwnedParentRepair $Arguments[$rootIndex+1] $Arguments[$ladIndex+1] $OperatorSid $PID $manifest
         }else{$prior=Read-InstallationAbandonedRollback $Arguments[$rootIndex+1] $Arguments[$ladIndex+1] $OperatorSid}
-        if($null -eq $prior -or -not(Test-ContainerWriterSessionAuthorityHeldByOther ([string]$prior.active.session_authority_mutex_name))){throw 'Abandoned repair authority is absent.'}
+        if($null -eq $prior -or $null -eq $AuthorityLease){throw 'Abandoned repair authority is absent.'}
+        # This caller owns the mutex on this thread: verify its actual lease.
+        # HeldByOther is reserved for the separate elevated wrapper process.
+        Assert-ContainerWriterSessionAuthority $prior.active $AuthorityLease
     }else{Assert-InstallationEvidenceProtectedPath $ancestor -AllowSupportedPreparation}
     $protectedRun=Join-Path (Join-Path $control 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
     $protectedResult=Join-Path $protectedRun 'elevation-result.json'
@@ -642,7 +644,7 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     $targetSha=Get-FileSha256 $Target
     $encoded=ConvertTo-InstallationMemoryCommand (Get-InstallationElevationWrapperSource) (@($Target,$protectedResult,$AuditBase,$OperatorSid,[string]$PID,$targetSha,(Get-FileSha256 $library))+$Arguments)
     $argv=@('-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$encoded)
-    $line=($argv|ForEach-Object {ConvertTo-ProcessArgument ([string]$_)}) -join ' '
+    $line=($argv|ForEach-Object {ConvertTo-BootstrapRelayArgument ([string]$_)}) -join ' '
     $winps=Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
     # Verb RunAs cannot share RedirectStandardOutput/Error parameter sets.
     # The supported elevated wrapper captures its finite helper internally.

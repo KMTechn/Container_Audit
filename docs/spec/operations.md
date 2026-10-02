@@ -856,6 +856,11 @@ or tuples stop with one Korean diagnostic. It completes rollback and proves the
 old ordinary relay ready before normal installation. Ordinary evidence retains
 the established operator-owned ACL; elevated evidence remains machine protected.
 This is a narrow rollback finisher, not general lifecycle convergence.
+The ordinary repair preflight validates its explicit held authority lease on the
+owning thread; only the separate elevated wrapper probes foreign ownership.
+Actual same-thread mutex tests cover valid, absent and wrong leases on both PS
+engines while stopping before UAC. The shared argument formatter also works
+when capture is called from canonical rather than the placement helper.
 
 PROVEN on Windows 11/Python 3.12.10/PS 5.1.26100.9444 and PS 7.6.5: baseline
 c75853e native placement/evidence RED; corrected native ACL preservation and parent

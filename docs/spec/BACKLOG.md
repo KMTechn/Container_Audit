@@ -492,3 +492,5 @@ decision; execute the separate LAB-REPAIR-PLAN before the next rehearsal. Actual
 UAC/privileged ownership, ordinary resident readiness and lab acceptance are
 NOT TESTED here. General lifecycle convergence remains a later task; coordinator
 owns independent review, fifth rehearsal and shared hub acceptance.
+Ordinary repair admission now validates the actual owning-thread lease; its
+PS5.1/PS7 mutex RED/GREEN includes absent/wrong lease rejection before UAC.

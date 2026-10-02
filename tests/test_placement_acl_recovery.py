@@ -310,3 +310,43 @@ if($child.EvidenceFailure.exception_chain[-1].win32_error -ne 5){throw 'inner ev
 'PASS'
 ''', engine=engine)
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('engine', ('powershell.exe', 'pwsh.exe'))
+@pytest.mark.parametrize('mode', ('abandoned', 'owned'))
+@pytest.mark.parametrize('claim_kind', ('valid', 'missing', 'wrong'))
+def test_ordinary_repair_preflight_checks_owned_lease_before_uac(tmp_path, engine, mode, claim_kind):
+    result = run_functions(tmp_path, ROOT / 'INSTALL_CANONICAL_PORTABLE.ps1', ['Sha'], r'''
+. $env:CA_FENCE_HELPER
+$Script:ContainerWriterFenceAdmissionMutexName='Local\KMTech.ContainerAudit.Sub127.'+[Guid]::NewGuid().ToString('N')
+$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$root=Join-Path $env:CA_CONTRACT_ROOT 'private';[void][IO.Directory]::CreateDirectory($root)
+$Script:InstallationEvidenceRoot=$root;$Script:preflightControl=Join-Path $root 'control'
+function Test-InstallationEvidencePrivileged {return $false}
+function Get-InstallationEvidenceControlRoot {return $Script:preflightControl}
+$source=Join-Path $root 'source';[void][IO.Directory]::CreateDirectory((Join-Path $source 'tools'))
+$target=Join-Path $source 'INSTALL_THIS_PC.ps1';[IO.File]::WriteAllText($target,'param()')
+[IO.File]::WriteAllText((Join-Path $source 'tools\bootstrap_integrity.ps1'),'# never executed')
+[IO.File]::WriteAllText((Join-Path $source 'portable-manifest.json'),'{}')
+$lease=Enter-ContainerWriterSessionAuthority ([Guid]::NewGuid().ToString('N')) ([Guid]::NewGuid().ToString('N')) ('e'*64) ([Guid]::NewGuid().ToString('N')) ('d'*64)
+$Script:preflightActive=[pscustomobject]@{session_authority_mutex_name=$lease.name}
+function Read-InstallationAbandonedRollback {return [pscustomobject]@{active=$Script:preflightActive}}
+function Read-InstallationOwnedParentRepair {return [pscustomobject]@{active=$Script:preflightActive}}
+$Script:reachedUac=$false
+function Start-Process {$Script:reachedUac=$true;throw 'owned test stops before UAC'}
+$flag=if($env:CA_REPAIR_MODE -ceq 'owned'){'-RepairOwnedInstallationParent'}else{'-RepairAbandonedInstallationParent'}
+$arguments=@($flag,'-InstallRoot','C:\KMTech\Apps\Container_Audit\current','-OperatorLocalAppDataRoot',$root)
+try{
+ if(Test-ContainerWriterSessionAuthorityHeldByOther $lease.name){throw 'same-thread fixture is not reentrant'}
+ $provided=if($env:CA_CLAIM_KIND -ceq 'missing'){$null}elseif($env:CA_CLAIM_KIND -ceq 'wrong'){@{acquired=$true;name='wrong';mutex=$lease.mutex}}else{$lease}
+ $parameters=@{Target=$target;Arguments=$arguments;AuditBase=(Join-Path $root 'audit');OperatorSid=$sid}
+ # The old signature cannot accept the owned lease: that is the RED condition.
+ if((Get-Command Invoke-InstallationElevationCapture).Parameters.ContainsKey('AuthorityLease')){$parameters.AuthorityLease=$provided}
+ $caught=$null;try{[void](Invoke-InstallationElevationCapture @parameters)}catch{$caught=$_}
+ if($env:CA_CLAIM_KIND -ceq 'valid' -and -not $Script:reachedUac -and $null -ne $caught){throw $caught}
+ if($Script:reachedUac -ne ($env:CA_CLAIM_KIND -ceq 'valid')){throw 'ordinary owned-authority admission differs'}
+ 'PASS'
+}finally{Exit-ContainerWriterSessionAuthority $lease}
+''', engine=engine, values={'CA_REPAIR_MODE': mode, 'CA_CLAIM_KIND': claim_kind,
+                           'CA_FENCE_HELPER': str(ROOT / 'tools/container_writer_fence.ps1')})
+    assert result.returncode == 0, result.stdout + result.stderr

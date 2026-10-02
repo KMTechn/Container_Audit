@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = 'c84582c34f04cd326d2a0999273d16e1b477a07c9a2758e7db300bac0e2d2b9d'
+$ExpectedBootstrapIntegritySha256 = '5f99ee68db999f172588179897d1c39032e93f5f895dbf075d0171cc5e2794b4'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -477,7 +477,7 @@ function Restore-CanonicalApplicationProtection {
     $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
         '-RepairOwnedInstallationParent','-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
         '-AbandonedRecoverySourceManifestSha256',$sourceManifestSha256,'-AbandonedRecoveryParentProcessId',[string]$PID)
-    $result=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $arguments (Join-Path $auditRoot ('parent-repair-'+$runId)) $operatorSid
+    $result=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $arguments (Join-Path $auditRoot ('parent-repair-'+$runId)) $operatorSid -AuthorityLease $canonicalWriterFenceAuthority
     if($result.ExitCode -ne 0){throw 'Owned application protection repair failed.'}
     Assert-InstallationEvidenceProtectedPath $parent
 }
@@ -581,7 +581,7 @@ function Resume-CanonicalAbandonedRollback {
             $repairArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
                 '-RepairAbandonedInstallationParent','-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
                 '-AbandonedRecoverySourceManifestSha256',$sourceManifestSha256,'-AbandonedRecoveryParentProcessId',[string]$PID)
-            $repair=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $repairArgs ($recoveryPath+'.repair') $operatorSid
+            $repair=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $repairArgs ($recoveryPath+'.repair') $operatorSid -AuthorityLease $claim
             if($repair.ExitCode -ne 0){throw 'Abandoned app protection failed.'}
         }
         $recoveryPath=Join-Path $Script:InstallationEvidenceRoot 'abandoned-recovery.json'
