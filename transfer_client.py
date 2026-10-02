@@ -8,7 +8,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping
 from urllib.parse import quote, urlencode, urlsplit
 
 from logistics_runtime_profile import (
@@ -134,6 +134,18 @@ class LogisticsTransferClient:
     def server_unanswered(self) -> bool:
         return bool(getattr(self._wait_limit, "unanswered", False))
 
+    @contextmanager
+    def guarded_transport(self, can_send: Callable[[], bool] | None) -> Iterator[None]:
+        """Recheck this attempt's admission immediately before each HTTP request."""
+        state = self._wait_limit
+        previous = getattr(state, "can_send", None)
+        state.can_send = (lambda: (previous is None or previous())
+                          and (can_send is None or can_send()))
+        try:
+            yield
+        finally:
+            state.can_send = previous
+
     def _request_timeout(self) -> float:
         deadline = getattr(self._wait_limit, "deadline", None)
         if deadline is None:
@@ -193,14 +205,23 @@ class LogisticsTransferClient:
         with self._connection_observation_lock:
             self._connection_request_sequence += 1
             request_sequence = self._connection_request_sequence
+        request_arguments = {
+            "headers": self._headers(idempotency_key),
+            "json": dict(payload) if payload is not None else None,
+            "timeout": self._request_timeout(),
+            "allow_redirects": False,
+        }
+        can_send = getattr(self._wait_limit, "can_send", None)
+        if can_send is not None and not can_send():
+            raise TransferSealError(
+                "TRANSFER_HOLD_WAIT", "작업자 결속 또는 묶음 보류 해소를 기다립니다.",
+                retryable=True, committed=False,
+            )
         try:
             response = self.session.request(
                 method,
                 f"{self.base_url}{path}",
-                headers=self._headers(idempotency_key),
-                json=dict(payload) if payload is not None else None,
-                timeout=self._request_timeout(),
-                allow_redirects=False,
+                **request_arguments,
             )
         except Exception:
             self._wait_limit.unanswered = True

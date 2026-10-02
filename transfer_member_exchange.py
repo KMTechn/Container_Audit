@@ -9,6 +9,8 @@ damage hold and performs CAS on every affected bundle in one transaction.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 import hashlib
 import json
 import os
@@ -986,10 +988,12 @@ class TransferMemberExchangeCoordinator:
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
         ui_thread_id_provider: Callable[[], int | None] | None = None,
+        transport_guard_factory: Callable[[str], Callable[[], bool]] | None = None,
     ) -> None:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        self.transport_guard_factory = transport_guard_factory
         if owner_thread_id_provider is None:
             owner_thread_id_provider = getattr(
                 store,
@@ -2470,63 +2474,72 @@ class TransferMemberExchangeCoordinator:
         operator_review = row["status"] == "OPERATOR_REVIEW"
         if operator_review and not command_was_durable:
             return self._attempt(row)
+        factory = self.transport_guard_factory
+        can_send = factory(str(row["master_label"])) if factory is not None else None
+        guarded = getattr(self.client, "guarded_transport", None)
         try:
-            if row["command_json"] is None:
-                row = self.store.bind_command(intent_id, self._build_command(row))
-            command = json.loads(row["command_json"])
-            rotation_payload = command.get("payload")
-            rotation_command = (
-                isinstance(rotation_payload, Mapping)
-                and isinstance(
-                    rotation_payload.get("operation_lease_rotation"), Mapping
+            with guarded(can_send) if callable(guarded) else nullcontext():
+                if row["command_json"] is None:
+                    row = self.store.bind_command(intent_id, self._build_command(row))
+                command = json.loads(row["command_json"])
+                rotation_payload = command.get("payload")
+                rotation_command = (
+                    isinstance(rotation_payload, Mapping)
+                    and isinstance(
+                        rotation_payload.get("operation_lease_rotation"), Mapping
+                    )
                 )
-            )
-            if self.client is None:
-                raise TransferSealError(
-                    "LOGISTICS_CLIENT_NOT_CONFIGURED",
-                    "물류 서버 설정이 없어 중앙 제품 교체를 진행할 수 없습니다.",
-                    retryable=True,
-                )
-            if command_was_durable and not rotation_command:
-                receipt_lookup = getattr(self.client, "get_receipt", None)
-                if callable(receipt_lookup):
-                    try:
-                        receipt = receipt_lookup(
-                            str(command["authority_scope_id"]),
-                            str(command["idempotency_key"]),
-                        )
-                    except Exception:
-                        if operator_review:
-                            return self._attempt(row)
-                        raise
-                    if receipt is not None:
-                        if operator_review:
-                            try:
+                if self.client is None:
+                    raise TransferSealError(
+                        "LOGISTICS_CLIENT_NOT_CONFIGURED",
+                        "물류 서버 설정이 없어 중앙 제품 교체를 진행할 수 없습니다.",
+                        retryable=True,
+                    )
+                if command_was_durable and not rotation_command:
+                    receipt_lookup = getattr(self.client, "get_receipt", None)
+                    if callable(receipt_lookup):
+                        try:
+                            receipt = receipt_lookup(
+                                str(command["authority_scope_id"]),
+                                str(command["idempotency_key"]),
+                            )
+                        except Exception:
+                            if operator_review:
+                                return self._attempt(row)
+                            raise
+                        if receipt is not None:
+                            if operator_review:
+                                try:
+                                    self._validate_receipt(command, receipt)
+                                    self._verify_rotation_receipt(row, command, receipt)
+                                    row = self.store.record_receipt(intent_id, receipt)
+                                except Exception:
+                                    return self._attempt(row)
+                            else:
                                 self._validate_receipt(command, receipt)
                                 self._verify_rotation_receipt(row, command, receipt)
                                 row = self.store.record_receipt(intent_id, receipt)
-                            except Exception:
-                                return self._attempt(row)
-                        else:
-                            self._validate_receipt(command, receipt)
-                            self._verify_rotation_receipt(row, command, receipt)
-                            row = self.store.record_receipt(intent_id, receipt)
+                            return self._attempt(row)
+                    if operator_review:
+                        # A review row may already have changed the authoritative
+                        # bundles. It is receipt-only from this point and must not
+                        # issue the immutable POST again.
                         return self._attempt(row)
-                if operator_review:
-                    # A review row may already have changed the authoritative
-                    # bundles. It is receipt-only from this point and must not
-                    # issue the immutable POST again.
+                elif command_was_durable and operator_review:
+                    # A terminally reviewed rotation command is never posted again.
+                    # Lost-ACK rows remain RETRY_WAIT and replay the exact machine-
+                    # authenticated POST so L2 is not exposed through receipt GET.
                     return self._attempt(row)
-            elif command_was_durable and operator_review:
-                # A terminally reviewed rotation command is never posted again.
-                # Lost-ACK rows remain RETRY_WAIT and replay the exact machine-
-                # authenticated POST so L2 is not exposed through receipt GET.
-                return self._attempt(row)
-            receipt = self.client.replace_bundle_members(command)
-            self._validate_receipt(command, receipt)
-            self._verify_rotation_receipt(row, command, receipt)
-            row = self.store.record_receipt(intent_id, receipt)
+                if can_send is not None and not can_send():
+                    raise TransferSealError("TRANSFER_HOLD_WAIT", "작업자 결속 또는 묶음 보류 해소를 기다립니다.",
+                                            retryable=True, committed=False)
+                receipt = self.client.replace_bundle_members(command)
+                self._validate_receipt(command, receipt)
+                self._verify_rotation_receipt(row, command, receipt)
+                row = self.store.record_receipt(intent_id, receipt)
         except TransferSealError as exc:
+            if exc.code == "TRANSFER_HOLD_WAIT" and row["status"] == "OPERATOR_REVIEW":
+                return self._attempt(row)
             row = self.store.record_error(intent_id, exc)
         except Exception as exc:
             row = self.store.record_error(

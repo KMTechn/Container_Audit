@@ -2299,7 +2299,57 @@ class ContainerAudit:
         except (AttributeError, tk.TclError):
             pass
 
-    def _preflight_context_blocks_mutation(self) -> bool:
+    def _preflight_label_is_held(self, master_label: str) -> bool:
+        """A hold belongs to the label/bundle, independently of its worker slot."""
+        if not master_label:
+            return False
+        master = normalize_master_label_input(master_label)
+        fields = self._parse_new_format_qr(master) or {}
+        base = self._preflight_hold_base_path()
+        for path in (base, *base.parent.glob(f"{base.stem}_*.json")):
+            if not path.exists():
+                continue
+            held = PreflightScanHoldStore.load_path(path)
+            raw = normalize_master_label_input(held.master_raw)
+            if raw == master:
+                return True
+            other = self._parse_new_format_qr(raw) or {}
+            for identifier in ("LBL", "BND", "ITG"):
+                if fields.get(identifier) and other.get(identifier):
+                    if fields[identifier] == other[identifier]:
+                        return True
+                    # Different labels remain independent even when their
+                    # inspection input anchor is shared.
+                    break
+        return self._paired_preflight_blocks_label(master)
+
+    def _transfer_transport_guard(self, master_label: str) -> Callable[[], bool]:
+        actor = str(getattr(self, "worker_name", "") or "").strip()
+        login_epoch = getattr(self, "_admin_pin_login_epoch", None)
+        bound = bool(actor) and bool(getattr(self, "_work_session_identity_bound", True))
+        lock = self.__dict__.setdefault("_work_session_persist_lock", threading.RLock())
+
+        def can_send() -> bool:
+            # Only compare identity and durable hold evidence under the short
+            # lock; no HTTP or SQLite transaction is held here.
+            with lock:
+                if (not bound or actor != str(getattr(self, "worker_name", "") or "").strip()
+                    or login_epoch != getattr(self, "_admin_pin_login_epoch", None)
+                    or not getattr(self, "_work_session_identity_bound", True)):
+                    return False
+                try:
+                    held = self._preflight_label_is_held(master_label)
+                    # Reading hold files may yield to an actor transition.
+                    # Compare again after that I/O, at the request boundary.
+                    return (not held
+                        and actor == str(getattr(self, "worker_name", "") or "").strip()
+                        and login_epoch == getattr(self, "_admin_pin_login_epoch", None)
+                        and bool(getattr(self, "_work_session_identity_bound", True)))
+                except (OSError, PreflightHoldError, TypeError, ValueError):
+                    return False
+        return can_send
+
+    def _preflight_context_blocks_mutation(self, master_label: str = "") -> bool:
         snapshot = getattr(self, "_preflight_hold_snapshot", None)
         memory_gate = bool(
             getattr(self, "_master_preflight_pending", False)
@@ -2322,6 +2372,12 @@ class ContainerAudit:
             owned = store.exists() and store.load().worker == persistent_operator_name(actor)
             if owned:
                 return True
+            tray = getattr(self, "current_tray", None)
+            labels = (master_label, str(getattr(tray, "master_label_code", "") or ""),
+                      str(getattr(tray, "canonical_input_tag_qr", "") or ""),
+                      str(getattr(tray, "active_label_qr_payload", "") or ""))
+            if any(self._preflight_label_is_held(label) for label in labels if label):
+                return True
             paired = self._paired_preflight_store()
             return paired.unidentified_pending() or paired.unidentified_stale()
         except (OSError, PreflightHoldError, TypeError, ValueError):
@@ -2329,8 +2385,10 @@ class ContainerAudit:
             # not let a mutation race an unreadable active-hold location.
             return True
 
-    def _reject_mutation_during_preflight_hold(self) -> bool:
-        if not self._preflight_context_blocks_mutation():
+    def _reject_mutation_during_preflight_hold(self, master_label: str = "") -> bool:
+        blocked = (self._preflight_context_blocks_mutation(master_label) if master_label
+                   else self._preflight_context_blocks_mutation())
+        if not blocked:
             return False
         self.show_status_message(
             "중앙 조회 보류 묶음 처리 중입니다. 이번 작업은 접수되지 않았습니다.",
@@ -11642,7 +11700,7 @@ class ContainerAudit:
             return False
         if (
             not preflight_hold_owner
-            and self._reject_mutation_during_preflight_hold()
+            and self._reject_mutation_during_preflight_hold(barcode)
         ):
             return False
         self.current_tray = TraySession(
@@ -16421,6 +16479,7 @@ class ContainerAudit:
     def _transfer_seal_runtime(self):
         coordinator = getattr(self, "transfer_seal_coordinator", None)
         if coordinator is not None:
+            coordinator.transport_guard_factory = self._transfer_transport_guard
             return coordinator
         data_root = str(getattr(self, "data_root", "") or "").strip()
         if not data_root:
@@ -16432,11 +16491,13 @@ class ContainerAudit:
             ui_thread_id_provider=self._transfer_coordinator_ui_thread_id,
         )
         self.transfer_seal_coordinator = coordinator
+        coordinator.transport_guard_factory = self._transfer_transport_guard
         return coordinator
 
     def _transfer_member_exchange_runtime(self):
         coordinator = getattr(self, "transfer_member_exchange_coordinator", None)
         if coordinator is not None:
+            coordinator.transport_guard_factory = self._transfer_transport_guard
             return coordinator
         seal_coordinator = self._transfer_seal_runtime()
         coordinator = TransferMemberExchangeCoordinator(
@@ -16457,6 +16518,7 @@ class ContainerAudit:
             ),
         )
         self.transfer_member_exchange_coordinator = coordinator
+        coordinator.transport_guard_factory = self._transfer_transport_guard
         return coordinator
 
     def _work_transfer_coordinator_ui_snapshot(
@@ -17138,6 +17200,7 @@ class ContainerAudit:
                 ui_thread_id_provider=ui_provider,
             )
             self._central_transport_coordinator = coordinator
+        coordinator.transport_guard_factory = self._transfer_transport_guard
         return coordinator
 
     def _scanonly_exchange_runtime(self):
@@ -17151,6 +17214,7 @@ class ContainerAudit:
                     ui_thread_id_provider=ui_provider), seal.client, seal.operation_lease_manager,
                 owner_thread_id_provider=provider, ui_thread_id_provider=ui_provider)
             self._central_exchange_coordinator = coordinator
+        coordinator.transport_guard_factory = self._transfer_transport_guard
         return coordinator
 
     def _schedule_scanonly_transport(self, *, lookup=None) -> bool:
@@ -17169,7 +17233,8 @@ class ContainerAudit:
                            str(getattr(self.current_tray, "operation_lease_id", "")))
         if getattr(self, "_tray_state_persist_lock", None) is None:
             self._tray_state_persist_lock = threading.RLock()
-        def work():
+        queued_guard = self._transfer_transport_guard("")
+        def transport_work():
             coordinator = self._scanonly_transport_runtime()
             if getattr(self, "_scanonly_recover_requested", False):
                 self._scanonly_recover_requested = False
@@ -17179,6 +17244,8 @@ class ContainerAudit:
             completed_exchange_keys = (coordinator.store.projected_scan_exchange_keys()
                                        if unprojected_exchanges else set())
             for row in unprojected_exchanges:
+                if not queued_guard() or not self._transfer_transport_guard(str(row["master_label"]))():
+                    continue
                 context = json.loads(row["context_json"])
                 state = dict(context["after_state"])
                 key = "container-member-exchange:" + row["intent_hash"]
@@ -17189,6 +17256,8 @@ class ContainerAudit:
                 # Match GUI saves: writer admission precedes the checkpoint
                 # lock, so recovery cannot deadlock an already admitted save.
                 with writer_admission("gui_tray_state_save"), self._tray_state_persist_lock:
+                    if not queued_guard() or not self._transfer_transport_guard(str(row["master_label"]))():
+                        continue
                     recovered = read_recovery_file(current_path, "current", tray_size=self.TRAY_SIZE)
                     current = recovered.value if recovered.verified else {}
                     same_round = bool(current) and all(current.get(field) == state.get(field)
@@ -17229,15 +17298,24 @@ class ContainerAudit:
                     continue
                 exchange = exchanges.attempt(exchange_id)
                 if exchange.status != "ACKED":
+                    if exchange.error_code == "TRANSFER_HOLD_WAIT":
+                        continue
                     break
                 exchanges.store.mark_local_applied(exchange_id, {"scan_exchange_locally_projected": True})
             pending_exchanges = [key for key in exchanges.store.pending_ids()
                                 if exchanges.store.scan_exchange_context(key) is not None]
             result["exchange_pending"] = len(pending_exchanges) + len(
                 exchanges.store.scan_exchange_rows(unprojected=True))
-            if lookup is not None and not pending_exchanges:
+            if lookup is not None and not any(
+                exchanges.store.load(pending_id)["master_label"] == lookup[0]
+                for pending_id in pending_exchanges
+            ):
                 try:
-                    result["preflight"] = coordinator.prefetch_scan_label(lookup[0], lookup[1])
+                    guard = self._transfer_transport_guard(lookup[0])
+                    if guard():
+                        guarded = getattr(coordinator.client, "guarded_transport", None)
+                        with guarded(guard) if callable(guarded) else nullcontext():
+                            result["preflight"] = coordinator.prefetch_scan_label(lookup[0], lookup[1])
                 except Exception as exc:
                     result["lookup_error"] = str(getattr(exc, "code", "TRANSPORT_ERROR"))
             for intent_id in coordinator.store.pending_ids():
@@ -17251,12 +17329,19 @@ class ContainerAudit:
                     if dependency_keys - acknowledged:
                         continue
                 attempt = coordinator.attempt(intent_id)
-                if attempt.status == "RETRY_WAIT":
+                if attempt.status == "RETRY_WAIT" and attempt.error_code != "TRANSFER_HOLD_WAIT":
                     break
             result["pending"], result["reviews"] = coordinator.store.scan_transport_counts()
             result["reviews"] += sum(row["status"] == "OPERATOR_REVIEW" for row in exchanges.store.scan_exchange_rows())
             result["reviews"] += result["local_exchange_reviews"]
             return result
+        def work():
+            if not queued_guard():
+                raise TransferSealError("TRANSFER_HOLD_WAIT", "작업자 결속을 기다립니다.", retryable=True)
+            client = self._scanonly_transport_runtime().client
+            guarded = getattr(client, "guarded_transport", None)
+            with guarded(queued_guard) if callable(guarded) else nullcontext():
+                return transport_work()
         def finish(result):
             recovered_state = result.get("recovered_exchange_state")
             before = result.get("recovered_exchange_before") or {}
@@ -17903,6 +17988,7 @@ class ContainerAudit:
             keep_release_requests()
             print(f"이적 재시작 복구 lane 실패: {exc.__class__.__name__}")
 
+        queued_guard = self._transfer_transport_guard("")
         admission = lane.submit(
             LaneTask(
                 name="startup-transfer-recovery",
@@ -17913,6 +17999,7 @@ class ContainerAudit:
                     background=background,
                     release_requests=release_requests,
                     active_lease_id=active_lease_id,
+                    transport_guard=queued_guard,
                 ),
                 finish=self._finish_startup_transfer_recovery,
                 fail=fail,
@@ -18228,6 +18315,8 @@ class ContainerAudit:
                     )
                 except Exception as exc:
                     code = str(getattr(exc, "code", "") or exc.__class__.__name__)
+                    if code == "TRANSFER_HOLD_WAIT":
+                        break
                     if callable(bounded_wait) and client.server_unanswered():
                         if operation_lease_utc_text() >= release["expires_at"]:
                             # Past expiry the administrator screen releases it.
@@ -18267,6 +18356,7 @@ class ContainerAudit:
         background: bool = False,
         release_requests: Sequence[str] = (),
         active_lease_id: str = "",
+        transport_guard: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, Any]:
         lane = getattr(self, "_ui_lane", None)
         if (
@@ -18274,15 +18364,18 @@ class ContainerAudit:
             or threading.get_ident() != getattr(lane, "worker_thread_id", None)
         ):
             raise RuntimeError("startup transfer recovery requires the shared lane worker")
+        if transport_guard is not None and not transport_guard():
+            return {"blocked_by_hold": True}
         client = getattr(getattr(self, "transfer_seal_coordinator", None), "client", None)
         bounded_wait = getattr(client, "bounded_wait", None) if background else None
+        guarded = getattr(client, "guarded_transport", None)
         # A background poll shares one completion limit across its release and
         # seal requests; it ends at the first request the server leaves unanswered.
         with (
             bounded_wait(self.COMPLETION_SERVER_WAIT_SECONDS)
             if callable(bounded_wait)
             else nullcontext()
-        ):
+        ), guarded(transport_guard) if callable(guarded) else nullcontext():
             return self._work_pending_transfer_recovery(
                 master_label=master_label,
                 precommand_query=precommand_query,

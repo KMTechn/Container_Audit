@@ -1647,10 +1647,12 @@ class TransferSealCoordinator:
         *,
         owner_thread_id_provider: Callable[[], int | None] | None = None,
         ui_thread_id_provider: Callable[[], int | None] | None = None,
+        transport_guard_factory: Callable[[str], Callable[[], bool]] | None = None,
     ) -> None:
         self.store = store
         self.client = client
         self.operation_lease_manager = operation_lease_manager
+        self.transport_guard_factory = transport_guard_factory
         if owner_thread_id_provider is None:
             owner_thread_id_provider = getattr(
                 store,
@@ -3209,46 +3211,55 @@ class TransferSealCoordinator:
     def _attempt_row(self, row: sqlite3.Row) -> SealAttempt:
         self._assert_owner()
         intent_id = str(row["intent_id"])
+        factory = self.transport_guard_factory
+        can_send = factory(str(row["master_label"])) if factory is not None else None
+        guarded = getattr(self.client, "guarded_transport", None)
         try:
-            if row["command_json"] is None:
-                context = self._build_command(row)
-                row = self.store.bind_command(intent_id, context)
-            context = json.loads(row["command_json"])
-            self._validate_bound_command(row, context)
-            if self.client is None:
-                raise TransferSealError(
-                    "LOGISTICS_CLIENT_NOT_CONFIGURED",
-                    "물류 서버 설정이 없어 이적 seal을 보류했습니다.",
-                    retryable=True,
-                )
-            receipt = self.client.seal_transfer(context)
-            data = self._validate_receipt(context, receipt)
-            qr_payload = self._seal_qr(context, data)
-            operation_lease_id = self._stored_operation_lease_id(row)
-            if operation_lease_id:
-                if self.operation_lease_manager is None:
+            with guarded(can_send) if callable(guarded) else nullcontext():
+                if row["command_json"] is None:
+                    context = self._build_command(row)
+                    row = self.store.bind_command(intent_id, context)
+                context = json.loads(row["command_json"])
+                self._validate_bound_command(row, context)
+                if self.client is None:
                     raise TransferSealError(
-                        "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
-                        "오프라인 이적 확인 결과를 기록할 수 없습니다.",
+                        "LOGISTICS_CLIENT_NOT_CONFIGURED",
+                        "물류 서버 설정이 없어 이적 seal을 보류했습니다.",
+                        retryable=True,
                     )
-                try:
-                    self.operation_lease_manager.store.record_receipt(
-                        lease_id=operation_lease_id,
-                        transfer_intent_id=intent_id,
-                        receipt=receipt,
-                    )
-                except (OperationLeaseError, sqlite3.Error) as exc:
-                    code = getattr(
-                        exc,
-                        "code",
-                        "OPERATION_LEASE_RECEIPT_DURABILITY_FAILED",
-                    )
-                    raise TransferSealError(
-                        code,
-                        "서버 이적 확인 결과를 안전하게 기록하지 못했습니다.",
-                    ) from exc
-            row = self.store.record_receipt(intent_id, receipt, qr_payload)
+                if can_send is not None and not can_send():
+                    raise TransferSealError("TRANSFER_HOLD_WAIT", "작업자 결속 또는 묶음 보류 해소를 기다립니다.",
+                                            retryable=True, committed=False)
+                receipt = self.client.seal_transfer(context)
+                data = self._validate_receipt(context, receipt)
+                qr_payload = self._seal_qr(context, data)
+                operation_lease_id = self._stored_operation_lease_id(row)
+                if operation_lease_id:
+                    if self.operation_lease_manager is None:
+                        raise TransferSealError(
+                            "OPERATION_LEASE_RUNTIME_UNAVAILABLE",
+                            "오프라인 이적 확인 결과를 기록할 수 없습니다.",
+                        )
+                    try:
+                        self.operation_lease_manager.store.record_receipt(
+                            lease_id=operation_lease_id,
+                            transfer_intent_id=intent_id,
+                            receipt=receipt,
+                        )
+                    except (OperationLeaseError, sqlite3.Error) as exc:
+                        code = getattr(
+                            exc,
+                            "code",
+                            "OPERATION_LEASE_RECEIPT_DURABILITY_FAILED",
+                        )
+                        raise TransferSealError(
+                            code,
+                            "서버 이적 확인 결과를 안전하게 기록하지 못했습니다.",
+                        ) from exc
+                row = self.store.record_receipt(intent_id, receipt, qr_payload)
         except TransferSealError as exc:
+            if exc.code == "TRANSFER_HOLD_WAIT" and row["status"] == "OPERATOR_REVIEW":
+                return self._attempt_from_row(row)
             row = self.store.record_error(intent_id, exc)
             operation_lease_id = self._stored_operation_lease_id(row)
             if (
