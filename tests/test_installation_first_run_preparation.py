@@ -27,11 +27,11 @@ foreach($path in @('C:\','C:\KMTech','C:\KMTech\Apps','C:\KMTech\Apps\Container_
  $acl=[Security.AccessControl.DirectorySecurity]::new();$acl.SetSecurityDescriptorSddlForm($sddl);$script:acls[$path]=$acl
 }
 function Test-Path {param($LiteralPath,$PathType)
- if($LiteralPath.StartsWith('C:\KMTech') -or $LiteralPath -ceq 'C:\'){return $script:acls.ContainsKey($LiteralPath)}
+ if($LiteralPath -in @('C:\','C:\KMTech','C:\KMTech\Apps') -or $LiteralPath.StartsWith('C:\KMTech\Apps\')){return $script:acls.ContainsKey($LiteralPath)}
  return (Microsoft.PowerShell.Management\Test-Path -LiteralPath $LiteralPath)
 }
 function Get-Item {param($LiteralPath,$ErrorAction)
- if($LiteralPath.StartsWith('C:\KMTech') -or $LiteralPath -ceq 'C:\'){
+ if($LiteralPath -in @('C:\','C:\KMTech','C:\KMTech\Apps') -or $LiteralPath.StartsWith('C:\KMTech\Apps\')){
   if(-not $script:acls.ContainsKey($LiteralPath)){throw 'fixture path is absent'}
   return [pscustomobject]@{Attributes=if($env:CA_PREP_SCENARIO -ceq 'reparse' -and $LiteralPath -ceq 'C:\KMTech\Apps'){[IO.FileAttributes]::ReparsePoint}else{[IO.FileAttributes]::Directory}}
  }
@@ -99,6 +99,8 @@ function Test-InstallationEvidencePrivileged {return $true}
 $script:realStrictPath=${function:Get-StrictFullPath}
 $script:realProtectedPath=${function:Assert-InstallationEvidenceProtectedPath}
 function Convert-MemoryPath([string]$Path){
+ $volume=Join-Path $env:CA_CONTRACT_ROOT 'volume'
+ if($Path.Equals($volume,[StringComparison]::OrdinalIgnoreCase) -or $Path.StartsWith($volume+'\',[StringComparison]::OrdinalIgnoreCase)){return $Path}
  if($Path.StartsWith('C:\')){return (Join-Path $env:CA_CONTRACT_ROOT ('volume\'+$Path.Substring(3)))}
  return $Path
 }

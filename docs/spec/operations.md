@@ -812,3 +812,19 @@ installation remain NOT TESTED. The frozen diagnostic's no-BOM Korean text
 defect is preserved; shipped installers/bootstrap now retain UTF8 BOM and an
 actual PS5 file-decoding/rejection regression. No field-wide claim follows from
 the two observed Windows machines or this account's filtered administrator token.
+
+### Shared ancestor inheritance propagation — 2026-10-02
+
+Admission and target readback compare sorted ACE tuples (SID, mask, allow/deny,
+inheritance, propagation, inherited), with exact owner/group and protection state.
+After protecting the parent, the child is read again: equal permissions with a
+different ACE order are admitted; changed permissions/identity/protection stop.
+The fresh descriptor supplies both the write and the before-SDDL evidence.
+Both default, either intermediate state and both protected are supported.
+Native NTFS RED on the original helper and GREEN on PS5.1/PS7 cover propagation,
+unchanged legacy/sibling effective rights, normal writes/rename, repeat and an
+external permission change. The non-elevated host test translates owner admission
+only; real privileged ownership and the next lab installation are NOT TESTED.
+The first-run fixture maps only canonical paths and preserves an already mapped
+run, including a short C: basetemp; its original six fixture failures are retained.
+[Evidence and candidate](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-123/REPORT.md).

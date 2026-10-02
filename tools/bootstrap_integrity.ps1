@@ -776,6 +776,11 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         throw 'Code parent must be a direct application directory under C:\KMTech\Apps.'
     }
     $records=@(); $plans=@()
+    function Get-KmtechAncestorAclShapeKey($Acl) {
+        (@($Acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object {
+            [string]$_.IdentityReference.Value+'|'+[int64]$_.FileSystemRights+'|'+[string]$_.AccessControlType+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags+'|'+[int]$_.IsInherited
+        } | Sort-Object) -join ';')
+    }
     foreach ($path in @('C:\KMTech','C:\KMTech\Apps')) {
         $reason=''
         if (-not (Test-Path -LiteralPath $path)) {
@@ -792,21 +797,17 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         $owner=$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
         $rules=@($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
         $shape=@(
-            'S-1-5-32-544|2032127|3|0', 'S-1-5-18|2032127|3|0',
-            'S-1-5-32-545|1179817|3|0', 'S-1-5-11|-536805376|3|2'
+            'S-1-5-32-544|2032127|Allow|3|0', 'S-1-5-18|2032127|Allow|3|0',
+            'S-1-5-32-545|1179817|Allow|3|0', 'S-1-5-11|-536805376|Allow|3|2'
         )
-        $actual=@(); $allInherited=$true; $allExplicit=$true
         foreach($rule in $rules) {
             if ([string]$rule.AccessControlType -cne 'Allow') { $reason='거부 권한 항목이 있습니다' }
-            $actual+=([string]$rule.IdentityReference.Value+'|'+[int64]$rule.FileSystemRights+'|'+[int]$rule.InheritanceFlags+'|'+[int]$rule.PropagationFlags)
-            $allInherited=$allInherited -and $rule.IsInherited
-            $allExplicit=$allExplicit -and -not $rule.IsInherited
         }
-        $actualKey=(@($actual | Sort-Object) -join ';')
-        $defaultKey=(@(($shape+@('S-1-5-11|1245631|0|0')) | Sort-Object) -join ';')
-        $targetKey=(@(($shape+@('S-1-5-11|1179823|0|0')) | Sort-Object) -join ';')
-        $defaultShape=($rules.Count -eq 5 -and -not $acl.AreAccessRulesProtected -and $allInherited -and $actualKey -ceq $defaultKey)
-        $targetShape=($rules.Count -eq 5 -and $acl.AreAccessRulesProtected -and $allExplicit -and $actualKey -ceq $targetKey)
+        $actualKey=Get-KmtechAncestorAclShapeKey $acl
+        $defaultKey=(@(($shape+@('S-1-5-11|1245631|Allow|0|0')) | ForEach-Object {$_+'|1'} | Sort-Object) -join ';')
+        $targetKey=(@(($shape+@('S-1-5-11|1179823|Allow|0|0')) | ForEach-Object {$_+'|0'} | Sort-Object) -join ';')
+        $defaultShape=($rules.Count -eq 5 -and -not $acl.AreAccessRulesProtected -and $actualKey -ceq $defaultKey)
+        $targetShape=($rules.Count -eq 5 -and $acl.AreAccessRulesProtected -and $actualKey -ceq $targetKey)
         if($owner -cne 'S-1-5-32-544'){$reason='폴더 소유자가 예상과 다릅니다'}
         if(-not $reason -and -not $defaultShape -and -not $targetShape){$reason='권한 모양이 지원하는 기본값 또는 보호된 값과 다릅니다'}
         if($reason) {
@@ -817,17 +818,25 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
             $failure.Data['installation_preparation_exit_code']=if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){62}elseif($owner -cne 'S-1-5-32-544'){63}else{61}
             throw $failure
         }
-        $plans+=@{path=$path;acl=$acl;before=$before;default_shape=$defaultShape;target_shape=$targetShape}
+        $plans+=@{path=$path;shape_key=$actualKey;owner=$owner;group=$acl.GetGroup([Security.Principal.SecurityIdentifier]).Value;
+            protected=$acl.AreAccessRulesProtected;
+            default_shape=$defaultShape;target_shape=$targetShape}
     }
     if($AdmissionOnly){return}
     # Both existing shapes are admitted before the first ACL write.
     foreach($plan in $plans) {
-        $path=$plan.path; $acl=$plan.acl; $before=$plan.before
+        $path=$plan.path
         $entry=Get-Item -LiteralPath $path -ErrorAction Stop
         if($entry.Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Ancestor became a reparse point before protection.'}
         $fresh=Get-Acl -LiteralPath $path -ErrorAction Stop
         $freshSddl=$fresh.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
-        if($freshSddl -cne $before){throw 'Ancestor ACL changed during protection admission.'}
+        # Our preceding parent write can reorder this child's inherited ACEs.
+        # Reject changed permissions/identity/flags, then transform the fresh ACL.
+        if((Get-KmtechAncestorAclShapeKey $fresh) -cne $plan.shape_key -or
+            $fresh.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $plan.owner -or
+            $fresh.GetGroup([Security.Principal.SecurityIdentifier]).Value -cne $plan.group -or
+            $fresh.AreAccessRulesProtected -ne $plan.protected){throw 'Ancestor ACL changed during protection admission.'}
+        $acl=$fresh; $before=$freshSddl
         Write-InstallationEvidenceEvent ([ordered]@{event='ANCESTOR_ACL_BEFORE';path=$path;before_sddl=$before;already_target=$plan.target_shape;intentional_persistent_change=$true})
         if($plan.default_shape) {
             $acl.SetAccessRuleProtection($true,$true)
@@ -850,10 +859,7 @@ function Protect-KmtechCodeAncestors([string]$CodeParent,[switch]$AdmissionOnly,
         $afterAcl=Get-Acl -LiteralPath $path -ErrorAction Stop
         $after=$afterAcl.GetSecurityDescriptorSddlForm([Security.AccessControl.AccessControlSections]::Owner -bor [Security.AccessControl.AccessControlSections]::Group -bor [Security.AccessControl.AccessControlSections]::Access)
         $afterRules=@($afterAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
-        $afterKey=(@($afterRules | ForEach-Object {
-            if($_.IsInherited -or $_.AccessControlType -ne 'Allow'){throw 'Ancestor ACL explicit readback failed.'}
-            [string]$_.IdentityReference.Value+'|'+[int64]$_.FileSystemRights+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags
-        } | Sort-Object) -join ';')
+        $afterKey=Get-KmtechAncestorAclShapeKey $afterAcl
         if($afterAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne 'S-1-5-32-544' -or -not $afterAcl.AreAccessRulesProtected -or $afterRules.Count -ne 5 -or $afterKey -cne $targetKey){throw 'Ancestor ACL protected readback failed.'}
         $record=[ordered]@{path=$path;before_sddl=$before;after_sddl=$after;changed=$plan.default_shape;intentional_persistent_change=$true}
         $records+=$record

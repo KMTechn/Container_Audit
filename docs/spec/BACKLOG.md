@@ -453,6 +453,14 @@ G10 기존 성공/조합/오류 음원으로 성공·완료·반복 오류를 �
 
 # CA installation follow-up — 2026-10-02
 
+Fifth rehearsal FAILED before app placement: protecting KMTech propagated the
+same inherited ACE set to Apps in a new order. The source fix compares sorted
+ACE tuples and refreshes the child descriptor after parent persistence; both
+intermediate states remain supported. PS5.1/PS7 native NTFS RED/GREEN and the
+captured lab intermediate SDDLs pass in an isolated host tree (owner seam only).
+Pending: independent review and actual lab acceptance from
+the protected-parent/inherited-child state; see [sub-123](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-123/REPORT.md).
+
 In progress: preserve original staged/child failure evidence, recognize exact
 TrustedInstaller SID and protect only the two shared ancestors with reviewed B
 self-mask reduction. Fourth lab installation FAILED; historical original cause
