@@ -537,6 +537,8 @@ def test_probe_only_admission_is_refused_for_every_unapproved_sink() -> None:
             ("worker_enrollment_network", "tools.register_container_audit_worker_pc._post_enrollment_request"),
             ("worker_pc_registration", "tools.register_container_audit_worker_pc.main"),
             ("current_user_onboarding", "current_user_onboarding.onboard_current_user"),
+            ("admin_pin_network", "container_admin_pin.AdminPinClient.query_roster"),
+            ("admin_pin_network", "container_admin_pin.AdminPinClient._post_signed"),
         }
     )
 
