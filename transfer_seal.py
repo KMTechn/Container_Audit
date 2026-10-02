@@ -365,6 +365,7 @@ def _physical_label_from_resolution(
                     f"PHS=2|SRC=KMTECH_INPUT_TAG|ITG={canonical_fields['ITG']}|"
                     f"CLC={canonical_fields['CLC']}|LBL={canonical_fields['LBL']}|"
                     f"HSH={canonical_fields['HSH']}"
+                    + (f"|QT={scanned_fields['QT']}" if "QT" in scanned_fields else "")
                 ),
                 "hash_prefix": canonical_fields["HSH"],
                 "scan_anchor_input_tag_id": canonical_fields["ITG"],
@@ -2410,6 +2411,9 @@ class TransferSealCoordinator:
             "LBL": str(identity.get("input_tag_label_id") or "").strip(),
             "HSH": str(identity.get("input_tag_hash_prefix") or "").strip(),
         }
+        physical_fields = _compact_phs2_fields_from_payload(str(row["master_label"]))
+        if "QT" in physical_fields:
+            fields["QT"] = physical_fields["QT"]
         self._verified_operation_lease(
             lease_id=lease_id,
             master_label=str(row["master_label"]),

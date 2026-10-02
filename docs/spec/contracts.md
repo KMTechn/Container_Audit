@@ -169,6 +169,8 @@ lease는 서명·keyring·binding·기간·membership 검증을 요구한다. �
 <a id="ca-c03"></a>
 ## CA-C03 CA → Web 이적 봉인·receipt
 
+봉인 명령 재검증은 저장된 원 현품표의 칸 구성을 유지한다(6칸은 그대로, 7칸은 마지막 QT 포함); physical label·구성원·서명 lease의 exact 검증과 기존 관리자 감사 재시도는 동일하다.
+
 완료 orchestration은 [tray_completion](../../tray_completion.py)의 명시 owner 함수로 위임한다.
 기존 완료 signature·prepared attempt 객체·generator yield 순서를 유지하고, 최종 state 적용과
 notice를 구분한다. scanner/held 감사 ACK·동기 복구·coordinator transaction은 원 소유다.

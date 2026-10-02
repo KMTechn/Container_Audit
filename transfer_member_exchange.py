@@ -1404,17 +1404,18 @@ class TransferMemberExchangeCoordinator:
             }
         )
         if str(identity.get("input_tag_hash_prefix") or "").strip():
-            validate_compact_phs2_preflight(
-                {
-                    "PHS": "2",
-                    "SRC": identity.get("source_kind"),
-                    "ITG": identity.get("input_tag_id"),
-                    "CLC": identity.get("item_id") or row["item_id"],
-                    "LBL": identity.get("input_tag_label_id"),
-                    "HSH": identity.get("input_tag_hash_prefix"),
-                },
-                resolved_target,
-            )
+            fields = {
+                "PHS": "2",
+                "SRC": identity.get("source_kind"),
+                "ITG": identity.get("input_tag_id"),
+                "CLC": identity.get("item_id") or row["item_id"],
+                "LBL": identity.get("input_tag_label_id"),
+                "HSH": identity.get("input_tag_hash_prefix"),
+            }
+            physical_fields = parse_new_format_qr(str(row["master_label"])) or {}
+            if "QT" in physical_fields:
+                fields["QT"] = physical_fields["QT"]
+            validate_compact_phs2_preflight(fields, resolved_target)
         target = self._target_projection(resolved_target)
         if target["item_id"] != str(row["item_id"]):
             raise TransferSealError(
