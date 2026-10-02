@@ -1355,6 +1355,7 @@ class ContainerAudit:
         self._setup_core_ui_structure()
         self._setup_styles()
         self.root.bind('<Configure>', self._schedule_responsive_style_refresh, add="+")
+        remembered_worker = self.worker_registry.recent_worker()
         self.show_worker_input_screen()
         self._poll_event_log_notice()
         
@@ -1366,6 +1367,8 @@ class ContainerAudit:
             add="+",
         )
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        # Registration/catalog startup finishes before the Tk callback runs.
+        self.root.after(0, lambda: self._start_remembered_worker(remembered_worker))
 
     ####################################################################
     # 30일 최고 기록 관리
@@ -3180,7 +3183,33 @@ class ContainerAudit:
             messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
         return registered
 
-    def start_work(self, event=None):
+    def _start_remembered_worker(self, worker_name: Optional[str]) -> None:
+        if (not worker_name or self.worker_name
+                or self._work_session_recovery_blocked
+                or self.transfer_seal_coordinator.client is None):
+            return
+        try:
+            if (self.worker_registry.recent_worker() != worker_name
+                    or not self.worker_registry.has_worker(worker_name)
+                    or (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists()
+                    or self._paired_preflight_store().unidentified_pending()):
+                return
+            previous_session = self._load_work_session_state()
+            if previous_session and previous_session["worker_name"] != worker_name:
+                # Removing the latest registry row must not log in an older
+                # remembered worker from the remaining history.
+                return
+            store = self._preflight_hold_store()
+            if store.exists():
+                held = store.load()
+                if held.worker == worker_name or held.state == HOLD_DRAINING:
+                    return
+        except (OSError, ValueError, PreflightHoldError, PairedHandoffError):
+            return
+        self._set_worker_entry_value(worker_name)
+        self.start_work(_automatic=True)
+
+    def start_work(self, event=None, *, _automatic=False):
         worker_name = self._ensure_worker_login_name(self.worker_entry.get())
         if not worker_name:
             return
@@ -3188,14 +3217,6 @@ class ContainerAudit:
             worker_name == PROTECTED_ADMIN_OPERATOR_ID
             and getattr(self, "_authenticated_protected_admin", False)
         )
-        worker_registry = getattr(self, "worker_registry", None)
-        if worker_registry is not None and not protected_admin_authenticated:
-            try:
-                worker_name = worker_registry.mark_recent(worker_name)
-            except ValueError as exc:
-                messagebox.showerror("작업자 기록 오류", str(exc), parent=self.root)
-                return
-            self._refresh_worker_entry_options()
         self._work_session_identity_bound = False
         self.worker_name = worker_name
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
@@ -3247,15 +3268,24 @@ class ContainerAudit:
             self.current_tray = TraySession()
             self.worker_name = ""
             self.worker_role = ""
-            messagebox.showerror(
-                "작업 시작 기록 대기",
-                "작업 세션과 감사 outbox를 함께 저장하거나 투영하지 못했습니다. "
-                "상태를 보존했으니 다시 시도하고 계속되면 관리자에게 문의하세요.",
-                parent=self.root,
-            )
             self.show_worker_input_screen()
+            message = ("작업 세션과 감사 outbox를 함께 저장하거나 투영하지 못했습니다. "
+                       "상태를 보존했으니 다시 시도하고 계속되면 관리자에게 문의하세요.")
+            if _automatic:
+                self.show_status_message(message, self.COLOR_DANGER, duration=0)
+            else:
+                messagebox.showerror("작업 시작 기록 대기", message, parent=self.root)
             return
         self._work_session_identity_bound = True
+        worker_registry = getattr(self, "worker_registry", None)
+        if worker_registry is not None and not protected_admin_authenticated:
+            try:
+                worker_registry.mark_recent(worker_name)
+                self._refresh_worker_entry_options()
+            except (OSError, ValueError):
+                # The session is durable; a preference write must not unbind it.
+                self.show_status_message("작업은 시작했지만 최근 작업자 이름을 저장하지 못했습니다.",
+                                         self.COLOR_DANGER, duration=0)
         # Recovery only admits work after the login's durable session binding.
         self._schedule_startup_transfer_recovery()
         if not self._audit_recovered_atomic_temps(startup_evidence):

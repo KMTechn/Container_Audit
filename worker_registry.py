@@ -162,6 +162,38 @@ class WorkerRegistry:
             return False
         return normalized in set(self.list_workers())
 
+    def recent_worker(self) -> Optional[str]:
+        """Read the last used identity without substituting another active name."""
+        try:
+            with open(self.registry_path, "r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            entries = payload["workers"]
+            if not isinstance(entries, list):
+                return None
+            recent = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    return None
+                used = entry.get("last_used_at") or entry.get("last_login_at")
+                if not used:
+                    continue
+                timestamp = self._timestamp_sort_value(used)
+                if timestamp is None:
+                    return None
+                recent.append((timestamp, entry))
+            if not recent:
+                return None
+            latest = max(timestamp for timestamp, _entry in recent)
+            candidates = [entry for timestamp, entry in recent if timestamp == latest]
+            names = {self.normalize_name(entry.get("name", "")) for entry in candidates}
+            if len(names) != 1 or any(entry.get("active", True) is not True for entry in candidates):
+                return None
+            name = names.pop()
+            self._validate_name(name)
+            return name
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+            return None
+
     def register(self, name: str) -> str:
         name = self.normalize_name(name)
         self._validate_name(name)
@@ -187,7 +219,9 @@ class WorkerRegistry:
         self._validate_name(name)
         payload = self._read_payload()
         workers = payload.setdefault("workers", [])
-        now = datetime.datetime.now().isoformat(timespec="seconds")
+        # Keep the existing ISO timestamp field, including distinct starts in
+        # the same second (for example an immediate worker change).
+        now = datetime.datetime.now().isoformat(timespec="microseconds")
         for entry in workers:
             if isinstance(entry, dict) and self.normalize_name(entry.get("name", "")) == name:
                 entry["active"] = True

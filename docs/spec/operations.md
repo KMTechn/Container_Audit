@@ -104,6 +104,8 @@ C 예외의 분리 출력은 기존 직접 pytest 명령에서 C `--basetemp`와
 <a id="ca-o01"></a>
 ## CA-O01 실행 구조·시작·권한
 
+이적 PC는 마지막으로 작업을 시작한 등록·활성 일반 작업자 이름을 기존 작업자 목록에 기억하고, 다음 실행에서 확인 창이나 `작업 시작` 누름 없이 같은 시작 경로로 작업 화면을 연다. 현재 이름은 기존 작업자 표시 영역에 보이며 `작업자 변경`으로 새 이름을 시작하면 그 이름을 기억한다. 첫 실행·기억 없음·이름 중지/제거·PC 연결 설정 필요·세션/현재 트레이/본인 보류 복구 필요·이름 기록 불확실은 선택 화면에 머문다. 세션 시작 저장 실패도 결속과 배경 전송 없이 선택 화면으로 돌아가고 화면 안 안내를 보인다. 검증된 오프라인 품목 캐시와 로컬 연결 설정이 있으면 같은 자동 시작을 사용하며 기존 `저장 전송` 안내를 유지한다.
+
 portable builder의 `APP_ROOT_FILES`는 제품 identity 포트, transfer client/common/store·member exchange view·tray completion을 포함한 root Python 57개를 명시한다.
 `APP_PACKAGE_DIRS`·데이터 목록·`PORTABLE_INSTALL_ASSETS`와 실제 import에서 파생한
 relay/등록/profile 도구 3개와 외부 운영 CLI `tools.direct_sync_relay_operator`를 함께 탑재한다.
