@@ -1524,7 +1524,7 @@ try {
             created_at = (Get-Date).ToUniversalTime().ToString('o')
             helper_sha256 = Get-FileSha256 $BootstrapScriptPath
             integrity_helper_sha256 = Get-FileSha256 $BootstrapIntegrityFunctions
-            receipt_path = $replacementReceiptFull
+            receipt_path = Get-StrictFullPath $BootstrapBoundParameters['ReplacementReceiptPath'] 'replacement receipt binding path'
             install_root = $installRootFull
             install_parent = $applicationParent
             rollback_root = $replacementRollbackRoot

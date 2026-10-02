@@ -419,6 +419,10 @@ admission lifetime; early/late/unknown/ambiguous/direct unfenced calls are rejec
 [검증 보고서](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-107/REPORT.md)의
 별도 미검증 범위다.
 
+교체 영수증 내부 `receipt_path`는 최초 요청의 ordinary export 경로를 유지한다.
+관리자가 쓰는 물리 경로와 구별하며, export는 바이트와 digest를 그대로 보존해
+기존 replacement 검증·복원 consumer의 정확한 경로 바인딩을 유지한다.
+
 기존 사용자 TLS 구성 복사와 delegated writer-fence 상태는 사용자 프로필 저장
 계약을 유지한다. TLS는 디렉터리 생성 전 existing ancestor와 복사 전 target,
 writer-fence는 기존 구성 요소 검사로 재분석 지점을 쓰기 전에 거절한다.

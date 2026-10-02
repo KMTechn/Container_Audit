@@ -78,12 +78,17 @@ $tokens=$null;$errors=$null
 $installer=[Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $env:CA_CONTRACT_SOURCE) 'INSTALL_THIS_PC.ps1'),[ref]$tokens,[ref]$errors)
 $initializer=@($installer.EndBlock.Statements|Where-Object {$_ -is [Management.Automation.Language.IfStatementAst] -and $_.Extent.Text.Contains('$helperInstallationEvidenceRoot=Initialize-InstallationEvidence')})
 if($errors.Count -or $initializer.Count -ne 1){throw 'actual helper evidence initializer is unavailable'}
+$payload=@($installer.FindAll({param($node) $node -is [Management.Automation.Language.AssignmentStatementAst] -and $node.Left.Extent.Text -ceq '$receiptPayload' -and $node.Right.Extent.Text.Contains("schema_version = 'container-audit-verified-replacement-v1'")},$true))
+if($payload.Count -ne 1){throw 'actual replacement receipt payload is unavailable'}
+$table=@($payload[0].Right.FindAll({param($node) $node -is [Management.Automation.Language.HashtableAst]},$true))[0]
+$pathValue=@($table.KeyValuePairs|Where-Object {$_.Item1.SafeGetValue() -ceq 'receipt_path'})
+if($pathValue.Count -ne 1){throw 'actual replacement receipt path binding is unavailable'}
 # Execute only the real parameter/evidence initialization boundary, then a
-# harmless result writer; never the installer entrypoint or placement logic.
-$helperSource=$installer.ParamBlock.Extent.Text+"`n"+$initializer[0].Extent.Text+"`n"+@'
+# harmless result writer with the real payload path expression; never placement.
+$helperSource=$installer.ParamBlock.Extent.Text+"`n"+'$BootstrapBoundParameters=@{ReplacementReceiptPath=$ReplacementReceiptPath}'+"`n"+$initializer[0].Extent.Text+"`n"+'$replacementReceiptFull=$ReplacementReceiptPath'+"`n"+'$boundReceiptPath='+$pathValue[0].Item2.Extent.Text+"`n"+@'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 Write-Output '{"authorization":"Bearer synthetic-child-value","credential":"synthetic-child-credential"}'
-[void](Write-BootstrapReplacementReceipt $ReplacementReceiptPath @{status='REPLACEMENT_READY'})
+[void](Write-BootstrapReplacementReceipt $ReplacementReceiptPath @{status='REPLACEMENT_READY';receipt_path=$boundReceiptPath})
 [void](Write-BootstrapReplacementReceipt $RestoreEvidencePath @{status='RESTORE_READY'})
 [void](Complete-InstallationEvidence)
 exit 0
@@ -121,6 +126,8 @@ foreach($pair in @(@($replacement,'replacement-receipt.json'),@($restore,'restor
  $protected=Join-Path $binding.stage_evidence_root $pair[1]
  if(-not(Test-Path -LiteralPath $protected) -or (Get-FileSha256 $pair[0]) -cne (Get-FileSha256 $protected)){throw 'ordinary result export differs from protected original'}
 }
+$receipt=Get-Content -LiteralPath $replacement -Raw -Encoding UTF8|ConvertFrom-Json
+if(-not(Test-BootstrapSamePath $receipt.receipt_path $replacement)){throw 'ordinary restore consumer would reject exported receipt path binding'}
 $summary=Complete-InstallationEvidence
 if($summary.status -cne 'COMPLETE' -or $summary.root -cne $parentRoot){throw 'ordinary final summary did not consume protected child evidence'}
 'PASS'
