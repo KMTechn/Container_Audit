@@ -27,11 +27,19 @@ class WorkerRegistry:
         return str(name or "").strip()
 
     @staticmethod
-    def _validate_name(name: str, *, roster_identity: bool = False) -> None:
+    def _validate_name(name: str, *, roster_identity: bool = False, legacy_local: bool = False) -> None:
         if not name:
             raise ValueError("작업자 이름은 비워둘 수 없습니다.")
-        if any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for character in name):
+        # Existing local names retain the registration rules of the baseline.
+        if (CONTROL_CHAR_RE.search(name) if legacy_local else
+                any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for character in name)):
             raise ValueError("작업자 이름에는 제어 문자를 사용할 수 없습니다.")
+        if not legacy_local and len(name.strip()) > 64:
+            raise ValueError("작업자 이름은 64자까지 사용할 수 있습니다.")
+        if name.strip().startswith(FORMULA_PREFIX_CHARS):
+            raise ValueError("작업자 이름은 = + - @ 문자로 시작할 수 없습니다.")
+        if re.search(r'[\\/:*?"<>|]', name):
+            raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
         if name in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}:
             raise ValueError("보호된 관리자 식별자는 일반 작업자로 등록할 수 없습니다.")
         if not roster_identity and is_protected_admin_candidate(name):
@@ -111,8 +119,10 @@ class WorkerRegistry:
             ):
                 continue
             try:
-                self._validate_name(str(entry.get("name") or ""), roster_identity=bool(entry.get("worker_id")))
-                self._validate_name(name, roster_identity=bool(entry.get("worker_id")))
+                self._validate_name(str(entry.get("name") or ""), roster_identity=bool(entry.get("worker_id")),
+                                    legacy_local=not entry.get("worker_id"))
+                self._validate_name(name, roster_identity=bool(entry.get("worker_id")),
+                                    legacy_local=not entry.get("worker_id"))
             except ValueError:
                 continue
             active_value = entry.get("active", True)
@@ -190,7 +200,8 @@ class WorkerRegistry:
             if len(names) != 1 or any(entry.get("active", True) is not True for entry in candidates):
                 return None
             name = names.pop()
-            self._validate_name(name, roster_identity=bool(candidates[0].get("worker_id")))
+            self._validate_name(name, roster_identity=bool(candidates[0].get("worker_id")),
+                                legacy_local=not candidates[0].get("worker_id"))
             return name
         except (OSError, UnicodeError, ValueError, TypeError, KeyError):
             return None
@@ -239,9 +250,10 @@ class WorkerRegistry:
         return name
 
     def mark_recent(self, name: str, *, worker_id: str = "") -> str:
-        self._validate_name(str(name or ""), roster_identity=bool(worker_id))
+        legacy_local = not worker_id and self.has_worker(name)
+        self._validate_name(str(name or ""), roster_identity=bool(worker_id), legacy_local=legacy_local)
         name = self.normalize_name(name)
-        self._validate_name(name, roster_identity=bool(worker_id))
+        self._validate_name(name, roster_identity=bool(worker_id), legacy_local=legacy_local)
         payload = self._read_payload()
         workers = payload.setdefault("workers", [])
         # Keep the existing ISO timestamp field, including distinct starts in

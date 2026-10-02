@@ -3251,7 +3251,8 @@ class ContainerAudit:
         row = roster.active_worker(name=name) if roster is not None and roster.has_rows else None
         local_id = self.worker_registry.worker_id_for_name(name) if row is None else ""
         try:
-            WorkerRegistry._validate_name(name, roster_identity=row is not None or bool(local_id))
+            WorkerRegistry._validate_name(name, roster_identity=row is not None or bool(local_id),
+                                          legacy_local=row is None and not local_id)
         except ValueError:
             return None
         self._selected_roster_id = row["worker_id"] if row else local_id

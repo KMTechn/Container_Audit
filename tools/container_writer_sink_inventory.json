@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4922,
+      "line": 4923,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4926,
+          "line": 4927,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -5799,11 +5799,11 @@
       ],
       "file": "worker_registry.py",
       "kind": "function",
-      "line": 90,
+      "line": 98,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 98,
+          "line": 106,
           "operation": "source.replace",
           "writer_admission_sources": []
         }
@@ -5830,11 +5830,11 @@
       ],
       "file": "worker_roster.py",
       "kind": "function",
-      "line": 83,
+      "line": 85,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 85,
+          "line": 87,
           "operation": "path.replace",
           "writer_admission_sources": []
         }
@@ -6551,7 +6551,7 @@
     ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "19adde1b08480161a7c8941b36b9d1fbf5e19812f08b0e3f9e56ee166b69b955",
+  "inventory_sha256": "548ad6c2e7a7131e322d60a905a20cd06c89759ae01f7d9653e53f660338d959",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -13022,7 +13022,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 21125,
+      "line": 21126,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -13030,7 +13030,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4922,
+      "line": 4923,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -13038,7 +13038,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3597,
+      "line": 3598,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13046,7 +13046,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3565,
+      "line": 3566,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13054,7 +13054,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3515,
+      "line": 3516,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -13062,7 +13062,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 4011,
+      "line": 4012,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -14358,7 +14358,7 @@
       "direct_mutation_site_count": 1,
       "file": "worker_registry.py",
       "function": "worker_registry.WorkerRegistry._quarantine_registry_file",
-      "line": 90,
+      "line": 98,
       "marker_kind": "decorator",
       "source": "worker_registry_quarantine"
     },
@@ -14366,7 +14366,7 @@
       "direct_mutation_site_count": 0,
       "file": "worker_registry.py",
       "function": "worker_registry.WorkerRegistry._write_payload",
-      "line": 141,
+      "line": 151,
       "marker_kind": "decorator",
       "source": "worker_registry_write"
     },
@@ -14374,7 +14374,7 @@
       "direct_mutation_site_count": 0,
       "file": "worker_roster.py",
       "function": "worker_roster.WorkerRoster.apply",
-      "line": 114,
+      "line": 116,
       "marker_kind": "decorator",
       "source": "worker_roster_cache"
     },
@@ -14382,7 +14382,7 @@
       "direct_mutation_site_count": 1,
       "file": "worker_roster.py",
       "function": "worker_roster.WorkerRoster._preserve_bad",
-      "line": 83,
+      "line": 85,
       "marker_kind": "decorator",
       "source": "worker_roster_quarantine"
     }

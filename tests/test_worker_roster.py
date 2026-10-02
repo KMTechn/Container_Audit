@@ -208,13 +208,22 @@ def test_actual_selector_has_no_edit_or_registration_control(flow, tmp_path, mon
     assert app.worker_entry.options["values"] == ["tester"]
 
 
-@pytest.mark.parametrize("name", ["홍길", "홍길동", "Alex", "Nguyễn Văn An", "외국 이름" * 100, "외국/이름", "=Alex"])
-def test_selected_name_is_preserved_in_session_scan_and_history(flow, windows, tmp_path, name):
+@pytest.mark.parametrize("name,eligible", [("홍길", True), ("홍길동", True), ("Alex", True),
+    ("Nguyễn Văn An", True), ("외국 이름" * 100, False), ("외국/이름", False), ("=Alex", False)])
+def test_selected_name_is_preserved_in_session_scan_and_history(flow, windows, tmp_path, name, eligible):
     app = flow(transition=False)
     registry = _registry(tmp_path / "workers.json")
     _login(app, registry, tmp_path)
     chosen = row(name)
     app.worker_roster = store(tmp_path, chosen)
+    if not eligible:
+        # Contract 2026-10-03: unsafe rows are excluded before selection/writing.
+        assert app.worker_roster.active_workers() == []
+        assert app.worker_roster.has_rows
+        assert app._worker_selection_names() == []
+        assert app._ensure_worker_login_name(name) is None
+        assert windows == []
+        return
     app._refresh_worker_roster = lambda: None
     app._begin_or_resume_work_session = MethodType(ContainerAudit._begin_or_resume_work_session, app)
     app._set_worker_entry_value(name)

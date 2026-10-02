@@ -73,8 +73,10 @@ class WorkerRoster:
                 raise ValueError("invalid or duplicate roster worker")
             seen.add(row["worker_id"])
             name = row["display_name"].strip()
-            if name and not any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
-                                for character in row["display_name"]):
+            if (name and len(name) <= 64 and not name.startswith(("=", "+", "-", "@"))
+                    and not any(character in '\\/:*?"<>|' for character in name)
+                    and not any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"}
+                                for character in row["display_name"])):
                 workers.append({"worker_id": row["worker_id"], "display_name": name, "status": row["status"]})
         return {"contract_version": CONTRACT_VERSION, "authority_scope_id": self.authority_scope_id,
                  "version": value["version"], "workers": workers, "source_row_count": source_row_count}
