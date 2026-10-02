@@ -828,3 +828,42 @@ only; real privileged ownership and the next lab installation are NOT TESTED.
 The first-run fixture maps only canonical paths and preserves an already mapped
 run, including a short C: basetemp; its original six fixture failures are retained.
 [Evidence and candidate](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-123/REPORT.md).
+
+### Placement ACL scope and failed installation recovery — 2026-10-03
+
+Placement retains the protected application parent and admits existing control
+directories through the protected creator. Only placed code trees are hardened;
+update-control, evidence, user data and unknown siblings are excluded. Native
+child exit and redacted output are retained before evidence persistence. A failed
+helper emits one bounded JSON stdout diagnostic: 71 for evidence persistence,
+72 for a failed native child, 73 for another helper failure. Canonical captures it
+in its own journal; original exceptions remain distinct from recording failures.
+
+Rollback attempts parent protection, supported product removal, exact Run restore
+and marker cleanup independently, recording every result. Protection uses the
+same nonrecursive creator; an ordinary caller's repair is admitted inside the
+pinned elevation wrapper under its held writer authority. Existing code/fence
+readback still gates release and ordinary relay readiness gates recovery success.
+
+A new installer durably flushes a reentry record before runtime mutation and
+updates it after completed removal and before placement. It records owner PID
+and UTC start, exact fence/prepared tuple and hashes, delegation hash (no token),
+old metadata hashes and Run preimage, removal completion and marker hash.
+Reentry supports intact old code with completed removal and uncompleted placement,
+no scheduled writer, absent Run/relays, dead PID and a newly claimed old authority.
+PID reuse, existing/inaccessible mutexes, missing/ambiguous records, changed code
+or tuples stop with one Korean diagnostic. It completes rollback and proves the
+old ordinary relay ready before normal installation. Ordinary evidence retains
+the established operator-owned ACL; elevated evidence remains machine protected.
+This is a narrow rollback finisher, not general lifecycle convergence.
+
+PROVEN on Windows 11/Python 3.12.10/PS 5.1.26100.9444 and PS 7.6.5: baseline
+c75853e native placement/evidence RED; corrected native ACL preservation and parent
+repair, fallback capture, continued rollback and durable-record reentry GREEN.
+Native owner admission/assignment are translated only in owned D: fixtures;
+registry/relay/UAC callbacks are isolated in reentry tests. PS 7 JSON reads preserve
+UTC wire strings using DateKind String when available. Original fixture failures
+are retained. Actual privileged ownership, UAC, lab installation/GUI and release
+acceptance remain NOT TESTED. The legacy sub-125 lab build has no qualifying
+reentry record and is deliberately refused; its separate lab repair plan is not
+a product hash exception. [Evidence and limits](D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-127/REPORT.md).

@@ -481,3 +481,14 @@ original exception chain. Source/memory-ACL regression evidence is recorded in
 `D:/KMTech/program-improvement-20260912/work/program/w9setupprep/sub-111/REPORT.md`.
 Native folder creation/ACL application, declarations/stock/packet transition and
 fifth lab installation remain NOT TESTED by this subtask.
+
+2026-10-03 sub-127: placement now preserves application/control/evidence ACLs;
+native child diagnostics survive evidence failure; rollback attempts independent
+steps; a durably recorded dead unplaced installation can finish rollback before
+reentry. Source and isolated PS5.1/PS7/NTFS regression are PROVEN with native owner
+translation and mocked runtime callbacks explicitly limited. The sub-125 legacy
+lab residue is refused because its record is insufficient, per coordinator
+decision; execute the separate LAB-REPAIR-PLAN before the next rehearsal. Actual
+UAC/privileged ownership, ordinary resident readiness and lab acceptance are
+NOT TESTED here. General lifecycle convergence remains a later task; coordinator
+owns independent review, fifth rehearsal and shared hub acceptance.

@@ -55,7 +55,7 @@ $onboardingServerBaseUrlLabel = if ($onboardingServerBaseUrl) { $onboardingServe
 
 $BootstrapIntegrityFunctions = Join-Path $PSScriptRoot 'tools\bootstrap_integrity.ps1'
 # Generated with the writer inventory: authenticate this earlier bootstrap load.
-$ExpectedBootstrapIntegritySha256 = '30e0b296eaccfe1b59ea7d3d009ed07950149d272d1cb2c247f750b0144c643e'
+$ExpectedBootstrapIntegritySha256 = 'c84582c34f04cd326d2a0999273d16e1b477a07c9a2758e7db300bac0e2d2b9d'
 if ((Get-FileHash -LiteralPath $BootstrapIntegrityFunctions -Algorithm SHA256).Hash.ToLowerInvariant() -cne $ExpectedBootstrapIntegritySha256) {
     throw 'Bootstrap integrity helper pin mismatch.'
 }
@@ -469,6 +469,153 @@ function Snapshot {
         $data = [string]$key.GetValue($RunName,$null,[Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
         return [ordered]@{exists=$true;kind=$kind;data=$data}
     } finally { $key.Dispose() }
+}
+function Restore-CanonicalApplicationProtection {
+    $parent=Split-Path -Parent $install
+    if(Test-InstallationEvidencePrivileged){New-InstallationProtectedDirectory $parent $operatorSid -RecoverAbandoned;return}
+    try{Assert-InstallationEvidenceProtectedPath $parent;return}catch{Write-InstallationCaughtFailure $_}
+    $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+        '-RepairOwnedInstallationParent','-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
+        '-AbandonedRecoverySourceManifestSha256',$sourceManifestSha256,'-AbandonedRecoveryParentProcessId',[string]$PID)
+    $result=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $arguments (Join-Path $auditRoot ('parent-repair-'+$runId)) $operatorSid
+    if($result.ExitCode -ne 0){throw 'Owned application protection repair failed.'}
+    Assert-InstallationEvidenceProtectedPath $parent
+}
+function Invoke-CanonicalRollbackRuntimePreimage($Before,[switch]$RemovalAlreadyProven) {
+    $steps=[Collections.Generic.List[object]]::new()
+    foreach($name in @('app_protection','product_removal','run_preimage','stop_marker')){
+        $failure=$null
+        try{
+            Set-InstallationEvidenceStage ('rollback.'+$name) 'rollback'
+            switch($name){
+                'app_protection' {
+                    if(-not $testMode){
+                        Restore-CanonicalApplicationProtection
+                    }
+                }
+                'product_removal' {
+                    if(-not $RemovalAlreadyProven){Product $install '--remove-current-user-setup'}
+                    [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
+                }
+                'run_preimage' {
+                    Restore $Before
+                    $check=Snapshot
+                    if([bool]$check.exists -ne [bool]$Before.exists -or [string]$check.kind -cne [string]$Before.kind -or [string]$check.data -cne [string]$Before.data){throw 'registry restore failed'}
+                }
+                'stop_marker' {if(Test-Path -LiteralPath $stop){Remove-Item -LiteralPath $stop -ErrorAction Stop};if(Test-Path -LiteralPath $stop){throw 'stop marker remains'}}
+            }
+        }catch{$failure=Get-InstallationFailureDetails $_;Write-InstallationCaughtFailure $_}
+        $record=[ordered]@{step=$name;status=if($null -eq $failure){'PROVEN'}else{'FAILED'};reused_completed_removal=($name -ceq 'product_removal' -and $RemovalAlreadyProven.IsPresent);failure=$failure}
+        $steps.Add($record)
+        Write-InstallationEvidenceEvent ([ordered]@{event='ROLLBACK_STEP';detail=$record})
+    }
+    return ,$steps.ToArray()
+}
+
+function Write-CanonicalInstallReentryRecord([string]$Phase) {
+    if($null -eq $audit -or $audit.operation -cne 'INSTALL' -or -not $before.exists -or
+        [bool]$writerBefore.present){return}
+    $path=Join-Path $Script:InstallationEvidenceRoot 'reentry-record.json'
+    if($Phase -ceq 'PREIMAGE_SAVED'){
+        $active=Read-ContainerWriterFence
+        $record=[ordered]@{schema='container-audit-install-reentry-v1';phase=$Phase;run_id=$runId;install_root=$install;
+            operator_sid=$operatorSid;operator_local_appdata_root=$lad;owner_process_id=$PID;
+            owner_started_at_utc=(Get-Process -Id $PID -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o');
+            session_id=$active.session_id;attempt_id=$active.attempt_id;replacement_transaction_id=$active.replacement_transaction_id;
+            session_started_at_utc=$active.session_started_at_utc;orchestrator_sha256=$active.orchestrator_sha256;
+            writer_contract_sha256=$active.writer_contract_sha256;writer_inventory_sha256=$active.writer_inventory_sha256;
+            delegation_sha256=$active.delegation_sha256;prepared_receipt_sha256=$active.prepared_receipt_sha256;prepared_writer_inventory_sha256=$Script:ContainerWriterFenceInventorySha256;
+            source_manifest_sha256=$sourceManifestSha256;old_manifest_sha256=Sha (Join-Path $install 'portable-manifest.json');
+            old_integrity_sha256=Sha (Join-Path $install 'bootstrap-integrity.json');preimage=$before;
+            removal_completed=$false;removal_receipt_sha256='';stop_marker_sha256='';secret_values_recorded=$false}
+    }else{
+        $record=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+        $record.phase=$Phase
+        if($Phase -ceq 'RUNTIME_QUIESCED_UNPLACED'){
+            $record.removal_completed=$true;$record.removal_receipt_sha256=Sha $removalPath;$record.stop_marker_sha256=Sha $stop
+        }
+        # Inventory changes are explicit fenced transitions. Keep the recovery
+        # tuple equal to the actual active record, including its accepted pin.
+        $record.writer_inventory_sha256=(Read-ContainerWriterFence).writer_inventory_sha256
+    }
+    Assert-InstallationEvidenceWriteRoot $Script:InstallationEvidenceRoot
+    Assert-BootstrapNoReparsePoint (Split-Path -Parent $path) 'reentry record parent' -PathOnly
+    if(Test-Path -LiteralPath $path){Assert-BootstrapNoReparsePoint $path 'reentry record' -PathOnly}
+    $temporary=Join-Path $Script:InstallationEvidenceRoot ('r-'+[Guid]::NewGuid().ToString('N').Substring(0,8)+'.tmp')
+    $bytes=[Text.UTF8Encoding]::new($false).GetBytes(($record|ConvertTo-Json -Depth 10)+"`n")
+    $stream=[IO.FileStream]::new($temporary,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+    try{$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    Set-InstallationEvidenceAcl $temporary $operatorSid
+    Move-Item -LiteralPath $temporary -Destination $path -Force
+    $readback=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$readback.phase -cne $Phase -or [string]$readback.run_id -cne $runId){throw 'Reentry record readback differs.'}
+    Write-InstallationEvidenceEvent ([ordered]@{event='REENTRY_RECORD';phase=$Phase;path=$path;sha256=Sha $path;secret_values_recorded=$false})
+}
+function Resume-CanonicalAbandonedRollback {
+    try{$prior=Read-InstallationAbandonedRollback $install $lad $operatorSid}
+    catch{throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)}
+    if($null -eq $prior){return $null}
+    if($Uninstall -or $RestoreVerifiedReplacement -or $CompleteRetiredRemoval){throw '이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.'}
+    $claim=$null;$admission=$null;$savedInventory=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
+    $recoveryPath=Join-Path $auditRoot ('abandoned-recovery-'+[Guid]::NewGuid().ToString('N')+'.json')
+    try{
+        $admission=Enter-ContainerWriterAdmission
+        # Reuse the existing tuple-derived authority. Its create-only claim
+        # rejects every surviving mutex, including inaccessible/live ownership.
+        $claim=Enter-ContainerWriterSessionAuthority -SessionId ([string]$prior.active.session_id) `
+            -AttemptId ([string]$prior.active.attempt_id) -OrchestratorSha256 ([string]$prior.active.orchestrator_sha256) `
+            -ReplacementTransactionId ([string]$prior.active.replacement_transaction_id) `
+            -WriterContractSha256 ([string]$prior.active.writer_contract_sha256)
+        $fresh=Read-InstallationAbandonedRollback $install $lad $operatorSid
+        if($fresh.active_sha256 -cne $prior.active_sha256 -or $fresh.audit_sha256 -cne $prior.audit_sha256 -or $fresh.stop_sha256 -cne $prior.stop_sha256 -or $fresh.record_sha256 -cne $prior.record_sha256){throw 'Abandoned recovery inputs changed.'}
+        if((Snapshot).exists -or @(Relays).Count -ne 0){throw 'Abandoned recovery runtime differs.'}
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$prior.active.writer_inventory_sha256
+        # The old exclusive authority remains held. Do not hold the admission
+        # mutex across a child or UAC wait: ordinary product writers need it.
+        Exit-ContainerWriterAdmission $admission;$admission=$null
+        if(Test-InstallationEvidencePrivileged){
+            New-InstallationProtectedDirectory (Split-Path -Parent $install) $operatorSid -RecoverAbandoned
+            [void](Initialize-InstallationEvidence $recoveryPath $operatorSid)
+        }else{
+            [void](Initialize-InstallationEvidence $recoveryPath $operatorSid)
+            $repairArgs=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
+                '-RepairAbandonedInstallationParent','-InstallRoot',$install,'-OperatorLocalAppDataRoot',$lad,'-OperatorSid',$operatorSid,
+                '-AbandonedRecoverySourceManifestSha256',$sourceManifestSha256,'-AbandonedRecoveryParentProcessId',[string]$PID)
+            $repair=Invoke-InstallationElevationCapture (Join-Path $source 'INSTALL_THIS_PC.ps1') $repairArgs ($recoveryPath+'.repair') $operatorSid
+            if($repair.ExitCode -ne 0){throw 'Abandoned app protection failed.'}
+        }
+        $recoveryPath=Join-Path $Script:InstallationEvidenceRoot 'abandoned-recovery.json'
+        Write-InstallationEvidenceEvent ([ordered]@{event='ABANDONED_RECOVERY_START';original_owner_pid=$prior.owner_pid;original_audit_path=$prior.audit_path;original_audit_sha256=$prior.audit_sha256})
+        # All prior bytes were admitted before changing the parent. Repeat the
+        # installed trust/readback after protection and before registry recovery.
+        Assert-BootstrapProtectedRelayPath $install
+        [void](Assert-BootstrapIntegrityRecord $install)
+        $steps=Invoke-CanonicalRollbackRuntimePreimage $prior.audit.preimage -RemovalAlreadyProven
+        $recovery=[ordered]@{status='RECOVERY_PENDING';original_audit_path=$prior.audit_path;original_audit_sha256=$prior.audit_sha256;steps=$steps;fence_released=$false;old_relay_ready=$false}
+        Save $recoveryPath $recovery
+        # Continue fence recovery after an earlier removal error if the old
+        # code, exact Run and absence of writers/stop marker are proven safe.
+        $check=Snapshot
+        if(-not $check.exists -or $check.kind -cne $prior.audit.preimage.kind -or $check.data -cne $prior.audit.preimage.data -or
+            (Test-Path -LiteralPath $stop) -or @(Relays).Count -ne 0){throw 'Abandoned runtime restore readback failed.'}
+        [void](Abort-ContainerWriterFence -SessionId ([string]$prior.active.session_id) -AttemptId ([string]$prior.active.attempt_id) `
+            -ReplacementTransactionId ([string]$prior.active.replacement_transaction_id) -AuthorityLease $claim)
+        $recovery.fence_released=$true
+        Save $recoveryPath $recovery
+        [void](Start-CanonicalRelayAfterFenceRelease -Root $install -RunCommand ([string]$prior.audit.preimage.data))
+        $recovery.old_relay_ready=$true;$recovery.status='PROVEN_OLD_RUNTIME_RESTORED'
+        Save $recoveryPath $recovery
+        Write-InstallationEvidenceEvent ([ordered]@{event='ABANDONED_RECOVERY_COMPLETE';recovery_path=$recoveryPath;old_relay_ready=$true})
+        return [ordered]@{status=$recovery.status;path=$recoveryPath;sha256=Sha $recoveryPath;stage_evidence_root=$Script:InstallationEvidenceRoot}
+    }catch{
+        Write-InstallationCaughtFailure $_
+        throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)
+    }finally{
+        [void](Complete-InstallationEvidence)
+        if($null -ne $admission){Exit-ContainerWriterAdmission $admission}
+        if($null -ne $claim){Exit-ContainerWriterSessionAuthority $claim}
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$savedInventory
+    }
 }
 function Restore($Before) {
     $key = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey($RunKey,$true)
@@ -2020,6 +2167,9 @@ $relayPath = Join-Path $statusRoot 'container_audit_user_relay.json'
 $retirement = if ($CompleteRetiredRemoval) { Read-CanonicalRetiredRemoval } else { $null }
 $runId = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssfffZ')+'-'+[Guid]::NewGuid().ToString('N')
 $auditRoot = Join-Path $activeDataRoot 'install-audit'
+$abandonedRecovery=$null
+try{$abandonedPending=Read-InstallationAbandonedRollback $install $lad $operatorSid}
+catch{throw [InvalidOperationException]::new('이전 설치 복구 상태를 확인할 수 없습니다. 지원 담당자에게 문의하세요.',$_.Exception)}
 $auditPath = Join-Path $auditRoot "canonical-portable-$runId.json"
 $canonicalWriterFencePreparedPath = Join-Path $auditRoot "canonical-portable-$runId-writer-prepared.json"
 $elevationLogPath = Join-Path $auditRoot "canonical-portable-$runId-elevated.jsonl"
@@ -2049,7 +2199,7 @@ foreach ($name in $canonicalWriterFenceEnvironmentNames) {
     $canonicalWriterFenceEnvironmentBefore[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 $canonicalWriterFenceAuthority = $null
-$installationEvidenceRoot=Initialize-InstallationEvidence $auditPath $operatorSid @($Script:CanonicalWriterFenceDelegationToken)
+$installationEvidenceRoot=if($null -eq $abandonedPending){Initialize-InstallationEvidence $auditPath $operatorSid @($Script:CanonicalWriterFenceDelegationToken)}else{''}
 Set-InstallationEvidenceStage 'canonical.writer_fence_preflight'
 $canonicalWriterFenceActive = $false
 $canonicalWriterFenceLastReleaseAuthorizationPath = ''
@@ -2148,7 +2298,7 @@ if ($retirementResume) {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
         -ExpectedCommand $installedCommand -ExpectedRoot $install -StopMarkerExists $false
 }
-else {
+elseif($null -eq $abandonedPending) {
     $runtimePreimageBinding = Assert-CanonicalRuntimePreimage `
         -Before $before `
         -Processes $old `
@@ -2167,6 +2317,8 @@ $uninstallCodeStarted = $false
 $uninstallStopSha256 = ''
 $uninstallRecordPreimagePath = Join-Path $auditRoot "canonical-portable-$runId-integrity-preimage.json"
 $retirementResumeClaim = $null
+$original=$null
+$audit=$null
 try {
 if ($retirementResume) { $retirementResumeClaim = Enter-RetirementResumeClaim $retirementResume }
 $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
@@ -2175,6 +2327,15 @@ $canonicalWriterFenceAuthority = Enter-ContainerWriterSessionAuthority `
     -OrchestratorSha256 $canonicalWriterFenceOrchestratorSha256 `
     -ReplacementTransactionId $Script:CanonicalWriterFenceTransactionId `
     -WriterContractSha256 $canonicalWriterFenceContractSha256
+if($null -ne $abandonedPending){
+    # Recovery mutations run under this install's existing authority boundary;
+    # Resume separately claims the exact abandoned tuple before touching it.
+    $abandonedRecovery=Resume-CanonicalAbandonedRollback
+    $installationEvidenceRoot=Initialize-InstallationEvidence $auditPath $operatorSid @($Script:CanonicalWriterFenceDelegationToken)
+    $before=Snapshot;$old=@(Relays)
+    $runtimePreimageBinding=Assert-CanonicalRuntimePreimage -Before $before -Processes $old `
+        -ExpectedCommand $installedCommand -ExpectedRoot $install -StopMarkerExists (Test-Path -LiteralPath $stop)
+}
 $canonicalWriterFencePreparedReceipt = New-CanonicalWriterFencePreparedReceipt `
     -Path $canonicalWriterFencePreparedPath `
     -SessionId $Script:CanonicalWriterFenceSessionId `
@@ -2307,9 +2468,11 @@ if ($CompleteRetiredRemoval) {
     $retirement.resume_receipt_sha256=$ResumeRetirementReceiptSha256
 }
 $audit['stage_evidence_root']=$installationEvidenceRoot
+$audit['abandoned_recovery']=$abandonedRecovery
 Set-InstallationEvidenceStage 'canonical.prestate_verification'
 Save $auditPath $audit
 if ($evidenceFull) { Save $evidenceFull $audit }
+Write-CanonicalInstallReentryRecord 'PREIMAGE_SAVED'
 
 $mutated = ($old.Count -gt 0)
 $writerRestoreNeeded = [bool]$writerBefore.restore_required
@@ -2604,11 +2767,13 @@ $enteredPlacementTry = $true
             $audit.code_replacement.runtime_quiescence_readback = Confirm-CanonicalRuntimeQuiescence `
                 -Removal $removal -ExpectedRelays $old -StopRequestPath $stop
             $runtimeQuiescedForReplacement = $true
+            Write-CanonicalInstallReentryRecord 'RUNTIME_QUIESCED_UNPLACED'
             $audit.code_replacement.status='PRESTATE_VERIFIED_RUNTIME_QUIESCED'
             Save $auditPath $audit
             if ($evidenceFull) { Save $evidenceFull $audit }
         }
         Sync-CanonicalWriterFenceInventory $Script:ContainerWriterFenceInventorySha256
+        if($replaceExisting){Write-CanonicalInstallReentryRecord 'PLACEMENT_ATTEMPTED'}
         $bootstrap = @(
             '-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass',
             '-File',(Join-Path $source 'INSTALL_THIS_PC.ps1'),
@@ -2704,6 +2869,7 @@ $enteredPlacementTry = $true
             $inquiryCode = 'CA-' + (Get-ContainerWriterFenceStringSha256 ($operatorSid + '|' + $env:COMPUTERNAME + '|' + $Script:CanonicalWriterFenceAttemptId)).Substring(0, 12).ToUpperInvariant()
             throw "설치 코드 배치 전 중단: $reason 문의 코드 $inquiryCode ($failureCode). 준비 상태를 다시 확인하고 설치를 재시도하세요. 기존 설치본과 기록은 그대로 보존되며, 이 시도는 보류하고 다른 업무를 계속할 수 있습니다."
         }
+        if($replaceExisting){Write-CanonicalInstallReentryRecord 'PLACEMENT_COMPLETED'}
         $audit.code_placement='PLACED_PENDING_VERIFICATION'
         $currentTreeInventorySha256 = $Script:ContainerWriterFenceInventorySha256
         if ($replaceExisting) {
@@ -3045,6 +3211,13 @@ catch {
     }
     $autostartRollbackFailure=''
     $codeRollbackFailure=''
+    # Restore parent protection before any code/runtime trust check in rollback.
+    # This uses the same non-recursive protected creator as initial preparation.
+    if(-not $testMode){
+        try{
+            Restore-CanonicalApplicationProtection
+        }catch{Write-InstallationCaughtFailure $_;$audit.rollback['app_protection_failure']=Get-InstallationFailureDetails $_}
+    }
     if ($codeRestoreNeeded) {
         try {
             Set-InstallationEvidenceStage 'rollback.code_replacement' 'rollback'
@@ -3112,15 +3285,12 @@ catch {
         if ($mutated -and [string]::IsNullOrWhiteSpace($codeRollbackFailure)) {
             Set-InstallationEvidenceStage 'rollback.autostart_preimage' 'rollback'
             Sync-CanonicalWriterFenceInventory $currentTreeInventorySha256
-            Product $install '--remove-current-user-setup'
-            [void](Assert-RollbackRelayPreimage -ExpectedRelays @())
-            Restore $before
-            if (Test-Path $stop) { Remove-Item $stop -Force }
+            $audit.rollback['steps']=Invoke-CanonicalRollbackRuntimePreimage $before
             $check = Snapshot
             if (
                 [bool]$check.exists -ne [bool]$before.exists -or
                 [string]$check.kind -cne [string]$before.kind -or
-                [string]$check.data -cne [string]$before.data
+                [string]$check.data -cne [string]$before.data -or (Test-Path -LiteralPath $stop) -or @(Relays).Count -ne 0
             ) { throw 'registry restore failed' }
             $audit.rollback.runtime_restored = ($old.Count -eq 0)
         }
@@ -3281,15 +3451,18 @@ catch {
 finally {
     Complete-InstallationEvidenceStage 'forward'
     $evidenceRollbackFailure=$null
-    if($null -ne $original -and -not $audit.rollback.runtime_restored){$evidenceRollbackFailure=$original}
+    if($null -ne $original -and ($null -eq $audit -or -not $audit.rollback.runtime_restored)){$evidenceRollbackFailure=$original}
     Complete-InstallationEvidenceStage 'rollback' $evidenceRollbackFailure
-    $audit['installation_evidence']=Complete-InstallationEvidence
-    try {
-        Save $auditPath $audit
-        if($evidenceFull){Save $evidenceFull $audit}
-    }catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED'}
-    Write-Output ('installation_evidence_status='+[string]$audit.installation_evidence.status)
-    Write-Output ('installation_evidence_summary_path='+[string]$audit.installation_evidence.summary_path)
+    $finalEvidence=Complete-InstallationEvidence
+    if($null -ne $audit){
+        $audit['installation_evidence']=$finalEvidence
+        try {
+            Save $auditPath $audit
+            if($evidenceFull){Save $evidenceFull $audit}
+        }catch{Write-Warning 'INSTALLATION_EVIDENCE_FINAL_AUDIT_SAVE_FAILED'}
+    }
+    Write-Output ('installation_evidence_status='+[string]$finalEvidence.status)
+    Write-Output ('installation_evidence_summary_path='+[string]$finalEvidence.summary_path)
     $Script:ContainerWriterFenceAcceptedInstalledInventorySha256 = ''
     foreach ($name in $canonicalWriterFenceEnvironmentNames) {
         [Environment]::SetEnvironmentVariable($name, $canonicalWriterFenceEnvironmentBefore[$name], 'Process')

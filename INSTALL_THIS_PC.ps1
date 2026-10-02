@@ -31,7 +31,11 @@ param(
     [string]$WriterFenceDelegationToken = "",
     [switch]$AllowNoncanonicalLayoutForTest,
     [switch]$ApplyHardenedAclForTest,
-    [switch]$InjectRestoreFailureAfterDisplaceForTest
+    [switch]$InjectRestoreFailureAfterDisplaceForTest,
+    [switch]$RepairAbandonedInstallationParent,
+    [switch]$RepairOwnedInstallationParent,
+    [string]$AbandonedRecoverySourceManifestSha256 = '',
+    [int]$AbandonedRecoveryParentProcessId = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,6 +71,15 @@ if($pinnedLibrary){
     . ($libraryAst.GetScriptBlock())
 }else{. $BootstrapIntegrityFunctions}
 $IntegrityFileName = $BootstrapIntegrityFileName
+if($RepairAbandonedInstallationParent -or $RepairOwnedInstallationParent){
+    if(-not(Test-InstallationEvidencePrivileged) -or $InstallRoot -ine $ExpectedInstallRoot -or
+        $AbandonedRecoveryParentProcessId -le 0 -or
+        (Get-FileSha256 (Join-Path $PSScriptRoot 'portable-manifest.json')) -cne $AbandonedRecoverySourceManifestSha256){throw 'Abandoned parent repair binding differs.'}
+    if(-not(Get-Variable -Name InstallationAbandonedRepairAdmitted -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){throw 'Abandoned repair requires the admitted pinned wrapper.'}
+    Assert-InstallationEvidenceProtectedPath (Split-Path -Parent $InstallRoot)
+    'abandoned_app_protection=PROVEN'
+    exit 0
+}
 $LegacyRelayTaskName = "direct-sync-relay-container-audit"
 $LegacyQualificationTaskName = "container-audit-isolated-qualification-authority"
 $PlacementWriterSource = "canonical_code_placement"
@@ -885,9 +898,8 @@ function Initialize-ContainerStartupUpdate([string]$Root) {
     $control = Join-Path $managed 'update-control'
     $versions = Join-Path $managed 'versions'
     foreach ($directory in @($control,$versions)) {
-        if (-not (Test-Path -LiteralPath $directory)) { New-Item -ItemType Directory -Path $directory | Out-Null }
         Assert-NoReparsePoint $directory 'startup update protected directory'
-        Set-HardenedCodeAcl $directory -Recursive
+        New-InstallationProtectedDirectory $directory $OperatorSid
     }
     $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     $manifest = Get-Content -LiteralPath (Join-Path $Root 'portable-manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1385,7 +1397,9 @@ $replacementReceiptWritten = $false
 $previousReplacementIdentity = $null
 New-Item -ItemType Directory -Path $applicationParent -Force | Out-Null
 if ($applyHardenedAcl) {
-    Set-HardenedCodeAcl $applicationParent
+    # Preparation already protected this parent. Never reset control, evidence,
+    # user data or unknown siblings, even temporarily, during code placement.
+    Assert-InstallationEvidenceProtectedPath $applicationParent
 }
 New-Item -ItemType Directory -Path $stagingRoot -Force | Out-Null
     Set-InstallationEvidenceStage 'placement.staging_copy'
@@ -1655,8 +1669,11 @@ catch {
 }
 }
 catch {
-    Fail-InstallationEvidenceStages $_
-    throw
+    $originalHelperFailure=$_
+    Fail-InstallationEvidenceStages $originalHelperFailure
+    $diagnostic=Get-InstallationFallbackDiagnostic $originalHelperFailure
+    [Console]::Out.WriteLine('installation_failure_summary='+($diagnostic | ConvertTo-Json -Depth 10 -Compress))
+    exit $diagnostic.exit_code
 }
 finally {
     if ($null -ne $placementWriterFenceLease) {

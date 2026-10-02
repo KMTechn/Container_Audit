@@ -106,8 +106,26 @@ function Get-InstallationPreparationDiagnostic([int]$ExitCode) {
     return [pscustomobject]@{code=('INSTALLATION_PREPARATION_'+$entry[0]);message=($entry[1]+' 지원 담당자에게 문의하세요.');exit_code=$ExitCode}
 }
 
-function New-InstallationProtectedDirectory([string]$Path,[string]$Sid) {
+function New-InstallationProtectedDirectory([string]$Path,[string]$Sid,[switch]$RecoverAbandoned) {
     $parent=Split-Path -Parent $Path
+    if($RecoverAbandoned){
+        # This narrow admission is used only after claiming a dead install's
+        # recorded authority, or at the start of its already-owned rollback.
+        if($Path -ine (Split-Path -Parent (Get-InstallationEvidenceControlRoot)) -or
+            -not(Test-InstallationEvidencePrivileged)){throw 'Abandoned app protection requires the privileged canonical parent.'}
+        Assert-InstallationEvidenceProtectedPath $parent
+        Assert-BootstrapNoReparsePoint $Path 'abandoned app parent' -PathOnly
+        $existing=Get-Acl -LiteralPath $Path -ErrorAction Stop
+        if(-not $existing.AreAccessRulesProtected){
+            $rules=@($existing.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+            $key=(@($rules|ForEach-Object {[string]$_.IdentityReference.Value+'|'+[int64]$_.FileSystemRights+'|'+[string]$_.AccessControlType+'|'+[int]$_.InheritanceFlags+'|'+[int]$_.PropagationFlags+'|'+[int]$_.IsInherited}|Sort-Object)-join ';')
+            $expected=(@('S-1-5-32-544|2032127|Allow|3|0|1','S-1-5-18|2032127|Allow|3|0|1','S-1-5-32-545|1179817|Allow|3|0|1','S-1-5-11|-536805376|Allow|3|2|1','S-1-5-11|1245631|Allow|0|0|1')|Sort-Object)-join ';'
+            if($existing.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne 'S-1-5-32-544' -or $key -cne $expected){throw 'Abandoned app parent ACL is not the recorded reset shape.'}
+            # Set the protected DACL directly. There is no reset/unprotected gap
+            # and no recursive owner or permission change beneath this parent.
+            Set-InstallationEvidenceAcl $Path $Sid -Directory
+        }
+    }
     if($parent -ieq 'C:\KMTech\Apps'){Assert-InstallationEvidenceProtectedPath $Path -AllowSupportedPreparation}
     else{Assert-InstallationEvidenceProtectedPath $parent}
     if(-not(Test-Path -LiteralPath $Path)){
@@ -118,6 +136,121 @@ function New-InstallationProtectedDirectory([string]$Path,[string]$Sid) {
         else{[void][IO.Directory]::CreateDirectory($Path,$acl)}
     }
     Assert-InstallationEvidenceProtectedPath $Path
+}
+
+function Read-InstallationAbandonedRollback([string]$InstallRoot,[string]$LocalAppDataRoot,[string]$Sid) {
+    $root=Join-Path $LocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    $activePath=Join-Path $root 'active.json'
+    if(-not(Test-Path -LiteralPath $activePath)){return $null}
+    if(-not(Test-BootstrapSamePath $LocalAppDataRoot (Get-ContainerWriterFenceProfileLocalAppDataRoot $Sid))){throw 'Abandoned operator profile differs.'}
+    Assert-BootstrapNoReparsePoint $activePath 'abandoned fence'
+    if((Get-Item -LiteralPath $activePath).Length -gt 262144){throw 'Abandoned fence is oversized.'}
+    $activeSha=Get-FileSha256 $activePath
+    $active=Get-Content -LiteralPath $activePath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    if([string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer'){throw 'Abandoned fence state differs.'}
+    $auditRoot=Join-Path $LocalAppDataRoot 'KMTech\ContainerAudit\install-audit'
+    $preparedPath=Get-StrictFullPath ([string]$active.prepared_receipt_path) 'abandoned prepared receipt'
+    if(-not(Test-BootstrapSamePath (Split-Path -Parent $preparedPath) $auditRoot) -or
+        [IO.Path]::GetFileName($preparedPath) -cnotmatch '^canonical-portable-(\d{8}T\d{9}Z-[0-9a-f]{32})-writer-prepared\.json$'){throw 'Abandoned prepared path differs.'}
+    $runId=$Matches[1]
+    $auditPath=Join-Path $auditRoot ('canonical-portable-'+$runId+'.json')
+    Assert-BootstrapNoReparsePoint $auditPath 'abandoned audit'
+    if((Get-Item -LiteralPath $auditPath).Length -gt 1048576){throw 'Abandoned audit is oversized.'}
+    $audit=Get-Content -LiteralPath $auditPath -Raw -Encoding UTF8 | ConvertFrom-ContainerWriterFenceJson
+    $stage=Get-StrictFullPath ([string]$audit.stage_evidence_root) 'abandoned stage root'
+    $store=Join-Path (Get-InstallationEvidenceControlRoot) 'installation-evidence'
+    $run=Split-Path -Parent $stage
+    $protectedRun=Test-BootstrapSamePath (Split-Path -Parent $run) $store
+    $ordinaryRun=Test-BootstrapSamePath (Split-Path -Parent $stage) $auditRoot
+    if(($protectedRun -and [IO.Path]::GetFileName($run) -cnotmatch '^run-[0-9a-f]{32}$') -or
+        (-not $protectedRun -and -not $ordinaryRun) -or
+        [IO.Path]::GetFileName($stage) -cnotmatch ('^canonical-portable-'+[regex]::Escape($runId)+'\.json\.evidence\.([1-9][0-9]{0,9})$')){throw 'Abandoned evidence run differs.'}
+    # Only the corrected installer's durable record qualifies. Ordinary caller
+    # evidence is owned by that same operator; elevated evidence stays machine
+    # protected. Unknown owners, writable trustees and reparse points refuse.
+    $recordPath=Join-Path $stage 'reentry-record.json'
+    Assert-BootstrapNoReparsePoint $recordPath 'abandoned reentry record' -PathOnly
+    if($protectedRun){Assert-InstallationEvidenceProtectedPath $recordPath}
+    else{
+        $acl=Get-Acl -LiteralPath $stage
+        if(-not $acl.AreAccessRulesProtected -or $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -cne $Sid){throw 'Abandoned ordinary evidence owner differs.'}
+        foreach($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])){
+            if($rule.AccessControlType -eq 'Allow' -and $rule.IdentityReference.Value -cnotin @($Sid,'S-1-5-18','S-1-5-32-544')){throw 'Abandoned ordinary evidence trustee differs.'}
+        }
+    }
+    if((Get-Item -LiteralPath $recordPath).Length -gt 65536){throw 'Abandoned reentry record is oversized.'}
+    $record=Get-Content -LiteralPath $recordPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$record.schema -cne 'container-audit-install-reentry-v1' -or [string]$record.phase -cnotin @('RUNTIME_QUIESCED_UNPLACED','PLACEMENT_ATTEMPTED') -or
+        [string]$record.run_id -cne $runId -or [string]$record.operator_sid -cne $Sid -or
+        -not(Test-BootstrapSamePath ([string]$record.install_root) $InstallRoot) -or
+        -not(Test-BootstrapSamePath ([string]$record.operator_local_appdata_root) $LocalAppDataRoot) -or
+        $record.removal_completed -isnot [bool] -or -not $record.removal_completed -or
+        $record.secret_values_recorded -isnot [bool] -or $record.secret_values_recorded -or
+        -not(Test-BootstrapJsonInteger $record.owner_process_id) -or [int64]$record.owner_process_id -le 0 -or
+        [string]$record.delegation_sha256 -cne [string]$active.delegation_sha256 -or
+        -not(Test-ContainerWriterFenceHex ([string]$record.delegation_sha256) 64) -or
+        [string]$record.prepared_receipt_sha256 -cne [string]$active.prepared_receipt_sha256){throw 'Abandoned durable admission is incomplete.'}
+    [void](ConvertTo-ContainerWriterFenceUtc ([string]$record.owner_started_at_utc))
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','writer_contract_sha256','writer_inventory_sha256')){
+        if([string]$record.$name -cne [string]$active.$name){throw 'Abandoned record/fence tuple differs.'}
+    }
+    $accepted=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
+    try{
+        $Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$record.writer_inventory_sha256
+        [void](Read-ContainerWriterFence $root)
+        if((Get-FileSha256 $activePath) -cne $activeSha){throw 'Abandoned fence changed during admission.'}
+    }finally{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$accepted}
+    $prepared=Get-Content -LiteralPath $preparedPath -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$prepared.schema -cne 'container-audit-canonical-writer-prepared-v1' -or [string]$prepared.status -cne 'PREPARED' -or
+        [string]$prepared.operator_sid -cne $Sid -or [string]$prepared.source_manifest_sha256 -cne [string]$record.source_manifest_sha256 -or [string]$prepared.writer_inventory_sha256 -cne [string]$record.prepared_writer_inventory_sha256){throw 'Abandoned prepared identity differs.'}
+    foreach($name in @('session_id','attempt_id','replacement_transaction_id','session_started_at_utc','orchestrator_sha256','writer_contract_sha256')){
+        if([string]$prepared.$name -cne [string]$active.$name){throw 'Abandoned prepared/fence tuple differs.'}
+    }
+    # PID reuse is never interpreted as a dead owner. The start time is kept for
+    # support diagnostics; a surviving PID or mutex always refuses recovery.
+    $ownerPid=[int]$record.owner_process_id
+    if(@(Get-Process -ErrorAction Stop | Where-Object {$_.Id -eq $ownerPid}).Count){throw 'Abandoned installer PID is alive or reused.'}
+    if((Get-FileSha256 (Join-Path $InstallRoot 'portable-manifest.json')) -cne [string]$record.old_manifest_sha256 -or
+        (Get-FileSha256 (Join-Path $InstallRoot 'bootstrap-integrity.json')) -cne [string]$record.old_integrity_sha256){throw 'Abandoned old code metadata changed.'}
+    [void](Assert-BootstrapIntegrityRecord $InstallRoot)
+    $expected=(ConvertTo-BootstrapRelayArgument (Join-Path $InstallRoot 'runtime\pythonw.exe'))+' -I -B '+(ConvertTo-BootstrapRelayArgument (Join-Path $InstallRoot 'app\main.py'))+' --container-audit-user-relay'
+    $entryExpected=(ConvertTo-BootstrapRelayArgument (Join-Path $InstallRoot 'runtime\pythonw.exe'))+' -I -B '+(ConvertTo-BootstrapRelayArgument (Join-Path $InstallRoot 'app\user_relay_entry.py'))
+    if($record.preimage.exists -isnot [bool] -or -not $record.preimage.exists -or [string]$record.preimage.kind -cne 'String' -or
+        [string]$record.preimage.data -cnotin @($expected,$entryExpected) -or
+        [string]$audit.schema -cne 'container-audit-canonical-portable-install-v2' -or [string]$audit.operation -cne 'INSTALL' -or
+        [string]$audit.run_id -cne $runId -or [string]$audit.source_manifest_sha256 -cne [string]$record.source_manifest_sha256 -or
+        [string]$audit.preimage.data -cne [string]$record.preimage.data -or
+        [string]$audit.code_replacement.receipt_path -or [string]$audit.code_replacement.receipt_sha256 -or
+        [bool]$audit.scheduled_writer.preimage.present){throw 'Abandoned rollback state is ambiguous.'}
+    $stop=Join-Path $LocalAppDataRoot 'KMTech\DirectSync\container_audit\control\container_audit_user_relay.stop.json'
+    Assert-BootstrapNoReparsePoint $stop 'abandoned stop marker'
+    if((Get-FileSha256 $stop) -cne [string]$record.stop_marker_sha256){throw 'Abandoned stop marker changed.'}
+    return [pscustomobject]@{active=$active;active_path=$activePath;active_sha256=$activeSha;audit=$audit;audit_path=$auditPath;
+        audit_sha256=Get-FileSha256 $auditPath;record=$record;record_path=$recordPath;record_sha256=Get-FileSha256 $recordPath;
+        stop=$stop;stop_sha256=Get-FileSha256 $stop;owner_pid=$ownerPid;removal_sha256=[string]$record.removal_receipt_sha256}
+}
+
+function Read-InstallationOwnedParentRepair([string]$InstallRoot,[string]$LocalAppDataRoot,[string]$Sid,[int]$ParentProcessId,$Manifest) {
+    if($InstallRoot -ine 'C:\KMTech\Apps\Container_Audit\current' -or
+        -not(Test-BootstrapSamePath $LocalAppDataRoot (Get-ContainerWriterFenceProfileLocalAppDataRoot $Sid))){throw 'Owned repair path differs.'}
+    $security=Get-BootstrapRelaySecurity $ParentProcessId
+    if($security.sid -cne $Sid -or $security.elevated -or $security.integrity_level -ne 8192 -or $security.session_id -le 0){throw 'Owned repair parent is not the ordinary operator.'}
+    $root=Join-Path $LocalAppDataRoot 'KMTech\DirectSync\container_audit\control\writer-session'
+    $path=Join-Path $root 'active.json'
+    Assert-BootstrapNoReparsePoint $path 'owned repair fence'
+    $raw=Get-Content -LiteralPath $path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    $old=Get-Content -LiteralPath (Join-Path $InstallRoot 'portable-manifest.json') -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$raw.orchestrator_sha256 -cne [string]$Manifest.installer_sha256 -or
+        [string]$raw.writer_contract_sha256 -cne [string]$Manifest.writer_session_contract_sha256 -or
+        [string]$raw.writer_inventory_sha256 -cnotin @([string]$Manifest.writer_sink_inventory_contract_sha256,[string]$old.writer_sink_inventory_contract_sha256)){throw 'Owned repair source/fence differs.'}
+    $saved=$Script:ContainerWriterFenceAcceptedInstalledInventorySha256
+    try{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=[string]$old.writer_sink_inventory_contract_sha256;$active=Read-ContainerWriterFence $root}
+    finally{$Script:ContainerWriterFenceAcceptedInstalledInventorySha256=$saved}
+    if([string]$active.status -cne 'INSTALLING' -or [string]$active.owner_kind -cne 'canonical_installer' -or
+        -not(Test-ContainerWriterSessionAuthorityHeldByOther ([string]$active.session_authority_mutex_name))){throw 'Owned repair authority is not held.'}
+    $prepared=Get-Content -LiteralPath $active.prepared_receipt_path -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+    if([string]$prepared.operator_sid -cne $Sid -or [string]$prepared.source_manifest_sha256 -cne $script:OwnedRepairManifestSha256){throw 'Owned repair prepared source differs.'}
+    return [pscustomobject]@{active=$active}
 }
 
 function Initialize-InstallationProtectedBase([string]$Sid) {
@@ -219,6 +352,10 @@ function Initialize-InstallationEvidence([string]$BasePath,[string]$OperatorSid,
     $Script:InstallationEvidenceSensitiveValues = @($SensitiveValues)
     $Script:InstallationEvidenceLanes = @{}
     $Script:InstallationEvidenceSequence = 0
+    $Script:InstallationLastChildCapture=$null
+    $Script:InstallationLastChildEvidenceFailure=$null
+    $Script:InstallationFirstFailedChildCapture=$null
+    $Script:InstallationFirstFailedChildEvidenceFailure=$null
     $Script:InstallationEvidenceFailed = $false
     $Script:InstallationEvidenceFailureCodes = [Collections.Generic.List[string]]::new()
     Write-InstallationEvidenceEvent ([ordered]@{event='INITIALIZED';process_id=$PID;byte_cap_per_stream=1048576;journal_cap_bytes=1048576;raw_command_recorded=$false})
@@ -398,6 +535,7 @@ for($i=0;$i -lt $values.Count;$i++){
  else{if(++$i -ge $values.Count){throw 'Elevated helper parameter value is missing.'};$bound[$name]=[string]$values[$i]}
 }
 if($bound.ContainsKey('ElevationLogPath')){$bound['ElevationLogPath']=Join-Path $Script:InstallationProtectedRunRoot 'helper-audit'}
+if($bound.ContainsKey('RepairAbandonedInstallationParent') -or $bound.ContainsKey('RepairOwnedInstallationParent')){$Script:InstallationAbandonedRepairAdmitted=$true}
 & $helperBlock @bound
 '@
 }
@@ -420,6 +558,24 @@ try{
  . $libraryBlock
  $Script:InstallationEvidencePrivileged=$true
  $Script:InstallationProtectedRunRoot=Split-Path -Parent $resultPath
+ if(($childArgs -ccontains '-RepairAbandonedInstallationParent') -or ($childArgs -ccontains '-RepairOwnedInstallationParent')){
+  $repairValues=@{}
+  foreach($name in @('InstallRoot','OperatorLocalAppDataRoot','OperatorSid','AbandonedRecoverySourceManifestSha256','AbandonedRecoveryParentProcessId')){
+   $index=[Array]::IndexOf($childArgs,'-'+$name)
+   if($index -lt 0 -or $index+1 -ge $childArgs.Length){throw 'Abandoned repair argument missing.'}
+   $repairValues[$name]=[string]$childArgs[$index+1]
+  }
+  $manifestPath=Join-Path (Split-Path -Parent $target) 'portable-manifest.json'
+  if((Get-FileSha256 $manifestPath) -cne $repairValues.AbandonedRecoverySourceManifestSha256 -or $repairValues.OperatorSid -cne $sid -or [int]$repairValues.AbandonedRecoveryParentProcessId -ne $parentPid){throw 'Abandoned repair caller/source differs.'}
+  $repairManifest=Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8|ConvertFrom-Json
+  $writerFenceHelperPath=Join-Path (Split-Path -Parent $target) 'tools\container_writer_fence.ps1'
+  . (Get-InstallationVerifiedScript $writerFenceHelperPath ([string]$repairManifest.writer_fence_helper_sha256))
+  if($childArgs -ccontains '-RepairOwnedInstallationParent'){$Script:OwnedRepairManifestSha256=$repairValues.AbandonedRecoverySourceManifestSha256;$prior=Read-InstallationOwnedParentRepair $repairValues.InstallRoot $repairValues.OperatorLocalAppDataRoot $sid $parentPid $repairManifest}
+  else{$prior=Read-InstallationAbandonedRollback $repairValues.InstallRoot $repairValues.OperatorLocalAppDataRoot $sid}
+  if($null -eq $prior -or -not(Test-ContainerWriterSessionAuthorityHeldByOther ([string]$prior.active.session_authority_mutex_name))){throw 'Abandoned repair authority differs.'}
+  New-InstallationProtectedDirectory (Split-Path -Parent $repairValues.InstallRoot) $sid -RecoverAbandoned
+  $Script:InstallationAbandonedRepairAdmitted=$true
+ }
  $captureRoot=Initialize-InstallationEvidence (Join-Path $Script:InstallationProtectedRunRoot 'elevation-capture') $sid $sensitive
 }catch{
  # No privileged fallback to an operator-writable path before the run exists.
@@ -470,7 +626,16 @@ function Invoke-InstallationElevationCapture([string]$Target,[string[]]$Argument
     $ancestor=if(Test-Path -LiteralPath $control){$control}else{Split-Path -Parent $control}
     # Missing app/shared folders and the reviewed default ancestor shape are
     # prepared by the supported elevated creator; all other paths still refuse.
-    Assert-InstallationEvidenceProtectedPath $ancestor -AllowSupportedPreparation
+    if(($Arguments -ccontains '-RepairAbandonedInstallationParent') -or ($Arguments -ccontains '-RepairOwnedInstallationParent')){
+        $rootIndex=[Array]::IndexOf($Arguments,'-InstallRoot');$ladIndex=[Array]::IndexOf($Arguments,'-OperatorLocalAppDataRoot')
+        if($rootIndex -lt 0 -or $ladIndex -lt 0){throw 'Abandoned repair arguments differ.'}
+        if($Arguments -ccontains '-RepairOwnedInstallationParent'){
+            $manifest=Get-Content -LiteralPath (Join-Path (Split-Path -Parent $Target) 'portable-manifest.json') -Raw -Encoding UTF8|ConvertFrom-ContainerWriterFenceJson
+            $Script:OwnedRepairManifestSha256=Get-FileSha256 (Join-Path (Split-Path -Parent $Target) 'portable-manifest.json')
+            $prior=Read-InstallationOwnedParentRepair $Arguments[$rootIndex+1] $Arguments[$ladIndex+1] $OperatorSid $PID $manifest
+        }else{$prior=Read-InstallationAbandonedRollback $Arguments[$rootIndex+1] $Arguments[$ladIndex+1] $OperatorSid}
+        if($null -eq $prior -or -not(Test-ContainerWriterSessionAuthorityHeldByOther ([string]$prior.active.session_authority_mutex_name))){throw 'Abandoned repair authority is absent.'}
+    }else{Assert-InstallationEvidenceProtectedPath $ancestor -AllowSupportedPreparation}
     $protectedRun=Join-Path (Join-Path $control 'installation-evidence') ('run-'+[Guid]::NewGuid().ToString('N'))
     $protectedResult=Join-Path $protectedRun 'elevation-result.json'
     $library=Join-Path (Split-Path -Parent $Target) 'tools\bootstrap_integrity.ps1'
@@ -736,23 +901,81 @@ function Invoke-InstallationEvidenceChild([string]$Name,[string]$Executable,[str
     Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_START';stage=$Name;executable_leaf=[IO.Path]::GetFileName($Executable);byte_cap_per_stream=1048576;arguments_recorded=$false})
     $watch=[Diagnostics.Stopwatch]::StartNew()
     $result=[KMTechInstallationChildCapture]::Run($Executable,$Arguments,$WorkingDirectory)
-    $watch.Stop(); $streams=@{}; $texts=@{}
+    $watch.Stop(); $streams=@{}; $texts=@{}; $evidenceFailure=$null
+    # Decode/redact both native streams before attempting any evidence writes.
+    # The child exit and original output must survive a failed protected writer.
+    $safeOutputs=@{}
+    foreach($streamName in @('stdout','stderr')){
+        $safeOutputs[$streamName]=ConvertTo-SafeInstallationOutput $result.$streamName
+        $texts[$streamName]=[Text.Encoding]::GetEncoding($safeOutputs[$streamName].encoding).GetString($safeOutputs[$streamName].bytes)
+    }
+    $Script:InstallationLastChildCapture=[ordered]@{stage=$Name;pid=$result.pid;exit_code=$result.exit_code;stdout=(Protect-InstallationText $texts.stdout 512);stderr=(Protect-InstallationText $texts.stderr 512)}
     foreach ($streamName in @('stdout','stderr')) {
-        $output=$result.$streamName; $safe=ConvertTo-SafeInstallationOutput $output
-        $path=''
+        $output=$result.$streamName; $safe=$safeOutputs[$streamName]
+        $path='';$storedSha=''
         $root=Get-Variable -Name InstallationEvidenceRoot -Scope Script -ValueOnly -ErrorAction SilentlyContinue
         if($root) {
-            Assert-InstallationEvidenceWriteRoot $root
-            $path=Join-Path $root ($Name+'-'+$result.pid+'-'+$streamName+'.bin')
-            if(Test-Path -LiteralPath $path){throw 'Installer child evidence target already exists.'}
-            [IO.File]::WriteAllBytes($path,$safe.bytes)
-            Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid
+            try{
+                Assert-InstallationEvidenceWriteRoot $root
+                $path=Join-Path $root ($Name+'-'+$result.pid+'-'+$streamName+'.bin')
+                if(Test-Path -LiteralPath $path){throw 'Installer child evidence target already exists.'}
+                [IO.File]::WriteAllBytes($path,$safe.bytes)
+                Set-InstallationEvidenceAcl $path $Script:InstallationEvidenceSid
+                $storedSha=Get-FileSha256 $path
+            }catch{
+                if($null -eq $evidenceFailure){$evidenceFailure=Get-InstallationFailureDetails $_}
+                $path='';$Script:InstallationEvidenceFailed=$true
+                if(-not $Script:InstallationEvidenceFailureCodes.Contains('CHILD_STREAM_IO_OR_ACL_FAILURE')){$Script:InstallationEvidenceFailureCodes.Add('CHILD_STREAM_IO_OR_ACL_FAILURE')}
+            }
         }
-        $streams[$streamName]=@{path=$path;observed_bytes=$output.observed;saved_bytes=$safe.bytes.Length;complete=$output.complete;truncated=$safe.truncated;redacted=$safe.redacted;sha256=if($path){Get-FileSha256 $path}else{''};encoding=$safe.encoding}
-        $texts[$streamName]=[Text.Encoding]::GetEncoding($safe.encoding).GetString($safe.bytes)
+        $streams[$streamName]=@{path=$path;observed_bytes=$output.observed;saved_bytes=$safe.bytes.Length;complete=$output.complete;truncated=$safe.truncated;redacted=$safe.redacted;sha256=$storedSha;encoding=$safe.encoding}
     }
-    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EXIT';stage=$Name;pid=$result.pid;exit_code=$result.exit_code;elapsed_ms=$watch.ElapsedMilliseconds;streams=$streams})
-    return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams}
+    $Script:InstallationLastChildEvidenceFailure=$evidenceFailure
+    if(($result.exit_code -ne 0 -or $null -ne $evidenceFailure) -and
+        -not(Get-Variable -Name InstallationFirstFailedChildCapture -Scope Script -ValueOnly -ErrorAction SilentlyContinue)){
+        $Script:InstallationFirstFailedChildCapture=$Script:InstallationLastChildCapture
+        $Script:InstallationFirstFailedChildEvidenceFailure=$evidenceFailure
+    }
+    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_EXIT';stage=$Name;pid=$result.pid;exit_code=$result.exit_code;elapsed_ms=$watch.ElapsedMilliseconds;streams=$streams;evidence_failure=$evidenceFailure})
+    # A pinned helper's bounded one-line fallback belongs in its parent's own
+    # journal. Retain it even when the helper could not persist a summary file.
+    foreach($line in @($texts.stdout -split '\r?\n')){
+        if($line.Length -le 4096 -and $line.StartsWith('installation_failure_summary=',[StringComparison]::Ordinal)){
+            try{
+                $diagnostic=$line.Substring('installation_failure_summary='.Length) | ConvertFrom-Json
+                if([string]$diagnostic.schema -ceq 'container-audit-installation-fallback-v1' -and [int]$diagnostic.exit_code -in @(71,72,73)){
+                    Write-InstallationEvidenceEvent ([ordered]@{event='CHILD_FAILURE_FALLBACK';stage=$Name;pid=$result.pid;child_exit_code=$result.exit_code;diagnostic=$diagnostic})
+                }
+            }catch{Write-InstallationCaughtFailure $_}
+        }
+    }
+    return [pscustomobject]@{ExitCode=$result.exit_code;ProcessId=$result.pid;Stdout=$texts.stdout;Stderr=$texts.stderr;Streams=$streams;EvidenceFailure=$evidenceFailure}
+}
+
+function Get-InstallationFallbackDiagnostic($Failure) {
+    $detail=Get-InstallationFailureDetails $Failure
+    $detail.script_file=Protect-InstallationText $detail.script_file 96
+    if($detail.exception_chain.Count -gt 4){$detail.exception_chain=@($detail.exception_chain | Select-Object -First 3)+@($detail.exception_chain[-1])}
+    foreach($item in $detail.exception_chain){$item.message=Protect-InstallationText $item.message 96;$item.type=Protect-InstallationText $item.type 96}
+    $child=Get-Variable -Name InstallationLastChildCapture -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $evidence=Get-Variable -Name InstallationLastChildEvidenceFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    $first=Get-Variable -Name InstallationFirstFailedChildCapture -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+    if($null -ne $first){$child=$first;$evidence=Get-Variable -Name InstallationFirstFailedChildEvidenceFailure -Scope Script -ValueOnly -ErrorAction SilentlyContinue}
+    if($null -ne $child){
+        $child=($child|ConvertTo-Json -Depth 12)|ConvertFrom-Json
+        $child.stdout=Protect-InstallationText $child.stdout 256
+        $child.stderr=Protect-InstallationText $child.stderr 256
+        $child.stage=Protect-InstallationText $child.stage 96
+    }
+    if($null -ne $evidence){
+        $evidence=($evidence|ConvertTo-Json -Depth 12)|ConvertFrom-Json
+        $evidence.script_file=Protect-InstallationText $evidence.script_file 96
+        if($evidence.exception_chain.Count -gt 4){$evidence.exception_chain=@($evidence.exception_chain | Select-Object -First 3)+@($evidence.exception_chain[-1])}
+        foreach($item in $evidence.exception_chain){$item.message=Protect-InstallationText $item.message 96;$item.type=Protect-InstallationText $item.type 96}
+    }
+    # Fixed table: protected evidence write / native child / other helper failure.
+    $code=if($null -ne $evidence){71}elseif($null -ne $child -and [int]$child.exit_code -ne 0){72}else{73}
+    return [ordered]@{schema='container-audit-installation-fallback-v1';exit_code=$code;failure=$detail;child=$child;evidence_failure=$evidence}
 }
 
 function Get-StrictFullPath([string]$Path, [string]$Purpose) {
