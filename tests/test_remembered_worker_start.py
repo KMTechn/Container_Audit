@@ -164,7 +164,9 @@ def test_failed_automatic_session_save_preserves_memory_and_sends_no_held_work(t
     saves = []
     app._save_work_session_state = lambda state: saves.append(state["phase"]) or False
     original = hold.path.read_bytes()
-    remembered_bytes = Path(registry.registry_path).read_bytes()
+    remembered_payload = json.loads(Path(registry.registry_path).read_text(encoding="utf-8"))
+    # An unsuccessful start retains name history but durably requires selection (sub-167).
+    remembered_payload["automatic_start_enabled"] = False
     try:
         app._start_remembered_worker(registry.recent_worker())
         assert saves == ["START_PENDING"]
@@ -175,7 +177,8 @@ def test_failed_automatic_session_save_preserves_memory_and_sends_no_held_work(t
         root.run_until(lambda: not lane.is_busy())
         assert calls["seal"] == [] and seals.intent_ids == ["seal-1"]
         assert hold.path.read_bytes() == original
-        assert Path(registry.registry_path).read_bytes() == remembered_bytes
+        assert json.loads(Path(registry.registry_path).read_text(encoding="utf-8")) == remembered_payload
+        assert not WorkerRegistry(registry.registry_path).automatic_start_enabled()
         assert windows == []
     finally:
         lane.close_idle()

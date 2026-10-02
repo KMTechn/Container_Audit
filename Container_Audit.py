@@ -3183,13 +3183,25 @@ class ContainerAudit:
             messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
         return registered
 
+    def _disable_remembered_worker_start(self) -> bool:
+        registry = getattr(self, "worker_registry", None)
+        if registry is None:
+            return True
+        try:
+            registry.disable_automatic_start()
+        except (OSError, UnicodeError, ValueError):
+            self.show_status_message("작업자 변경 정보를 저장하지 못했습니다. 다시 시도하세요.", self.COLOR_DANGER, duration=0)
+            return False
+        return True
+
     def _start_remembered_worker(self, worker_name: Optional[str]) -> None:
         if (not worker_name or self.worker_name
                 or self._work_session_recovery_blocked
                 or self.transfer_seal_coordinator.client is None):
             return
         try:
-            if (self.worker_registry.recent_worker() != worker_name
+            if (not self.worker_registry.automatic_start_enabled()
+                or self.worker_registry.recent_worker() != worker_name
                     or not self.worker_registry.has_worker(worker_name)
                     or (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists()
                     or self._paired_preflight_store().unidentified_pending()):
@@ -3217,6 +3229,8 @@ class ContainerAudit:
             worker_name == PROTECTED_ADMIN_OPERATOR_ID
             and getattr(self, "_authenticated_protected_admin", False)
         )
+        if not self._disable_remembered_worker_start():
+            return
         self._work_session_identity_bound = False
         self.worker_name = worker_name
         self.worker_role = "ADMIN" if protected_admin_authenticated else "WORKER"
@@ -3320,6 +3334,8 @@ class ContainerAudit:
         if self.current_tray.master_label_code:
             msg += "\n\n진행 중인 작업은 다음 로그인 시 복구할 수 있도록 저장됩니다."
         if messagebox.askyesno("작업자 변경", msg):
+            if not self._disable_remembered_worker_start():
+                return
             if self.current_tray.master_label_code:
                 if not self._save_current_tray_state():
                     messagebox.showerror("작업 저장 실패", "진행 중인 트레이 상태를 저장하지 못해 작업자를 변경하지 않습니다.")
@@ -4026,6 +4042,8 @@ class ContainerAudit:
         return True
 
     def _end_work_session(self, *, reason: str) -> bool:
+        if reason != "app_close" and not self._disable_remembered_worker_start():
+            return False
         if self._work_session_state_path() is None:
             return self._log_event(
                 "WORK_END",

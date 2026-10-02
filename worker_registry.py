@@ -84,7 +84,10 @@ class WorkerRegistry:
             sanitized_payload = dict(payload)
             sanitized_payload["workers"] = sanitized_workers
             self._write_payload(sanitized_payload)
-        return {"workers": sanitized_workers}
+        result = {"workers": sanitized_workers}
+        if "automatic_start_enabled" in payload:
+            result["automatic_start_enabled"] = payload["automatic_start_enabled"]
+        return result
 
     @writer_sink("worker_registry_quarantine")
     def _quarantine_registry_file(self) -> str:
@@ -194,6 +197,28 @@ class WorkerRegistry:
         except (OSError, UnicodeError, ValueError, TypeError, KeyError):
             return None
 
+    def automatic_start_enabled(self) -> bool:
+        try:
+            with open(self.registry_path, "r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+            return isinstance(payload, dict) and payload.get("automatic_start_enabled", True) is True
+        except (OSError, UnicodeError, ValueError):
+            return False
+
+    def disable_automatic_start(self) -> None:
+        # Keep names and usage timestamps: selection order is independent of startup eligibility.
+        try:
+            with open(self.registry_path, "r", encoding="utf-8") as stream:
+                payload = json.load(stream)
+        except FileNotFoundError:
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("workers"), list):
+            raise ValueError("Invalid worker registry")
+        if payload.get("automatic_start_enabled") is False:
+            return
+        payload["automatic_start_enabled"] = False
+        self._write_payload(payload)
+
     def register(self, name: str) -> str:
         name = self.normalize_name(name)
         self._validate_name(name)
@@ -221,6 +246,7 @@ class WorkerRegistry:
         workers = payload.setdefault("workers", [])
         # Keep the existing ISO timestamp field, including distinct starts in
         # the same second (for example an immediate worker change).
+        payload["automatic_start_enabled"] = True
         now = datetime.datetime.now().isoformat(timespec="microseconds")
         for entry in workers:
             if isinstance(entry, dict) and self.normalize_name(entry.get("name", "")) == name:
