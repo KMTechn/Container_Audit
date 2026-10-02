@@ -19,11 +19,11 @@
       ],
       "file": "Container_Audit.py",
       "kind": "function",
-      "line": 4833,
+      "line": 4922,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 4837,
+          "line": 4926,
           "operation": "os.remove",
           "writer_admission_sources": []
         }
@@ -46,22 +46,21 @@
       "covered_entrypoints": [],
       "decorated_source": "admin_pin_network",
       "direct_callers": [
-        "container_admin_pin.AdminPinClient.redeem",
-        "container_admin_pin.AdminPinClient.status",
-        "container_admin_pin.AdminPinClient.verify"
+        "container_admin_pin.AdminPinClient.post",
+        "container_admin_pin.AdminPinClient.query_roster"
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 99,
+      "line": 111,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 126,
+          "line": 138,
           "operation": "self.session.post",
           "writer_admission_sources": []
         }
       ],
-      "node": "container_admin_pin.AdminPinClient.post",
+      "node": "container_admin_pin.AdminPinClient._post_signed",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
       "trust_reason": "",
@@ -77,17 +76,17 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 150,
+      "line": 172,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 158,
+          "line": 180,
           "operation": "self.post",
           "writer_admission_sources": []
         },
         {
           "category": "network",
-          "line": 162,
+          "line": 184,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -106,16 +105,16 @@
       "covered_entrypoints": [],
       "decorated_source": "admin_pin_network",
       "direct_callers": [
-        "container_admin_pin.AdminPinClient.post",
+        "container_admin_pin.AdminPinClient._post_signed",
         "container_admin_pin.AdminPinClient.redeem"
       ],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 184,
+      "line": 206,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 185,
+          "line": 207,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -136,11 +135,11 @@
       "direct_callers": [],
       "file": "container_admin_pin.py",
       "kind": "function",
-      "line": 199,
+      "line": 221,
       "mutation_sites": [
         {
           "category": "network",
-          "line": 205,
+          "line": 227,
           "operation": "self.post",
           "writer_admission_sources": []
         }
@@ -3260,7 +3259,8 @@
         "recovery_two_phase.RecoveryTwoPhaseJournal._write",
         "storage_utils.RemoteAttempt.begin",
         "tools.register_container_audit_worker_pc._write_registration_json",
-        "worker_registry.WorkerRegistry._write_payload"
+        "worker_registry.WorkerRegistry._write_payload",
+        "worker_roster.WorkerRoster.apply"
       ],
       "file": "storage_utils.py",
       "kind": "function",
@@ -5603,11 +5603,11 @@
       ],
       "file": "tray_state.py",
       "kind": "function",
-      "line": 901,
+      "line": 899,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 915,
+          "line": 913,
           "operation": "source.replace",
           "writer_admission_sources": []
         }
@@ -5799,11 +5799,11 @@
       ],
       "file": "worker_registry.py",
       "kind": "function",
-      "line": 93,
+      "line": 90,
       "mutation_sites": [
         {
           "category": "filesystem",
-          "line": 101,
+          "line": 98,
           "operation": "source.replace",
           "writer_admission_sources": []
         }
@@ -5811,6 +5811,41 @@
       "node": "worker_registry.WorkerRegistry._quarantine_registry_file",
       "reachable_entrypoints": [],
       "reachable_from_product_entrypoint": false,
+      "trust_reason": "",
+      "unsunk_entrypoints": [],
+      "unsunk_paths": []
+    },
+    {
+      "caller_guard_reason": "",
+      "caller_guard_sources": [],
+      "coverage_status": "covered",
+      "covered_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "decorated_source": "worker_roster_quarantine",
+      "direct_callers": [
+        "worker_roster.WorkerRoster.load"
+      ],
+      "file": "worker_roster.py",
+      "kind": "function",
+      "line": 83,
+      "mutation_sites": [
+        {
+          "category": "filesystem",
+          "line": 85,
+          "operation": "path.replace",
+          "writer_admission_sources": []
+        }
+      ],
+      "node": "worker_roster.WorkerRoster._preserve_bad",
+      "reachable_entrypoints": [
+        "Container_Audit.__file_entry__",
+        "Container_Audit.main",
+        "portable.main.__file_entry__"
+      ],
+      "reachable_from_product_entrypoint": true,
       "trust_reason": "",
       "unsunk_entrypoints": [],
       "unsunk_paths": []
@@ -5919,12 +5954,13 @@
     "warning_presenter.py",
     "work_session_state.py",
     "worker_registry.py",
+    "worker_roster.py",
     "writer_session_fence.py"
   ],
   "coverage_summary": {
     "caller_fence_reference_failure_count": 0,
-    "closure_direct_mutation_function_count": 142,
-    "closure_module_count": 103,
+    "closure_direct_mutation_function_count": 143,
+    "closure_module_count": 104,
     "external_process_mutation_site_count": 9,
     "powershell_direct_mutation_site_count": 66,
     "powershell_execution_site_count": 36,
@@ -5938,8 +5974,8 @@
     "powershell_sink_count": 1,
     "python_external_control_literal_site_count": 4,
     "scheduled_task_mutation_site_count": 7,
-    "sink_function_count": 208,
-    "total_cross_language_sink_count": 209,
+    "sink_function_count": 212,
+    "total_cross_language_sink_count": 213,
     "trusted_control_plane_mutation_count": 0,
     "uncovered_mutation_function_count": 0
   },
@@ -6059,6 +6095,7 @@
     "warning_presenter.py",
     "work_session_state.py",
     "worker_registry.py",
+    "worker_roster.py",
     "writer_session_fence.py"
   ],
   "import_closure_edges": {
@@ -6113,6 +6150,7 @@
       "warning_presenter",
       "work_session_state",
       "worker_registry",
+      "worker_roster",
       "writer_session_fence"
     ],
     "best_time_records": [
@@ -6507,9 +6545,13 @@
       "storage_utils",
       "writer_session_fence"
     ],
+    "worker_roster": [
+      "storage_utils",
+      "writer_session_fence"
+    ],
     "writer_session_fence": []
   },
-  "inventory_sha256": "4bc8999059df59cc032ea28f59f7d0f104e496099e144534fd079f5a3cee6755",
+  "inventory_sha256": "19adde1b08480161a7c8941b36b9d1fbf5e19812f08b0e3f9e56ee166b69b955",
   "known_route_coverage": [
     {
       "delegation_source": "code_derived_writer_inventory",
@@ -6617,7 +6659,9 @@
         "worker_enrollment_network",
         "worker_pc_registration",
         "worker_registry_quarantine",
-        "worker_registry_write"
+        "worker_registry_write",
+        "worker_roster_cache",
+        "worker_roster_quarantine"
       ],
       "route_id": "canonical_installer",
       "scheduled_task_guard_failures": [],
@@ -6712,7 +6756,8 @@
         "transfer_store.TransferSealStore._ensure_linked_event",
         "transfer_store.TransferSealStore._initialize",
         "tray_state.quarantine_tray_state_file",
-        "user_relay._write_json_atomic"
+        "user_relay._write_json_atomic",
+        "worker_roster.WorkerRoster._preserve_bad"
       ],
       "reachable_sources": [
         "admin_pin_verified_file_move",
@@ -6767,7 +6812,8 @@
         "transfer_seal",
         "tray_state_quarantine",
         "worker_enrollment_network",
-        "worker_pc_registration"
+        "worker_pc_registration",
+        "worker_roster_quarantine"
       ],
       "route_id": "gui_startup",
       "start": "Container_Audit.main",
@@ -12492,6 +12538,7 @@
     "warning_presenter.__file_entry__",
     "work_session_state.__file_entry__",
     "worker_registry.__file_entry__",
+    "worker_roster.__file_entry__",
     "writer_session_fence.__file_entry__"
   ],
   "python_external_control_commands": {
@@ -12638,7 +12685,9 @@
     "worker_enrollment_network",
     "worker_pc_registration",
     "worker_registry_quarantine",
-    "worker_registry_write"
+    "worker_registry_write",
+    "worker_roster_cache",
+    "worker_roster_quarantine"
   ],
   "writer_sinks": [
     {
@@ -12653,12 +12702,20 @@
       "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinIntentStore.write",
-      "line": 280,
+      "line": 302,
       "marker_kind": "decorator",
       "source": "admin_pin_intent"
     },
     {
       "direct_mutation_site_count": 1,
+      "file": "container_admin_pin.py",
+      "function": "container_admin_pin.AdminPinClient._post_signed",
+      "line": 111,
+      "marker_kind": "decorator",
+      "source": "admin_pin_network"
+    },
+    {
+      "direct_mutation_site_count": 0,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.post",
       "line": 99,
@@ -12666,10 +12723,18 @@
       "source": "admin_pin_network"
     },
     {
+      "direct_mutation_site_count": 0,
+      "file": "container_admin_pin.py",
+      "function": "container_admin_pin.AdminPinClient.query_roster",
+      "line": 105,
+      "marker_kind": "decorator",
+      "source": "admin_pin_network"
+    },
+    {
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.redeem",
-      "line": 199,
+      "line": 221,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -12677,7 +12742,7 @@
       "direct_mutation_site_count": 1,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.status",
-      "line": 184,
+      "line": 206,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -12685,7 +12750,7 @@
       "direct_mutation_site_count": 2,
       "file": "container_admin_pin.py",
       "function": "container_admin_pin.AdminPinClient.verify",
-      "line": 150,
+      "line": 172,
       "marker_kind": "decorator",
       "source": "admin_pin_network"
     },
@@ -12949,7 +13014,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit.save_settings",
-      "line": 1484,
+      "line": 1487,
       "marker_kind": "decorator",
       "source": "gui_settings_save"
     },
@@ -12957,7 +13022,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit._prepare_gui_startup",
-      "line": 21034,
+      "line": 21125,
       "marker_kind": "decorator",
       "source": "gui_startup"
     },
@@ -12965,7 +13030,7 @@
       "direct_mutation_site_count": 1,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._delete_current_tray_state",
-      "line": 4833,
+      "line": 4922,
       "marker_kind": "decorator",
       "source": "gui_tray_state_delete"
     },
@@ -12973,7 +13038,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._clear_projected_checkpoint_audits",
-      "line": 3508,
+      "line": 3597,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12981,7 +13046,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._recover_checkpoint_audit_events",
-      "line": 3476,
+      "line": 3565,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12989,7 +13054,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_tray_state_snapshot",
-      "line": 3426,
+      "line": 3515,
       "marker_kind": "decorator",
       "source": "gui_tray_state_save"
     },
@@ -12997,7 +13062,7 @@
       "direct_mutation_site_count": 0,
       "file": "Container_Audit.py",
       "function": "Container_Audit.ContainerAudit._save_work_session_state",
-      "line": 3922,
+      "line": 4011,
       "marker_kind": "decorator",
       "source": "gui_work_session_save"
     },
@@ -14205,7 +14270,7 @@
       "direct_mutation_site_count": 1,
       "file": "tray_state.py",
       "function": "tray_state.quarantine_tray_state_file",
-      "line": 901,
+      "line": 899,
       "marker_kind": "decorator",
       "source": "tray_state_quarantine"
     },
@@ -14293,7 +14358,7 @@
       "direct_mutation_site_count": 1,
       "file": "worker_registry.py",
       "function": "worker_registry.WorkerRegistry._quarantine_registry_file",
-      "line": 93,
+      "line": 90,
       "marker_kind": "decorator",
       "source": "worker_registry_quarantine"
     },
@@ -14301,9 +14366,25 @@
       "direct_mutation_site_count": 0,
       "file": "worker_registry.py",
       "function": "worker_registry.WorkerRegistry._write_payload",
-      "line": 143,
+      "line": 141,
       "marker_kind": "decorator",
       "source": "worker_registry_write"
+    },
+    {
+      "direct_mutation_site_count": 0,
+      "file": "worker_roster.py",
+      "function": "worker_roster.WorkerRoster.apply",
+      "line": 114,
+      "marker_kind": "decorator",
+      "source": "worker_roster_cache"
+    },
+    {
+      "direct_mutation_site_count": 1,
+      "file": "worker_roster.py",
+      "function": "worker_roster.WorkerRoster._preserve_bad",
+      "line": 83,
+      "marker_kind": "decorator",
+      "source": "worker_roster_quarantine"
     }
   ]
 }

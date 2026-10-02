@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -242,7 +243,11 @@ def _completion_replay_identity(details: Dict[str, Any]) -> str | None:
 
 
 def _sanitize_worker_name(worker_name: str) -> str:
-    return re.sub(r'[\\/*?:"<>|]', "", str(worker_name or ""))
+    name = str(worker_name or "")
+    sanitized = re.sub(r'[\\/*?:"<>|]', "", name)
+    if sanitized != name or len(sanitized.encode("utf-16-le")) > 240 or not sanitized or sanitized.endswith((".", " ")):
+        return "worker-" + hashlib.sha256(name.encode("utf-8")).hexdigest()
+    return sanitized
 
 
 def _session_capacity(session: Dict[str, Any], fallback_tray_size: int) -> int:

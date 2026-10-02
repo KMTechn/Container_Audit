@@ -10145,7 +10145,7 @@ def test_worker_registry_skips_malformed_disk_entries(tmp_path):
         encoding="utf-8",
     )
 
-    assert WorkerRegistry(str(registry_path)).list_workers() == ["가작업"]
+    assert WorkerRegistry(str(registry_path)).list_workers() == ["bad/name", "가작업"]
 
 
 def test_worker_registry_quarantines_corrupt_registry_before_recreate(tmp_path):
@@ -10184,8 +10184,8 @@ def test_worker_registry_register_rewrites_sanitized_payload(tmp_path):
     assert registry.register("홍길동") == "홍길동"
 
     payload = json.loads(registry_path.read_text(encoding="utf-8"))
-    assert payload["workers"] == [{"name": "홍길동", "active": True, "created_at": "old"}]
-    assert registry.list_workers() == ["홍길동"]
+    assert payload["workers"] == [{"name": "bad/name", "active": True}, {"name": "홍길동", "active": True, "created_at": "old"}]
+    assert registry.list_workers() == ["bad/name", "홍길동"]
 
 
 def test_parse_new_format_qr_pipe_key_value_payload():

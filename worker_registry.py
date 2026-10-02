@@ -2,6 +2,7 @@ import datetime
 import json
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,18 +27,14 @@ class WorkerRegistry:
         return str(name or "").strip()
 
     @staticmethod
-    def _validate_name(name: str) -> None:
+    def _validate_name(name: str, *, roster_identity: bool = False) -> None:
         if not name:
             raise ValueError("작업자 이름은 비워둘 수 없습니다.")
-        if CONTROL_CHAR_RE.search(name):
+        if any(unicodedata.category(character) in {"Cc", "Cf", "Cs", "Zl", "Zp"} for character in name):
             raise ValueError("작업자 이름에는 제어 문자를 사용할 수 없습니다.")
-        if name.startswith(FORMULA_PREFIX_CHARS):
-            raise ValueError("작업자 이름은 = + - @ 문자로 시작할 수 없습니다.")
-        if re.search(r'[\\/:*?"<>|]', name):
-            raise ValueError("작업자 이름에는 \\ / : * ? \" < > | 문자를 사용할 수 없습니다.")
         if name in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}:
             raise ValueError("보호된 관리자 식별자는 일반 작업자로 등록할 수 없습니다.")
-        if is_protected_admin_candidate(name):
+        if not roster_identity and is_protected_admin_candidate(name):
             raise ValueError("6자리 숫자 입력은 관리자 인증에만 사용할 수 있습니다.")
 
     @staticmethod
@@ -84,7 +81,7 @@ class WorkerRegistry:
             sanitized_payload = dict(payload)
             sanitized_payload["workers"] = sanitized_workers
             self._write_payload(sanitized_payload)
-        result = {"workers": sanitized_workers}
+        result = dict(payload, workers=sanitized_workers)
         if "automatic_start_enabled" in payload:
             result["automatic_start_enabled"] = payload["automatic_start_enabled"]
         return result
@@ -109,12 +106,13 @@ class WorkerRegistry:
                 continue
             name = self.normalize_name(entry.get("name", ""))
             if (
-                is_protected_admin_candidate(name)
+                (is_protected_admin_candidate(name) and not entry.get("worker_id"))
                 or name in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}
             ):
                 continue
             try:
-                self._validate_name(name)
+                self._validate_name(str(entry.get("name") or ""), roster_identity=bool(entry.get("worker_id")))
+                self._validate_name(name, roster_identity=bool(entry.get("worker_id")))
             except ValueError:
                 continue
             active_value = entry.get("active", True)
@@ -192,7 +190,7 @@ class WorkerRegistry:
             if len(names) != 1 or any(entry.get("active", True) is not True for entry in candidates):
                 return None
             name = names.pop()
-            self._validate_name(name)
+            self._validate_name(name, roster_identity=bool(candidates[0].get("worker_id")))
             return name
         except (OSError, UnicodeError, ValueError, TypeError, KeyError):
             return None
@@ -220,6 +218,7 @@ class WorkerRegistry:
         self._write_payload(payload)
 
     def register(self, name: str) -> str:
+        self._validate_name(str(name or ""))
         name = self.normalize_name(name)
         self._validate_name(name)
         payload = self._read_payload()
@@ -239,9 +238,10 @@ class WorkerRegistry:
         self._write_payload(payload)
         return name
 
-    def mark_recent(self, name: str) -> str:
+    def mark_recent(self, name: str, *, worker_id: str = "") -> str:
+        self._validate_name(str(name or ""), roster_identity=bool(worker_id))
         name = self.normalize_name(name)
-        self._validate_name(name)
+        self._validate_name(name, roster_identity=bool(worker_id))
         payload = self._read_payload()
         workers = payload.setdefault("workers", [])
         # Keep the existing ISO timestamp field, including distinct starts in
@@ -249,7 +249,11 @@ class WorkerRegistry:
         payload["automatic_start_enabled"] = True
         now = datetime.datetime.now().isoformat(timespec="microseconds")
         for entry in workers:
-            if isinstance(entry, dict) and self.normalize_name(entry.get("name", "")) == name:
+            if isinstance(entry, dict) and (entry.get("worker_id") == worker_id if worker_id and entry.get("worker_id")
+                                           else self.normalize_name(entry.get("name", "")) == name):
+                entry["name"] = name
+                if worker_id:
+                    entry["worker_id"] = worker_id
                 entry["active"] = True
                 entry["last_used_at"] = now
                 self._write_payload(payload)
@@ -260,7 +264,41 @@ class WorkerRegistry:
                 "active": True,
                 "created_at": now,
                 "last_used_at": now,
+                **({"worker_id": worker_id} if worker_id else {}),
             }
         )
         self._write_payload(payload)
         return name
+
+    def recent_worker_id(self) -> str:
+        name = self.recent_worker()
+        for entry in self._read_payload()["workers"]:
+            if entry["name"] == name:
+                return str(entry.get("worker_id") or "")
+        return ""
+
+    def bind_worker_id(self, name: str, worker_id: str) -> None:
+        """Upgrade an old remembered name without changing its start eligibility."""
+        payload = self._read_payload()
+        for entry in payload["workers"]:
+            if entry["name"] == name and not entry.get("worker_id"):
+                entry["worker_id"] = worker_id
+                self._write_payload(payload)
+                return
+
+    def worker_id_for_name(self, name: str) -> str:
+        normalized = self.normalize_name(name)
+        for entry in self._read_payload().get("workers", []):
+            if self.normalize_name(entry.get("name", "")) == normalized:
+                return str(entry.get("worker_id") or "")
+        return ""
+
+    def order_roster(self, rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        entries = self._read_payload()["workers"]
+        def recent(row):
+            matches = [entry for entry in entries if
+                       (entry.get("worker_id") == row["worker_id"] if entry.get("worker_id")
+                        else entry["name"] == row["display_name"])]
+            return min((self._worker_sort_key(entry) for entry in matches),
+                       default=(2, 0.0, row["display_name"]))[:2] + (row["display_name"],)
+        return sorted(rows, key=recent)

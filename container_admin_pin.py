@@ -98,6 +98,18 @@ class AdminPinClient:
     @writer_sink("admin_pin_network", probe_only=True)
     def post(self, route: str, payload: Mapping[str, Any]) -> dict[str, Any]:
         path = "/api/admin-pin/v1/" + route
+        return self._post_signed(path, payload, response_limit=8192,
+                                 expected_status=201 if route == "verifications" else 200)
+
+    @writer_sink("admin_pin_network", probe_only=True)
+    def query_roster(self, *, authority_scope_id: str, known_version: int | None) -> dict[str, Any]:
+        return self._post_signed("/api/worker-roster/v1/query",
+                                 {"authority_scope_id": authority_scope_id, "known_version": known_version},
+                                 response_limit=262144, expected_status=200)
+
+    @writer_sink("admin_pin_network", probe_only=True)
+    def _post_signed(self, path: str, payload: Mapping[str, Any], *,
+                     response_limit: int, expected_status: int) -> dict[str, Any]:
         body = canonical_json(payload).encode("utf-8")
         if len(body) > 8192:
             raise AdminPinError("REQUEST_TOO_LARGE")
@@ -125,12 +137,22 @@ class AdminPinClient:
             else:
                 response = self.session.post(
                     self.origin + path, data=body, headers=headers, timeout=10,
-                    allow_redirects=False,
+                    allow_redirects=False, stream=True,
                 )
-                status, raw = response.status_code, response.content
+                try:
+                    status = response.status_code
+                    chunks, total = [], 0
+                    for chunk in response.iter_content(chunk_size=8192):
+                        total += len(chunk)
+                        if total > response_limit:
+                            raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
+                        chunks.append(chunk)
+                    raw = b"".join(chunks)
+                finally:
+                    response.close()
         except Exception:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True) from None
-        if type(status) is not int or len(raw) > 8192:
+        if type(status) is not int or len(raw) > response_limit:
             raise AdminPinError("VERIFY_UNAVAILABLE", unknown=True)
         try:
             answer = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique_object)
@@ -142,7 +164,7 @@ class AdminPinClient:
         code = error.get("code") if isinstance(error, dict) and type(error.get("code")) is str else ""
         if status >= 500:
             raise AdminPinError("PIN_BUSY" if code == "PIN_BUSY" else "VERIFY_UNAVAILABLE", unknown=True)
-        if status != (201 if route == "verifications" else 200) or answer.get("ok") is not True:
+        if status != expected_status or answer.get("ok") is not True:
             raise AdminPinError(code or "VERIFY_UNAVAILABLE", unknown=not bool(code))
         return answer
 

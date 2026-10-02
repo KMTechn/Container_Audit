@@ -146,7 +146,7 @@ def test_reserved_numeric_and_internal_identity_are_scrubbed_from_registry(
     assert PROTECTED_ADMIN_OPERATOR_ID not in persisted
 
 
-def test_start_work_replaces_code_before_state_logs_or_worker_ui(tmp_path: Path) -> None:
+def test_start_work_replaces_code_before_state_logs_or_worker_ui(tmp_path: Path, monkeypatch) -> None:
     variable = _Variable(TEST_ADMIN_CODE)
     app = ContainerAudit.__new__(ContainerAudit)
     app.worker_entry_var = variable
@@ -164,7 +164,9 @@ def test_start_work_replaces_code_before_state_logs_or_worker_ui(tmp_path: Path)
     logged = []
     app._log_event = lambda event, detail=None, **kwargs: logged.append((event, detail)) or True
 
-    app.start_work()
+    # The dedicated admin button retains the same credential/profile and persistence checks.
+    monkeypatch.setattr("Container_Audit.simpledialog.askstring", lambda *args, **kwargs: TEST_ADMIN_CODE)
+    app._start_protected_admin()
 
     assert app.worker_name == PROTECTED_ADMIN_OPERATOR_ID
     assert app.worker_role == PROTECTED_ADMIN_ROLE

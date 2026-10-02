@@ -1,5 +1,6 @@
 import datetime
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any, Dict, Mapping
 
@@ -135,8 +136,7 @@ def validate_work_session_state(
     worker_name = str(state.get("worker_name") or "").strip()
     if (
         not worker_name
-        or len(worker_name) > 128
-        or any(ord(character) < 32 for character in worker_name)
+        or any(unicodedata.category(character) == "Cc" for character in worker_name)
     ):
         raise WorkSessionStateError("worker_name is invalid")
     worker_role = str(state.get("worker_role") or "").strip()

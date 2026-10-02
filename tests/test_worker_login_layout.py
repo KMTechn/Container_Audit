@@ -39,7 +39,8 @@ def test_large_text_short_login_fixture_keeps_logo_and_actions_in_budget(worker_
     assert app.logo_photo_ref.width() > 1 and app.logo_photo_ref.height() > 1
     for widget in _visible_controls(app):assert_contained(widget, app.worker_input_frame)
     assert app.worker_entry.get() == '테스트 작업자'
-    assert [button.cget('text') for button in app._worker_login_buttons] == ['신규 등록', '작업 시작']
+    assert [button.cget('text') for button in app._worker_login_buttons] == ['관리자', '작업 시작']
+    assert app.worker_entry.cget('state') == 'readonly'
     assert app.worker_entry.winfo_rooty() < app._worker_login_buttons[0].winfo_rooty()
 
 

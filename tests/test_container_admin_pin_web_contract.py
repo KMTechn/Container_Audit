@@ -2,8 +2,10 @@
 
 import importlib.util
 import os
+import sqlite3
 import subprocess
 import sys
+import threading
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -30,6 +32,44 @@ def test_pinned_web_ca_authorization_has_durable_boundaries(monkeypatch, tmp_pat
         return
     root = Path(root_text)
     assert (root / "admin_pin.py").is_file()
+    from tests.test_container_admin_pin import make_headless_app, SignedPinServer
+    # Preserve native type introspection through the CA detector's SQL proxy.
+    # Its execute/transaction hooks still observe every operation.
+    guarded = sqlite3.connect(":memory:")
+    proxy_type = type(guarded)
+    guarded.close()
+    if proxy_type.__module__ == "tests.conftest":
+        class NativeTypeProxy(proxy_type):
+            @property
+            def __class__(self):
+                return sqlite3.Connection
+
+        guarded_connect = sqlite3.connect
+
+        def compatible_connect(*args, **kwargs):
+            connection = guarded_connect(*args, **kwargs)
+            if type(connection) is proxy_type:
+                object.__setattr__(connection, "__class__", NativeTypeProxy)
+            return connection
+
+        monkeypatch.setattr(sqlite3, "connect", compatible_connect)
+    from werkzeug.routing import Map
+    # A guarded Python factory needs the same static binding as the native lock factory.
+    monkeypatch.setattr(Map, "lock_class", staticmethod(threading.Lock))
+    # Each app owns a different module with this name in the isolated integration child.
+    def app_specific_module(name):
+        return name == "worker_roster" or name == "kmtech_factory_contracts" or name.startswith("kmtech_factory_contracts.")
+
+    ca_modules = {name: module for name, module in sys.modules.items() if app_specific_module(name)}
+
+    def restore_ca_modules():
+        for name in tuple(sys.modules):
+            if app_specific_module(name):
+                sys.modules.pop(name, None)
+        sys.modules.update(ca_modules)
+
+    for name in ca_modules:
+        sys.modules.pop(name, None)
     sys.path.insert(0, str(root))
     try:
         specification = importlib.util.spec_from_file_location(
@@ -97,7 +137,8 @@ def test_pinned_web_ca_authorization_has_durable_boundaries(monkeypatch, tmp_pat
 
         # Use the actual CA approval entry used by manager recovery handlers, and
         # inspect its durable local intent as well as the public HTTP server.
-        from tests.test_container_admin_pin import make_headless_app, SignedPinServer
+        sys.path.remove(str(root))
+        restore_ca_modules()
         ca, _audits, _notices = make_headless_app(monkeypatch, tmp_path / "ca", SignedPinServer())
         ca._admin_pin_client = client
         ca._prompt_blocked_work_admin_pin = lambda **_request: ("A1", "000000" if scenario == "wrong_pin" else "582714")
@@ -136,4 +177,6 @@ def test_pinned_web_ca_authorization_has_durable_boundaries(monkeypatch, tmp_pat
             statuses = [r[0] for r in conn.execute("SELECT status FROM admin_pin_grants")]
             assert statuses == (["REVOKED"] if prior is not None else [])
     finally:
-        sys.path.remove(str(root))
+        if str(root) in sys.path:
+            sys.path.remove(str(root))
+        restore_ca_modules()

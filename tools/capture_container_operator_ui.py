@@ -6388,9 +6388,8 @@ MUTATION_GUARD_APP_METHODS: dict[str, tuple[str, ...]] = {
     ),
     "direct_sync": ("_trigger_session_direct_sync",),
     "worker_write": (
-        "_register_worker_name",
+        "_start_protected_admin",
         "_ensure_worker_login_name",
-        "register_worker_from_login",
         "start_work",
         "change_worker",
     ),

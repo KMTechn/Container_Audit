@@ -277,14 +277,14 @@ CA는 검사 GOOD/NG를 재판정하지 않는다. 검사 완료 구성원은 [I
 <a id="ca-01"></a>
 ### CA-01 시작·작업자 선택
 
-작업자 변경 중 앱이 꺼지면 다음 시작은 작업자 선택 화면이며, 새 작업 세션 저장·결속이 성공한 뒤에만 자동 시작을 다시 허용한다.
+공용 ACTIVE 명단에서 이름을 고르며 직접 입력·PC 등록은 없다. 기억한 ACTIVE 번호로 자동 시작하고 명단·캐시가 없으면 기존 이름 목록·기억을 한시 사용한다. 작업자 변경 중 앱이 꺼지면 다음 시작은 선택 화면이며 새 작업 세션 저장·결속이 성공한 뒤에만 자동 시작을 다시 허용한다. [명단·캐시 계약](contracts.md), [운영](operations.md).
 
 - 일반 GUI 런처·사용자 relay·재시작은 **명시 `--data-root` > 환경 변수 > HKCU relay 등록의 영속 루트 > 기본값** 순서로 같은 데이터셋을 선택한다. 저장된 custom 루트의 소실·읽기/쓰기 오류나 등록 설정 읽기 오류는 안내 후 시작을 중단하며 기본값으로 전환하지 않는다. 기본 설치의 명령·분리 경로는 유지한다. [확인·복구](operations.md#ca-custom-root-autostart).
 
 - **일반 창 배치:** 기본 복원 크기 `1280x820`과 최소 `1024x720`은 해당 monitor의 작업 영역에 실제 client+frame이 들어가는 범위에서 유지한다. 일반 초기화는 같은 UI thread의 `GetWindowRect`·`GetClientRect`·`GetMonitorInfo.rcWork`로 최소/복원 크기를 먼저 맞춘 뒤 기존 최대화 시작을 유지한다. 명시적 `CONTAINER_AUDIT_STARTUP_GEOMETRY`의 signed absolute 배치는 별도 기존 경로다. [화면 수용 범위](operations.md#ca-o03)를 함께 따른다.
 
 - **시작·입력:** 소스/패키지 진입 후 등록된 작업자 이름 또는 보호 관리자 로그인. `main`의 계약 확인·단일 인스턴스·onboarding 준비와 `start_work`가 경계다. [Container_Audit.py](../../Container_Audit.py), [runtime_instance.py](../../runtime_instance.py)
-- **검증·저장·결과:** 이름 등록과 보호 관리자 인증을 구분하고 사용자 상태 경로를 준비한다. 복구 대상이 있으면 현재 트레이 복구 흐름으로 진입한다. 작업자 선택만으로 서버 권한을 만들지 않는다. [worker_registry](../../worker_registry.py), [current_user_onboarding](../../current_user_onboarding.py)
+- **검증·저장·결과:** 명단 선택과 보호 관리자 인증을 구분하고 사용자 상태 경로를 준비한다. 복구 대상이 있으면 현재 트레이 복구 흐름으로 진입한다. 작업자 선택만으로 서버 권한을 만들지 않는다. [worker_registry](../../worker_registry.py), [current_user_onboarding](../../current_user_onboarding.py)
 - **금일 작업 현황:** 로그 행·파일 또는 저장 폴더 읽기에 오류가 있으면 읽은 자료는 유지하고 `작업 현황 확인 필요` 경고창에 오류 건수·수량 누락 가능성·관리자 확인 요청을 표시한다. 확인 후 작업 시작을 계속하며 성공 문구는 표시하지 않는다. 정상 빈 표와 오류 없는 기존 성공 문구는 유지한다. [안내·대응](operations.md#ca-history-load-warning)
 - **실패·취소·재시작:** 중복 실행, 부분 onboarding, 읽기 불가능한 보호 상태는 오류를 보존해 진입을 중단한다. 임의 초기화 대신 동일 사용자·원본 상태의 복구 가능성을 확인한다.
 - **수용 기준:** 정상 사용자로 준비된 상태를 재사용하고, 불완전 준비·중복 실행을 성공 화면으로 넘기지 않으며, 재시작 후 작업자와 트레이 소유권을 잘못 연결하지 않는다.

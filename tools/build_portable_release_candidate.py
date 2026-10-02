@@ -45,6 +45,7 @@ RUNTIME_ROOT_FILES = (
 # consumers. Add new runtime modules here explicitly; unrelated root scripts
 # must not enter the packet or seed its tools import closure.
 APP_ROOT_FILES = (
+    "worker_roster.py",
     "best_time_records.py",
     "Container_Audit.py",
     "container_admin_pin.py",

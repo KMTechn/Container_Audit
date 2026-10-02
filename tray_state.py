@@ -1,5 +1,6 @@
 import datetime
 import json
+import unicodedata
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping
 
@@ -363,8 +364,7 @@ def _validate_pending_completion_event(
         )
     projection_worker_name = payload["projection_worker_name"].strip()
     if (
-        len(projection_worker_name) > 128
-        or any(ord(character) < 32 for character in projection_worker_name)
+        any(unicodedata.category(character) == "Cc" for character in projection_worker_name)
     ):
         raise TrayStateValidationError(
             f"{COMPLETION_EVENT_STATE_KEY}.projection_worker_name is invalid"
@@ -478,8 +478,7 @@ def _validate_pending_activation_event(
         )
     projection_worker_name = payload["projection_worker_name"].strip()
     if (
-        len(projection_worker_name) > 128
-        or any(ord(character) < 32 for character in projection_worker_name)
+        any(unicodedata.category(character) == "Cc" for character in projection_worker_name)
     ):
         raise TrayStateValidationError(
             f"{ACTIVATION_EVENT_STATE_KEY}.projection_worker_name is invalid"
@@ -567,8 +566,7 @@ def _validate_parked_restore_projection_event(
     projection_worker_name = payload["projection_worker_name"].strip()
     if (
         not projection_worker_name
-        or len(projection_worker_name) > 128
-        or any(ord(character) < 32 for character in projection_worker_name)
+        or any(unicodedata.category(character) == "Cc" for character in projection_worker_name)
     ):
         raise TrayStateValidationError(
             f"{key_root}.projection_worker_name is invalid"

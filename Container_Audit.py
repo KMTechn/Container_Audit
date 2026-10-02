@@ -210,7 +210,7 @@ from tk_serial_ui_lane import (
     LaneTask,
     TkSerialUiLane,
 )
-from writer_session_fence import writer_admission, writer_sink
+from writer_session_fence import WriterFencedError, writer_admission, writer_sink
 from tray_state import (
     ACTIVATION_EVENT_STATE_KEY,
     ACTIVATION_EVENT_STATE_SCHEMA_VERSION,
@@ -290,6 +290,7 @@ from update_service import (
     verify_update_manifest_signature,
 )
 from worker_registry import WorkerRegistry
+from worker_roster import WorkerRoster
 from warning_presenter import (
     CompletionOutcome,
     CompletionOutcomeSnapshot,
@@ -1229,6 +1230,8 @@ class ContainerAudit:
             scan_source_dir=self.direct_sync_scan_source_dir,
         )
         self.worker_registry = WorkerRegistry(os.path.join(self.config_folder, self.WORKERS_FILE))
+        roster_scope = str(getattr(self.transfer_seal_coordinator.client, "authority_scope_id", "") or "")
+        self.worker_roster = WorkerRoster(Path(self.config_folder) / "roster.json", roster_scope) if roster_scope else None
         self.parked_tray_store = ParkedTrayStore(self.parked_trays_dir)
 
         self.settings = self.load_app_settings()
@@ -3027,30 +3030,28 @@ class ContainerAudit:
             font=(self.DEFAULT_FONT, int(12*self.scale_factor)),
         )
         self._worker_login_name_label.pack()
-        workers = self.worker_registry.list_workers()
+        workers = self._worker_selection_names()
         self.worker_entry_var = tk.StringVar(value=workers[0] if workers else "")
         self.worker_entry = ttk.Combobox(
             center_frame,
             textvariable=self.worker_entry_var,
             values=workers,
-            state='normal',
+            state='readonly',
             width=25,
             font=(self.DEFAULT_FONT, int(18*self.scale_factor), 'bold'),
             justify='center',
         )
         self.worker_entry.pack()
         self.worker_entry.bind('<Return>', self.start_work)
-        self.worker_entry.bind('<KeyRelease>', self._update_worker_input_mask)
         self.worker_entry.bind('<<ComboboxSelected>>', self._update_worker_input_mask)
-        self._update_worker_input_mask()
         self.worker_entry.focus()
         button_container = ttk.Frame(center_frame, style='TFrame')
         self._worker_login_button_container = button_container
         button_container.pack()
-        register_button = ttk.Button(
+        admin_button = ttk.Button(
             button_container,
-            text="신규 등록",
-            command=self.register_worker_from_login,
+            text="관리자",
+            command=self._start_protected_admin,
             style='Secondary.TButton',
             width=16,
         )
@@ -3061,16 +3062,133 @@ class ContainerAudit:
             style='TButton',
             width=20,
         )
-        self._worker_login_buttons = [register_button, start_button]
-        register_button.pack(side=tk.LEFT)
+        self._worker_login_buttons = [admin_button, start_button]
+        admin_button.pack(side=tk.LEFT)
         start_button.pack(side=tk.LEFT)
+        self._worker_roster_notice = ttk.Label(center_frame, text=self._worker_roster_notice_text(), style='TLabel')
+        self._worker_roster_notice.pack()
         self._apply_worker_login_layout()
         self.worker_input_frame.bind('<Configure>', self._schedule_worker_login_layout_refresh)
         self.root.after(0, self._apply_worker_login_layout)
+        self._refresh_worker_roster()
 
     def _refresh_worker_entry_options(self):
-        if hasattr(self, 'worker_entry') and hasattr(self.worker_entry, 'configure'):
-            self.worker_entry.configure(values=self.worker_registry.list_workers())
+        if not getattr(self, "worker_name", "") and hasattr(self, 'worker_entry') and hasattr(self.worker_entry, 'configure'):
+            workers = self._worker_selection_names()
+            self.worker_entry.configure(values=workers)
+            if not getattr(self, "worker_name", "") and self.worker_entry.get() not in workers:
+                self._set_worker_entry_value(workers[0] if workers else "")
+        notice = getattr(self, "_worker_roster_notice", None)
+        if notice is not None:
+            try:
+                notice.configure(text=self._worker_roster_notice_text())
+            except tk.TclError:
+                pass
+
+    def _worker_selection_names(self):
+        roster = getattr(self, "worker_roster", None)
+        if roster is None or not roster.has_rows:
+            return self.worker_registry.list_workers()
+        return [row["display_name"] for row in self.worker_registry.order_roster(roster.active_workers())
+                if row["display_name"] not in {PROTECTED_ADMIN_OPERATOR_ID, PROTECTED_ADMIN_DISPLAY_NAME}]
+
+    def _worker_roster_notice_text(self):
+        roster = getattr(self, "worker_roster", None)
+        if (roster is None or not roster.has_rows) and self.worker_registry.list_workers():
+            return "이 PC에 저장된 이름으로 한시 선택합니다. 관리자에게 명단 등록을 요청하세요."
+        return "관리자에게 명단 등록을 요청하세요"
+
+    def _refresh_worker_roster(self):
+        job = getattr(self, "_roster_refresh_job", None)
+        if job:
+            self.root.after_cancel(job)
+        self._roster_refresh_job = None
+        roster = getattr(self, "worker_roster", None)
+        if roster is None or getattr(self, "_ui_close_requested", False):
+            return
+        epoch = getattr(self, "_admin_pin_login_epoch", "")
+        if (getattr(self, "_roster_pending_epoch", None) == epoch
+                and getattr(self, "_roster_thread", None) is not None
+                and self._roster_thread.is_alive()):
+            return
+        self._roster_pending_epoch = epoch
+        # A login transition retires the old query. Its result has no cache/UI effects.
+        attempt = uuid.uuid4().hex
+        self._roster_attempt = attempt
+        requested_version = roster.known_version
+        results = queue.Queue(maxsize=1)
+        def read():
+            client = None
+            try:
+                client = self._admin_pin_client_for_work()
+                answer = client.query_roster(authority_scope_id=roster.authority_scope_id,
+                                             known_version=requested_version)
+            except Exception:
+                answer = None
+            finally:
+                if client is not None and getattr(self, "_admin_pin_client", None) is not client:
+                    session = getattr(client, "session", None)
+                    if session is not None:
+                        session.close()
+            results.put(answer)
+        self._roster_thread = threading.Thread(target=read, name="container-audit-roster", daemon=True)
+        self._roster_thread.start()
+        self._poll_worker_roster(results, attempt, epoch, requested_version)
+
+    def _poll_worker_roster(self, results, attempt, epoch, requested_version):
+        if (getattr(self, "_ui_close_requested", False) or attempt != getattr(self, "_roster_attempt", None)):
+            return
+        try:
+            answer = results.get_nowait()
+        except queue.Empty:
+            self.root.after(50, lambda: self._poll_worker_roster(results, attempt, epoch, requested_version))
+            return
+        if epoch == getattr(self, "_admin_pin_login_epoch", "") and answer is not None:
+            try:
+                self.worker_roster.apply(answer, requested_version=requested_version)
+                self._refresh_worker_entry_options()
+                if not self._current_roster_worker_active():
+                    self._disable_remembered_worker_start()
+            except (OSError, ValueError, TypeError, WriterFencedError):
+                pass  # Keep the last valid cache and the current tray's original owner.
+        job = getattr(self, "_roster_refresh_job", None)
+        if job:
+            self.root.after_cancel(job)
+        self._roster_refresh_job = self.root.after(60000, self._refresh_worker_roster)
+
+    def _current_roster_worker_active(self):
+        roster = getattr(self, "worker_roster", None)
+        if roster is None or not roster.has_rows or getattr(self, "worker_role", "") == "ADMIN":
+            return True
+        name = getattr(self, "worker_name", "") or self.worker_registry.recent_worker() or ""
+        worker_id = getattr(self, "_selected_roster_id", "") if getattr(self, "worker_name", "") else self.worker_registry.recent_worker_id()
+        return roster.active_worker(worker_id=worker_id, name=name) is not None
+
+    def _roster_allows_new_tray(self):
+        if self._current_roster_worker_active():
+            return True
+        if not self._disable_remembered_worker_start():
+            return False
+        if not self._end_work_session(reason="roster_inactive"):
+            self.show_status_message("작업 종료 기록을 저장하지 못했습니다. 다시 시도하세요.", self.COLOR_DANGER, duration=0)
+            return False
+        self._work_session_identity_bound = False
+        self.worker_name = ""
+        self.worker_role = ""
+        self.show_worker_input_screen()
+        return False
+
+    def _start_protected_admin(self):
+        code = simpledialog.askstring("관리자", "관리자 코드를 입력하세요.", parent=self.root, show="●")
+        if code is None:
+            return
+        # Only this button routes a credential into the existing protected profile check.
+        self._authenticated_protected_admin = False
+        if not is_protected_admin_candidate(code):
+            messagebox.showerror("인증 오류", "관리자 코드를 확인하세요.", parent=self.root)
+            return
+        if self._resolve_worker_login_candidate(code) == PROTECTED_ADMIN_OPERATOR_ID:
+            self.start_work()
 
     def _set_worker_entry_value(self, value: str) -> None:
         if hasattr(self, "worker_entry_var"):
@@ -3089,9 +3207,8 @@ class ContainerAudit:
             value = ""
         if value != PROTECTED_ADMIN_DISPLAY_NAME:
             self._authenticated_protected_admin = False
-        mask = "●" if value.isascii() and value.isdecimal() else ""
         try:
-            entry.configure(show=mask)
+            entry.configure(show="")
         except (TypeError, tk.TclError):
             pass
 
@@ -3123,65 +3240,23 @@ class ContainerAudit:
             return None
         return candidate
 
-    def _register_worker_name(self, worker_name: str, parent=None) -> Optional[str]:
-        worker_name = WorkerRegistry.normalize_name(worker_name)
-        try:
-            return self.worker_registry.register(worker_name)
-        except ValueError as exc:
-            messagebox.showerror("작업자 등록 오류", str(exc), parent=parent or self.root)
-            return None
-
-    def register_worker_from_login(self):
-        worker_name = WorkerRegistry.normalize_name(self.worker_entry_var.get() if hasattr(self, 'worker_entry_var') else "")
-        if not worker_name:
-            worker_name = simpledialog.askstring(
-                "신규 작업자 등록",
-                "등록할 작업자 이름을 입력하세요.",
-                parent=self.root,
-                show="●",
-            )
-        if is_protected_admin_candidate(worker_name):
-            resolved = self._resolve_worker_login_candidate(worker_name)
-            if resolved == PROTECTED_ADMIN_OPERATOR_ID:
-                messagebox.showinfo(
-                    "관리자 인증",
-                    "보호된 관리자 인증을 확인했습니다. 작업 시작을 누르세요.",
-                    parent=self.root,
-                )
-            return
-        registered = self._register_worker_name(worker_name, parent=self.root)
-        if not registered:
-            return
-        self.worker_entry_var.set(registered)
-        self._refresh_worker_entry_options()
-        messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
-
     def _ensure_worker_login_name(self, worker_name: str) -> Optional[str]:
-        worker_name = self._resolve_worker_login_candidate(worker_name)
-        if worker_name is None:
+        name = WorkerRegistry.normalize_name(worker_name)
+        if name == PROTECTED_ADMIN_DISPLAY_NAME and getattr(self, "_authenticated_protected_admin", False):
+            return PROTECTED_ADMIN_OPERATOR_ID
+        if name not in self._worker_selection_names():
+            self.show_status_message("관리자에게 명단 등록을 요청하세요", self.COLOR_DANGER, duration=0)
             return None
-        if not worker_name:
-            messagebox.showerror("오류", "작업자 이름을 입력해주세요.")
+        roster = getattr(self, "worker_roster", None)
+        row = roster.active_worker(name=name) if roster is not None and roster.has_rows else None
+        local_id = self.worker_registry.worker_id_for_name(name) if row is None else ""
+        try:
+            WorkerRegistry._validate_name(name, roster_identity=row is not None or bool(local_id))
+        except ValueError:
             return None
-        if (
-            worker_name == PROTECTED_ADMIN_OPERATOR_ID
-            and getattr(self, "_authenticated_protected_admin", False)
-        ):
-            return worker_name
-        if self.worker_registry.has_worker(worker_name):
-            return worker_name
-        should_register = messagebox.askyesno(
-            "신규 작업자 등록",
-            f"등록되지 않은 작업자입니다.\n\n작업자: {worker_name}\n\n신규 작업자로 등록하시겠습니까?",
-            parent=self.root,
-        )
-        if not should_register:
-            return None
-        registered = self._register_worker_name(worker_name, parent=self.root)
-        if registered:
-            self._refresh_worker_entry_options()
-            messagebox.showinfo("작업자 등록", f"{registered} 작업자를 등록했습니다.", parent=self.root)
-        return registered
+        self._selected_roster_id = row["worker_id"] if row else local_id
+        self._authenticated_protected_admin = False
+        return name
 
     def _disable_remembered_worker_start(self) -> bool:
         registry = getattr(self, "worker_registry", None)
@@ -3199,15 +3274,24 @@ class ContainerAudit:
                 or self._work_session_recovery_blocked
                 or self.transfer_seal_coordinator.client is None):
             return
+        remembered_name = worker_name
         try:
+            roster = getattr(self, "worker_roster", None)
+            if roster is not None and roster.has_rows:
+                row = roster.active_worker(worker_id=self.worker_registry.recent_worker_id(), name=worker_name)
+                if row is None:
+                    self._disable_remembered_worker_start()
+                    return
+                self.worker_registry.bind_worker_id(worker_name, row["worker_id"])
+                worker_name = row["display_name"]
             if (not self.worker_registry.automatic_start_enabled()
-                or self.worker_registry.recent_worker() != worker_name
-                    or not self.worker_registry.has_worker(worker_name)
+                or self.worker_registry.recent_worker() != remembered_name
+                    or worker_name not in self._worker_selection_names()
                     or (Path(self.save_folder) / self.CURRENT_TRAY_STATE_FILE).exists()
                     or self._paired_preflight_store().unidentified_pending()):
                 return
             previous_session = self._load_work_session_state()
-            if previous_session and previous_session["worker_name"] != worker_name:
+            if previous_session and previous_session["worker_name"] != remembered_name:
                 # Removing the latest registry row must not log in an older
                 # remembered worker from the remaining history.
                 return
@@ -3291,10 +3375,15 @@ class ContainerAudit:
                 messagebox.showerror("작업 시작 기록 대기", message, parent=self.root)
             return
         self._work_session_identity_bound = True
+        self._refresh_worker_roster()
         worker_registry = getattr(self, "worker_registry", None)
         if worker_registry is not None and not protected_admin_authenticated:
             try:
-                worker_registry.mark_recent(worker_name)
+                selected_id = getattr(self, "_selected_roster_id", "")
+                if selected_id:
+                    worker_registry.mark_recent(worker_name, worker_id=selected_id)
+                else:
+                    worker_registry.mark_recent(worker_name)
                 self._refresh_worker_entry_options()
             except (OSError, ValueError):
                 # The session is durable; a preference write must not unbind it.
@@ -14086,6 +14175,8 @@ class ContainerAudit:
                         )
                         return
                     self.restore_parked_tray(str(parked_filepath))
+                    return
+                if waiting_hold is None and not self._roster_allows_new_tray():
                     return
                 if self._reject_legacy_master_label(qr_data):
                     return

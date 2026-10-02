@@ -6,29 +6,33 @@ from worker_registry import WorkerRegistry
 
 
 @pytest.mark.parametrize(
-    "name",
+    "name,accepted",
     [
-        "",
-        " ",
-        "bad/name",
-        "bad:name",
-        "bad\"name",
-        "bad|name",
-        "=SUM(A1:A2)",
-        "+cmd|' /C calc'!A0",
-        "-1+2",
-        "@HYPERLINK(\"https://example.invalid\")",
-        "\t=SUM(A1:A2)",
-        "홍\n길동",
-        "홍\r길동",
-        "홍\x00길동",
+        ("", False),
+        (" ", False),
+        ("bad/name", True),
+        ("bad:name", True),
+        ("bad\"name", True),
+        ("bad|name", True),
+        ("=SUM(A1:A2)", True),
+        ("+cmd|' /C calc'!A0", True),
+        ("-1+2", True),
+        ("@HYPERLINK(\"https://example.invalid\")", True),
+        ("\t=SUM(A1:A2)", False),
+        ("홍\n길동", False),
+        ("홍\r길동", False),
+        ("홍\x00길동", False),
     ],
 )
-def test_worker_registry_rejects_formula_and_control_character_names(tmp_path, name):
+def test_worker_registry_rejects_formula_and_control_character_names(tmp_path, name, accepted):
     registry = WorkerRegistry(str(tmp_path / "worker_registry.json"))
 
-    with pytest.raises(ValueError):
-        registry.register(name)
+    # Retain every original input; stage one changes only visible-name restrictions.
+    if accepted:
+        assert registry.register(name) == name.strip()
+    else:
+        with pytest.raises(ValueError):
+            registry.register(name)
 
 
 def test_worker_registry_sanitizes_formula_and_control_character_entries_from_disk(tmp_path):
@@ -47,4 +51,5 @@ def test_worker_registry_sanitizes_formula_and_control_character_entries_from_di
         encoding="utf-8",
     )
 
-    assert WorkerRegistry(str(registry_path)).list_workers() == ["안전작업자"]
+    # Stage-one name rules accept visible text without alphabet/filename restrictions.
+    assert WorkerRegistry(str(registry_path)).list_workers() == ["=SUM(A1:A2)", "안전작업자"]
